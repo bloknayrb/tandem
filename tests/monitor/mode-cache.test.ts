@@ -8,7 +8,7 @@ import {
   sseResponse,
 } from "./fetch-harness.js";
 
-describe("getCachedMode fail-closed", () => {
+describe("getCachedMode stale-preserving", () => {
   let stub: ReturnType<typeof createFetchStub>;
   beforeEach(async () => {
     installMonitorFakeTimers();
@@ -22,47 +22,28 @@ describe("getCachedMode fail-closed", () => {
     vi.useRealTimers();
   });
 
-  it("returns 'solo' when /api/mode throws (network error)", async () => {
+  // --- Cold-start behavior: no successful fetch has ever landed. ---
+  // The documented cold-start default is TANDEM_MODE_DEFAULT ("tandem").
+
+  it("returns the cold-start default 'tandem' when /api/mode throws on a true cold start (network error)", async () => {
     stub.on("/api/mode", () => {
       throw new Error("ECONNREFUSED");
     });
     const { getCachedMode } = await import("../../src/monitor/index.js");
     const mode = await getCachedMode();
-    expect(mode).toBe("solo");
+    expect(mode).toBe("tandem");
   });
 
-  it("returns 'solo' when /api/mode returns 500", async () => {
+  it("returns the cold-start default 'tandem' when /api/mode returns 500 on a true cold start", async () => {
     stub.on("/api/mode", () => new Response("err", { status: 500 }));
     const { getCachedMode } = await import("../../src/monitor/index.js");
     const mode = await getCachedMode();
-    expect(mode).toBe("solo");
+    expect(mode).toBe("tandem");
   });
 
-  it("retries /api/mode on next call if previous call failed (does not poison cache timestamp)", async () => {
-    let callCount = 0;
-    stub.on("/api/mode", () => {
-      callCount++;
-      if (callCount === 1) throw new Error("transient");
-      return new Response(JSON.stringify({ mode: "tandem" }), { status: 200 });
-    });
+  it("uses the cold-start default for non-JSON / unrecognized / missing mode on cold start", async () => {
     const { getCachedMode } = await import("../../src/monitor/index.js");
-    const first = await getCachedMode();
-    expect(first).toBe("solo"); // failed call → fail closed
-    const second = await getCachedMode();
-    expect(second).toBe("tandem"); // retry succeeded
-    expect(callCount).toBe(2); // cache was not poisoned
-  });
-
-  it("propagates fail-closed to getModeSync (hot path sees 'solo' after startup failure)", async () => {
-    stub.on("/api/mode", () => {
-      throw new Error("refused");
-    });
-    const mod = await import("../../src/monitor/index.js");
-    await mod.getCachedMode();
-    expect(mod.getModeSync()).toBe("solo");
-  });
-
-  it("fails closed to 'solo' when /api/mode returns non-JSON (HTML)", async () => {
+    // non-JSON HTML
     stub.on(
       "/api/mode",
       () =>
@@ -71,29 +52,93 @@ describe("getCachedMode fail-closed", () => {
           headers: { "Content-Type": "text/html" },
         }),
     );
-    const { getCachedMode } = await import("../../src/monitor/index.js");
-    expect(await getCachedMode()).toBe("solo");
-  });
-
-  it("fails closed to 'solo' when /api/mode returns an unrecognized mode value", async () => {
+    expect(await getCachedMode()).toBe("tandem");
+    // unrecognized enum value
     stub.on(
       "/api/mode",
       () => new Response(JSON.stringify({ mode: "enterprise" }), { status: 200 }),
     );
-    const { getCachedMode } = await import("../../src/monitor/index.js");
-    expect(await getCachedMode()).toBe("solo");
-  });
-
-  it("fails closed to 'solo' when /api/mode omits the mode field", async () => {
+    expect(await getCachedMode()).toBe("tandem");
+    // missing mode field
     stub.on("/api/mode", () => new Response(JSON.stringify({}), { status: 200 }));
+    expect(await getCachedMode()).toBe("tandem");
+    // non-string mode
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: 42 }), { status: 200 }));
+    expect(await getCachedMode()).toBe("tandem");
+  });
+
+  it("retries /api/mode on next call if previous call failed (does not poison cache timestamp)", async () => {
+    let callCount = 0;
+    stub.on("/api/mode", () => {
+      callCount++;
+      if (callCount === 1) throw new Error("transient");
+      return new Response(JSON.stringify({ mode: "solo" }), { status: 200 });
+    });
     const { getCachedMode } = await import("../../src/monitor/index.js");
+    const first = await getCachedMode();
+    expect(first).toBe("tandem"); // cold-start failure → cold-start default
+    const second = await getCachedMode();
+    expect(second).toBe("solo"); // retry succeeded, real mode observed
+    expect(callCount).toBe(2); // cache was not poisoned by the failure
+  });
+
+  // --- Stale-preserving behavior: a real mode was observed first. ---
+  // A subsequent failure must NEVER change the cached mode.
+
+  it("preserves a previously-observed 'tandem' across a /api/mode failure (does NOT flip to solo or default)", async () => {
+    let shouldFail = false;
+    stub.on("/api/mode", () => {
+      if (shouldFail) throw new Error("ECONNREFUSED");
+      return new Response(JSON.stringify({ mode: "tandem" }), { status: 200 });
+    });
+    const { getCachedMode } = await import("../../src/monitor/index.js");
+    expect(await getCachedMode()).toBe("tandem");
+
+    // Move past the TTL so the next call actually re-fetches, then fail.
+    shouldFail = true;
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(await getCachedMode()).toBe("tandem"); // stale-preserved, NOT "solo"/default
+  });
+
+  it("preserves a previously-observed 'solo' across a /api/mode failure (does NOT flip to default)", async () => {
+    let shouldFail = false;
+    stub.on("/api/mode", () => {
+      if (shouldFail) return new Response("err", { status: 503 });
+      return new Response(JSON.stringify({ mode: "solo" }), { status: 200 });
+    });
+    const { getCachedMode } = await import("../../src/monitor/index.js");
+    expect(await getCachedMode()).toBe("solo");
+
+    shouldFail = true;
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(await getCachedMode()).toBe("solo"); // stale-preserved, NOT the cold-start default "tandem"
+  });
+
+  it("only changes mode when the server reports a new mode (user toggled)", async () => {
+    let serverMode: "tandem" | "solo" = "tandem";
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: serverMode }), { status: 200 }));
+    const { getCachedMode } = await import("../../src/monitor/index.js");
+    expect(await getCachedMode()).toBe("tandem");
+
+    serverMode = "solo"; // user toggled
+    await vi.advanceTimersByTimeAsync(2_500);
     expect(await getCachedMode()).toBe("solo");
   });
 
-  it("fails closed to 'solo' when /api/mode returns mode as a non-string", async () => {
-    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: 42 }), { status: 200 }));
-    const { getCachedMode } = await import("../../src/monitor/index.js");
-    expect(await getCachedMode()).toBe("solo");
+  it("propagates the preserved mode to getModeSync after a mid-session failure", async () => {
+    let shouldFail = false;
+    stub.on("/api/mode", () => {
+      if (shouldFail) throw new Error("refused");
+      return new Response(JSON.stringify({ mode: "tandem" }), { status: 200 });
+    });
+    const mod = await import("../../src/monitor/index.js");
+    await mod.getCachedMode();
+    expect(mod.getModeSync()).toBe("tandem");
+
+    shouldFail = true;
+    await vi.advanceTimersByTimeAsync(2_500);
+    await mod.getCachedMode();
+    expect(mod.getModeSync()).toBe("tandem"); // hot path still sees the real mode
   });
 });
 
@@ -259,7 +304,8 @@ describe("background mode refresh", () => {
 
     const mod = await import("../../src/monitor/index.js");
     await mod.getCachedMode();
-    expect(mod.getModeSync()).toBe("solo");
+    // Cold-start failure → documented cold-start default (TANDEM_MODE_DEFAULT).
+    expect(mod.getModeSync()).toBe("tandem");
     expect(modeCallCount).toBe(1);
 
     const stream = new ControllableStream();

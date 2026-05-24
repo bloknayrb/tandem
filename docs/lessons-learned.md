@@ -356,13 +356,13 @@ Initial attempts to filter at the bridge and server levels had no effect because
 
 **Key insight:** Debounce and suppression are independent concerns. Suppression answers "should I ignore this event?" — that's an arrival-time decision. Debounce answers "should I wait for more events before acting?" — that's a delivery-time decision. Mixing them (checking suppress at delivery time) creates a race where the suppress can consume the wrong event.
 
-## 38. Privacy Signals Fail Closed, Not Open
+## 38. Mode Is Stale-Preserving — A Transient Failure Never Changes It
 
-**Problem:** Solo mode is a user-driven privacy preference — the user has explicitly asked Claude not to process events. If `/api/mode` fails and the monitor falls back to "tandem" (the permissive default), Claude silently gains access to activity the user asked to suppress.
+**Problem:** Solo/Tandem mode is a user-driven setting. The original monitor warm-up failed *closed* to "solo" and the channel failed *open* to "tandem"; #822's first refactor unified both on fail-closed-to-"solo". Both behaviors share the same defect: a transient `/api/mode` hiccup silently *changes the user's mode* to a hardcoded default. The user directive is that mode must NOT change unless the user explicitly changes it — neither fail-open nor fail-closed honors that.
 
-**Solution:** Startup mode warm-up (`getCachedMode()`) fails closed to "solo" on any error. The hot-path background refresh (`refreshMode()`) is fire-and-forget and leaves `cachedMode` unchanged on failure — stale-preferred, not fail-closed — to avoid randomly suppressing events mid-session when the server hiccups.
+**Solution (#822):** The mode cache is **stale-preserving**. `getCachedMode()` returns the last successfully-fetched mode on any failure and never overwrites `cachedMode` with a default. The hardcoded cold-start default (`TANDEM_MODE_DEFAULT`, `"tandem"`) is used in exactly one state: `cachedModeAt === 0`, meaning no fetch has ever succeeded. After the first success `cachedModeAt` is non-zero forever, so failures can never revert a known mode. The hot-path background refresh (`refreshMode()`) was already stale-preferred; this extends the same guarantee to the warm-up / first-fetch path. The net contract: once a real mode has been observed, the mode changes only when the server reports a new value — i.e. when the user toggles it.
 
-**Key insight:** Distinct failure modes need distinct fallbacks. The cold-start case and the mid-session-transient case have opposite risk profiles: leaking activity on cold start is worse than the brief stale window from a transient mid-session failure.
+**Key insight:** "Fail safe" for a *user setting* means "don't change the setting", not "pick the safest-looking default". A default — solo or tandem — is still a change the user didn't request. The only state without a prior user signal is the genuine cold start, and that is the only place a hardcoded default belongs.
 
 ## 39. Retry Budgets Must Reset on Stable Uptime, Not Per Event
 
