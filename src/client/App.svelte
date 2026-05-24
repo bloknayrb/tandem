@@ -6,6 +6,7 @@ import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
+import { generateNotificationId } from "../shared/utils";
 import {
   createScratchpad,
   saveStore,
@@ -467,9 +468,10 @@ wireActionDeps({
     await triggerSaveAs({
       activeDocId: yjsSync.activeTabId,
       defaultName,
+      sourceFormat: tab?.format,
       notify: (severity, message) =>
         notifications.push({
-          id: `save-as-${Date.now()}`,
+          id: generateNotificationId(),
           type: "launcher",
           severity,
           message,
@@ -731,6 +733,10 @@ $effect(() => {
       } else if (e.code === "KeyS" && e.shiftKey && !e.altKey) {
         // Ctrl+Shift+S → Save As… (palette action 'save-as'). Tested before
         // the plain Ctrl+S branch so the modifier-bearing combo wins.
+        // Don't hijack the keystroke while the user is typing in a chat /
+        // annotation input or other editable field.
+        const el = e.target as HTMLElement;
+        if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
         e.preventDefault();
         const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
         const lastSlash = tab
@@ -740,9 +746,10 @@ $effect(() => {
         void triggerSaveAs({
           activeDocId: yjsSync.activeTabId,
           defaultName,
+          sourceFormat: tab?.format,
           notify: (severity, message) =>
             notifications.push({
-              id: `save-as-${Date.now()}`,
+              id: generateNotificationId(),
               type: "launcher",
               severity,
               message,

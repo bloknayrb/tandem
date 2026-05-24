@@ -171,6 +171,10 @@ interface SaveAsOptions {
   notify: (severity: "info" | "warning" | "error", message: string) => void;
   /** Hint for the native dialog's default filename. Falls back to "Scratchpad.md". */
   defaultName?: string;
+  /** The active doc's current format. Used by the browser download fallback to
+   *  preserve the doc's format (e.g. a .txt-backed scratchpad downloads as .txt,
+   *  not re-formatted to markdown). Non-md/txt formats fall back to "md". */
+  sourceFormat?: string;
 }
 
 /**
@@ -185,7 +189,7 @@ interface SaveAsOptions {
  */
 export async function triggerSaveAs(opts: SaveAsOptions): Promise<void> {
   if (saveAsInflight) return;
-  const { activeDocId, notify, defaultName } = opts;
+  const { activeDocId, notify, defaultName, sourceFormat } = opts;
   if (!activeDocId) {
     notify("warning", "No active document to save.");
     return;
@@ -195,7 +199,7 @@ export async function triggerSaveAs(opts: SaveAsOptions): Promise<void> {
     if (isTauriRuntime()) {
       await runTauriSaveAs(activeDocId, notify, defaultName ?? "Scratchpad.md");
     } else {
-      await runBrowserSaveAs(activeDocId, notify);
+      await runBrowserSaveAs(activeDocId, notify, sourceFormat);
     }
   } finally {
     saveAsInflight = false;
@@ -259,10 +263,13 @@ async function runTauriSaveAs(
 async function runBrowserSaveAs(
   activeDocId: string,
   notify: SaveAsOptions["notify"],
+  sourceFormat?: string,
 ): Promise<void> {
   // Browser distribution can't write to arbitrary paths — fall back to a
-  // Blob + anchor download. Default to .md; user can rename after download.
-  const format: SaveAsFormat = "md";
+  // Blob + anchor download. Preserve the doc's current format so a .txt-backed
+  // doc isn't re-formatted to markdown; anything outside the md/txt allowlist
+  // falls back to .md. User can rename after download.
+  const format: SaveAsFormat = sourceFormat === "txt" ? "txt" : "md";
   try {
     const res = await fetch(`${API_BASE}${API_SAVE}`, {
       method: "POST",
@@ -278,7 +285,7 @@ async function runBrowserSaveAs(
       data?: { content?: string; fileName?: string };
     } | null;
     const content = json?.data?.content;
-    const fileName = json?.data?.fileName ?? "Scratchpad.md";
+    const fileName = json?.data?.fileName ?? `Scratchpad.${format}`;
     if (typeof content !== "string") {
       notify("error", "Save As returned no content.");
       return;

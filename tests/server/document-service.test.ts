@@ -39,12 +39,16 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
   };
 });
 
-// Mock file-io for save tests
+// Mock file-io for save tests. `atomicWrite` delegates to the real impl so the
+// durable-annotation round-trip test (save-as promote) actually writes the
+// annotation envelope to disk; the spy wrapper still lets save tests assert it
+// was called. Doc saves in these tests target /tmp paths (harmless real writes).
 vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
+  const realAtomicWrite = actual.atomicWrite as (p: string, c: string) => Promise<void>;
   return {
     ...actual,
-    atomicWrite: vi.fn().mockResolvedValue(undefined),
+    atomicWrite: vi.fn((p: string, c: string) => realAtomicWrite(p, c)),
   };
 });
 
@@ -588,6 +592,94 @@ describe("saveDocumentAsToDisk", () => {
     const result = await saveDocumentAsToDisk("ro-doc", "/tmp/elsewhere.md", "md");
     expect(result.status).toBe("error");
     expect(result.errorCode).toBe("READ_ONLY");
+  });
+
+  it("re-keys the durable annotation store so post-promote annotations persist under the real path's docHash (#827 Medium 2)", async () => {
+    const os = await import("node:os");
+    const fsReal = await import("node:fs/promises");
+    const pathMod = await import("node:path");
+    const { docHash } = await import("../../src/server/annotations/doc-hash.js");
+    const { createStore, resetForTesting: storeReset } = await import(
+      "../../src/server/annotations/store.js"
+    );
+    const { resetForTesting: syncReset } = await import("../../src/server/annotations/sync.js");
+    const { resetForTesting: queueReset } = await import("../../src/server/events/queue.js");
+    const { withBrowser } = await import("../../src/shared/origins.js");
+    const { Y_MAP_ANNOTATIONS } = await import("../../src/shared/constants.js");
+
+    // Isolated app-data dir so the annotation envelope round-trips on real disk.
+    const appData = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-promote-"));
+    const prevAppData = process.env.TANDEM_APP_DATA_DIR;
+    process.env.TANDEM_APP_DATA_DIR = appData;
+    storeReset();
+    syncReset();
+    queueReset();
+
+    // Real disk target for the promoted file (saveSession is mocked, so only
+    // the doc content + annotation envelope hit disk).
+    const targetDir = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-target-"));
+    const targetPath = pathMod.join(targetDir, "Promoted.md");
+
+    try {
+      const docId = "promote-annotations";
+      const uploadPath = "upload://scratchpad/promote-uuid/Scratchpad.md";
+      addDoc(docId, {
+        id: docId,
+        filePath: uploadPath,
+        format: "md",
+        readOnly: false,
+        source: "upload",
+      });
+      setActiveDocId(docId);
+
+      // Seed some content so the markdown adapter has something to serialize.
+      const doc = getOrCreateDocument(docId);
+      const frag = doc.getXmlFragment("default");
+      const p = new Y.XmlElement("paragraph");
+      frag.insert(0, [p]);
+      p.insert(0, [new Y.XmlText("scratch content")]);
+
+      const result = await saveDocumentAsToDisk(docId, targetPath, "md");
+      expect(result.status).toBe("saved");
+
+      // Add an annotation AFTER promote via a browser-origin transact so the
+      // durable-sync observer (now wired to the real path's docHash) queues a
+      // write.
+      const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+      const annotation = {
+        id: "ann-post-promote",
+        type: "comment",
+        author: "user",
+        content: "created after promote",
+        range: { from: 0, to: 5 },
+        status: "pending",
+        timestamp: Date.now(),
+        rev: 1,
+      };
+      withBrowser(doc, () => annMap.set(annotation.id, annotation));
+
+      // Flush the per-doc store (module-keyed by docHash) so the debounced
+      // write lands, then read it back through a fresh handle keyed to the
+      // PROMOTED path's docHash — proving continuity under the real-path key.
+      const promotedHash = docHash(targetPath);
+      const verifyStore = createStore(promotedHash, { filePath: targetPath });
+      await verifyStore.flush();
+      const loaded = await verifyStore.load();
+
+      expect(loaded.annotations.map((a) => a.id)).toContain("ann-post-promote");
+      // And NOT under the old upload docHash.
+      const uploadHash = docHash(uploadPath);
+      expect(uploadHash).not.toBe(promotedHash);
+    } finally {
+      // Restore env + clean module state so later tests aren't polluted.
+      if (prevAppData === undefined) delete process.env.TANDEM_APP_DATA_DIR;
+      else process.env.TANDEM_APP_DATA_DIR = prevAppData;
+      storeReset();
+      syncReset();
+      queueReset();
+      await fsReal.rm(appData, { recursive: true, force: true }).catch(() => {});
+      await fsReal.rm(targetDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });
 

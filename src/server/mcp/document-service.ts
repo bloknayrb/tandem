@@ -13,7 +13,8 @@ import {
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { closeStore } from "../annotations/store.js";
-import { clearFileSyncContext } from "../events/queue.js";
+import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
+import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { atomicWrite, getAdapter } from "../file-io/index.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
@@ -301,6 +302,21 @@ export async function saveDocumentAsToDisk(
       console.error(`[SaveAs] saveSession failed for ${resolved}:`, err);
     }
 
+    // Capture the pre-promote upload:// path BEFORE `addDoc` overwrites it.
+    // Used to delete the stale upload session below so a restart doesn't try
+    // to restore a now-promoted doc under its old synthetic key.
+    const oldUploadPath = docState.filePath;
+
+    // Delete the pre-promote upload session. Best-effort — a leftover session
+    // for an upload:// path is skipped by listSessionFilePaths on restart, but
+    // leaving it behind is dead state. Do it after the new session write so a
+    // crash between the two leaves the durable copy, not nothing.
+    try {
+      await deleteSession(oldUploadPath);
+    } catch (err) {
+      console.error(`[SaveAs] deleteSession failed for ${oldUploadPath}:`, err);
+    }
+
     // Promote in place — keep the Hocuspocus room ID, swap source/filePath/format.
     const fileName = path.basename(resolved);
     addDoc(docId, {
@@ -322,9 +338,34 @@ export async function saveDocumentAsToDisk(
       meta.set(Y_MAP_SAVED_AT_VERSION, now);
     });
 
+    // Re-key the durable annotation store to the promoted path. Scratchpads
+    // open WITHOUT a file-sync context (openScratchpad skips wireAnnotationStore
+    // — ephemeral docs shouldn't orphan JSON on close). Once promoted to a real
+    // file, annotations SHOULD persist under `docHash(resolved)`, so wire the
+    // store now. wireAnnotationStore runs loadAndMerge (no prior on-disk state
+    // for a fresh path) and registers the file-sync context keyed to the new
+    // docHash, so annotations created post-promote serialize under the real
+    // path's key and reload on reopen-by-path. Best-effort: a wiring failure
+    // must not fail the save (the disk write is the contract), and the helper
+    // itself swallows + surfaces its own errors via the notification bus.
+    const { wireAnnotationStore } = await import("./file-opener.js");
+    await wireAnnotationStore(docId, doc, resolved);
+
+    // The doc is now a real file — its channel observers were attached as an
+    // upload doc (uploadDoc: true → annotation/reply events suppressed). Re-
+    // attach as a non-upload doc so post-promote annotations reach Claude.
+    attachObservers(docId, doc);
+
     // Broadcast the new openDocuments list so every connected tab bar reflects
     // the new basename + format.
     broadcastOpenDocs();
+
+    // Emit a synthetic `document:opened` so Claude can read/edit the now-real
+    // file by path. Because promote keeps the same documentId, the ctrl-meta
+    // observer sees no openDocuments ID change and would otherwise leave the
+    // doc in its `uploadDocIds` suppression set (invisible to Claude). This
+    // clears that suppression and surfaces the file on the channel.
+    notifyDocumentPromoted(docId, { fileName, format });
 
     return { status: "saved", targetPath: resolved, fileName, format };
   } catch (err) {
