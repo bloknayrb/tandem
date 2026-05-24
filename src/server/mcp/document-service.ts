@@ -199,9 +199,18 @@ export interface SaveAsResult {
  * doc now looks like a `source === "file"` doc with a real `filePath`, so
  * the 60s timer will round-trip it through `atomicWrite` going forward.
  *
- * Path safety: `targetPath` is validated via `assertPathSafe()` (the same
- * helper integration apply uses for `~/.claude.json` writes) — symlinks +
- * paths outside the home/tmp roots are rejected before any I/O.
+ * Path safety: Save-As is a USER-DRIVEN flow — the path comes from the
+ * native Save dialog, so the user explicitly chose where to write
+ * (external drives, network mounts, project dirs outside $HOME are all
+ * legitimate). We therefore do NOT confine the target to the home/tmp
+ * roots. We DO still reject:
+ *  - symlinked path components (a planted symlink could redirect the write
+ *    to a protected file). `assertPathSafe()` runs its full realpath/
+ *    symlink walk; we widen only its allowed-roots confinement by passing
+ *    the resolved path's own filesystem root, so any absolute path passes
+ *    the root check while the symlink rejection stays intact.
+ *  - UNC paths on Windows (NTLM-relay attack surface — see the explicit
+ *    guard below).
  *
  * Bypasses two guards that normal `saveDocumentToDisk` enforces:
  *  - upload-only short-circuit (the whole point is to write an upload doc out)
@@ -274,8 +283,17 @@ export async function saveDocumentAsToDisk(
     };
   }
 
+  // Save-As is user-driven: the path came from the native Save dialog, so
+  // the user is allowed to write anywhere they point it (external drives,
+  // network shares, project dirs outside $HOME). We keep assertPathSafe's
+  // symlink-rejection walk — a planted symlink redirecting the write is a
+  // genuine attack — but widen its allowed-roots confinement so no
+  // home/tmp restriction applies. Passing the resolved path's own
+  // filesystem root means the root check always passes (a path is always
+  // under its own root) while the realpath/symlink walk still rejects any
+  // symlinked component. UNC is rejected separately above.
   try {
-    assertPathSafe(resolved);
+    assertPathSafe(resolved, { allowedRoots: [path.parse(resolved).root] });
   } catch (err) {
     return {
       status: "error",
