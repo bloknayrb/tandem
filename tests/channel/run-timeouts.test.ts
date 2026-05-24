@@ -26,6 +26,12 @@ const RUN_TS_PATH = fileURLToPath(new URL("../../src/channel/run.ts", import.met
 const EVENT_BRIDGE_PATH = fileURLToPath(
   new URL("../../src/channel/event-bridge.ts", import.meta.url),
 );
+// Post-#282 the SSE retry / awareness / mode / error-report logic lives in
+// src/shared/sse-consumer.ts. event-bridge.ts is now a thin adapter that only
+// owns the MCP delivery callback.
+const SSE_CONSUMER_PATH = fileURLToPath(
+  new URL("../../src/shared/sse-consumer.ts", import.meta.url),
+);
 
 describe("channel/run.ts timeout coverage", () => {
   it("does not import authFetch directly — all HTTP goes through fetchWithTimeout", async () => {
@@ -57,48 +63,67 @@ describe("channel/run.ts timeout coverage", () => {
   });
 });
 
-describe("channel/event-bridge.ts timeout coverage", () => {
+describe("shared/sse-consumer.ts timeout coverage (post-#282)", () => {
   it("wraps every authFetch callsite with fetchWithTimeout (handshake exempt)", async () => {
-    const src = await readFile(EVENT_BRIDGE_PATH, "utf8");
+    const src = await readFile(SSE_CONSUMER_PATH, "utf8");
     // The SSE handshake retains a raw authFetch (intentional — the split
     // controller pattern is documented inline). Assert exactly one bare
     // authFetch call remains, and it is the handshake.
     const bareAuthFetch = src.match(/\bauthFetch\s*\(/g) ?? [];
     expect(bareAuthFetch.length).toBe(1);
-    expect(src).toMatch(/authFetch\(`\$\{tandemUrl\}(?:\/api\/events|\$\{API_EVENTS\})`/);
+    expect(src).toMatch(/authFetch\(`\$\{opts\.tandemUrl\}(?:\/api\/events|\$\{API_EVENTS\})`/);
   });
 
   it("pairs every request-response endpoint with fetchWithTimeout and its timeout budget", async () => {
-    const src = await readFile(EVENT_BRIDGE_PATH, "utf8");
+    const src = await readFile(SSE_CONSUMER_PATH, "utf8");
     expectFetchWithTimeoutEndpoint(src, "/api/channel-error", "CHANNEL_ERROR_REPORT_TIMEOUT_MS");
     expectFetchWithTimeoutEndpoint(src, "/api/mode", "CHANNEL_MODE_FETCH_TIMEOUT_MS");
 
+    // Awareness POSTs: scheduled flush (active=true) + auto-clear (idle)
+    // inside connectAndStreamOnce, plus the shutdown-drain flush
+    // (`flushFinalAwareness`).
     expect(
       countMatches(
         src,
         /fetchWithTimeout\([\s\S]*?(?:\/api\/channel-awareness|API_CHANNEL_AWARENESS)/g,
       ),
-    ).toBe(2);
-    expect(countMatches(src, /CHANNEL_AWARENESS_FETCH_TIMEOUT_MS/g)).toBeGreaterThanOrEqual(2);
+    ).toBe(3);
+    expect(countMatches(src, /CHANNEL_AWARENESS_FETCH_TIMEOUT_MS/g)).toBeGreaterThanOrEqual(3);
   });
 
   it("uses split AbortController for the SSE handshake (not AbortSignal.timeout on the body)", async () => {
-    const src = await readFile(EVENT_BRIDGE_PATH, "utf8");
+    const src = await readFile(SSE_CONSUMER_PATH, "utf8");
     expect(src).toMatch(/new AbortController\(\)/);
     expect(src).toMatch(/clearTimeout\(connectTimer\)/);
   });
 
   it("includes an SSE inactivity watchdog and bounded buffer", async () => {
-    const src = await readFile(EVENT_BRIDGE_PATH, "utf8");
+    const src = await readFile(SSE_CONSUMER_PATH, "utf8");
     expect(src).toMatch(/CHANNEL_SSE_INACTIVITY_TIMEOUT_MS/);
     expect(src).toMatch(/CHANNEL_MAX_SSE_BUFFER_BYTES/);
     expect(src).toMatch(/reader\.cancel\(/);
   });
 
   it("clears watchdog and awareness timers in finally (no leaked timers across reconnects)", async () => {
-    const src = await readFile(EVENT_BRIDGE_PATH, "utf8");
+    const src = await readFile(SSE_CONSUMER_PATH, "utf8");
     expect(src).toMatch(/finally\s*\{[\s\S]*?clearInterval\(watchdog\)/);
-    expect(src).toMatch(/finally\s*\{[\s\S]*?clearTimeout\(awarenessTimer\)/);
-    expect(src).toMatch(/finally\s*\{[\s\S]*?clearTimeout\(clearAwarenessTimer\)/);
+    expect(src).toMatch(/finally\s*\{[\s\S]*?clearTimeout\(shutdownTimers\.awarenessTimer\)/);
+    expect(src).toMatch(/finally\s*\{[\s\S]*?clearTimeout\(shutdownTimers\.clearAwarenessTimer\)/);
+    // Also clears the stable-uptime timer (timer-leak fix from the monitor
+    // brought to event-bridge via the shared module).
+    expect(src).toMatch(/finally\s*\{[\s\S]*?clearTimeout\(stableTimer\)/);
+  });
+});
+
+describe("channel/event-bridge.ts is now a thin adapter (post-#282)", () => {
+  it("delegates all HTTP / retry / awareness / mode logic to the shared consumer", async () => {
+    const src = await readFile(EVENT_BRIDGE_PATH, "utf8");
+    expect(src).toMatch(/runEventConsumer\s*\(/);
+    // No direct fetch / authFetch / fetchWithTimeout calls remain in the adapter.
+    expect(src.match(/\bauthFetch\s*\(/g) ?? []).toHaveLength(0);
+    expect(src.match(/\bfetchWithTimeout\s*\(/g) ?? []).toHaveLength(0);
+    // No SSE-specific machinery — that lives in the shared module now.
+    expect(src).not.toMatch(/getReader\(\)/);
+    expect(src).not.toMatch(/parseTandemEvent/);
   });
 });
