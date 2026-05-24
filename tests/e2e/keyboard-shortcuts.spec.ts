@@ -199,15 +199,22 @@ test("Ctrl+Shift+M toggles solo / tandem mode", async ({ page }) => {
   // Default mode is tandem.
   const tandemBtn = page.locator("[data-testid='mode-tandem-btn']");
   const soloBtn = page.locator("[data-testid='mode-solo-btn']");
+  // The `[data-tandem-mode="solo"]` CSS rule in index.html (the de-emphasis
+  // fade for solo mode) is the ground truth — assert the root attribute
+  // toggles in lockstep with the toolbar state.
+  const root = page.locator("[data-tandem-mode]").first();
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
   await expect(soloBtn).toHaveAttribute("aria-pressed", "false");
+  await expect(root).toHaveAttribute("data-tandem-mode", "tandem");
 
   await page.keyboard.press("Control+Shift+M");
   await expect(soloBtn).toHaveAttribute("aria-pressed", "true");
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "false");
+  await expect(root).toHaveAttribute("data-tandem-mode", "solo");
 
   await page.keyboard.press("Control+Shift+M");
   await expect(tandemBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(root).toHaveAttribute("data-tandem-mode", "tandem");
 });
 
 test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
