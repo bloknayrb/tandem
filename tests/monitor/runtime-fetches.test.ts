@@ -10,6 +10,9 @@ import {
 } from "./fetch-harness.js";
 
 const MONITOR_PATH = fileURLToPath(new URL("../../src/monitor/index.ts", import.meta.url));
+const SSE_CONSUMER_PATH = fileURLToPath(
+  new URL("../../src/shared/sse-consumer.ts", import.meta.url),
+);
 
 describe("monitor authenticated fetch surface", () => {
   let stub: ReturnType<typeof createFetchStub>;
@@ -34,19 +37,23 @@ describe("monitor authenticated fetch surface", () => {
   });
 
   it("keeps monitor request-response endpoints on the shared timeout helper", async () => {
-    const src = await readFile(MONITOR_PATH, "utf8");
-    // Assert path + each named import individually so the test survives
-    // import-statement reordering or formatter rewrites.
-    expect(src).toContain('"../shared/fetch-with-timeout.js"');
+    // Post-#282 the SSE / awareness / mode / error-report fetches live in
+    // src/shared/sse-consumer.ts. Assert on the shared module (where the
+    // logic now is) for the bulk of the timeout coverage, and on
+    // src/monitor/index.ts only for the thin adapter surface.
+    const src = await readFile(SSE_CONSUMER_PATH, "utf8");
+    expect(src).toContain('"./fetch-with-timeout.js"');
     expect(src).toMatch(
-      /import\s+\{[^}]*\bdescribeFetchError\b[^}]*\}\s+from\s+["']\.\.\/shared\/fetch-with-timeout\.js["']/,
+      /import\s+\{[^}]*\bdescribeFetchError\b[^}]*\}\s+from\s+["']\.\/fetch-with-timeout\.js["']/,
     );
     expect(src).toMatch(
-      /import\s+\{[^}]*\bfetchWithTimeout\b[^}]*\}\s+from\s+["']\.\.\/shared\/fetch-with-timeout\.js["']/,
+      /import\s+\{[^}]*\bfetchWithTimeout\b[^}]*\}\s+from\s+["']\.\/fetch-with-timeout\.js["']/,
     );
     expect(src).not.toMatch(/async function fetchWithTimeout\(/);
-    expectFetchWithTimeoutEndpoint(src, "/api/channel-error", "ERROR_REPORT_TIMEOUT_MS");
-    expectFetchWithTimeoutEndpoint(src, "/api/mode", "MODE_FETCH_TIMEOUT_MS");
+    expectFetchWithTimeoutEndpoint(src, "/api/channel-error", "CHANNEL_ERROR_REPORT_TIMEOUT_MS");
+    expectFetchWithTimeoutEndpoint(src, "/api/mode", "CHANNEL_MODE_FETCH_TIMEOUT_MS");
+    // Awareness POSTs: scheduled flush + auto-clear (inside connectAndStreamOnce)
+    // plus the shutdown-drain flush (`flushFinalAwareness`).
     expect(
       countMatches(
         src,
@@ -54,7 +61,16 @@ describe("monitor authenticated fetch surface", () => {
       ),
     ).toBe(3);
     expect(src.match(/\bauthFetch\s*\(/g)?.length ?? 0).toBe(1);
-    expect(src).toMatch(/authFetch\(`\$\{TANDEM_URL\}(?:\/api\/events|\$\{API_EVENTS\})`/);
+    expect(src).toMatch(/authFetch\(`\$\{opts\.tandemUrl\}(?:\/api\/events|\$\{API_EVENTS\})`/);
+
+    // The monitor wrapper itself should be thin: zero direct fetch / authFetch
+    // / fetchWithTimeout calls. All HTTP flows through the shared module via
+    // the runEventConsumer + flushFinalAwareness contract.
+    const monitorSrc = await readFile(MONITOR_PATH, "utf8");
+    expect(monitorSrc.match(/\bauthFetch\s*\(/g) ?? []).toHaveLength(0);
+    expect(monitorSrc.match(/\bfetchWithTimeout\s*\(/g) ?? []).toHaveLength(0);
+    expect(monitorSrc).toMatch(/runEventConsumer\s*\(/);
+    expect(monitorSrc).toMatch(/flushFinalAwareness\s*\(/);
   });
 
   it("authenticates the SSE handshake with plugin URL and token", async () => {
