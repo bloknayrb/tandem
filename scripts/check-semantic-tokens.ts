@@ -122,15 +122,22 @@ interface CommentState {
  * Mask comment regions in a single line while preserving column indices so
  * violation positions stay accurate. Maintains running state across lines for
  * multi-line CSS block comments (`/* ... *\/`) and HTML comments
- * (`<!-- ... -->`). HTML comments are only recognized when `html` is true so
- * `<!--` sequences in JS/TS/Svelte code (rare, but possible in strings) are
- * not treated as comment openers.
+ * (`<!-- ... -->`). HTML comments are recognized only when `html` is true,
+ * which the caller sets for `.html` and `.svelte` files (both use `<!-- -->`
+ * markup); for `.ts`/`.js`/`.css` files `<!--` is left as-is.
  *
  * Block comments and HTML comments are masked (replaced with spaces). A leading
  * `//` line comment (after whitespace) masks the remainder of the line, but
  * only when not already inside a block/HTML comment — matching the prior
  * line-start `//` skip behavior without dropping code that precedes a mid-line
  * `/*` opener.
+ *
+ * Known limitation: this scanner has no string-literal awareness, so a `/*`
+ * (or, in `.svelte`/`.html`, a `<!--`) inside a string literal is treated as a
+ * comment opener and masks the rest of the literal — a potential false
+ * negative. This matches the prior regex-based behavior (which was equally
+ * string-unaware) and is an accepted tradeoff for a lint gate; full
+ * string-literal parsing is out of scope.
  */
 function maskComments(line: string, state: CommentState, html: boolean): string {
   const out: string[] = [];
@@ -218,7 +225,9 @@ export function checkContent(content: string, rel: string): string[] {
   const violations: string[] = [];
 
   const lines = content.split("\n");
-  const isHtml = rel.endsWith(".html");
+  // `.svelte` files use the same `<!-- -->` markup comments as `.html`, and
+  // both are in `collectFiles` scope, so they get the same HTML-comment gate.
+  const isHtml = rel.endsWith(".html") || rel.endsWith(".svelte");
   const state: CommentState = { inBlockComment: false, inHtmlComment: false };
 
   for (let i = 0; i < lines.length; i++) {

@@ -267,8 +267,8 @@ describe("check-semantic-tokens", () => {
     });
 
     it("treats `<!--` as live code in non-html files (no HTML comment stripping)", () => {
-      // HTML comment recognition is gated on the `.html` extension; a literal
-      // `<!--` in a .ts string must not swallow a following bundle hex.
+      // HTML comment recognition is gated on the `.html`/`.svelte` extensions; a
+      // literal `<!--` in a .ts string must not swallow a following bundle hex.
       const violations = checkContent(
         `const s = "<!-- #f57018 -->";\n`,
         "src/client/components/NotHtml.ts",
@@ -276,6 +276,50 @@ describe("check-semantic-tokens", () => {
 
       expect(violations).toEqual([
         "src/client/components/NotHtml.ts:1: #f57018 [bundle-blocklist]",
+      ]);
+    });
+
+    it("does not flag a bundle hex inside a single-line HTML comment in a .svelte file", () => {
+      // `.svelte` markup uses `<!-- -->` comments just like `.html`, so the
+      // HTML-comment gate must apply to .svelte files too.
+      const violations = checkContent(
+        `<div>before</div><!-- legacy color was #c96442 --><div>after</div>\n`,
+        "src/client/components/SvelteComment.svelte",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    it("does not flag a bundle/CSS-keyword hex inside a multi-line HTML comment in a .svelte file", () => {
+      // A multi-line `<!-- -->` comment whose body contains a `color:` keyword
+      // (which would otherwise satisfy the CSS-indicator heuristic) must be
+      // masked across all spanned lines.
+      const violations = checkContent(
+        ["<!-- palette notes", "  legacy color: #c96442", "  bundle blue #1095d4", "-->"].join(
+          "\n",
+        ),
+        "src/client/components/SvelteMultiComment.svelte",
+      );
+
+      expect(violations).toEqual([]);
+    });
+
+    it("flags a bundle hex in live .svelte markup/script (positive control)", () => {
+      // Bundle-blocklisted hex outside any comment is real, both in an inline
+      // style attribute (CSS context) and in a script string literal.
+      const violations = checkContent(
+        [
+          `<script lang="ts">`,
+          `  const c = "#f57018";`,
+          `</script>`,
+          `<div style="color: #c96442;">live</div>`,
+        ].join("\n"),
+        "src/client/components/SvelteLive.svelte",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/SvelteLive.svelte:2: #f57018 [bundle-blocklist]",
+        "src/client/components/SvelteLive.svelte:4: #c96442",
       ]);
     });
   });
