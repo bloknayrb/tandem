@@ -21,6 +21,7 @@ import {
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
+  Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_DOCUMENT_META,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
@@ -280,6 +281,27 @@ describe("broadcastOpenDocs", () => {
     const docs = meta.get("openDocuments") as any[];
     expect(docs).toEqual([]);
     expect(meta.get("activeDocumentId")).toBeNull();
+  });
+
+  it("broadcasts an advancing activation epoch to CTRL_ROOM and per-doc rooms", () => {
+    addDoc("ep-a", makeOpenDoc("ep-a"));
+    setActiveDocId("ep-a");
+    broadcastOpenDocs();
+
+    const ctrlMeta = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_DOCUMENT_META);
+    const first = ctrlMeta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) as number;
+    expect(typeof first).toBe("number");
+    // Mirrored into the doc's own room so a per-tab observer sees the same epoch.
+    expect(
+      getOrCreateDocument("ep-a").getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_ACTIVE_DOCUMENT_EPOCH),
+    ).toBe(first);
+
+    // Every setActiveDocId advances the epoch — even re-selecting the same id
+    // (the intentional re-focus the client must honor).
+    setActiveDocId("ep-a");
+    broadcastOpenDocs();
+    const second = ctrlMeta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) as number;
+    expect(second).toBeGreaterThan(first);
   });
 });
 

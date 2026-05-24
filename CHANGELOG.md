@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Keyboard tab switch no longer reverts under a stale sync** — a local `Ctrl+1..9` (or click) tab switch is client-only and was being clobbered when a late `documentMeta` re-broadcast re-applied the server's active doc, surfacing as a flaky "Ctrl+N switches to the Nth tab" E2E test. The server now broadcasts a monotonic activation epoch (`activeDocumentEpoch`) alongside the active id; the client applies the server's active only when the epoch advances, so a stale re-sync is ignored while a genuine re-activation (e.g. re-opening the already-active doc) still steals focus.
 - **Selection toolbar places itself clear of fixed chrome (#680)** — the selection BubbleMenu flips below the selection when above-placement would overlap the TitleBar + FormattingBar; selections that straddle the viewport fold pin the toolbar to the viewport bottom rather than clamping onto the chrome; and a 4px hysteresis band at the flip boundary keeps the toolbar from shimmering as a selection drifts across the threshold.
 
 ## [0.12.0] - 2026-05-15

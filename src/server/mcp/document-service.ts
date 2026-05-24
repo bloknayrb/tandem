@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import {
   CTRL_ROOM,
+  Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_DOCUMENT_META,
   Y_MAP_GENERATION_ID,
@@ -37,6 +38,7 @@ import { getOrCreateDocument } from "../yjs/provider.js";
 
 import {
   docCount,
+  getActiveDocEpoch,
   getActiveDocId,
   getOpenDocs,
   type OpenDoc,
@@ -47,6 +49,7 @@ import {
 export {
   addDoc,
   docCount,
+  getActiveDocEpoch,
   getActiveDocId,
   getCurrentDoc,
   getOpenDocs,
@@ -204,6 +207,7 @@ export function toDocListEntry(d: OpenDoc) {
 export function broadcastOpenDocs(): void {
   const docList = Array.from(openDocs.values()).map(toDocListEntry);
   const id = getActiveDocId();
+  const epoch = getActiveDocEpoch();
 
   try {
     const ctrl = getOrCreateDocument(CTRL_ROOM);
@@ -211,6 +215,7 @@ export function broadcastOpenDocs(): void {
     withInternal(ctrl, () => {
       ctrlMeta.set(Y_MAP_OPEN_DOCUMENTS, docList);
       ctrlMeta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
+      ctrlMeta.set(Y_MAP_ACTIVE_DOCUMENT_EPOCH, epoch);
     });
   } catch (err) {
     console.error("[Tandem] broadcastOpenDocs: failed to update CTRL_ROOM:", err);
@@ -224,6 +229,7 @@ export function broadcastOpenDocs(): void {
       withInternal(ydoc, () => {
         meta.set(Y_MAP_OPEN_DOCUMENTS, docList);
         meta.set(Y_MAP_ACTIVE_DOCUMENT_ID, id);
+        meta.set(Y_MAP_ACTIVE_DOCUMENT_EPOCH, epoch);
       });
     } catch (err) {
       console.error(`[Tandem] broadcastOpenDocs: failed to update doc ${docId}:`, err);
@@ -320,6 +326,7 @@ export async function restoreCtrlSession(): Promise<string | null> {
   withInternal(ctrlDoc, () => {
     meta.delete(Y_MAP_OPEN_DOCUMENTS);
     meta.delete(Y_MAP_ACTIVE_DOCUMENT_ID);
+    meta.delete(Y_MAP_ACTIVE_DOCUMENT_EPOCH);
   });
 
   console.error("[Tandem] Restored chat history from session (cleared stale doc list)");

@@ -5,6 +5,7 @@ import {
   CTRL_ROOM,
   DEFAULT_MCP_PORT,
   DEFAULT_WS_PORT,
+  Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
@@ -18,6 +19,7 @@ import {
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation } from "../../shared/types";
 import type { DocListEntry, OpenTab } from "../types";
+import { resolveActiveTabId } from "./tab-reconcile.js";
 import { deduplicateDocList } from "./useYjsSync";
 
 export type ConnectionStatus = "connected" | "connecting" | "disconnected";
@@ -89,6 +91,11 @@ export function createYjsSync(): YjsSyncState {
   /** Track whether we've ever connected — don't count initial attempt as a reconnect. */
   let hadConnection = false;
   let generationId: string | null = null;
+  // Last activation epoch applied from the server. Lets handleDocumentList tell a
+  // genuine (re)activation (epoch advanced) from a stale re-broadcast of an
+  // unchanged active id (epoch same), so the latter never clobbers a local tab
+  // switch. Shared across the bootstrap + all per-tab observers (one closure).
+  let lastAppliedActiveEpoch: number | null = null;
   // Synchronous dedup guards — prevent duplicate provider creation when multiple
   // Yjs observers fire before reactive state catches up.
   const pendingIds = new Set<string>();
@@ -163,7 +170,11 @@ export function createYjsSync(): YjsSyncState {
   };
 
   // ---------- handleDocumentList: reconcile tabs from server-broadcast list ----------
-  const handleDocumentList = (docList: DocListEntry[], newActiveId: string | null) => {
+  const handleDocumentList = (
+    docList: DocListEntry[],
+    newActiveId: string | null,
+    activeEpoch: number | null,
+  ) => {
     const currentTabs = tabsState;
     const existingIds = new Set(currentTabs.map((t) => t.id));
     const serverIds = new Set(docList.map((d) => d.id));
@@ -202,15 +213,19 @@ export function createYjsSync(): YjsSyncState {
 
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
       const metaObserver = (event: Y.YMapEvent<unknown>) => {
-        // keysChanged guards #2 + #3 (preserves original line 183)
+        // keysChanged guards #2 + #3 (preserves original line 183). The epoch key
+        // is included so the guard can't silently no-op if it is ever written
+        // without the active id in the same transaction.
         if (
           !event.keysChanged.has(Y_MAP_OPEN_DOCUMENTS) &&
-          !event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID)
+          !event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID) &&
+          !event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_EPOCH)
         )
           return;
         const docs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
         const active = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
-        if (docs) handleDocumentList(docs, active ?? null);
+        const epoch = meta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) as number | null | undefined;
+        if (docs) handleDocumentList(docs, active ?? null, epoch ?? null);
       };
       meta.observe(metaObserver);
       tabMetaCleanups.set(doc.id, () => meta.unobserve(metaObserver));
@@ -236,20 +251,23 @@ export function createYjsSync(): YjsSyncState {
     const kept = currentTabs.filter((t) => serverIds.has(t.id));
     tabsState = [...kept, ...newTabs];
 
-    // Keep the client's current tab when a *different* tab was closed and the
-    // server isn't explicitly requesting a switch.
+    // Resolve the active tab. A stale re-broadcast of an unchanged active id
+    // (same epoch) must not clobber a local keyboard/click switch; a genuine
+    // (re)activation (advanced epoch) applies. See resolveActiveTabId.
     if (newActiveId !== null) {
-      const prev = activeTabIdState;
-      if (prev === null) {
-        activeTabIdState = newActiveId;
-      } else if (!serverIds.has(prev)) {
-        activeTabIdState = newActiveId; // active tab was removed
-      } else if (toRemove.length > 0 && newActiveId === prev) {
-        // close of another tab — keep current
-      } else {
-        activeTabIdState = newActiveId;
-      }
+      activeTabIdState = resolveActiveTabId({
+        prev: activeTabIdState,
+        serverActiveId: newActiveId,
+        serverIds,
+        removedCount: toRemove.length,
+        serverEpoch: activeEpoch,
+        lastAppliedEpoch: lastAppliedActiveEpoch,
+      });
+      lastAppliedActiveEpoch = activeEpoch;
     }
+    // Note: when newActiveId === null (last tab closed) we leave
+    // lastAppliedActiveEpoch stale. Harmless: epoch is monotonic, so the next
+    // genuine reactivation still satisfies activeEpoch !== lastAppliedActiveEpoch.
   };
 
   // Forward-declared so the bootstrap block (below) can assign and destroy() can call.
@@ -298,6 +316,11 @@ export function createYjsSync(): YjsSyncState {
         if (newGenId && generationId && newGenId !== generationId) {
           console.warn("[Tandem] Server restarted — refreshing documents");
           serverRestarted = true;
+          // The server's activeDocEpoch resets to 0 on restart and climbs back.
+          // Clear our last-applied epoch so the restored active id is always
+          // re-applied below — otherwise a post-restart epoch that numerically
+          // collides with the stale value would make the gate wrongly skip it.
+          lastAppliedActiveEpoch = null;
           if (restartTimer) clearTimeout(restartTimer);
           restartTimer = setTimeout(() => {
             serverRestarted = false;
@@ -306,14 +329,17 @@ export function createYjsSync(): YjsSyncState {
         if (newGenId) generationId = newGenId;
       }
 
-      // keysChanged guard #5 (preserves original line 286)
+      // keysChanged guard #5 (preserves original line 286). Epoch key included so
+      // the guard can't silently no-op if it is ever written alone.
       if (
         event.keysChanged.has(Y_MAP_OPEN_DOCUMENTS) ||
-        event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID)
+        event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_ID) ||
+        event.keysChanged.has(Y_MAP_ACTIVE_DOCUMENT_EPOCH)
       ) {
         const docs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
         const active = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
-        if (docs) handleDocumentList(docs, active ?? null);
+        const epoch = meta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) as number | null | undefined;
+        if (docs) handleDocumentList(docs, active ?? null, epoch ?? null);
       }
 
       // keysChanged guard #6: annotation store read-only state
@@ -328,7 +354,8 @@ export function createYjsSync(): YjsSyncState {
     if (initGenId) generationId = initGenId;
     const initDocs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
     const initActive = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
-    if (initDocs) handleDocumentList(initDocs, initActive ?? null);
+    const initEpoch = meta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) as number | null | undefined;
+    if (initDocs) handleDocumentList(initDocs, initActive ?? null, initEpoch ?? null);
     storeReadOnly = (meta.get(Y_MAP_STORE_READ_ONLY) as boolean | undefined) === true;
 
     // Stash bootstrap cleanup for destroy()
