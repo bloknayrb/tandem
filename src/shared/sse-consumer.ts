@@ -26,6 +26,14 @@
  * pattern). The channel previously reset retries on every successful event
  * — bringing exponential backoff + stable uptime gives the channel the
  * same robustness guarantees.
+ *
+ * Frame-skip policy: advance `lastEventId` past malformed-JSON and
+ * failed-validation frames (channel's "advance past garbage" pattern). The
+ * monitor previously did NOT advance on these — its catch / `!event`
+ * branches just `continue`d, so a permanently-unparseable frame would be
+ * replayed from `Last-Event-ID` on every reconnect forever (an infinite
+ * parse-fail loop). Unifying on the channel's semantics fixes that latent
+ * infinite re-delivery bug.
  */
 
 import { API_CHANNEL_AWARENESS, API_CHANNEL_ERROR, API_EVENTS, API_MODE } from "./api-paths.js";

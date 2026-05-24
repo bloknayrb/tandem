@@ -18,7 +18,7 @@
 
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CHANNEL_MAX_RETRIES } from "../../src/shared/constants.js";
+import { CHANNEL_MAX_RETRIES, CHANNEL_RETRY_DELAY_MS } from "../../src/shared/constants.js";
 import {
   ControllableStream,
   createFetchStub,
@@ -394,6 +394,72 @@ describe("event-bridge: awareness debounce + auto-clear", () => {
 
     stream.end();
     await vi.advanceTimersByTimeAsync(200_000);
+    await promise;
+  });
+});
+
+describe("event-bridge: retry counter resets after stable uptime", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = setupHarness({ mode: "tandem" });
+  });
+
+  afterEach(() => {
+    teardownHarness(h);
+  });
+
+  it("retry counter resets after STABLE_CONNECTION_MS of continuous uptime", async () => {
+    // Mirror of tests/monitor/retry.test.ts. Accumulate retries BEFORE the
+    // stable-uptime period so the reset has something to reset. Attempts 1+2
+    // fail (retries climbs to 2), attempt 3 succeeds and stays up past
+    // STABLE_CONNECTION_MS (60s) so onStable fires and retries resets to 0.
+    // When attempt 3 ends, the catch runs:
+    //   - With the reset: retries goes 0→1, backoff = base (2000ms).
+    //   - Without the reset: retries would go 2→3, backoff = 8000ms.
+    // Asserting that attempt 4 fires within ~2s proves the reset happened.
+    // Without the per-stable-uptime reset (the pre-#282 channel behavior of
+    // resetting on every successful event), a channel link flapping faster
+    // than 60s could exhaust its retry budget and process.exit(1).
+    const attemptTimes: number[] = [];
+    let attempt = 0;
+    const stream3 = new ControllableStream();
+    const stream4 = new ControllableStream();
+    h.stub.on("/api/events", () => {
+      attempt++;
+      attemptTimes.push(Date.now());
+      if (attempt <= 2) throw new Error("refused");
+      if (attempt === 3) return sseResponse(stream3);
+      if (attempt === 4) return sseResponse(stream4);
+      throw new Error("unexpected attempt");
+    });
+
+    const start = await loadStartEventBridge();
+    const promise = start(h.mcp as unknown as Server, URL).catch(() => {});
+
+    // Drive past attempts 1+2 (backoffs 2s+4s) so attempt 3 is active.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(attempt).toBe(3);
+
+    // Hold attempt 3 up past STABLE_CONNECTION_MS (60s) so onStable fires.
+    await vi.advanceTimersByTimeAsync(60_500);
+
+    stream3.end();
+    const t3End = Date.now();
+
+    // Advance slightly past the base backoff (2s). If reset worked, attempt 4
+    // has fired. If reset failed silently, retries would still be 2→3, delay
+    // would be 8s, and attempt 4 would not have fired yet.
+    await vi.advanceTimersByTimeAsync(CHANNEL_RETRY_DELAY_MS + 100);
+
+    expect(attempt).toBe(4);
+    const delayToAttempt4 = attemptTimes[3]! - t3End;
+    expect(delayToAttempt4).toBeGreaterThanOrEqual(CHANNEL_RETRY_DELAY_MS - 100);
+    expect(delayToAttempt4).toBeLessThan(CHANNEL_RETRY_DELAY_MS * 1.5);
+
+    stream4.end();
+    // Drain remaining retries so the loop exits via the MAX branch.
+    await vi.advanceTimersByTimeAsync(300_000);
     await promise;
   });
 });
