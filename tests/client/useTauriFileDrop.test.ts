@@ -228,8 +228,10 @@ describe("useTauriFileDrop", () => {
       // Delimited-token match: ext must NOT be followed by another letter.
       // Rejects substring-only matches like `.htm` inside `.html` (the very
       // hazard that hid the original bug 8e73059 fixed) or `.md` inside a
-      // future `.markdown`.
-      const escaped = ext.replace(/\./g, "\\.");
+      // future `.markdown`. Escapes every regex metacharacter (not just `.`)
+      // so a future extension containing e.g. `(` or `+` wouldn't poison
+      // the pattern — CodeQL js/incomplete-sanitization.
+      const escaped = ext.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       expect(msg).toMatch(new RegExp(`${escaped}(?![a-zA-Z])`));
     }
   });
