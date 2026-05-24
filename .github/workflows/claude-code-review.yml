@@ -2,7 +2,7 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened]
+    types: [opened, ready_for_review, reopened]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -16,16 +16,17 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write
-  issues: write
+  issues: read # gh issue view (in --allowedTools) needs read; omitting the key entirely would set it to none
   id-token: write # required by claude-code-action per docs/setup.md, even with API-key auth
 
 jobs:
   review:
     if: >
       github.event.pull_request.draft == false &&
-      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.event.pull_request.user.type != 'Bot' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # cost guard: cap a hung/runaway LLM run (default is 360)
     steps:
       - uses: actions/checkout@v4
         with:
