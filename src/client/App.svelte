@@ -1316,6 +1316,8 @@ const tutorial = createTutorial(
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
+    closedTabTop={closedTabStack.top}
+    onReopenClosed={reopenClosedTab}
   />
 {/snippet}
 

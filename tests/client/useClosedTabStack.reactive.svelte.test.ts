@@ -43,4 +43,31 @@ describe("createClosedTabStack reactive top", () => {
     });
     cleanup();
   });
+
+  it("propagates through a $derived (the indirection the prop hops rely on)", () => {
+    // App reads closedTabStack.top in a template and passes it down through
+    // DocumentTabs to NewTabMenu. Each hop is a reactive read of the getter.
+    // A $derived reading `top`, observed via an $effect, is the unit-test
+    // analogue: if the effect re-runs, the template prop hops do too.
+    const cleanup = $effect.root(() => {
+      const stack = createClosedTabStack();
+      const topPath = $derived(stack.top?.filePath ?? null);
+      let seen: string | null = "sentinel";
+      $effect(() => {
+        seen = topPath;
+      });
+
+      flushSync();
+      expect(seen).toBeNull();
+
+      stack.push({ filePath: "/x", closedAt: 1 });
+      flushSync();
+      expect(seen).toBe("/x");
+
+      stack.pop();
+      flushSync();
+      expect(seen).toBeNull();
+    });
+    cleanup();
+  });
 });
