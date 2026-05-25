@@ -77,3 +77,13 @@ If a sub-PR finds a resolution above is wrong for its specific surface:
 4. Update this document with the override in the same PR.
 
 This is intentionally heavyweight — the default is "follow the locked resolution" so 40+ PRs don't each re-debate the same nine tradeoffs.
+
+---
+
+## Applied Overrides
+
+### Sub-PR 1.9 (NewTabMenu) — elevated "clean port" → full feature rebuild
+
+- **What changed:** the master plan labeled 1.9 a "clean port," but the bundle's `a7-new-tab` is a structurally richer two-column **searchable launcher** (search/filter, recent metadata + "when" timestamp, reopen-last-closed, from-clipboard, keyboard footer) than production's simple recents dropdown. On 2026-05-25 Bryan explicitly chose a **full feature rebuild** over a visual-only restyle.
+- **Why this is an override:** it intentionally breaks Phase 1's "visual-only / no `src/server`" rule. So a future reader doesn't mistake it for an accidental scope violation: the recents-with-timestamps schema change (1.9a) and the launcher feature work (1.9b) are sanctioned. Exploration found the feature is achievable almost entirely client-side (recents are client `localStorage`; closed-tab history already exists in `useClosedTabStack`; clipboard import reuses the existing `/api/upload` ingestion) — so in practice `src/server` is untouched, but the *intent* exceeds visual-only.
+- **Scope guardrails still hold:** all existing testids preserved; clipboard content flows through the existing sanitization-equivalent ingestion (security-reviewed); no server route added.
