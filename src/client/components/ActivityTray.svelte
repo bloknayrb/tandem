@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
 import type { ActivityItem } from "../hooks/useNotifications.svelte";
+import { resolveActivityAction } from "./activityActions.js";
 import { relativeTime, SEVERITY_GLYPHS } from "./activityCenter.js";
 
 interface Props {
@@ -9,9 +10,13 @@ interface Props {
   onToggle: () => void;
   onDismiss: (id: string) => void;
   onClear: () => void;
+  // Required (App is the only consumer): a row's action button is shown when
+  // resolveActivityAction(item) is non-null, so an optional/forgotten handler
+  // would render a silently-dead button.
+  onAction: (item: ActivityItem) => void;
 }
 
-let { items, open, onToggle, onDismiss, onClear }: Props = $props();
+let { items, open, onToggle, onDismiss, onClear, onAction }: Props = $props();
 
 const total = $derived(items.length);
 // Highest-severity-wins: error outranks warning outranks info, else idle.
@@ -50,6 +55,7 @@ onDestroy(() => clearInterval(clock));
       {:else}
         <div class="tray-list">
           {#each items as item (item.id)}
+            {@const action = resolveActivityAction(item)}
             <div class="toast-row {item.severity}" data-testid={`activity-row-${item.id}`}>
               <span class="glyph">
                 <svg
@@ -76,6 +82,30 @@ onDestroy(() => clearInterval(clock));
                   {/if}
                   <span class="ts">{relativeTime(item.timestamp, now)}</span>
                 </div>
+                {#if action}
+                  <button
+                    type="button"
+                    class="action"
+                    data-testid={`activity-action-${item.id}`}
+                    onclick={() => onAction(item)}
+                  >
+                    <svg
+                      width="11"
+                      height="11"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M21 12a9 9 0 1 1-3-7" />
+                      <path d="M21 4v5h-5" />
+                    </svg>
+                    {action.label}
+                  </button>
+                {/if}
               </div>
               <button
                 type="button"
@@ -363,6 +393,27 @@ onDestroy(() => clearInterval(clock));
   .toast-row .msg {
     font-weight: 500;
     min-width: 0;
+  }
+  .toast-row .action {
+    margin-top: 6px;
+    font-family: var(--tandem-font-sans);
+    font-size: var(--tandem-text-xs);
+    font-weight: 500;
+    height: 22px;
+    padding: 0 10px;
+    border-radius: var(--tandem-r-pill);
+    background: transparent;
+    border: 1px solid var(--tandem-border-strong);
+    color: var(--tandem-fg);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: background 100ms, border-color 100ms;
+  }
+  .toast-row .action:hover {
+    background: var(--tandem-surface-sunk);
+    border-color: var(--tandem-fg-faint);
   }
   .toast-row .ts {
     margin-left: auto;

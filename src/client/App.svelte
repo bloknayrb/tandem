@@ -16,6 +16,7 @@ import {
 } from "./actions/builtin.svelte.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
 import ActivityTray from "./components/ActivityTray.svelte";
+import { resolveActivityAction } from "./components/activityActions.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -313,6 +314,7 @@ if (import.meta.env.DEV) {
       __tandemTest?: {
         openSettingsModal: () => void;
         pushNotification: (n: TandemNotification) => void;
+        activeDocumentId: () => string | null;
       };
     }
   ).__tandemTest = {
@@ -324,6 +326,9 @@ if (import.meta.env.DEV) {
     // so a notification pushed before the EventSource connects is lost).
     // Exercises the real client `push` → ingest → tray + transient-pop path.
     pushNotification: (n: TandemNotification) => notifications.push(n),
+    // Lets the activity-tray Retry E2E target a genuinely-open doc so the
+    // onAction handler reaches triggerSave instead of the closed-doc fallback.
+    activeDocumentId: () => yjsSync.activeTabId,
   };
 }
 let paletteOpen = $state(false);
@@ -1312,6 +1317,24 @@ const tutorial = createTutorial(
       onToggle={() => (activityOpen = !activityOpen)}
       onDismiss={notifications.dismissActivity}
       onClear={notifications.clearActivity}
+      onAction={(item) => {
+        const action = resolveActivityAction(item);
+        if (!action) return;
+        // The failed doc may have been closed since the error fired; triggerSave
+        // would silently skip a closed doc, so tell the user to reopen instead.
+        if (yjsSync.tabs.some((t) => t.id === action.documentId)) {
+          void triggerSave(action.documentId);
+        } else {
+          notifications.push({
+            id: `retry-unavailable-${Date.now()}`,
+            type: "general-error",
+            severity: "warning",
+            message: "Reopen the document to retry the save.",
+            dedupKey: `retry-unavailable:${action.documentId}`,
+            timestamp: Date.now(),
+          });
+        }
+      }}
     />
 
     {#if isTauriRuntime()}

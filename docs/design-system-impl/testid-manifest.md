@@ -192,7 +192,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Activity center (1.10)
 - `activity-pill`, `activity-tray`, `activity-empty`, `activity-clear-all`
-- `activity-row-{*}`, `activity-dismiss-{*}`
+- `activity-row-{*}`, `activity-dismiss-{*}`, `activity-action-{*}`
 
 ### Apply & collapsible primitives
 - `apply-changes-btn`

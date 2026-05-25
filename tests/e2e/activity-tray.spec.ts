@@ -191,3 +191,50 @@ test("activity persists across a page reload", async ({ page }) => {
     "Survives reload.",
   );
 });
+
+test("a save-error row shows Retry, and clicking it re-runs the save for that doc", async ({
+  page,
+}) => {
+  await openEditor(page);
+
+  // Intercept the save POST so no real disk write happens, and capture the
+  // documentId the Retry button forwards to triggerSave.
+  let savedDocumentId: string | null = null;
+  await page.route("**/api/save", async (route) => {
+    if (route.request().method() === "POST") {
+      savedDocumentId =
+        (route.request().postDataJSON() as { documentId?: string }).documentId ?? null;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "saved" }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
+  // Target the genuinely-open active doc so onAction reaches triggerSave
+  // (rather than the closed-doc "reopen to retry" fallback).
+  const docId = await page.evaluate(() => {
+    const w = window as unknown as { __tandemTest?: { activeDocumentId: () => string | null } };
+    return w.__tandemTest?.activeDocumentId() ?? null;
+  });
+  expect(docId).toBeTruthy();
+
+  await pushNotification(page, {
+    id: "save-err-1",
+    type: "save-error",
+    severity: "error",
+    message: "Save failed: disk full",
+    documentId: docId as string,
+  });
+
+  await page.locator("[data-testid='activity-pill']").click();
+  const retry = page.locator("[data-testid='activity-action-save-err-1']");
+  await expect(retry).toBeVisible();
+  await expect(retry).toContainText("Retry");
+
+  await retry.click();
+  await expect.poll(() => savedDocumentId).toBe(docId);
+});

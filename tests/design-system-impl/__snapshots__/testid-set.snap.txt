@@ -1,5 +1,6 @@
 accent-hue-slider
 accept-btn-{*}
+activity-action-{*}
 activity-clear-all
 activity-dismiss-{*}
 activity-empty
