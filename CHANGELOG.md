@@ -5,32 +5,73 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - 2026-05-25
 
 ### Added
 
 - **Settings → Models tab + edit modal (Wave 2 PR 8b, #659)** — new tab in `SettingsModal` for managing the Models registry. Provider-grouped list with per-row enable toggle, edit, two-step delete confirm. `ModelEditModal` covers add and edit flows: provider select (Anthropic / OpenAI / Gemini / Ollama / llama.cpp), conditional cloud-vs-local fields, reveal-gated API key (masked `••••${last4}` on edit; "Replace key" button to enter a new value — existing key never round-trips through the DOM). Mandatory in-product disclosure banner about plaintext localStorage storage.
 - **Models registry data model + `useModels` hook (Wave 2 PR 8a, #659)** — `TandemSettings` now carries a `models: ModelRegistryEntry[]` array tracking AI providers Tandem can call out to (Anthropic, OpenAI, Gemini, local Ollama, local llama.cpp). The data layer ships in this PR; the Settings → Models UI ships in PR 8b. Orthogonal to `IntegrationConfig` (#477) — that schema tracks MCP clients connecting INTO Tandem, while this tracks providers Tandem talks OUT to.
+- **Multi-provider Models registry (#659, #784)** — keychain-backed secret storage, per-provider default selection, and a first-run model picker spanning Anthropic / OpenAI / Gemini cloud providers plus local Ollama / llama.cpp endpoints. A legacy-migration banner upgrades pre-registry single-key setups.
 - **Schema v2 → v3 migration with forward-compat read-only mode** — `loadSettings` now walks an explicit migration chain (v1→v2→v3). An on-disk `schemaVersion` greater than v3 loads defensively with `_readOnly: true`, and `createTandemSettings.updateSettings` short-circuits writes on read-only settings. This is the load-bearing defence against a downgraded client clobbering a newer client's Models registry / future fields on first save.
-
-### Security
-
-- **CI guard: harness components must not leak into production client bundle (Wave 2 PR 7)** — new `scripts/ci/verify-harness-stripped.mjs` runs after `npm run build` and greps `dist/client/` for known harness symbols (`UpdateAvailableHarness`, `harness-acknowledge`, etc.). Defends against a future commit accidentally importing a harness component from a production-shipping module, which would expose internal state (e.g. acknowledge buttons, version accessors) to end users. Pairs with the #660 audit confirming every settings-open path routes through the ack-clearing wrapper.
+- **Integration setup wizard + first-run auto-open (#477 PRs 1/3a/3b/3c-i/3c-ii-b — #728, #729, #730, #731, #773)** — a full-screen wizard for connecting MCP clients (Claude Code and other agents) to Tandem. Ships the `IntegrationConfig` schema with atomic storage + v1→v2→v3 migration, a non-mutating reader for existing `~/.claude.json` entries, and an apply path (`POST /api/integrations/apply`) that backs up the target config before rewriting it. On first launch with no `integrations.json` the wizard opens automatically; later launches do not. Enabled by default.
+- **Native OS keychain on the Tauri desktop app (#477 PR 3c-tauri-keychain, #732)** — integration secrets are stored in the platform keychain on desktop, with graceful env-var fallback when the keychain is unavailable.
+- **Auto-launcher for Claude Code (#477 PR 4a/4b, #800)** — Tandem spawns and supervises the Claude Code CLI alongside the server, with a native cross-platform parent-death reaper so the child is reliably cleaned up on exit. Adds command-palette actions "Relaunch Claude in this folder" and "Start fresh Claude conversation", a working-directory picker in Settings → Integrations, and a project-context skill bundled on startup. Enabled by default for users with a configured `claude-code` integration; opt out with `TANDEM_DISABLE_LAUNCHER=1`.
+- **Native file picker + drag-and-drop on the Tauri desktop app (#378)** — open files through the OS-native file dialog and by dragging them onto the window; the File Open dialog is consolidated to a single Browse + Recent panel.
+- **Heading-section collapse (#650)** — collapse everything under a heading via its fold control; collapse state persists per document in localStorage and survives heading-text edits and reloads.
+- **Scratchpad save-to-disk (#827)** — save a scratchpad to a real file via the native dialog (`.md` / `.txt`); Save-As accepts user-chosen locations anywhere on disk while keeping the symlink + UNC guards.
+- **Claude typing-presence indicator (#651)** — a presence cue shows when Claude is actively writing, with monotonic token ownership so overlapping presence updates resolve deterministically.
+- **Warm canvas theme (#738)** — a fourth theme option (System / Light / Dark / Warm) and the foundation for the v7 floating-chrome redesign.
+- **Re-landed D11 bundled fonts (#680)** — re-applied the fontsource Latin variable-axis builds of Source Serif 4, Inter Tight, and JetBrains Mono originally shipped in PR #663 then reverted via #678. The SIL OFL 1.1 license texts (`public/fonts/OFL-*.txt`) ship alongside the binaries per §4. Editor body text renders in Source Serif 4 via the existing `--tandem-editor-font-family` token.
+- **Margin annotation view (#649, #711, #715, #719, #720)** — Word-style margin comment bubbles with breathing-room gaps and leader lines connecting each card to its anchor, action parity with the sidebar, and the annotation filter chip relocated into the panel header.
+- **Margin view auto-collapses on rail open or narrow viewport (#683)** — opening the left rail now hides only the left margin column; opening the right rail hides only the right column. When the viewport gets narrow enough that margin reserve + open rails + readable editor would crowd, both columns hide together. A 32px hysteresis band on the viewport threshold prevents flicker when a user drags through the boundary. New `useViewportWidth` rune store provides the rAF-debounced subscription.
+- **Status-bar word-count cycle + page count (#741, #792)** — the floating status pill cycles through word, character, and page counts.
+- **Inline annotation decoration toggle (#791)** — turn the inline highlight/underline decorations on or off without hiding the annotations themselves.
+- **Knowledge-graph pilot (#769, #771)** — 25 hand-curated concept/rule/ADR nodes with cross-edges, queryable via `npm run kg`.
 
 ### Changed
 
 - **Network settings split into Connection / Advanced (Wave 2 PR 6)** — connection status, transport, and the restart-sidecar button stay always-visible; loopback port, degraded-banner delay, reconnect strategy, hold-while-offline, and token rotation collapsed under a new "Advanced" disclosure. Disclosure state is ephemeral (resets each time the modal opens). New `CollapsibleSection.svelte` primitive uses native `<details>/<summary>` for free keyboard a11y.
-
-### Added
-
-- **Re-landed D11 bundled fonts (#680)** — re-applied the fontsource Latin variable-axis builds of Source Serif 4, Inter Tight, and JetBrains Mono originally shipped in PR #663 then reverted via #678. The SIL OFL 1.1 license texts (`public/fonts/OFL-*.txt`) ship alongside the binaries per §4. Editor body text renders in Source Serif 4 via the existing `--tandem-editor-font-family` token.
-- **Margin view auto-collapses on rail open or narrow viewport (#683)** — opening the left rail now hides only the left margin column; opening the right rail hides only the right column. When the viewport gets narrow enough that margin reserve + open rails + readable editor would crowd, both columns hide together. A 32px hysteresis band on the viewport threshold prevents flicker when a user drags through the boundary. New `useViewportWidth` rune store provides the rAF-debounced subscription.
+- **v7 floating-chrome redesign sweep (Waves 1–M)** — a multi-wave reskin that lifts the editor chrome off the canvas:
+  - Edge-anchored side rails with inner-rounded corners (Wave 2, #739) and a shared `.tandem-floating-pill` recipe (Wave 3, #740) applied across the formatting bar, status bar (Wave 5, #741), selection popup (Wave C, #762), and slash menu (Wave 10, #757).
+  - TitleBar + DocumentTabs reflow: bar seam removed so chrome melts into the canvas (Wave 4a, #746), pill-shaped tabs (Wave 4b, #748), tabs lifted into the TitleBar center cluster with mask-fade overflow and a floating `+` button (Wave 4a/4b maximalist, #752, #755).
+  - Left rail locked to outline-only (Wave D, #759); outline rail clears the status pill lane (Wave 6, #742); peek-from-side strips + edge-click panel collapse (Wave E, #764).
+  - Narrow-viewport Settings sidebar drawer + hamburger (Wave 9, #745); `.docx` batch-promote with always-visible checkboxes (Wave 8, #756).
+  - Native scrollbars hidden with mask-faded overflow edges (Wave B, #761); titlebar/status/right-rail header polish (Wave A, #760); placeholder + margin-card hover affordance (Wave F, #763).
+  - Redesign-parity sweep across titlebar, rails, picker teardown, popup, composer (Waves G–L, #765) plus the Wave M titlebar dropdown + solo-mode fade + dark-mode v7 alignment (#776).
+- **README + documentation rewrite (#777, #778)** — README rewritten for a lay reader with technical detail moved below the fold, plus new `docs/cli.md`, `docs/configuration.md`, `docs/troubleshooting.md`, and `docs/security.md`.
+- **MCP-first integration policy; your AI as the default integration (ADR-038, #722)** — documents that Tandem's integration contract is MCP and Claude is the default concrete integration.
 
 ### Fixed
 
 - **Inline code combined with bold/italic/strikethrough/link no longer loses its `code` formatting on save** — opening a `.md` file in Tandem (editable, not read-only) and letting autosave write it back used to drop the `code` mark on any span that also carried bold/italic/strike, and silently discard the surrounding link for code-in-link. The damage surfaced as doubled asterisks and `&#x20;` entity-spaces — code-heavy docs like `docs/decisions.md` were corrupted just by being viewed. `deltaToPhrasingContent` now treats `code` as a leaf and wraps link/strike/italic/bold unconditionally, and a new coalescing pass merges adjacent same-wrapper phrasing nodes so a bold run holding a code span serializes as one emphasis instead of several. Round-trip verified lossless across the repo's code-heavy docs.
 - **Keyboard tab switch no longer reverts under a stale sync** — a local `Ctrl+1..9` (or click) tab switch is client-only and was being clobbered when a late `documentMeta` re-broadcast re-applied the server's active doc, surfacing as a flaky "Ctrl+N switches to the Nth tab" E2E test. The server now broadcasts a monotonic activation epoch (`activeDocumentEpoch`) alongside the active id; the client applies the server's active only when the epoch advances, so a stale re-sync is ignored while a genuine re-activation (e.g. re-opening the already-active doc) still steals focus.
 - **Selection toolbar places itself clear of fixed chrome (#680)** — the selection BubbleMenu flips below the selection when above-placement would overlap the TitleBar + FormattingBar; selections that straddle the viewport fold pin the toolbar to the viewport bottom rather than clamping onto the chrome; and a 4px hysteresis band at the flip boundary keeps the toolbar from shimmering as a selection drifts across the threshold.
+- **Clicked highlight stays focused over an overlapping comment (#817)** — clicking a highlight that overlaps a comment now collapses the ProseMirror selection so the overlay clears and the click-to-focus ordering resolves to the highlight; unknown annotation types fall back gracefully.
+- **Solo/Tandem mode never auto-flips on a transient error (#822)** — a failed `/api/mode` poll preserves the last-known mode instead of silently reverting to Solo.
+- **Annotation palette remap aligned with the v7 design (Wave 7, #743)**.
+- **Post-wave correctness fixes across 9 sites (#758)** — a cleanup pass over regressions introduced during the redesign sweep.
+- **Kept-tab metadata refreshes on document-list reconcile** — tab titles and state no longer go stale when the open-document list re-syncs.
+- **Unsupported-extension toast names the right extension (#808)** — `extensionAllowed` extracts the basename correctly (handling dot-in-directory and dotfile edge cases) and surfaces `.htm` properly.
+- **`.docx` comment-extraction failures surface via notification (#696, #701)** — instead of failing silently.
+
+### Security
+
+- **`IntegrationConfig.url` constrained to loopback only (#753)** — accepts `http://127.0.0.1[:port][/path]` only; rejects `localhost`, IPv6 loopback `[::1]`, other `127.x.x.x` addresses, `https`, and embedded credentials (`http://user:pw@…`). Legacy `http://localhost` entries are normalized to `http://127.0.0.1` on read; any other host shape is surfaced as invalid and re-prompts the wizard.
+- **Windows ACL hardening on `.claude.json` (#643, #795)** — a restrictive DACL is applied to the written config.
+- **`.claude.json` backed up before overwrite (#644, #796)** — backups written under `${appDataDir}/.backups/` with mode `0o600` (POSIX) / restrictive DACL (Windows), capped at `MAX_BACKUPS=3`. Token rotation triggers a backup, so up to 3 superseded bearer tokens may persist on disk per integration; clear the backup folder manually for tighter retention.
+- **Malformed-input matrix + shape gates + BOM strip on integration-config reads (#645, #797)** — broken-JSON backups on Windows also receive a restrictive ACL, with the read-modify-write TOCTOU window closed.
+- **CI guard: harness components must not leak into production client bundle (Wave 2 PR 7)** — new `scripts/ci/verify-harness-stripped.mjs` runs after `npm run build` and greps `dist/client/` for known harness symbols (`UpdateAvailableHarness`, `harness-acknowledge`, etc.). Defends against a future commit accidentally importing a harness component from a production-shipping module, which would expose internal state (e.g. acknowledge buttons, version accessors) to end users. Pairs with the #660 audit confirming every settings-open path routes through the ack-clearing wrapper.
+
+### Internal
+
+- **Annotation-lifecycle architecture pass (ADRs 031–037, #695–#714)** — origin-tagged transaction wrappers (ADR-031), a `RefreshResult` tagged variant (ADR-032), `DocumentRegistry` extracted from `document-service` (ADR-033), named file-open entry points (ADR-034), a per-key change-observer factory + `AnnotationLifecycle` module (ADR-035), the `FormatAdapter` capability set + `LoadResult` (ADR-036), and the `LayoutModel` rune store (ADR-037). Includes observer-driven tombstoning that records on every delete.
+- **`#477` Phase 0 spikes (#712, #726, #750)** — session-resume Spike A (GO), plugin-monitor Spike B (NO-GO), marketplace-install spike re-validated NO-GO.
+- **Sidecar-launcher validation spike (#642, #794)** — canonicalize-before-allowlist, Windows reparse-point walk, POSIX hardlink + world-writable-parent rejection, prototyped and tested under `#[cfg(test)]` in `integrations_probe.rs`. Not yet wired into the shipped spawn path.
+- **Test-suite audit (#786)** — ADR-027 privacy bug fix, weak-assertion sweep, ADR-031 gap fill; E2E `waitForTimeout` flake removal (#785); schema-version assertions pinned to `CURRENT_SCHEMA_VERSION` (#789).
+- **Refactors** — `matchShortcut` helper extraction + dead `useSettingsShortcut` removal (#820), shared SSE event-consumer extraction (#822), `THEME_OPTIONS` extracted from TitleBar (#790), typed `RejectionReason` from `extract_file_arg` (#819), dead Solo/Tandem mode plumbing removed.
+- **Tooling / CI** — `check:tokens` extended with a bundle-color blocklist (#826), `claude-review` workflow hardened + auto `/code-review` on new PRs (#830), `block-e2e-port-kill` PreToolUse hook removed (#787).
+- **Dependencies** — `ws` 8.19.0 → 8.20.1 (#772) and `qs` bumped (npm_and_yarn group); no CVE cited.
+- **Docs** — `RelativeRange` invariants documented (#793), roadmap and CLAUDE.md file-map refreshes (#744, #749, #751), design-notes + redesign-review archival (#774, #775), reference-doc consolidation (#852, #854, #856), and AGENTS.md tracked as the cross-agent contributor guide (#858).
 
 ## [0.12.0] - 2026-05-15
 
