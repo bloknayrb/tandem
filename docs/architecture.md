@@ -4,14 +4,7 @@
 
 > Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today. See [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
 
-The four terms used throughout this document:
-
-| Term | Meaning |
-|---|---|
-| **MCP contract** | The 26 active MCP tools at `http://127.0.0.1:3479/mcp` and the SSE event stream at `/api/events`. Available to every MCP client. |
-| **Default integration** | Claude. Auto-configured by the desktop app's integration wizard. Documented and tested. Recommended in all install flows. |
-| **Claude-specific extras** | Six features built on top of the MCP contract that only work with Claude today: channel push (channel shim + plugin monitor), `--dangerously-load-development-channels` flag wiring, auto-launcher, Cowork plugin bridge, Claude Code skill, and the plugin marketplace artifacts. |
-| **Best-effort, not validated** | What we say about other MCP clients today. We don't intentionally break them; we don't test them in CI. |
+Four terms — **MCP contract**, **default integration**, **Claude-specific extras**, and **best-effort, not validated** — are used throughout this document with the precise meanings defined in [ADR-038's term glossary](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) (the single source of truth).
 
 Sections below labeled "Claude-default" describe features in the **Claude-specific extras** column. Generic MCP plumbing (the HTTP server, the SSE stream, the 26 tools) works for any MCP-capable client.
 
