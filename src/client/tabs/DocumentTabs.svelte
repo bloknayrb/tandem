@@ -2,7 +2,12 @@
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import type { OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
-import { addRecentFile, loadRecentFilesCached, saveRecentFiles } from "../utils/recentFiles.js";
+import {
+  addRecentFile,
+  loadRecentFilesCached,
+  recentFilePaths,
+  saveRecentFiles,
+} from "../utils/recentFiles.js";
 import { openServerPath } from "../utils/server-paths.js";
 import NewTabMenu from "./NewTabMenu.svelte";
 import TabItem from "./TabItem.svelte";
@@ -244,7 +249,7 @@ $effect(() => {
   <button
     bind:this={openBtnEl}
     onclick={() => {
-      recentFiles = loadRecentFilesCached();
+      recentFiles = recentFilePaths(loadRecentFilesCached());
       showRecent = !showRecent;
     }}
     data-testid="open-file-btn"

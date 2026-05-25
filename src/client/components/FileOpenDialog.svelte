@@ -8,6 +8,7 @@ import {
   addRecentFile,
   clearRecentFiles,
   loadRecentFiles,
+  recentFilePaths,
   saveRecentFiles,
 } from "../utils/recentFiles.js";
 import { openServerPath } from "../utils/server-paths.js";
@@ -21,18 +22,16 @@ const { onClose }: Props = $props();
 let error = $state<string | null>(null);
 let loading = $state(false);
 let fileInputEl: HTMLInputElement | undefined = $state();
-let recentFiles = $state<string[]>(loadRecentFiles());
+let recentFiles = $state<string[]>(recentFilePaths(loadRecentFiles()));
 
 const extensionList = Array.from(SUPPORTED_EXTENSIONS).sort();
 const acceptAttr = extensionList.join(",");
 const filterExtensions = extensionList.map((ext) => ext.replace(/^\./, ""));
 
 function pushRecent(path: string) {
-  recentFiles = (() => {
-    const updated = addRecentFile(recentFiles, path);
-    saveRecentFiles(updated);
-    return updated;
-  })();
+  const updated = addRecentFile(loadRecentFiles(), path);
+  saveRecentFiles(updated);
+  recentFiles = recentFilePaths(updated);
 }
 
 function handleClearRecent() {
