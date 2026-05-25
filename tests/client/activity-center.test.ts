@@ -20,7 +20,7 @@ import {
   type NotificationsState,
 } from "../../src/client/hooks/useNotifications.svelte";
 import NotificationsHarness from "../../src/client/svelte-harness/NotificationsHarness.svelte";
-import { ACTIVITY_HISTORY_CAP } from "../../src/shared/constants.js";
+import { ACTIVITY_HISTORY_CAP, TOAST_DISMISS_MS } from "../../src/shared/constants.js";
 import type { TandemNotification } from "../../src/shared/types.js";
 
 // happy-dom has no EventSource; capture instances so a test can drive onmessage.
@@ -54,9 +54,13 @@ function note(overrides: Partial<TandemNotification> = {}): TandemNotification {
   };
 }
 
-async function mountStore(): Promise<NotificationsState> {
+async function mountStore(
+  props: { persist?: boolean; storageKey?: string } = {},
+): Promise<NotificationsState> {
   let state: NotificationsState | null = null;
-  render(NotificationsHarness, { props: { onReady: (s: NotificationsState) => (state = s) } });
+  render(NotificationsHarness, {
+    props: { ...props, onReady: (s: NotificationsState) => (state = s) },
+  });
   await tick();
   if (!state) throw new Error("harness did not call onReady");
   return state;
@@ -148,6 +152,61 @@ describe("activity center — dedup + dismissal", () => {
   });
 });
 
+describe("activity center — info-TTL timer lifecycle", () => {
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    FakeEventSource.last = null;
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("a dedup severity upgrade (info→error) cancels the stale info-expiry timer", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "i", dedupKey: "net", severity: "info", message: "Reconnecting…" }));
+    api.push(note({ id: "e", dedupKey: "net", severity: "error", message: "Connection lost" }));
+    await tick();
+
+    const row = api.activity.find((a) => a.dedupKey === "net");
+    expect(row?.severity).toBe("error");
+    expect(row?.id).toBe("i"); // first id preserved by coalesce
+
+    // The original info timer must NOT fire and delete the upgraded error.
+    vi.advanceTimersByTime(TOAST_DISMISS_MS.info + 1_000);
+    await tick();
+    expect(api.activity.some((a) => a.dedupKey === "net")).toBe(true);
+  });
+
+  it("rehydrated within-TTL info re-arms its timer and still expires", async () => {
+    const KEY = "test:rehydrate-rearm";
+    localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        {
+          id: "fresh",
+          message: "Session restored",
+          timestamp: Date.now(),
+          severity: "info",
+          type: "session-restored",
+          count: 1,
+        },
+      ]),
+    );
+    try {
+      const api = await mountStore({ persist: true, storageKey: KEY });
+      expect(api.activity.map((a) => a.id)).toContain("fresh");
+
+      vi.advanceTimersByTime(TOAST_DISMISS_MS.info + 1_000);
+      await tick();
+      expect(api.activity.map((a) => a.id)).not.toContain("fresh");
+    } finally {
+      localStorage.clear();
+    }
+  });
+});
+
 describe("loadActivity — rehydrate/prune", () => {
   const KEY = "test:activityHistory";
   beforeEach(() => localStorage.clear());
@@ -159,6 +218,32 @@ describe("loadActivity — rehydrate/prune", () => {
     expect(loadActivity(KEY)).toEqual([]);
     localStorage.setItem(KEY, "{ broken json");
     expect(loadActivity(KEY)).toEqual([]);
+  });
+
+  it("drops entries with missing or out-of-range severity", () => {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify([
+        {
+          id: "ok",
+          message: "m",
+          timestamp: Date.now(),
+          severity: "error",
+          type: "general-error",
+          count: 1,
+        },
+        { id: "no-sev", message: "m", timestamp: Date.now(), type: "general-error", count: 1 },
+        {
+          id: "bad-sev",
+          message: "m",
+          timestamp: Date.now(),
+          severity: "critical",
+          type: "general-error",
+          count: 1,
+        },
+      ]),
+    );
+    expect(loadActivity(KEY).map((a) => a.id)).toEqual(["ok"]);
   });
 
   it("drops malformed entries (missing id/message/timestamp)", () => {

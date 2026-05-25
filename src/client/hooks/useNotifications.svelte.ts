@@ -74,7 +74,10 @@ export function loadActivity(storageKey: string): ActivityItem[] {
         typeof x === "object" &&
         typeof (x as ActivityItem).id === "string" &&
         typeof (x as ActivityItem).message === "string" &&
-        typeof (x as ActivityItem).timestamp === "number",
+        typeof (x as ActivityItem).timestamp === "number" &&
+        // Severity drives glyph/class/pill lookups — a missing or out-of-range
+        // value would render an unstyled, glyph-less row the pill never counts.
+        ["info", "warning", "error"].includes((x as ActivityItem).severity),
     );
     // On reload the in-memory info-TTL timers are gone, so re-evaluate here:
     // drop info older than its TTL, then cap to the newest ACTIVITY_HISTORY_CAP.
@@ -169,9 +172,15 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
   };
 
   // ---- persistent activity list ----
-  const scheduleInfoExpiry = (id: string, timestamp: number) => {
+  const clearInfoTimer = (id: string) => {
     const existing = infoTtlTimers.get(id);
-    if (existing) clearTimeout(existing);
+    if (existing) {
+      clearTimeout(existing);
+      infoTtlTimers.delete(id);
+    }
+  };
+  const scheduleInfoExpiry = (id: string, timestamp: number) => {
+    clearInfoTimer(id);
     const remaining = Math.max(0, INFO_TTL - (Date.now() - timestamp));
     infoTtlTimers.set(
       id,
@@ -202,7 +211,14 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
         const next = [...activity];
         next[idx] = updated;
         activity = next;
-        if (updated.severity === "info") scheduleInfoExpiry(updated.id, updated.timestamp);
+        if (updated.severity === "info") {
+          scheduleInfoExpiry(updated.id, updated.timestamp);
+        } else {
+          // Severity upgraded away from info (e.g. info→error on the same
+          // dedupKey): drop the stale info-expiry timer so it can't later
+          // delete the now-persistent warning/error row out from under us.
+          clearInfoTimer(updated.id);
+        }
         scheduleSave();
         return;
       }
@@ -230,11 +246,7 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
 
   const dismissActivity = (id: string) => {
     activity = activity.filter((a) => a.id !== id);
-    const t = infoTtlTimers.get(id);
-    if (t) {
-      clearTimeout(t);
-      infoTtlTimers.delete(id);
-    }
+    clearInfoTimer(id);
     scheduleSave();
   };
 
@@ -244,6 +256,13 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
     infoTtlTimers.clear();
     scheduleSave();
   };
+
+  // Re-arm info-expiry for items rehydrated from localStorage — in-memory
+  // timers don't survive a reload, so without this a within-TTL info entry
+  // would linger in the tray indefinitely instead of expiring on schedule.
+  for (const item of activity) {
+    if (item.severity === "info") scheduleInfoExpiry(item.id, item.timestamp);
+  }
 
   // Client-originated: info pops (it's a message to the user).
   const push = (notification: TandemNotification) => ingest(notification, true);
