@@ -169,6 +169,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tauri shell**: reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) are now blocked in the desktop app to prevent accidental navigation away from the editor; DevTools, Find, Print, and right-click context menu are preserved (#541)
 - **Semantic token foundation expanded for redesign wave 2 (#521)** — added radius, font-size, shadow, z-index, editor-font-size, and highlight-color token families in `index.html`, plus checker rules that now flag raw `border-radius: <n>px` and inline `box-shadow: ... rgba(...)` in `src/client/`.
 - **Read-only/info surfaces now use the shared info token family (#521)** — `ReviewOnlyBanner`, `ConnectionBanner`, `ToastContainer`, `StatusBar`, and related chrome now consume the shared token scales instead of hardcoded radius/text/shadow values.
+- **Monitor and channel honor `CLAUDE_PLUGIN_OPTION_SERVER_URL`** — `resolveTandemUrl()` now checks the `CLAUDE_PLUGIN_OPTION_SERVER_URL` environment variable (exported by Claude Code's plugin host from `plugin.json` `userConfig`) before falling back to `TANDEM_URL` and the localhost default. Both the monitor (`src/monitor/index.ts`) and channel shim (`src/channel/run.ts`) benefit automatically. No change for existing installs that don't use `userConfig`. (Drafted as a standalone v0.10.1 patch that was never tagged; shipped as part of v0.11.0.)
+- **Monitor and channel honor `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`** — new `resolveAuthToken()` function in `src/shared/cli-runtime.ts` mirrors `resolveTandemUrl()`. Precedence: `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` → `TANDEM_AUTH_TOKEN`. `authFetch` uses it automatically, so all stdio subcommands gain the new lookup without caller changes.
 
 ### Tests
 
@@ -189,15 +191,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tauri shell: live OS app-mode flips now retheme without restart** — `systemTheme()` reads the live `tauriTheme.current` reactive store (updated by the Tauri theme bridge) instead of a startup-only snapshot; `applyTheme()` in `useTheme.svelte.ts` subscribes reactively so `<html data-theme>` updates immediately when the user switches Windows between light and dark app mode (Codex P1 follow-up to #535).
 - **Dark annotation highlight colors** — `--tandem-highlight-yellow/green/blue/pink` now have dark-adapted overrides in `[data-theme="dark"]`; the light `rgba(255, 235, 59, 0.3)`-style values were washed out against dark surfaces.
 - **Forced-colors fallbacks for background-only state surfaces (closes #311)** — StatusBar status dots, toast badge, ModeToggle active button, BulkActions confirm button, AnnotationCard type-badge and Private pill now have `border`/`outline` fallbacks in `@media (forced-colors: active)`.
-
-## [0.10.1] - Unreleased
-
-Plugin URL and auth resolution for custom-port and network-remote setups.
-
-### Changed
-
-- \*\*Monitor and channel honor \*\***CLAUDE_PLUGIN_OPTION_SERVER_URL** — `resolveTandemUrl()` now checks the `CLAUDE_PLUGIN_OPTION_SERVER_URL` environment variable (exported by Claude Code's plugin host from `plugin.json` `userConfig`) before falling back to `TANDEM_URL` and the localhost default. Both the monitor (`src/monitor/index.ts`) and channel shim (`src/channel/run.ts`) benefit automatically. No change for existing installs that don't use `userConfig`.
-- \*\*Monitor and channel honor \*\***CLAUDE_PLUGIN_OPTION_AUTH_TOKEN** — new `resolveAuthToken()` function in `src/shared/cli-runtime.ts` mirrors `resolveTandemUrl()`. Precedence: `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN` → `TANDEM_AUTH_TOKEN`. `authFetch` uses it automatically, so all stdio subcommands gain the new lookup without caller changes.
 
 ## [0.10.0] - 2026-05-03
 
