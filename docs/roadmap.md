@@ -411,7 +411,7 @@ Each release targets **one coherent concern** so that a bad PR is bisectable and
 
 ### Cowork integration status
 
-Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge was introduced in tandem-editor@0.6.0 and first cross-platform working in @0.6.2 (Windows `workspaces` packaging bug). See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304) for the decision trail.
+Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge was introduced in tandem-editor@0.6.0 and first cross-platform working in @0.6.2 (Windows `workspaces` packaging bug). See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304--claude-default-integration) for the decision trail.
 
 Remaining Cowork work (#316, #317, #322) is polish — making the installer turnkey on macOS/Linux and adding cross-platform firewall scoping. Not a capability blocker. Deferred from v0.9.0 to v0.13.0 (requires macOS/Linux validation hardware).
 
