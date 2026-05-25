@@ -362,7 +362,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 
 ## ADR-031: Origin-Tagged Transaction Wrappers
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15)
+**Status:** Accepted; implemented (verified against `src/` 2026-05-25). `src/shared/origins.ts` exports all five helpers (`withMcp` / `withFileSync` / `withInternal` / `withReload` / `withBrowser`), the skip-set matrix is enforced in `events/queue.ts` + `annotations/sync.ts`, and no raw `*.transact(` remains in `src/`. **Enforcement diverged from the Consequences below:** the actual guard is the warn-only PostToolUse hook `.claude/hooks/check-raw-transact.sh` plus the `npm run audit:origins` script — there is no blocking pre-commit `block-raw-transact.sh` and no Biome AST rule. Separately, issues #695/#700 later reversed the tombstone column of the skip-set matrix — `file-sync` / `internal` now **record** tombstones rather than skipping them (see the matrix note below). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15; landed incrementally across the redesign waves.
 
 **Context:** Critical Rule #2 required every server-side `doc.transact(...)` to carry an origin string — `MCP_ORIGIN` ("mcp") for Claude-initiated writes, `FILE_SYNC_ORIGIN` ("file-sync") for disk-reload echoes. Enforcement was reviewer-eyes plus a post-tool-use hook. An audit found ~40 `transact()` callsites across the server; roughly half passed an origin and half did not. The unlabelled half were not (yet) bugs — they happen during session restore, mdast / docx population, tutorial seeding, scratchpad seeding, and `clearAndReload`, which all run before the event queue and durable-annotation observers attach to that document — but the rule "every write declares its origin" had a silent exception that lived only in the reviewer's head. The origins themselves were plain `string` constants, so a typo or a forgotten second argument compiled fine and broke echo-prevention silently.
 
@@ -384,12 +384,12 @@ Skip-set matrix:
 | Origin     | Channel event queue | Durable-sync observer | Tombstone observer |
 |------------|---------------------|-----------------------|--------------------|
 | `mcp`      | skip                | persist               | record             |
-| `file-sync`| skip                | skip                  | **skip**           |
-| `internal` | skip                | skip                  | skip               |
+| `file-sync`| skip                | skip                  | record             |
+| `internal` | skip                | skip                  | record             |
 | `reload`   | skip                | **persist**           | record             |
 | `browser`  | emit                | persist               | record             |
 
-The tombstone observer's `file-sync` skip is load-bearing: file-opener's eviction-and-reopen path (clear under `file-sync`, repopulate from disk) must not tombstone the cleared annotations or they would not reappear after the reopen. Same for `internal` (population writes are not real deletes even when overwriting prior state).
+**Tombstone column reversed post-ADR (#695/#700; matrix above reflects current code).** The original ADR-031 decision had `file-sync` and `internal` *skip* tombstones, reasoning that the eviction-and-reopen path (clear under `file-sync`, repopulate from disk) must not tombstone the cleared annotations or they would not reappear after the reopen. Issues #695/#700 reversed this to **record tombstones for all origins**: skipping risked *losing* file-driven deletes when `loadAndMerge` was skipped or failed. Resurrection is prevented structurally rather than by skipping — `recordTombstone` stamps the tombstone at `prevRev + 1`, the merge deletes a Y.Map entry only when `stone.rev > ymapRec.rev` (otherwise it treats the live copy as a resurrection and keeps it), and `loadAndMerge` re-seeds the ledger from the on-disk file on every open. See the observer + merge logic in `src/server/annotations/sync.ts`.
 
 A pre-commit hook (`.claude/hooks/block-raw-transact.sh`) blocks any new `*.transact(` outside the helpers' file. The grep is paired with a Biome AST lint rule (`MemberExpression(property.name === "transact")`) to catch dynamic-dispatch bypasses (`doc["trans" + "act"](...)`, `Reflect.apply`, etc.) the grep misses. Test fixtures that construct synthetic Y.Docs are allowlisted via path pattern (`tests/**`, `**/*.test.ts`) or routed through a `transactForTest` helper exposed from `src/shared/origins.ts`.
 
@@ -412,7 +412,7 @@ A pre-commit hook (`.claude/hooks/block-raw-transact.sh`) blocks any new `*.tran
 
 ## ADR-032: Position Module Results as Tagged Variants
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Continuation of ADR-018.
+**Status:** Accepted; implemented (verified against `src/` 2026-05-25) — `RefreshResult`, `PmRangeResult`, `AnchoredRangeResult`, and `RangeValidation` are all defined in `src/shared/positions/types.ts`. Continuation of ADR-018. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15; landed incrementally across the redesign waves.
 
 **Context:** ADR-018 consolidated position logic into `src/server/positions.ts`, `src/client/positions.ts`, and `src/shared/positions/`. The consolidation succeeded structurally but left the result *types* under-designed. Each of the four high-level entry points returns an ad-hoc shape that hides a sum type behind a single nominal return:
 - `refreshRange(ann, ydoc, map?)` returns `Annotation` but takes six semantically distinct paths: healthy (unchanged), updated (relRange resolved to new offsets), lazy-attached (relRange computed from flat), repaired (dead relRange re-anchored from flat), stripped (dead relRange deleted because re-anchor failed — annotation is now degraded but indistinguishable from healthy at the type level), and inverted (newFrom > newTo — logs an error and returns input unchanged, silently masking data corruption).
@@ -448,7 +448,7 @@ Callers that don't care about the variant destructure `.annotation` / `.from` / 
 
 ## ADR-033: Document Registry and Named Hocuspocus Lifecycle Interface
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15)
+**Status:** Accepted; partially implemented (verified against `src/` 2026-05-25). The `DocumentRegistry` landed (`src/server/documents/registry.ts`, described in-file as "a minimal seam extraction" owning `openDocs` / `activeDocId` / the keep-alive predicate). The named `HocuspocusLifecycle` interface is **deferred:** `src/server/yjs/lifecycle.ts` does not exist, and the free callback slots (`setShouldKeepDocument`, `setDocLifecycleCallbacks` with `onDocSwapped` / `onDocUnloaded`) still live in `provider.ts`. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** Document state was spread across two modules with three implicit invariants enforced only by call-order discipline:
 
@@ -485,7 +485,7 @@ Public registry interface (sketch — not authoritative):
 
 ## ADR-034: File-Open Pipeline with Named Entry Points and Shared Core
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Pairs with ADR-033.
+**Status:** Accepted; partially implemented (verified against `src/` 2026-05-25). Part 1 landed: `src/server/documents/open.ts` exposes named entry aliases (`openFromDisk` / `openFromUpload` / `openScratchpad`) that forward to `file-opener.ts`, plus a derived `kindOfOpenResult` helper. **Deferred:** the shared internal pipeline still lives in the ~1000-line `file-opener.ts`, the `openFromRestore` entry point is not yet exposed, and `OpenResult` remains a derived enum rather than a discriminator on the result type. Pairs with ADR-033. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** `src/server/mcp/file-opener.ts` is 1049 lines exposing three public entry points (`openFileByPath`, `openFileFromContent`, `openScratchpad`) and internal helpers (`applyPreparedContent`, `clearAndReload`, `wireAnnotationStore`, `ensureAutoSave`). Six callers invoke `openFileByPath`: `startup-file.ts` (cold-start file-association), `index.ts` (welcome/changelog auto-open), `mcp/routes/open.ts` (HTTP REST API), `mcp/document.ts` (`tandem_open` MCP tool), `mcp/convert.ts` (after `.docx` HTML conversion), and `mcp/document-service.ts` (session restore — using a dynamic `await import(...)` to dodge a circular dependency through provider/registry state). Each caller wires the same downstream steps (track the doc, broadcast, set active, attach auto-save) in slightly different orders. `OpenFileResult` conflates outcomes via booleans (`forceReloaded`, `alreadyOpen`). The "open before HTTP bind" startup invariant (CLAUDE.md) is enforced by call ordering in `src/server/index.ts` only.
 
@@ -529,7 +529,7 @@ Public registry interface (sketch — not authoritative):
 
 ## ADR-035: Annotation Lifecycle Module
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Builds on ADR-027 (audience model), ADR-031 (origin tagging), and ADR-032 (tagged result variants).
+**Status:** Accepted; partially implemented (verified against `src/` 2026-05-25). `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). **Deferred:** the create / remove / edit paths, `promoteNoteToComment`, the `.docx` `importNote` entry, and the `narrowForChannel` channel projection still live on the handlers rather than in the lifecycle module. Builds on ADR-027 (audience model), ADR-031 (origin tagging), and ADR-032 (tagged result variants). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** The annotation lifecycle is fragmented across six modules. Creating one comment touches all of them in implicit order:
 
@@ -587,7 +587,7 @@ Each method's `LifecycleResult` failure variant enumerates only the failures tha
 
 ## ADR-036: Format Adapter as Capability Set
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Sharpens encoding of ADR-004 (.docx review-only) and unblocks issue #576 (.docx write-back).
+**Status:** Accepted; partially implemented, shape diverged (verified against `src/` 2026-05-25). The capability-set principle partially landed: `FormatAdapter` in `src/server/file-io/types.ts` is now a `parse` / `apply` / `save?` shape (optional `save` is capability-style, and the silent `.catch(() => [])` comment-extraction failure is replaced by `LoadIssue[]` partial-failure surfacing). **Diverged / deferred from the sketch below:** the interface settled on `parse` / `apply` rather than `load` / `LoadResult`, and `extractComments?` / `applyTrackedChanges?` were **not** added as adapter capabilities — `applyTrackedChanges` remains a free function in `docx-apply.ts` consumed via a direct import through `file-io/index.ts`. Sharpens encoding of ADR-004 (.docx review-only) and unblocks issue #576 (.docx write-back). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** `src/server/file-io/types.ts` declares a three-method `FormatAdapter` interface (`load`, `save`, `canSave`). The actual capabilities of registered adapters do not match that shape:
 
@@ -641,7 +641,7 @@ Comment extraction migrates from `.docx`'s `load()` body into the adapter's opti
 
 ## ADR-037: Layout Model — Rune Store Layered Over Settings
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15).
+**Status:** Accepted; implemented (verified against `src/` 2026-05-25) — `createLayoutModel` in `src/client/layout/model.svelte.ts`, consumed by `App.svelte` (`leftVisible` / `rightVisible` / `toggleLeft` / `toggleRight`). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15; landed across the redesign waves.
 
 **Context:** Panel-visibility and rail-tab state is encoded as four settings fields on `settingsState` plus a derivation in `App.svelte`:
 

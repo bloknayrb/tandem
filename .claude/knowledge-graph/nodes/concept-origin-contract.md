@@ -2,9 +2,11 @@
 id: concept-origin-contract
 type: concept
 name: Origin contract (5 tags)
-last_verified: 2026-05-18
+last_verified: 2026-05-25
 sources:
   - src/shared/origins.ts
+  - .claude/hooks/check-raw-transact.sh
+  - scripts/audit-origins.ts
   - docs/decisions.md#adr-031-origin-tagged-transaction-wrappers
 ---
 
@@ -15,12 +17,12 @@ Every Y.Doc write is tagged with one of five origin values: `mcp`, `file-sync`, 
 | Origin     | Channel events | Durable-sync | Tombstones |
 |------------|----------------|--------------|------------|
 | `mcp`      | skip           | persist      | record     |
-| `file-sync`| skip           | skip         | skip       |
-| `internal` | skip           | skip         | skip       |
+| `file-sync`| skip           | skip         | record     |
+| `internal` | skip           | skip         | record     |
 | `reload`   | skip           | persist      | record     |
 | `browser`  | **emit**       | persist      | record     |
 
-Only `browser` writes emit channel events — this is how the channel shim distinguishes "user did something" from server-internal noise.
+Only `browser` writes emit channel events — this is how the channel shim distinguishes "user did something" from server-internal noise. Tombstones are recorded for **every** origin (including `file-sync` / `internal`) — #695/#700 reversed ADR-031's original skip-for-file-sync rule so file-driven deletes are never lost; resurrection is prevented by rev-gated merge (`stone.rev > ymapRec.rev`), not by skipping. See `src/server/annotations/sync.ts`.
 
 Wrapper helpers in `src/shared/origins.ts`:
 - `withMcp` — Claude-initiated writes from MCP tool handlers
@@ -29,4 +31,4 @@ Wrapper helpers in `src/shared/origins.ts`:
 - `withReload` — file-watcher `reloadFromDisk` flow (origin distinct from `file-sync` so durable-sync persists re-anchored relRanges)
 - `withBrowser` — user edits from the browser
 
-Raw `doc.transact(...)` is blocked everywhere in `src/` by the pre-commit hook `.claude/hooks/block-raw-transact.sh` and a Biome AST rule for dynamic-dispatch bypasses. Test-only synthetic Y.Docs use `transactForTest` (sentinel origin `"test"`, allowlisted).
+Raw `doc.transact(...)` should not appear anywhere in `src/`; the rule is surfaced by the warn-only PostToolUse hook `.claude/hooks/check-raw-transact.sh` and the `npm run audit:origins` static walk (no blocking pre-commit hook or Biome AST rule is wired). Test-only synthetic Y.Docs use `transactForTest` (sentinel origin `"test"`, allowlisted).
