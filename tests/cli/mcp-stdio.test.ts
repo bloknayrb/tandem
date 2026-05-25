@@ -807,14 +807,16 @@ describe("mcp-stdio per-request timeout", () => {
     const stdoutChunks: string[] = [];
     child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
 
-    // Wait for httpReady, then send the request.
-    await new Promise((r) => setTimeout(r, 500));
+    // Write immediately — the request buffers in preReadyBuffer until httpReady
+    // flips. We poll on `heldRes` below (NOT a fixed sleep) so the test
+    // tolerates subprocess startup latency under concurrent vitest load.
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 30, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );
 
-    // Poll until server has the POST, then wait for timer to fire first.
-    for (let i = 0; i < 60; i++) {
+    // Poll until the server has the POST (i.e. the per-request timer started).
+    // 200 × 50ms = 10s budget absorbs slow `--import tsx` startup under load.
+    for (let i = 0; i < 200; i++) {
       if (heldRes) break;
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -843,7 +845,7 @@ describe("mcp-stdio per-request timeout", () => {
     }).length;
     // Exactly one -32000 for id=30 — timer fired first, catch found map empty.
     expect(errorCount).toBe(1);
-  }, 10_000);
+  }, 15_000);
 
   it("process exits in <3s after half-open timeout fires (no orphan handles)", async () => {
     // Regression guard: after the per-request timer fires and the proxy sends a
@@ -853,7 +855,7 @@ describe("mcp-stdio per-request timeout", () => {
     // exercising the real natural-exit path. SIGTERM would bypass the Node event
     // loop entirely and cannot detect orphan timer handles that block clean exit.
     // The timer has already fired and been cleared from the map before stdin.end().
-    const { port } = await makeHalfOpenServer();
+    const { port, postsReceived } = await makeHalfOpenServer();
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
     child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
       env: {
@@ -864,10 +866,17 @@ describe("mcp-stdio per-request timeout", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    await new Promise((r) => setTimeout(r, 500));
+    // Write immediately — the request buffers in preReadyBuffer until httpReady
+    // flips, then forwardToUpstream fires. Poll for the POST (NOT a fixed sleep)
+    // so the test tolerates subprocess startup latency under concurrent vitest
+    // load, where `--import tsx` startup can far exceed 500ms. The ordering is
+    // load-bearing: waitForPosts returns the moment the POST arrives = the 300ms
+    // timer has only just started, so readOneLine's listener attaches well
+    // before the -32000 is emitted.
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 40, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );
+    await waitForPosts(postsReceived, 1);
 
     // Wait for the -32000 to arrive (timer fired).
     const line = await readOneLine(child, 3_000);
@@ -887,7 +896,7 @@ describe("mcp-stdio per-request timeout", () => {
       });
     });
     expect(closed).toBe(true);
-  }, 10_000);
+  }, 15_000);
 });
 
 describe("parseTimeoutMs", () => {
