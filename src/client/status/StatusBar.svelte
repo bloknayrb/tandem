@@ -171,12 +171,12 @@ function cycleWordMode() {
      display-name input + word-count button remain reachable. -->
 <div
   class="tandem-floating-pill tandem-status-pill"
-  style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 4px var(--tandem-space-3); height: var(--tandem-h-statusbar, 28px); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"
+  style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 6px var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"
 >
   <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
     <span
       class="status-dot"
-      style="width: 8px; height: 8px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {isReconnecting ? 'tandem-reconnect-pulse 1.2s ease-in-out infinite' : 'none'};"
+      style="width: 7px; height: 7px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {isReconnecting ? 'tandem-reconnect-pulse 1.2s ease-in-out infinite' : 'none'};"
     ></span>
     <span>{connLabel}</span>
     {#if editor}
@@ -235,7 +235,7 @@ function cycleWordMode() {
   <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
     <span
       class="claude-dot"
-      style="width: 8px; height: 8px; border-radius: 50%; background: var(--tandem-author-claude); opacity: {claudeActive ? 1 : 0.4}; display: inline-block; transition: opacity 0.3s ease; animation: {claudeActive ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
+      style="width: 7px; height: 7px; border-radius: 50%; background: var(--tandem-author-claude); opacity: {claudeActive ? 1 : 0.4}; display: inline-block; transition: opacity 0.3s ease; animation: {claudeActive ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
     ></span>
     <span style="transition: color 0.3s ease; color: {claudeActive ? 'var(--tandem-fg)' : 'var(--tandem-fg-subtle)'};">
       {claudeStatus ? `Claude · ${claudeStatus}` : "Claude · idle"}
