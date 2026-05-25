@@ -4,6 +4,9 @@ dist/
 .worktrees/
 private/
 *.log
+
+# Knowledge-graph generator output (regenerable artifact dump)
+graphify-out/
 .env
 .env.local
 
@@ -24,6 +27,8 @@ AGENTS.md
 .claude/plans/
 .claude/scheduled_tasks.lock
 .claude/.workflow-state/
+# Ephemeral PR working files (diffs, review scratch, body drafts)
+.claude/.pr*
 .clone/
 .superpowers/
 skills-lock.json
