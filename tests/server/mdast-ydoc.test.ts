@@ -692,6 +692,118 @@ describe("yDocToMdast — reverse conversion", () => {
   });
 });
 
+describe("yDocToMdast — inline code combined with other marks", () => {
+  // Builds a paragraph holding a single Y.XmlText segment with the given delta
+  // attributes — mirrors what the load side produces for e.g. strong > inlineCode
+  // (a segment carrying both { bold:{}, code:{} }). Targets the SAVE path directly.
+  function loadSegment(value: string, attributes: Record<string, object>): Y.Doc {
+    doc = new Y.Doc();
+    const frag = getFragment(doc);
+    const paragraph = new Y.XmlElement("paragraph");
+    const text = new Y.XmlText();
+    paragraph.insert(0, [text]);
+    frag.insert(0, [paragraph]);
+    text.insert(0, value, attributes);
+    return doc;
+  }
+
+  function paragraphChildren(): any[] {
+    return (yDocToMdast(doc).children[0] as any).children;
+  }
+
+  it("bold + code → strong wrapping inlineCode (code mark preserved)", () => {
+    loadSegment("appdata-path", { bold: {}, code: {} });
+    const [node] = paragraphChildren();
+    expect(node.type).toBe("strong");
+    expect(node.children).toEqual([{ type: "inlineCode", value: "appdata-path" }]);
+  });
+
+  it("italic + code → emphasis wrapping inlineCode", () => {
+    loadSegment("italicCode", { italic: {}, code: {} });
+    const [node] = paragraphChildren();
+    expect(node.type).toBe("emphasis");
+    expect(node.children).toEqual([{ type: "inlineCode", value: "italicCode" }]);
+  });
+
+  it("strike + code → delete wrapping inlineCode", () => {
+    loadSegment("strikeCode", { strike: {}, code: {} });
+    const [node] = paragraphChildren();
+    expect(node.type).toBe("delete");
+    expect(node.children).toEqual([{ type: "inlineCode", value: "strikeCode" }]);
+  });
+
+  it("link + code → link wrapping inlineCode (link NOT discarded)", () => {
+    loadSegment("linkCode", { link: { href: "https://example.com" }, code: {} });
+    const [node] = paragraphChildren();
+    expect(node.type).toBe("link");
+    expect(node.url).toBe("https://example.com");
+    expect(node.children).toEqual([{ type: "inlineCode", value: "linkCode" }]);
+  });
+
+  it("bold + italic + code → strong > emphasis > inlineCode", () => {
+    loadSegment("triple", { bold: {}, italic: {}, code: {} });
+    const [node] = paragraphChildren();
+    expect(node.type).toBe("strong");
+    expect(node.children[0].type).toBe("emphasis");
+    expect(node.children[0].children).toEqual([{ type: "inlineCode", value: "triple" }]);
+  });
+
+  // Two adjacent segments differing only in their link attributes. toDelta keeps
+  // them as separate ops, so coalescePhrasing/sameWrapper decides whether the
+  // resulting link nodes merge. These guard the link discriminator at
+  // mdast-ydoc.ts sameWrapper(): merging distinct links would silently drop a url
+  // (or a title) on every save.
+  function loadTwoSegments(
+    a: { value: string; attributes: Record<string, object> },
+    b: { value: string; attributes: Record<string, object> },
+  ): Y.Doc {
+    doc = new Y.Doc();
+    const frag = getFragment(doc);
+    const paragraph = new Y.XmlElement("paragraph");
+    const text = new Y.XmlText();
+    paragraph.insert(0, [text]);
+    frag.insert(0, [paragraph]);
+    text.insert(0, a.value, a.attributes);
+    text.insert(text.length, b.value, b.attributes);
+    return doc;
+  }
+
+  it("adjacent links with different urls do NOT coalesce (both urls kept)", () => {
+    loadTwoSegments(
+      { value: "a", attributes: { link: { href: "https://one.example" } } },
+      { value: "b", attributes: { link: { href: "https://two.example" } } },
+    );
+    const nodes = paragraphChildren();
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map((n) => n.type)).toEqual(["link", "link"]);
+    expect(nodes.map((n) => n.url)).toEqual(["https://one.example", "https://two.example"]);
+  });
+
+  it("adjacent links with same url but different titles do NOT coalesce", () => {
+    loadTwoSegments(
+      { value: "a", attributes: { link: { href: "https://x.example", title: "First" } } },
+      { value: "b", attributes: { link: { href: "https://x.example", title: "Second" } } },
+    );
+    const nodes = paragraphChildren();
+    expect(nodes).toHaveLength(2);
+    expect(nodes.map((n) => n.title)).toEqual(["First", "Second"]);
+  });
+
+  it("adjacent links with identical url+title DO coalesce into one node", () => {
+    loadTwoSegments(
+      { value: "a", attributes: { link: { href: "https://x.example", title: "T" }, code: {} } },
+      { value: "b", attributes: { link: { href: "https://x.example", title: "T" } } },
+    );
+    const nodes = paragraphChildren();
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("link");
+    expect(nodes[0].children).toEqual([
+      { type: "inlineCode", value: "a" },
+      { type: "text", value: "b" },
+    ]);
+  });
+});
+
 describe("yDocToMdast — table cell block flattening", () => {
   it("serializes two paragraph children in one GFM cell", () => {
     doc = makeOneCellTable({ value: "First" }, { value: "Second" });

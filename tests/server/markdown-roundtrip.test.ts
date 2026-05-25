@@ -61,6 +61,48 @@ describe("markdown round-trip", () => {
     expect(output).toContain("https://example.com");
   });
 
+  // Regression: inline code combined with bold/italic/strike/link used to lose
+  // its `code` mark on save (deltaToPhrasingContent dropped it), surfacing as
+  // doubled `**` and `&#x20;` entity-spaces — e.g. opening docs/decisions.md to
+  // view it silently corrupted code-in-bold runs.
+  it("inline code inside bold survives without mark loss or &#x20; noise", () => {
+    const input = "**(c) `appdata-path` / `app-data-folder`:**";
+    const output = normalize(roundTrip(input));
+    expect(output).toContain("`appdata-path`");
+    expect(output).toContain("`app-data-folder`");
+    expect(output).not.toContain("****");
+    expect(output).not.toContain("&#x20;");
+  });
+
+  it("inline code inside italic survives", () => {
+    const output = normalize(roundTrip("*`italicCode`*"));
+    expect(output).toContain("`italicCode`");
+    expect(output).not.toContain("&#x20;");
+  });
+
+  it("inline code inside strikethrough survives", () => {
+    const output = normalize(roundTrip("~~`strikeCode`~~"));
+    expect(output).toContain("`strikeCode`");
+    expect(output).toContain("~~");
+    expect(output).not.toContain("&#x20;");
+  });
+
+  it("inline code inside a link keeps both the link and the code span", () => {
+    const output = normalize(roundTrip("[`linkCode`](https://example.com)"));
+    expect(output).toContain("`linkCode`");
+    expect(output).toContain("https://example.com");
+  });
+
+  it("link with mixed code + text content coalesces into a single link", () => {
+    // Exercises link-link coalescing across segments that share an href but
+    // differ in the inner `code` mark — must stay ONE link, not split.
+    const output = normalize(roundTrip("[`code` then text](https://example.com)"));
+    expect(output).toContain("`code` then text");
+    expect(output).toContain("(https://example.com)");
+    // Single link: the url must appear exactly once.
+    expect(output.match(/https:\/\/example\.com/g)).toHaveLength(1);
+  });
+
   it("bullet lists", () => {
     const input = "- Item one\n- Item two\n- Item three";
     const output = normalize(roundTrip(input));
