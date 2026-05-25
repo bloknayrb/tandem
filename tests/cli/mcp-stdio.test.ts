@@ -870,9 +870,10 @@ describe("mcp-stdio per-request timeout", () => {
     // flips, then forwardToUpstream fires. Poll for the POST (NOT a fixed sleep)
     // so the test tolerates subprocess startup latency under concurrent vitest
     // load, where `--import tsx` startup can far exceed 500ms. The ordering is
-    // load-bearing: waitForPosts returns the moment the POST arrives = the 300ms
-    // timer has only just started, so readOneLine's listener attaches well
-    // before the -32000 is emitted.
+    // load-bearing: the 300ms timer is armed just before http.send, so when
+    // waitForPosts returns (POST received) it has been running only for the
+    // network round-trip — ~290ms still remain, so readOneLine's listener
+    // attaches well before the -32000 is emitted.
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 40, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );
