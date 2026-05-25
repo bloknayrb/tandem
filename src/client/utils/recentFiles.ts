@@ -37,6 +37,26 @@ export function recentFilePaths(list: RecentFileEntry[]): string[] {
   return list.map((e) => e.path);
 }
 
+/**
+ * Compact relative-time label for a recents row's "when" column.
+ *
+ * Returns "" for `openedAt === 0` (unknown — legacy/migrated entry; the launcher
+ * omits the label entirely). Future timestamps (clock skew) collapse to "just
+ * now". Resolution is intentionally coarse — minutes, then hours, then days —
+ * because the launcher only needs a rough recency cue, not a precise duration.
+ */
+export function formatWhen(openedAt: number, now: number = Date.now()): string {
+  if (!openedAt) return "";
+  const deltaMs = now - openedAt;
+  if (deltaMs < 60_000) return "just now";
+  const minutes = Math.floor(deltaMs / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
 export function loadRecentFiles(): RecentFileEntry[] {
   try {
     const raw = localStorage.getItem(RECENT_FILES_KEY);
