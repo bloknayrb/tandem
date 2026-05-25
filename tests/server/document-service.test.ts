@@ -639,115 +639,128 @@ describe("saveDocumentAsToDisk", () => {
     expect(deleteSession).not.toHaveBeenCalled();
   });
 
-  it("allows a target path outside home/tmp — Save-As is user-driven, not PATH_REJECTED (#827 user decision)", async () => {
-    const os = await import("node:os");
-    const fsReal = await import("node:fs/promises");
-    const pathMod = await import("node:path");
-    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+  // POSIX-only: Probe 1 asserts the literal absolute path reaches atomicWrite,
+  // but win32 path.resolve rewrites "/etc/x" → "C:\etc\x". The path-widening
+  // behavior itself works on win32; only the hard-coded POSIX assertion doesn't.
+  // Linux CI exercises this; win32 path policy is covered by the UNC test below.
+  it.skipIf(process.platform === "win32")(
+    "allows a target path outside home/tmp — Save-As is user-driven, not PATH_REJECTED (#827 user decision)",
+    async () => {
+      const os = await import("node:os");
+      const fsReal = await import("node:fs/promises");
+      const pathMod = await import("node:path");
+      const { atomicWrite } = await import("../../src/server/file-io/index.js");
 
-    // Probe 1: an absolute path that exists outside both homedir() and
-    // tmpdir() (`/etc`) must no longer be refused by the home/tmp
-    // confinement. The old behavior returned PATH_REJECTED here; the user
-    // decision is that any absolute path the user pointed the native Save
-    // dialog at passes the path-safety gate (symlink + UNC guards aside).
-    // Stub atomicWrite to a no-op so we assert the path-policy DECISION
-    // without writing into a system directory (`/etc` would pollute and may
-    // even be writable as root in CI).
-    vi.mocked(atomicWrite).mockClear();
-    vi.mocked(atomicWrite).mockResolvedValueOnce(undefined);
-    addDoc("path-allow", {
-      id: "path-allow",
-      filePath: "upload://scratchpad/x/Scratchpad.md",
-      format: "md",
-      readOnly: false,
-      source: "upload",
-    });
-    const doc = getOrCreateDocument("path-allow");
-    const frag = doc.getXmlFragment("default");
-    const p = new Y.XmlElement("paragraph");
-    frag.insert(0, [p]);
-    p.insert(0, [new Y.XmlText("content")]);
-
-    const result = await saveDocumentAsToDisk("path-allow", "/etc/tandem-evil-827.md", "md");
-    // The key assertion: the home/tmp confinement no longer rejects this.
-    expect(result.errorCode).not.toBe("PATH_REJECTED");
-    // The path-safety gate let it through to the (stubbed) write.
-    expect(atomicWrite).toHaveBeenCalledWith("/etc/tandem-evil-827.md", expect.any(String));
-
-    // Probe 2: end-to-end save into a freshly created dir outside the home
-    // tree, proving the widening lets a legitimate user-chosen external
-    // location through to a real disk write (atomicWrite delegates to the
-    // real impl for non-stubbed calls).
-    const writableDir = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-saveas-"));
-    try {
-      addDoc("path-allow-2", {
-        id: "path-allow-2",
-        filePath: "upload://scratchpad/y/Scratchpad.md",
-        format: "md",
-        readOnly: false,
-        source: "upload",
-      });
-      const doc2 = getOrCreateDocument("path-allow-2");
-      const frag2 = doc2.getXmlFragment("default");
-      const p2 = new Y.XmlElement("paragraph");
-      frag2.insert(0, [p2]);
-      p2.insert(0, [new Y.XmlText("content")]);
-
-      const okResult = await saveDocumentAsToDisk(
-        "path-allow-2",
-        pathMod.join(writableDir, "Promoted.md"),
-        "md",
-      );
-      expect(okResult.errorCode).not.toBe("PATH_REJECTED");
-      expect(okResult.status).toBe("saved");
-    } finally {
-      await fsReal.rm(writableDir, { recursive: true, force: true }).catch(() => {});
-    }
-  });
-
-  it("still rejects a symlinked target path with PATH_REJECTED and writes nothing (#827 keeps symlink guard)", async () => {
-    const os = await import("node:os");
-    const fsReal = await import("node:fs/promises");
-    const pathMod = await import("node:path");
-    const { atomicWrite } = await import("../../src/server/file-io/index.js");
-    vi.mocked(atomicWrite).mockClear();
-
-    // Create a real symlinked directory and aim the Save-As target through
-    // it. assertPathSafe's realpath/symlink walk must still refuse: a planted
-    // symlink redirecting the write is a genuine attack we keep guarding,
-    // even though the home/tmp root confinement was widened.
-    const baseDir = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-symlink-"));
-    const realDir = pathMod.join(baseDir, "real");
-    const linkDir = pathMod.join(baseDir, "link");
-    await fsReal.mkdir(realDir);
-    await fsReal.symlink(realDir, linkDir, "dir");
-
-    try {
-      addDoc("symlink-reject", {
-        id: "symlink-reject",
+      // Probe 1: an absolute path that exists outside both homedir() and
+      // tmpdir() (`/etc`) must no longer be refused by the home/tmp
+      // confinement. The old behavior returned PATH_REJECTED here; the user
+      // decision is that any absolute path the user pointed the native Save
+      // dialog at passes the path-safety gate (symlink + UNC guards aside).
+      // Stub atomicWrite to a no-op so we assert the path-policy DECISION
+      // without writing into a system directory (`/etc` would pollute and may
+      // even be writable as root in CI).
+      vi.mocked(atomicWrite).mockClear();
+      vi.mocked(atomicWrite).mockResolvedValueOnce(undefined);
+      addDoc("path-allow", {
+        id: "path-allow",
         filePath: "upload://scratchpad/x/Scratchpad.md",
         format: "md",
         readOnly: false,
         source: "upload",
       });
-      const doc = getOrCreateDocument("symlink-reject");
+      const doc = getOrCreateDocument("path-allow");
       const frag = doc.getXmlFragment("default");
       const p = new Y.XmlElement("paragraph");
       frag.insert(0, [p]);
       p.insert(0, [new Y.XmlText("content")]);
 
-      const result = await saveDocumentAsToDisk(
-        "symlink-reject",
-        pathMod.join(linkDir, "Promoted.md"),
-        "md",
-      );
-      expect(result.status).toBe("error");
-      expect(result.errorCode).toBe("PATH_REJECTED");
-      expect(atomicWrite).not.toHaveBeenCalled();
-    } finally {
-      await fsReal.rm(baseDir, { recursive: true, force: true }).catch(() => {});
-    }
-  });
+      const result = await saveDocumentAsToDisk("path-allow", "/etc/tandem-evil-827.md", "md");
+      // The key assertion: the home/tmp confinement no longer rejects this.
+      expect(result.errorCode).not.toBe("PATH_REJECTED");
+      // The path-safety gate let it through to the (stubbed) write.
+      expect(atomicWrite).toHaveBeenCalledWith("/etc/tandem-evil-827.md", expect.any(String));
+
+      // Probe 2: end-to-end save into a freshly created dir outside the home
+      // tree, proving the widening lets a legitimate user-chosen external
+      // location through to a real disk write (atomicWrite delegates to the
+      // real impl for non-stubbed calls).
+      const writableDir = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-saveas-"));
+      try {
+        addDoc("path-allow-2", {
+          id: "path-allow-2",
+          filePath: "upload://scratchpad/y/Scratchpad.md",
+          format: "md",
+          readOnly: false,
+          source: "upload",
+        });
+        const doc2 = getOrCreateDocument("path-allow-2");
+        const frag2 = doc2.getXmlFragment("default");
+        const p2 = new Y.XmlElement("paragraph");
+        frag2.insert(0, [p2]);
+        p2.insert(0, [new Y.XmlText("content")]);
+
+        const okResult = await saveDocumentAsToDisk(
+          "path-allow-2",
+          pathMod.join(writableDir, "Promoted.md"),
+          "md",
+        );
+        expect(okResult.errorCode).not.toBe("PATH_REJECTED");
+        expect(okResult.status).toBe("saved");
+      } finally {
+        await fsReal.rm(writableDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+
+  // POSIX-only: real fsReal.symlink() throws EPERM on win32 without Developer
+  // Mode/admin, so the fixture can't be built. The symlink-rejection behavior
+  // (assertPathSafe's realpath walk) is exercised on Linux CI.
+  it.skipIf(process.platform === "win32")(
+    "still rejects a symlinked target path with PATH_REJECTED and writes nothing (#827 keeps symlink guard)",
+    async () => {
+      const os = await import("node:os");
+      const fsReal = await import("node:fs/promises");
+      const pathMod = await import("node:path");
+      const { atomicWrite } = await import("../../src/server/file-io/index.js");
+      vi.mocked(atomicWrite).mockClear();
+
+      // Create a real symlinked directory and aim the Save-As target through
+      // it. assertPathSafe's realpath/symlink walk must still refuse: a planted
+      // symlink redirecting the write is a genuine attack we keep guarding,
+      // even though the home/tmp root confinement was widened.
+      const baseDir = await fsReal.mkdtemp(pathMod.join(os.tmpdir(), "tandem-symlink-"));
+      const realDir = pathMod.join(baseDir, "real");
+      const linkDir = pathMod.join(baseDir, "link");
+      await fsReal.mkdir(realDir);
+      await fsReal.symlink(realDir, linkDir, "dir");
+
+      try {
+        addDoc("symlink-reject", {
+          id: "symlink-reject",
+          filePath: "upload://scratchpad/x/Scratchpad.md",
+          format: "md",
+          readOnly: false,
+          source: "upload",
+        });
+        const doc = getOrCreateDocument("symlink-reject");
+        const frag = doc.getXmlFragment("default");
+        const p = new Y.XmlElement("paragraph");
+        frag.insert(0, [p]);
+        p.insert(0, [new Y.XmlText("content")]);
+
+        const result = await saveDocumentAsToDisk(
+          "symlink-reject",
+          pathMod.join(linkDir, "Promoted.md"),
+          "md",
+        );
+        expect(result.status).toBe("error");
+        expect(result.errorCode).toBe("PATH_REJECTED");
+        expect(atomicWrite).not.toHaveBeenCalled();
+      } finally {
+        await fsReal.rm(baseDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
 
   it("rejects a UNC target path on win32 with INVALID_PATH and writes nothing (#827 Low)", async () => {
     const pathMod = (await import("node:path")).default;
