@@ -612,7 +612,7 @@ async function handleViewChangelog(): Promise<void> {
     background: var(--tandem-surface);
     color: var(--tandem-fg);
     border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-4);
+    border-radius: var(--tandem-r-5);
     box-shadow: var(--tandem-shadow-3);
     /* One above the scrim's --tandem-z-above-titlebar so the dialog sits over
        its own backdrop. The above-titlebar tier clears the title bar's
@@ -628,7 +628,7 @@ async function handleViewChangelog(): Promise<void> {
   .settings-modal-sidebar {
     display: flex;
     flex-direction: column;
-    gap: var(--tandem-space-4);
+    gap: var(--tandem-space-3);
     padding: var(--tandem-space-5) var(--tandem-space-3);
     border-right: 1px solid var(--tandem-border);
     background: var(--tandem-surface-muted);
@@ -683,6 +683,7 @@ async function handleViewChangelog(): Promise<void> {
     font-weight: 500;
     text-align: left;
     cursor: pointer;
+    transition: background 100ms, color 100ms;
   }
 
   .settings-modal-nav-btn:hover {
@@ -802,16 +803,18 @@ async function handleViewChangelog(): Promise<void> {
     color: var(--tandem-fg-subtle);
     font-size: 18px;
     line-height: 1;
-    padding: 4px 8px;
-    min-width: 30px;
-    min-height: 30px;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0;
     border-radius: var(--tandem-r-2);
   }
 
   .settings-modal-close:hover,
   .settings-modal-close:focus-visible {
     color: var(--tandem-fg);
-    background: var(--tandem-surface-muted);
+    background: var(--tandem-surface-sunk);
     outline: none;
   }
 
