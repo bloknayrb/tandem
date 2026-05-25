@@ -7,7 +7,9 @@ interface Props {
 
 let { onReady }: Props = $props();
 
-const notifications = createNotifications();
+// persist: false — the harness must not read/write the real app's
+// ACTIVITY_HISTORY_KEY (shared-localStorage clobber; see plan-review).
+const notifications = createNotifications({ persist: false });
 $effect(() => {
   onReady(notifications);
 });
