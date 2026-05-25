@@ -1,24 +1,27 @@
 /**
  * Visual baseline HTML capture — Phase 0i of the design-system-impl umbrella.
  *
- * Generates self-contained HTML files (markup + inlined CSS) for the eight
- * cross-cutting / shared-recipe surfaces, light + dark = 16 files total.
- * Writes to `docs/design-system-impl/preview/baselines/` so OpenDesign and
- * any browser can render them as-is.
+ * Captures the eight cross-cutting / shared-recipe surfaces in light + dark
+ * (16 scenes) and combines them into ONE self-contained gallery,
+ * `docs/design-system-impl/preview/baselines/baselines.html`, which
+ * OpenDesign and any browser render as-is. Each scene is embedded in an
+ * `<iframe srcdoc>` so its inlined `<html data-theme>` + stylesheet stay
+ * isolated. See `combine.ts` for the gallery shell.
+ *
+ * Single file (not 16) because OpenDesign flattens every file under
+ * docs/design-system-impl into one list — one artifact keeps that view clean.
  *
  * NOT a test — no assertions, no regression gate. The role is **visual
  * reference library**: a place to see what each surface currently looks
- * like in both themes. Cross-surface drift surfaces at PR review time via
- * the git diff of the committed HTML files (markup + class changes are
- * human-readable), not via automated CI failure.
+ * like in both themes.
  *
  * Run:
  *   npm run capture:design-baselines
  *
- * Sub-PR ritual: when a sub-PR re-skins a surface covered here, re-run
- * this command, commit the regenerated HTML for that surface (and only
- * that surface), and reviewers can see the markup change in the diff +
- * the visual change in OpenDesign.
+ * Sub-PR ritual: when a sub-PR re-skins a surface covered here, re-run this
+ * command and commit the regenerated baselines.html so reviewers can see the
+ * change in OpenDesign. (The combined file is large and not hand-diffable;
+ * the visual review happens in OD, not the git diff.)
  */
 
 import fs from "node:fs";
@@ -30,12 +33,12 @@ import {
   McpTestClient,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
+import { PARTS_DIR } from "./combine";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..");
 const welcomePath = path.join(repoRoot, "sample", "welcome.md");
-const OUT_DIR = path.join(repoRoot, "docs", "design-system-impl", "preview", "baselines");
 
 // Skip unless the capture command set the gate; mirrors scripts/screenshots pattern.
 test.skip(
@@ -46,10 +49,6 @@ test.skip(
 test.use({ viewport: { width: 1440, height: 900 } });
 
 let mcp: McpTestClient;
-
-test.beforeAll(() => {
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-});
 
 test.beforeEach(async () => {
   mcp = new McpTestClient();
@@ -174,8 +173,10 @@ ${bodyClone.innerHTML}
     { surface, theme, focusTag },
   );
 
-  const outPath = path.join(OUT_DIR, `${surface}-${theme}.html`);
-  fs.writeFileSync(outPath, html, "utf-8");
+  // Write to disk immediately. globalTeardown folds all parts into the single
+  // baselines.html — persisting per-scene survives a worker restart on retry,
+  // which would wipe any in-memory accumulation.
+  fs.writeFileSync(path.join(PARTS_DIR, `${surface}-${theme}.html`), html, "utf-8");
 }
 
 for (const theme of ["light", "dark"] as const) {

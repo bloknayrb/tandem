@@ -3,6 +3,7 @@ dist/
 .tandem/
 .worktrees/
 private/
+scripts/design-baselines/.parts/
 *.log
 .env
 .env.local

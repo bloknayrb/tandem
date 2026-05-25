@@ -4,9 +4,11 @@ Phase 0i of the design-system-impl umbrella. The capture script lives at `script
 
 ## What this is
 
-A **visual reference library** for the eight cross-cutting surfaces of Tandem, captured as self-contained HTML files (markup + inlined CSS). Each file opens in OpenDesign and any browser without needing the dev server.
+A **visual reference library** for the eight cross-cutting surfaces of Tandem, captured into a single self-contained HTML gallery (`baselines.html`, markup + inlined CSS). Each surface × theme is embedded in an `<iframe srcdoc>` so its inlined `<html data-theme>` + stylesheet stay isolated. Opens in OpenDesign and any browser without the dev server.
 
-The role is reference + drift detection at PR review time, **not** automated CI assertion. When a sub-PR re-skins a surface, the HTML for that surface regenerates, the git diff shows the markup/class change to reviewers, and OpenDesign renders the visual change for visual review.
+The role is reference + drift detection at PR review time, **not** automated CI assertion. When a sub-PR re-skins a surface, the gallery regenerates and OpenDesign renders the visual change for review.
+
+One file rather than 16 because OpenDesign flattens every file under `docs/design-system-impl/` into one list — a single artifact keeps that view clean. The tradeoff: the per-surface git diff is gone (the combined file is ~12MB and not hand-diffable), so visual review happens in OD, not the diff.
 
 ## Why HTML, not PNG
 
@@ -14,11 +16,11 @@ Previous iteration of this gate used Playwright `toHaveScreenshot()` pixel diffs
 
 - **OS-portable.** PNGs differ between Windows / macOS / Linux because of font rendering, anti-aliasing, sub-pixel layout. HTML renders consistently. No platform gates or CI-only seeding needed.
 - **Viewable in OpenDesign.** OD watches `docs/design-system-impl/`. HTML files render there directly; PNG files are just images.
-- **Human-readable diffs.** A git diff on HTML shows the class added, the testid renamed, the attribute changed — actionable feedback. A pixel diff is opaque ("12% of pixels differ" — where? why?).
+- **Inspectable markup.** The captured markup + classes live in the file, so a regression can be traced to a class added / testid renamed / attribute changed. (The combined gallery isn't cleanly git-diffable, so primary review is visual in OD — but the markup is still there to inspect.)
 - **Self-contained.** Inlined CSS means the file is portable — share via OD, drop in a Slack message, archive, whatever.
 - **No CI cost.** The capture spec is on-demand only; routine CI doesn't run it.
 
-## Scope (8 surfaces × 2 themes = 16 files)
+## Scope (8 surfaces × 2 themes = 16 scenes in one file)
 
 Eight cross-cutting / shared-recipe surfaces. The plan called for ~30 surfaces × 2 viewports = ~120 captures; that's too much maintenance for the signal value. Most surfaces consume shared recipes (floating-pill, card chrome, modal frame), so covering the recipes covers their consumers.
 
@@ -39,22 +41,21 @@ From the repo root:
 npm run capture:design-baselines
 ```
 
-The command spawns the dev server, runs the capture spec, and writes 16 HTML files to `docs/design-system-impl/preview/baselines/`. Takes a couple of minutes.
+The command spawns the dev server, runs the capture spec, and writes a single `baselines.html` to `docs/design-system-impl/preview/baselines/`. Takes a couple of minutes.
 
 After capture:
-- Open the files in OpenDesign (auto-detected) or directly in any browser.
-- `git status` shows which baselines changed since last capture.
-- `git diff` on any HTML file shows the markup/class change.
+- Open `baselines.html` in OpenDesign (auto-detected) or directly in any browser.
+- The left surface picker jumps between surfaces; the Both/Light/Dark filter narrows themes.
 
 ## Sub-PR ritual
 
 When a sub-PR re-skins a surface covered by this set:
 
 1. After implementing the change, run `npm run capture:design-baselines`.
-2. `git status` will show updated HTML files for the surface (and possibly cross-cutting surfaces that consume the same recipe).
-3. Commit ONLY the HTML files for surfaces the sub-PR intentionally touched. If unexpected files changed, that IS the drift signal — investigate before committing.
-4. PR description lists which baselines updated and why.
-5. Reviewer opens the updated HTML in OD to confirm the visual matches intent; the git diff confirms the markup/class change is minimal.
+2. `git status` shows `baselines.html` changed.
+3. Open `baselines.html` in OD and confirm the re-skinned surface matches intent (and that cross-cutting surfaces consuming the same recipe didn't drift unexpectedly).
+4. PR description lists which surfaces changed and why.
+5. Commit the regenerated `baselines.html`.
 
 If a sub-PR doesn't touch any of the 8 surfaces, no baseline regeneration needed.
 
@@ -82,6 +83,6 @@ If a baseline shows changed timestamps but no other structural change, it's not 
 
 ## When this work retires
 
-The capture script and committed baselines stay in master after the umbrella merges, as an ongoing visual reference. Sub-PRs touching any of the 8 surfaces refresh the relevant baseline as a discipline.
+The capture script and committed `baselines.html` stay in master after the umbrella merges, as an ongoing visual reference. Sub-PRs touching any of the 8 surfaces refresh the gallery as a discipline.
 
 The Phase 0 procedure docs (this file, derived-spec.md, conflicts-resolved.md) stay in `docs/design-system-impl/` as historical record of the umbrella's design decisions.
