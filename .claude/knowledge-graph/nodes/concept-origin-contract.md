@@ -17,12 +17,12 @@ Every Y.Doc write is tagged with one of five origin values: `mcp`, `file-sync`, 
 | Origin     | Channel events | Durable-sync | Tombstones |
 |------------|----------------|--------------|------------|
 | `mcp`      | skip           | persist      | record     |
-| `file-sync`| skip           | skip         | skip       |
-| `internal` | skip           | skip         | skip       |
+| `file-sync`| skip           | skip         | record     |
+| `internal` | skip           | skip         | record     |
 | `reload`   | skip           | persist      | record     |
 | `browser`  | **emit**       | persist      | record     |
 
-Only `browser` writes emit channel events — this is how the channel shim distinguishes "user did something" from server-internal noise.
+Only `browser` writes emit channel events — this is how the channel shim distinguishes "user did something" from server-internal noise. Tombstones are recorded for **every** origin (including `file-sync` / `internal`) — #695/#700 reversed ADR-031's original skip-for-file-sync rule so file-driven deletes are never lost; resurrection is prevented by rev-gated merge (`stone.rev > ymapRec.rev`), not by skipping. See `src/server/annotations/sync.ts`.
 
 Wrapper helpers in `src/shared/origins.ts`:
 - `withMcp` — Claude-initiated writes from MCP tool handlers
