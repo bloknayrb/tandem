@@ -191,8 +191,9 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
       const idx = activity.findIndex((a) => a.dedupKey === notification.dedupKey);
       if (idx !== -1) {
         const existing = activity[idx];
-        // Keep the FIRST id (stable testids / keyed-each / storage); bump
-        // count + timestamp so it re-sorts as recent and re-arms info expiry.
+        // Keep the FIRST id (stable testids / keyed-each / storage) and its
+        // list position; bump count + refresh timestamp so the relative-time
+        // label ages from the latest hit and the info-expiry timer re-arms.
         const updated: ActivityItem = {
           ...notification,
           id: existing.id,

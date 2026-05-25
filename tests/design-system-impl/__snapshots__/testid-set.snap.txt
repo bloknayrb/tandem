@@ -1,5 +1,11 @@
 accent-hue-slider
 accept-btn-{*}
+activity-clear-all
+activity-dismiss-{*}
+activity-empty
+activity-pill
+activity-row-{*}
+activity-tray
 annotation-card-{*}
 annotation-decorations-toggle
 annotation-import-byline-{*}

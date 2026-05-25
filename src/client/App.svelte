@@ -4,7 +4,7 @@ import { onDestroy, untrack } from "svelte";
 import { cubicOut } from "svelte/easing";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
-import type { CapturedAnchor } from "../shared/types";
+import type { CapturedAnchor, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
@@ -15,6 +15,7 @@ import {
   wireActionDeps,
 } from "./actions/builtin.svelte.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
+import ActivityTray from "./components/ActivityTray.svelte";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -183,6 +184,7 @@ createWebViewZoom();
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
 
 const notifications = createNotifications();
+let activityOpen = $state(false);
 const fileDrop = createFileDrop();
 initTauriFileDrop(notifications.push);
 
@@ -306,10 +308,22 @@ let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 // event before App.svelte's window-level handler sees it. Exposed only in
 // dev/test builds — stripped by `import.meta.env.DEV` in production.
 if (import.meta.env.DEV) {
-  (window as unknown as { __tandemTest?: { openSettingsModal: () => void } }).__tandemTest = {
+  (
+    window as unknown as {
+      __tandemTest?: {
+        openSettingsModal: () => void;
+        pushNotification: (n: TandemNotification) => void;
+      };
+    }
+  ).__tandemTest = {
     openSettingsModal: () => {
       settingsModalOpen = true;
     },
+    // Drives the activity center deterministically in E2E without the
+    // SSE-connect race (the server's notify-stream has no buffer replay,
+    // so a notification pushed before the EventSource connects is lost).
+    // Exercises the real client `push` → ingest → tray + transient-pop path.
+    pushNotification: (n: TandemNotification) => notifications.push(n),
   };
 }
 let paletteOpen = $state(false);
@@ -1291,6 +1305,14 @@ const tutorial = createTutorial(
     />
 
     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
+
+    <ActivityTray
+      items={notifications.activity}
+      open={activityOpen}
+      onToggle={() => (activityOpen = !activityOpen)}
+      onDismiss={notifications.dismissActivity}
+      onClear={notifications.clearActivity}
+    />
 
     {#if isTauriRuntime()}
       <CoworkAdminDeclinedModal />
