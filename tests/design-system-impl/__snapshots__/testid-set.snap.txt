@@ -179,6 +179,12 @@ network-degraded-delay-slider
 network-hold-annotations-toggle
 network-restart-sidecar
 network-retry-strategy
+new-tab-browse
+new-tab-empty
+new-tab-no-match
+new-tab-recent-{*}
+new-tab-reopen-closed
+new-tab-search
 notifications-harness
 onboarding-tutorial
 open-file-btn
