@@ -96,7 +96,7 @@ can produce a Windows installer only via slow cross-compile, and the official
 Tauri docs say cross-compile is "last resort". (b) **Azure Trusted Signing**:
 the signing flow assumes a Windows host with the signing CLI present;
 running it from inside a Linux container is unproven. (c) **File-watcher
-performance**: bind-mounting `C:\Users\blokn\GitHub\tandem` into a Linux
+performance**: bind-mounting the repo working tree (e.g. `C:\Users\<you>\GitHub\tandem`) into a Linux
 container goes through the 9P file share, which kills inotify performance —
 this would hurt Vite HMR significantly. The Docker docs explicitly recommend
 keeping watched code inside the WSL2 ext4 FS, which means cloning the repo

@@ -2,7 +2,7 @@
 
 For each row, replace the empty `Bryan` cell with one of: **Core** (must ship for v1.0), **Defer** (v1.1+), **Cut** (drop entirely), or **TBD**. To accept the recommendation in the `Rec` column, just type "ditto" or copy the rec value.
 
-Full plan context: `~/.claude/plans/it-occurs-to-rustling-newt.md`. Once this triage is locked, the wave list in §4 of the plan becomes concrete.
+Full plan context lives in a maintainer-local planning doc. Once this triage is locked, the wave list in §4 of that plan becomes concrete.
 
 **v1.0 thesis (your call, 2026-05-14):** every core feature rock-solid + redesign complete + pending decisions finalized. Quality over speed. Date is soft.
 
@@ -153,7 +153,7 @@ These block specific implementation work. Each unlocks a downstream wave.
 
 When done:
 
-- This file gets folded back into `~/.claude/plans/it-occurs-to-rustling-newt.md`
+- This file gets folded back into the maintainer-local planning doc
 - Wave list in §4 of the plan locks
 - I verify §1H "likely shipped" items against current code (Wave 0 task #1)
 - Apple Developer cert procurement starts (Wave 0 calendar gate)
