@@ -29,6 +29,10 @@ export default defineConfig({
   testDir: "./",
   fullyParallel: false,
   workers: 1,
+  // Run-once hooks (immune to worker restarts on retry): setup clears the
+  // scratch parts dir, teardown folds the per-scene parts into baselines.html.
+  globalSetup: "./global-setup.ts",
+  globalTeardown: "./global-teardown.ts",
   webServer: [
     {
       command: "npm run dev",

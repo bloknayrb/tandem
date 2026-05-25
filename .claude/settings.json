@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/sessionstart-prune-state.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/sessionstart-prune-state.sh\""
           }
         ]
       }
@@ -29,11 +29,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/block-sensitive.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-sensitive.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/nudge-plan-review.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/nudge-plan-review.sh\""
           }
         ]
       },
@@ -42,11 +42,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/block-no-verify.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-no-verify.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/nudge-simplify-before-commit.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/nudge-simplify-before-commit.sh\""
           }
         ]
       }
@@ -56,7 +56,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/track-workflow-events.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/track-workflow-events.sh\""
           }
         ]
       },
@@ -65,40 +65,40 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/format-on-edit.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/format-on-edit.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/typecheck-on-edit.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/typecheck-on-edit.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/check-ymap-keys.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-ymap-keys.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/check-extract-markdown.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-extract-markdown.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/check-console-log.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-console-log.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/check-raw-transact.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-raw-transact.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/svelte-check-on-edit.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/svelte-check-on-edit.sh\""
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/check-token-violation.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-token-violation.sh\"",
             "continueOnBlock": true
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/related-test.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/related-test.sh\""
           }
         ]
       },
@@ -107,7 +107,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/nudge-pr-review.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/nudge-pr-review.sh\""
           }
         ]
       }
@@ -117,10 +117,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/stop-cycle-check.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-cycle-check.sh\""
           }
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "dev-tools@claudestuff-marketplace": true
   }
 }

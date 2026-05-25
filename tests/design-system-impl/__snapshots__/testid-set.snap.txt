@@ -25,6 +25,8 @@ bulk-confirm-btn
 bulk-dismiss-btn
 changelog-error
 chat-tab
+claude-typing-indicator-{*}
+claude-working-indicator
 clear-chat-btn
 clear-filters-btn
 clear-recent-files
@@ -89,11 +91,9 @@ editor-root
 editor-width-slider
 error-boundary-recover-btn
 error-boundary-reload-btn
+file-open-browse
 file-open-dialog
 file-open-error
-file-open-submit
-file-path-input
-file-upload-zone
 filter-bar-toggle
 find-case-toggle
 find-close-btn
@@ -124,7 +124,6 @@ harness-acknowledge
 harness-banner-dismiss
 harness-banner-version
 harness-version
-held-banner
 help-modal
 help-modal-close
 high-contrast-toggle
@@ -220,7 +219,6 @@ report-bug-link
 review-only-banner
 review-only-dismiss
 save-indicator
-sb-held
 selection-toolbar-toggle
 send-to-claude-btn-{*}
 settings-content
@@ -250,6 +248,12 @@ settings-modal-solo-rail-hidden-toggle
 settings-modal-tab-{*}
 settings-modal-view-changelog-btn
 settings-modal-view-documentation-btn
+settings-modal-working-directory
+settings-modal-working-directory-input
+settings-modal-working-directory-load-error
+settings-modal-working-directory-pick
+settings-modal-working-directory-reset
+settings-modal-working-directory-save
 settings-popover
 settings-shortcuts-list
 settings-sidebar-footer
