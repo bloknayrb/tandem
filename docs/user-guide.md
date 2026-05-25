@@ -320,7 +320,7 @@ Previously-open documents are auto-restored when the server starts — no manual
 
 ### Further Reading
 
-- [MCP Tool Reference](mcp-tools.md) — Full documentation for all 29 tools (26 active, 3 deprecated stubs)
+- [MCP Tool Reference](mcp-tools.md) — Full documentation for all MCP tools
 - [Workflows](workflows.md) — Advanced Claude Code patterns: cross-referencing documents, multi-model collaboration, RFP drafting, session handoff details
 - [Architecture](architecture.md) — System design, coordinate systems, data flows
 
