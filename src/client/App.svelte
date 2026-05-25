@@ -1326,7 +1326,9 @@ const tutorial = createTutorial(
           void triggerSave(action.documentId);
         } else {
           notifications.push({
-            id: `retry-unavailable-${Date.now()}`,
+            // Deterministic per-doc id (matches the dedupKey) so repeat clicks
+            // coalesce on one stable row instead of risking a same-ms id clash.
+            id: `retry-unavailable-${action.documentId}`,
             type: "general-error",
             severity: "warning",
             message: "Reopen the document to retry the save.",
