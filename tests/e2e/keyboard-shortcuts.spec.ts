@@ -62,7 +62,7 @@ test("'+' button → Browse opens the file dialog", async ({ page }) => {
   await expect(page.locator("[data-testid='open-file-btn']")).toBeVisible();
 
   await page.locator("[data-testid='open-file-btn']").click();
-  await page.getByRole("menuitem", { name: "Browse files…" }).click();
+  await page.locator("[data-testid='new-tab-browse']").click();
 
   await expect(page.locator("[data-testid='file-open-dialog']")).toBeVisible();
 });

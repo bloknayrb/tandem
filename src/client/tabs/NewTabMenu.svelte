@@ -49,7 +49,11 @@ const GLYPHS: Record<string, string[]> = {
 };
 
 function getFocusableItems(): HTMLElement[] {
-  return Array.from(menuEl?.querySelectorAll<HTMLElement>("[role='menuitem']") ?? []);
+  // The arrow-navigable items (recents + the action buttons) are marked with
+  // `data-nav-item`. They are plain <button>s, not role="menuitem" — this is a
+  // dialog with a search box + buttons, not an ARIA menu, so menuitem (which
+  // requires a menu/menubar parent) would be an aria-required-parent violation.
+  return Array.from(menuEl?.querySelectorAll<HTMLElement>("[data-nav-item]") ?? []);
 }
 
 function moveFocus(delta: number) {
@@ -188,7 +192,7 @@ $effect(() => {
           {#each filtered as row, i (row.path)}
             <button
               type="button"
-              role="menuitem"
+              data-nav-item
               class="ntl-recent"
               data-testid={`new-tab-recent-${i}`}
               onclick={() => onOpen(row.path)}
@@ -214,7 +218,7 @@ $effect(() => {
       <div class="ntl-colhead"><span class="ntl-colhead-label">Create</span></div>
       <button
         type="button"
-        role="menuitem"
+        data-nav-item
         class="ntl-action ntl-action-primary"
         data-testid="palette-item-new-scratchpad"
         onclick={onNewScratchpad}
@@ -227,7 +231,7 @@ $effect(() => {
       <div class="ntl-colhead"><span class="ntl-colhead-label">Open</span></div>
       <button
         type="button"
-        role="menuitem"
+        data-nav-item
         class="ntl-action"
         data-testid="new-tab-browse"
         onclick={onBrowse}
@@ -239,7 +243,7 @@ $effect(() => {
       {#if closedTabTop}
         <button
           type="button"
-          role="menuitem"
+          data-nav-item
           class="ntl-action"
           data-testid="new-tab-reopen-closed"
           onclick={onReopenClosed}
