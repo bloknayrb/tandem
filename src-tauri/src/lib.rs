@@ -22,10 +22,12 @@ mod cowork_meta;
 #[cfg(test)]
 mod integrations_probe;
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tauri::Url;
 use tauri::{Emitter, Manager};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -138,6 +140,70 @@ impl std::fmt::Display for RejectionReason {
             }
         }
     }
+}
+
+/// Why `classify_opened_url` rejected a `file://`-style URL delivered via the
+/// macOS `RunEvent::Opened` Apple Event (`kAEOpenDocuments`). Distinct from
+/// `RejectionReason` (which classifies argv candidates): this enum classifies
+/// already-parsed `tauri::Url` values from the Opened-event surface. See issue
+/// #630, sub-task #3 (`classify_opened_url` extraction).
+///
+/// The helper itself is unconditionally compiled and pure so it can be
+/// unit-tested cross-platform; only its caller (`handle_opened_urls`) is
+/// macOS-gated.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum OpenedUrlRejection {
+    /// The URL's scheme is not `file` (e.g. `https://…`). Tandem only opens
+    /// local files from Opened events.
+    NonFileScheme,
+    /// The URL carries a non-empty host (e.g. `file://localhost/x` or the
+    /// SMB-style `file://smb-host/share`). RFC-8089 permits `localhost`, but
+    /// Tandem flags any host conservatively — an SMB host is a real security
+    /// concern and a `localhost` host is surprising for a desktop open.
+    NonEmptyHost,
+    /// `url.to_file_path()` failed to produce a filesystem path (e.g. a
+    /// `cannot-be-a-base` `file:` URL with no path component).
+    ConversionFailed,
+}
+
+impl std::fmt::Display for OpenedUrlRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenedUrlRejection::NonFileScheme => {
+                write!(f, "non-file URL from Opened event")
+            }
+            OpenedUrlRejection::NonEmptyHost => {
+                write!(f, "file URL with host from Opened event")
+            }
+            OpenedUrlRejection::ConversionFailed => {
+                write!(f, "failed to convert URL to file path")
+            }
+        }
+    }
+}
+
+/// Classify a `file://`-style URL from the macOS Opened event into either an
+/// openable filesystem path or a typed rejection.
+///
+/// Rules (in order):
+/// - Reject any non-`file` scheme (`NonFileScheme`).
+/// - Reject any non-empty host (`NonEmptyHost`). `file://host/share/...`
+///   SMB-style URLs would surprise the user; require an empty/missing host.
+/// - Convert via `Url::to_file_path()`; a failure is `ConversionFailed`.
+///
+/// Pure and unconditionally compiled so it can be unit-tested cross-platform
+/// (the macOS Apple-Event delivery plumbing in `handle_opened_urls` is not
+/// unit-testable from Windows). Its only production caller is the macOS-gated
+/// `handle_opened_urls`. See issue #630, sub-task #3.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn classify_opened_url(url: &Url) -> Result<PathBuf, OpenedUrlRejection> {
+    if url.scheme() != "file" {
+        return Err(OpenedUrlRejection::NonFileScheme);
+    }
+    if url.host_str().map(|h| !h.is_empty()).unwrap_or(false) {
+        return Err(OpenedUrlRejection::NonEmptyHost);
+    }
+    url.to_file_path().map_err(|_| OpenedUrlRejection::ConversionFailed)
 }
 
 /// Extract a file path to open from a process's command-line args.
@@ -375,19 +441,12 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
         }
     };
     for url in urls {
-        if url.scheme() != "file" {
-            log::warn!("Ignoring non-file URL from Opened event: {url}");
-            continue;
-        }
-        // `file://host/share/...` SMB-style URLs would surprise the user; require
-        // an empty/missing host on macOS.
-        if url.host_str().map(|h| !h.is_empty()).unwrap_or(false) {
-            log::warn!("Ignoring file URL with host: {url}");
-            continue;
-        }
-        let Ok(path) = url.to_file_path() else {
-            log::warn!("Failed to convert URL to file path: {url}");
-            continue;
+        let path = match classify_opened_url(&url) {
+            Ok(path) => path,
+            Err(reason) => {
+                log::warn!("Ignoring URL from Opened event ({reason}): {url}");
+                continue;
+            }
         };
         // try_queue_or_post serializes the SIDECAR_HEALTHY check + the push
         // through the same mutex used by promote_healthy_and_drain. This is
@@ -2354,5 +2413,110 @@ mod url_constants_tests {
                 "{name} must use 127.0.0.1 (got {url}) — see #477 PR 2"
             );
         }
+    }
+}
+
+/// Cross-platform unit tests for `classify_opened_url` (#630 sub-task #3). The
+/// helper is pure and unconditionally compiled, so these run on every platform
+/// even though its only production caller (`handle_opened_urls`) is macOS-gated.
+/// CI runs `cargo test` on both ubuntu-latest and windows-latest, so every
+/// assertion below must hold on both.
+#[cfg(test)]
+mod classify_opened_url_tests {
+    use super::*;
+
+    /// An empty-host, absolute-path `file://` URL converts to a filesystem
+    /// path. `Url::to_file_path()` is platform-specific: Windows requires a
+    /// drive letter (`/C:/x` -> `C:\x`), Unix takes the POSIX path as-is
+    /// (`/tmp/x`). We cfg-gate the literal and assert on the file name (which
+    /// is stable across both) rather than the full path string.
+    #[test]
+    fn empty_host_absolute_path_is_ok() {
+        #[cfg(target_os = "windows")]
+        let literal = "file:///C:/x";
+        #[cfg(not(target_os = "windows"))]
+        let literal = "file:///tmp/x";
+
+        let url = Url::parse(literal).expect("valid file URL");
+        let path = classify_opened_url(&url).expect("should classify Ok");
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("x"),
+            "path should end in the requested file name"
+        );
+    }
+
+    #[test]
+    fn smb_style_host_is_non_empty_host() {
+        let url = Url::parse("file://smb-host/share").expect("valid file URL");
+        assert_eq!(
+            classify_opened_url(&url),
+            Err(OpenedUrlRejection::NonEmptyHost),
+            "SMB-style file URLs with a host must be rejected"
+        );
+    }
+
+    /// Documents a known gap: issue #630 expected `file://localhost/x` to
+    /// reject as `NonEmptyHost`, but the `url` crate normalizes the literal
+    /// `localhost` host to an empty host for the `file` scheme (per the WHATWG
+    /// URL spec / RFC 8089 `file://localhost/p` == `file:///p`). `host_str()`
+    /// returns `None`, so the host gate never fires — the URL falls through to
+    /// `to_file_path()`. This matches the ORIGINAL inline code's behavior
+    /// (it also keyed off `host_str()`); this extraction is a pure refactor and
+    /// does not regress it. Closing the gap requires inspecting the raw URL
+    /// string and is left as a #630 follow-up.
+    ///
+    /// The downstream outcome is platform-specific: on Windows the bare
+    /// `/x` path has no drive letter so conversion fails (`ConversionFailed`);
+    /// on Unix `/x` is a valid absolute path so it classifies `Ok`. We assert
+    /// the actual behavior on each platform so a future reader sees the gap.
+    #[test]
+    fn localhost_host_normalizes_away_and_falls_through() {
+        let url = Url::parse("file://localhost/x").expect("valid file URL");
+        assert_eq!(
+            url.host_str(),
+            None,
+            "the url crate normalizes localhost to an empty host for file://"
+        );
+
+        let result = classify_opened_url(&url);
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            result,
+            Err(OpenedUrlRejection::ConversionFailed),
+            "bare /x has no Windows drive letter, so conversion fails"
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            result.as_ref().map(|p| p.file_name().and_then(|n| n.to_str())),
+            Ok(Some("x")),
+            "on Unix /x is a valid absolute path, so it classifies Ok"
+        );
+    }
+
+    #[test]
+    fn https_scheme_is_non_file_scheme() {
+        let url = Url::parse("https://example.com/x").expect("valid https URL");
+        assert_eq!(
+            classify_opened_url(&url),
+            Err(OpenedUrlRejection::NonFileScheme),
+            "only the file scheme is openable from Opened events"
+        );
+    }
+
+    /// A `cannot-be-a-base` `file:` URL (no `//` authority, opaque path) fails
+    /// `to_file_path()` on every platform — the `url` crate rejects it before
+    /// any OS-specific path handling. Passes the scheme gate (scheme is
+    /// `file`) and the host gate (no host), so it reaches the conversion step.
+    #[test]
+    fn cannot_be_a_base_file_url_is_conversion_failed() {
+        let url = Url::parse("file:foo").expect("valid (opaque) file URL");
+        assert_eq!(url.scheme(), "file", "scheme gate must pass");
+        assert_eq!(url.host_str(), None, "host gate must pass");
+        assert_eq!(
+            classify_opened_url(&url),
+            Err(OpenedUrlRejection::ConversionFailed),
+            "an opaque cannot-be-a-base file URL has no convertible path"
+        );
     }
 }
