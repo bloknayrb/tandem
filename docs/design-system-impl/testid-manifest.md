@@ -193,6 +193,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 ### Toasts & notifications
 - `toast-container`, `toast-{*}`, `toast-count-{*}`, `toast-dismiss-{*}`
 
+### Activity center (1.10)
+- `activity-pill`, `activity-tray`, `activity-empty`, `activity-clear-all`
+- `activity-row-{*}`, `activity-dismiss-{*}`, `activity-action-{*}`
+
 ### Apply & collapsible primitives
 - `apply-changes-btn`
 - Collapsible passthrough: `testid ? \`{*}-toggle\` : undefined` (CollapsibleSection wrapper — actual selectors live at call sites)

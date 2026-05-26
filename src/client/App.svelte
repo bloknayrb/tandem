@@ -4,7 +4,7 @@ import { onDestroy, untrack } from "svelte";
 import { cubicOut } from "svelte/easing";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
-import type { CapturedAnchor } from "../shared/types";
+import type { CapturedAnchor, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
@@ -15,6 +15,8 @@ import {
   wireActionDeps,
 } from "./actions/builtin.svelte.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
+import ActivityTray from "./components/ActivityTray.svelte";
+import { resolveActivityAction } from "./components/activityActions.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -183,6 +185,7 @@ createWebViewZoom();
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
 
 const notifications = createNotifications();
+let activityOpen = $state(false);
 const fileDrop = createFileDrop();
 initTauriFileDrop(notifications.push);
 
@@ -306,10 +309,26 @@ let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 // event before App.svelte's window-level handler sees it. Exposed only in
 // dev/test builds — stripped by `import.meta.env.DEV` in production.
 if (import.meta.env.DEV) {
-  (window as unknown as { __tandemTest?: { openSettingsModal: () => void } }).__tandemTest = {
+  (
+    window as unknown as {
+      __tandemTest?: {
+        openSettingsModal: () => void;
+        pushNotification: (n: TandemNotification) => void;
+        activeDocumentId: () => string | null;
+      };
+    }
+  ).__tandemTest = {
     openSettingsModal: () => {
       settingsModalOpen = true;
     },
+    // Drives the activity center deterministically in E2E without the
+    // SSE-connect race (the server's notify-stream has no buffer replay,
+    // so a notification pushed before the EventSource connects is lost).
+    // Exercises the real client `push` → ingest → tray + transient-pop path.
+    pushNotification: (n: TandemNotification) => notifications.push(n),
+    // Lets the activity-tray Retry E2E target a genuinely-open doc so the
+    // onAction handler reaches triggerSave instead of the closed-doc fallback.
+    activeDocumentId: () => yjsSync.activeTabId,
   };
 }
 let paletteOpen = $state(false);
@@ -1291,6 +1310,34 @@ const tutorial = createTutorial(
     />
 
     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
+
+    <ActivityTray
+      items={notifications.activity}
+      open={activityOpen}
+      onToggle={() => (activityOpen = !activityOpen)}
+      onDismiss={notifications.dismissActivity}
+      onClear={notifications.clearActivity}
+      onAction={(item) => {
+        const action = resolveActivityAction(item);
+        if (!action) return;
+        // The failed doc may have been closed since the error fired; triggerSave
+        // would silently skip a closed doc, so tell the user to reopen instead.
+        if (yjsSync.tabs.some((t) => t.id === action.documentId)) {
+          void triggerSave(action.documentId);
+        } else {
+          notifications.push({
+            // Deterministic per-doc id (matches the dedupKey) so repeat clicks
+            // coalesce on one stable row instead of risking a same-ms id clash.
+            id: `retry-unavailable-${action.documentId}`,
+            type: "general-error",
+            severity: "warning",
+            message: "Reopen the document to retry the save.",
+            dedupKey: `retry-unavailable:${action.documentId}`,
+            timestamp: Date.now(),
+          });
+        }
+      }}
+    />
 
     {#if isTauriRuntime()}
       <CoworkAdminDeclinedModal />
