@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addRecentFile,
+  formatWhen,
   type RecentFileEntry,
   recentFilePaths,
 } from "../../src/client/utils/recentFiles.js";
@@ -153,5 +154,32 @@ describe("loadRecentFilesCached", () => {
 
     saveRecentFiles([entry("/new.md")]);
     expect(loadRecentFilesCached()[0].path).toBe("/new.md");
+  });
+});
+
+describe("formatWhen", () => {
+  const NOW = 1_000_000_000_000;
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+  const DAY = 24 * HOUR;
+
+  it.each([
+    { why: "unknown timestamp (legacy/migrated entry)", openedAt: 0, expected: "" },
+    { why: "under a minute", openedAt: NOW - 30_000, expected: "just now" },
+    { why: "exactly at the minute boundary", openedAt: NOW - MIN, expected: "1m" },
+    { why: "minutes", openedAt: NOW - 45 * MIN, expected: "45m" },
+    { why: "just under an hour", openedAt: NOW - 59 * MIN, expected: "59m" },
+    { why: "exactly an hour", openedAt: NOW - HOUR, expected: "1h" },
+    { why: "hours", openedAt: NOW - 5 * HOUR, expected: "5h" },
+    { why: "just under a day", openedAt: NOW - 23 * HOUR, expected: "23h" },
+    { why: "exactly a day", openedAt: NOW - DAY, expected: "1d" },
+    { why: "days", openedAt: NOW - 9 * DAY, expected: "9d" },
+    {
+      why: "future timestamp (clock skew) collapses to just now",
+      openedAt: NOW + 5000,
+      expected: "just now",
+    },
+  ])("$why → '$expected'", ({ openedAt, expected }) => {
+    expect(formatWhen(openedAt, NOW)).toBe(expected);
   });
 });

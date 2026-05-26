@@ -1,11 +1,12 @@
 <script lang="ts">
 import { createScratchpad } from "../actions/builtin.svelte.js";
+import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
 import type { OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import {
   addRecentFile,
   loadRecentFilesCached,
-  recentFilePaths,
+  type RecentFileEntry,
   saveRecentFiles,
 } from "../utils/recentFiles.js";
 import { openServerPath } from "../utils/server-paths.js";
@@ -20,6 +21,9 @@ interface Props {
   reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
   reduceMotion?: boolean;
   onRequestOpenDialog?: () => void;
+  /** Reactive head of the closed-tab stack — drives "Reopen last closed". */
+  closedTabTop?: ClosedTabRecord | null;
+  onReopenClosed?: () => void;
 }
 
 const {
@@ -30,12 +34,14 @@ const {
   reorder,
   reduceMotion = false,
   onRequestOpenDialog,
+  closedTabTop = null,
+  onReopenClosed,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
 
 let showRecent = $state(false);
-let recentFiles = $state<string[]>([]);
+let recentFiles = $state<RecentFileEntry[]>([]);
 let openBtnEl: HTMLButtonElement | null = $state(null);
 
 // Plain let — not reactive UI; just internal close-dedup guard
@@ -249,7 +255,7 @@ $effect(() => {
   <button
     bind:this={openBtnEl}
     onclick={() => {
-      recentFiles = recentFilePaths(loadRecentFilesCached());
+      recentFiles = loadRecentFilesCached();
       showRecent = !showRecent;
     }}
     data-testid="open-file-btn"
@@ -263,6 +269,7 @@ $effect(() => {
   {#if showRecent}
     <NewTabMenu
       {recentFiles}
+      {closedTabTop}
       anchorEl={openBtnEl}
       onOpen={async (filePath) => {
         showRecent = false;
@@ -280,6 +287,10 @@ $effect(() => {
       onBrowse={() => {
         showRecent = false;
         onRequestOpenDialog?.();
+      }}
+      onReopenClosed={() => {
+        showRecent = false;
+        onReopenClosed?.();
       }}
       onClose={() => (showRecent = false)}
     />
