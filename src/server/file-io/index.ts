@@ -152,6 +152,12 @@ async function renameWithRetry(tempPath: string, filePath: string): Promise<void
 }
 
 /**
+ * Filename prefix for atomic-write temp siblings. Exported so the startup
+ * reaper (`reaper.ts`) can build the exact same name shape it sweeps for.
+ */
+export const ATOMIC_TEMP_PREFIX = ".tandem-tmp-";
+
+/**
  * Produce a unique temp filename in the same directory as `filePath`. Uses a
  * random suffix so concurrent writers to the same directory cannot collide on
  * a shared `Date.now()` millisecond (the annotation store writes multiple
@@ -159,7 +165,7 @@ async function renameWithRetry(tempPath: string, filePath: string): Promise<void
  */
 function tempSiblingPath(filePath: string): string {
   const rand = crypto.randomBytes(6).toString("hex");
-  return path.join(path.dirname(filePath), `.tandem-tmp-${Date.now()}-${rand}`);
+  return path.join(path.dirname(filePath), `${ATOMIC_TEMP_PREFIX}${Date.now()}-${rand}`);
 }
 
 /**

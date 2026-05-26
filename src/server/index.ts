@@ -10,7 +10,12 @@ import {
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
 } from "../shared/constants.js";
 import { isUploadPath } from "../shared/paths.js";
-import { acquireStoreLock, isStoreReadOnly, releaseStoreLock } from "./annotations/store.js";
+import {
+  acquireStoreLock,
+  getAnnotationsDir,
+  isStoreReadOnly,
+  releaseStoreLock,
+} from "./annotations/store.js";
 import { loadOrCreateToken, readTokenFromFile } from "./auth/token-store.js";
 import { checkBindConfig, isNonLoopback } from "./bind-check.js";
 import { isKnownHocuspocusError } from "./error-filter.js";
@@ -20,6 +25,7 @@ import {
   reattachCtrlObservers,
   reattachObservers,
 } from "./events/queue.js";
+import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
 import {
   restoreCtrlSession,
@@ -36,7 +42,7 @@ import {
   startMcpServerStdio,
 } from "./mcp/server.js";
 import { pushNotification } from "./notifications.js";
-import { freePort, LAST_SEEN_VERSION_FILE, waitForPort } from "./platform.js";
+import { freePort, LAST_SEEN_VERSION_FILE, SESSION_DIR, waitForPort } from "./platform.js";
 import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
@@ -256,6 +262,25 @@ async function main() {
     .catch((err) => {
       console.error("[Tandem] Failed to clean up stale sessions:", err);
     });
+
+  // Sweep orphaned atomic-write temp files (`.tandem-tmp-*`) left behind when
+  // the process was SIGKILLed between writeFile and rename. Only the app-data
+  // dirs we own — never user document dirs. Skipped in read-only mode (another
+  // instance holds the store lock). Fire-and-forget with a belt-and-braces
+  // .catch(): an escaping rejection would hit the unhandledRejection handler.
+  if (!isStoreReadOnly()) {
+    reapOrphanedTemps([getAnnotationsDir(), SESSION_DIR])
+      .then(({ cleaned, failed }) => {
+        if (cleaned > 0)
+          console.error(`[Tandem] Reaped ${cleaned} orphaned temp file(s) from app-data dirs`);
+        if (failed > 0) console.error(`[Tandem] Failed to reap ${failed} orphaned temp file(s)`);
+      })
+      .catch((err) =>
+        console.error(
+          `[Tandem] Orphaned-temp reaper failed: ${err instanceof Error ? err.message : err}`,
+        ),
+      );
+  }
 
   // Must await before restoreOpenDocuments: the GC unlinks stale envelopes,
   // and wireAnnotationStore reads them. A fire-and-forget chain raced the
