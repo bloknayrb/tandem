@@ -45,12 +45,21 @@ export default defineConfig({
       command: "node node_modules/tsx/dist/cli.mjs src/server/index.ts",
       cwd: repoRoot,
       url: "http://127.0.0.1:3479/health",
-      reuseExistingServer: !process.env.CI,
+      // Never reuse a server the developer already has running — `seedAnnotations`
+      // writes "Nice opener" fixtures into sample/welcome.md, and reusing a
+      // real instance would persist them into the developer's actual profile.
+      // Always start a fresh server pinned to a throwaway data dir.
+      reuseExistingServer: false,
       timeout: 120_000,
+      // webServer.env REPLACES (not merges) the child env, so the base config's
+      // TANDEM_APP_DATA_DIR isolation is lost unless re-declared here. Without
+      // it, the seeded annotations land in the real `<app-data>/annotations`
+      // store and accumulate across capture runs.
       env: {
         ...(process.env as Record<string, string>),
         TANDEM_DISABLE_FIRST_RUN_WIZARD: "1",
         TANDEM_NO_SAMPLE: "1",
+        TANDEM_APP_DATA_DIR: "/tmp/tandem-baselines-data",
       },
     },
   ],
