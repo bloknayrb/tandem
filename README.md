@@ -112,7 +112,7 @@ See [docs/security.md](docs/security.md) for the full security model.
 
 ## Where Tandem is headed
 
-Tandem is on the way to a v1.0 release. Work in progress covers support for multiple AI providers, in-app configuration for connections and models, and improvements to how Word documents round-trip through the editor. Tandem is free during the public beta; at v1.0 it moves to a one-time paid license, and beta users are grandfathered with a free license. The full plan lives in [docs/roadmap.md](docs/roadmap.md).
+Tandem is on the way to a v1.0 release. Recent releases added support for multiple AI providers and in-app configuration for connections and models. Work still in progress covers improvements to how Word documents round-trip through the editor, turnkey setup on macOS and Linux, and final polish. Tandem is free during the public beta; at v1.0 it moves to a one-time paid license, and beta users are grandfathered with a free license. The full plan lives in [docs/roadmap.md](docs/roadmap.md).
 
 ## Documentation
 
