@@ -35,11 +35,13 @@ Conventions used below:
 - **Why:** Wave 9 (#745) shipped narrow-viewport hamburger; #659 added the Models tab with wizard sub-flows; the tab registry contract is consumed by 5+ tab components. Bundle's `Settings.svelte` (197 lines, 8 sections) is a single non-responsive layout that drops both the hamburger and the Models wizard scaffolding.
 - **Sub-PR constraint:** Responsive shell + tab registry contract are frozen. Visual updates only to tab content and the section list. Models tab wizard sub-flows untouched in this PR.
 
-## #5 — Selection Mini-Toolbar (Sub-PR 1.11)
+## #5 — Selection surface + formatting bar (Sub-PRs: Decorations → Selection)
 
-- **Resolution:** Keep the production audience-first popup. Layer the bundle's formatting controls into a secondary affordance.
-- **Why:** ADR-027's audience-first model ("Note to self ⏎ vs Send to Claude ⌘⏎") is structurally central to Tandem's annotation system. Bundle's `A8 - Selection Mini-Toolbar.html` is a formatting-focused toolbar with no audience awareness. Replacement regresses ADR-027.
-- **Sub-PR constraint:** Audience popup is primary; formatting controls are secondary (collapsed by default, expandable). Sub-PR must add an explicit assertion that the audience-first popup is the default entry point. `data-testid="popup-*"` selectors stay verbatim.
+> **Updated 2026-05-25** with Bryan's explicit sign-off — supersedes the original "secondary, collapsed-by-default formatting controls" resolution. Additive to Conflict #2 (does **not** override the floating-pill visual port).
+
+- **Resolution:** The selection popup is **always the full stacked surface** — a format pill (B/I/S/code/link · H/lists/quote/codeblock) over an annotate pill (highlight swatches + an **Annotate** button → anchored note popover). The floating formatting bar ported under Conflict #2 is **retained but becomes optional/hideable** via a swap control, governed by a new `formattingBarVisible` setting (default `true`). Decoration display toggles (authorship + per-annotation-type) consolidate into a **title-bar Decorations split button** (eye = mute/restore, caret = per-type options), which becomes authorship's on-screen home once the bar can be hidden.
+- **Why:** ADR-027's audience-first model — **Note to self `⏎` vs Send to Claude `⌘⏎`** — stays structurally primary, and the Annotate popover is the default annotation entry point. Bundle's `A8 - Selection Mini-Toolbar.html` is a formatting-only toolbar with no audience awareness, so it is layered in as the format pill rather than replacing the popup. Making the bar hideable requires authorship to have a non-bar home, so the Decorations control ships **before** the hideable bar — there is no interval where authorship lacks an on-screen toggle.
+- **Sub-PR constraint:** Audience-first popup is primary and is the default entry point (sub-PR asserts this). `data-testid="popup-*"` selectors stay verbatim. The per-type decoration split (`showComments` / `showHighlights` / `showNotes`) is **display-only** — it never affects ADR-027 (notes are still never read by Claude; it only hides the user's own marks in their own view). No parallel shadow scale (Conflict #2). Ships as two PRs: **Decorations control first**, then **Selection surface + optional bar**.
 
 ## #6 — Token Reconciliation (Phase 0c, enforced across all sub-PRs)
 
