@@ -6,17 +6,45 @@ import type { HighlightColor } from "../../shared/types";
 import FormattingToolbar from "../editor/toolbar/FormattingToolbar.svelte";
 import HighlightColorPicker from "../editor/toolbar/HighlightColorPicker.svelte";
 import { toggleHighlight } from "../editor/toolbar/highlight-toggle";
-import ToolbarButton from "../editor/toolbar/ToolbarButton.svelte";
 import { pmPosToFlatOffset } from "../positions";
+import DecorationsMenu from "./DecorationsMenu.svelte";
 
 interface Props {
   editor: TiptapEditor | null;
   ydoc: Y.Doc | null;
+  // Decoration display state (1.13). Drives the trailing Decorations split
+  // button (eye = master mute/restore, caret = per-type options incl.
+  // authorship). The four per-type prefs reflect the user's *preference*;
+  // master mute is a separate overlay, so a muted state still shows the rows
+  // as checked.
   showAuthorship?: boolean;
-  onAuthorshipChange?: (visible: boolean) => void;
+  showComments?: boolean;
+  showHighlights?: boolean;
+  showNotes?: boolean;
+  decorationsMuted?: boolean;
+  /** Persist a decoration settings partial (per-type rows auto-unmute in one call). */
+  onUpdateDecorations?: (partial: {
+    showAuthorship?: boolean;
+    showComments?: boolean;
+    showHighlights?: boolean;
+    showNotes?: boolean;
+    decorationsMuted?: boolean;
+  }) => void;
+  /** Open Settings → Appearance (the canonical home for these toggles). */
+  onOpenSettings?: () => void;
 }
 
-const { editor, ydoc, showAuthorship = false, onAuthorshipChange }: Props = $props();
+const {
+  editor,
+  ydoc,
+  showAuthorship = true,
+  showComments = true,
+  showHighlights = true,
+  showNotes = true,
+  decorationsMuted = false,
+  onUpdateDecorations,
+  onOpenSettings,
+}: Props = $props();
 
 // Force-reactive tick — mirrors FormattingToolbar's pattern so that
 // canHighlight reflects the live selection state, not just editor existence.
@@ -79,6 +107,11 @@ function handleHighlight(color: HighlightColor) {
     class="tandem-floating-pill"
     style="display: inline-flex; align-items: center; padding: var(--tandem-space-1); user-select: none; pointer-events: auto; -webkit-app-region: no-drag; max-width: calc(100% - var(--tandem-space-6));"
   >
+    <!-- The format controls live in an overflow:hidden track so a narrow
+         window truncates buttons rather than wrapping. The Decorations split
+         button is intentionally OUTSIDE that track: it must never truncate,
+         and its dropdown (which drops below the pill) would otherwise be
+         clipped by the track's overflow:hidden. -->
     <div style="display: flex; align-items: center; gap: 1px; overflow: hidden; min-width: 0;">
       <FormattingToolbar {editor} />
       <div class="fmtbar-divider"></div>
@@ -86,25 +119,19 @@ function handleHighlight(color: HighlightColor) {
         disabled={!canHighlight}
         onHighlight={handleHighlight}
       />
-      {#if onAuthorshipChange}
-        <div class="fmtbar-divider"></div>
-        <ToolbarButton
-          ariaLabel={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
-          shortcut="Ctrl+Alt+A"
-          active={showAuthorship}
-          ariaPressed={showAuthorship}
-          testId="formatbar-authorship-toggle"
-          onClick={() => onAuthorshipChange?.(!showAuthorship)}
-        >
-          {#snippet children()}
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="5.5" cy="8" r="3.2" fill="var(--tandem-author-user)" />
-              <circle cx="10.5" cy="8" r="3.2" fill="var(--tandem-author-claude)" opacity="0.85" />
-            </svg>
-          {/snippet}
-        </ToolbarButton>
-      {/if}
     </div>
+    {#if onUpdateDecorations}
+      <div class="fmtbar-divider"></div>
+      <DecorationsMenu
+        {showAuthorship}
+        {showComments}
+        {showHighlights}
+        {showNotes}
+        {decorationsMuted}
+        onUpdate={onUpdateDecorations}
+        {onOpenSettings}
+      />
+    {/if}
   </div>
 </div>
 

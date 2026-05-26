@@ -61,12 +61,14 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `title-bar`, `titlebar-brand-menu`, `titlebar-brand-menu-popover`,
   `titlebar-default-model`, `titlebar-update-available-dot`,
   `brand-menu-{settings,shortcuts,theme-{*}}`
-- Decorations split button (1.13): `decorations-menu`, `decorations-mute-toggle`,
-  `decorations-menu-caret`, `decorations-row-{authorship,comments,highlights,notes}`,
-  `decorations-settings-link`
-- `formatting-bar`, `formatbar-authorship-toggle`,
+- `formatting-bar`,
   `toolbar-link-{input,submit,cancel}`,
   `toolbar-highlight-color-{toggle,{*}}`, `color-picker-close`
+- Decorations split button (1.13) — lives in the formatting bar (subsumes the
+  standalone authorship toggle; `formatbar-authorship-toggle` removed):
+  `decorations-menu`, `decorations-mute-toggle`, `decorations-menu-caret`,
+  `decorations-row-{authorship,comments,highlights,notes}`,
+  `decorations-settings-link`
 - `mode-{toggle,solo-btn,tandem-btn}`
 
 ### Selection popup (audience-first, ADR-027)

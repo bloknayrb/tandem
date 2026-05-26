@@ -69,10 +69,13 @@ function chooseSettings() {
 
 <!-- Both split halves AND the dropdown live inside one clickOutside node:
      clickOutside uses node.contains(), so a separate wrapper would treat a
-     click on the eye/caret as "outside" and instantly re-close. NOT portaled. -->
+     click on the eye/caret as "outside" and instantly re-close. NOT portaled.
+     Rendered flat (no own pill chrome): the embedding FormattingBar pill
+     already supplies the surface/border/shadow, so the eye+caret read as
+     toolbar segments rather than a nested pill-in-a-pill. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="fpill split menu-wrap"
+  class="split menu-wrap"
   class:open={menuOpen}
   data-testid="decorations-menu"
   data-tauri-drag-region="false"
@@ -208,20 +211,12 @@ function chooseSettings() {
 </div>
 
 <style>
-  /* floating-pill recipe (matches tab pills + mode toggle) */
-  .fpill {
+  /* split button: eye (mute/restore all) + caret (open options). Flat — the
+     host FormattingBar pill provides the surface chrome. */
+  .split {
     display: inline-flex;
     align-items: center;
-    background: var(--tandem-surface);
-    border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-pill);
-    box-shadow: var(--tandem-shadow-2);
-  }
-
-  /* split button: eye (mute/restore all) + caret (open options) */
-  .split {
     gap: 0;
-    padding: 2px;
   }
 
   .menu-wrap {
@@ -229,7 +224,7 @@ function chooseSettings() {
   }
 
   .ib {
-    height: 20px;
+    height: 26px;
     min-width: 26px;
     padding: 0 6px;
     border: 1px solid transparent;

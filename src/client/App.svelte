@@ -480,8 +480,9 @@ wireActionDeps({
 
 // Toggle authorship visibility, auto-unmuting in one updateSettings call when
 // the master overlay is on — same coherence rule as the per-type Decorations
-// rows, so editing authorship from ANY surface (formatting bar, Ctrl+Alt+A,
-// command palette) while muted is never an invisible no-op (1.13).
+// rows, so toggling authorship via Ctrl+Alt+A or the command palette while
+// muted is never an invisible no-op (1.13). The Decorations dropdown's own
+// authorship row folds the same unmute inside `toggleRow`.
 function setAuthorshipVisible(visible: boolean): void {
   settingsState.updateSettings({
     showAuthorship: visible,
@@ -1077,12 +1078,6 @@ const tutorial = createTutorial(
     updateAvailable={updateAvailable.showDot}
     defaultModelLabel={defaultModelLabel}
     onOpenModelsSettings={openModelsSettings}
-    showAuthorship={settingsState.settings.showAuthorship}
-    showComments={settingsState.settings.showComments}
-    showHighlights={settingsState.settings.showHighlights}
-    showNotes={settingsState.settings.showNotes}
-    decorationsMuted={settingsState.settings.decorationsMuted}
-    onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -1129,7 +1124,12 @@ const tutorial = createTutorial(
       {editor}
       ydoc={activeTab?.ydoc ?? null}
       showAuthorship={settingsState.settings.showAuthorship}
-      onAuthorshipChange={(visible) => setAuthorshipVisible(visible)}
+      showComments={settingsState.settings.showComments}
+      showHighlights={settingsState.settings.showHighlights}
+      showNotes={settingsState.settings.showNotes}
+      decorationsMuted={settingsState.settings.decorationsMuted}
+      onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
+      onOpenSettings={toggleSettings}
     />
 
     <!-- Single persistent container — editor column is always rendered in the same

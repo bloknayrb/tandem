@@ -62,7 +62,9 @@ test("toolbar renders all expected controls", async ({ page }) => {
 
   await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeVisible();
   await expect(page.locator("[data-testid='titlebar-brand-menu']")).toBeVisible();
-  await expect(page.locator("[data-testid='formatbar-authorship-toggle']")).toBeVisible();
+  // Authorship is no longer a standalone toggle — it lives inside the
+  // Decorations split button in the formatting bar (eye = mute, caret = rows).
+  await expect(page.locator("[data-testid='decorations-menu']")).toBeVisible();
 });
 
 test("highlight quick-action is disabled with no selection", async ({ page }) => {

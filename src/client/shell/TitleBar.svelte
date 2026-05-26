@@ -6,7 +6,6 @@ import type { TandemMode } from "../../shared/types";
 import ModeToggle from "../editor/toolbar/ModeToggle.svelte";
 import { type ThemePreference } from "../hooks/useTandemSettings.svelte";
 import { onOutsideEvent } from "../utils/dismiss-outside";
-import DecorationsMenu from "./DecorationsMenu.svelte";
 import { THEME_OPTIONS } from "./theme-options";
 
 interface Props {
@@ -55,25 +54,6 @@ interface Props {
   defaultModelLabel?: string | null;
   /** Click handler for the default-model chip. Receives no args. */
   onOpenModelsSettings?: () => void;
-  /**
-   * Decoration display state (1.13). Drives the title-bar Decorations split
-   * button (eye = master mute/restore, caret = per-type options). The four
-   * per-type prefs reflect the user's *preference* (master mute is a separate
-   * overlay), so a muted state still shows the rows as checked.
-   */
-  showAuthorship?: boolean;
-  showComments?: boolean;
-  showHighlights?: boolean;
-  showNotes?: boolean;
-  decorationsMuted?: boolean;
-  /** Persist a decoration settings partial (per-type rows auto-unmute in one call). */
-  onUpdateDecorations?: (partial: {
-    showAuthorship?: boolean;
-    showComments?: boolean;
-    showHighlights?: boolean;
-    showNotes?: boolean;
-    decorationsMuted?: boolean;
-  }) => void;
 }
 
 let {
@@ -90,12 +70,6 @@ let {
   updateAvailable = false,
   defaultModelLabel = null,
   onOpenModelsSettings,
-  showAuthorship = true,
-  showComments = true,
-  showHighlights = true,
-  showNotes = true,
-  decorationsMuted = false,
-  onUpdateDecorations,
 }: Props = $props();
 
 let win = $state<TauriWindow | null>(null);
@@ -334,18 +308,6 @@ function chooseHelp() {
   <div class="title-bar-spacer" data-tauri-drag-region></div>
 
   <div class="title-bar-actions">
-    {#if onUpdateDecorations}
-      <DecorationsMenu
-        {showAuthorship}
-        {showComments}
-        {showHighlights}
-        {showNotes}
-        {decorationsMuted}
-        onUpdate={onUpdateDecorations}
-        onOpenSettings={onOpenSettings}
-      />
-    {/if}
-
     {#if tandemMode && onModeChange}
       <ModeToggle {tandemMode} {onModeChange} />
     {/if}
