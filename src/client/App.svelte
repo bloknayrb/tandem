@@ -9,7 +9,9 @@ import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
   createScratchpad,
+  SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS,
   saveStore,
+  shouldAutoOpenScratchpad,
   triggerSave,
   triggerSaveAs,
   wireActionDeps,
@@ -972,6 +974,35 @@ $effect(() => {
 });
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
+
+// #842: when the user reaches the empty tab-bar state (e.g. closes the last
+// tab) with a live connection, auto-open a fresh scratchpad instead of
+// stranding them on "No document open."
+//
+// The debounce is load-bearing, not cosmetic: on initial connect `connected`
+// flips true before the server's `openDocuments` list syncs, so `tabs` is
+// briefly empty. Firing immediately would race the startup doc
+// (welcome.md / CHANGELOG.md, opened server-side before HTTP bind) and open a
+// stray scratchpad ahead of it. The timer also rides out the transient
+// `activeTab === null` during a Y.Doc swap (reload-from-disk) and never fires
+// during the disconnect-debounce window (gate requires `connected`). The
+// startup doc arriving within the window re-runs this effect, cleanup clears
+// the pending timer, and the gate no longer passes — so no scratchpad opens.
+$effect(() => {
+  if (
+    !shouldAutoOpenScratchpad({
+      connected: yjsSync.connected,
+      tabCount: yjsSync.tabs.length,
+      activeTabId: yjsSync.activeTabId,
+    })
+  ) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    void createScratchpad();
+  }, SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS);
+  return () => clearTimeout(timer);
+});
 
 // Lifted from SidePanel.svelte so that:
 //   1. There's exactly one review instance (both rails would otherwise mount
