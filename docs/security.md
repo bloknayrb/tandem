@@ -35,7 +35,15 @@ Bare `http://localhost` was narrowed out in PR #637 because it bypassed DNS-rebi
 
 ## No telemetry
 
-Tandem ships with **no usage analytics, no crash reporting, no telemetry beacons**. The codebase contains no Sentry, PostHog, Amplitude, or equivalent integrations. The only outbound traffic Tandem initiates is to your configured AI client over loopback (or LAN, if you opted in).
+Tandem ships with **no usage analytics, no crash reporting, no telemetry beacons**. The codebase contains no Sentry, PostHog, Amplitude, or equivalent integrations. The outbound traffic Tandem initiates is to your configured AI client over loopback (or LAN, if you opted in) and — for the desktop app — periodic update checks against the public release host. Update checks carry no analytics.
+
+## Licensing activation (v1.0)
+
+This describes the paid model arriving at v1.0; during the public beta Tandem is free and unlicensed. See [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license).
+
+- **Running the app validates a license offline.** At v1.0 the app verifies an Ed25519-signed license file locally against a public key embedded in the build. *Running needs no network call* — activation works air-gapped, and the signature is checked on your own machine. This is a separate key from the Ed25519/minisign key used to sign release artifacts.
+- **The license file binds a copy to its buyer.** It carries the buyer's email, an order ID, and an update-window expiry, all covered by the signature.
+- **Updates authenticate entitlement, and log only to authorize.** The licensed build's updater authenticates against a small license-checked endpoint that serves new builds only while the license's update window is current. That endpoint logs only what it needs to authorize the download (ideally a signed entitlement check rather than transmitting the raw key), so the no-telemetry posture holds. An expired-window license still *runs* offline; it simply stops receiving new builds.
 
 ## Reporting security issues
 

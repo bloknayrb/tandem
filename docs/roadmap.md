@@ -144,7 +144,7 @@ Implemented in Phase 1:
 
 Deferred — only if demand appears:
 
-- Named groups (e.g., "February DRPA Review") with `tandem_createGroup`
+- Named groups (e.g., "February Report Review") with `tandem_createGroup`
 - Cross-reference tools (`tandem_crossReference`, `tandem_searchGroup`)
 - Split-pane UI for side-by-side documents
 - Tab drag-to-split functionality
@@ -623,7 +623,7 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 | Annotation thread emoji reactions | D5 — explicit cut, not just defer. |
 | Diff/Apply-edit hunk staging surface | D3 option B locked for v1.1 revisit; surface defers from v1.0. |
 | #316/#317 firewall scoping (#317 only) | #316 is now Core; #317 paired-defer. |
-| #394 Monetization potential | Strategic; tracked outside engineering roadmap. |
+| #394 Monetization | **Decided — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license).** Free beta → one-time paid license at v1.0; offline signed-license activation; beta users grandfathered. In-app license verification + server-side trial gate + license-checked updater are v1.0 features, planned in their own PR. The *strategic* decision is settled; the *engineering* work lands as scheduled v1.0 tasks. |
 | Desktop UI Tier 3 remainder (§3.2 tray, §3.3 context menus) | Polish. |
 | Desktop UI deferred (frameless window, vibrancy, multi-window, file explorer sidebar) | Out of scope per HANDOFF. |
 | Smaller follow-ups (#283, #284, #287, #292, #300) | Rolling maintenance; not blocking v1.0 quality. |

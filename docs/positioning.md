@@ -1,10 +1,12 @@
 # Tandem — Positioning & Market Context
 
-_Last updated: 2026-05-17_
+_Last updated: 2026-05-26_
+
+> **Audience & monetization direction ([ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)):** Tandem targets **individuals** working on their own documents — not institutions. The moat is the **same-canvas / no-copy-paste** review experience backed by **persistent, queryable annotations + the .docx review-record loop**. Monetization is **free during public beta → a one-time paid license at v1.0** (offline signed-license activation; beta users grandfathered). This document is being reframed to that direction; institutional roles below survive only as example *contexts*, not as the target buyer.
 
 ## What Tandem Is
 
-Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — a progress report, an RFP response, a compliance filing — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, flag issues, and edit text alongside you. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. The original file is never modified unless you say so.
+Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a thesis chapter, a report, a contract you're reviewing, or anything else you write — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, flag issues, and edit text alongside you. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. The original file is never modified unless you say so.
 
 The core value: **you point at text, the AI sees it, and you iterate together without leaving the document.**
 
@@ -38,25 +40,27 @@ The AI has a cursor, a status indicator, and awareness of what the user is doing
 
 Tandem opens .docx files in review-only mode via mammoth.js. The original file is never modified. Claude annotates the content. The user accepts or dismisses annotations. Session persistence preserves annotations across restarts. `tandem_exportAnnotations` outputs a Markdown review report.
 
-This maps directly to how government agencies, consultancies, and compliance teams actually work: receive a Word document, review it, send back comments. No one is building AI tooling for this workflow today.
+This maps directly to how a huge amount of real document work actually happens: someone hands you a Word document, you review it, you send back comments. A grad student marking up an advisor's draft, a freelancer reviewing a client's brief, an analyst checking a colleague's report — the loop is the same. No one is building AI tooling for this round-trip today.
 
 ## The Market
 
-### Who reviews documents today
+Tandem is for **individuals** who write and review prose-heavy documents and want to do that work alongside an AI — not for institutions buying seats. The near-term reachable audience is bounded by who already runs an MCP-capable LLM (see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §1); we grow that audience by lowering setup friction, not by adding a hosted backend.
 
-- **Government agencies** (toll authorities, DOTs, transit agencies) review contractor-submitted progress reports, invoices, and compliance filings. The workflow is: download .docx from SharePoint, open in Word, use Track Changes, email comments back. Pain points: comment consolidation across multiple reviewers, no AI assistance, 14-day review windows with no tooling support.
+### Who this is
 
-- **Legal teams** review contracts, but that market is well-served (Ironclad, Harvey, LegalOn). What's underserved is **narrative document review** — progress reports, proposals, technical memos. Thomson Reuters found that 51% of legal professionals use AI for contract review but only 14% for general document review.
+The same person shows up in many contexts. Tandem doesn't care which:
 
-- **Compliance teams** review documents against standards (SOC 2, regulatory requirements, internal policies). The annotation model maps naturally to compliance checklists — each annotation is a finding against a rule.
+- **Writers and researchers** — drafting and self-editing essays, theses, articles, technical memos, proposals; wanting a second reader for tone and structure without pasting paragraphs into a chat window.
+- **Knowledge workers reviewing prose** — someone hands you a report, a brief, or a deliverable and you mark it up. This is the same Word-comment round-trip whether the reviewer is a grad student, a freelancer, an analyst, or someone in a legal, compliance, or consulting role. Those roles are *example contexts* for the work, not the buyer — Tandem is bought by the individual doing it.
+- **People working with AI-drafted text** — the AI wrote a draft and you need to read it critically and decide what to keep, in place, as addressable suggestions rather than a wall of regenerated text.
 
-- **Consultancies** review client deliverables, peer-review reports, and QA submissions. The "comment merge problem" (multiple reviewers marking up the same document independently) is a top pain point with no good solution.
+The underserved gap is **narrative document review** — proposals, reports, technical memos, theses — as opposed to contract review, which is well-served (Ironclad, Harvey, LegalOn). Thomson Reuters found 51% of legal professionals use AI for contract review but only 14% for general document review; that 14% gap generalizes well beyond legal.
 
 ### What they use today
 
-Word + email + SharePoint. That's it. A 2024 AIIM survey found 67% of organizations still route documents for review via email. 43% report "version confusion" as a regular problem. SharePoint's review/approval workflow is universally described as difficult to configure and abandoned in favor of email.
+Copy-paste into a chat window, or Word + Track Changes + email. A 2024 AIIM survey found 67% of organizations still route documents for review via email and 43% report "version confusion" as a regular problem — and the individual feeling that pain is the one Tandem helps. For AI specifically, the dominant workflow is still "select text → paste into ChatGPT/Claude → paste the answer back," which loses the document context on every hop.
 
-Bluebeam Revu built a $300M+ business solving the document review problem for PDFs in the architecture/engineering/construction market. There is no equivalent for .docx review workflows.
+Bluebeam Revu built a $300M+ business solving document review for PDFs in the architecture/engineering/construction market. There is no equivalent for the everyday .docx/Markdown review loop an individual runs.
 
 ### AI adoption in document review
 
@@ -84,7 +88,7 @@ The remaining distribution-friction risk is **downstream**: whether multi-provid
 
 ### Platform risk (medium)
 
-Microsoft could add equivalent annotation features to Word Copilot within 12-18 months. Word already has the Track Changes data model. If Copilot starts writing AI-reasoned suggestions into that model with "ask why" capability, the general-purpose differentiation collapses. The .docx-without-cloud and compliance angles would survive because they're distribution plays, not feature plays.
+Microsoft could add equivalent annotation features to Word Copilot within 12-18 months, and in-place AI editing with accept/reject is **already shipped** by ChatGPT Canvas, Claude artifacts (now MCP-connected), and `docx-mcp`. So in-place editing itself is no longer the differentiator. What survives is the durable wedge: a **persistent, addressable, queryable, exportable review record** that lives in your own files, runs **local-first with no cloud account**, and works with **whatever MCP-capable AI you bring** rather than one vendor's cloud. Canvas, artifacts, and docx-mcp do the editing; none of them give you that record. Invest there, not in raw editing (see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §2).
 
 ### MCP adoption (medium)
 
@@ -93,9 +97,9 @@ Tandem's architecture bets on MCP becoming a standard interface for AI tool use.
 - **If MCP adoption broadens** (Microsoft, OpenAI, others speaking MCP natively), Tandem benefits without changes — the same `:3479/mcp` endpoint serves any client.
 - **If MCP adoption stalls**, Claude remains usable via Anthropic's continued MCP commitment, and non-MCP providers reach Tandem via the Agent SDK adapter (ADR-038 §3 — owned by a future ADR). Tandem isn't Claude-locked even in the bear case.
 
-### Open source economics (low-medium)
+### Revenue model (decided — ADR-040)
 
-The compliance and commercial use cases that would pay for this tool require either a hosted offering or a support contract. An open-source project competing on features with well-funded incumbents without a revenue model doesn't survive long enough to matter. This needs a decision before the tool reaches maturity.
+The revenue question is now settled in [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license). Tandem is **free during the public beta** and moves to a **one-time paid license at v1.0**, activated by an **offline Ed25519-signed license file** — no hosted offering, no subscription, no support-contract dependency, consistent with the local-first promise. A Merchant of Record (Polar.sh or Paddle) handles checkout and global tax; auto-updates within the license's renewal window are served by a small license-checked endpoint. Existing beta users are grandfathered with a free license; new users pay. Pricing is set low (~$29–79) so paying beats building from source. Revenue is expected to be modest, and that is an accepted risk (full commitment, no kill-criterion) — see ADR-040 §3 and the licensing-change prerequisite in §5.
 
 ## Positioning Summary
 

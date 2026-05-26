@@ -55,9 +55,11 @@ Tandem is built to work with Anthropic's Claude out of the box. Other AI tools c
 ## Who Tandem is for
 
 - If you draft long-form writing and want a second reader for tone and structure.
-- If you review contracts, policies, RFP responses, or compliance filings and want a faster pass.
-- When a colleague hands you a report to mark up.
+- If you review documents — an essay, a thesis chapter, a report, or a contract — and want a faster pass.
+- When a colleague hands you a document to mark up.
 - When the AI wrote a draft and you need to decide what to keep.
+
+Tandem is built for individuals working on their own documents. The example document types above are just that — examples; the workflow is the same whatever you are writing or reviewing.
 
 ## Getting started
 
@@ -104,13 +106,13 @@ See [docs/workflows.md](docs/workflows.md) for examples of how this looks in dai
 - Tandem itself runs on your computer and stores your documents on your disk. We do not operate any servers that hold your files.
 - When you ask the AI to do something, the text you share with it goes to whichever AI service you are using. For example, if you connect Claude, the text goes to Anthropic under their terms. Tandem does not relay or copy your document anywhere else.
 - Tandem includes a private notes feature. Notes you mark as private are stripped from every response the AI sees ([ADR-027](docs/decisions.md)).
-- Tandem does not collect telemetry or analytics.
+- Tandem does not collect telemetry or analytics — no usage data, no crash reporting. When paid licensing arrives at v1.0, running the app will validate a signed license file on your own machine (no network call required); update checks will remain network-only, carry no analytics, and the update service will log only what it needs to authorize the download.
 
 See [docs/security.md](docs/security.md) for the full security model.
 
 ## Where Tandem is headed
 
-Tandem is on the way to a v1.0 release. Recent releases added support for multiple AI providers and in-app configuration for connections and models. Work still in progress covers improvements to how Word documents round-trip through the editor, turnkey setup on macOS and Linux, and final polish. The full plan lives in [docs/roadmap.md](docs/roadmap.md).
+Tandem is on the way to a v1.0 release. Recent releases added support for multiple AI providers and in-app configuration for connections and models. Work still in progress covers improvements to how Word documents round-trip through the editor, turnkey setup on macOS and Linux, and final polish. Tandem is free during the public beta; at v1.0 it moves to a one-time paid license, and beta users are grandfathered with a free license. The full plan lives in [docs/roadmap.md](docs/roadmap.md).
 
 ## Documentation
 
@@ -129,7 +131,7 @@ Tandem is on the way to a v1.0 release. Recent releases added support for multip
 
 ## License
 
-Tandem is free to use. It is licensed under the Business Source License 1.1 (BUSL-1.1); see [LICENSE](LICENSE) for the terms.
+Tandem is free during the public beta. At v1.0 it moves to a one-time paid license; existing beta users are grandfathered with a free license. It is licensed under the Business Source License 1.1 (BUSL-1.1); see [LICENSE](LICENSE) for the terms.
 
 ---
 

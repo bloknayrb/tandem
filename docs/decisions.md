@@ -739,4 +739,47 @@ Both are silent from the user's perspective today; both end when the integration
 - **Auto-launch parity:** v1.0 auto-launches Claude only. Per-provider auto-launchers are future work, each in its own ADR.
 - **MCP-bridge for non-MCP providers:** the OpenAI/Gemini adapter design is owned by a separate ADR (likely ADR-039) — this ADR commits to the approach but not the implementation.
 
-**Cross-references:** ADR-003 (MCP over REST), ADR-019 (Channel Shim — channel push transport), ADR-023 (Cowork Plugin Bridge — Cowork extra), ADR-024 (`bearer_methods_supported` — Claude Code empirical findings), ADR-027 (Annotation System Redesign — `author: "claude"` constant), ADR-028 (Plugin Monitor URL/Auth). Spike reports: `docs/spikes/plugin-monitor-viability-spike.md`, `docs/spikes/cli-session-resume-spike.md`, `docs/spikes/sidecar-launcher-spike.md`. Roadmap: `docs/roadmap.md` #477 + D4.
+**Cross-references:** ADR-003 (MCP over REST), ADR-019 (Channel Shim — channel push transport), ADR-023 (Cowork Plugin Bridge — Cowork extra), ADR-024 (`bearer_methods_supported` — Claude Code empirical findings), ADR-027 (Annotation System Redesign — `author: "claude"` constant), ADR-028 (Plugin Monitor URL/Auth), ADR-040 (Audience & Monetization — supersedes the institutional-market framing referenced in this ADR's Context). Spike reports: `docs/spikes/plugin-monitor-viability-spike.md`, `docs/spikes/cli-session-resume-spike.md`, `docs/spikes/sidecar-launcher-spike.md`. Roadmap: `docs/roadmap.md` #477 + D4.
+
+---
+
+## ADR-039: Agent SDK Adapter for Non-MCP Providers (Reserved)
+
+**Status:** Reserved (2026-05-26) — placeholder for the OpenAI / Gemini Agent SDK adapter committed to in [ADR-038](#adr-038-mcp-first-integration-policy-claude-as-default-integration) §3. Design and implementation are a future PR (roadmap #477 PR 5 / wave 6, possibly v1.1). This number is reserved so the adapter ADR lands here; until it is drafted, ADR-038 §3 is the authoritative reference.
+
+---
+
+## ADR-040: Audience and Monetization (Individuals; Same-Canvas Moat; Free Beta to One-Time License)
+
+**Status:** Split (per ADR-028's split-status pattern) — §1 (audience), §2 (moat), §3 (monetization mechanism), §4 (offline activation), and §6 (distribution) **Accepted (2026-05-26)**. §5 (BUSL re-scope) is **Proposed**: charging cannot begin until counsel drafts it, before the first sale.
+
+**Context:** Tandem shipped without a recorded audience or revenue decision. `docs/positioning.md` frames the market as institutions and (§economics) says paying cases "require either a hosted offering or a support contract… This needs a decision." `README.md` said "Tandem is free to use." `docs/roadmap.md` tracks "#394 Monetization" as "tracked outside engineering roadmap." The product is BUSL-1.1 (source-available): the base grant is non-production use only; the **Additional Use Grant** extends limited production use ("Personal use and individual self-hosting are permitted; commercial hosting or resale of the Licensed Work is not") — so individuals already use it in production for free. It converts to MIT at the earlier of the Change Date (2029-06-10 / v1.0 GA + 2 years) **and** the BUSL per-version 4-year floor. This ADR supersedes the institutional-market and undecided-revenue framing.
+
+**Decision §1 — Audience: individuals.** Target = individuals (writers, editors, researchers, developers) on their own documents — not institutions. Local-first and BYO-LLM are non-negotiable product identity; consequently the near-term reachable market is bounded by users who already run an MCP-capable LLM. Breadth is pursued by **lowering setup friction** (multi-provider first-run wizard / roadmap D4), not by a bundled/hosted inference layer (which would add recurring cost and revisit local-first — deferred to a possible post-1.0 decision). Supersedes positioning.md's §The Market and the institutional/technical-user audience framing recorded in **ADR-038's Context** ("gates the audience to developers and technical users" is ADR-038's phrasing). ADR-038's MCP-first integration *policy* is unaffected and is the basis for §2.
+
+**Decision §2 — Moat: same canvas + persistent review record.** Headline: you and your AI work on the same live document — no copy-pasting between a chat window and your editor — highlighting text the AI sees and edits/comments on **in place**, as first-class objects you **accept, dismiss, or discuss**, powered by your own MCP LLM. The durable differentiator beneath the headline is annotations as **persistent, addressable, queryable first-class objects** + the **.docx review-record loop** (Word-comment round-trip). ChatGPT Canvas, Claude artifacts (MCP-connected), and `docx-mcp` do in-place editing, but not a persistent, queryable, exportable review record — that is the wedge. BYO-MCP-LLM is the enabler. Basis: ADR-038 (MCP-first).
+
+**Decision §3 — Monetization & capture: free beta → one-time license at v1.0.** Free during public beta. At v1.0 **one public build** self-trials and **requires a valid offline-signed license to keep running** past the trial (a hard gate, not a nag); its auto-updates come from a **license-checked endpoint** that serves new builds only while the license's update window is current (this enforces a bundled-updates window / paid major-version upgrades). Pricing set later (~$29–79). No separate gated download — a shared installer is useless without a license, so license-to-run is the capture vector and gating the download would be redundant infra. The trial clock is on-device → soft; the hard gate is the signed license. Source-available remains a high-bar escape hatch. Existing beta users are **grandfathered** with a free signed license at 1.0 (goodwill over the small early-cohort revenue); new users pay.
+
+**Decision §4 — Activation: offline signed license files.** *Running* validates an Ed25519-signed license on-device against an embedded public key — no network, no telemetry, air-gapped, binds a copy to its buyer. Update *checks* are network (as today); for the licensed build they authenticate entitlement at the update endpoint, which **logs only what's needed to authorize** (ideally a signed entitlement check, not the raw key). No usage analytics — the no-telemetry promise holds for running the app.
+
+**Decision §5 — Licensing change (prerequisite for charging; PROPOSED, pending legal).** Charging requires a substantive narrowing of the Additional Use Grant — both the personal-use AND individual-self-hosting clauses — so continued/production use needs a paid license while personal *evaluation* (the trial) stays free; and addressing the MIT conversion (BUSL permits a per-version Change Date — reset per paid release, or move the commercial build off BUSL). Requires counsel; resolve before the first sale.
+
+**Decision §6 — Distribution & payment.** Checkout via a Merchant of Record (Polar.sh or Paddle) for payment + global VAT/sales-tax + the issuance webhook; licensing decoupled, low lock-in. **One public build** stays on GitHub Releases; the licensed app's updater authenticates entitlement at a small license-checked endpoint (Keygen, or a Cloudflare Worker). License-to-run is enforced in the **server** (booted by both the Tauri sidecar and the npm CLI). LLC + accountant before taking money.
+
+**Options considered:**
+- **Public binary + honor-system nag (one-time, whole app)** — no capture vector; rejected.
+- **Gated download host + dual trial/paid builds** — redundant with license-to-run; extra infra for no added capture; rejected.
+- **Subscription / hosted SaaS** — contradicts local-first/no-backend; rejected.
+- **Enterprise / support contracts** — mismatched to individuals; rejected.
+- **Donations / free forever (go-light)** — lower-effort fallback; rejected — full commitment to the paid model.
+- **Online license validation for running** — phones home; rejected for offline files (§4).
+
+**Consequences:**
+- Doc surfaces updated: positioning.md, README.md (free-during-beta + activation/telemetry + audience bullets), roadmap.md (#394), security.md, workflows.md + user-guide.md, CHANGELOG.md.
+- One public build throughout (no installer takedown); the only gated surface is the update endpoint.
+- In-app license-verification + server-side trial gate + license-authenticated updater are v1.0 work.
+- Existing beta users are grandfathered with a free license at 1.0; new users pay.
+- §1/§2 finalized; revenue ceiling is modest and accepted (full commitment, no kill-criterion).
+
+**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), `docs/positioning.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1).

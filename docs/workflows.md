@@ -4,7 +4,7 @@
 
 > **Looking for editor UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
 
-Real-world patterns for using Tandem with Claude on toll consulting documents.
+Real-world patterns for using Tandem with Claude on the kinds of documents an individual writes and reviews — reports, proposals, and prose drafts. The scenarios below use concrete example documents, but the workflow is the same whatever you are working on.
 
 > **Note:** These workflows assume the desktop app, where the server runs automatically and Claude Code is configured on launch. If you installed via npm instead (`npm install -g tandem-editor`), run `tandem setup` first, then `tandem` to start the server before proceeding.
 
@@ -61,9 +61,9 @@ npm update -g tandem-editor
 tandem setup    # re-writes MCP config with new paths
 ```
 
-## Editing a DRPA Progress Report
+## Reviewing a Progress Report
 
-**Setup:** Bryan has a monthly progress report draft that needs review before submitting to DRPA.
+**Setup:** Bryan has a monthly progress report draft and wants a review pass before sending it on.
 
 ```
 Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\progress-report-feb.md" })
@@ -200,7 +200,7 @@ Claude: tandem_resolveRange({ pattern: "[Technical approach content here]" })
 
 Claude: tandem_edit({
   from: 156, to: 192,
-  newText: "Our approach leverages 15 years of toll systems experience across DRPA, VDOT, and DelDOT to deliver a comprehensive solution..."
+  newText: "Our approach combines a decade of hands-on experience delivering comparable projects to provide a comprehensive, low-risk solution..."
 })
 ```
 
