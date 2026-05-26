@@ -123,6 +123,12 @@ export const TOAST_DISMISS_MS = { error: 8000, warning: 6000, info: 4000 } as co
 export const MAX_VISIBLE_TOASTS = 5;
 export const NOTIFICATION_BUFFER_SIZE = 50;
 
+// Activity center — persistent notification tray (sub-PR 1.10).
+// NOTE: NOT "tandem:activity" — that would shadow the Y_MAP_ACTIVITY = "activity"
+// Y.Map sub-key above. This is a localStorage key for the client-side tray history.
+export const ACTIVITY_HISTORY_KEY = "tandem:activityHistory";
+export const ACTIVITY_HISTORY_CAP = 50;
+
 // Onboarding tutorial
 export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
 // Load-bearing: useTutorial.svelte.ts uses this prefix to exclude tutorial

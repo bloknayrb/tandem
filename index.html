@@ -89,6 +89,15 @@
         --tandem-author-claude-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, var(--tandem-surface));
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* File-type pip colors for the new-tab launcher recents list. These are
+           6px decorative dots (non-text → WCAG text-contrast does not gate).
+           .md/.docx reuse the author tokens; .txt/.html get their own identity
+           so they don't read as authorship. Light seeds are taken verbatim from
+           the Claude Design a7 bundle; dark variants below derive from these by
+           applying the same light→dark lightness lift the author-user token uses
+           (+0.17 L, -0.01 C, hue fixed). */
+        --tandem-filetype-txt: oklch(0.62 0.04 280);
+        --tandem-filetype-html: oklch(0.55 0.14 150);
         --tandem-success: oklch(0.55 0.14 150);
         --tandem-success-fg: #ffffff;
         --tandem-success-fg-strong: #166534;
@@ -278,33 +287,83 @@
          to a card shape (menus aren't pill-shaped) and stacks an item list
          with a keyboard-hint footer. */
       .tandem-slash-menu {
-        border-radius: var(--tandem-r-4);
-        min-width: 200px;
+        border-radius: var(--tandem-r-5);
+        min-width: 256px;
         padding: var(--tandem-space-1);
         z-index: var(--tandem-z-popover, 1100);
       }
       .tandem-slash-menu__item {
         display: flex;
         align-items: center;
+        gap: var(--tandem-space-3);
         width: 100%;
-        padding: var(--tandem-space-1) var(--tandem-space-3);
+        padding: var(--tandem-space-1) var(--tandem-space-2);
+        /* Transparent base border kept so the selected/hover states never
+           shift the row height by 1px. */
         border: 1px solid transparent;
-        border-radius: var(--tandem-r-2);
+        border-radius: var(--tandem-r-3);
         background: transparent;
         color: var(--tandem-fg);
         font: inherit;
         font-size: var(--tandem-text-sm);
+        font-weight: 500;
         text-align: left;
         cursor: pointer;
         white-space: nowrap;
       }
       .tandem-slash-menu__item:hover {
-        background: color-mix(in srgb, var(--tandem-fg) 5%, transparent);
+        background: var(--tandem-surface-sunk);
       }
       .tandem-slash-menu__item[aria-selected="true"] {
         background: var(--tandem-accent-bg);
         color: var(--tandem-accent-fg-strong);
+        border-color: transparent;
+      }
+      .tandem-slash-menu__icon {
+        flex-shrink: 0;
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--tandem-border);
+        border-radius: var(--tandem-r-3);
+        background: var(--tandem-surface-sunk);
+        color: var(--tandem-fg-subtle);
+        font-weight: 700;
+        font-size: var(--tandem-text-2xs);
+        line-height: 1;
+      }
+      .tandem-slash-menu__icon svg {
+        width: 14px;
+        height: 14px;
+        display: block;
+      }
+      .tandem-slash-menu__item[aria-selected="true"] .tandem-slash-menu__icon {
+        background: color-mix(in srgb, var(--tandem-accent) 14%, var(--tandem-surface));
         border-color: var(--tandem-accent-border);
+        color: var(--tandem-accent);
+      }
+      .tandem-slash-menu__label {
+        flex: 1;
+      }
+      .tandem-slash-menu__shortcut {
+        flex-shrink: 0;
+        font-family: var(--tandem-font-mono);
+        font-size: var(--tandem-text-2xs);
+        padding: 0 6px;
+        border: 1px solid var(--tandem-border);
+        border-radius: var(--tandem-r-1);
+        background: var(--tandem-surface-sunk);
+        color: var(--tandem-fg-faint);
+      }
+      .tandem-slash-menu__item[aria-selected="true"] .tandem-slash-menu__shortcut {
+        background: var(--tandem-accent-bg);
+        border-color: var(--tandem-accent-border);
+        /* Matches the selected row's label color rather than the bundle's
+           --tandem-accent: accent-on-accent-bg is only ~4.6:1 in light mode
+           (AA-marginal), accent-fg-strong clears it comfortably (Conflict #6,
+           same call as the 1.7 version chip / 1.8 status pill). */
+        color: var(--tandem-accent-fg-strong);
       }
       .tandem-slash-menu__hint {
         display: flex;
@@ -354,6 +413,11 @@
         --tandem-author-claude-bg: #4d2419;
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* Dark file-type pips — light seeds lifted by the author-user light→dark
+           delta (+0.17 L, -0.01 C, hue fixed) so they stay legible on the dark
+           recents surface. See the light :root block for the rationale. */
+        --tandem-filetype-txt: oklch(0.79 0.03 280);
+        --tandem-filetype-html: oklch(0.72 0.13 150);
         --tandem-success: #22c55e;
         --tandem-success-fg: #0f172a;
         --tandem-success-fg-strong: #bbf7d0;
