@@ -736,6 +736,7 @@ pub fn run() {
             cowork_set_lan_ip_override,
             cowork_retry_admin_elevation,
             restart_sidecar,
+            show_in_file_manager,
             install_update,
             keychain::keychain_get,
             keychain::keychain_set,
@@ -789,6 +790,59 @@ fn restart_sidecar(app: tauri::AppHandle) {
             }
         }
     });
+}
+
+/// Build the `(program, args)` tuple that reveals `path` in the host OS file
+/// manager, parameterized by target OS string so the construction can be unit
+/// tested for every platform without spawning a process.
+///
+/// Platform contracts:
+/// - **Windows** (`explorer`): the documented form is `/select,<path>` as a
+///   *single* argv element — Explorer parses the comma-prefixed switch and the
+///   path as one token. Passing `/select,` and the path as two separate args
+///   makes Explorer open the parent folder without selecting the file. The path
+///   is the *file* itself.
+/// - **macOS** (`open -R <path>`): `-R` reveals (selects) the file in Finder.
+///   The path is the *file* itself.
+/// - **Linux** (`xdg-open <dir>`): no portable "reveal/select" verb exists, so
+///   we open the *containing directory*. Callers pass the dirname for Linux.
+///
+/// In every case the path is appended as opaque argv data to a fixed literal —
+/// never interpolated into a shell line, and no shell is ever invoked.
+fn reveal_command_args(path: &str, target_os: &str) -> (&'static str, Vec<String>) {
+    match target_os {
+        "windows" => ("explorer", vec![format!("/select,{path}")]),
+        "macos" => ("open", vec!["-R".to_string(), path.to_string()]),
+        // Linux and any other Unix-like target: open the containing directory.
+        _ => {
+            // `Path::parent()` returns `Some("")` (not `None`) for a bare
+            // filename with no directory component — treat that empty parent
+            // the same as "no parent" and fall back to the path itself, so we
+            // never hand `xdg-open` an empty argument.
+            let dir = std::path::Path::new(path)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| path.to_string());
+            ("xdg-open", vec![dir])
+        }
+    }
+}
+
+/// Reveal `path` in the OS file manager (Explorer / Finder / file manager).
+///
+/// Implemented as a native `std::process::Command` — this needs NO capability
+/// entry. Capabilities gate Tauri *plugin* APIs (e.g. `shell:allow-execute`),
+/// not native Rust process spawns. The per-OS argument vector is built by the
+/// pure `reveal_command_args` helper (unit-tested); the path is always passed
+/// as a separate argv element, so there is no shell-injection surface.
+#[tauri::command]
+fn show_in_file_manager(path: String) -> Result<(), String> {
+    let (program, args) = reveal_command_args(&path, std::env::consts::OS);
+    match std::process::Command::new(program).args(&args).spawn() {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Failed to reveal {path} in file manager: {e}")),
+    }
 }
 
 /// Kill the sidecar process if one is running.
@@ -2354,5 +2408,58 @@ mod url_constants_tests {
                 "{name} must use 127.0.0.1 (got {url}) — see #477 PR 2"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod reveal_command_tests {
+    use super::*;
+
+    // Issue #299 — "Show in file explorer". The actual OS reveal cannot be
+    // verified in CI; these tests assert only that the per-OS argument vector
+    // is constructed correctly (the security-relevant part: the path is always
+    // a discrete argv element appended to a fixed literal, never shell-spliced).
+
+    #[test]
+    fn windows_selects_the_file_with_single_select_arg() {
+        // Explorer's documented contract is `/select,<path>` as ONE argv
+        // element — splitting `/select,` and the path into two args makes
+        // Explorer open the parent folder without selecting the file.
+        let (program, args) = reveal_command_args(r"C:\Users\me\notes.md", "windows");
+        assert_eq!(program, "explorer");
+        assert_eq!(args, vec![r"/select,C:\Users\me\notes.md".to_string()]);
+    }
+
+    #[test]
+    fn macos_reveals_the_file_with_dash_r() {
+        let (program, args) = reveal_command_args("/Users/me/notes.md", "macos");
+        assert_eq!(program, "open");
+        assert_eq!(args, vec!["-R".to_string(), "/Users/me/notes.md".to_string()]);
+    }
+
+    #[test]
+    fn linux_opens_the_containing_directory() {
+        // No portable reveal verb on Linux — open the parent dir instead.
+        let (program, args) = reveal_command_args("/home/me/notes.md", "linux");
+        assert_eq!(program, "xdg-open");
+        assert_eq!(args, vec!["/home/me".to_string()]);
+    }
+
+    #[test]
+    fn linux_falls_back_to_path_when_no_parent() {
+        // A bare filename with no directory component has no parent → use the
+        // path as-is rather than passing an empty string to xdg-open.
+        let (program, args) = reveal_command_args("notes.md", "freebsd");
+        assert_eq!(program, "xdg-open");
+        assert_eq!(args, vec!["notes.md".to_string()]);
+    }
+
+    #[test]
+    fn path_is_never_shell_spliced_into_one_token() {
+        // Defense-in-depth: a path containing shell metacharacters stays a
+        // single, opaque argv element on macOS — it is data, not a command.
+        let nasty = "/Users/me/$(rm -rf ~) file.md";
+        let (_program, args) = reveal_command_args(nasty, "macos");
+        assert_eq!(args, vec!["-R".to_string(), nasty.to_string()]);
     }
 }

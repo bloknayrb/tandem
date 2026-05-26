@@ -493,6 +493,35 @@ async function startFreshConversation(d: ActionDeps): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Show in file explorer — reveal the active doc in the OS file manager (#299)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reveal the active document in the OS file manager via the native
+ * `show_in_file_manager` Tauri command. Disabled (notifies) when the active
+ * doc has no on-disk path — scratchpads, `upload://` docs, and app-internal
+ * docs all return `null` from `getActiveDocumentPath()`. The action is only
+ * *registered* in the Tauri runtime (see BUILTINS spread), so this never runs
+ * in browser mode; the import below is a defensive fallback.
+ */
+async function showInFileManager(d: ActionDeps): Promise<void> {
+  const path = d.getActiveDocumentPath();
+  if (!path) {
+    d.notify("warning", "This document isn't saved to a file yet.");
+    return;
+  }
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("show_in_file_manager", { path });
+  } catch (err) {
+    d.notify(
+      "error",
+      `Couldn't reveal in file manager: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Register all builtins at module top-level
 // ---------------------------------------------------------------------------
 
@@ -706,6 +735,22 @@ const BUILTINS: Action[] = [
       guardedRun("launcher-start-fresh", (d) => void startFreshConversation(d));
     },
   },
+  // Reveal-in-OS-file-manager only makes sense in the desktop app, which can
+  // spawn Explorer / Finder / xdg-open. The browser distribution has no such
+  // capability, so the action is gated out of the registry entirely there
+  // (conditional spread below) rather than shown-and-erroring.
+  ...(isTauriRuntime()
+    ? [
+        {
+          id: "show-in-file-explorer",
+          label: "Show in file explorer",
+          group: "document",
+          run() {
+            guardedRun("show-in-file-explorer", (d) => void showInFileManager(d));
+          },
+        } satisfies Action,
+      ]
+    : []),
 ];
 
 for (const action of BUILTINS) {
