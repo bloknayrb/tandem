@@ -63,7 +63,10 @@ vi.mock("../../src/client/positions", () => ({
   },
 }));
 
-const { AnnotationExtension } = await import("../../src/client/editor/extensions/annotation");
+const { AnnotationExtension, renderedDecorationType } = await import(
+  "../../src/client/editor/extensions/annotation"
+);
+const { sanitizeAnnotation } = await import("../../src/shared/sanitize");
 
 // --- Helpers ---
 
@@ -126,8 +129,11 @@ describe("annotation plugin apply() recovery branch", () => {
     expect(result).not.toBe(EMPTY_SENTINEL);
   });
 
-  it("does not rebuild when no annotations exist", () => {
+  it("short-circuits to empty when no visible annotations exist (no rebuild)", () => {
     const ydoc = new Y.Doc();
+    // If the plugin reached the recovery branch it would build "non-empty";
+    // the empty result proves the hasVisibleAnnotations short-circuit fired
+    // before any O(n) rebuild.
     buildDecorationsResult = "non-empty";
 
     const plugin = getPlugin(ydoc);
@@ -139,8 +145,8 @@ describe("annotation plugin apply() recovery branch", () => {
       fakeState,
     );
 
-    // No annotations → maps forward, no rebuild
-    expect(result).toBe("mapped-forward");
+    // No annotations → nothing visible → returns empty without rebuilding.
+    expect(result).toBe(EMPTY_SENTINEL);
   });
 
   it("gates recovery after successful rebuild", () => {
@@ -257,24 +263,44 @@ describe("annotation plugin apply() recovery branch", () => {
   });
 });
 
-// --- #596: showAnnotationDecorations toggle ---
+// --- #596 → 1.13: per-type decoration visibility ---
 
-describe("annotation plugin decoration-visibility toggle (#596)", () => {
-  function clearStoredToggle() {
-    try {
-      localStorage.removeItem("tandem:showAnnotationDecorations");
-    } catch {
-      // localStorage may not exist in this environment — fine.
-    }
+const DECORATION_KEY = "tandem:decorationVisibility";
+const ALL_ON = { comment: true, highlight: true, note: true };
+const ALL_OFF = { comment: false, highlight: false, note: false };
+
+function clearVisibility() {
+  try {
+    localStorage.removeItem(DECORATION_KEY);
+  } catch {
+    // localStorage may not exist in this environment — fine.
   }
+}
 
-  beforeEach(clearStoredToggle);
-  // Avoid leaking a `"false"` setting into AR2 tests further down the file —
+function setVisibility(v: { comment: boolean; highlight: boolean; note: boolean }) {
+  localStorage.setItem(DECORATION_KEY, JSON.stringify(v));
+}
+
+function addTypedAnnotation(ydoc: Y.Doc, type: string, id = `ann-${type}`) {
+  ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+    id,
+    type,
+    status: "pending",
+    content: "test",
+    author: type === "comment" ? "claude" : "user",
+    createdAt: Date.now(),
+    range: { from: 1, to: 5 },
+  });
+}
+
+describe("annotation plugin decoration-visibility toggle (#596 → 1.13)", () => {
+  beforeEach(clearVisibility);
+  // Avoid leaking an all-off blob into AR2 tests further down the file —
   // those build plugins via init() and would otherwise see EMPTY_SENTINEL.
-  afterEach(clearStoredToggle);
+  afterEach(clearVisibility);
 
-  it("plugin init returns empty DecorationSet when toggle is stored false", () => {
-    localStorage.setItem("tandem:showAnnotationDecorations", "false");
+  it("plugin init returns empty DecorationSet when all types stored false", () => {
+    setVisibility(ALL_OFF);
     const ydoc = new Y.Doc();
     addAnnotation(ydoc);
     buildDecorationsResult = "non-empty";
@@ -285,8 +311,8 @@ describe("annotation plugin decoration-visibility toggle (#596)", () => {
     expect(initial).toBe(EMPTY_SENTINEL);
   });
 
-  it("plugin init returns built decorations when toggle is stored true", () => {
-    localStorage.setItem("tandem:showAnnotationDecorations", "true");
+  it("plugin init returns built decorations when types stored true", () => {
+    setVisibility(ALL_ON);
     const ydoc = new Y.Doc();
     addAnnotation(ydoc);
     buildDecorationsResult = "non-empty";
@@ -297,7 +323,7 @@ describe("annotation plugin decoration-visibility toggle (#596)", () => {
     expect(initial).not.toBe(EMPTY_SENTINEL);
   });
 
-  it("apply() clears decorations on toggle-decorations meta with visible=false", () => {
+  it("apply() clears decorations on toggle-decorations meta with all types false", () => {
     const ydoc = new Y.Doc();
     addAnnotation(ydoc);
     buildDecorationsResult = "non-empty";
@@ -306,7 +332,7 @@ describe("annotation plugin decoration-visibility toggle (#596)", () => {
     const result = plugin.spec.state.apply(
       makeTr({
         docChanged: false,
-        meta: { type: "toggle-decorations", visible: false },
+        meta: { type: "toggle-decorations", visible: ALL_OFF },
       }),
       { _stub: "previous-set" },
       fakeState,
@@ -316,8 +342,8 @@ describe("annotation plugin decoration-visibility toggle (#596)", () => {
     expect(result).toBe(EMPTY_SENTINEL);
   });
 
-  it("apply() rebuilds decorations on toggle-decorations meta with visible=true", () => {
-    localStorage.setItem("tandem:showAnnotationDecorations", "false");
+  it("apply() rebuilds decorations on toggle-decorations meta with types true", () => {
+    setVisibility(ALL_OFF);
     const ydoc = new Y.Doc();
     addAnnotation(ydoc);
     buildDecorationsResult = "non-empty";
@@ -326,7 +352,7 @@ describe("annotation plugin decoration-visibility toggle (#596)", () => {
     const result = plugin.spec.state.apply(
       makeTr({
         docChanged: false,
-        meta: { type: "toggle-decorations", visible: true },
+        meta: { type: "toggle-decorations", visible: ALL_ON },
       }),
       EMPTY_SENTINEL,
       fakeState,
@@ -336,12 +362,12 @@ describe("annotation plugin decoration-visibility toggle (#596)", () => {
     expect(result).not.toBe(EMPTY_SENTINEL);
   });
 
-  it("apply() suppresses docChanged rebuild path when visible is false", () => {
-    localStorage.setItem("tandem:showAnnotationDecorations", "false");
+  it("apply() suppresses docChanged rebuild path when all types false", () => {
+    setVisibility(ALL_OFF);
     const ydoc = new Y.Doc();
     addAnnotation(ydoc);
     // If the plugin ignored the toggle it would call buildDecorations on the
-    // recovery branch (empty + docChanged + hasAnnotations).
+    // recovery branch (empty + docChanged + hasVisibleAnnotations).
     buildDecorationsResult = "non-empty";
 
     const plugin = getPlugin(ydoc);
@@ -353,6 +379,67 @@ describe("annotation plugin decoration-visibility toggle (#596)", () => {
     );
 
     expect(result).toBe(EMPTY_SENTINEL);
+  });
+
+  // Recovery-guard interaction (plan-review HIGH). A doc holding only
+  // hidden-type annotations is a PERMANENT "annotations present but nothing
+  // visible" state. If the guard tracked mere presence (hasAnnotations) the
+  // recovery branch would re-run buildDecorations O(n) on every keystroke
+  // forever. Tracking hasVisibleAnnotations short-circuits before recovery.
+  it("does NOT rebuild on docChanged when all annotations are a hidden type", () => {
+    setVisibility({ comment: true, highlight: true, note: false });
+    const ydoc = new Y.Doc();
+    addTypedAnnotation(ydoc, "note");
+    // Would build "non-empty" if the recovery branch were reached — proving a
+    // (forbidden) per-keystroke rebuild. The empty result proves it short-circuits.
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const first = plugin.spec.state.apply(
+      makeTr({ docChanged: true }),
+      EMPTY_SENTINEL,
+      fakeState,
+      fakeState,
+    );
+    expect(first).toBe(EMPTY_SENTINEL);
+    // Second keystroke: still no rebuild.
+    const second = plugin.spec.state.apply(
+      makeTr({ docChanged: true }),
+      EMPTY_SENTINEL,
+      fakeState,
+      fakeState,
+    );
+    expect(second).toBe(EMPTY_SENTINEL);
+  });
+
+  it("builds only the visible type (comments off, highlights on)", () => {
+    setVisibility({ comment: false, highlight: true, note: true });
+    const ydoc = new Y.Doc();
+    addTypedAnnotation(ydoc, "highlight");
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const initial = plugin.spec.state.init(null, fakeState);
+    // Highlight is visible → builds.
+    expect(initial).not.toBe(EMPTY_SENTINEL);
+  });
+
+  // Privacy invariant (plan-review LOW → regression guard). Hiding notes is
+  // DISPLAY-ONLY: the note is suppressed from the decoration set but stays in
+  // the Y.Map untouched, so the channel-observer / MCP layer (ADR-027) is
+  // unaffected — Claude never reads notes regardless of this toggle.
+  it("showNotes:false hides the note mark but leaves the note in the Y.Map", () => {
+    setVisibility({ comment: true, highlight: true, note: false });
+    const ydoc = new Y.Doc();
+    addTypedAnnotation(ydoc, "note", "note-1");
+    buildDecorationsResult = "non-empty";
+
+    const plugin = getPlugin(ydoc);
+    const initial = plugin.spec.state.init(null, fakeState);
+    // No visible annotations → no decorations rendered.
+    expect(initial).toBe(EMPTY_SENTINEL);
+    // The note is still present in the CRDT map — display filter never mutates it.
+    expect(ydoc.getMap(Y_MAP_ANNOTATIONS).has("note-1")).toBe(true);
   });
 });
 
@@ -444,6 +531,38 @@ describe("annotation plugin observer coalescing (#610)", () => {
     expect(dispatchCount()).toBe(0);
 
     restoreRAF();
+  });
+});
+
+// --- renderedDecorationType must mirror sanitize's type bucketing ---
+
+describe("renderedDecorationType mirrors sanitizeAnnotation", () => {
+  // The cheap visible-annotations walk reads RAW Y.Map types and maps them via
+  // renderedDecorationType; buildDecorations filters the SANITIZED type. If the
+  // two ever disagree, the gate hides a renderable annotation (or vice versa).
+  // This pins the mirror so a future change to sanitize's bucketing breaks here.
+  it.each([
+    { raw: "highlight", why: "highlight keeps its own bucket" },
+    { raw: "note", why: "note keeps its own bucket" },
+    { raw: "flag", why: "legacy flag → note" },
+    { raw: "comment", why: "comment is a comment" },
+    { raw: "suggestion", why: "legacy suggestion → comment" },
+    { raw: "question", why: "legacy question → comment" },
+    { raw: "totally-unknown", why: "unknown type → comment" },
+  ])("$raw → same bucket as sanitize ($why)", ({ raw }) => {
+    const sanitized = sanitizeAnnotation(
+      {
+        id: "t",
+        type: raw,
+        author: "claude",
+        status: "pending",
+        content: "x",
+        range: { from: 1, to: 2 },
+        timestamp: Date.now(),
+      } as never,
+      () => {},
+    );
+    expect(renderedDecorationType(raw)).toBe(sanitized.type);
   });
 });
 

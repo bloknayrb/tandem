@@ -4,7 +4,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
 import {
-  ANNOTATION_DECORATIONS_TOGGLE_KEY,
+  DECORATION_VISIBILITY_KEY,
   HIGHLIGHT_COLOR_VARS,
   normalizeHighlightColor,
   Y_MAP_ANNOTATIONS,
@@ -15,10 +15,59 @@ import { annotationToPmRange } from "../../positions";
 
 export const annotationPluginKey = new PluginKey("tandemAnnotations");
 
-/** Dispatched by App.svelte when showAnnotationDecorations flips (#596). */
+/** Effective per-annotation-type decoration visibility (master mute folded in). */
+export interface DecorationVisibility {
+  comment: boolean;
+  highlight: boolean;
+  note: boolean;
+}
+
+/** Dispatched by App.svelte when any per-type decoration flag flips (#596 → 1.13). */
 export interface AnnotationToggleMeta {
   type: "toggle-decorations";
-  visible: boolean;
+  visible: DecorationVisibility;
+}
+
+const ALL_VISIBLE: DecorationVisibility = { comment: true, highlight: true, note: true };
+
+/**
+ * Parse the mirrored visibility blob; malformed/absent → all visible.
+ *
+ * Read at plugin construction. Correct cold-load behavior (no flash of marks
+ * for a user who has decorations muted/off) depends on the settings hook's
+ * `mirrorDecorationKeys` having seeded this key first — `createTandemSettings()`
+ * runs in App.svelte's top-level script, strictly before the editor (and thus
+ * this plugin) is constructed. See `useTandemSettings.svelte.ts`.
+ */
+function parseStoredVisibility(): DecorationVisibility {
+  try {
+    const stored = localStorage.getItem(DECORATION_VISIBILITY_KEY);
+    if (!stored) return { ...ALL_VISIBLE };
+    const parsed = JSON.parse(stored) as Partial<DecorationVisibility>;
+    return {
+      comment: parsed.comment !== false,
+      highlight: parsed.highlight !== false,
+      note: parsed.note !== false,
+    };
+  } catch (err) {
+    console.warn("[annotation] localStorage unavailable", err);
+    return { ...ALL_VISIBLE };
+  }
+}
+
+/**
+ * Map a RAW annotation type to its rendered decoration bucket, mirroring
+ * `sanitizeAnnotation`'s type normalization (highlight→highlight, note/flag→note,
+ * everything else — comment/suggestion/question/unknown — →comment). Used by the
+ * cheap visible-annotations walk, which reads raw Y.Map values (no sanitize, to
+ * avoid O(n) allocation on every observer fire). Exported so a test can pin it
+ * against `sanitizeAnnotation` — if sanitize's bucketing ever changes, this must
+ * change in lockstep or the visibility gate silently disagrees with the build.
+ */
+export function renderedDecorationType(rawType: unknown): keyof DecorationVisibility {
+  if (rawType === "highlight") return "highlight";
+  if (rawType === "note" || rawType === "flag") return "note";
+  return "comment";
 }
 
 /**
@@ -28,6 +77,7 @@ function buildDecorations(
   doc: PmNode,
   annotationsMap: Y.Map<unknown>,
   ydoc: Y.Doc | null,
+  visible: DecorationVisibility,
 ): DecorationSet {
   const decorations: Decoration[] = [];
   const maxPos = doc.content.size;
@@ -38,6 +88,9 @@ function buildDecorations(
       console.warn("[sanitize]", event);
     });
     if (ann.status !== "pending") return;
+    // Per-type display filter (1.13). Display-only — notes filtered here are
+    // still present in the Y.Map and never read by Claude server-side (ADR-027).
+    if (!visible[ann.type]) return;
     if (!ann.range && !ann.relRange) return;
 
     const resolved = annotationToPmRange(ann, doc, ydoc);
@@ -150,18 +203,37 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     if (!ydoc) return [];
 
     const annotationsMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
-    // Y.Map.size is O(n) — avoid calling it on every transaction.
-    let hasAnnotations = annotationsMap.size > 0;
-    let recoveryAttempted = false;
 
-    // Read initial state from localStorage so the plugin stays decoupled from the Svelte store.
-    let visible = true;
-    try {
-      const stored = localStorage.getItem(ANNOTATION_DECORATIONS_TOGGLE_KEY);
-      if (stored === "false") visible = false;
-    } catch (err) {
-      console.warn("[annotation] localStorage unavailable", err);
+    // Read initial per-type visibility from localStorage so the plugin stays
+    // decoupled from the Svelte store.
+    let visible = parseStoredVisibility();
+
+    /**
+     * Does the map hold at least one pending annotation of a currently-visible
+     * type? Drives both the cheap short-circuit and the docChanged recovery
+     * guard. Recomputed only on visibility changes (toggle meta) and map
+     * changes (observer) — NOT per keystroke — so the O(n) walk stays rare.
+     * Using "visible" (not merely "present") is load-bearing: a doc of only
+     * hidden-type annotations must NOT keep retrying the recovery rebuild,
+     * which would re-run buildDecorations on every keystroke (the #610 perf
+     * fix relies on the guard latching once a non-empty rebuild lands).
+     *
+     * Reads RAW Y.Map values via `renderedDecorationType` (no sanitize — that
+     * would allocate O(n) on every observer fire). Iterates with an early
+     * `break` so it stops at the first match instead of walking the whole map.
+     */
+    function computeHasVisibleAnnotations(): boolean {
+      for (const value of annotationsMap.values()) {
+        const ann = value as { status?: string; type?: unknown } | undefined;
+        if (ann && ann.status === "pending" && visible[renderedDecorationType(ann.type)]) {
+          return true;
+        }
+      }
+      return false;
     }
+
+    let hasVisibleAnnotations = computeHasVisibleAnnotations();
+    let recoveryAttempted = false;
 
     return [
       new Plugin({
@@ -169,28 +241,38 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
 
         state: {
           init(_, state) {
-            return visible
-              ? buildDecorations(state.doc, annotationsMap, ydoc)
+            return hasVisibleAnnotations
+              ? buildDecorations(state.doc, annotationsMap, ydoc, visible)
               : DecorationSet.empty;
           },
           apply(tr, decorationSet, _oldState, newState) {
             const meta = tr.getMeta(annotationPluginKey) as AnnotationToggleMeta | true | undefined;
             if (meta && typeof meta === "object" && meta.type === "toggle-decorations") {
+              // A type toggle changes visibility without changing the map, so
+              // recompute the visible-annotations quantity here too, and re-arm
+              // recovery (a toggle that newly reveals a type whose annotations
+              // failed to resolve should be allowed one rebuild attempt).
               visible = meta.visible;
+              hasVisibleAnnotations = computeHasVisibleAnnotations();
+              recoveryAttempted = false;
             }
             if (meta) {
-              return visible
-                ? buildDecorations(newState.doc, annotationsMap, ydoc)
+              return hasVisibleAnnotations
+                ? buildDecorations(newState.doc, annotationsMap, ydoc, visible)
                 : DecorationSet.empty;
             }
-            if (!visible) return DecorationSet.empty;
+            if (!hasVisibleAnnotations) return DecorationSet.empty;
             if (tr.docChanged) {
               // Y.Map observer can fire before y-prosemirror populates the doc,
-              // leaving decorationSet empty despite annotations in the map.
-              // Gate retries so degraded state (all annotations fail range
-              // validation) doesn't rebuild O(n) on every keystroke.
-              if (!recoveryAttempted && decorationSet === DecorationSet.empty && hasAnnotations) {
-                const rebuilt = buildDecorations(newState.doc, annotationsMap, ydoc);
+              // leaving decorationSet empty despite visible annotations in the
+              // map. Gate retries so degraded state (all visible annotations
+              // fail range validation) doesn't rebuild O(n) on every keystroke.
+              if (
+                !recoveryAttempted &&
+                decorationSet === DecorationSet.empty &&
+                hasVisibleAnnotations
+              ) {
+                const rebuilt = buildDecorations(newState.doc, annotationsMap, ydoc, visible);
                 if (rebuilt !== DecorationSet.empty) recoveryAttempted = true;
                 return rebuilt;
               }
@@ -223,7 +305,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
           }
 
           const observer = () => {
-            hasAnnotations = annotationsMap.size > 0;
+            hasVisibleAnnotations = computeHasVisibleAnnotations();
             recoveryAttempted = false;
             scheduleRebuild();
           };

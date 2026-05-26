@@ -61,9 +61,14 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `title-bar`, `titlebar-brand-menu`, `titlebar-brand-menu-popover`,
   `titlebar-default-model`, `titlebar-update-available-dot`,
   `brand-menu-{settings,shortcuts,theme-{*}}`
-- `formatting-bar`, `formatbar-authorship-toggle`,
+- `formatting-bar`,
   `toolbar-link-{input,submit,cancel}`,
   `toolbar-highlight-color-{toggle,{*}}`, `color-picker-close`
+- Decorations split button (1.13) — lives in the formatting bar (subsumes the
+  standalone authorship toggle; `formatbar-authorship-toggle` removed):
+  `decorations-menu`, `decorations-mute-toggle`, `decorations-menu-caret`,
+  `decorations-row-{authorship,comments,highlights,notes}`,
+  `decorations-settings-link`
 - `mode-{toggle,solo-btn,tandem-btn}`
 
 ### Selection popup (audience-first, ADR-027)
@@ -155,7 +160,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
   `text-size-{*}-btn`, `accent-hue-slider`, `editor-font-{*}-btn`,
-  `density-{*}-btn`, `annotation-decorations-toggle`, `reduce-motion-toggle`
+  `density-{*}-btn`, `reduce-motion-toggle`
+- Decorations mirror group (1.13): `appearance-show-{authorship,comments,highlights,notes}`
+  (interpolated via `{testid}`, so not in the testid-set snapshot; tracked here).
+  Replaces the single `annotation-decorations-toggle` (#596 per-type split).
 
 ### Settings — Editor / Accessibility / Network
 - `editor-width-slider`

@@ -459,10 +459,7 @@ wireActionDeps({
     if (cur && cur.author !== "user") review.handleDismiss(cur.id);
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
-  toggleAuthorship: () =>
-    settingsState.updateSettings({
-      showAuthorship: !settingsState.settings.showAuthorship,
-    }),
+  toggleAuthorship: () => setAuthorshipVisible(!settingsState.settings.showAuthorship),
   saveAs: async () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
     // Save-As is a PROMOTION path — only offer it for ephemeral upload://
@@ -500,15 +497,30 @@ wireActionDeps({
   },
 });
 
+// Toggle authorship visibility, auto-unmuting in one updateSettings call when
+// the master overlay is on — same coherence rule as the per-type Decorations
+// rows, so toggling authorship via Ctrl+Alt+A or the command palette while
+// muted is never an invisible no-op (1.13). The Decorations dropdown's own
+// authorship row folds the same unmute inside `toggleRow`.
+function setAuthorshipVisible(visible: boolean): void {
+  settingsState.updateSettings({
+    showAuthorship: visible,
+    ...(settingsState.settings.decorationsMuted ? { decorationsMuted: false } : {}),
+  });
+}
+
 // The authorship plugin reads its initial visibility from localStorage at
 // construction time, so dispatch only on subsequent changes — first-run
 // dispatch was the path that produced an effect-depth loop under prod
 // scheduling (transaction → tick → effect rerun → dispatch …).
+// Effective visibility folds in the master `decorationsMuted` overlay (1.13);
+// reading settings inside the effect body keeps it reactive (NOT a frozen const).
 let lastDispatchedAuthorship: boolean | null = null;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  const visible = settingsState.settings.showAuthorship;
+  const s = settingsState.settings;
+  const visible = !s.decorationsMuted && s.showAuthorship;
   if (lastDispatchedAuthorship === visible) return;
   const firstRun = lastDispatchedAuthorship === null;
   lastDispatchedAuthorship = visible;
@@ -519,15 +531,25 @@ $effect(() => {
   });
 });
 
-// #596: mirrors the authorship toggle pattern; plugin reads localStorage at init, this handles flips.
-let lastDispatchedDecorations: boolean | null = null;
+// #596 → 1.13: per-type decoration visibility. Plugin reads localStorage at
+// init; this handles flips. Effective visibility folds in `decorationsMuted`.
+// The dedupe guard uses a positional encoding (NOT JSON.stringify, which would
+// silently break on a later key reorder/spread → missed or redundant dispatch).
+let lastDispatchedDecorations: string | null = null;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  const visible = settingsState.settings.showAnnotationDecorations;
-  if (lastDispatchedDecorations === visible) return;
+  const s = settingsState.settings;
+  const muted = s.decorationsMuted;
+  const visible = {
+    comment: !muted && s.showComments,
+    highlight: !muted && s.showHighlights,
+    note: !muted && s.showNotes,
+  };
+  const encoded = `${visible.comment ? 1 : 0}${visible.highlight ? 1 : 0}${visible.note ? 1 : 0}`;
+  if (lastDispatchedDecorations === encoded) return;
   const firstRun = lastDispatchedDecorations === null;
-  lastDispatchedDecorations = visible;
+  lastDispatchedDecorations = encoded;
   if (firstRun) return;
   untrack(() => {
     const tr = ed.state.tr.setMeta(annotationPluginKey, {
@@ -937,9 +959,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "toggle-authorship": (e) => {
     // Works even when focus is in a form input (global UI preference).
     e.preventDefault();
-    settingsState.updateSettings({
-      showAuthorship: !settingsState.settings.showAuthorship,
-    });
+    setAuthorshipVisible(!settingsState.settings.showAuthorship);
   },
   "toggle-left-panel": (e) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -1123,7 +1143,12 @@ const tutorial = createTutorial(
       {editor}
       ydoc={activeTab?.ydoc ?? null}
       showAuthorship={settingsState.settings.showAuthorship}
-      onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
+      showComments={settingsState.settings.showComments}
+      showHighlights={settingsState.settings.showHighlights}
+      showNotes={settingsState.settings.showNotes}
+      decorationsMuted={settingsState.settings.decorationsMuted}
+      onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
+      onOpenSettings={toggleSettings}
     />
 
     <!-- Single persistent container — editor column is always rendered in the same

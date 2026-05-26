@@ -101,7 +101,14 @@ export const Y_MAP_READ_ONLY = "readOnly";
 export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
-export const ANNOTATION_DECORATIONS_TOGGLE_KEY = "tandem:showAnnotationDecorations";
+/**
+ * Per-type annotation decoration visibility, mirrored from settings so the
+ * ProseMirror plugin can read it at init before any Svelte effect runs.
+ * Value is `JSON.stringify({ comment, highlight, note })` carrying the
+ * *effective* booleans (master mute already folded in). Replaces the v8-era
+ * single `tandem:showAnnotationDecorations` flag (#596 → 1.13 per-type split).
+ */
+export const DECORATION_VISIBILITY_KEY = "tandem:decorationVisibility";
 
 export const RECENT_FILES_KEY = "tandem:recentFiles";
 export const RECENT_FILES_CAP = 20;

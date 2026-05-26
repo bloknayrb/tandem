@@ -348,4 +348,46 @@ describe("loadSettings — migration chain", () => {
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
+
+  // v8→v9 (1.13): split the single showAnnotationDecorations into per-type
+  // showComments / showHighlights / showNotes + a decorationsMuted overlay.
+  // The old flag was a persistent "all marks off" preference, so it maps onto
+  // all three per-type flags by intent (mute starts off). Equivalence classes
+  // on the old flag: false (all off), true (all on), absent (default on).
+  it.each([
+    { why: "old=false → all three per-type flags off", old: false, expected: false },
+    { why: "old=true → all three per-type flags on", old: true, expected: true },
+  ])("v8→v9: $why", ({ old, expected }) => {
+    writeRaw({ schemaVersion: 8, showAnnotationDecorations: old, theme: "dark" });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.showComments).toBe(expected);
+    expect(s.showHighlights).toBe(expected);
+    expect(s.showNotes).toBe(expected);
+    // Mute is transient — never derived from the old persistent flag.
+    expect(s.decorationsMuted).toBe(false);
+    // The retired field name must not survive the split.
+    expect(s.showAnnotationDecorations).toBeUndefined();
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it("v8→v9: old flag absent → per-type flags default on", () => {
+    writeRaw({ schemaVersion: 8, theme: "warm" });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.showComments).toBe(true);
+    expect(s.showHighlights).toBe(true);
+    expect(s.showNotes).toBe(true);
+    expect(s.decorationsMuted).toBe(false);
+  });
+
+  it("forward-compat strips showAnnotationDecorations via REMOVED_FIELDS", () => {
+    // A future-blob carrying the retired field must not leak it through the
+    // forward-compat passthrough into a schema that re-uses the name.
+    writeRaw({ schemaVersion: 99, showAnnotationDecorations: false });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s._readOnly).toBe(true);
+    expect(s.showAnnotationDecorations).toBeUndefined();
+  });
 });

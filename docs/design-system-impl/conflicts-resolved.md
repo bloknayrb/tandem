@@ -35,11 +35,14 @@ Conventions used below:
 - **Why:** Wave 9 (#745) shipped narrow-viewport hamburger; #659 added the Models tab with wizard sub-flows; the tab registry contract is consumed by 5+ tab components. Bundle's `Settings.svelte` (197 lines, 8 sections) is a single non-responsive layout that drops both the hamburger and the Models wizard scaffolding.
 - **Sub-PR constraint:** Responsive shell + tab registry contract are frozen. Visual updates only to tab content and the section list. Models tab wizard sub-flows untouched in this PR.
 
-## #5 — Selection Mini-Toolbar (Sub-PR 1.11)
+## #5 — Selection surface + formatting bar (Sub-PRs: Decorations → Selection)
 
-- **Resolution:** Keep the production audience-first popup. Layer the bundle's formatting controls into a secondary affordance.
-- **Why:** ADR-027's audience-first model ("Note to self ⏎ vs Send to Claude ⌘⏎") is structurally central to Tandem's annotation system. Bundle's `A8 - Selection Mini-Toolbar.html` is a formatting-focused toolbar with no audience awareness. Replacement regresses ADR-027.
-- **Sub-PR constraint:** Audience popup is primary; formatting controls are secondary (collapsed by default, expandable). Sub-PR must add an explicit assertion that the audience-first popup is the default entry point. `data-testid="popup-*"` selectors stay verbatim.
+> **Updated 2026-05-25** with Bryan's explicit sign-off — supersedes the original "secondary, collapsed-by-default formatting controls" resolution. Additive to Conflict #2 (does **not** override the floating-pill visual port).
+> **Further updated 2026-05-26** (Bryan): the Decorations split button lives in the **formatting bar**, not the title bar — see [Applied Overrides → Sub-PR 1.13 Decorations placement](#sub-pr-113-decorations-control--placed-in-the-formatting-bar-not-the-title-bar). The clauses below reflect the current decision.
+
+- **Resolution:** The selection popup is **always the full stacked surface** — a format pill (B/I/S/code/link · H/lists/quote/codeblock) over an annotate pill (highlight swatches + an **Annotate** button → anchored note popover) — and it mirrors the **full** formatting-bar control set (including the Decorations split button) even while the bar is visible. The floating formatting bar ported under Conflict #2 is **retained but becomes optional/hideable** via a swap control, governed by a new `formattingBarVisible` setting (default `true`). Decoration display toggles (authorship + per-annotation-type) consolidate into a **Decorations split button in the formatting bar** (eye = mute/restore, caret = per-type options), subsuming the standalone authorship toggle added in sub-PR 1.2.
+- **Why:** ADR-027's audience-first model — **Note to self `⏎` vs Send to Claude `⌘⏎`** — stays structurally primary, and the Annotate popover is the default annotation entry point. Bundle's `A8 - Selection Mini-Toolbar.html` is a formatting-only toolbar with no audience awareness, so it is layered in as the format pill rather than replacing the popup. Putting Decorations in the formatting bar is safe even though the bar is hideable: because the selection popup mirrors the full bar control set, the controls remain reachable when the bar is hidden — the popup is the mirror, so no separate title-bar home is needed.
+- **Sub-PR constraint:** Audience-first popup is primary and is the default entry point (sub-PR asserts this). `data-testid="popup-*"` selectors stay verbatim. The per-type decoration split (`showComments` / `showHighlights` / `showNotes`) is **display-only** — it never affects ADR-027 (notes are still never read by Claude; it only hides the user's own marks in their own view). No parallel shadow scale (Conflict #2). Ships as two PRs: **Decorations control first**, then **Selection surface + optional bar**.
 
 ## #6 — Token Reconciliation (Phase 0c, enforced across all sub-PRs)
 
@@ -81,6 +84,13 @@ This is intentionally heavyweight — the default is "follow the locked resoluti
 ---
 
 ## Applied Overrides
+
+### Sub-PR 1.13 (Decorations control) — placed in the formatting bar, not the title bar
+
+- **What changed:** Conflict #5 (as updated 2026-05-25) located the Decorations split button in the **title bar**, reasoning that authorship needed a non-hideable home once the formatting bar became optional. On 2026-05-26 Bryan directed it into the **formatting bar** instead, and confirmed the standalone authorship toggle (`formatbar-authorship-toggle`, added in 1.2) is **subsumed** into the Decorations dropdown's authorship row.
+- **Why this is consistent, not a regression of the hideable-bar feature:** the same Conflict #5 update already specifies that the selection popup mirrors the **full** formatting-bar control set even when the bar is visible (sub-PR 1.11's D1). So when the bar is hidden, the Decorations control is still reachable via the popup — the popup is the mirror, which removes the original reason for a title-bar home. The hideable-bar feature (1.11's D3) survives unchanged.
+- **Scope guardrails still hold:** display-only; ADR-027 untouched (notes never read by Claude); no `src/server/` changes; all `decorations-*` testids preserved (only the now-redundant `formatbar-authorship-toggle` is removed, its E2E coverage relocated to assert the Decorations control). The control is mounted outside the bar's `overflow:hidden` track so its dropdown is never clipped.
+- **Downstream:** sub-PR 1.11's plan (`docs/plans/2026-05-25-1.11-selection-surface.md`) D1 now includes Decorations in the popup mirror, and D4 changes from "remove authorship from the bar" to "authorship is already subsumed into the bar's Decorations control" (no separate removal step).
 
 ### Sub-PR 1.9 (NewTabMenu) — elevated "clean port" → full feature rebuild
 
