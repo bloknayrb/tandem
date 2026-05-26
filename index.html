@@ -89,6 +89,15 @@
         --tandem-author-claude-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, var(--tandem-surface));
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* File-type pip colors for the new-tab launcher recents list. These are
+           6px decorative dots (non-text → WCAG text-contrast does not gate).
+           .md/.docx reuse the author tokens; .txt/.html get their own identity
+           so they don't read as authorship. Light seeds are taken verbatim from
+           the Claude Design a7 bundle; dark variants below derive from these by
+           applying the same light→dark lightness lift the author-user token uses
+           (+0.17 L, -0.01 C, hue fixed). */
+        --tandem-filetype-txt: oklch(0.62 0.04 280);
+        --tandem-filetype-html: oklch(0.55 0.14 150);
         --tandem-success: oklch(0.55 0.14 150);
         --tandem-success-fg: #ffffff;
         --tandem-success-fg-strong: #166534;
@@ -404,6 +413,11 @@
         --tandem-author-claude-bg: #4d2419;
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* Dark file-type pips — light seeds lifted by the author-user light→dark
+           delta (+0.17 L, -0.01 C, hue fixed) so they stay legible on the dark
+           recents surface. See the light :root block for the rationale. */
+        --tandem-filetype-txt: oklch(0.79 0.03 280);
+        --tandem-filetype-html: oklch(0.72 0.13 150);
         --tandem-success: #22c55e;
         --tandem-success-fg: #0f172a;
         --tandem-success-fg-strong: #bbf7d0;

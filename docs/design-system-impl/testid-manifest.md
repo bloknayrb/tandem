@@ -80,6 +80,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `open-file-btn`, `file-open-{dialog,submit,error}`, `file-path-input`,
   `file-upload-zone`, `recent-files-list`, `recent-file-{*}`,
   `clear-recent-files`
+- New-tab launcher (a7, sub-PR 1.9b): `new-tab-search`, `new-tab-recent-{*}`,
+  `new-tab-browse`, `new-tab-reopen-closed`, `new-tab-empty`, `new-tab-no-match`
+  (the primary action keeps `palette-item-new-scratchpad`)
 
 ### Status bar
 - `status-word-count`, `save-indicator`, `user-name-input`, `sb-held`
@@ -189,6 +192,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Toasts & notifications
 - `toast-container`, `toast-{*}`, `toast-count-{*}`, `toast-dismiss-{*}`
+
+### Activity center (1.10)
+- `activity-pill`, `activity-tray`, `activity-empty`, `activity-clear-all`
+- `activity-row-{*}`, `activity-dismiss-{*}`, `activity-action-{*}`
 
 ### Apply & collapsible primitives
 - `apply-changes-btn`
