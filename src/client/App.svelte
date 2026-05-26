@@ -48,7 +48,7 @@ import {
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
-import { createClosedTabStack } from "./hooks/useClosedTabStack.js";
+import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
@@ -1363,6 +1363,8 @@ const tutorial = createTutorial(
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
+    closedTabTop={closedTabStack.top}
+    onReopenClosed={reopenClosedTab}
   />
 {/snippet}
 

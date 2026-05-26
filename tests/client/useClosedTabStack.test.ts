@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createClosedTabStack } from "../../src/client/hooks/useClosedTabStack.js";
+import { createClosedTabStack } from "../../src/client/hooks/useClosedTabStack.svelte.js";
 
 const rec = (filePath: string, closedAt = Date.now()) => ({ filePath, closedAt });
 
