@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Markdown save no longer leaves `\@` escape noise in non-email prose (#850)** — the serializer's #605 un-escape chain now conditionally reverses `\@`→`@` in positions that cannot re-form a GFM email autolink-literal (e.g. `@`-handles, `@` with no host, numeric-only TLDs), while keeping the escape where a `local@domain`-shaped host follows, for canonical output consistent with how `\[`/`\_` are handled. The host guard is deliberately conservative — verified zero false-negatives against the GFM autolink boundary, including the leading-dot host `user@.com`. This is an escape-noise cleanup, not a structural-safety fix: CommonMark un-escapes `\@`→`@` at parse time, so an email-shaped `@` autolinks on the next load regardless of the escape. Follow-up to PR #849.
+
 ### Changed
 
 - **Audience & monetization direction recorded (ADR-040)** — documentation now reflects the decided product direction: Tandem targets **individuals** (not institutions), the moat is the **same-canvas / no-copy-paste review experience** backed by **persistent, queryable annotations + the .docx review-record loop**, and monetization is **free during public beta → a one-time paid license at v1.0** with **offline signed-license activation**. Existing beta users will be grandfathered with a free license. Updated `docs/decisions.md` (new ADR-040; ADR-039 reserved for the Agent SDK adapter), `README.md`, `docs/positioning.md`, `docs/roadmap.md` (#394), `docs/security.md`, `docs/workflows.md`, and `docs/user-guide.md`. No code changes — the in-app license-verification, trial gate, and license-checked updater are v1.0 engineering work tracked separately.
