@@ -440,10 +440,7 @@ wireActionDeps({
     if (cur && cur.author !== "user") review.handleDismiss(cur.id);
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
-  toggleAuthorship: () =>
-    settingsState.updateSettings({
-      showAuthorship: !settingsState.settings.showAuthorship,
-    }),
+  toggleAuthorship: () => setAuthorshipVisible(!settingsState.settings.showAuthorship),
   saveAs: async () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
     // Save-As is a PROMOTION path — only offer it for ephemeral upload://
@@ -480,6 +477,17 @@ wireActionDeps({
     });
   },
 });
+
+// Toggle authorship visibility, auto-unmuting in one updateSettings call when
+// the master overlay is on — same coherence rule as the per-type Decorations
+// rows, so editing authorship from ANY surface (formatting bar, Ctrl+Alt+A,
+// command palette) while muted is never an invisible no-op (1.13).
+function setAuthorshipVisible(visible: boolean): void {
+  settingsState.updateSettings({
+    showAuthorship: visible,
+    ...(settingsState.settings.decorationsMuted ? { decorationsMuted: false } : {}),
+  });
+}
 
 // The authorship plugin reads its initial visibility from localStorage at
 // construction time, so dispatch only on subsequent changes — first-run
@@ -931,9 +939,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "toggle-authorship": (e) => {
     // Works even when focus is in a form input (global UI preference).
     e.preventDefault();
-    settingsState.updateSettings({
-      showAuthorship: !settingsState.settings.showAuthorship,
-    });
+    setAuthorshipVisible(!settingsState.settings.showAuthorship);
   },
   "toggle-left-panel": (e) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -1123,7 +1129,7 @@ const tutorial = createTutorial(
       {editor}
       ydoc={activeTab?.ydoc ?? null}
       showAuthorship={settingsState.settings.showAuthorship}
-      onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
+      onAuthorshipChange={(visible) => setAuthorshipVisible(visible)}
     />
 
     <!-- Single persistent container — editor column is always rendered in the same
