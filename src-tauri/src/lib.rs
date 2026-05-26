@@ -2504,19 +2504,34 @@ mod classify_opened_url_tests {
         );
     }
 
-    /// A `cannot-be-a-base` `file:` URL (no `//` authority, opaque path) fails
-    /// `to_file_path()` on every platform — the `url` crate rejects it before
-    /// any OS-specific path handling. Passes the scheme gate (scheme is
-    /// `file`) and the host gate (no host), so it reaches the conversion step.
+    /// `file:foo` is NOT cannot-be-a-base: the `file:` scheme is special, so
+    /// the `url` crate normalizes it to `file:///foo` (empty host, absolute
+    /// path `/foo`). It passes the scheme gate (`file`) and the host gate (no
+    /// host), so it reaches `to_file_path()` -- whose result is genuinely
+    /// platform-dependent, and is the *only* way `ConversionFailed` is
+    /// reachable once those gates pass:
+    ///   - Windows rejects the driveless path `/foo` (needs a drive letter or
+    ///     UNC root) -> `Err(ConversionFailed)`.
+    ///   - Unix accepts `/foo` as an absolute path -> `Ok("/foo")`.
+    /// CI runs both arms (ubuntu + windows), so each is exercised.
     #[test]
-    fn cannot_be_a_base_file_url_is_conversion_failed() {
-        let url = Url::parse("file:foo").expect("valid (opaque) file URL");
+    fn empty_host_file_url_classification_is_platform_dependent() {
+        let url = Url::parse("file:foo").expect("valid file URL");
         assert_eq!(url.scheme(), "file", "scheme gate must pass");
         assert_eq!(url.host_str(), None, "host gate must pass");
+        assert!(!url.cannot_be_a_base(), "file: is a special base scheme");
+        let got = classify_opened_url(&url);
+        #[cfg(windows)]
         assert_eq!(
-            classify_opened_url(&url),
+            got,
             Err(OpenedUrlRejection::ConversionFailed),
-            "an opaque cannot-be-a-base file URL has no convertible path"
+            "Windows cannot convert the driveless path /foo to a file path"
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            got,
+            Ok(PathBuf::from("/foo")),
+            "Unix accepts /foo as an absolute path"
         );
     }
 }
