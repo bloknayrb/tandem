@@ -1,7 +1,6 @@
 accent-hue-slider
 accept-btn-{*}
 annotation-card-{*}
-annotation-decorations-toggle
 annotation-import-byline-{*}
 annotation-list-scroll-container
 annotation-patterns-toggle
@@ -73,6 +72,14 @@ cowork-vethernet-cidr
 cowork-workspace-report-{*}-{*}
 cowork-workspace-row-{*}-{*}
 cowork-workspace-table
+decorations-menu
+decorations-menu-caret
+decorations-mute-toggle
+decorations-row-authorship
+decorations-row-comments
+decorations-row-highlights
+decorations-row-notes
+decorations-settings-link
 default-mode-solo-btn
 default-mode-tandem-btn
 default-tab-annotations-btn

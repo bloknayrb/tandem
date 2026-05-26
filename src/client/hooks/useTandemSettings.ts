@@ -103,8 +103,17 @@ export interface TandemSettings {
   holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
-  // #596: when false, suppresses inline annotation marks in the editor; side-panel cards stay.
-  showAnnotationDecorations: boolean;
+  // #596 → 1.13: per-annotation-type display toggles (split from the old single
+  // showAnnotationDecorations). When false, suppresses that type's inline marks
+  // in the editor; side-panel cards stay. Display-only — `showNotes:false` hides
+  // the user's own note marks in their own view but never affects ADR-027.
+  showComments: boolean;
+  showHighlights: boolean;
+  showNotes: boolean;
+  // 1.13: transient master "mute all decorations" overlay (clean reading view).
+  // Suppresses all decoration rendering without clobbering the per-type prefs,
+  // so restoring returns exactly the prior set. Editing a per-type row auto-unmutes.
+  decorationsMuted: boolean;
   // #659: AI provider registry. API keys live in the OS keychain
   // (`tandem-models` service) via `POST /api/models/secrets/:ref`; the
   // entries here only carry the opaque `apiKeyRef`.
@@ -141,7 +150,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 8,
+  schemaVersion: 9,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -162,7 +171,10 @@ const DEFAULTS: TandemSettings = {
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
   marginView: false,
-  showAnnotationDecorations: true,
+  showComments: true,
+  showHighlights: true,
+  showNotes: true,
+  decorationsMuted: false,
   models: [],
   defaultModelId: null,
 };
@@ -280,8 +292,14 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  * v7→v8: introduce `showAnnotationDecorations: true` (#596). Default
  *   preserves prior visual behavior; users opt in to suppress inline
  *   annotation marks in the editor.
+ * v8→v9 (1.13): split the single `showAnnotationDecorations` into per-type
+ *   `showComments` / `showHighlights` / `showNotes` + a transient
+ *   `decorationsMuted` master overlay. The old flag was a persistent "all
+ *   marks off" preference, so it maps onto all three per-type flags by
+ *   intent (mute stays off). This migration sets values (derives three
+ *   fields from one) rather than being a pure version bump.
  */
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -374,8 +392,10 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
         ? parsed.holdAnnotationsWhileOffline
         : DEFAULTS.holdAnnotationsWhileOffline,
     marginView: parsed.marginView === true,
-    showAnnotationDecorations:
-      parsed.showAnnotationDecorations === false ? false : DEFAULTS.showAnnotationDecorations,
+    showComments: parsed.showComments === false ? false : DEFAULTS.showComments,
+    showHighlights: parsed.showHighlights === false ? false : DEFAULTS.showHighlights,
+    showNotes: parsed.showNotes === false ? false : DEFAULTS.showNotes,
+    decorationsMuted: parsed.decorationsMuted === true,
     models: parseModels(parsed.models),
     defaultModelId:
       typeof parsed.defaultModelId === "string" && parsed.defaultModelId.length > 0
@@ -473,6 +493,24 @@ export function loadSettings(): TandemSettings {
         // the actual coercion on a blob that already carries the field.
         parsed = { ...parsed, schemaVersion: 8 };
       }
+      if (parsed.schemaVersion === 8) {
+        // v8→v9: split the single `showAnnotationDecorations` into per-type
+        // flags. The old flag meant "all marks off" (a persistent preference,
+        // not a transient mute), so map `false` onto all three per-type flags
+        // by intent; mute starts off. Sets values because it derives three
+        // fields from one — normalizeKnownFields can't infer the split.
+        const allOff = parsed.showAnnotationDecorations === false;
+        const next: Record<string, unknown> = {
+          ...parsed,
+          showComments: allOff ? false : true,
+          showHighlights: allOff ? false : true,
+          showNotes: allOff ? false : true,
+          decorationsMuted: false,
+          schemaVersion: 9,
+        };
+        delete next.showAnnotationDecorations;
+        parsed = next;
+      }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
       // is the contract `createTandemSettings.updateSettings` checks.
@@ -506,7 +544,12 @@ export function loadSettings(): TandemSettings {
         // One-way ratchet: removing an entry from this set requires bumping
         // CURRENT_SCHEMA_VERSION such that no older client ever observes
         // the resurrected field name on a write-through round-trip.
-        const REMOVED_FIELDS = new Set(["leftRailTabs", "rightRailTabs", "showIntegrationWizard"]);
+        const REMOVED_FIELDS = new Set([
+          "leftRailTabs",
+          "rightRailTabs",
+          "showIntegrationWizard",
+          "showAnnotationDecorations",
+        ]);
         const futureFields: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(parsed)) {
           if (!knownKeys.has(k) && k !== "_readOnly" && !REMOVED_FIELDS.has(k)) {

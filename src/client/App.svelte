@@ -485,11 +485,14 @@ wireActionDeps({
 // construction time, so dispatch only on subsequent changes — first-run
 // dispatch was the path that produced an effect-depth loop under prod
 // scheduling (transaction → tick → effect rerun → dispatch …).
+// Effective visibility folds in the master `decorationsMuted` overlay (1.13);
+// reading settings inside the effect body keeps it reactive (NOT a frozen const).
 let lastDispatchedAuthorship: boolean | null = null;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  const visible = settingsState.settings.showAuthorship;
+  const s = settingsState.settings;
+  const visible = !s.decorationsMuted && s.showAuthorship;
   if (lastDispatchedAuthorship === visible) return;
   const firstRun = lastDispatchedAuthorship === null;
   lastDispatchedAuthorship = visible;
@@ -500,15 +503,25 @@ $effect(() => {
   });
 });
 
-// #596: mirrors the authorship toggle pattern; plugin reads localStorage at init, this handles flips.
-let lastDispatchedDecorations: boolean | null = null;
+// #596 → 1.13: per-type decoration visibility. Plugin reads localStorage at
+// init; this handles flips. Effective visibility folds in `decorationsMuted`.
+// The dedupe guard uses a positional encoding (NOT JSON.stringify, which would
+// silently break on a later key reorder/spread → missed or redundant dispatch).
+let lastDispatchedDecorations: string | null = null;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  const visible = settingsState.settings.showAnnotationDecorations;
-  if (lastDispatchedDecorations === visible) return;
+  const s = settingsState.settings;
+  const muted = s.decorationsMuted;
+  const visible = {
+    comment: !muted && s.showComments,
+    highlight: !muted && s.showHighlights,
+    note: !muted && s.showNotes,
+  };
+  const encoded = `${visible.comment ? 1 : 0}${visible.highlight ? 1 : 0}${visible.note ? 1 : 0}`;
+  if (lastDispatchedDecorations === encoded) return;
   const firstRun = lastDispatchedDecorations === null;
-  lastDispatchedDecorations = visible;
+  lastDispatchedDecorations = encoded;
   if (firstRun) return;
   untrack(() => {
     const tr = ed.state.tr.setMeta(annotationPluginKey, {
@@ -1058,6 +1071,12 @@ const tutorial = createTutorial(
     updateAvailable={updateAvailable.showDot}
     defaultModelLabel={defaultModelLabel}
     onOpenModelsSettings={openModelsSettings}
+    showAuthorship={settingsState.settings.showAuthorship}
+    showComments={settingsState.settings.showComments}
+    showHighlights={settingsState.settings.showHighlights}
+    showNotes={settingsState.settings.showNotes}
+    decorationsMuted={settingsState.settings.decorationsMuted}
+    onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />

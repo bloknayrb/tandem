@@ -16,6 +16,15 @@ let { settings, onUpdate }: Props = $props();
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 
+// Decorations mirror group (1.13): [settings field, testid, label]. Mirrors the
+// title-bar Decorations control; editing any row auto-unmutes the master overlay.
+const DECORATION_ROWS = [
+  ["showAuthorship", "appearance-show-authorship", "Authorship colors"],
+  ["showComments", "appearance-show-comments", "Comments"],
+  ["showHighlights", "appearance-show-highlights", "Highlights"],
+  ["showNotes", "appearance-show-notes", "Notes (private)"],
+] as const;
+
 function cardStyle(selected: boolean, disabled?: boolean): string {
   return [
     "flex: 1;",
@@ -220,26 +229,33 @@ const densityRg = createRadioGroup<Density>(
   </div>
 </div>
 
-<!-- Annotation Decorations (#596) -->
+<!-- Decorations (#596 → 1.13: per-type display toggles, mirrored from the
+     title-bar Decorations control) -->
 <div>
-  <label
-    data-testid="annotation-decorations-toggle"
-    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
-  >
-    <input
-      type="checkbox"
-      checked={settings.showAnnotationDecorations}
-      onchange={(e) =>
-        onUpdate({ showAnnotationDecorations: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent);"
-    />
-    <span>Show annotation marks in editor</span>
-  </label>
+  <div style={sectionLabelStyle}>Decorations</div>
+  {#each DECORATION_ROWS as [field, testid, label] (field)}
+    <label
+      data-testid={testid}
+      style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+    >
+      <input
+        type="checkbox"
+        checked={settings[field]}
+        onchange={(e) =>
+          onUpdate({
+            [field]: (e.target as HTMLInputElement).checked,
+            ...(settings.decorationsMuted ? { decorationsMuted: false } : {}),
+          })}
+        style="accent-color: var(--tandem-accent);"
+      />
+      <span>{label}</span>
+    </label>
+  {/each}
   <div
     style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);"
   >
-    Turn off to hide inline highlight, note, comment, and suggestion marks in the editor.
-    Annotation cards in the side panel stay visible.
+    Turn a type off to hide its inline marks in the editor. Annotation cards in the
+    side panel stay visible. Display-only — hiding Notes never affects what Claude reads.
   </div>
 </div>
 
