@@ -70,6 +70,21 @@ describe("claimedByFixedShortcut", () => {
       chord({ ctrlOrMeta: true, alt: true, code: "Digit7" }),
       "Jump to tab 7",
     ],
+    // Enter exercises keyForChord's `e.key`-derivation defense-in-depth branch.
+    // These chords can't reach claimedByFixedShortcut through either production
+    // caller (isBindableChord rejects Enter/NumpadEnter in both parseCustomShortcuts
+    // and chordFromEvent), but the matcher-oracle still catches them — so if Enter
+    // were ever removed from UNBINDABLE_CODES, accept/dismiss stays protected.
+    [
+      "Ctrl+Enter → accept annotation",
+      chord({ ctrlOrMeta: true, code: "Enter" }),
+      "Accept annotation",
+    ],
+    [
+      "Ctrl+Shift+Enter → dismiss annotation",
+      chord({ ctrlOrMeta: true, shift: true, code: "Enter" }),
+      "Dismiss annotation",
+    ],
   ])("claims %s", (_desc, c, label) => {
     expect(claimedByFixedShortcut(c)).toBe(label);
   });
@@ -189,6 +204,10 @@ describe("parseCustomShortcuts", () => {
 
   it("drops an UNBINDABLE code even with a modifier (Ctrl+Escape)", () => {
     expect(parseCustomShortcuts({ save: chord({ ctrlOrMeta: true, code: "Escape" }) })).toEqual({});
+  });
+
+  it("drops Ctrl+Enter at the isBindableChord gate (so it can't shadow accept/dismiss)", () => {
+    expect(parseCustomShortcuts({ save: chord({ ctrlOrMeta: true, code: "Enter" }) })).toEqual({});
   });
 
   it("dedupes two ids on the same chord, keeping the matcher's override-loop winner", () => {

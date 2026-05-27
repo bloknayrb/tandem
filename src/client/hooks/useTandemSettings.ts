@@ -120,8 +120,11 @@ export interface TandemSettings {
   /**
    * User-remapped keyboard shortcuts (ADR-041). Keyed by
    * `RemappableShortcutId`; the value is the chord that overrides that
-   * action's default. Only remappable ids with well-formed, non-reserved
-   * chords survive `parseCustomShortcuts` on load/merge.
+   * action's default. `parseCustomShortcuts` re-validates on every load/merge,
+   * dropping any entry that isn't a remappable id, isn't a well-formed chord,
+   * isn't bindable, collides with a reserved chord (`RESERVED_CHORDS`) or a
+   * fixed matcher branch (`claimedByFixedShortcut`), or duplicates a
+   * higher-priority id's chord.
    */
   customShortcuts: Record<string, ShortcutChord>;
   /**

@@ -133,8 +133,8 @@ export function matchShortcut(
   // `REMAPPABLE_SHORTCUT_IDS` order), so no two ids can share a chord — which
   // is the real hazard, not "two distinct chords matching one event". With
   // duplicates impossible, this loop's order is deterministic and fires the
-  // same id load-time dedupe kept. A remapped combo short-circuits the entire
-  // legacy chain below.
+  // same id that the load-time dedupe kept. A remapped combo short-circuits the
+  // entire legacy chain below.
   if (overrides && overrides.size > 0) {
     for (const id of REMAPPABLE_SHORTCUT_IDS) {
       const chord = overrides.get(id);

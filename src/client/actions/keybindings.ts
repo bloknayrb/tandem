@@ -130,7 +130,8 @@ export const DEFAULT_BINDINGS: Record<RemappableShortcutId, ShortcutChord> = {
  *     package.json). A Tiptap MAJOR bump requires re-auditing this list. The
  *     Tiptap heading (`Ctrl+Alt+1..6`) and list (`Ctrl+Shift+7/8`) chords are
  *     omitted because the matcher's pick-tab family already claims every
- *     `Ctrl+Digit`, so `claimedByFixedShortcut` covers them.
+ *     `Ctrl+Digit1..9`, so `claimedByFixedShortcut` covers them. (`Ctrl+Digit0`
+ *     is NOT pick-tab — it is reserved separately below as Reset zoom.)
  *
  * Note: `Ctrl+Alt+M` is NOT reserved here — it is the default of the
  * remappable `comment-on-selection`, not a separate editor binding.
@@ -242,10 +243,10 @@ export function chordFromEvent(e: KeyboardEventLikeForChord): ShortcutChord | nu
   return isBindableChord(chord) ? chord : null;
 }
 
-/** Strict equality on all four fields. MUST stay strict: the override-first
- * loop's determinism depends on the override map never holding two ids on the
- * same chord (enforced by `parseCustomShortcuts` dedupe), so a single event
- * matches at most one override. */
+/** Strict equality on all four fields. At-most-one-override-per-event needs
+ * BOTH halves: strict equality here (so one event can't loosely match two
+ * different chords) AND the `parseCustomShortcuts` dedupe (so the override map
+ * never holds two ids on one chord). Neither alone suffices; keep both. */
 export function chordMatches(chord: ShortcutChord, e: KeyboardEventLikeForChord): boolean {
   return (
     chord.ctrlOrMeta === (e.ctrlKey || e.metaKey) &&
