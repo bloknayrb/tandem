@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en" data-theme="warm">
+<head>
+<meta charset="utf-8" />
+<title>Tandem · 1.11 Formatting architecture — decision aid</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../bundle/extracted/colors_and_type.css" />
+<style>
+  body { background: var(--tandem-bg); color: var(--tandem-fg); font-family: var(--tandem-font-sans); font-feature-settings: "cv11","ss01","ss03"; line-height: 1.45; margin: 0; }
+  .page { max-width: 1180px; margin: 0 auto; padding: 40px 32px 110px; }
+
+  .eyebrow { font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tandem-fg-faint); margin-bottom: 6px; }
+  h1 { font-family: var(--tandem-h1-font); font-size: 34px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 10px; }
+  .lede { font-size: 14px; color: var(--tandem-fg-muted); max-width: 78ch; margin: 0 0 8px; }
+  .lede code, .sec-note code, .decision code { font-family: var(--tandem-font-mono); font-size: 12px; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); padding: 1px 5px; border-radius: var(--tandem-r-2); }
+  .hint { font-size: 11.5px; color: var(--tandem-fg-faint); margin-top: 8px; font-style: italic; }
+
+  .controls { display: flex; gap: 8px; align-items: center; margin: 18px 0 30px; }
+  .controls .lbl { font-family: var(--tandem-font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tandem-fg-faint); }
+  .seg { display: inline-flex; background: var(--tandem-surface-sunk); border-radius: 999px; padding: 3px; border: 1px solid var(--tandem-border); }
+  .seg button { height: 26px; padding: 0 14px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 999px; font-size: 12px; font-weight: 500; font-family: inherit; cursor: pointer; }
+  .seg button.on { background: var(--tandem-surface); color: var(--tandem-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.10); }
+
+  .opthead { margin: 40px 0 4px; font-family: var(--tandem-h1-font); font-size: 22px; font-weight: 600; letter-spacing: -0.015em; display: flex; align-items: baseline; gap: 12px; }
+  .optsub { font-size: 13px; color: var(--tandem-fg-muted); max-width: 80ch; margin: 0 0 4px; }
+
+  section { margin-bottom: 30px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--tandem-border); padding-bottom: 8px; }
+  .sec-head h2 { font-family: var(--tandem-h2-font); font-size: 17px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .badge { font-family: var(--tandem-font-mono); font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: var(--tandem-r-pill); white-space: nowrap; }
+  .badge.ship { background: var(--tandem-claude-focus-bg); border: 1px solid var(--tandem-claude-focus-border); color: var(--tandem-author-claude-fg); }
+  .badge.ref { background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); color: var(--tandem-fg-muted); }
+  .badge.rec { background: var(--tandem-accent-bg); border: 1px solid var(--tandem-accent-border); color: var(--tandem-accent-fg-strong); }
+  .sec-note { font-size: 12.5px; color: var(--tandem-fg-muted); margin: 0 0 18px; max-width: 82ch; }
+
+  .stage { position: relative; min-height: 120px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-5); box-shadow: var(--tandem-shadow-1); padding: 28px; display: flex; flex-wrap: wrap; gap: 44px; align-items: flex-start; }
+  .specimen { display: flex; flex-direction: column; gap: 10px; }
+  .specimen .cap { font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--tandem-fg-faint); }
+
+  .pill { background: var(--tandem-surface); border: 1px solid var(--tandem-border); box-shadow: var(--c7-pill-shadow); border-radius: var(--tandem-r-pill); display: inline-flex; flex-direction: column; width: max-content; max-width: 100%; }
+  .row { display: flex; align-items: center; gap: 1px; padding: 4px; flex-wrap: nowrap; }
+  .sep { width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0; }
+
+  .b { height: 26px; min-width: 26px; padding: 0 7px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); font-family: var(--tandem-font-sans); font-size: 12px; font-weight: 500; line-height: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer; transition: background 120ms, color 120ms; }
+  .b:hover { background: var(--tandem-surface-sunk); color: var(--tandem-fg); }
+  .b.on { background: var(--tandem-accent-bg); color: var(--tandem-accent-fg-strong); }
+  .b strong { font-size: 13px; font-weight: 700; }
+  .b em { font-size: 13px; font-style: italic; }
+  .b .strike { font-size: 13px; text-decoration: line-through; }
+  .b.mono { font-family: var(--tandem-font-mono); font-size: 10.5px; letter-spacing: -0.02em; }
+  .b.caret { padding-right: 4px; gap: 2px; }
+  .b .chev { color: var(--tandem-fg-faint); display: inline-grid; place-items: center; }
+  .b .serifH { font-family: var(--tandem-font-serif); font-weight: 600; font-size: 13.5px; }
+
+  .swatches { display: inline-flex; gap: 3px; padding: 0 4px; align-items: center; }
+  .sw { width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); cursor: pointer; padding: 0; }
+  .sw.none { background: var(--tandem-surface); border-color: var(--tandem-border-strong); }
+  .sw.y { background: var(--tandem-highlight-yellow); }
+  .sw.g { background: var(--tandem-highlight-green); }
+  .sw.bl { background: var(--tandem-highlight-blue); }
+  .sw.pk { background: var(--tandem-highlight-pink); }
+
+  .annotate { height: 24px; padding: 0 12px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap; }
+  .coral { height: 24px; padding: 0 14px; border: 1px solid var(--tandem-claude-focus-border); background: var(--tandem-claude-focus-bg); color: var(--tandem-author-claude-fg); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+  .coral .ci { color: var(--tandem-author-claude); }
+
+  .hidden { display: none !important; }
+
+  /* segmented control inside popup */
+  .popseg { display: inline-flex; background: var(--tandem-surface-sunk); border-radius: var(--tandem-r-pill); padding: 2px; gap: 2px; }
+  .popseg button { height: 22px; padding: 0 12px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer; }
+  .popseg button.on { background: var(--tandem-surface); color: var(--tandem-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+
+  .annote-card { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; min-width: 260px; }
+  .annote-card textarea { width: 100%; box-sizing: border-box; min-height: 28px; resize: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); font-size: 12px; padding: 4px 6px; outline: none; font-family: inherit; }
+  .annote-card .acts { display: flex; justify-content: space-between; gap: 6px; }
+  .annote-card .acts button { flex: 1; height: 28px; padding: 0 10px; border-radius: var(--tandem-r-2); font-size: 12px; cursor: pointer; font-family: inherit; }
+  .annote-card .note { border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); font-weight: 500; }
+  .annote-card .cmt { border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); font-weight: 600; }
+
+  /* overflow dropdown */
+  .menu { position: absolute; margin-top: 6px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); box-shadow: var(--tandem-shadow-2); padding: 4px; display: flex; flex-direction: column; gap: 1px; min-width: 150px; z-index: 5; }
+  .menu button { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border: none; background: transparent; color: var(--tandem-fg); border-radius: var(--tandem-r-2); font-size: 12.5px; font-family: inherit; cursor: pointer; text-align: left; }
+  .menu button:hover { background: var(--tandem-surface-sunk); }
+
+  .decision { margin-top: 16px; background: var(--tandem-accent-bg); border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-4); padding: 16px 20px; }
+  .decision h3 { font-family: var(--tandem-h2-font); font-size: 15px; font-weight: 600; margin: 0 0 8px; color: var(--tandem-accent-fg-strong); }
+  .decision ul { margin: 6px 0 0; padding: 0 0 0 18px; font-size: 12.5px; color: var(--tandem-fg); }
+  .decision li { margin: 5px 0; line-height: 1.5; }
+  .decision .rec-line { font-weight: 600; color: var(--tandem-accent-fg-strong); }
+
+  .warn { margin: 14px 0 0; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border-strong); border-left: 3px solid var(--tandem-author-claude); border-radius: var(--tandem-r-3); padding: 12px 16px; font-size: 12.5px; color: var(--tandem-fg); max-width: 82ch; }
+  .warn b { color: var(--tandem-author-claude-fg); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">Sub-PR 1.11 · formatting architecture · decision aid (scratch — not committed)</div>
+  <h1>Where does formatting live?</h1>
+  <p class="lede">
+    Two configurations. <strong>Option 1</strong> keeps the persistent formatting bar and gives the selection popup a
+    minimal role. <strong>Option 2</strong> follows the bundle's actual A8 contract — <em>no permanent format bar; the
+    selection popup is the only formatting surface</em> — so every formatting control collapses into the popup.
+    Option 2 is mocked four ways below, with a recommendation.
+  </p>
+  <p class="hint">Everything is interactive — chevrons, segments, overflow menus, Annotate. Switch themes to check contrast.</p>
+
+  <div class="controls">
+    <span class="lbl">Theme</span>
+    <div class="seg" id="theme-seg">
+      <button data-theme-val="">Light</button>
+      <button data-theme-val="warm" class="on">Warm</button>
+      <button data-theme-val="dark">Dark</button>
+    </div>
+  </div>
+
+  <!-- ════════════════════ OPTION 1 ════════════════════ -->
+  <div class="opthead">Option 1 <span class="badge ref">Keep persistent bar</span></div>
+  <p class="optsub">Persistent formatting bar stays (full control set, always visible). The selection popup stays minimal and audience-first — quick marks + highlight + Annotate, nothing more. Lowest-risk; closest to what ships today.</p>
+
+  <section>
+    <div class="sec-head"><h2>Persistent formatting bar (unchanged)</h2></div>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Always-on bar — full control set</span>
+        <div class="pill">
+          <div class="row">
+            <button class="b" title="Undo">↶</button>
+            <button class="b" title="Redo">↷</button>
+            <span class="sep"></span>
+            <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+            <span class="sep"></span>
+            <button class="b"><strong>B</strong></button>
+            <button class="b"><em>I</em></button>
+            <button class="b"><span class="strike">S</span></button>
+            <button class="b mono">&lt;/&gt;</button>
+            <button class="b">🔗</button>
+            <span class="sep"></span>
+            <button class="b">•≡</button>
+            <button class="b">1≡</button>
+            <button class="b">❝</button>
+            <button class="b">▭</button>
+            <span class="sep"></span>
+            <span class="swatches"><button class="sw y"></button></span>
+            <span class="sep"></span>
+            <button class="b" title="Authorship">◐</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section>
+    <div class="sec-head"><h2>Minimal selection popup</h2></div>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">On selection — audience-first</span>
+        <div class="pill">
+          <div class="row">
+            <button class="b"><strong>B</strong></button>
+            <button class="b"><em>I</em></button>
+            <span class="sep"></span>
+            <span class="swatches"><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            <span class="sep"></span>
+            <button class="annotate">Annotate</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════ OPTION 2 ════════════════════ -->
+  <div class="opthead">Option 2 <span class="badge rec">Popup is the only format surface</span></div>
+  <p class="optsub">No persistent formatting bar. Every formatting control moves into the selection popup. The chrome gets much calmer; the popup gets denser. Four designs follow — the tradeoff between them is how much is shown at rest vs. on demand.</p>
+
+  <div class="warn">
+    <b>The catch — homeless controls.</b> A8 only accounts for selection-scoped formatting. Three controls on today's bar
+    are <em>not</em> selection-scoped: <strong>Undo</strong>, <strong>Redo</strong>, and the <strong>authorship toggle</strong>.
+    A selection-only popup can't host them. Option 2 only works if those move to the <strong>title bar</strong>
+    (undo/redo as a small left cluster; authorship moves back where it lived pre-1.2) — otherwise undo/redo become
+    keyboard-only, a regression for mouse users.
+  </div>
+
+  <section>
+    <div class="sec-head"><h2>Design 2a — A8 two rows, always expanded</h2><span class="badge ref">Bundle-faithful</span></div>
+    <p class="sec-note">The bundle's literal A8 layout, plus the audience action. Everything visible, no hidden state. Heaviest at rest — but honest: the only format surface shows all its tools.</p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Two-row formatting + audience</span>
+        <div class="pill" style="flex-direction:row; align-items:stretch; padding:5px 8px 5px 12px; gap:4px;">
+          <div style="display:grid; grid-template-rows:28px 28px; row-gap:2px;">
+            <div class="row" style="padding:0;">
+              <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+              <span class="sep"></span>
+              <button class="b"><strong>B</strong></button><button class="b"><em>I</em></button>
+              <button class="b"><span class="strike">S</span></button><button class="b mono">&lt;/&gt;</button>
+              <span class="sep"></span><button class="b">🔗</button>
+            </div>
+            <div class="row" style="padding:0;">
+              <button class="b">•≡</button><button class="b">1≡</button>
+              <button class="b">❝</button><button class="b">▭</button>
+              <span class="sep"></span>
+              <span class="swatches"><button class="sw none"></button><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            </div>
+          </div>
+          <span class="sep" style="height:auto; margin:0 2px;"></span>
+          <button class="annotate" style="align-self:stretch; height:auto;">Annotate</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Design 2b — inline marks at rest, block-level on demand</h2><span class="badge rec">Recommended</span></div>
+    <p class="sec-note">Collapsed shows the high-frequency inline marks (B / I / S / code / link), highlight, and Annotate — the chevron reveals block-level controls (heading, lists, quote, rule). Calm common case, full set one click away. Two-click cost only hits the rare block actions, never bold/italic/highlight/comment.</p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Click ⌄ to reveal block-level</span>
+        <div class="pill" id="opt2b">
+          <div class="row">
+            <button class="b"><strong>B</strong></button><button class="b"><em>I</em></button>
+            <button class="b"><span class="strike">S</span></button><button class="b mono">&lt;/&gt;</button>
+            <button class="b">🔗</button>
+            <span class="sep"></span>
+            <span class="swatches"><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            <span class="sep"></span>
+            <button class="annotate">Annotate</button>
+            <button class="b" id="opt2b-toggle" title="Block formatting" style="margin-left:1px;"><span class="chev">⌄</span></button>
+          </div>
+          <div class="row hidden" id="opt2b-more" style="padding-top:0;">
+            <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+            <span class="sep"></span>
+            <button class="b">•≡</button><button class="b">1≡</button>
+            <button class="b">❝</button><button class="b">▭</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Design 2c — segmented: Format / Annotate</h2><span class="badge ref">Alternative</span></div>
+    <p class="sec-note">A segment at the top switches the popup between a full Format view and the Annotate note card. Clean separation, scales to any number of controls — but adds a mode switch, and formatting + commenting are never co-visible.</p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Toggle the segment</span>
+        <div class="pill" id="opt2c" style="min-width:300px;">
+          <div class="row" style="justify-content:center; padding:6px 6px 2px;">
+            <div class="popseg">
+              <button id="opt2c-fmt-tab" class="on">Format</button>
+              <button id="opt2c-ann-tab">Annotate</button>
+            </div>
+          </div>
+          <div id="opt2c-fmt">
+            <div class="row" style="justify-content:center;">
+              <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+              <span class="sep"></span>
+              <button class="b"><strong>B</strong></button><button class="b"><em>I</em></button>
+              <button class="b"><span class="strike">S</span></button><button class="b mono">&lt;/&gt;</button>
+              <button class="b">🔗</button>
+            </div>
+            <div class="row" style="justify-content:center; padding-top:0;">
+              <button class="b">•≡</button><button class="b">1≡</button>
+              <button class="b">❝</button><button class="b">▭</button>
+              <span class="sep"></span>
+              <span class="swatches"><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            </div>
+          </div>
+          <div id="opt2c-ann" class="hidden">
+            <div class="annote-card">
+              <textarea rows="2" placeholder="Write a note or instruction...">Rework this sentence</textarea>
+              <div class="acts"><button class="note">Note to self</button><button class="cmt">Comment</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Design 2d — single row + overflow menu</h2><span class="badge ref">Alternative</span></div>
+    <p class="sec-note">High-frequency controls stay inline; the long tail (lists, quote, rule, code block) collapses behind a "⋯" menu. Narrowest silhouette, but hides discoverable controls behind a click.</p>
+    <div class="stage" style="min-height:160px;">
+      <div class="specimen">
+        <span class="cap">Click ⋯ for the long tail</span>
+        <div class="pill" id="opt2d" style="position:relative;">
+          <div class="row">
+            <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+            <button class="b"><strong>B</strong></button><button class="b"><em>I</em></button>
+            <button class="b"><span class="strike">S</span></button><button class="b mono">&lt;/&gt;</button>
+            <button class="b">🔗</button>
+            <button class="b" id="opt2d-more" title="More">⋯</button>
+            <span class="sep"></span>
+            <span class="swatches"><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            <span class="sep"></span>
+            <button class="annotate">Annotate</button>
+          </div>
+          <div class="menu hidden" id="opt2d-menu">
+            <button>•≡ &nbsp;Bullet list</button>
+            <button>1≡ &nbsp;Numbered list</button>
+            <button>❝ &nbsp;Blockquote</button>
+            <button>▭ &nbsp;Horizontal rule</button>
+            <button>{ } &nbsp;Code block</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════ Recommendation ════════════════════ -->
+  <div class="warn" style="border-left-color: var(--tandem-accent);">
+    <b style="color: var(--tandem-accent-fg-strong);">Scope — Option 2 is not one sub-PR.</b> Option 1 fits inside 1.11 as planned. Option 2 is a 2–3 PR sequence:
+    build the consolidated popup → relocate undo/redo + authorship to the title bar → delete the persistent
+    <code>FormattingBar</code> → retire/rename its testids (<code>formatting-bar</code>, <code>formatbar-authorship-toggle</code>,
+    <code>toolbar-highlight-*</code>, <code>toolbar-link-*</code>) → re-point tutorial anchors → reopen Conflict #2 with an
+    override (1.2 just visually ported the bar that 2 deletes). Bigger payoff, materially bigger job.
+  </div>
+
+  <div class="decision">
+    <h3>Recommendation</h3>
+    <p class="rec-line">If you go Option 2: lean Design 2b, with 2a a genuinely close runner-up — and relocate undo/redo + authorship to the title bar either way.</p>
+    <ul>
+      <li><strong>2b vs 2a is close, not obvious.</strong> The popup is <em>already</em> context-gated (it only appears on selection), so 2a's "everything one click, pill is just taller" is a real, predictable option — the bundle author chose it deliberately. 2b's edge is purely a frequency bet: most selections end in highlight or comment, few in blockquote/rule, so paying a second click only on the rare block actions feels right. If you value predictable muscle-memory over a calm resting state, 2a wins.</li>
+      <li><strong>One wrinkle that favors 2a:</strong> the H⌄ heading dropdown is itself a popover. In 2b it nests <em>inside</em> the chevron-expanded row inside the selection popup — popover-in-popover-in-popup, with fiddly escape / click-outside / focus-return semantics. 2a (and 2c) keep H⌄ at the top level of an always-visible row, one less level of nesting.</li>
+      <li><strong>2b/2a over 2c:</strong> a segment makes formatting <em>and</em> commenting both cost a mode switch. Audience-first means the comment path should be a single visible button.</li>
+      <li><strong>2b/2a over 2d:</strong> overflow menus hide discoverable controls; a labeled expander or a visible second row reads as "more here" better than "⋯".</li>
+      <li><strong>Option 1 is the safe play:</strong> lowest risk, no homeless-control problem, smallest diff, fits 1.11 as-is — but it leaves two formatting surfaces standing.</li>
+    </ul>
+  </div>
+  <div class="decision" style="background:var(--tandem-surface-sunk); border-color:var(--tandem-border);">
+    <h3 style="color:var(--tandem-fg);">What I need from you</h3>
+    <ul style="color:var(--tandem-fg);">
+      <li>Option 1 or Option 2?</li>
+      <li>If Option 2: which design (2a / 2b / 2c / 2d), and OK to move undo/redo + authorship to the title bar?</li>
+      <li>Annotate styling: keep the outlined-blue <strong>Annotate</strong>, or use A8's coral comment treatment? (Coral needs a WCAG re-check under Conflict #6.)</li>
+      <li>Note: Option 2 reopens Conflict #2/#5 (both assumed the persistent bar stays) — I'll need an override note in the PR, which you'd confirm.</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+  const seg = document.getElementById("theme-seg");
+  seg.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-theme-val]");
+    if (!btn) return;
+    seg.querySelectorAll("button").forEach((b) => b.classList.remove("on"));
+    btn.classList.add("on");
+    const val = btn.getAttribute("data-theme-val");
+    if (val) document.documentElement.setAttribute("data-theme", val);
+    else document.documentElement.removeAttribute("data-theme");
+  });
+
+  // 2b expand
+  document.getElementById("opt2b-toggle").addEventListener("click", () => {
+    const more = document.getElementById("opt2b-more");
+    const hidden = more.classList.toggle("hidden");
+    document.querySelector("#opt2b-toggle .chev").textContent = hidden ? "⌄" : "⌃";
+  });
+
+  // 2c segment
+  const cFmtTab = document.getElementById("opt2c-fmt-tab");
+  const cAnnTab = document.getElementById("opt2c-ann-tab");
+  const cFmt = document.getElementById("opt2c-fmt");
+  const cAnn = document.getElementById("opt2c-ann");
+  cFmtTab.addEventListener("click", () => { cFmtTab.classList.add("on"); cAnnTab.classList.remove("on"); cFmt.classList.remove("hidden"); cAnn.classList.add("hidden"); });
+  cAnnTab.addEventListener("click", () => { cAnnTab.classList.add("on"); cFmtTab.classList.remove("on"); cAnn.classList.remove("hidden"); cFmt.classList.add("hidden"); });
+
+  // 2d overflow
+  document.getElementById("opt2d-more").addEventListener("click", () => {
+    document.getElementById("opt2d-menu").classList.toggle("hidden");
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en" data-theme="">
+<head>
+<meta charset="utf-8" />
+<title>Tandem · 1.11 Title bar — undo/redo + Decorations menu</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../bundle/extracted/colors_and_type.css" />
+<style>
+  body { background: var(--tandem-bg); color: var(--tandem-fg); font-family: var(--tandem-font-sans); font-feature-settings: "cv11","ss01","ss03"; line-height: 1.45; margin: 0; }
+  .page { max-width: 1100px; margin: 0 auto; padding: 40px 32px 110px; }
+
+  .eyebrow { font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tandem-fg-faint); margin-bottom: 6px; }
+  h1 { font-family: var(--tandem-h1-font); font-size: 32px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 10px; }
+  .lede { font-size: 14px; color: var(--tandem-fg-muted); max-width: 82ch; margin: 0 0 8px; }
+  .lede code, .sec-note code, .decision code { font-family: var(--tandem-font-mono); font-size: 12px; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); padding: 1px 5px; border-radius: var(--tandem-r-2); }
+
+  .controls { display: flex; gap: 8px; align-items: center; margin: 18px 0 26px; }
+  .controls .lbl { font-family: var(--tandem-font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tandem-fg-faint); }
+  .seg { display: inline-flex; background: var(--tandem-surface-sunk); border-radius: 999px; padding: 3px; border: 1px solid var(--tandem-border); }
+  .seg button { height: 26px; padding: 0 14px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 999px; font-size: 12px; font-weight: 500; font-family: inherit; cursor: pointer; }
+  .seg button.on { background: var(--tandem-surface); color: var(--tandem-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.10); }
+
+  section { margin-bottom: 38px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--tandem-border); padding-bottom: 8px; }
+  .sec-head h2 { font-family: var(--tandem-h2-font); font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .sec-note { font-size: 12.5px; color: var(--tandem-fg-muted); margin: 0 0 18px; max-width: 82ch; }
+
+  /* ── App-window frame: titlebar floats over a faint editor canvas ── */
+  .win { position: relative; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-5); background: var(--tandem-bg); box-shadow: var(--tandem-shadow-2); overflow: visible; min-height: 360px; }
+  .canvas { position: absolute; inset: 64px 0 0; background: var(--tandem-bg); border-top: 1px solid color-mix(in srgb, var(--tandem-border) 60%, transparent); }
+  .canvas .doc { max-width: 540px; margin: 26px auto; font-family: var(--tandem-body-font); font-size: 14px; color: var(--tandem-fg-muted); padding: 0 24px; }
+
+  /* titlebar: transparent 3-cluster floating chrome (matches TitleBar.svelte) */
+  .tb { position: relative; display: flex; align-items: center; padding: 14px 14px 4px; background: transparent; z-index: 3; }
+  .tb-left { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  /* brand: bare 32px logo in a 40px hit box, negative margin to optically align (TitleBar.svelte) */
+  .brand-btn { width: 40px; height: 40px; margin: -8px 0 0 -8px; padding: 0; border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; transform: translateY(-4px); }
+  .brand-btn img { width: 32px; height: 32px; display: block; transition: transform 140ms ease; }
+  .brand-btn:hover img { transform: scale(1.12); }
+  .spacer-fixed { flex: 0 0 12px; }
+
+  /* tabs: soft floating pills (TabItem.svelte) — inactive carry a faint shadow, active = surface + border */
+  .tabs { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; padding: 6px 4px; }
+  .tab { height: 26px; padding: 0 8px 0 12px; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--tandem-r-pill); background: transparent; color: var(--tandem-fg-subtle); font-size: var(--tandem-text-sm, 13px); border: 1px solid transparent; box-shadow: 0 1px 3px rgba(0,0,0,0.08); white-space: nowrap; }
+  .tab.on { background: var(--tandem-surface); color: var(--tandem-fg); border-color: var(--tandem-border); box-shadow: var(--tandem-shadow-1); }
+  .tab .nm { font-weight: 400; }
+  .tab.on .nm { font-weight: 500; }
+  .tab .x { background: none; border: none; cursor: pointer; font-size: 15px; line-height: 1; color: var(--tandem-fg-muted); padding: 0 2px; }
+  .tab-add { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--tandem-r-circle, 50%); background: var(--tandem-surface); border: 1px solid var(--tandem-border); box-shadow: var(--tandem-shadow-2); color: var(--tandem-fg-subtle); font-size: 16px; line-height: 1; cursor: pointer; flex-shrink: 0; margin-left: 8px; }
+  .tab-add:hover { color: var(--tandem-accent); border-color: var(--tandem-accent-border); }
+  .spacer { flex: 1 1 0; }
+
+  .actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 0 8px; transform: translateY(-4px); }
+  /* floating-pill recipe (matches the tab pills + add button) for the new control groups */
+  .fpill { display: inline-flex; align-items: center; gap: 2px; padding: 3px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); box-shadow: var(--tandem-shadow-2); }
+
+  .ib { height: 26px; min-width: 26px; padding: 0 6px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); display: inline-flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer; transition: background 120ms, color 120ms; font: inherit; font-size: 12px; }
+  .ib:hover { background: var(--tandem-surface-sunk); color: var(--tandem-fg); }
+  .ib.on { background: var(--tandem-accent-bg); color: var(--tandem-accent-fg-strong); }
+  .ib svg { width: 16px; height: 16px; display: block; }
+  .authdots circle { stroke: none; }
+
+  /* mode toggle (ModeToggle.svelte): recessed track, raised active pill */
+  .modepill { display: inline-flex; background: var(--tandem-surface-sunk); border-radius: var(--tandem-r-pill); padding: 3px; }
+  .modepill button { padding: 4px 12px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 500; font-family: inherit; line-height: 1; cursor: pointer; }
+  .modepill button.on { background: var(--tandem-surface); color: var(--tandem-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+  .statusdot { width: 8px; height: 8px; border-radius: var(--tandem-r-circle, 50%); background: var(--tandem-author-claude); box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-author-claude) 18%, transparent); flex-shrink: 0; }
+  .modelchip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; margin: 0 4px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); color: var(--tandem-fg-muted); font-size: 11px; font-weight: 500; }
+  .modelchip .d { width: 6px; height: 6px; border-radius: var(--tandem-r-circle, 50%); background: var(--tandem-accent); }
+
+  /* window controls (Tauri): bare, flush to the corner */
+  .wc { display: inline-flex; align-items: center; height: 30px; margin: -14px -14px 0 6px; align-self: flex-start; }
+  .wc button { width: 36px; height: 30px; border: none; background: transparent; color: var(--tandem-fg-muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .wc button:hover { background: color-mix(in srgb, var(--tandem-fg) 6%, transparent); color: var(--tandem-fg); }
+  .wc button.close:hover { background: var(--tandem-error); color: var(--tandem-error-fg); }
+
+  /* decorations split button: eye (toggle all) + caret (open options) */
+  .fpill.split { gap: 0; padding: 2px; }
+  .split .ib { height: 20px; }
+  .split .ib.half-main { border-radius: var(--tandem-r-pill) 4px 4px var(--tandem-r-pill); padding: 0 5px 0 9px; }
+  .split .ib.half-caret { border-radius: 4px var(--tandem-r-pill) var(--tandem-r-pill) 4px; padding: 0 6px; min-width: 20px; }
+  .split .ib.half-caret svg { width: 12px; height: 12px; }
+  .split-div { width: 1px; height: 16px; background: var(--tandem-border); flex-shrink: 0; }
+  .split .ib.half-main.on + .split-div { background: color-mix(in srgb, var(--tandem-accent-fg-strong) 30%, transparent); }
+
+  /* decorations dropdown */
+  .menu-wrap { position: relative; }
+  .menu { position: absolute; top: calc(100% + 8px); right: 0; min-width: 248px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); box-shadow: var(--tandem-shadow-3); padding: var(--tandem-space-1); z-index: 9; }
+  .menu-head { padding: 7px 10px 3px; color: var(--tandem-fg-subtle); font-size: var(--tandem-text-2xs, 10px); text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--tandem-font-mono); }
+  .mi { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: none; background: transparent; color: var(--tandem-fg); font: inherit; font-size: 13px; text-align: left; cursor: pointer; border-radius: var(--tandem-r-2); box-sizing: border-box; }
+  .mi:hover { background: var(--tandem-surface-sunk); }
+  .mi .mi-ic { width: 16px; height: 16px; flex-shrink: 0; color: var(--tandem-fg-muted); display: inline-flex; }
+  .mi .mi-ic svg { width: 16px; height: 16px; }
+  .mi .mi-label { flex: 1; }
+  .mi .chk { width: 17px; height: 17px; border-radius: var(--tandem-r-1); border: 1px solid var(--tandem-border-strong); display: inline-grid; place-items: center; flex-shrink: 0; }
+  .mi.on .chk { background: var(--tandem-accent); border-color: var(--tandem-accent); }
+  .mi .chk svg { width: 12px; height: 12px; color: #fff; opacity: 0; }
+  .mi.on .chk svg { opacity: 1; }
+  .menu-div { height: 1px; background: var(--tandem-border); margin: 4px 6px; }
+  .mi.link { color: var(--tandem-fg-muted); font-size: 12px; justify-content: space-between; }
+  .mi.link kbd { font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-fg-subtle); }
+
+  .decision { margin-top: 16px; background: var(--tandem-accent-bg); border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-4); padding: 16px 20px; }
+  .decision h3 { font-family: var(--tandem-h2-font); font-size: 15px; font-weight: 600; margin: 0 0 8px; color: var(--tandem-accent-fg-strong); }
+  .decision ul { margin: 6px 0 0; padding: 0 0 0 18px; font-size: 12.5px; color: var(--tandem-fg); }
+  .decision li { margin: 5px 0; line-height: 1.5; }
+  .note-box { margin: 14px 0 0; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border-strong); border-left: 3px solid var(--tandem-success); border-radius: var(--tandem-r-3); padding: 12px 16px; font-size: 12.5px; color: var(--tandem-fg); max-width: 84ch; }
+  .note-box b { color: var(--tandem-success-fg-strong); }
+  .legend { font-size: 11.5px; color: var(--tandem-fg-faint); margin-top: 10px; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">Sub-PR 1.11 / Decorations · title-bar Decorations control (scratch — not committed)</div>
+  <h1>Title bar: a Decorations control</h1>
+  <p class="lede">
+    Authorship stops being a lone toggle and becomes one row in a <strong>Decorations</strong> control — a split button:
+    the <strong>eye mutes / restores all decorations</strong> at once (clean reading view ⇄ restore), the
+    <strong>caret opens the per-type options</strong>. Four rows: Authorship colors, Comments, Highlights, Notes.
+    undo / redo stay where they are (formatting bar + <code>Ctrl+Z/Y</code>); a right-click menu is the future home, not 1.11.
+  </p>
+
+  <div class="controls">
+    <span class="lbl">Theme</span>
+    <div class="seg" id="theme-seg">
+      <button data-theme-val="" class="on">Light</button>
+      <button data-theme-val="warm">Warm</button>
+      <button data-theme-val="dark">Dark</button>
+    </div>
+  </div>
+
+  <!-- ════════ Title bar ════════ -->
+  <section>
+    <div class="sec-head"><h2>Title bar — Decorations split button open</h2></div>
+    <p class="sec-note">
+      Same 3-cluster floating chrome as today (brand · tabs · actions · window controls), rebuilt from the shipped
+      <code>TitleBar</code> / <code>TabItem</code> / <code>ModeToggle</code> CSS + the real logo. The only addition is the
+      <strong>Decorations split button</strong> — eye (mute / restore all) + caret (per-type options) — styled as a
+      floating pill so it sits natively beside the mode toggle and model chip.
+    </p>
+    <div class="win">
+      <div class="tb">
+        <div class="tb-left">
+          <button class="brand-btn" aria-label="Tandem menu"><img src="../bundle/extracted/assets/logo.png" width="32" height="32" alt="Tandem" /></button>
+        </div>
+        <div class="spacer-fixed"></div>
+        <div class="tabs">
+          <span class="tab on"><span class="nm">draft.md</span><button class="x" aria-label="Close">×</button></span>
+          <span class="tab"><span class="nm">notes.md</span><button class="x" aria-label="Close">×</button></span>
+          <button class="tab-add" title="Open file" aria-label="Open file">+</button>
+        </div>
+        <div class="spacer"></div>
+
+        <div class="actions">
+          <!-- decorations split button (caret open) -->
+          <div class="fpill menu-wrap split">
+            <button class="ib half-main on" title="Toggle all decorations" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <span class="split-div"></span>
+            <button class="ib half-caret" title="Decoration options" aria-haspopup="menu" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+            <div class="menu" role="menu" aria-label="Decorations">
+              <div class="menu-head">Decorations</div>
+              <button class="mi on" role="menuitemcheckbox" aria-checked="true">
+                <span class="mi-ic"><svg class="authdots" viewBox="0 0 24 24"><circle cx="9.5" cy="12" r="5" fill="var(--tandem-author-user)"/><circle cx="14.5" cy="12" r="5" fill="var(--tandem-author-claude)"/></svg></span>
+                <span class="mi-label">Authorship colors</span>
+                <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+              </button>
+              <button class="mi on" role="menuitemcheckbox" aria-checked="true">
+                <span class="mi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.5 7.5L3 21l1.6-5A8.5 8.5 0 1 1 21 11.5z"/></svg></span>
+                <span class="mi-label">Comments</span>
+                <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+              </button>
+              <button class="mi on" role="menuitemcheckbox" aria-checked="true">
+                <span class="mi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="18" height="6" rx="2" fill="currentColor" opacity="0.25" stroke="none"/><path d="M4 6h16M4 18h11"/></svg></span>
+                <span class="mi-label">Highlights</span>
+                <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+              </button>
+              <button class="mi on" role="menuitemcheckbox" aria-checked="true">
+                <span class="mi-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M8 13h7M8 17h4"/></svg></span>
+                <span class="mi-label">Notes <span style="color:var(--tandem-fg-faint);font-size:11px;">· private</span></span>
+                <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+              </button>
+              <div class="menu-div"></div>
+              <button class="mi link" role="menuitem"><span>Appearance settings…</span><kbd>Ctrl+,</kbd></button>
+            </div>
+          </div>
+
+          <span class="modepill"><button>Solo</button><button class="on">Tandem</button></span>
+          <span class="statusdot" title="AI assistant connected"></span>
+          <span class="modelchip"><span class="d"></span>Opus 4.7</span>
+        </div>
+
+        <div class="wc">
+          <button title="Minimize"><svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg></button>
+          <button title="Maximize"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0H10V10H0V0ZM1 2V9H9V2H1Z" fill="currentColor"/></svg></button>
+          <button class="close" title="Close"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 0L0 1L4 5L0 9L1 10L5 6L9 10L10 9L6 5L10 1L9 0L5 4L1 0Z" fill="currentColor"/></svg></button>
+        </div>
+      </div>
+      <div class="canvas">
+        <div class="doc">Tandem is a real-time, document-first co-authorship tool. You work in the document; Claude works alongside you.</div>
+      </div>
+    </div>
+    <p class="legend">undo / redo are intentionally absent here — they stay on the formatting bar + <code>Ctrl+Z/Y</code> for 1.0, with a future right-click menu as their proper home (Tandem has no editor context menu yet, so that's its own follow-up).</p>
+  </section>
+
+  <div class="decision">
+    <h3>Decorations feature — plan</h3>
+    <ul>
+      <li><strong>Four top-level toggles:</strong> Authorship colors, Comments, Highlights, Notes. <code>showAuthorship</code>
+        already exists; the other three are a per-type split of today's single <code>showAnnotationDecorations</code> (#596).
+        <strong>Claude's focus is dropped</strong> — it only appears in Tandem mode, so the Solo/Tandem toggle already
+        covers it. <strong>Annotation patterns (a11y) stays in Settings</strong>, not the top-level menu.</li>
+      <li><strong>Per-type split.</strong> Today <code>showAnnotationDecorations</code> shows/hides <em>all</em> annotation
+        marks. <code>annotation.ts</code>'s <code>buildDecorations</code> instead filters by annotation type against three
+        flags — <code>showComments</code> (type <code>"comment"</code>, incl. suggested-text comments),
+        <code>showHighlights</code> (<code>"highlight"</code>), <code>showNotes</code> (<code>"note"</code>). Display-only —
+        does <em>not</em> touch ADR-027 (notes are still never read by Claude; this only hides the user's own marks in their view).</li>
+      <li><strong>Consolidation, not invention.</strong> Today authorship lives on the formatbar button and the
+        annotation toggle in Appearance settings. The feature gathers the display toggles into one <strong>Decorations
+        split button</strong> + keeps a mirrored group in Settings → Appearance (canonical home; a11y patterns stay there too).</li>
+      <li><strong>Wiring reuses the established pattern</strong> — each toggle is an <code>$effect</code> that
+        <code>dispatch</code>es <code>setMeta(pluginKey, {type, visible})</code> to its ProseMirror plugin
+        (exactly how authorship + #596 already work in <code>App.svelte</code>).</li>
+      <li><strong>Settings model:</strong> replace <code>showAnnotationDecorations</code> with
+        <code>showComments</code> / <code>showHighlights</code> / <code>showNotes</code> (default <code>true</code>; the
+        migration maps the old single flag onto all three) + a <code>decorationsMuted</code> master flag + a
+        <code>useTandemSettings</code> bump. Client-only — no <code>src/server/</code> changes.</li>
+      <li><strong>Master = mute / restore.</strong> The eye half: clicking when anything is on remembers the current set
+        and hides all decorations (clean reading view); clicking when muted restores exactly that set. Implemented as a
+        <code>decorationsMuted</code> overlay flag that suppresses rendering without clobbering the individual prefs;
+        editing a row in the dropdown auto-unmutes.</li>
+    </ul>
+  </div>
+  <div class="note-box">
+    <b>How this relates to 1.11.</b> 1.11 needed an always-visible home for the authorship toggle once the formatting
+    bar became hideable. Folding authorship into the Decorations control solves that and answers your "make all
+    decorations toggleable" ask in one move. Sequencing: <strong>1.11</strong> = full popup + optional bar + swap/settings
+    (the bar just loses its authorship toggle; undo/redo stay put). <strong>1.13 · Decorations control</strong> = the
+    title-bar split button + the per-type annotation/notes filter split. undo/redo are untouched in both; a right-click
+    menu is a separate later follow-up.
+  </div>
+  <div class="decision" style="background:var(--tandem-surface-sunk); border-color:var(--tandem-border);">
+    <h3 style="color:var(--tandem-fg);">Settled / open</h3>
+    <ul style="color:var(--tandem-fg);">
+      <li><strong>Settled:</strong> transient decorations excluded; Highlights split out; Claude's focus dropped (Solo/Tandem covers it); a11y patterns live in Settings; master = mute/restore; undo/redo stay on the bar (right-click menu later).</li>
+      <li><strong>Open:</strong> does the right-side balance read well now that it's just the Decorations split button + mode toggle + model chip? Or fold Decorations into the brand menu instead?</li>
+      <li><strong>Open (carryover):</strong> selection popover keys — Note <code>⏎</code> / Send to Claude <code>⌘⏎</code>. OK?</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+  const seg = document.getElementById("theme-seg");
+  seg.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-theme-val]");
+    if (!btn) return;
+    seg.querySelectorAll("button").forEach((b) => b.classList.remove("on"));
+    btn.classList.add("on");
+    const val = btn.getAttribute("data-theme-val");
+    if (val) document.documentElement.setAttribute("data-theme", val);
+    else document.documentElement.removeAttribute("data-theme");
+  });
+</script>
+</body>
+</html>
