@@ -15,6 +15,12 @@ interface Props {
   onMouseDown?: (e: MouseEvent) => void;
   onClick?: (e: MouseEvent) => void;
   style?: string;
+  /** For dropdown-trigger buttons: set to "menu" or "dialog" to advertise
+   *  the popup type to assistive technology. */
+  ariaHasPopup?: "menu" | "listbox" | "tree" | "grid" | "dialog";
+  /** For dropdown-trigger buttons: reflects whether the controlled popup
+   *  is currently expanded. Paired with ariaHasPopup. */
+  ariaExpanded?: boolean;
 }
 
 const {
@@ -29,6 +35,8 @@ const {
   onMouseDown,
   onClick,
   style = "",
+  ariaHasPopup,
+  ariaExpanded,
 }: Props = $props();
 
 const computed = $derived.by(() => {
@@ -67,6 +75,8 @@ const fullStyle = $derived(
   {disabled}
   title={titleAttr}
   aria-label={ariaLabelValue}
+  aria-haspopup={ariaHasPopup}
+  aria-expanded={ariaExpanded}
   onmousedown={onMouseDown}
   onclick={onClick}
   style={fullStyle}
