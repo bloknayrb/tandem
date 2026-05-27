@@ -153,6 +153,20 @@ describe("check-semantic-tokens", () => {
       expect(violations).toEqual([]);
     });
 
+    it("flags `#1e1e2e` (D7 onboarding prototype dark stand-in; cluster 3.11 source)", () => {
+      // Added in the 2026-05-27 refreshed-bundle pass: the D7 BrandMenu swatch
+      // mock hardcodes `#1e1e2e` where production uses --tandem-swatch-dark. The
+      // blocklist pass must catch it even outside CSS context.
+      const violations = checkContent(
+        `const darkSwatch = "#1e1e2e";\n`,
+        "src/client/components/OnboardingTutorial.svelte",
+      );
+
+      expect(violations).toEqual([
+        "src/client/components/OnboardingTutorial.svelte:1: #1e1e2e [bundle-blocklist]",
+      ]);
+    });
+
     it("flags two distinct bundle hex values on the same non-CSS line", () => {
       // Position-keyed dedupe (not value-keyed) so both occurrences land.
       const violations = checkContent(

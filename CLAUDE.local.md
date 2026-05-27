@@ -36,7 +36,7 @@ Note on pre-push: full vitest suite occasionally flakes `tests/cli/mcp-stdio.tes
 - `docs/design-system-impl/derived-spec.md` — Phase 3 recipe doc; sub-PRs implement against this
 - `docs/design-system-impl/conflicts-resolved.md` — 9 locked decisions
 - `scripts/design-baselines/capture.spec.ts` — captures 16 scenes; `combine.ts` folds them into one `baselines.html`
-- `scripts/check-semantic-tokens.ts` — current token gate (NOT extended with bundle blocklist; see #799)
+- `scripts/check-semantic-tokens.ts` — token gate, INCLUDING the bundle-color blocklist (`BUNDLE_BLOCKLIST_HEX`); #799 shipped 2026-05-24
 
 ## Commands
 
@@ -65,7 +65,7 @@ Every sub-PR into `feat/design-system-impl` includes:
 ## Follow-ups not blocking sub-PRs
 
 - **#798** Motion language threading — defer until umbrella merges; v1.0 GA gate
-- **#799** Bundle-token CI blocklist — should land before Phase 3 starts (Phase 1-2 are tight enough for doc-review)
+- **#799** Bundle-token CI blocklist — SHIPPED 2026-05-24 (`c38a52c`/`a4c01d9`/`847d3be`); `BUNDLE_BLOCKLIST_HEX` in `check-semantic-tokens.ts`. W0 (2026-05-27) added `#1e1e2e` for cluster 3.11's D7 source.
 
 ## Things that have caught me
 
