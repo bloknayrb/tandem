@@ -39,6 +39,21 @@ async function readOneLine(
 }
 
 /**
+ * Polls `counter()` until it returns >= `n` or `timeoutMs` elapses.
+ * Throws a descriptive error on timeout so CI output names the bottleneck.
+ * Decouples assertions from subprocess startup latency; mirrors the
+ * `waitForPosts` helper inside the per-request-timeout describe block.
+ */
+async function waitForCount(counter: () => number, n: number, timeoutMs = 15_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (counter() >= n) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`Only ${counter()}/${n} items reached threshold within ${timeoutMs}ms`);
+}
+
+/**
  * Read up to `n` newline-delimited JSON-RPC lines from child stdout.
  * Returns as soon as n lines arrive or timeoutMs elapses (in which case
  * it resolves with whatever arrived — callers assert on the count).
@@ -480,12 +495,11 @@ describe("mcp-stdio error synthesis on upstream unavailability", () => {
       child.stdin.write(`${JSON.stringify(makeRequest(101))}\n`);
       child.stdin.write(`${JSON.stringify(makeRequest(102))}\n`);
 
-      // Poll until all three POSTs reach the server (preflight + drain must complete first).
-      for (let i = 0; i < 100; i++) {
-        if (heldResponses.length >= 3) break;
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      expect(heldResponses.length).toBeGreaterThanOrEqual(3);
+      // Poll until all three POSTs reach the server (preflight + drain must
+      // complete first). 15s budget survives heavy CPU load (e.g. concurrent
+      // cargo compile); readLines below uses its own 10s budget, total ~25s
+      // well within the 30s test timeout.
+      await waitForCount(() => heldResponses.length, 3, 15_000);
 
       // Destroy all held responses to trigger forwardToUpstream.catch for each.
       for (const r of heldResponses) r.destroy();

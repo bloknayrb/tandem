@@ -116,6 +116,45 @@ const linkDisabled = $derived.by(() => {
 
 const headingLabel = $derived(activeHeading ? `H${activeHeading}` : "H");
 
+// Hoisted command handlers — prevents event-listener churn on each Tiptap
+// transaction (tick++) that would occur with inline lambda props. Mirrors the
+// $derived pattern in Toolbar.svelte.
+const handleUndo = $derived(withPreventDefault(() => editor?.commands.undo()));
+const handleRedo = $derived(withPreventDefault(() => editor?.commands.redo()));
+const handleBold = $derived(withPreventDefault(() => editor?.chain().focus().toggleBold().run()));
+const handleItalic = $derived(
+  withPreventDefault(() => editor?.chain().focus().toggleItalic().run()),
+);
+const handleStrike = $derived(
+  withPreventDefault(() => editor?.chain().focus().toggleStrike().run()),
+);
+const handleCode = $derived(withPreventDefault(() => editor?.chain().focus().toggleCode().run()));
+const handleBulletList = $derived(
+  withPreventDefault(() => editor?.chain().focus().toggleBulletList().run()),
+);
+const handleOrderedList = $derived(
+  withPreventDefault(() => editor?.chain().focus().toggleOrderedList().run()),
+);
+const handleBlockquote = $derived(
+  withPreventDefault(() => editor?.chain().focus().toggleBlockquote().run()),
+);
+const handleHorizontalRule = $derived(
+  withPreventDefault(() => editor?.chain().focus().setHorizontalRule().run()),
+);
+const handleCodeBlock = $derived(
+  withPreventDefault(() => editor?.chain().focus().toggleCodeBlock().run()),
+);
+
+// Keyboard activation: Enter/Space on a focused button fires `click` with
+// detail === 0. The mouse path uses `mousedown` so the editor selection
+// survives. Pair onMouseDown (mouse) with onClick={onKeyActivate(...)}
+// (keyboard, filtered on detail===0) so both routes work without double-firing.
+function onKeyActivate(handler: (e: MouseEvent) => void) {
+  return (e: MouseEvent) => {
+    if (e.detail === 0) handler(e);
+  };
+}
+
 function handleHeadingToggle(level: HeadingLevel) {
   return (e: MouseEvent) => {
     e.preventDefault();
@@ -160,7 +199,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       ariaLabel="Undo"
       shortcut="Ctrl+Z"
       disabled={!canUndo}
-      onMouseDown={withPreventDefault(() => editor.commands.undo())}
+      onMouseDown={handleUndo}
+      onClick={onKeyActivate(handleUndo)}
       style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
@@ -174,7 +214,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       ariaLabel="Redo"
       shortcut="Ctrl+Shift+Z"
       disabled={!canRedo}
-      onMouseDown={withPreventDefault(() => editor.commands.redo())}
+      onMouseDown={handleRedo}
+      onClick={onKeyActivate(handleRedo)}
       style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
@@ -191,7 +232,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       shortcut="Ctrl+B"
       disabled={isDisabled}
       active={isActiveBold}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBold().run())}
+      onMouseDown={handleBold}
+      onClick={onKeyActivate(handleBold)}
       style="font-weight: 700; min-width: 30px;"
     />
     <ToolbarButton
@@ -199,7 +241,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       shortcut="Ctrl+I"
       disabled={isDisabled}
       active={isActiveItalic}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().toggleItalic().run())}
+      onMouseDown={handleItalic}
+      onClick={onKeyActivate(handleItalic)}
       style="font-style: italic; min-width: 30px;"
     />
     <ToolbarButton
@@ -207,7 +250,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       shortcut="Ctrl+Shift+X"
       disabled={isDisabled}
       active={isActiveStrike}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().toggleStrike().run())}
+      onMouseDown={handleStrike}
+      onClick={onKeyActivate(handleStrike)}
       style="text-decoration: line-through; min-width: 30px;"
     />
     <ToolbarButton
@@ -215,7 +259,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       shortcut="Ctrl+E"
       disabled={isDisabled}
       active={isActiveCode}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().toggleCode().run())}
+      onMouseDown={handleCode}
+      onClick={onKeyActivate(handleCode)}
       style="font-family: monospace; min-width: 30px;"
     />
 
@@ -232,10 +277,16 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
         label={headingLabel}
         disabled={isDisabled}
         active={activeHeading !== null}
+        ariaHasPopup="menu"
+        ariaExpanded={showHeadingMenu}
         onMouseDown={(e: MouseEvent) => {
           e.preventDefault();
           showHeadingMenu = !showHeadingMenu;
         }}
+        onClick={onKeyActivate((e: MouseEvent) => {
+          e.preventDefault();
+          showHeadingMenu = !showHeadingMenu;
+        })}
         style="min-width: 30px;"
       />
       {#if showHeadingMenu}
@@ -248,10 +299,13 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
             gap: 2px; z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-1);"
         >
           {#each HEADING_LEVELS as level (level)}
+            {@const headingHandler = handleHeadingToggle(level)}
             <button
               type="button"
-              role="menuitem"
-              onmousedown={handleHeadingToggle(level)}
+              role="menuitemradio"
+              aria-checked={activeHeading === level}
+              onmousedown={headingHandler}
+              onclick={onKeyActivate(headingHandler)}
                 style="padding: 4px 12px; font-size: 13px; border: none;
                 border-radius: var(--tandem-r-2);
                 background: {activeHeading === level ? 'var(--tandem-accent-bg)' : 'transparent'};
@@ -273,7 +327,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       shortcut="Ctrl+Shift+8"
       disabled={isDisabled}
       active={isActiveBulletList}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBulletList().run())}
+      onMouseDown={handleBulletList}
+      onClick={onKeyActivate(handleBulletList)}
       style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
@@ -292,7 +347,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       shortcut="Ctrl+Shift+7"
       disabled={isDisabled}
       active={isActiveOrderedList}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().toggleOrderedList().run())}
+      onMouseDown={handleOrderedList}
+      onClick={onKeyActivate(handleOrderedList)}
       style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
@@ -311,7 +367,8 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       shortcut="Ctrl+Shift+B"
       disabled={isDisabled}
       active={isActiveBlockquote}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().toggleBlockquote().run())}
+      onMouseDown={handleBlockquote}
+      onClick={onKeyActivate(handleBlockquote)}
       style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
@@ -339,7 +396,10 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
         shortcut="Ctrl+K"
         disabled={linkDisabled}
         active={isActiveLink || showLinkInput}
+        ariaHasPopup="dialog"
+        ariaExpanded={showLinkInput}
         onMouseDown={handleLinkMouseDown}
+        onClick={onKeyActivate(handleLinkMouseDown)}
         style="min-width: 30px; padding: 4px 6px;"
       >
         {#snippet children()}
@@ -375,6 +435,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
             type="button"
             data-testid="toolbar-link-submit"
             onmousedown={(e) => { e.preventDefault(); submitLinkInput(); }}
+            onclick={onKeyActivate((e) => { e.preventDefault(); submitLinkInput(); })}
             style="height: 26px; padding: 0 8px; font-size: 12px; font-weight: 500;
               border: 1px solid var(--tandem-accent-border); background: transparent;
               color: var(--tandem-accent); border-radius: var(--tandem-r-2); cursor: pointer;
@@ -384,6 +445,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
             type="button"
             data-testid="toolbar-link-cancel"
             onmousedown={(e) => { e.preventDefault(); dismissLinkInput(); }}
+            onclick={onKeyActivate((e) => { e.preventDefault(); dismissLinkInput(); })}
             style="height: 26px; padding: 0 8px; font-size: 12px; font-weight: 500;
               border: 1px solid var(--tandem-border); background: transparent;
               color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); cursor: pointer;"
@@ -395,14 +457,16 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       label="—"
       ariaLabel="Horizontal rule"
       disabled={isDisabled}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().setHorizontalRule().run())}
+      onMouseDown={handleHorizontalRule}
+      onClick={onKeyActivate(handleHorizontalRule)}
       style="min-width: 30px;"
     />
     <ToolbarButton
       ariaLabel="Code block"
       disabled={isDisabled}
       active={isActiveCodeBlock}
-      onMouseDown={withPreventDefault(() => editor.chain().focus().toggleCodeBlock().run())}
+      onMouseDown={handleCodeBlock}
+      onClick={onKeyActivate(handleCodeBlock)}
       style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
