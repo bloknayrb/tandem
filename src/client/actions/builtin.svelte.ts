@@ -93,6 +93,38 @@ let inflight = false;
 
 let scratchpadInflight = false;
 
+/**
+ * Debounce (ms) before auto-opening a scratchpad once the empty state is
+ * reached. The window absorbs three transients that must NOT trigger an
+ * auto-open:
+ *   1. Initial connect — `connected` flips true before the server's
+ *      `openDocuments` list has synced, so `tabs` is briefly empty. The
+ *      startup doc (welcome.md / CHANGELOG.md) arrives within this window.
+ *   2. Y.Doc swap (reload-from-disk) — `activeTab` is momentarily null while
+ *      the tab entry is replaced.
+ *   3. Tab-switch churn during reconcile.
+ * It must comfortably exceed the time for the bootstrap `openDocuments`
+ * broadcast to land after `connected` flips.
+ */
+export const SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS = 400;
+
+/**
+ * Pure gate for the App-level auto-open-scratchpad effect (#842). Returns true
+ * only when the user has genuinely reached the empty tab-bar state with a live
+ * server connection — never during the disconnect-debounce window (which fails
+ * the `connected` check) and never with a doc still open.
+ *
+ * Extracted as a pure function so the precedence/timing logic is unit-testable
+ * without standing up a Svelte component or a Hocuspocus provider.
+ */
+export function shouldAutoOpenScratchpad(state: {
+  connected: boolean;
+  tabCount: number;
+  activeTabId: string | null;
+}): boolean {
+  return state.connected && state.tabCount === 0 && state.activeTabId === null;
+}
+
 export async function createScratchpad(): Promise<void> {
   if (scratchpadInflight) return;
   scratchpadInflight = true;
