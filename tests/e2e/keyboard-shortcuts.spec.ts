@@ -11,6 +11,27 @@ import {
 let mcp: McpTestClient;
 let tmpDir: string;
 
+/**
+ * #859: after a keyboard panel toggle, focus is restored to a tabindex="-1"
+ * peek strip / edge-collapse zone purely to preserve tab position. That focus
+ * follows a keydown, so :focus-visible matches — we must suppress the keyboard
+ * focus ring. Assert the active element draws neither an outline ring nor an
+ * inset box-shadow ring (the peek strip's accent ring was an inset shadow).
+ */
+async function expectNoFocusRing(page: import("@playwright/test").Page) {
+  const ring = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return { outlineStyle: cs.outlineStyle, boxShadow: cs.boxShadow };
+  });
+  expect(ring).not.toBeNull();
+  expect(ring!.outlineStyle).toBe("none");
+  // The only ring the peek strip ever drew was `inset 0 0 0 2px <accent>`;
+  // its elevation shadow is non-inset, so any `inset` keyword means a ring.
+  expect(ring!.boxShadow).not.toContain("inset");
+}
+
 test.beforeEach(async () => {
   mcp = new McpTestClient();
   await mcp.connect();
@@ -142,7 +163,9 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await expect(modal.getByText("Previous annotation")).toBeVisible();
   await expect(modal.getByText("Accept focused annotation")).toBeVisible();
   await expect(modal.getByText("Dismiss focused annotation")).toBeVisible();
-  await expect(modal.getByText("Comment on selection (in editor)")).toBeVisible();
+  // "Comment on selection" (Ctrl+Alt+M) became user-remappable (ADR-041) and
+  // has no registry row, so it now lives in the editable Settings → Shortcuts
+  // list rather than the Help catalog.
   await expect(modal.getByText("Heading 1")).toBeVisible();
   await expect(modal.getByText("Heading 6")).toBeVisible();
   await expect(modal.getByText("Select containing block")).toBeVisible();
@@ -241,6 +264,9 @@ test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
   await expect(
     page.getByTestId(visibleAfterFirst ? "panel-edge-collapse-left" : "peek-strip-left"),
   ).toBeFocused();
+  // #859: focus restoration must not leave a lingering keyboard focus ring on
+  // the tabindex="-1" restoration target.
+  await expectNoFocusRing(page);
 
   await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect.poll(async () => leftHandle.count()).toBe(initial);
@@ -248,6 +274,7 @@ test("Alt+Shift+Left toggles the left panel", async ({ page }) => {
   await expect(
     page.getByTestId(visibleAfterSecond ? "panel-edge-collapse-left" : "peek-strip-left"),
   ).toBeFocused();
+  await expectNoFocusRing(page);
 });
 
 test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
@@ -264,6 +291,9 @@ test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
   await expect(
     page.getByTestId(visibleAfterFirst ? "panel-edge-collapse-right" : "peek-strip-right"),
   ).toBeFocused();
+  // #859: focus restoration must not leave a lingering keyboard focus ring on
+  // the tabindex="-1" restoration target.
+  await expectNoFocusRing(page);
 
   await page.keyboard.press("Alt+Shift+ArrowRight");
   await expect.poll(async () => rightHandle.count()).toBe(initial);
@@ -271,6 +301,7 @@ test("Alt+Shift+Right toggles the right panel", async ({ page }) => {
   await expect(
     page.getByTestId(visibleAfterSecond ? "panel-edge-collapse-right" : "peek-strip-right"),
   ).toBeFocused();
+  await expectNoFocusRing(page);
 });
 
 test("Ctrl+Alt+T reopens the most recently closed tab", async ({ page }) => {

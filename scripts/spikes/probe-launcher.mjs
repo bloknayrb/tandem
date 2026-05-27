@@ -4,7 +4,7 @@
 // Simulates what a stand-alone `tandem-launcher` binary (spawned by Claude
 // Code via the MCP `command`/`args` shape) would do:
 //   1. Resolve sidecar path from a pointer file (or --exe override).
-//   2. Spawn the sidecar with TANDEM_AUTH_TOKEN + TANDEM_OPEN_BROWSER=0
+//   2. Spawn the sidecar with TANDEM_AUTH_TOKEN + TANDEM_TAURI_SIDECAR=1
 //      and a minimal allowlisted env (PATH, SystemRoot, HOME, etc.).
 //      NOTE: TANDEM_BIND_HOST is intentionally never set → server binds 127.0.0.1.
 //   3. Race a 20s health-poll of http://127.0.0.1:3479/health against the
@@ -165,7 +165,7 @@ async function main() {
   // exposes parent-process secrets to the sidecar and any grandchildren.
   const env = {
     TANDEM_AUTH_TOKEN: token,
-    TANDEM_OPEN_BROWSER: "0",
+    TANDEM_TAURI_SIDECAR: "1",
   };
   for (const key of [
     "PATH",

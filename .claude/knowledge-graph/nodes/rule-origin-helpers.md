@@ -2,7 +2,7 @@
 id: rule-origin-helpers
 type: rule
 name: Origin-tag every Y.Doc write
-last_verified: 2026-05-18
+last_verified: 2026-05-25
 sources:
   - src/shared/origins.ts
   - .claude/hooks/check-raw-transact.sh
@@ -21,6 +21,6 @@ Raw `doc.transact(...)` should not appear in `src/` — every write must go thro
 - `npm run audit:origins` — static TS-compiler walk; warn-only finding list
 - Test-only synthetic Y.Docs allowed via `transactForTest` (sentinel origin `"test"`)
 
-**Drift note:** `CLAUDE.md` and ADR-031 prose describe this as "pre-commit hook blocks" with a "Biome AST rule." Neither is currently wired — lint-staged runs eslint/biome/check-tokens only. The warn surface is real and effective but stronger language in the docs overstates the guardrail. Flag for separate cleanup.
+**Drift note (resolved 2026-05-25):** `CLAUDE.md`, ADR-031, and the `concept-origin-contract` / `adr-031` KG nodes previously described this as a "pre-commit hook blocks" guardrail with a "Biome AST rule." Neither is wired — lint-staged runs eslint/biome/check-tokens only — so the prose was corrected to match the warn-only reality.
 
 **How to choose:** see the worked-example table in `src/shared/origins.ts` and `adr-031`. Short version: ask "what should happen?" — if Claude initiated it (MCP handler) use `withMcp`; if a file-watcher reload use `withReload`; if startup/seeding/cleanup use `withInternal`; if a user did it in the browser use `withBrowser`; if it's an echo from the file-writer use `withFileSync`.

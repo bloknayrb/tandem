@@ -868,8 +868,14 @@ describe("mcp-stdio per-request timeout", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // Send immediately; preReadyBuffer holds it until httpReady. Poll on
-    // postsReceived instead of a fixed setTimeout(500) — see #687.
+    // Write immediately — the request buffers in preReadyBuffer until httpReady
+    // flips, then forwardToUpstream fires. Poll for the POST (NOT a fixed sleep,
+    // see #687) so the test tolerates subprocess startup latency under concurrent
+    // vitest load, where `--import tsx` startup can far exceed 500ms. The ordering
+    // is load-bearing: the 300ms timer is armed just before http.send, so when
+    // waitForPosts returns (POST received) it has been running only for the
+    // network round-trip — ~290ms still remain, so readOneLine's listener
+    // attaches well before the -32000 is emitted.
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 40, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );

@@ -38,7 +38,8 @@ function handleKey(e: KeyboardEvent) {
   <span class="peek-chevron" aria-hidden="true">
     {side === "left" ? "›" : "‹"}
   </span>
-  <!-- Rotated panel name, revealed on hover/focus once the strip widens.
+  <!-- Rotated panel name, revealed on hover once the strip widens (not on
+       focus, per #859 — restoration focus must stay visually inert).
        Decorative (the button's aria-label is the accessible name); its
        surface-muted background masks the chevron it sits over. -->
   <span class="peek-label" aria-hidden="true">{label}</span>
@@ -83,8 +84,9 @@ function handleKey(e: KeyboardEvent) {
     transition: opacity 160ms ease;
   }
   /* Rotated vertical panel name, centered over the chevron. Hidden at rest;
-     fades in once the strip widens on hover/focus. Its surface-muted
-     background masks the chevron underneath so the two don't visually clash. */
+     fades in once the strip widens on hover. Its surface-muted background
+     masks the chevron underneath so the two don't visually clash. Scoped to
+     :hover only (never :focus-visible) per #859 — see the focus comment below. */
   .peek-label {
     position: absolute;
     top: 50%;
@@ -103,21 +105,27 @@ function handleKey(e: KeyboardEvent) {
     pointer-events: none;
     transition: opacity 140ms ease 60ms;
   }
-  .peek-strip:hover,
-  .peek-strip:focus-visible {
+  .peek-strip:hover {
     width: 28px;
     box-shadow: var(--tandem-shadow-3);
     outline: none;
   }
-  .peek-strip:hover .peek-chevron,
-  .peek-strip:focus-visible .peek-chevron {
+  .peek-strip:hover .peek-chevron {
     opacity: 1;
   }
-  .peek-strip:hover .peek-label,
-  .peek-strip:focus-visible .peek-label {
+  .peek-strip:hover .peek-label {
     opacity: 1;
   }
+  /* tabindex="-1": never reachable via Tab. The only focus paths are the
+     keyboard-toggle restoration helper (focusToggleTarget, which focuses the
+     strip purely to preserve tab position after the panel collapses) and a
+     mouse click. The restoration focus follows a keydown, so :focus-visible
+     would match and draw a lingering accent ring — plus the width-expand and
+     elevation bump it once shared with :hover would make the strip silently
+     widen (#859). Restoration focus must be visually inert, so the hover
+     affordances (width, elevation, chevron + label reveal) are scoped to
+     :hover only and no focus ring is drawn. */
   .peek-strip:focus-visible {
-    box-shadow: var(--tandem-shadow-3), inset 0 0 0 2px var(--tandem-accent);
+    outline: none;
   }
 </style>

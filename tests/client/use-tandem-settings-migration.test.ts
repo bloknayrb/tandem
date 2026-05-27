@@ -411,4 +411,110 @@ describe("loadSettings — migration chain", () => {
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.formattingBarVisible).toBe(expected);
   });
+
+  it("v8 blob migrates to current with customShortcuts defaulting to {}", () => {
+    writeRaw({ schemaVersion: 8, leftPanelVisible: true });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  it("preserves a valid customShortcuts override on load", () => {
+    const chord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
+    writeRaw({ schemaVersion: 9, customShortcuts: { "new-scratchpad": chord } });
+    const s = loadSettings();
+    expect(s.customShortcuts).toEqual({ "new-scratchpad": chord });
+  });
+
+  it("normalizeKnownFields drops junk customShortcuts entries (bad id / bad chord)", () => {
+    writeRaw({
+      schemaVersion: 9,
+      customShortcuts: {
+        "not-a-real-id": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" },
+        save: { ctrlOrMeta: true, code: "KeyJ" }, // malformed chord
+      },
+    });
+    const s = loadSettings();
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  it("normalizeKnownFields drops a stored override colliding with a fixed matcher branch", () => {
+    // Ctrl+A → select-all and Ctrl+Shift+/ → help are fixed matcher branches
+    // (covered live by claimedByFixedShortcut). An override pointing at either —
+    // including the loose Ctrl+Shift+/ help variant the old reserved list missed —
+    // must be dropped at load rather than shadowing the fixed shortcut.
+    writeRaw({
+      schemaVersion: 9,
+      customShortcuts: {
+        save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" },
+        "close-tab": { ctrlOrMeta: true, alt: false, shift: true, code: "Slash" },
+      },
+    });
+    const s = loadSettings();
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  it("normalizeKnownFields drops a non-bindable override (no primary modifier)", () => {
+    // Plain Shift+J has no Ctrl/Alt, so the override loop would fire it on every
+    // keystroke; it must be dropped at load (matches the recording-UI gate).
+    writeRaw({
+      schemaVersion: 9,
+      customShortcuts: { save: { ctrlOrMeta: false, alt: false, shift: true, code: "KeyJ" } },
+    });
+    const s = loadSettings();
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  it("forward-compat (v99) sanitizes customShortcuts too", () => {
+    writeRaw({
+      schemaVersion: 99,
+      customShortcuts: { "bogus-id": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" } },
+    });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  // Cross-branch reconciliation: master and the umbrella both used schemaVersion
+  // 9 (master = customShortcuts, umbrella = decorations split). A blob written by
+  // a master-line v9 build carries the legacy showAnnotationDecorations flag and
+  // no per-type fields; bumping it straight to v11 must not silently reset an
+  // explicit "all marks off" preference. The presence-keyed fallback re-derives
+  // the split.
+  it.each([
+    { why: "master-v9 all-off → per-type flags off", deco: false, expected: false },
+    { why: "master-v9 all-on → per-type flags on", deco: true, expected: true },
+  ])("master-line v9 (showAnnotationDecorations) reconciles: $why", ({ deco, expected }) => {
+    writeRaw({
+      schemaVersion: 9,
+      showAnnotationDecorations: deco,
+      customShortcuts: {},
+      theme: "dark",
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.showComments).toBe(expected);
+    expect(s.showHighlights).toBe(expected);
+    expect(s.showNotes).toBe(expected);
+    expect(s.decorationsMuted).toBe(false);
+    expect(s.showAnnotationDecorations).toBeUndefined();
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it("umbrella v9 blob (already split) is untouched by the reconciliation guard", () => {
+    // Per-type fields present + no legacy flag → guard must not fire. An explicit
+    // showComments:false must survive (not be clobbered back to the default).
+    writeRaw({
+      schemaVersion: 9,
+      showComments: false,
+      showHighlights: true,
+      showNotes: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.showComments).toBe(false);
+    expect(s.showHighlights).toBe(true);
+    expect(s.showNotes).toBe(true);
+  });
 });

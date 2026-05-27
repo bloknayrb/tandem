@@ -6,7 +6,7 @@ The `tandem` command is the entry point for the npm-installed Tandem package. It
 
 ### `tandem`
 
-Starts the Tandem server (Hocuspocus on `:3478` + MCP HTTP on `:3479`) and opens the editor in your default browser. This is the command you run day-to-day after installing the npm package.
+Starts the Tandem server (Hocuspocus on `:3478` + MCP HTTP on `:3479`). Browser auto-open was removed in v0.12.0 (#637) — the Tauri desktop app is the primary editor; with the npm package, open `http://127.0.0.1:3479` in your browser once the server is running. This is the command you run day-to-day after installing the npm package.
 
 ```bash
 tandem
@@ -16,7 +16,7 @@ The server stays attached to the terminal. Press `Ctrl+C` to stop.
 
 ### `tandem setup`
 
-Registers Tandem's MCP entries with the integrations Tandem detects (Claude Code and Claude Desktop today). On first run, also installs the Claude Code skill at `~/.claude/skills/tandem/SKILL.md`. Re-run after upgrading.
+Registers Tandem's MCP entries with the integrations Tandem detects (Claude Code and Claude Desktop today). Also installs the Claude Code skill at `~/.claude/skills/tandem/SKILL.md` (idempotent — refreshed on every run). Re-run after upgrading.
 
 ```bash
 tandem setup

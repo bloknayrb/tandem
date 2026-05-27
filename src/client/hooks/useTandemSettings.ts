@@ -5,6 +5,8 @@ import {
   TANDEM_SETTINGS_KEY,
 } from "../../shared/constants";
 import type { TandemMode } from "../../shared/types.js";
+import type { ShortcutChord } from "../actions/keybindings.js";
+import { parseCustomShortcuts } from "../actions/shortcut-conflicts.js";
 
 export type EditorFont = "serif" | "sans" | "mono";
 export type Density = "compact" | "cozy" | "spacious";
@@ -129,6 +131,16 @@ export interface TandemSettings {
    */
   defaultModelId: string | null;
   /**
+   * User-remapped keyboard shortcuts (ADR-041). Keyed by
+   * `RemappableShortcutId`; the value is the chord that overrides that
+   * action's default. `parseCustomShortcuts` re-validates on every load/merge,
+   * dropping any entry that isn't a remappable id, isn't a well-formed chord,
+   * isn't bindable, collides with a reserved chord (`RESERVED_CHORDS`) or a
+   * fixed matcher branch (`claimedByFixedShortcut`), or duplicates a
+   * higher-priority id's chord.
+   */
+  customShortcuts: Record<string, ShortcutChord>;
+  /**
    * **DO NOT** set this from product code. Internal marker stamped by
    * `loadSettings` when the on-disk `schemaVersion` is newer than this
    * client knows how to migrate. `createTandemSettings` short-circuits
@@ -154,7 +166,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 10,
+  schemaVersion: 11,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -182,6 +194,7 @@ const DEFAULTS: TandemSettings = {
   decorationsMuted: false,
   models: [],
   defaultModelId: null,
+  customShortcuts: {},
 };
 
 /** Max length of an opaque keychain ref (matches server-side `REF_MAX_LENGTH`). */
@@ -305,8 +318,12 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  *   fields from one) rather than being a pure version bump.
  * v9→v10 (1.11): introduce `formattingBarVisible: true`. Pure version bump —
  *   default preserves today's always-shown bar; normalizeKnownFields coerces.
+ * v10→v11: introduce `customShortcuts: {}` (ADR-041, remappable keyboard
+ *   shortcuts). Structural no-op like v7→v8 — `normalizeKnownFields` runs
+ *   `parseCustomShortcuts` on whatever is present, dropping invalid /
+ *   reserved-colliding entries.
  */
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -410,6 +427,12 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       typeof parsed.defaultModelId === "string" && parsed.defaultModelId.length > 0
         ? parsed.defaultModelId
         : null,
+    // Validate against the CURRENT remappable + reserved sets so a stale
+    // override that now collides with a newly-fixed shortcut is dropped here
+    // rather than shadowing it via the matcher's override-first loop.
+    // Returning it here also auto-adds `customShortcuts` to `knownKeys` for
+    // the forward-compat passthrough.
+    customShortcuts: parseCustomShortcuts(parsed.customShortcuts),
   };
 }
 
@@ -527,6 +550,27 @@ export function loadSettings(): TandemSettings {
         // an explicit false.
         parsed = { ...parsed, schemaVersion: 10 };
       }
+      if (parsed.schemaVersion === 10) {
+        // v10→v11: introduce `customShortcuts: {}` (ADR-041). Structural no-op;
+        // normalizeKnownFields runs `parseCustomShortcuts` on whatever the
+        // blob already carries.
+        parsed = { ...parsed, schemaVersion: 11 };
+      }
+      // Cross-branch reconciliation guard. master and the design-system umbrella
+      // independently used schemaVersion 9 — master for `customShortcuts`
+      // (ADR-041), the umbrella for the per-type decorations split. A blob
+      // written by a master-line v9 build is bumped straight to v11 by the pure
+      // version steps above WITHOUT ever running the v8→v9 split, so it still
+      // carries the legacy `showAnnotationDecorations` flag and lacks the
+      // per-type fields. Re-derive the split here, keyed on the field's value
+      // (not version), so an explicit "all marks off" preference isn't silently
+      // reset to all-on. Only the `=== false` case is lossy: true/absent already
+      // map onto the all-on defaults. No-op for umbrella blobs, which deleted
+      // the legacy field during their own split. (`showAnnotationDecorations` is
+      // dropped regardless by normalizeKnownFields, which only emits known keys.)
+      if (parsed.showAnnotationDecorations === false && parsed.showComments === undefined) {
+        parsed = { ...parsed, showComments: false, showHighlights: false, showNotes: false };
+      }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
       // is the contract `createTandemSettings.updateSettings` checks.
@@ -597,6 +641,10 @@ export function mergeAndClampSettings(
   const parsedModels = parseModels(merged.models);
   return {
     ...merged,
+    // Re-run the shape filter so a partial/corrupt in-memory update can't
+    // persist a junk or reserved-colliding override. Callers pass the WHOLE
+    // map (shallow-merge), so this validates the full set on every write.
+    customShortcuts: parseCustomShortcuts(merged.customShortcuts),
     editorWidthPercent: Math.max(40, Math.min(100, merged.editorWidthPercent)),
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,

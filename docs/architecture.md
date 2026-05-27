@@ -4,14 +4,7 @@
 
 > Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today. See [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
 
-The four terms used throughout this document:
-
-| Term | Meaning |
-|---|---|
-| **MCP contract** | The 26 MCP tools at `http://127.0.0.1:3479/mcp` and the SSE event stream at `/api/events`. Available to every MCP client. |
-| **Default integration** | Claude. Auto-configured by the desktop app's integration wizard. Documented and tested. Recommended in all install flows. |
-| **Claude-specific extras** | Six features built on top of the MCP contract that only work with Claude today: channel push (channel shim + plugin monitor), `--dangerously-load-development-channels` flag wiring, auto-launcher, Cowork plugin bridge, Claude Code skill, and the plugin marketplace artifacts. |
-| **Best-effort, not validated** | What we say about other MCP clients today. We don't intentionally break them; we don't test them in CI. |
+Four terms — **MCP contract**, **default integration**, **Claude-specific extras**, and **best-effort, not validated** — are used throughout this document with the precise meanings defined in [ADR-038's term glossary](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) (the single source of truth).
 
 Sections below labeled "Claude-default" describe features in the **Claude-specific extras** column. Generic MCP plumbing (the HTTP server, the SSE stream, the 26 tools) works for any MCP-capable client.
 
@@ -723,7 +716,7 @@ Tauri v2 uses a capabilities model to grant permissions:
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-029), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-038), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket
@@ -746,7 +739,6 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `index.ts` -- Entry point, starts MCP HTTP on :3479 and Hocuspocus WebSocket on :3478 (stdio fallback via `TANDEM_TRANSPORT=stdio`)
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
-- `open-browser.ts` -- Cross-platform browser launcher (`execFile`-based, no shell injection risk). Best-effort — errors logged, never thrown.
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API; `openScratchpad()` for ephemeral in-memory docs via `source:"upload"`), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
 - `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
 - `yjs/` -- Y.Doc management, the authoritative document state

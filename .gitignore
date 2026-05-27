@@ -5,6 +5,9 @@ dist/
 private/
 scripts/design-baselines/.parts/
 *.log
+
+# Knowledge-graph generator output (regenerable artifact dump)
+graphify-out/
 .env
 .env.local
 
@@ -19,12 +22,13 @@ gha-creds-*.json
 
 # Claude Code ephemeral
 .agents/
-AGENTS.md
 .claude/worktrees/
 .claude/settings.local.json
 .claude/plans/
 .claude/scheduled_tasks.lock
 .claude/.workflow-state/
+# Ephemeral PR working files (diffs, review scratch, body drafts)
+.claude/.pr*
 .clone/
 .superpowers/
 skills-lock.json

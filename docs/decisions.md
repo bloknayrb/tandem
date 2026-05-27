@@ -312,7 +312,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 
 ## ADR-028: Plugin Monitor URL and Auth Resolution — `userConfig` over Hardcoded Default
 
-**Status:** Proposed
+**Status:** Split — the v0.10.1 resolution (`resolveTandemUrl` / `resolveAuthToken` precedence) is **Accepted** and shipped in v0.11.0; the v0.10.2 `userConfig` installer pre-population remains **Proposed**, pending the Sub-task D gate.
 **See ADR-038:** the plugin monitor is one of the six Claude-specific extras built on top of the MCP contract. The URL/auth resolution policy here applies to the Claude monitor; other MCP clients connect to the same MCP HTTP endpoint without the plugin-host indirection.
 **Context:** `src/monitor/index.ts` hardcoded `http://localhost:3479` and `authFetch` in `src/shared/cli-runtime.ts` read only `TANDEM_AUTH_TOKEN`. In Cowork VM sessions the monitor connects to loopback inside the VM (not the host's server) and silently fails; in custom-port and LAN-dev setups the URL override was ignored entirely. Phase 0 probe (2026-05) confirmed: (a) Claude Code's `monitors[]` manifest schema (CLI 2.1.126) rejects `env` blocks — the proposed manifest-level env injection approach is impossible; (b) the documented channel for runtime config is `userConfig` + `CLAUDE_PLUGIN_OPTION_*` env exports.
 **Decision (v0.10.1):** Bake `CLAUDE_PLUGIN_OPTION_SERVER_URL` into `resolveTandemUrl()`'s precedence chain (before `TANDEM_URL`, after explicit override) and add peer function `resolveAuthToken()` with the same pattern for `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`. `authFetch` calls `resolveAuthToken()` instead of reading `TANDEM_AUTH_TOKEN` directly. Both the monitor and channel shim automatically benefit — no per-caller changes needed.
@@ -333,6 +333,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 **Collision policy:** `registerAction` with a duplicate id warns in production and throws in dev (surfacing the bug at the source). Pass `{ replace: true }` to update an existing entry intentionally (e.g., OutlinePanel re-registering heading-jump actions).
 **Non-goals:** This ADR does not define a binding-from-string mechanism (shortcut strings are display-only in Wave 2). Full migration of all ad-hoc keydown listeners is deferred; only Save and Settings migrate in this PR. Heading-jump actions (one per H1-H3) will be registered by OutlinePanel when PR 569 merges and the action registry is available.
 **Consequences:** All future shortcuts should register via the registry before adding a hardcoded `SHORTCUT_SECTIONS` entry. The Settings → Shortcuts tab now reflects the live registry state; an empty registry on first paint is a dev bug (builtins are registered at import, so this should not occur in practice).
+**Superseded in part by [ADR-041](#adr-041-customizable-keyboard-shortcuts-override-layer):** the "shortcut strings are display-only; binding is the caller's responsibility" stance still holds for the registry, but ADR-041 adds a parallel override layer so the ~17 App-level discrete shortcuts ARE user-rebindable. The registry `shortcut` field remains the *default* display; the effective binding is now `override ?? default`.
 
 ## ADR-030: Windows Code Signing via Azure Trusted Signing + OIDC
 
@@ -362,7 +363,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 
 ## ADR-031: Origin-Tagged Transaction Wrappers
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15)
+**Status:** Accepted; implemented (verified against `src/` 2026-05-25). `src/shared/origins.ts` exports all five helpers (`withMcp` / `withFileSync` / `withInternal` / `withReload` / `withBrowser`), the skip-set matrix is enforced in `events/queue.ts` + `annotations/sync.ts`, and no raw `*.transact(` remains in `src/`. **Enforcement diverged from the Consequences below:** the actual guard is the warn-only PostToolUse hook `.claude/hooks/check-raw-transact.sh` plus the `npm run audit:origins` script — there is no blocking pre-commit `block-raw-transact.sh` and no Biome AST rule. Separately, issues #695/#700 later reversed the tombstone column of the skip-set matrix — `file-sync` / `internal` now **record** tombstones rather than skipping them (see the matrix note below). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15; landed incrementally across the redesign waves.
 
 **Context:** Critical Rule #2 required every server-side `doc.transact(...)` to carry an origin string — `MCP_ORIGIN` ("mcp") for Claude-initiated writes, `FILE_SYNC_ORIGIN` ("file-sync") for disk-reload echoes. Enforcement was reviewer-eyes plus a post-tool-use hook. An audit found ~40 `transact()` callsites across the server; roughly half passed an origin and half did not. The unlabelled half were not (yet) bugs — they happen during session restore, mdast / docx population, tutorial seeding, scratchpad seeding, and `clearAndReload`, which all run before the event queue and durable-annotation observers attach to that document — but the rule "every write declares its origin" had a silent exception that lived only in the reviewer's head. The origins themselves were plain `string` constants, so a typo or a forgotten second argument compiled fine and broke echo-prevention silently.
 
@@ -384,12 +385,12 @@ Skip-set matrix:
 | Origin     | Channel event queue | Durable-sync observer | Tombstone observer |
 |------------|---------------------|-----------------------|--------------------|
 | `mcp`      | skip                | persist               | record             |
-| `file-sync`| skip                | skip                  | **skip**           |
-| `internal` | skip                | skip                  | skip               |
+| `file-sync`| skip                | skip                  | record             |
+| `internal` | skip                | skip                  | record             |
 | `reload`   | skip                | **persist**           | record             |
 | `browser`  | emit                | persist               | record             |
 
-The tombstone observer's `file-sync` skip is load-bearing: file-opener's eviction-and-reopen path (clear under `file-sync`, repopulate from disk) must not tombstone the cleared annotations or they would not reappear after the reopen. Same for `internal` (population writes are not real deletes even when overwriting prior state).
+**Tombstone column reversed post-ADR (#695/#700; matrix above reflects current code).** The original ADR-031 decision had `file-sync` and `internal` *skip* tombstones, reasoning that the eviction-and-reopen path (clear under `file-sync`, repopulate from disk) must not tombstone the cleared annotations or they would not reappear after the reopen. Issues #695/#700 reversed this to **record tombstones for all origins**: skipping risked *losing* file-driven deletes when `loadAndMerge` was skipped or failed. Resurrection is prevented structurally rather than by skipping — `recordTombstone` stamps the tombstone at `prevRev + 1`, the merge deletes a Y.Map entry only when `stone.rev > ymapRec.rev` (otherwise it treats the live copy as a resurrection and keeps it), and `loadAndMerge` re-seeds the ledger from the on-disk file on every open. See the observer + merge logic in `src/server/annotations/sync.ts`.
 
 A pre-commit hook (`.claude/hooks/block-raw-transact.sh`) blocks any new `*.transact(` outside the helpers' file. The grep is paired with a Biome AST lint rule (`MemberExpression(property.name === "transact")`) to catch dynamic-dispatch bypasses (`doc["trans" + "act"](...)`, `Reflect.apply`, etc.) the grep misses. Test fixtures that construct synthetic Y.Docs are allowlisted via path pattern (`tests/**`, `**/*.test.ts`) or routed through a `transactForTest` helper exposed from `src/shared/origins.ts`.
 
@@ -412,7 +413,7 @@ A pre-commit hook (`.claude/hooks/block-raw-transact.sh`) blocks any new `*.tran
 
 ## ADR-032: Position Module Results as Tagged Variants
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Continuation of ADR-018.
+**Status:** Accepted; implemented (verified against `src/` 2026-05-25) — `RefreshResult`, `PmRangeResult`, `AnchoredRangeResult`, and `RangeValidation` are all defined in `src/shared/positions/types.ts`. Continuation of ADR-018. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15; landed incrementally across the redesign waves.
 
 **Context:** ADR-018 consolidated position logic into `src/server/positions.ts`, `src/client/positions.ts`, and `src/shared/positions/`. The consolidation succeeded structurally but left the result *types* under-designed. Each of the four high-level entry points returns an ad-hoc shape that hides a sum type behind a single nominal return:
 - `refreshRange(ann, ydoc, map?)` returns `Annotation` but takes six semantically distinct paths: healthy (unchanged), updated (relRange resolved to new offsets), lazy-attached (relRange computed from flat), repaired (dead relRange re-anchored from flat), stripped (dead relRange deleted because re-anchor failed — annotation is now degraded but indistinguishable from healthy at the type level), and inverted (newFrom > newTo — logs an error and returns input unchanged, silently masking data corruption).
@@ -448,7 +449,7 @@ Callers that don't care about the variant destructure `.annotation` / `.from` / 
 
 ## ADR-033: Document Registry and Named Hocuspocus Lifecycle Interface
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15)
+**Status:** Accepted; partially implemented (verified against `src/` 2026-05-25). The `DocumentRegistry` landed (`src/server/documents/registry.ts`, described in-file as "a minimal seam extraction" owning `openDocs` / `activeDocId` / the keep-alive predicate). The named `HocuspocusLifecycle` interface is **deferred:** `src/server/yjs/lifecycle.ts` does not exist, and the free callback slots (`setShouldKeepDocument`, `setDocLifecycleCallbacks` with `onDocSwapped` / `onDocUnloaded`) still live in `provider.ts`. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** Document state was spread across two modules with three implicit invariants enforced only by call-order discipline:
 
@@ -485,7 +486,7 @@ Public registry interface (sketch — not authoritative):
 
 ## ADR-034: File-Open Pipeline with Named Entry Points and Shared Core
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Pairs with ADR-033.
+**Status:** Accepted; partially implemented (verified against `src/` 2026-05-25). Part 1 landed: `src/server/documents/open.ts` exposes named entry aliases (`openFromDisk` / `openFromUpload` / `openScratchpad`) that forward to `file-opener.ts`, plus a derived `kindOfOpenResult` helper. **Deferred:** the shared internal pipeline still lives in the ~1000-line `file-opener.ts`, the `openFromRestore` entry point is not yet exposed, and `OpenResult` remains a derived enum rather than a discriminator on the result type. Pairs with ADR-033. Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** `src/server/mcp/file-opener.ts` is 1049 lines exposing three public entry points (`openFileByPath`, `openFileFromContent`, `openScratchpad`) and internal helpers (`applyPreparedContent`, `clearAndReload`, `wireAnnotationStore`, `ensureAutoSave`). Six callers invoke `openFileByPath`: `startup-file.ts` (cold-start file-association), `index.ts` (welcome/changelog auto-open), `mcp/routes/open.ts` (HTTP REST API), `mcp/document.ts` (`tandem_open` MCP tool), `mcp/convert.ts` (after `.docx` HTML conversion), and `mcp/document-service.ts` (session restore — using a dynamic `await import(...)` to dodge a circular dependency through provider/registry state). Each caller wires the same downstream steps (track the doc, broadcast, set active, attach auto-save) in slightly different orders. `OpenFileResult` conflates outcomes via booleans (`forceReloaded`, `alreadyOpen`). The "open before HTTP bind" startup invariant (CLAUDE.md) is enforced by call ordering in `src/server/index.ts` only.
 
@@ -529,7 +530,7 @@ Public registry interface (sketch — not authoritative):
 
 ## ADR-035: Annotation Lifecycle Module
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Builds on ADR-027 (audience model), ADR-031 (origin tagging), and ADR-032 (tagged result variants).
+**Status:** Accepted; partially implemented (verified against `src/` 2026-05-25). `src/server/annotations/lifecycle.ts` exists and `src/server/mcp/annotations.ts` routes the accept/dismiss transitions through it (`acceptPending` / `dismissPending`, returning a tagged `LifecycleResult`). **Deferred:** the create / remove / edit paths, `promoteNoteToComment`, the `.docx` `importNote` entry, and the `narrowForChannel` channel projection still live on the handlers rather than in the lifecycle module. Builds on ADR-027 (audience model), ADR-031 (origin tagging), and ADR-032 (tagged result variants). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** The annotation lifecycle is fragmented across six modules. Creating one comment touches all of them in implicit order:
 
@@ -587,7 +588,7 @@ Each method's `LifecycleResult` failure variant enumerates only the failures tha
 
 ## ADR-036: Format Adapter as Capability Set
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15). Sharpens encoding of ADR-004 (.docx review-only) and unblocks issue #576 (.docx write-back).
+**Status:** Accepted; partially implemented, shape diverged (verified against `src/` 2026-05-25). The capability-set principle partially landed: `FormatAdapter` in `src/server/file-io/types.ts` is now a `parse` / `apply` / `save?` shape (optional `save` is capability-style, and the silent `.catch(() => [])` comment-extraction failure is replaced by `LoadIssue[]` partial-failure surfacing). **Diverged / deferred from the sketch below:** the interface settled on `parse` / `apply` rather than `load` / `LoadResult`, and `extractComments?` / `applyTrackedChanges?` were **not** added as adapter capabilities — `applyTrackedChanges` remains a free function in `docx-apply.ts` consumed via a direct import through `file-io/index.ts`. Sharpens encoding of ADR-004 (.docx review-only) and unblocks issue #576 (.docx write-back). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15.
 
 **Context:** `src/server/file-io/types.ts` declares a three-method `FormatAdapter` interface (`load`, `save`, `canSave`). The actual capabilities of registered adapters do not match that shape:
 
@@ -641,7 +642,7 @@ Comment extraction migrates from `.docx`'s `load()` body into the adapter's opti
 
 ## ADR-037: Layout Model — Rune Store Layered Over Settings
 
-**Status:** Accepted (implementation pending — grilling pass under `/improve-codebase-architecture`, 2026-05-15).
+**Status:** Accepted; implemented (verified against `src/` 2026-05-25) — `createLayoutModel` in `src/client/layout/model.svelte.ts`, consumed by `App.svelte` (`leftVisible` / `rightVisible` / `toggleLeft` / `toggleRight`). Designed in the `/improve-codebase-architecture` grilling pass, 2026-05-15; landed across the redesign waves.
 
 **Context:** Panel-visibility and rail-tab state is encoded as four settings fields on `settingsState` plus a derivation in `App.svelte`:
 
@@ -699,7 +700,7 @@ Four terms have precise meanings; every doc surface uses them consistently:
 
 | Term | Meaning |
 |---|---|
-| **MCP contract** | The 26 MCP tools at `http://127.0.0.1:3479` and the SSE event stream at `/api/events`. Available to every MCP client. |
+| **MCP contract** | The 26 active MCP tools at `http://127.0.0.1:3479` and the SSE event stream at `/api/events`. Available to every MCP client. |
 | **Default integration** | Claude. Recommended in all install flows. Documented, tested, and the target of the first-run wizard's one-click setup. |
 | **Claude-specific extras** | Six features built on top of the MCP contract that only work with Claude today: (1) channel push (channel shim + plugin monitor), (2) `--dangerously-load-development-channels` flag wiring, (3) auto-launcher (#477 PR 4), (4) Cowork plugin bridge (`tandem mcp-stdio`), (5) Claude Code skill (`skills/tandem/SKILL.md`), (6) plugin marketplace artifacts (`.claude-plugin/`). |
 | **Best-effort, not validated** | What we say about other MCP clients today. We don't intentionally break them; we don't test them. The MCP HTTP endpoint is the same surface they all use. |
@@ -739,4 +740,57 @@ Both are silent from the user's perspective today; both end when the integration
 - **Auto-launch parity:** v1.0 auto-launches Claude only. Per-provider auto-launchers are future work, each in its own ADR.
 - **MCP-bridge for non-MCP providers:** the OpenAI/Gemini adapter design is owned by a separate ADR (likely ADR-039) — this ADR commits to the approach but not the implementation.
 
-**Cross-references:** ADR-003 (MCP over REST), ADR-019 (Channel Shim — channel push transport), ADR-023 (Cowork Plugin Bridge — Cowork extra), ADR-024 (`bearer_methods_supported` — Claude Code empirical findings), ADR-027 (Annotation System Redesign — `author: "claude"` constant), ADR-028 (Plugin Monitor URL/Auth). Spike reports: `docs/spikes/plugin-monitor-viability-spike.md`, `docs/spikes/cli-session-resume-spike.md`, `docs/spikes/sidecar-launcher-spike.md`. Roadmap: `docs/roadmap.md` #477 + D4.
+**Cross-references:** ADR-003 (MCP over REST), ADR-019 (Channel Shim — channel push transport), ADR-023 (Cowork Plugin Bridge — Cowork extra), ADR-024 (`bearer_methods_supported` — Claude Code empirical findings), ADR-027 (Annotation System Redesign — `author: "claude"` constant), ADR-028 (Plugin Monitor URL/Auth), ADR-040 (Audience & Monetization — supersedes the institutional-market framing referenced in this ADR's Context). Spike reports: `docs/spikes/plugin-monitor-viability-spike.md`, `docs/spikes/cli-session-resume-spike.md`, `docs/spikes/sidecar-launcher-spike.md`. Roadmap: `docs/roadmap.md` #477 + D4.
+
+---
+
+## ADR-039: Agent SDK Adapter for Non-MCP Providers (Reserved)
+
+**Status:** Reserved (2026-05-26) — placeholder for the OpenAI / Gemini Agent SDK adapter committed to in [ADR-038](#adr-038-mcp-first-integration-policy-claude-as-default-integration) §3. Design and implementation are a future PR (roadmap #477 PR 5 / wave 6, possibly v1.1). This number is reserved so the adapter ADR lands here; until it is drafted, ADR-038 §3 is the authoritative reference.
+
+---
+
+## ADR-040: Audience and Monetization (Individuals; Same-Canvas Moat; Free Beta to One-Time License)
+
+**Status:** Split (per ADR-028's split-status pattern) — §1 (audience), §2 (moat), §3 (monetization mechanism), §4 (offline activation), and §6 (distribution) **Accepted (2026-05-26)**. §5 (BUSL re-scope) is **Proposed**: charging cannot begin until counsel drafts it, before the first sale.
+
+**Context:** Tandem shipped without a recorded audience or revenue decision. `docs/positioning.md` frames the market as institutions and (§economics) says paying cases "require either a hosted offering or a support contract… This needs a decision." `README.md` said "Tandem is free to use." `docs/roadmap.md` tracks "#394 Monetization" as "tracked outside engineering roadmap." The product is BUSL-1.1 (source-available): the base grant is non-production use only; the **Additional Use Grant** extends limited production use ("Personal use and individual self-hosting are permitted; commercial hosting or resale of the Licensed Work is not") — so individuals already use it in production for free. It converts to MIT at the earlier of the Change Date (2029-06-10 / v1.0 GA + 2 years) **and** the BUSL per-version 4-year floor. This ADR supersedes the institutional-market and undecided-revenue framing.
+
+**Decision §1 — Audience: individuals.** Target = individuals (writers, editors, researchers, developers) on their own documents — not institutions. Local-first and BYO-LLM are non-negotiable product identity; consequently the near-term reachable market is bounded by users who already run an MCP-capable LLM. Breadth is pursued by **lowering setup friction** (multi-provider first-run wizard / roadmap D4), not by a bundled/hosted inference layer (which would add recurring cost and revisit local-first — deferred to a possible post-1.0 decision). Supersedes positioning.md's §The Market and the institutional/technical-user audience framing recorded in **ADR-038's Context** ("gates the audience to developers and technical users" is ADR-038's phrasing). ADR-038's MCP-first integration *policy* is unaffected and is the basis for §2.
+
+**Decision §2 — Moat: same canvas + persistent review record.** Headline: you and your AI work on the same live document — no copy-pasting between a chat window and your editor — highlighting text the AI sees and edits/comments on **in place**, as first-class objects you **accept, dismiss, or discuss**, powered by your own MCP LLM. The durable differentiator beneath the headline is annotations as **persistent, addressable, queryable first-class objects** + the **.docx review-record loop** (Word-comment round-trip). ChatGPT Canvas, Claude artifacts (MCP-connected), and `docx-mcp` do in-place editing, but not a persistent, queryable, exportable review record — that is the wedge. BYO-MCP-LLM is the enabler. Basis: ADR-038 (MCP-first).
+
+**Decision §3 — Monetization & capture: free beta → one-time license at v1.0.** Free during public beta. At v1.0 **one public build** self-trials and **requires a valid offline-signed license to keep running** past the trial (a hard gate, not a nag); its auto-updates come from a **license-checked endpoint** that serves new builds only while the license's update window is current (this enforces a bundled-updates window / paid major-version upgrades). Pricing set later (~$29–79). No separate gated download — a shared installer is useless without a license, so license-to-run is the capture vector and gating the download would be redundant infra. The trial clock is on-device → soft; the hard gate is the signed license. Source-available remains a high-bar escape hatch. Existing beta users are **grandfathered** with a free signed license at 1.0 (goodwill over the small early-cohort revenue); new users pay.
+
+**Decision §4 — Activation: offline signed license files.** *Running* validates an Ed25519-signed license on-device against an embedded public key — no network, no telemetry, air-gapped, binds a copy to its buyer. Update *checks* are network (as today); for the licensed build they authenticate entitlement at the update endpoint, which **logs only what's needed to authorize** (ideally a signed entitlement check, not the raw key). No usage analytics — the no-telemetry promise holds for running the app.
+
+**Decision §5 — Licensing change (prerequisite for charging; PROPOSED, pending legal).** Charging requires a substantive narrowing of the Additional Use Grant — both the personal-use AND individual-self-hosting clauses — so continued/production use needs a paid license while personal *evaluation* (the trial) stays free; and addressing the MIT conversion (BUSL permits a per-version Change Date — reset per paid release, or move the commercial build off BUSL). Requires counsel; resolve before the first sale.
+
+**Decision §6 — Distribution & payment.** Checkout via a Merchant of Record (Polar.sh or Paddle) for payment + global VAT/sales-tax + the issuance webhook; licensing decoupled, low lock-in. **One public build** stays on GitHub Releases; the licensed app's updater authenticates entitlement at a small license-checked endpoint (Keygen, or a Cloudflare Worker). License-to-run is enforced in the **server** (booted by both the Tauri sidecar and the npm CLI). LLC + accountant before taking money.
+
+**Options considered:**
+- **Public binary + honor-system nag (one-time, whole app)** — no capture vector; rejected.
+- **Gated download host + dual trial/paid builds** — redundant with license-to-run; extra infra for no added capture; rejected.
+- **Subscription / hosted SaaS** — contradicts local-first/no-backend; rejected.
+- **Enterprise / support contracts** — mismatched to individuals; rejected.
+- **Donations / free forever (go-light)** — lower-effort fallback; rejected — full commitment to the paid model.
+- **Online license validation for running** — phones home; rejected for offline files (§4).
+
+**Consequences:**
+- Doc surfaces updated: positioning.md, README.md (free-during-beta + activation/telemetry + audience bullets), roadmap.md (#394), security.md, workflows.md + user-guide.md, CHANGELOG.md.
+- One public build throughout (no installer takedown); the only gated surface is the update endpoint.
+- In-app license-verification + server-side trial gate + license-authenticated updater are v1.0 work.
+- Existing beta users are grandfathered with a free license at 1.0; new users pay.
+- §1/§2 finalized; revenue ceiling is modest and accepted (full commitment, no kill-criterion).
+
+**Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), `docs/positioning.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1).
+
+## ADR-041: Customizable Keyboard Shortcuts (Override Layer)
+
+**Status:** Accepted (2026-05-27)
+**Context:** Tandem ships ~60 keyboard shortcuts, none user-configurable. The real key→action mapping is NOT the action registry (ADR-029 made `shortcut` display-only) — it lives in `matchShortcut()` (`src/client/hooks/useAppShortcuts.ts`), a hand-ordered `if/else` chain keyed on `e.code`/`e.key` + modifiers, with deliberately preserved "legacy quirks" (e.g. `Ctrl+S` matches even with Alt held; `Ctrl+Shift+S`→save-as is tested *before* `Ctrl+S`→save and falls through). App.svelte's dispatch table owns the side effects. Several matcher `ShortcutId`s carry runtime context via Shift or are digit families (`Ctrl+1..9`) and are not single discrete chords.
+**Decision:** Add an **override layer** rather than rewriting the matcher. (1) Scope: only the ~17 App-level discrete (single-chord) shortcuts are remappable — `save`, `save-as`, `settings`, `settings-modal`, `toggle-palette`, `new-scratchpad`, `close-tab`, `open-file`, `toggle-mode`, `reopen-closed-tab`, `comment-on-selection`, `toggle-authorship`, `toggle-left-panel`, `toggle-right-panel`, `annotation-next`, `annotation-prev`, `select-block`. Text-formatting/Tiptap keymaps and family/context shortcuts (`find`, `find-nav`, accept/dismiss, `pick-tab`, `toggle-help`, `select-all`) stay fixed/read-only. (2) `matchShortcut(e, overrides?)` loops overrides first (strict-equality `chordMatches`, so iteration order is not a correctness risk) and returns the remapped id; then runs the existing chain, but each *remappable* branch's return is wrapped `if (!isOverridden(id, overrides)) return …` so a remapped-away default still **falls through** to its sibling (remap `save-as` away ⇒ `Ctrl+Shift+S` falls through to `save`) instead of dying. Empty/undefined overrides ⇒ byte-identical to before, so non-remappers and the E2E suite see zero change. (3) Edit UX = click-to-record; conflicts block the assignment and name the owner. `findConflict` (`src/client/actions/shortcut-conflicts.ts`) checks effective remappable bindings, then **fixed matcher branches derived live from the matcher** (`claimedByFixedShortcut` synthesizes an event and runs `matchShortcut` with no overrides — see hardening note), then a `RESERVED_CHORDS` set covering only the **non-matcher** reservations (separate tab-cycle/zoom window listeners, version-pinned Tiptap *letter* keymaps). (4) Storage: `customShortcuts: Record<RemappableShortcutId, ShortcutChord>` in `TandemSettings` (schema v8→v9); `normalizeKnownFields` re-validates on every load/merge via `parseCustomShortcuts`, dropping entries that are junk, non-bindable (no primary modifier / Numpad / Tab-Escape-Enter), collide with a fixed branch or reserved chord, or duplicate a chord already held by a higher-priority id — so a stale or hand-edited override can't shadow a fixed shortcut or silently dead-bind via the override-first loop.
+**Why not bind from registry strings:** the registry `shortcut` is a human label (`"Ctrl+Shift+S"`), not a machine chord, and registry ids don't map 1:1 to matcher `ShortcutId`s (`find` vs `find-in-tabs`/`find-next`; `annotation-previous` vs `annotation-prev`). The matcher is the binding authority; the registry crosswalk (`REGISTRY_TO_SHORTCUT_ID`) exists only for Help-catalog reflection.
+**Consequences:** `chord` uses physical `e.code` (layout-independent, mirroring the matcher). `comment-on-selection` (Ctrl+Alt+M) and `toggle-palette` have no registry row, so they appear in the editable Settings list but not the Help catalog. The Tiptap reserved slice is hand-maintained and pinned to the `@tiptap/*` versions in `package.json` — a Tiptap major bump requires re-auditing it. New remappable shortcuts must be added to `REMAPPABLE_SHORTCUT_IDS` + `DEFAULT_BINDINGS`; new *fixed* shortcuts are picked up automatically by `claimedByFixedShortcut` if they go through `matchShortcut`, and only need a `RESERVED_CHORDS` entry if they live in a separate listener (tab-cycle/zoom) or a Tiptap keymap.
+**Conflict-model hardening (2026-05-27):** the original design hand-transcribed the matcher's fixed chords into `RESERVED_CHORDS` as *exact tuples*, but several fixed branches match *families* (`find`/`find-nav` ignore Alt; `pick-tab` ignores Alt+Shift; the `?` help branch has no modifier gate). The exact-tuple list missed those variants, so a user could remap onto e.g. `Ctrl+Shift+/`, `Ctrl+Alt+F`, or `Ctrl+Shift+3` and the override-first loop would silently steal the fixed function. Fixed by deriving fixed-branch conflicts live from the matcher (`claimedByFixedShortcut` reuses `matchShortcut` as the single source of truth — no second copy of the gating to drift), moving the conflict/validation helpers into `shortcut-conflicts.ts` to avoid a circular import, and removing the now-redundant matcher entries from `RESERVED_CHORDS`. The one irreducible US-layout assumption is the synthetic `e.key` derivation for `?`/`/`; non-US layouts keep the matcher's pre-existing layout quirk. Because the feature is unshipped, the only holders of an exploit-bound override are pre-merge testers, who lose that binding on next load (restoring the fixed shortcut) — there is no public migration.
+**Cross-references:** ADR-029 (Action Registry — superseded in part), ADR-037 (Layout Model — rune store over settings, the persistence pattern reused here).

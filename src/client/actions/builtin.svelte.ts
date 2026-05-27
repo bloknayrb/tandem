@@ -94,6 +94,38 @@ let inflight = false;
 
 let scratchpadInflight = false;
 
+/**
+ * Debounce (ms) before auto-opening a scratchpad once the empty state is
+ * reached. The window absorbs three transients that must NOT trigger an
+ * auto-open:
+ *   1. Initial connect — `connected` flips true before the server's
+ *      `openDocuments` list has synced, so `tabs` is briefly empty. The
+ *      startup doc (welcome.md / CHANGELOG.md) arrives within this window.
+ *   2. Y.Doc swap (reload-from-disk) — `activeTab` is momentarily null while
+ *      the tab entry is replaced.
+ *   3. Tab-switch churn during reconcile.
+ * It must comfortably exceed the time for the bootstrap `openDocuments`
+ * broadcast to land after `connected` flips.
+ */
+export const SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS = 400;
+
+/**
+ * Pure gate for the App-level auto-open-scratchpad effect (#842). Returns true
+ * only when the user has genuinely reached the empty tab-bar state with a live
+ * server connection — never during the disconnect-debounce window (which fails
+ * the `connected` check) and never with a doc still open.
+ *
+ * Extracted as a pure function so the precedence/timing logic is unit-testable
+ * without standing up a Svelte component or a Hocuspocus provider.
+ */
+export function shouldAutoOpenScratchpad(state: {
+  connected: boolean;
+  tabCount: number;
+  activeTabId: string | null;
+}): boolean {
+  return state.connected && state.tabCount === 0 && state.activeTabId === null;
+}
+
 export async function createScratchpad(): Promise<void> {
   if (scratchpadInflight) return;
   scratchpadInflight = true;
@@ -494,6 +526,35 @@ async function startFreshConversation(d: ActionDeps): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Show in file explorer — reveal the active doc in the OS file manager (#299)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reveal the active document in the OS file manager via the native
+ * `show_in_file_manager` Tauri command. Disabled (notifies) when the active
+ * doc has no on-disk path — scratchpads, `upload://` docs, and app-internal
+ * docs all return `null` from `getActiveDocumentPath()`. The action is only
+ * *registered* in the Tauri runtime (see BUILTINS spread), so this never runs
+ * in browser mode; the import below is a defensive fallback.
+ */
+async function showInFileManager(d: ActionDeps): Promise<void> {
+  const path = d.getActiveDocumentPath();
+  if (!path) {
+    d.notify("warning", "This document isn't saved to a file yet.");
+    return;
+  }
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("show_in_file_manager", { path });
+  } catch (err) {
+    d.notify(
+      "error",
+      `Couldn't reveal in file manager: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Register all builtins at module top-level
 // ---------------------------------------------------------------------------
 
@@ -718,6 +779,22 @@ const BUILTINS: Action[] = [
       guardedRun("launcher-start-fresh", (d) => void startFreshConversation(d));
     },
   },
+  // Reveal-in-OS-file-manager only makes sense in the desktop app, which can
+  // spawn Explorer / Finder / xdg-open. The browser distribution has no such
+  // capability, so the action is gated out of the registry entirely there
+  // (conditional spread below) rather than shown-and-erroring.
+  ...(isTauriRuntime()
+    ? [
+        {
+          id: "show-in-file-explorer",
+          label: "Show in file explorer",
+          group: "document",
+          run() {
+            guardedRun("show-in-file-explorer", (d) => void showInFileManager(d));
+          },
+        } satisfies Action,
+      ]
+    : []),
 ];
 
 for (const action of BUILTINS) {

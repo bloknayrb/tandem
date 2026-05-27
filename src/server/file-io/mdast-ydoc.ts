@@ -453,10 +453,15 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
           marks.set(stripHashSuffix(key), value);
         }
 
-        // Build phrasing node, wrapping with marks from inside out
-        let node: PhrasingContent = { type: "text", value: text };
+        // `code` is a leaf-level mark: the segment is either an inlineCode leaf
+        // or a plain-text leaf. link/strike/italic/bold then each wrap whatever
+        // `node` is — inlineCode is valid PhrasingContent inside all of them, so
+        // a code span keeps its mark even when combined with bold/italic/etc.
+        let node: PhrasingContent = marks.has("code")
+          ? { type: "inlineCode", value: text }
+          : { type: "text", value: text };
 
-        // link wraps first (innermost), then code, then strike, then italic, then bold
+        // Wrap from innermost to outermost: link, then strike, italic, bold.
         if (marks.has("link")) {
           const linkAttrs = marks.get("link") || {};
           node = {
@@ -466,31 +471,14 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
             children: [node],
           };
         }
-        if (marks.has("code")) {
-          // Code is a leaf node — extract text value
-          node = { type: "inlineCode", value: text };
-        }
         if (marks.has("strike")) {
-          if (node.type === "inlineCode") {
-            // Can't nest inlineCode inside delete — best effort
-            node = { type: "delete", children: [{ type: "text", value: text }] } as any;
-          } else {
-            node = { type: "delete", children: [node] } as any;
-          }
+          node = { type: "delete", children: [node] } as any;
         }
         if (marks.has("italic")) {
-          if (node.type === "inlineCode") {
-            node = { type: "emphasis", children: [{ type: "text", value: text }] };
-          } else {
-            node = { type: "emphasis", children: [node] };
-          }
+          node = { type: "emphasis", children: [node] };
         }
         if (marks.has("bold")) {
-          if (node.type === "inlineCode") {
-            node = { type: "strong", children: [{ type: "text", value: text }] };
-          } else {
-            node = { type: "strong", children: [node] };
-          }
+          node = { type: "strong", children: [node] };
         }
 
         result.push(node);
@@ -503,7 +491,48 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
     }
   }
 
-  return result;
+  return coalescePhrasing(result);
+}
+
+/**
+ * Merge adjacent phrasing nodes that share the same wrapper (strong/emphasis/
+ * delete, or a link with identical url+title) into one node, recursing into
+ * children. Each delta segment is wrapped independently above, so a bold run
+ * containing a code span produces a `strong > text` node adjacent to a
+ * `strong > inlineCode` node. Left un-merged, remark-stringify pads the two
+ * adjacent emphasis runs with `&#x20;` / doubled `**`, corrupting the file on
+ * save. Y.js `toDelta()` already collapses runs with identical attributes, so
+ * the only adjacent same-wrapper nodes here differ in some inner mark.
+ */
+function coalescePhrasing(nodes: PhrasingContent[]): PhrasingContent[] {
+  const out: PhrasingContent[] = [];
+  for (const node of nodes) {
+    const prev = out[out.length - 1];
+    if (prev && sameWrapper(prev, node)) {
+      const merged = prev as Extract<PhrasingContent, { children: PhrasingContent[] }>;
+      merged.children = coalescePhrasing([...merged.children, ...(node as typeof merged).children]);
+    } else {
+      out.push(node);
+    }
+  }
+  return out;
+}
+
+function sameWrapper(a: PhrasingContent, b: PhrasingContent): boolean {
+  if (a.type !== b.type) return false;
+  switch (a.type) {
+    case "strong":
+    case "emphasis":
+    case "delete":
+      return true;
+    case "link": {
+      const al = a as Extract<PhrasingContent, { type: "link" }>;
+      const bl = b as Extract<PhrasingContent, { type: "link" }>;
+      return al.url === bl.url && al.title === bl.title;
+    }
+    default:
+      return false;
+  }
 }
 
 function cellToPhrasingContent(cell: Y.XmlElement): PhrasingContent[] {

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Root } from "mdast";
+import { visit } from "unist-util-visit";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { mdParser, saveMarkdown, serializeMdast } from "../../../src/server/file-io/markdown.js";
@@ -41,6 +42,15 @@ function stripPositions(tree: unknown): unknown {
 
 function parseEqual(a: string, b: string): void {
   expect(stripPositions(mdParser.parse(a))).toEqual(stripPositions(mdParser.parse(b)));
+}
+
+/** True if parsing `input` produces any `mailto:` autolink (email) `link` node. */
+function hasMailtoLink(input: string): boolean {
+  let found = false;
+  visit(mdParser.parse(input) as Root, "link", (node) => {
+    if (typeof node.url === "string" && node.url.startsWith("mailto:")) found = true;
+  });
+  return found;
 }
 
 describe("markdown escaping (#605)", () => {
@@ -139,6 +149,113 @@ describe("markdown escaping (#605)", () => {
     });
   });
 
+  // remark-gfm escapes a plain-text `@` to `\@` on stringify whenever a
+  // word-ish local-part char precedes it, so that re-emitted prose doesn't
+  // *appear* to invite an autolink-literal email. The serializer's step-5
+  // reversal removes that escape noise only where the text after `@` is NOT
+  // host-shaped (no dotted domain with a letter-bearing TLD); host-shaped
+  // positions keep the escape, matching the chain's conservative posture.
+  //
+  // Subtlety this suite documents: a `\@` in a MARKDOWN SOURCE string is not a
+  // load-bearing guard. CommonMark un-escapes `\@`→`@` at parse time, then the
+  // GFM autolink extension forms the link from the bare `@`. So `user\@host.tld`
+  // in source already parses to a `link` node — the serializer never sees it as
+  // text. The escape the conditional controls is the one the serializer *emits*
+  // for a plain-text node value, which is why group (b) below feeds the
+  // serializer raw text-node values (no parse step) rather than markdown source.
+  describe("#850: conditional `\\@` un-escape", () => {
+    /** Serialize a single plain-text node value (bypasses the parser). */
+    function serializeRawText(value: string): string {
+      return serializeMdast({
+        type: "root",
+        children: [{ type: "paragraph", children: [{ type: "text", value }] }],
+      } as Root);
+    }
+
+    // ---- (a) safe positions un-escape AND stay stable across a 2nd pass ----
+    // These are real markdown sources: none parse to a `link` node, so the `@`
+    // survives as a text node and the serializer's step-5 reversal applies.
+    it.each([
+      ["bare `@` token with no local part", "The @ symbol stands alone.\n"],
+      ["social-style handle (no domain)", "Follow @jack on the site.\n"],
+      ["handle with internal dot but no host", "Ping @bob.smith and continue.\n"],
+      ["`@` flanked by spaces", "Seats cost 5 @ each today.\n"],
+      ["local part but host has no dot", "Reach user@host on the intranet.\n"],
+      ["host present but numeric-only TLD", "Build artifact ref@v2.0 is pinned.\n"],
+    ])("un-escapes %s and is idempotent", (_why, input) => {
+      // Guard the premise: these inputs are NOT emails, so no autolink forms.
+      expect(hasMailtoLink(input)).toBe(false);
+      const once = serializerRoundTrip(input);
+      // No `\@` escape noise once the autolink risk is gone.
+      expect(once).not.toMatch(/\\@/);
+      // Second load→save is a no-op (stable fixed point) and no link sneaks in.
+      expect(serializerRoundTrip(once)).toBe(once);
+      expect(hasMailtoLink(once)).toBe(false);
+      parseEqual(once, input);
+    });
+
+    it("un-escapes `\\@` round-tripping through the Y.Doc, stable on 2nd pass", () => {
+      // Full editor path (parse → Y.Doc → serialize), not just serializeMdast.
+      const input = "Reach user@host on the intranet.\n";
+      const once = roundTrip(input);
+      expect(once).not.toMatch(/\\@/);
+      expect(roundTrip(once)).toBe(once);
+      expect(hasMailtoLink(once)).toBe(false);
+    });
+
+    // ---- (b) host-shaped positions KEEP the `\@` escape on serialize ----
+    // Fed as raw text-node values (see the suite comment): any markdown source
+    // containing `user@host.tld` would parse to a `link`, never plain text. The
+    // `why` column names the equivalence class so missing ones are visible.
+    it.each([
+      ["classic email", "Contact user@host.tld today."],
+      ["single-char local + 2-char TLD", "Mail x@y.co now."],
+      ["multi-label host", "See foo@bar.example.org for info."],
+      ["hyphenated host", "Email user@my-host.com please."],
+      ["digit-bearing local part", "Ping a1@b2.io quickly."],
+      ["host followed by trailing dot", "Write user@host.tld. now."],
+      ["leading-dot host (regression: must not under-keep)", "Mail user@.com today."],
+      ["single-letter TLD", "Mail user@host.c now."],
+      ["numeric labels but letter-bearing final", "Pin user@1.a here."],
+    ])("keeps `\\@` escaped when serializing %s", (_why, value) => {
+      const out = serializeRawText(value);
+      // The conditional recognized the host shape and preserved the escape.
+      expect(out).toMatch(/\\@/);
+      // Safety gate proving the host shape is genuinely autolink-prone: the bare
+      // (naively un-escaped) text DOES form an email autolink. This is the
+      // condition that makes the un-escape unsafe and the escape worth keeping.
+      expect(hasMailtoLink(value)).toBe(true);
+      // The serializer chain converges to a stable fixed point. (For most hosts
+      // the escape is cosmetic — reloading drops it and GFM re-forms the angle
+      // autolink `<user@host.tld>`; for a few, e.g. the leading-dot host
+      // `user\@.com`, the escape survives reload and the escaped form is itself
+      // the fixed point. Either way, a further pass is a no-op.)
+      const reloaded = serializerRoundTrip(out);
+      expect(serializerRoundTrip(reloaded)).toBe(reloaded);
+    });
+
+    it("safe text-node values drop the `\\@` escape on serialize", () => {
+      // Mirror of group (a) at the serializer-contract level: a plain-text node
+      // value whose `@` is not host-shaped serializes WITHOUT the escape.
+      expect(serializeRawText("Reach user@host now.")).not.toMatch(/\\@/);
+      expect(serializeRawText("Pin ref@v2.0 build.")).not.toMatch(/\\@/);
+      expect(serializeRawText("The @ stands alone.")).not.toMatch(/\\@/);
+    });
+
+    it("documents that `\\@` in markdown SOURCE is cosmetic, not load-bearing", () => {
+      // The escape does not survive a parse: CommonMark turns `\@` into `@`,
+      // then the GFM autolink extension forms the email link. This is why
+      // group (b) tests the serializer contract directly, not a source string.
+      const escapedSource = "Contact user\\@host.tld today.\n";
+      const plainSource = "Contact user@host.tld today.\n";
+      expect(hasMailtoLink(escapedSource)).toBe(true);
+      expect(hasMailtoLink(plainSource)).toBe(true);
+      // The serializer still EMITS the escape for the (autolinked) text — the
+      // conditional preserves it as the canonical, escape-noise-free choice.
+      expect(serializerRoundTrip(escapedSource)).toBe("Contact <user@host.tld> today.\n");
+    });
+  });
+
   describe("ReDoS guard", () => {
     it("16K of `[` completes in linear time for our regex (upstream `state.safe()` has its own cost)", () => {
       // Regex 1's label class excludes `\` so it cannot backtrack across an
@@ -148,6 +265,23 @@ describe("markdown escaping (#605)", () => {
       const input = "[".repeat(16_000) + "\n";
       const start = Date.now();
       const out = serializerRoundTrip(input);
+      const elapsed = Date.now() - start;
+      expect(out.length).toBeGreaterThan(0);
+      expect(elapsed).toBeLessThan(2_000);
+    });
+
+    it("`\\@` host pattern stays linear on many dotted labels with no TLD letter", () => {
+      // Adversarial: a `@`-prefixed run of 16K dotted numeric labels (no
+      // letter anywhere) is the worst case for HOST_AFTER_AT — the mandatory
+      // trailing letter never matches, so the engine must reject. The classes
+      // don't nest with overlapping quantifiers, so rejection is reached in
+      // linear time rather than catastrophic backtrack.
+      const value = "a@" + "1.".repeat(16_000) + "2";
+      const start = Date.now();
+      const out = serializeMdast({
+        type: "root",
+        children: [{ type: "paragraph", children: [{ type: "text", value }] }],
+      } as Root);
       const elapsed = Date.now() - start;
       expect(out.length).toBeGreaterThan(0);
       expect(elapsed).toBeLessThan(2_000);

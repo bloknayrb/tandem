@@ -3,8 +3,9 @@
  *
  * Every Y.Doc write — server-side or browser-side — MUST go through one of
  * the five helpers below. Direct `*.transact()` calls outside this file are
- * blocked by the pre-commit hook `.claude/hooks/block-raw-transact.sh` and
- * the Biome AST rule that catches dynamic-dispatch bypasses. The wrapper
+ * surfaced (warn-only) by the `.claude/hooks/check-raw-transact.sh` PostToolUse
+ * hook and the `npm run audit:origins` static walk — there is no blocking
+ * pre-commit hook or Biome rule. The wrapper
  * choice is the contract: the rest of the system reads `txn.origin` and
  * decides whether to project events, persist to disk, record tombstones,
  * etc.
