@@ -2,7 +2,7 @@
 
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import DocumentTabs from "../../src/client/tabs/DocumentTabs.svelte";
 import type { OpenTab } from "../../src/client/types.js";
@@ -20,23 +20,19 @@ function makeTab(id: string): OpenTab {
   };
 }
 
-// happy-dom's DragEvent constructor ignores the `dataTransfer` init dict (same
-// quirk as Chromium per MDN). Build a generic Event and override the property.
-function makeDragEvent(type: string, dt: DataTransfer, clientX = 0, clientY = 0): DragEvent {
-  const evt = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
-  Object.defineProperty(evt, "dataTransfer", { value: dt, configurable: true });
-  Object.defineProperty(evt, "clientX", { value: clientX, configurable: true });
-  Object.defineProperty(evt, "clientY", { value: clientY, configurable: true });
+// happy-dom's PointerEvent constructor ignores clientX/clientY/pointerId/button
+// in the init dict (same quirk the old DragEvent helper worked around). Build a
+// generic Event and override the properties.
+function makePointerEvent(
+  type: string,
+  opts: { clientX?: number; clientY?: number; pointerId?: number; button?: number } = {},
+): PointerEvent {
+  const evt = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent;
+  Object.defineProperty(evt, "clientX", { value: opts.clientX ?? 0, configurable: true });
+  Object.defineProperty(evt, "clientY", { value: opts.clientY ?? 0, configurable: true });
+  Object.defineProperty(evt, "pointerId", { value: opts.pointerId ?? 1, configurable: true });
+  Object.defineProperty(evt, "button", { value: opts.button ?? 0, configurable: true });
   return evt;
-}
-
-function stubDt(getDataReturn = ""): DataTransfer {
-  return {
-    setData: vi.fn(),
-    getData: vi.fn(() => getDataReturn),
-    effectAllowed: "move",
-    dropEffect: "move",
-  } as unknown as DataTransfer;
 }
 
 function baseProps(tabs: OpenTab[], reorder: (...args: unknown[]) => void) {
@@ -49,8 +45,31 @@ function baseProps(tabs: OpenTab[], reorder: (...args: unknown[]) => void) {
   };
 }
 
-describe("DocumentTabs drag/drop", () => {
-  it("case A: handleDrop uses closure-captured draggedId when dataTransfer.getData returns ''", async () => {
+// happy-dom doesn't implement pointer capture; stub the methods so the gesture
+// machine doesn't throw. elementFromPoint is stubbed per-test to control which
+// tab the pointer is "over".
+beforeEach(() => {
+  // biome-ignore lint/suspicious/noExplicitAny: test stub
+  (Element.prototype as any).setPointerCapture = vi.fn();
+  // biome-ignore lint/suspicious/noExplicitAny: test stub
+  (Element.prototype as any).releasePointerCapture = vi.fn();
+});
+
+afterEach(async () => {
+  // Flush the macrotask queue so any pending click-suppressor cleanup
+  // (setTimeout(0) in handlePointerUp) fires and removes its window listener,
+  // keeping tests isolated.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  vi.restoreAllMocks();
+});
+
+// Stub document.elementFromPoint to report `el` as the element under the cursor.
+function overElement(el: Element | null) {
+  vi.spyOn(document, "elementFromPoint").mockReturnValue(el);
+}
+
+describe("DocumentTabs pointer reorder", () => {
+  it("case A: drag from A to B calls reorder(a, b, side) once", async () => {
     const reorder = vi.fn();
     const tabs = [makeTab("a"), makeTab("b")];
     const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
@@ -60,22 +79,21 @@ describe("DocumentTabs drag/drop", () => {
     const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
     expect(tabA).toBeTruthy();
     expect(tabB).toBeTruthy();
+    overElement(tabB);
 
-    // Tauri WebView2 case: dataTransfer.getData("text/plain") returns "".
-    // The production code must rely on closure-captured draggedId from dragstart.
-    const dt = stubDt("");
-
-    tabA.dispatchEvent(makeDragEvent("dragstart", dt));
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
     await tick();
-    tabB.dispatchEvent(makeDragEvent("dragover", dt, 0, 0));
-    tabB.dispatchEvent(makeDragEvent("drop", dt, 0, 0));
+    // Move well past the 5px threshold so `dragging` flips and dropTarget is set.
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
     await tick();
 
     expect(reorder).toHaveBeenCalledTimes(1);
     expect(reorder).toHaveBeenCalledWith("a", "b", expect.stringMatching(/^(left|right)$/));
   });
 
-  it("case B: draggedId survives a tabs prop re-render WITHOUT id removal (regression guard for #625)", async () => {
+  it("case B: drag survives a tabs prop re-render WITHOUT id removal (regression guard for #625)", async () => {
     const reorder = vi.fn();
     const tabsInit = [makeTab("a"), makeTab("b")];
     const { container, rerender } = render(DocumentTabs, {
@@ -85,51 +103,86 @@ describe("DocumentTabs drag/drop", () => {
 
     const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
     expect(tabA).toBeTruthy();
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    overElement(tabB);
 
-    const dt = stubDt("");
-    tabA.dispatchEvent(makeDragEvent("dragstart", dt));
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
     await tick();
 
-    // Mid-drag: tabs prop re-derives with the same a/b plus a new c. This is
-    // the shape of a Yjs awareness ping causing orderedTabs to recompute. With
-    // the deleted broad `$effect(() => { void tabs.length; clearDragState(); })`
-    // re-added, this rerender would null draggedId and the drop below would
-    // fall through to dt.getData("") and silently no-op.
+    // Mid-drag: tabs prop re-derives with the same a/b plus a new c (the shape
+    // of a Yjs awareness ping recomputing orderedTabs). The narrow $effect must
+    // NOT null draggedId because "a" is still present.
     const tabsExpanded = [tabsInit[0], tabsInit[1], makeTab("c")];
     await rerender(baseProps(tabsExpanded, reorder));
     await tick();
 
-    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
-    tabB.dispatchEvent(makeDragEvent("dragover", dt, 0, 0));
-    tabB.dispatchEvent(makeDragEvent("drop", dt, 0, 0));
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
     await tick();
 
     expect(reorder).toHaveBeenCalledTimes(1);
     expect(reorder).toHaveBeenCalledWith("a", "b", expect.stringMatching(/^(left|right)$/));
   });
 
-  it("case D: handleDragOver does NOT preventDefault when no drag is in flight (foreign-drag gate)", async () => {
+  it("case C: dragged tab removed mid-drag → $effect nulls draggedId, drop is a no-op", async () => {
+    const reorder = vi.fn();
+    const tabsInit = [makeTab("a"), makeTab("b")];
+    const { container, rerender } = render(DocumentTabs, {
+      props: baseProps(tabsInit, reorder),
+    });
+    await tick();
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    overElement(tabB);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
+    await tick();
+
+    // Mid-drag: tab "a" disappears (server-driven tandem_close race). The narrow
+    // $effect detects draggedId is no longer in tabs and nulls it.
+    await rerender({
+      tabs: [tabsInit[1]],
+      activeTabId: "b",
+      onTabSwitch: vi.fn(),
+      onTabClose: vi.fn(),
+      reorder,
+    });
+    await tick();
+
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
+    await tick();
+
+    expect(reorder).not.toHaveBeenCalled();
+  });
+
+  it("case D: pointerdown on the close button does NOT start a drag", async () => {
     const reorder = vi.fn();
     const tabs = [makeTab("a"), makeTab("b")];
     const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
     await tick();
 
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const closeBtn = tabA.querySelector("button") as HTMLButtonElement;
+    expect(closeBtn).toBeTruthy();
     const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
-    expect(tabB).toBeTruthy();
+    overElement(tabB);
 
-    // No prior dragstart — draggedId is null. A foreign drag (e.g. a file from
-    // Explorer, now reachable in the WebView because tauri dragDropEnabled is
-    // false) must fall through to OS no-drop instead of being preventDefault'd.
-    const dt = stubDt("");
-    const evt = makeDragEvent("dragover", dt, 0, 0);
-    const pdSpy = vi.spyOn(evt, "preventDefault");
-    tabB.dispatchEvent(evt);
+    // The close button stops pointerdown propagation, so the tab's
+    // handleTabPointerDown never runs and no gesture starts.
+    closeBtn.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
     await tick();
 
-    expect(pdSpy).not.toHaveBeenCalled();
+    expect(reorder).not.toHaveBeenCalled();
   });
 
-  it("case E: handleDrop reports side:right for right half, side:left for left half", async () => {
+  it("case E: side is 'right' for the right half, 'left' for the left half", async () => {
     const reorder = vi.fn();
     const tabs = [makeTab("a"), makeTab("b")];
     const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
@@ -137,8 +190,7 @@ describe("DocumentTabs drag/drop", () => {
 
     const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
     const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
-    expect(tabA).toBeTruthy();
-    expect(tabB).toBeTruthy();
+    overElement(tabB);
 
     // happy-dom getBoundingClientRect returns zeros; stub a 100px-wide rect so
     // clientX positions land cleanly on either side of midX (=50).
@@ -154,53 +206,137 @@ describe("DocumentTabs drag/drop", () => {
       toJSON() {},
     } as DOMRect);
 
-    const dt = stubDt("");
-    tabA.dispatchEvent(makeDragEvent("dragstart", dt));
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 10 }));
     await tick();
-    tabB.dispatchEvent(makeDragEvent("drop", dt, 80, 10));
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 10 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 10 }));
     await tick();
 
     expect(reorder).toHaveBeenCalledTimes(1);
     expect(reorder).toHaveBeenCalledWith("a", "b", "right");
 
-    // Second drop on left half of the same tab.
+    // Second drag, drop on the left half of the same tab.
     reorder.mockClear();
-    tabA.dispatchEvent(makeDragEvent("dragstart", dt));
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 10 }));
     await tick();
-    tabB.dispatchEvent(makeDragEvent("drop", dt, 20, 10));
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 20, clientY: 10 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 20, clientY: 10 }));
     await tick();
 
     expect(reorder).toHaveBeenCalledTimes(1);
     expect(reorder).toHaveBeenCalledWith("a", "b", "left");
   });
 
-  it("case C: dragged tab removed mid-drag → narrower $effect clears draggedId, drop becomes no-op", async () => {
+  it("a sub-threshold press is a click, not a drag: reorder not called, switch fires", async () => {
     const reorder = vi.fn();
-    const tabsInit = [makeTab("a"), makeTab("b")];
-    const { container, rerender } = render(DocumentTabs, {
-      props: baseProps(tabsInit, reorder),
-    });
-    await tick();
-
-    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
-    const dt = stubDt("");
-    tabA.dispatchEvent(makeDragEvent("dragstart", dt));
-    await tick();
-
-    // Mid-drag: tab "a" disappears (server-driven tandem_close, race). The new
-    // narrower $effect should detect that draggedId is no longer in tabs and
-    // null it. A subsequent drop on b must NOT call reorder with the stale id.
-    await rerender({
-      tabs: [tabsInit[1]],
-      activeTabId: "b",
-      onTabSwitch: vi.fn(),
-      onTabClose: vi.fn(),
-      reorder,
-    });
+    const props = baseProps([makeTab("a"), makeTab("b")], reorder);
+    const { container } = render(DocumentTabs, { props });
     await tick();
 
     const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
-    tabB.dispatchEvent(makeDragEvent("drop", dt, 0, 0));
+    overElement(tabB);
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+
+    // Press and release with movement under the 5px threshold.
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 2, clientY: 1 }));
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 2, clientY: 1 }));
+    await tick();
+    // The browser would emit a click; the gesture installs no suppressor here.
+    tabA.click();
+    await tick();
+
+    expect(reorder).not.toHaveBeenCalled();
+    expect(props.onTabSwitch).toHaveBeenCalledWith("a");
+  });
+
+  it("a completed drag suppresses the trailing click so the active tab does not switch", async () => {
+    const reorder = vi.fn();
+    const props = baseProps([makeTab("a"), makeTab("b")], reorder);
+    const { container } = render(DocumentTabs, { props });
+    await tick();
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    overElement(tabB);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
+    await tick();
+
+    // The trailing synthetic click must be swallowed by the one-shot capture
+    // listener, so onTabSwitch is NOT called for the dragged tab.
+    tabA.click();
+    await tick();
+
+    expect(reorder).toHaveBeenCalledTimes(1);
+    expect(props.onTabSwitch).not.toHaveBeenCalled();
+  });
+
+  it("singleTab: a lone tab cannot be dragged", async () => {
+    const reorder = vi.fn();
+    const { container } = render(DocumentTabs, { props: baseProps([makeTab("a")], reorder) });
+    await tick();
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    overElement(tabA);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
+    await tick();
+
+    expect(reorder).not.toHaveBeenCalled();
+  });
+
+  it("Escape mid-drag aborts: no reorder, drop indicator cleared", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    overElement(tabB);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
+    await tick();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await tick();
+
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
+    await tick();
+
+    expect(reorder).not.toHaveBeenCalled();
+  });
+
+  it("pointercancel aborts the drag", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    overElement(tabB);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointercancel", { clientX: 80, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
     await tick();
 
     expect(reorder).not.toHaveBeenCalled();
