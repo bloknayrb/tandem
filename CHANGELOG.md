@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Markdown save no longer leaves `\@` escape noise in non-email prose (#850)** — the serializer's #605 un-escape chain now conditionally reverses `\@`→`@` in positions that cannot re-form a GFM email autolink-literal (e.g. `@`-handles, `@` with no host, numeric-only TLDs), while keeping the escape where a `local@domain`-shaped host follows, for canonical output consistent with how `\[`/`\_` are handled. The host guard is deliberately conservative — verified zero false-negatives against the GFM autolink boundary, including the leading-dot host `user@.com`. This is an escape-noise cleanup, not a structural-safety fix: CommonMark un-escapes `\@`→`@` at parse time, so an email-shaped `@` autolinks on the next load regardless of the escape. Follow-up to PR #849.
 - **Orphaned atomic-write temp files are reaped on startup** — a `.tandem-tmp-*` sibling left behind when the process is force-killed (dev restarts, crashes) between `writeFile` and `rename` is now swept from the annotations and sessions dirs at boot if it's over an hour old. Files younger than an hour, and all real store/session files, are never touched.
 
 ## [0.13.0] - 2026-05-25
