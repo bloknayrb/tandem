@@ -281,6 +281,12 @@ settings-popover
 settings-shortcuts-list
 settings-sidebar-footer
 settings-sidebar-version
+shortcut-conflict-{*}
+shortcut-edit-{*}
+shortcut-recording-{*}
+shortcut-reset-{*}
+shortcut-row-{*}
+shortcuts-reset-all
 solo-rail-hidden-toggle
 status-word-count
 store-readonly-banner
