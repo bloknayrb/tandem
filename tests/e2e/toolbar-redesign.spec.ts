@@ -168,6 +168,29 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   await expect(toolbar.getByRole("button", { name: "Note to self (Alt+Enter)" })).toBeVisible();
 });
 
+// Split into two single-selection tests: re-selecting the same range within one
+// test (collapse → re-select) races the popup's coordsAtPos retry path on a slow
+// CI runner (see Toolbar.svelte's MAX_AFFORDANCE_RETRIES note). Every reliable
+// test in this file opens the popup with exactly one selection episode.
+test("selection popup omits the restore button while the formatting bar is shown", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+  await expect(page.locator("[data-testid='formatting-bar']")).toBeVisible({ timeout: 10_000 });
+
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  // Restoring the bar would be a redundant no-op while it's already shown.
+  await expect(toolbar.locator("[data-testid='popup-show-formatbar-btn']")).toHaveCount(0);
+});
+
 test("hidden formatting bar can be restored from the selection popup", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
@@ -179,26 +202,16 @@ test("hidden formatting bar can be restored from the selection popup", async ({ 
   const bar = page.locator("[data-testid='formatting-bar']");
   await expect(bar).toBeVisible({ timeout: 10_000 });
 
-  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
-  const restore = toolbar.locator("[data-testid='popup-show-formatbar-btn']");
-
-  // While the bar is visible the popup must NOT offer a restore button (it would
-  // be a redundant no-op). Open the popup, assert absent, then dismiss.
-  await editor.click();
-  await editor.locator("p").first().selectText();
-  await expect(toolbar).toBeVisible({ timeout: 5_000 });
-  await expect(restore).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await expect(toolbar).toBeHidden({ timeout: 3_000 });
-
-  // Hide the persistent bar via its collapse control.
+  // Hide the persistent bar first (no selection needed), so the popup opens via a
+  // single fresh selection rather than a fragile re-selection.
   await page.locator("[data-testid='formatbar-hide-btn']").click();
   await expect(bar).toBeHidden({ timeout: 3_000 });
 
-  // Re-open the popup; now the restore button is the symmetric affordance.
   await editor.click();
   await editor.locator("p").first().selectText();
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  const restore = toolbar.locator("[data-testid='popup-show-formatbar-btn']");
   await expect(restore).toBeVisible({ timeout: 3_000 });
 
   // Clicking it brings the persistent bar back.
