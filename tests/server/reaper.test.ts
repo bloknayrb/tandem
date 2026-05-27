@@ -2,7 +2,8 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { reapOrphanedTemps } from "../../src/server/file-io/reaper";
+import { tempSiblingPath } from "../../src/server/file-io/index.js";
+import { ATOMIC_TEMP_RE, reapOrphanedTemps } from "../../src/server/file-io/reaper";
 
 const REAP_AGE_MS = 60 * 60 * 1000; // mirrors the constant in reaper.ts
 const NOW = 1_700_000_000_000; // fixed reference instant for deterministic age math
@@ -194,6 +195,54 @@ describe("reapOrphanedTemps", () => {
       const res = await reapOrphanedTemps([dir], NOW);
       expect(res).toEqual({ cleaned: 0, failed: 0 });
       expect(await exists(future)).toBe(true);
+    });
+  });
+
+  describe("non-file entries (entry.isFile() guard)", () => {
+    it("never removes a DIRECTORY whose name matches the temp pattern", async () => {
+      const dir = await makeDir();
+      // A directory named exactly like a long-orphaned temp. If the isFile()
+      // guard regressed, the name + age would make it eligible and the unlink
+      // would EISDIR/EPERM-fail (counted as `failed`); the guard must skip it
+      // before any unlink is attempted, so the result is a clean {0,0}.
+      const tempShapedDir = path.join(dir, `.tandem-tmp-${NOW - 5 * 60 * 60 * 1000}-${HEX12}`);
+      await fs.mkdir(tempShapedDir);
+      const res = await reapOrphanedTemps([dir], NOW);
+      expect(res).toEqual({ cleaned: 0, failed: 0 });
+      expect(await exists(tempShapedDir)).toBe(true);
+    });
+
+    it("never removes a SYMLINK whose name matches the temp pattern (link or target)", async () => {
+      const dir = await makeDir();
+      const target = await writeFile(dir, "real-target.txt");
+      const linkPath = path.join(dir, `.tandem-tmp-${NOW - 5 * 60 * 60 * 1000}-cccccccccccc`);
+      try {
+        await fs.symlink(target, linkPath);
+      } catch {
+        // Windows without Developer Mode / admin rights can't create symlinks;
+        // skip rather than fail — the directory case above already covers the
+        // isFile() guard for the common cross-platform path.
+        return;
+      }
+      const res = await reapOrphanedTemps([dir], NOW);
+      expect(res).toEqual({ cleaned: 0, failed: 0 });
+      expect(await exists(linkPath)).toBe(true); // the link itself is untouched
+      expect(await exists(target)).toBe(true); // and so is what it points at
+    });
+  });
+
+  describe("generator/regex coupling", () => {
+    it("ATOMIC_TEMP_RE matches the exact name shape tempSiblingPath produces", () => {
+      // The destructive boundary depends on tempSiblingPath (writer) and
+      // ATOMIC_TEMP_RE (reaper) agreeing on the name shape. If a future change
+      // to tempSiblingPath (separator, an added PID, a longer suffix) drifts
+      // from the regex, real orphans would silently stop being reaped with no
+      // behavioral test failing. Pin the contract directly across many random
+      // suffixes so any drift fails at build time.
+      for (let i = 0; i < 50; i++) {
+        const name = path.basename(tempSiblingPath(path.join("foo", "bar.json")));
+        expect(ATOMIC_TEMP_RE.test(name)).toBe(true);
+      }
     });
   });
 });

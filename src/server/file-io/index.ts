@@ -163,7 +163,7 @@ export const ATOMIC_TEMP_PREFIX = ".tandem-tmp-";
  * a shared `Date.now()` millisecond (the annotation store writes multiple
  * files in the same directory in parallel).
  */
-function tempSiblingPath(filePath: string): string {
+export function tempSiblingPath(filePath: string): string {
   const rand = crypto.randomBytes(6).toString("hex");
   return path.join(path.dirname(filePath), `${ATOMIC_TEMP_PREFIX}${Date.now()}-${rand}`);
 }

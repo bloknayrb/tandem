@@ -15,16 +15,29 @@ export interface ReapResult {
 const REAP_AGE_MS = 60 * 60 * 1000; // 1 hour
 
 /**
+ * Escape every regex metacharacter (including backslash) so a literal string
+ * can be embedded safely in a `RegExp` source. `ATOMIC_TEMP_PREFIX` is a
+ * constant holding only `.tandem-tmp-` today, but escaping the full
+ * metacharacter set — not just `.` — keeps the deletion boundary correct if
+ * the prefix ever gains another metachar, and closes the `js/incomplete-
+ * sanitization` gap (escaping `.` alone leaves backslash unescaped).
+ */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
  * Matches EXACTLY an atomic-write temp sibling: the `.tandem-tmp-` prefix, a
  * millisecond timestamp, and the 12-lowercase-hex random suffix produced by
  * `crypto.randomBytes(6).toString("hex")`. The `^`/`$` anchors plus the fixed
  * `{12}` hex length are the load-bearing safety gate — they guarantee
  * `store.lock`, `<hash>.json`, `<hash>.json.corrupt.<ts>`, `<hash>.json.future`,
  * and session `.json` files can never match, so the reaper only ever deletes
- * the temp siblings written by `atomicWrite`/`atomicWriteBuffer`.
+ * the temp siblings written by `atomicWrite`/`atomicWriteBuffer`. Exported so a
+ * test can pin that `tempSiblingPath`'s output shape stays reapable.
  */
-const ATOMIC_TEMP_RE = new RegExp(
-  `^${ATOMIC_TEMP_PREFIX.replace(/[.]/g, "\\$&")}(\\d+)-([0-9a-f]{12})$`,
+export const ATOMIC_TEMP_RE = new RegExp(
+  `^${escapeRegExp(ATOMIC_TEMP_PREFIX)}(\\d+)-([0-9a-f]{12})$`,
 );
 
 /**
@@ -91,7 +104,17 @@ export async function reapOrphanedTemps(
         try {
           const stat = await fs.stat(fullPath);
           tooOld = nowMs - stat.mtimeMs > REAP_AGE_MS;
-        } catch {
+        } catch (err) {
+          // Preserve on any stat failure. ENOENT just means the file was raced
+          // away between readdir and stat (benign); anything else (e.g. EACCES)
+          // is surfaced so a systemic stat failure isn't silently invisible.
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== "ENOENT") {
+            console.error(
+              `[Tandem] reaper: failed to stat ${fullPath} (${code ?? "unknown"}):`,
+              err,
+            );
+          }
           tooOld = false;
         }
       }
