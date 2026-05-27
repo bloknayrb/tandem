@@ -49,6 +49,12 @@ interface Props {
     decorationsMuted?: boolean;
   }) => void;
   onOpenSettings?: () => void;
+  // 1.11: whether the persistent formatting bar is currently shown. When it's
+  // hidden, the popup surfaces a "show formatting bar" affordance (the symmetric
+  // restore for the bar's own hide button) so the bar is reachable without the
+  // command palette / Appearance settings.
+  formattingBarVisible?: boolean;
+  onShowFormattingBar?: () => void;
 }
 
 let {
@@ -64,6 +70,8 @@ let {
   decorationsMuted = false,
   onUpdateDecorations,
   onOpenSettings,
+  formattingBarVisible = true,
+  onShowFormattingBar,
 }: Props = $props();
 
 let hasSelection = $state(false);
@@ -439,11 +447,11 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
   <!-- Selection popup uses the shared .tandem-floating-pill recipe so its
        shadow + warm/white/dark variants match the formatting bar and
        titlebar pills. 1.11: always the full stacked surface — a format pill
-       (FormattingToolbar variant="popup" + the mirrored Decorations control)
-       over an annotate pill (highlight swatches + Annotate). The format pill
-       mirrors the formatting bar so every control stays reachable when the bar
-       is hidden. -webkit-app-region: no-drag — it's fixed chrome over the
-       Tauri WebView. -->
+       (FormattingToolbar variant="popup" + the mirrored Decorations control,
+       plus a "show formatting bar" button when the bar is hidden) over an
+       annotate pill (highlight swatches + Annotate). The format pill mirrors the
+       formatting bar so every control stays reachable when the bar is hidden.
+       -webkit-app-region: no-drag — it's fixed chrome over the Tauri WebView. -->
   <div
     bind:this={toolbarEl}
     role="toolbar"
@@ -480,6 +488,30 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
               {onOpenSettings}
             />
           </div>
+        {/if}
+        {#if !formattingBarVisible && onShowFormattingBar}
+          <!-- Symmetric restore for the formatting bar's own hide button
+               (chevron-up). Only rendered while the bar is hidden. onmousedown
+               preventDefault keeps the editor selection alive so restoring the
+               bar doesn't dismiss the popup mid-interaction; onclick (filtered
+               to keyboard activation) covers Enter/Space. -->
+          <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
+          <button
+            type="button"
+            data-testid="popup-show-formatbar-btn"
+            aria-label="Show formatting bar"
+            title="Show formatting bar"
+            onmousedown={(e) => {
+              e.preventDefault();
+              onShowFormattingBar?.();
+            }}
+            onclick={onKeyActivate(() => onShowFormattingBar?.())}
+            style="height: 26px; min-width: 26px; padding: 0 6px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
         {/if}
       </div>
       <div style="height: 1px; background: var(--tandem-border); margin: 0 6px;"></div>

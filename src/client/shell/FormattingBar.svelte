@@ -35,7 +35,8 @@ interface Props {
   /**
    * 1.11: hide the persistent bar (sets `formattingBarVisible: false`). When
    * provided, a trailing collapse control renders. Restoring is via the
-   * command palette / Appearance settings / the always-full selection popup.
+   * "show formatting bar" button in the selection popup (the symmetric
+   * affordance), the command palette, or Appearance settings.
    */
   onHide?: () => void;
 }

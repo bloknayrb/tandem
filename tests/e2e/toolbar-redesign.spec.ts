@@ -168,6 +168,44 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   await expect(toolbar.getByRole("button", { name: "Note to self (Alt+Enter)" })).toBeVisible();
 });
 
+test("hidden formatting bar can be restored from the selection popup", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tiptap");
+  await expect(editor.locator("p").first()).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
+
+  const bar = page.locator("[data-testid='formatting-bar']");
+  await expect(bar).toBeVisible({ timeout: 10_000 });
+
+  const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
+  const restore = toolbar.locator("[data-testid='popup-show-formatbar-btn']");
+
+  // While the bar is visible the popup must NOT offer a restore button (it would
+  // be a redundant no-op). Open the popup, assert absent, then dismiss.
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await expect(restore).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(toolbar).toBeHidden({ timeout: 3_000 });
+
+  // Hide the persistent bar via its collapse control.
+  await page.locator("[data-testid='formatbar-hide-btn']").click();
+  await expect(bar).toBeHidden({ timeout: 3_000 });
+
+  // Re-open the popup; now the restore button is the symmetric affordance.
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  await expect(toolbar).toBeVisible({ timeout: 5_000 });
+  await expect(restore).toBeVisible({ timeout: 3_000 });
+
+  // Clicking it brings the persistent bar back.
+  await restore.click();
+  await expect(bar).toBeVisible({ timeout: 3_000 });
+});
+
 test("floating selection toolbar dismisses with Escape", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");

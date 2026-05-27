@@ -73,7 +73,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `mode-{toggle,solo-btn,tandem-btn}`
 
 ### Selection popup (audience-first, ADR-027)
-- `popup-{annotate-btn,annotation-input,note-submit,comment-submit,highlight-{*}}`
+- `popup-{annotate-btn,annotation-input,note-submit,comment-submit,highlight-{*},show-formatbar-btn}`
 
 ### Find/Replace
 - `find-replace-bar`, `find-{input,prev-btn,next-btn,close-btn,match-count}`
