@@ -12,15 +12,15 @@ import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { pmPosToFlatOffset } from "../../positions";
+import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
-import { withPreventDefault } from "./handlers.js";
+import FormattingToolbar from "./FormattingToolbar.svelte";
 import { toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
   type SelectionToolbarPlacement,
 } from "./selection-toolbar";
-import ToolbarButton from "./ToolbarButton.svelte";
 
 interface Props {
   editor: TiptapEditor | null;
@@ -33,6 +33,28 @@ interface Props {
    * Ctrl+Alt+M global shortcut in App.svelte.
    */
   requestCommentFocus?: number;
+  // 1.11: decoration display state, threaded through so the popup can mirror
+  // the formatting bar's Decorations split button (the reachability guarantee
+  // when the bar is hidden). Same prop shape as FormattingBar/DecorationsMenu.
+  showAuthorship?: boolean;
+  showComments?: boolean;
+  showHighlights?: boolean;
+  showNotes?: boolean;
+  decorationsMuted?: boolean;
+  onUpdateDecorations?: (partial: {
+    showAuthorship?: boolean;
+    showComments?: boolean;
+    showHighlights?: boolean;
+    showNotes?: boolean;
+    decorationsMuted?: boolean;
+  }) => void;
+  onOpenSettings?: () => void;
+  // 1.11: whether the persistent formatting bar is currently shown. When it's
+  // hidden, the popup surfaces a "show formatting bar" affordance (the symmetric
+  // restore for the bar's own hide button) so the bar is reachable without the
+  // command palette / Appearance settings.
+  formattingBarVisible?: boolean;
+  onShowFormattingBar?: () => void;
 }
 
 let {
@@ -41,6 +63,15 @@ let {
   selectionToolbar = true,
   suppressSelectionToolbar = false,
   requestCommentFocus = 0,
+  showAuthorship = true,
+  showComments = true,
+  showHighlights = true,
+  showNotes = true,
+  decorationsMuted = false,
+  onUpdateDecorations,
+  onOpenSettings,
+  formattingBarVisible = true,
+  onShowFormattingBar,
 }: Props = $props();
 
 let hasSelection = $state(false);
@@ -290,6 +321,10 @@ function createAnnotation(
   extras?: { color?: HighlightColor },
 ) {
   if (!editor || !ydoc) return;
+  // Structural empty-content guard (defense-in-depth): the textarea handlers
+  // already guard, but keep the invariant at the write seam so no future caller
+  // can persist a zero-content note/comment. Highlights carry no text.
+  if (type !== "highlight" && !content.trim()) return;
 
   const range = capturedRange ?? editor.state.selection;
   const { from, to } = range;
@@ -352,20 +387,16 @@ function handleHighlight(color: HighlightColor) {
   editor.chain().setTextSelection(to).run();
 }
 
+// Keyboard activation (Enter / Space on a focused button) fires `click` with
+// `detail === 0`. The mouse path uses `mousedown` so the editor selection
+// survives. Pair `onmousedown` (mouse, preventDefault) with
+// `onclick={onKeyActivate(...)}` (keyboard, filtered) so both routes fire
+// without double-firing. Used by the highlight swatches.
 function onKeyActivate(handler: (e: MouseEvent) => void) {
   return (e: MouseEvent) => {
     if (e.detail === 0) handler(e);
   };
 }
-
-// Keyboard activation (Enter / Space on a focused button) fires `click` with
-// `detail === 0`. The mouse path uses `mousedown` so the editor selection
-// survives. Pair `onMouseDown` (mouse) with `onClick={onKeyActivate(...)}`
-// (keyboard, filtered) so both routes apply the mark without double-firing.
-const boldHandler = $derived(withPreventDefault(() => editor?.chain().focus().toggleBold().run()));
-const italicHandler = $derived(
-  withPreventDefault(() => editor?.chain().focus().toggleItalic().run()),
-);
 
 function dismissPopup() {
   hasSelection = false;
@@ -388,14 +419,23 @@ function submitAsComment() {
 }
 
 function submitAsNote() {
+  if (!annotationTextTrimmed) return;
   createAnnotation("note", annotationTextTrimmed);
   dismissPopup();
 }
 
 function handleTextareaKeyDown(e: KeyboardEvent) {
-  if (e.key === "Enter" && !e.shiftKey) {
+  // Keybindings (Conflict #5, overridden by Bryan 2026-05-26): plain Enter =
+  // newline (no submit — let the textarea insert it), Alt+Enter = Note to self
+  // (private), Ctrl/Cmd+Enter = Send to Claude (outbound). Test the modifier
+  // branches first so a note-intent keystroke can never fall through to a
+  // comment submit. Plain/Shift+Enter hit no branch → default newline.
+  if (e.key === "Enter" && e.altKey) {
     e.preventDefault();
-    submitAsComment(); // Enter = primary action (Comment)
+    submitAsNote();
+  } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    submitAsComment();
   } else if (e.key === "Escape") {
     e.preventDefault();
     dismissPopup();
@@ -406,39 +446,77 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
 {#if showPopup && selectionPosition}
   <!-- Selection popup uses the shared .tandem-floating-pill recipe so its
        shadow + warm/white/dark variants match the formatting bar and
-       titlebar pills. -->
+       titlebar pills. 1.11: always the full stacked surface — a format pill
+       (FormattingToolbar variant="popup" + the mirrored Decorations control,
+       plus a "show formatting bar" button when the bar is hidden) over an
+       annotate pill (highlight swatches + Annotate). The format pill mirrors the
+       formatting bar so every control stays reachable when the bar is hidden.
+       -webkit-app-region: no-drag — it's fixed chrome over the Tauri WebView. -->
   <div
     bind:this={toolbarEl}
     role="toolbar"
     aria-label="Selection tools"
     class="tandem-floating-pill"
-    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-pill); z-index: var(--tandem-z-modal);`}
+    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-3); z-index: var(--tandem-z-modal); -webkit-app-region: no-drag;`}
   >
     {#if !annotateMode}
-      <!-- Single-row action surface: inline-mark formatting + highlight
-           swatches + Annotate. Buttons bind to mousedown via
-           withPreventDefault so the editor selection survives the click —
-           see handlers.ts for the rationale. -->
-      <div style="display: flex; align-items: center; gap: 1px; padding: 4px;">
-        <ToolbarButton
-          label="B"
-          ariaLabel="Bold"
-          style="font-weight: 700; min-width: 28px;"
-          onMouseDown={boldHandler}
-          onClick={onKeyActivate(boldHandler)}
-        />
-        <ToolbarButton
-          label="I"
-          ariaLabel="Italic"
-          style="font-style: italic; min-width: 28px;"
-          onMouseDown={italicHandler}
-          onClick={onKeyActivate(italicHandler)}
-        />
-        <!-- Strike, Inline code, and Link were intentionally removed from the
-             selection popup per docs/designs/handoff/tandem/project/
-             toolbar-ux-research.md. They remain on the persistent
-             FormattingToolbar and via keyboard shortcuts. -->
-        <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+      <!-- Format pill: full mark/block control set (no Undo/Redo — those stay
+           on the bar + Ctrl+Z/Y) + the mirrored Decorations control. Every
+           FormattingToolbar button already binds onMouseDown+withPreventDefault
+           so clicking one cannot blur the editor / collapse the selection. -->
+      <div style="display: flex; align-items: center; gap: 1px; padding: 4px 4px 2px;">
+        <FormattingToolbar {editor} variant="popup" />
+        {#if onUpdateDecorations}
+          <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
+          <!-- preventDefault on mousedown keeps the editor selection alive while
+               interacting with the (onclick-based) Decorations control, so a
+               toggle can't dismiss the popup before a follow-up Annotate.
+               click still fires — preventDefault on mousedown only blocks the
+               focus shift, not the click. -->
+          <div
+            style="display: inline-flex; align-items: center;"
+            onmousedown={(e) => e.preventDefault()}
+            role="presentation"
+          >
+            <DecorationsMenu
+              {showAuthorship}
+              {showComments}
+              {showHighlights}
+              {showNotes}
+              {decorationsMuted}
+              onUpdate={onUpdateDecorations}
+              {onOpenSettings}
+            />
+          </div>
+        {/if}
+        {#if !formattingBarVisible && onShowFormattingBar}
+          <!-- Symmetric restore for the formatting bar's own hide button
+               (chevron-up). Only rendered while the bar is hidden. onmousedown
+               preventDefault keeps the editor selection alive so restoring the
+               bar doesn't dismiss the popup mid-interaction; onclick (filtered
+               to keyboard activation) covers Enter/Space. -->
+          <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
+          <button
+            type="button"
+            data-testid="popup-show-formatbar-btn"
+            aria-label="Show formatting bar"
+            title="Show formatting bar"
+            onmousedown={(e) => {
+              e.preventDefault();
+              onShowFormattingBar?.();
+            }}
+            onclick={onKeyActivate(() => onShowFormattingBar?.())}
+            style="height: 26px; min-width: 26px; padding: 0 6px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
+        {/if}
+      </div>
+      <div style="height: 1px; background: var(--tandem-border); margin: 0 6px;"></div>
+      <!-- Annotate pill: highlight swatches + Annotate. -->
+      <div style="display: flex; align-items: center; gap: 1px; padding: 2px 4px 4px;">
         <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
           {#each MINI_HIGHLIGHT_COLORS as color}
             <button
@@ -473,6 +551,8 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
         >Annotate</button>
       </div>
     {:else}
+      <!-- Annotate popover. Keybindings: Alt+Enter = Note to self (private),
+           Ctrl/Cmd+Enter = Send to Claude (outbound), plain Enter = newline. -->
       <div style="display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; min-width: 260px; max-width: 360px;">
         <textarea
           bind:this={textareaEl}
@@ -488,18 +568,27 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           <button
             type="button"
             data-testid="popup-note-submit"
-            aria-label="Note to self"
+            aria-label="Note to self (Alt+Enter)"
+            title="Note to self — private, not sent to Claude (Alt+Enter)"
+            disabled={!annotationTextTrimmed}
             onclick={submitAsNote}
-            style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer;"
-          >Note to self</button>
+            style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
+          >
+            Note to self
+            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-fg-subtle);">⌥⏎</kbd>
+          </button>
           <button
             type="button"
             data-testid="popup-comment-submit"
-            aria-label="Comment on selection"
+            aria-label="Send to Claude (Ctrl+Enter)"
+            title="Send to Claude — outbound comment (Ctrl/Cmd+Enter)"
             disabled={!annotationTextTrimmed}
             onclick={submitAsComment}
-            style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer;"
-          >Comment</button>
+            style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
+          >
+            Send to Claude
+            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-author-user);">⌘⏎</kbd>
+          </button>
         </div>
       </div>
     {/if}

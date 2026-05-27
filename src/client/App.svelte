@@ -460,6 +460,10 @@ wireActionDeps({
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
   toggleAuthorship: () => setAuthorshipVisible(!settingsState.settings.showAuthorship),
+  toggleFormattingBar: () =>
+    settingsState.updateSettings({
+      formattingBarVisible: !settingsState.settings.formattingBarVisible,
+    }),
   saveAs: async () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
     // Save-As is a PROMOTION path — only offer it for ephemeral upload://
@@ -1137,11 +1141,6 @@ const tutorial = createTutorial(
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
       requestCommentFocus={commentFocusTrigger}
-    />
-
-    <FormattingBar
-      {editor}
-      ydoc={activeTab?.ydoc ?? null}
       showAuthorship={settingsState.settings.showAuthorship}
       showComments={settingsState.settings.showComments}
       showHighlights={settingsState.settings.showHighlights}
@@ -1149,7 +1148,24 @@ const tutorial = createTutorial(
       decorationsMuted={settingsState.settings.decorationsMuted}
       onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
       onOpenSettings={toggleSettings}
+      formattingBarVisible={settingsState.settings.formattingBarVisible}
+      onShowFormattingBar={() => settingsState.updateSettings({ formattingBarVisible: true })}
     />
+
+    {#if settingsState.settings.formattingBarVisible}
+      <FormattingBar
+        {editor}
+        ydoc={activeTab?.ydoc ?? null}
+        showAuthorship={settingsState.settings.showAuthorship}
+        showComments={settingsState.settings.showComments}
+        showHighlights={settingsState.settings.showHighlights}
+        showNotes={settingsState.settings.showNotes}
+        decorationsMuted={settingsState.settings.decorationsMuted}
+        onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
+        onOpenSettings={toggleSettings}
+        onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
+      />
+    {/if}
 
     <!-- Single persistent container — editor column is always rendered in the same
          DOM position so the Editor component never remounts on panel toggles.

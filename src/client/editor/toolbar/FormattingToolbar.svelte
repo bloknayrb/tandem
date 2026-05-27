@@ -8,9 +8,18 @@ import ToolbarButton from "./ToolbarButton.svelte";
 interface Props {
   editor: TiptapEditor | null;
   disabled?: boolean;
+  /**
+   * "bar" (default) = the persistent floating bar: shows Undo/Redo.
+   * "popup" = the selection popup's format pill: omits Undo/Redo (they stay on
+   * the bar + Ctrl+Z/Y; the popup mirrors only the mark/block controls).
+   */
+  variant?: "bar" | "popup";
 }
 
-const { editor, disabled = false }: Props = $props();
+const { editor, disabled = false, variant = "bar" }: Props = $props();
+
+// $derived (not a plain const) so it tracks if `variant` ever becomes dynamic.
+const showHistory = $derived(variant === "bar");
 
 type HeadingLevel = 1 | 2 | 3;
 const HEADING_LEVELS: HeadingLevel[] = [1, 2, 3];
@@ -146,9 +155,15 @@ function dismissLinkInput() {
 function handleLinkInputKeyDown(e: KeyboardEvent) {
   if (e.key === "Enter") {
     e.preventDefault();
+    // Stop bubbling: when this toolbar renders inside the selection popup, the
+    // popup mounts a window-level Escape listener that calls dismissPopup().
+    // Without stopPropagation an Escape (or Enter) while editing the URL would
+    // tear down the whole popup instead of just closing the link input.
+    e.stopPropagation();
     submitLinkInput();
   } else if (e.key === "Escape") {
     e.preventDefault();
+    e.stopPropagation();
     dismissLinkInput();
   }
 }
@@ -156,33 +171,35 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
 
 {#if editor}
   <div style="display: flex; align-items: center; gap: 1px;">
-    <ToolbarButton
-      ariaLabel="Undo"
-      shortcut="Ctrl+Z"
-      disabled={!canUndo}
-      onMouseDown={withPreventDefault(() => editor.commands.undo())}
-    >
-      {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <path d="M4 7L1 4l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M1 4h9a5 5 0 0 1 0 10H7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      {/snippet}
-    </ToolbarButton>
-    <ToolbarButton
-      ariaLabel="Redo"
-      shortcut="Ctrl+Shift+Z"
-      disabled={!canRedo}
-      onMouseDown={withPreventDefault(() => editor.commands.redo())}
-    >
-      {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 7l3-3-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M15 4H6a5 5 0 0 0 0 10h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      {/snippet}
-    </ToolbarButton>
-    <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
+    {#if showHistory}
+      <ToolbarButton
+        ariaLabel="Undo"
+        shortcut="Ctrl+Z"
+        disabled={!canUndo}
+        onMouseDown={withPreventDefault(() => editor.commands.undo())}
+      >
+        {#snippet children()}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 7L1 4l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M1 4h9a5 5 0 0 1 0 10H7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        {/snippet}
+      </ToolbarButton>
+      <ToolbarButton
+        ariaLabel="Redo"
+        shortcut="Ctrl+Shift+Z"
+        disabled={!canRedo}
+        onMouseDown={withPreventDefault(() => editor.commands.redo())}
+      >
+        {#snippet children()}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 7l3-3-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M15 4H6a5 5 0 0 0 0 10h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        {/snippet}
+      </ToolbarButton>
+      <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
+    {/if}
 
     <ToolbarButton
       label="B"

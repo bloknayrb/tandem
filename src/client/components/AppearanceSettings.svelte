@@ -277,3 +277,24 @@ const densityRg = createRadioGroup<Density>(
     Disables smooth autoscroll and the annotation flash animation.
   </div>
 </div>
+
+<!-- Formatting bar (1.11) -->
+<div>
+  <label
+    data-testid="appearance-formatting-bar"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+  >
+    <input
+      type="checkbox"
+      checked={settings.formattingBarVisible}
+      onchange={(e) =>
+        onUpdate({ formattingBarVisible: (e.target as HTMLInputElement).checked })}
+      style="accent-color: var(--tandem-accent);"
+    />
+    <span>Show formatting bar</span>
+  </label>
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+    The persistent toolbar above the document. When hidden, formatting stays available
+    in the selection popup, and Ctrl+Z / Ctrl+Y still undo and redo.
+  </div>
+</div>

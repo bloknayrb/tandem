@@ -95,6 +95,10 @@ export interface TandemSettings {
   highContrast: boolean;
   annotationPatterns: boolean;
   selectionToolbar: boolean;
+  // 1.11: when false, the persistent floating formatting bar is hidden. The
+  // always-full selection popup mirrors every bar control, so formatting stays
+  // reachable while hidden (and Ctrl+Z/Y still drive undo/redo). Default true.
+  formattingBarVisible: boolean;
   soloRailHidden: boolean;
   degradedBannerDelayMs: number;
   // TODO(v0.11.0): wire to yjsSync reconnect strategy
@@ -150,7 +154,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 9,
+  schemaVersion: 10,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorWidthPercent: 100,
@@ -166,6 +170,7 @@ const DEFAULTS: TandemSettings = {
   highContrast: false,
   annotationPatterns: false,
   selectionToolbar: true,
+  formattingBarVisible: true,
   soloRailHidden: true,
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
@@ -298,8 +303,10 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  *   marks off" preference, so it maps onto all three per-type flags by
  *   intent (mute stays off). This migration sets values (derives three
  *   fields from one) rather than being a pure version bump.
+ * v9→v10 (1.11): introduce `formattingBarVisible: true`. Pure version bump —
+ *   default preserves today's always-shown bar; normalizeKnownFields coerces.
  */
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -374,6 +381,8 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     highContrast: parsed.highContrast === true,
     annotationPatterns: parsed.annotationPatterns === true,
     selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
+    formattingBarVisible:
+      parsed.formattingBarVisible === false ? false : DEFAULTS.formattingBarVisible,
     soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
     degradedBannerDelayMs:
       typeof parsed.degradedBannerDelayMs === "number" &&
@@ -510,6 +519,13 @@ export function loadSettings(): TandemSettings {
         };
         delete next.showAnnotationDecorations;
         parsed = next;
+      }
+      if (parsed.schemaVersion === 9) {
+        // v9→v10: introduce `formattingBarVisible`. Pure version bump — do NOT
+        // set the field here (that would clobber an explicit `false`).
+        // normalizeKnownFields defaults a missing field to true and preserves
+        // an explicit false.
+        parsed = { ...parsed, schemaVersion: 10 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
