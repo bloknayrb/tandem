@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Audience & monetization direction recorded (ADR-040)** — documentation now reflects the decided product direction: Tandem targets **individuals** (not institutions), the moat is the **same-canvas / no-copy-paste review experience** backed by **persistent, queryable annotations + the .docx review-record loop**, and monetization is **free during public beta → a one-time paid license at v1.0** with **offline signed-license activation**. Existing beta users will be grandfathered with a free license. Updated `docs/decisions.md` (new ADR-040; ADR-039 reserved for the Agent SDK adapter), `README.md`, `docs/positioning.md`, `docs/roadmap.md` (#394), `docs/security.md`, `docs/workflows.md`, and `docs/user-guide.md`. No code changes — the in-app license-verification, trial gate, and license-checked updater are v1.0 engineering work tracked separately.
 
+### Fixed
+
+- **Orphaned atomic-write temp files are reaped on startup** — a `.tandem-tmp-*` sibling left behind when the process is force-killed (dev restarts, crashes) between `writeFile` and `rename` is now swept from the annotations and sessions dirs at boot if it's over an hour old. Files younger than an hour, and all real store/session files, are never touched.
+
 ## [0.13.0] - 2026-05-25
 
 ### Added

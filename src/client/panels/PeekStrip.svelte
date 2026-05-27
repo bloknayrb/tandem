@@ -73,17 +73,23 @@ function handleKey(e: KeyboardEvent) {
     opacity: 0.7;
     transition: opacity 160ms ease;
   }
-  .peek-strip:hover,
-  .peek-strip:focus-visible {
+  .peek-strip:hover {
     width: 20px;
     box-shadow: var(--tandem-shadow-3);
     outline: none;
   }
-  .peek-strip:hover .peek-chevron,
-  .peek-strip:focus-visible .peek-chevron {
+  .peek-strip:hover .peek-chevron {
     opacity: 1;
   }
+  /* tabindex="-1": never reachable via Tab. The only focus paths are the
+     keyboard-toggle restoration helper (focusToggleTarget, which focuses the
+     strip purely to preserve tab position after the panel collapses) and a
+     mouse click. The restoration focus follows a keydown, so :focus-visible
+     would match and draw a lingering accent ring — plus the width-expand and
+     elevation bump it once shared with :hover would make the strip silently
+     widen (#859). Restoration focus must be visually inert, so the hover
+     affordances are scoped to :hover only and no focus ring is drawn. */
   .peek-strip:focus-visible {
-    box-shadow: var(--tandem-shadow-3), inset 0 0 0 2px var(--tandem-accent);
+    outline: none;
   }
 </style>

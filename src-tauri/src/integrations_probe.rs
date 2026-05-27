@@ -11,7 +11,7 @@
 //!    launcher cannot rely on the Tauri build-time triple. We test reading a
 //!    pointer file written by `tandem setup` instead.
 //! 2. **Launch command shape** — build a `std::process::Command` with the
-//!    correct env vars (`TANDEM_AUTH_TOKEN`, `TANDEM_OPEN_BROWSER=0`,
+//!    correct env vars (`TANDEM_AUTH_TOKEN`, `TANDEM_TAURI_SIDECAR=1`,
 //!    `TANDEM_BIND_HOST` defaulted/omitted so the server binds 127.0.0.1).
 //! 3. **Config rewrite** — merge a tandem entry into an existing
 //!    `mcpServers` map without clobbering siblings, preserving the
@@ -314,7 +314,7 @@ pub fn read_sidecar_pointer(path: &Path) -> Result<UnvalidatedSidecarLocation, S
 pub fn build_launch_env(auth_token: &str, app_data_dir: &Path) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     env.insert("TANDEM_AUTH_TOKEN".into(), auth_token.into());
-    env.insert("TANDEM_OPEN_BROWSER".into(), "0".into());
+    env.insert("TANDEM_TAURI_SIDECAR".into(), "1".into());
     env.insert(
         "TANDEM_DATA_DIR".into(),
         app_data_dir.to_string_lossy().into_owned(),
@@ -407,7 +407,10 @@ mod tests {
     fn build_launch_env_never_sets_bind_host() {
         let env = build_launch_env("synthetic-token", Path::new("/tmp/tandem"));
         assert!(!env.contains_key("TANDEM_BIND_HOST"));
-        assert_eq!(env.get("TANDEM_OPEN_BROWSER").map(String::as_str), Some("0"));
+        assert_eq!(
+            env.get("TANDEM_TAURI_SIDECAR").map(String::as_str),
+            Some("1")
+        );
         assert_eq!(
             env.get("TANDEM_AUTH_TOKEN").map(String::as_str),
             Some("synthetic-token")

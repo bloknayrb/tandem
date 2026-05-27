@@ -25,7 +25,7 @@
 - [Agent Workflow](.claude/skills/issue-pipeline/SKILL.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-038)
-- [Lessons Learned](docs/lessons-learned.md) -- 74 lessons including E2E testing gotchas, CORS-allowlist three-surface audits, DOM-nested scroll sync for content-anchored overlays, schema-backed palette migrations, and epoch-vs-value reconcile discrimination
+- [Lessons Learned](docs/lessons-learned.md) -- 75 lessons including E2E testing gotchas, CORS-allowlist three-surface audits, DOM-nested scroll sync for content-anchored overlays, schema-backed palette migrations, epoch-vs-value reconcile discrimination, and boot-time reaping of crash-orphaned atomic-write temps
 - [Knowledge Graph](.claude/knowledge-graph/README.md) -- **PILOT (review 2026-06-01).** 25 hand-curated concept/rule/ADR nodes with cross-edges. Query via `npm run kg neighbors <id>` / `npm run kg rules-for <id-or-file>`. Validate via `npm run kg:lint`. Kill if no surprising query in two weeks.
 
 ## Development Workflow
@@ -146,6 +146,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **File watcher suppression checks at event arrival, not delivery.** `suppressNextChange()` is consumed in the `fs.watch` callback (arrival), not inside the debounce timer callback (delivery). Checking at delivery time creates a race where an external edit arriving within the debounce window gets suppressed instead of the self-write.
 - **Word comment offsets need re-anchoring.** `.docx` comment ranges reference HTML-converted content. `docx-comments.ts` re-resolves via `anchoredRange()` after Y.Doc population.
 - **Exception handler is narrowed, not blanket.** `uncaughtException`/`unhandledRejection` only swallow known Hocuspocus/ws errors (via `isKnownHocuspocusError`). Unknown errors call `process.exit(1)`.
+- **Boot-time orphaned-temp reaper.** `reapOrphanedTemps` (`src/server/file-io/reaper.ts`) sweeps `.tandem-tmp-*` atomic-write siblings older than 1 hour from the annotations + sessions dirs **only** (never user document dirs). These orphan when the process is SIGKILLed between `writeFile` and `rename` (dev restarts, force-quits). Fire-and-forget at boot (un-awaited, with `.catch()`), skipped when the store is read-only. The 1-hour age gate — not the store lock — is what makes it safe against a concurrently-starting instance, since session-dir writes aren't lock-gated. The match regex (`^\.tandem-tmp-(\d+)-([0-9a-f]{12})$`) is the safety boundary: `store.lock`, `<hash>.json`, `.corrupt.*`, `.future`, and session files can never match.
 
 ### Testing & E2E
 - **E2E tests start their own server** via Playwright `webServer`. `freePort()` kills existing :3478/:3479 -- running E2E alongside `dev:server` will terminate your dev server.
