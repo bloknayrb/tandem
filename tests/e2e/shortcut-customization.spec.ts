@@ -97,6 +97,28 @@ test("blocks a conflicting combo and names the owner", async ({ page }) => {
   await expect(page.locator(RESET_BTN)).toHaveCount(0);
 });
 
+test("blocks a combo claimed by a fixed matcher branch (Ctrl+Shift+/) and names it", async ({
+  page,
+}) => {
+  // Exercises the claimedByFixedShortcut path (not the remappable-default loop):
+  // Ctrl+Shift+/ reaches the help branch via e.key="?", a loose fixed branch the
+  // old reserved list did not cover. The override loop would otherwise steal it.
+  await openShortcutsTab(page);
+  await page.locator(EDIT_BTN).click();
+  await expect(page.locator(RECORDING)).toBeVisible();
+
+  await page.keyboard.press("Control+Shift+/");
+
+  await expect(page.locator(CONFLICT)).toBeVisible();
+  await expect(page.locator(CONFLICT)).toContainText("Show keyboard shortcuts");
+  await expect(page.locator(RECORDING)).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(RECORDING)).toHaveCount(0);
+  await expect(comboKbd(page)).toHaveText("Ctrl+N");
+  await expect(page.locator(RESET_BTN)).toHaveCount(0);
+});
+
 test("reset restores the default combo", async ({ page }) => {
   await openShortcutsTab(page);
   await page.locator(EDIT_BTN).click();

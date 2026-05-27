@@ -375,12 +375,28 @@ describe("loadSettings — migration chain", () => {
     expect(s.customShortcuts).toEqual({});
   });
 
-  it("normalizeKnownFields drops a stored override that collides with a reserved chord", () => {
-    // Ctrl+A is reserved by select-all; a stale override pointing at it must be
-    // dropped at load rather than shadowing the fixed shortcut.
+  it("normalizeKnownFields drops a stored override colliding with a fixed matcher branch", () => {
+    // Ctrl+A → select-all and Ctrl+Shift+/ → help are fixed matcher branches
+    // (covered live by claimedByFixedShortcut). An override pointing at either —
+    // including the loose Ctrl+Shift+/ help variant the old reserved list missed —
+    // must be dropped at load rather than shadowing the fixed shortcut.
     writeRaw({
       schemaVersion: 9,
-      customShortcuts: { save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" } },
+      customShortcuts: {
+        save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" },
+        "close-tab": { ctrlOrMeta: true, alt: false, shift: true, code: "Slash" },
+      },
+    });
+    const s = loadSettings();
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  it("normalizeKnownFields drops a non-bindable override (no primary modifier)", () => {
+    // Plain Shift+J has no Ctrl/Alt, so the override loop would fire it on every
+    // keystroke; it must be dropped at load (matches the recording-UI gate).
+    writeRaw({
+      schemaVersion: 9,
+      customShortcuts: { save: { ctrlOrMeta: false, alt: false, shift: true, code: "KeyJ" } },
     });
     const s = loadSettings();
     expect(s.customShortcuts).toEqual({});

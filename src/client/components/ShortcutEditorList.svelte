@@ -1,9 +1,7 @@
 <script lang="ts">
 import {
-  buildOverrides,
   chordFromEvent,
   effectiveChord,
-  findConflict,
   formatChord,
   REGISTRY_TO_SHORTCUT_ID,
   REMAPPABLE_LABELS,
@@ -11,6 +9,7 @@ import {
   type RemappableShortcutId,
 } from "../actions/keybindings.js";
 import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
+import { buildOverrides, findConflict } from "../actions/shortcut-conflicts.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
 import type { TandemSettings } from "../hooks/useTandemSettings.svelte.js";
 

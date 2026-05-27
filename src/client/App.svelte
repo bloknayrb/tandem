@@ -14,8 +14,9 @@ import {
   triggerSaveAs,
   wireActionDeps,
 } from "./actions/builtin.svelte.js";
-import { buildOverrides, effectiveBindingLabels } from "./actions/keybindings.js";
+import { effectiveBindingLabels } from "./actions/keybindings.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
+import { buildOverrides } from "./actions/shortcut-conflicts.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";

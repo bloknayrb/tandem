@@ -5,7 +5,8 @@ import {
   TANDEM_SETTINGS_KEY,
 } from "../../shared/constants";
 import type { TandemMode } from "../../shared/types.js";
-import { parseCustomShortcuts, type ShortcutChord } from "../actions/keybindings.js";
+import type { ShortcutChord } from "../actions/keybindings.js";
+import { parseCustomShortcuts } from "../actions/shortcut-conflicts.js";
 
 export type EditorFont = "serif" | "sans" | "mono";
 export type Density = "compact" | "cozy" | "spacious";

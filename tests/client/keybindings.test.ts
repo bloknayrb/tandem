@@ -1,14 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildOverrides,
   chordFromEvent,
-  chordsEqual,
   DEFAULT_BINDINGS,
-  findConflict,
   formatChord,
-  parseCustomShortcuts,
   REMAPPABLE_SHORTCUT_IDS,
-  RESERVED_CHORDS,
   type RemappableShortcutId,
   type ShortcutChord,
 } from "../../src/client/actions/keybindings.js";
@@ -50,45 +45,8 @@ describe("DEFAULT_BINDINGS drift guard", () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// Reserved-set completeness — every fixed combo derivable from our OWN code
-// (matcher fixed branches + tab-cycle + zoom listeners) must be reserved.
-// The Tiptap slice is reviewed/version-pinned, NOT asserted here.
-// ---------------------------------------------------------------------------
-describe("RESERVED_CHORDS completeness (code-derivable subset)", () => {
-  const reservedHas = (c: ShortcutChord) => RESERVED_CHORDS.some((r) => chordsEqual(r.chord, c));
-
-  it("covers the matcher's fixed single chords", () => {
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" })).toBe(true); // select-all
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "KeyF" })).toBe(true); // find
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: true, code: "KeyF" })).toBe(true); // find tabs
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "KeyG" })).toBe(true); // find-next
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: true, code: "KeyG" })).toBe(true); // find-prev
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "Enter" })).toBe(true); // accept
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: true, code: "Enter" })).toBe(true); // dismiss
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "Slash" })).toBe(true); // help
-  });
-
-  it("covers the pick-tab Ctrl+1..9 family", () => {
-    for (let i = 1; i <= 9; i++) {
-      expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: `Digit${i}` })).toBe(
-        true,
-      );
-    }
-  });
-
-  it("covers the separate tab-cycle and zoom window listeners", () => {
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "Tab" })).toBe(true);
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: true, code: "Tab" })).toBe(true);
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "Digit0" })).toBe(true);
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "Equal" })).toBe(true);
-    expect(reservedHas({ ctrlOrMeta: true, alt: false, shift: false, code: "Minus" })).toBe(true);
-  });
-
-  it("does NOT reserve Ctrl+Alt+M (that is the remappable comment-on-selection)", () => {
-    expect(reservedHas(DEFAULT_BINDINGS["comment-on-selection"])).toBe(false);
-  });
-});
+// Note: fixed-branch conflict coverage and reserved-set composition are tested
+// in `shortcut-conflicts.test.ts` (the matcher is the completeness oracle now).
 
 // ---------------------------------------------------------------------------
 // Override-aware matcher behavior.
@@ -174,70 +132,8 @@ describe("chordFromEvent", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// findConflict.
-// ---------------------------------------------------------------------------
-describe("findConflict", () => {
-  const empty = new Map<RemappableShortcutId, ShortcutChord>();
-
-  it("names the remappable owner of a default chord", () => {
-    expect(findConflict(DEFAULT_BINDINGS["save"], empty, "save-as")).toBe("Save document");
-  });
-
-  it("excludes the id being edited", () => {
-    expect(findConflict(DEFAULT_BINDINGS["save"], empty, "save")).toBeNull();
-  });
-
-  it("names a reserved-chord owner", () => {
-    expect(
-      findConflict({ ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" }, empty, "save"),
-    ).toBe("Select all");
-  });
-
-  it("returns null for a free chord", () => {
-    expect(
-      findConflict({ ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" }, empty, "save"),
-    ).toBeNull();
-  });
-
-  it("checks effective (overridden) bindings, not just defaults", () => {
-    const chord: ShortcutChord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
-    const overrides = overridesOf([["close-tab", chord]]);
-    expect(findConflict(chord, overrides, "save")).toBe("Close active tab");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// parseCustomShortcuts / buildOverrides — load-time validation.
-// ---------------------------------------------------------------------------
-describe("parseCustomShortcuts", () => {
-  it("keeps a valid remappable entry", () => {
-    const raw = { "new-scratchpad": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" } };
-    expect(parseCustomShortcuts(raw)).toEqual(raw);
-  });
-
-  it("drops unknown ids and malformed chords", () => {
-    const raw = {
-      "not-a-real-id": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" },
-      save: { ctrlOrMeta: true, code: "KeyJ" }, // missing alt/shift
-    };
-    expect(parseCustomShortcuts(raw)).toEqual({});
-  });
-
-  it("drops an override that now collides with a reserved chord", () => {
-    // A stored override for `save` pointing at Ctrl+A (now reserved by
-    // select-all) must be dropped at load rather than shadowing it.
-    const raw = { save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" } };
-    expect(parseCustomShortcuts(raw)).toEqual({});
-  });
-
-  it("buildOverrides yields a Map of the same valid entries", () => {
-    const chord: ShortcutChord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
-    const map = buildOverrides({ "close-tab": chord });
-    expect(map.get("close-tab")).toEqual(chord);
-    expect(map.size).toBe(1);
-  });
-});
+// Note: findConflict, parseCustomShortcuts, and buildOverrides moved to
+// `shortcut-conflicts.test.ts` along with their implementation.
 
 describe("formatChord", () => {
   it("formats a Ctrl+Shift chord on a non-mac platform", () => {

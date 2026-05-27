@@ -128,10 +128,13 @@ export function matchShortcut(
   // IME composition: never dispatch a shortcut mid-composition.
   if (e.isComposing) return null;
 
-  // Override layer wins first. Strict-equality `chordMatches` guarantees two
-  // distinct override chords can't both match one event, so Map iteration
-  // order is not a correctness risk. A remapped combo short-circuits the
-  // entire legacy chain below.
+  // Override layer wins first. The persisted override map is deduped by chord
+  // at load (`parseCustomShortcuts` keeps the entry earliest in
+  // `REMAPPABLE_SHORTCUT_IDS` order), so no two ids can share a chord — which
+  // is the real hazard, not "two distinct chords matching one event". With
+  // duplicates impossible, this loop's order is deterministic and fires the
+  // same id load-time dedupe kept. A remapped combo short-circuits the entire
+  // legacy chain below.
   if (overrides && overrides.size > 0) {
     for (const id of REMAPPABLE_SHORTCUT_IDS) {
       const chord = overrides.get(id);

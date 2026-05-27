@@ -330,6 +330,9 @@ describe("useTandemSettings — updateSettings write path", () => {
     sidecarRetryStrategy: "exponential",
     holdAnnotationsWhileOffline: true,
     marginView: false,
+    showAnnotationDecorations: true,
+    models: [],
+    defaultModelId: null,
     customShortcuts: {},
   } as TandemSettings;
 
@@ -397,11 +400,13 @@ describe("useTandemSettings — updateSettings write path", () => {
     expect(next.customShortcuts).toEqual({ "new-scratchpad": chord });
   });
 
-  it("drops junk / reserved-colliding customShortcuts on merge", () => {
+  it("drops junk / fixed-colliding / non-bindable customShortcuts on merge", () => {
     const next = mergeAndClampSettings(BASE, {
       customShortcuts: {
         "bogus-id": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" },
-        save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" }, // Ctrl+A reserved
+        save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" }, // Ctrl+A → select-all (fixed)
+        "close-tab": { ctrlOrMeta: true, alt: false, shift: true, code: "Slash" }, // Ctrl+Shift+/ → help (fixed family)
+        "open-file": { ctrlOrMeta: false, alt: false, shift: true, code: "KeyB" }, // plain Shift+B → not bindable
       },
     });
     expect(next.customShortcuts).toEqual({});

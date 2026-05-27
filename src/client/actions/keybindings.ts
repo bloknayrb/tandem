@@ -111,51 +111,31 @@ export const DEFAULT_BINDINGS: Record<RemappableShortcutId, ShortcutChord> = {
 };
 
 /**
- * Chords a remap must NOT steal. Three sources:
- *  1. Fixed matcher branches (find, find-nav, accept/dismiss, pick-tab,
- *     select-all, Ctrl+/ help) — these can't be overridden, so blocking is
- *     the only protection.
- *  2. Separate window listeners that aren't in the matcher at all: tab-cycle
- *     (`useTabCycleKeyboard.svelte.ts`) and WebView zoom
- *     (`useWebViewZoom.svelte.ts`, Tauri-only). The zoom listener matches on
- *     `e.key`; we translate to `e.code`: Ctrl+0 → Digit0, zoom-in (`+`/`=`) →
- *     Equal, zoom-out (`-`/`_`) → Minus.
- *  3. Tiptap / editor keymaps (StarterKit + extension-link). These live inside
+ * Chords a remap must NOT steal that the App keydown matcher does NOT itself
+ * claim. Fixed *matcher* branches (find, find-nav, accept/dismiss, pick-tab,
+ * select-all, help) are no longer listed here — `claimedByFixedShortcut`
+ * (`shortcut-conflicts.ts`) derives those live from `matchShortcut`, as
+ * *families* (so every modifier variant a loose branch claims is covered, not
+ * just the canonical tuple). This list is only the reservations that live
+ * OUTSIDE the matcher:
+ *  1. Separate window listeners: tab-cycle (`useTabCycleKeyboard.svelte.ts`)
+ *     and WebView zoom (`useWebViewZoom.svelte.ts`, Tauri-only). The zoom
+ *     listener matches on `e.key`; we translate to `e.code`: Ctrl+0 → Digit0,
+ *     zoom-in (`+`/`=`, incl. `Ctrl+Shift+=`) → Equal, zoom-out (`-`/`_`,
+ *     incl. `Ctrl+Shift+-`) → Minus.
+ *  2. Tiptap / editor keymaps (StarterKit + extension-link). These live inside
  *     the extensions' own `addKeyboardShortcuts()` internals with no
  *     machine-readable export, so this slice is a REVIEWED, version-pinned
  *     constant (`@tiptap/starter-kit` + `@tiptap/extension-link` in
- *     package.json). A Tiptap MAJOR bump requires re-auditing this list.
+ *     package.json). A Tiptap MAJOR bump requires re-auditing this list. The
+ *     Tiptap heading (`Ctrl+Alt+1..6`) and list (`Ctrl+Shift+7/8`) chords are
+ *     omitted because the matcher's pick-tab family already claims every
+ *     `Ctrl+Digit`, so `claimedByFixedShortcut` covers them.
  *
  * Note: `Ctrl+Alt+M` is NOT reserved here — it is the default of the
  * remappable `comment-on-selection`, not a separate editor binding.
  */
 export const RESERVED_CHORDS: ReadonlyArray<{ chord: ShortcutChord; label: string }> = [
-  // ---- Fixed matcher branches ----
-  { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" }, label: "Select all" },
-  { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyF" }, label: "Find / Replace" },
-  {
-    chord: { ctrlOrMeta: true, alt: false, shift: true, code: "KeyF" },
-    label: "Find in open tabs",
-  },
-  { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyG" }, label: "Find next" },
-  { chord: { ctrlOrMeta: true, alt: false, shift: true, code: "KeyG" }, label: "Find previous" },
-  {
-    chord: { ctrlOrMeta: true, alt: false, shift: false, code: "Enter" },
-    label: "Accept annotation",
-  },
-  {
-    chord: { ctrlOrMeta: true, alt: false, shift: true, code: "Enter" },
-    label: "Dismiss annotation",
-  },
-  {
-    chord: { ctrlOrMeta: true, alt: false, shift: false, code: "Slash" },
-    label: "Show keyboard shortcuts",
-  },
-  // pick-tab family: Ctrl+1..9
-  ...Array.from({ length: 9 }, (_, i) => ({
-    chord: { ctrlOrMeta: true, alt: false, shift: false, code: `Digit${i + 1}` },
-    label: `Jump to tab ${i + 1}`,
-  })),
   // ---- Separate window listeners ----
   {
     chord: { ctrlOrMeta: true, alt: false, shift: false, code: "Tab" },
@@ -167,7 +147,9 @@ export const RESERVED_CHORDS: ReadonlyArray<{ chord: ShortcutChord; label: strin
   },
   { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "Digit0" }, label: "Reset zoom" },
   { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "Equal" }, label: "Zoom in" },
+  { chord: { ctrlOrMeta: true, alt: false, shift: true, code: "Equal" }, label: "Zoom in" },
   { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "Minus" }, label: "Zoom out" },
+  { chord: { ctrlOrMeta: true, alt: false, shift: true, code: "Minus" }, label: "Zoom out" },
   // ---- Tiptap / editor keymaps (reviewed, version-pinned) ----
   { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyB" }, label: "Bold" },
   { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyI" }, label: "Italic" },
@@ -177,13 +159,7 @@ export const RESERVED_CHORDS: ReadonlyArray<{ chord: ShortcutChord; label: strin
   { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyY" }, label: "Redo" },
   { chord: { ctrlOrMeta: true, alt: false, shift: true, code: "KeyZ" }, label: "Redo" },
   { chord: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyK" }, label: "Add link" },
-  { chord: { ctrlOrMeta: true, alt: false, shift: true, code: "Digit7" }, label: "Ordered list" },
-  { chord: { ctrlOrMeta: true, alt: false, shift: true, code: "Digit8" }, label: "Bullet list" },
   { chord: { ctrlOrMeta: true, alt: false, shift: true, code: "KeyB" }, label: "Blockquote" },
-  ...Array.from({ length: 6 }, (_, i) => ({
-    chord: { ctrlOrMeta: true, alt: true, shift: false, code: `Digit${i + 1}` },
-    label: `Heading ${i + 1}`,
-  })),
 ];
 
 /** Crosswalk from registry action id → RemappableShortcutId for Help / catalog
@@ -233,29 +209,43 @@ export interface KeyboardEventLikeForChord {
 }
 
 /**
+ * Whether a chord is one a user is allowed to bind, independent of where it
+ * came from. Shared by `chordFromEvent` (UI recording) and
+ * `parseCustomShortcuts` (load/merge) so a hand-edited or imported settings
+ * blob can't smuggle in a chord the recording UI would have rejected. Rejects:
+ *  - pure modifier codes (Ctrl/Shift/Alt/Meta alone);
+ *  - Numpad keys and reserved nav/edit keys (Tab/Escape/Enter/…);
+ *  - chords without a primary modifier (Ctrl/Meta OR Alt) — a bare or
+ *    Shift-only single key would fire during normal text entry.
+ */
+export function isBindableChord(c: ShortcutChord): boolean {
+  if (KEYBOARD_EVENT_MODIFIER_CODES.test(c.code)) return false;
+  if (c.code.startsWith("Numpad")) return false;
+  if (UNBINDABLE_CODES.has(c.code)) return false;
+  return c.ctrlOrMeta || c.alt;
+}
+
+/**
  * Derive a bindable chord from a keydown event, or `null` if the event is not
- * a valid capture. Rejects:
- *  - pure modifier presses (Ctrl/Shift/Alt/Meta alone);
- *  - bare or Shift-only single keys (requires Ctrl/Meta OR Alt, so the capture
- *    is an actual chord, not plain typing);
- *  - Numpad keys, dead keys, and reserved nav/edit keys (Tab/Escape/Enter/…).
+ * a valid capture (see `isBindableChord` for the rules; dead keys are also
+ * rejected here since they only manifest at event time).
  */
 export function chordFromEvent(e: KeyboardEventLikeForChord): ShortcutChord | null {
   if (!e.code) return null;
-  if (KEYBOARD_EVENT_MODIFIER_CODES.test(e.code)) return null;
   if (e.key === "Dead") return null;
-  if (e.code.startsWith("Numpad")) return null;
-  if (UNBINDABLE_CODES.has(e.code)) return null;
-  const ctrlOrMeta = e.ctrlKey || e.metaKey;
-  // Require a primary modifier so we never capture plain typing or Shift-only
-  // single keys (which would fire during normal text entry).
-  if (!ctrlOrMeta && !e.altKey) return null;
-  return { ctrlOrMeta, alt: e.altKey, shift: e.shiftKey, code: e.code };
+  const chord: ShortcutChord = {
+    ctrlOrMeta: e.ctrlKey || e.metaKey,
+    alt: e.altKey,
+    shift: e.shiftKey,
+    code: e.code,
+  };
+  return isBindableChord(chord) ? chord : null;
 }
 
-/** Strict equality on all four fields. MUST stay strict: the matcher's
- * override-first loop relies on two distinct chords never both matching one
- * event, which makes Map iteration order irrelevant to correctness. */
+/** Strict equality on all four fields. MUST stay strict: the override-first
+ * loop's determinism depends on the override map never holding two ids on the
+ * same chord (enforced by `parseCustomShortcuts` dedupe), so a single event
+ * matches at most one override. */
 export function chordMatches(chord: ShortcutChord, e: KeyboardEventLikeForChord): boolean {
   return (
     chord.ctrlOrMeta === (e.ctrlKey || e.metaKey) &&
@@ -344,59 +334,13 @@ export function effectiveChord(
 }
 
 /**
- * Find what currently owns `chord`, or `null` if free. Checks every
- * remappable id's *effective* binding (override ?? default) except `excludeId`,
- * then the reserved set. Returns the owner's human label.
+ * `findConflict`, `parseCustomShortcuts`, and `buildOverrides` moved to
+ * `shortcut-conflicts.ts` (ADR-041) — they consult the matcher
+ * (`matchShortcut`) to derive fixed-branch conflicts as the single source of
+ * truth, which would create a circular import if they stayed here (this module
+ * is a leaf that `useAppShortcuts.ts` imports from). Pure model/format helpers
+ * stay here.
  */
-export function findConflict(
-  chord: ShortcutChord,
-  overrides: ReadonlyMap<RemappableShortcutId, ShortcutChord>,
-  excludeId: RemappableShortcutId,
-): string | null {
-  for (const id of REMAPPABLE_SHORTCUT_IDS) {
-    if (id === excludeId) continue;
-    if (chordsEqual(effectiveChord(id, overrides), chord)) return REMAPPABLE_LABELS[id];
-  }
-  for (const reserved of RESERVED_CHORDS) {
-    if (chordsEqual(reserved.chord, chord)) return reserved.label;
-  }
-  return null;
-}
-
-/**
- * Validate a persisted `customShortcuts` blob, dropping any entry whose key
- * isn't a remappable id, whose value isn't a well-formed chord, or that now
- * collides with a reserved chord. The reserved-collision drop closes the
- * stale-override gap: if a future version grows the reserved set, an override
- * stored under the old version that now shadows a new fixed shortcut is
- * dropped at load instead of silently winning via the override-first loop.
- */
-export function parseCustomShortcuts(raw: unknown): Record<string, ShortcutChord> {
-  const out: Record<string, ShortcutChord> = {};
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!isRemappableShortcutId(key)) continue;
-    if (!isValidChord(value)) continue;
-    if (RESERVED_CHORDS.some((r) => chordsEqual(r.chord, value))) continue;
-    out[key] = value;
-  }
-  return out;
-}
-
-/**
- * Build the runtime override map from the persisted `customShortcuts` record.
- * Returns a fresh Map each call (cheap — ≤17 entries).
- */
-export function buildOverrides(
-  customShortcuts: Record<string, unknown> | undefined,
-): ReadonlyMap<RemappableShortcutId, ShortcutChord> {
-  const out = new Map<RemappableShortcutId, ShortcutChord>();
-  const parsed = parseCustomShortcuts(customShortcuts);
-  for (const [key, value] of Object.entries(parsed)) {
-    out.set(key as RemappableShortcutId, value);
-  }
-  return out;
-}
 
 /** Effective formatted label per remappable id, for Help / catalog reflection. */
 export function effectiveBindingLabels(
