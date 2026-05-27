@@ -142,7 +142,9 @@ test("Help modal advertises the new shortcuts", async ({ page }) => {
   await expect(modal.getByText("Previous annotation")).toBeVisible();
   await expect(modal.getByText("Accept focused annotation")).toBeVisible();
   await expect(modal.getByText("Dismiss focused annotation")).toBeVisible();
-  await expect(modal.getByText("Comment on selection (in editor)")).toBeVisible();
+  // "Comment on selection" (Ctrl+Alt+M) became user-remappable (ADR-041) and
+  // has no registry row, so it now lives in the editable Settings → Shortcuts
+  // list rather than the Help catalog.
   await expect(modal.getByText("Heading 1")).toBeVisible();
   await expect(modal.getByText("Heading 6")).toBeVisible();
   await expect(modal.getByText("Select containing block")).toBeVisible();

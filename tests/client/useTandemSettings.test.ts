@@ -330,7 +330,8 @@ describe("useTandemSettings — updateSettings write path", () => {
     sidecarRetryStrategy: "exponential",
     holdAnnotationsWhileOffline: true,
     marginView: false,
-  };
+    customShortcuts: {},
+  } as TandemSettings;
 
   it("clamps editorWidthPercent above 100 down to 100", () => {
     const next = mergeAndClampSettings(BASE, { editorWidthPercent: 120 });
@@ -388,6 +389,22 @@ describe("useTandemSettings — updateSettings write path", () => {
 
   it("falls back to default accentHue for NaN", () => {
     expect(mergeAndClampSettings(BASE, { accentHue: NaN }).accentHue).toBe(275);
+  });
+
+  it("passes a valid customShortcuts override through the shape filter", () => {
+    const chord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
+    const next = mergeAndClampSettings(BASE, { customShortcuts: { "new-scratchpad": chord } });
+    expect(next.customShortcuts).toEqual({ "new-scratchpad": chord });
+  });
+
+  it("drops junk / reserved-colliding customShortcuts on merge", () => {
+    const next = mergeAndClampSettings(BASE, {
+      customShortcuts: {
+        "bogus-id": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" },
+        save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" }, // Ctrl+A reserved
+      },
+    });
+    expect(next.customShortcuts).toEqual({});
   });
 });
 

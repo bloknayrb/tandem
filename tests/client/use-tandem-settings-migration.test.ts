@@ -348,4 +348,51 @@ describe("loadSettings — migration chain", () => {
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.showIntegrationWizard).toBeUndefined();
   });
+
+  it("v8 blob migrates to current with customShortcuts defaulting to {}", () => {
+    writeRaw({ schemaVersion: 8, leftPanelVisible: true });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  it("preserves a valid customShortcuts override on load", () => {
+    const chord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
+    writeRaw({ schemaVersion: 9, customShortcuts: { "new-scratchpad": chord } });
+    const s = loadSettings();
+    expect(s.customShortcuts).toEqual({ "new-scratchpad": chord });
+  });
+
+  it("normalizeKnownFields drops junk customShortcuts entries (bad id / bad chord)", () => {
+    writeRaw({
+      schemaVersion: 9,
+      customShortcuts: {
+        "not-a-real-id": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" },
+        save: { ctrlOrMeta: true, code: "KeyJ" }, // malformed chord
+      },
+    });
+    const s = loadSettings();
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  it("normalizeKnownFields drops a stored override that collides with a reserved chord", () => {
+    // Ctrl+A is reserved by select-all; a stale override pointing at it must be
+    // dropped at load rather than shadowing the fixed shortcut.
+    writeRaw({
+      schemaVersion: 9,
+      customShortcuts: { save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" } },
+    });
+    const s = loadSettings();
+    expect(s.customShortcuts).toEqual({});
+  });
+
+  it("forward-compat (v99) sanitizes customShortcuts too", () => {
+    writeRaw({
+      schemaVersion: 99,
+      customShortcuts: { "bogus-id": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" } },
+    });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.customShortcuts).toEqual({});
+  });
 });
