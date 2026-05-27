@@ -1595,9 +1595,13 @@ const tutorial = createTutorial(
   .panel-edge-collapse:hover {
     background: var(--tandem-accent-bg);
   }
+  /* tabindex="-1": never reachable via Tab, so the only focus paths are the
+     keyboard-toggle restoration helper (focusToggleTarget) and a mouse click
+     — neither warrants a keyboard-style focus ring. The restoration focus
+     follows a keydown, so :focus-visible matches and would draw a lingering
+     blue ring after Alt+Shift+Arrow toggles (#859). Suppress the ring; the
+     :hover background still signals the zone on pointer interaction. */
   .panel-edge-collapse:focus-visible {
-    background: var(--tandem-accent-bg);
-    outline: 2px solid var(--tandem-accent);
-    outline-offset: -2px;
+    outline: none;
   }
 </style>
