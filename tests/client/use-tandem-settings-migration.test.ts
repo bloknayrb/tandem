@@ -390,4 +390,25 @@ describe("loadSettings — migration chain", () => {
     expect(s._readOnly).toBe(true);
     expect(s.showAnnotationDecorations).toBeUndefined();
   });
+
+  // v9→v10 (1.11): introduce formattingBarVisible (default true). Pure bump —
+  // a v9 blob with no formattingBarVisible defaults to true (today's behavior).
+  it("v9→v10: formattingBarVisible defaults true when absent", () => {
+    writeRaw({ schemaVersion: 9, theme: "dark" });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.formattingBarVisible).toBe(true);
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it.each([
+    { why: "explicit false survives the bump", val: false, expected: false },
+    { why: "explicit true survives the bump", val: true, expected: true },
+  ])("v9→v10: formattingBarVisible=$val — $why", ({ val, expected }) => {
+    writeRaw({ schemaVersion: 9, formattingBarVisible: val });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.formattingBarVisible).toBe(expected);
+  });
 });

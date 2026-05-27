@@ -32,6 +32,12 @@ interface Props {
   }) => void;
   /** Open Settings → Appearance (the canonical home for these toggles). */
   onOpenSettings?: () => void;
+  /**
+   * 1.11: hide the persistent bar (sets `formattingBarVisible: false`). When
+   * provided, a trailing collapse control renders. Restoring is via the
+   * command palette / Appearance settings / the always-full selection popup.
+   */
+  onHide?: () => void;
 }
 
 const {
@@ -44,6 +50,7 @@ const {
   decorationsMuted = false,
   onUpdateDecorations,
   onOpenSettings,
+  onHide,
 }: Props = $props();
 
 // Force-reactive tick — mirrors FormattingToolbar's pattern so that
@@ -132,6 +139,24 @@ function handleHighlight(color: HighlightColor) {
         {onOpenSettings}
       />
     {/if}
+    {#if onHide}
+      <!-- Outside the overflow:hidden track so it never truncates. Hiding the
+           bar leaves formatting reachable via the always-full selection popup;
+           restore via the command palette or Appearance settings. -->
+      <div class="fmtbar-divider"></div>
+      <button
+        type="button"
+        class="fmtbar-hide"
+        data-testid="formatbar-hide-btn"
+        title="Hide formatting bar"
+        aria-label="Hide formatting bar"
+        onclick={onHide}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m18 15-6-6-6 6" />
+        </svg>
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -142,5 +167,33 @@ function handleHighlight(color: HighlightColor) {
     background: var(--tandem-border);
     margin: 0 2px;
     flex-shrink: 0;
+  }
+  .fmtbar-hide {
+    height: 26px;
+    min-width: 26px;
+    padding: 0 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--tandem-fg-muted);
+    border-radius: var(--tandem-r-pill);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 120ms, color 120ms;
+  }
+  .fmtbar-hide:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .fmtbar-hide:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+  .fmtbar-hide svg {
+    width: 16px;
+    height: 16px;
+    display: block;
   }
 </style>

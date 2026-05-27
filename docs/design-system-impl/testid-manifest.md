@@ -63,7 +63,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `brand-menu-{settings,shortcuts,theme-{*}}`
 - `formatting-bar`,
   `toolbar-link-{input,submit,cancel}`,
-  `toolbar-highlight-color-{toggle,{*}}`, `color-picker-close`
+  `toolbar-highlight-color-{toggle,{*}}`, `color-picker-close`,
+  `formatbar-hide-btn` (1.11 — hides the optional bar; the popup mirrors its controls)
 - Decorations split button (1.13) — lives in the formatting bar (subsumes the
   standalone authorship toggle; `formatbar-authorship-toggle` removed):
   `decorations-menu`, `decorations-mute-toggle`, `decorations-menu-caret`,
@@ -160,7 +161,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
   `text-size-{*}-btn`, `accent-hue-slider`, `editor-font-{*}-btn`,
-  `density-{*}-btn`, `reduce-motion-toggle`
+  `density-{*}-btn`, `reduce-motion-toggle`, `appearance-formatting-bar` (1.11)
 - Decorations mirror group (1.13): `appearance-show-{authorship,comments,highlights,notes}`
   (interpolated via `{testid}`, so not in the testid-set snapshot; tracked here).
   Replaces the single `annotation-decorations-toggle` (#596 per-type split).

@@ -16,6 +16,7 @@ annotation-select-checkbox-{*}
 annotation-snippet-{*}
 annotations-tab
 app-info-footer
+appearance-formatting-bar
 apply-changes-btn
 archive-btn-{*}
 batch-promote-bar
@@ -133,6 +134,7 @@ first-run-providers
 first-run-save
 first-run-skip
 first-run-skip-secondary
+formatbar-hide-btn
 formatting-bar
 harness-acknowledge
 harness-banner-dismiss
