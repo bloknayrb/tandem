@@ -16,7 +16,9 @@ import {
   triggerSaveAs,
   wireActionDeps,
 } from "./actions/builtin.svelte.js";
+import { effectiveBindingLabels } from "./actions/keybindings.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
+import { buildOverrides } from "./actions/shortcut-conflicts.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -174,6 +176,13 @@ const modeState = createTandemModeBroadcast(
   () => settingsState.settings.selectionDwellMs,
 );
 const layoutModel = createLayoutModel(settingsState, modeState);
+
+// Remapped-shortcut override layer (ADR-041). Rebuilt whenever the user's
+// customShortcuts change; the keydown handler reads it at call time.
+const shortcutOverrides = $derived(buildOverrides(settingsState.settings.customShortcuts));
+// Effective (override ?? default) formatted labels for Help-modal reflection.
+const effectiveShortcutLabels = $derived(effectiveBindingLabels(shortcutOverrides));
+
 const visibleAnnotations = $derived(yjsSync.annotations);
 const connectionBanner = createConnectionBanner(
   () => yjsSync.disconnectedSince,
@@ -965,7 +974,12 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
 
 $effect(() => {
   function handler(e: KeyboardEvent) {
-    const match = matchShortcut(e);
+    // Read overrides at call time (not as an effect dep) so the listener is
+    // registered exactly once and never churns / captures a stale map.
+    const match = matchShortcut(
+      e,
+      untrack(() => shortcutOverrides),
+    );
     if (!match) return;
     dispatch[match.id]?.(e, match.context);
   }
@@ -1301,7 +1315,11 @@ const tutorial = createTutorial(
         })}
     />
 
-    <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+    <HelpModal
+      open={showHelp}
+      onClose={() => (showHelp = false)}
+      effectiveShortcutLabels={effectiveShortcutLabels}
+    />
 
     {#if shouldShowModelPicker}
       <FirstRunModelPickerModal onComplete={() => (modelPickerHandled = true)} />
