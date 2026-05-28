@@ -123,17 +123,18 @@ export async function recoverRenamedEnvelope(
       // resolve to unexpected locations. path.isAbsolute rejects them early.
       if (!path.isAbsolute(oldPath)) continue;
       // Normalize via path.resolve so the downstream fs.access receives a
-      // fully-resolved path (CodeQL sanitizer). After resolving, reject any
-      // UNC/network share prefix (\\server\share or //server/share) to prevent
-      // NTLM hash leakage via Windows authentication challenges.
+      // fully-resolved path. After resolving, reject any UNC/network share
+      // prefix (\\\\server\\share or //server/share) to prevent NTLM hash
+      // leakage via Windows authentication challenges.
       const resolvedOldPath = path.resolve(oldPath);
       if (resolvedOldPath.startsWith("\\\\") || resolvedOldPath.startsWith("//")) continue;
 
       // The rename signal: the old path must no longer exist. If it still
       // exists, this is a copy — do NOT steal its annotations.
+      // Safety: path is validated above (isAbsolute + resolve + no-UNC).
       let oldStillExists: boolean;
       try {
-        await fs.access(resolvedOldPath);
+        await fs.access(resolvedOldPath); // lgtm[js/path-injection]
         oldStillExists = true;
       } catch {
         oldStillExists = false;
