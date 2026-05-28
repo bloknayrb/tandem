@@ -1,7 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import { cubicOut } from "svelte/easing";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor, TandemNotification } from "../shared/types";
@@ -661,27 +660,10 @@ const toggleRightPanel = () => {
   focusToggleTarget("right", nextVisible);
 };
 
-/**
- * Slide transition for the rail containers. Translates the rail off the
- * window edge so showing/hiding the rail reads as a slide rather than a
- * snap. Reduced-motion users get a zero-duration no-op (collapses to a
- * snap, the existing behavior).
- *
- * Known limitation: while the rail's outro is running, its DOM is still
- * mounted alongside the PeekStrip (Svelte default). The editor column
- * briefly reflows around both. Margin-annotation positions catch up via
- * the existing ResizeObserver-driven layout effect; brief lag during the
- * ~220ms transition is acceptable.
- */
-function railSlide(_node: HTMLElement, params: { side: "left" | "right"; reduceMotion: boolean }) {
-  if (params.reduceMotion) return { duration: 0, css: () => "" };
-  const dir = params.side === "left" ? -1 : 1;
-  return {
-    duration: 220,
-    easing: cubicOut,
-    css: (t: number) => `transform: translateX(${(1 - t) * 100 * dir}%);`,
-  };
-}
+// Rail collapse is a snap: the always-mounted dual-layer shells below
+// display-toggle their full/peek layers. The width-slide + opacity crossfade
+// between the two layers is deferred to motion #798 (bundle `app.css`
+// `.c7-rail` 360ms easeOutQuint width + `.rail-full`/`.rail-peek` crossfade).
 
 // Margin annotation view reserves a column + edge inset + breathing-room gap
 // per side. Subtract from available width so the editor text never sits
@@ -1230,19 +1212,29 @@ const tutorial = createTutorial(
       style="position: relative; display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);"
       onscroll={(e) => {
         // TODO: if a future child needs horizontal scroll (overflowing table,
-        // inline overflow toolbar), scope this reset to the railSlide transition
-        // window (~250ms) or move it to a focus listener. Today the row has no
-        // horizontally-scrollable children, so the unconditional reset is safe.
+        // inline overflow toolbar), scope this reset or move it to a focus
+        // listener. Today the row has no horizontally-scrollable children, so
+        // the unconditional reset is safe.
         e.currentTarget.scrollLeft = 0;
       }}
     >
-      {#if effectiveLeftVisible}
-        <!-- Left rail is locked to the outline; the outline rail has no tab
-             bar. Outermost 8px is the edge-click collapse zone. -->
+      <!-- Left rail: always-mounted dual-layer shell. The `.rail-full` layer
+           (the outline panel) display:none's when collapsed — its PanelSlot
+           instance + scroll position persist, but it has no layout box, so its
+           scroll effects can't pop the editor and its children leave the Tab
+           order. The peek layer previews the outline as tick-marks. The shell
+           owns the chrome (bg, radius, shadow) + hover-grow; the outermost 8px
+           of the full layer is the edge-click collapse zone. Opacity-crossfade
+           + width-slide deferred to motion #798. -->
+      <div
+        class="rail-shell rail-shell-left"
+        class:collapsed={!effectiveLeftVisible}
+        style={effectiveLeftVisible ? `width: ${dragResizeLeft.width}px;` : ""}
+      >
         <div
           data-testid="left-outline-rail"
-          transition:railSlide={{ side: "left", reduceMotion: settingsState.settings.reduceMotion }}
-          style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-left);`}
+          class="rail-full rail-full-left"
+          style={`width: ${dragResizeLeft.width}px;`}
         >
           <PanelSlot
             kind="outline"
@@ -1252,20 +1244,29 @@ const tutorial = createTutorial(
           />
           {@render edgeCollapse("left", toggleLeftPanel)}
         </div>
+        <PeekStrip side="left" collapsed={!effectiveLeftVisible} kind="outline" onActivate={toggleLeftPanel} />
+      </div>
+      {#if effectiveLeftVisible}
         {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
-      {:else}
-        <PeekStrip side="left" onActivate={toggleLeftPanel} />
       {/if}
 
       {@render editorColumn()}
 
       {#if effectiveRightVisible}
         {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
-        <!-- Right rail: single node owns width + transition + styling, matching
-             the left rail's shape above so the two slide-in animations stay symmetric. -->
+      {/if}
+      <!-- Right rail: always-mounted dual-layer shell (mirrors the left rail).
+           The `.rail-full` layer (tabs + chat/annotations panels) display:none's
+           when collapsed; the peek layer previews annotations as colored dots.
+           See the left rail for the display-toggle rationale. -->
+      <div
+        class="rail-shell rail-shell-right"
+        class:collapsed={!effectiveRightVisible}
+        style={effectiveRightVisible ? `width: ${dragResizeRight.width}px;` : ""}
+      >
         <div
-          transition:railSlide={{ side: "right", reduceMotion: settingsState.settings.reduceMotion }}
-          style={`position: relative; z-index: 1; display: flex; flex-direction: column; width: ${dragResizeRight.width}px; background: var(--tandem-surface-muted); border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px); margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-right);`}
+          class="rail-full rail-full-right"
+          style={`width: ${dragResizeRight.width}px;`}
         >
           {@render edgeCollapse("right", toggleRightPanel)}
           <div class="rail-tabs-row">
@@ -1321,9 +1322,14 @@ const tutorial = createTutorial(
             visible={activeRailTab === "annotations"}
           />
         </div>
-      {:else}
-        <PeekStrip side="right" onActivate={toggleRightPanel} />
-      {/if}
+        <PeekStrip
+          side="right"
+          collapsed={!effectiveRightVisible}
+          kind="annotations"
+          annotations={visibleAnnotations}
+          onActivate={toggleRightPanel}
+        />
+      </div>
     </div>
 
     <StatusBar
@@ -1664,6 +1670,66 @@ const tutorial = createTutorial(
 {/snippet}
 
 <style>
+  /* Always-mounted dual-layer rail. The shell owns width + chrome (bg, inner
+     radius, side shadow) + the hover-grow; its two children (`.rail-full` via
+     the data-testid divs in markup, and `.rail-peek` via PeekStrip) are
+     absolute layers display-toggled by the `collapsed` class. Expanded width
+     is set inline (`width: <dragWidth>px`); the collapsed width + hover-grow
+     live here so the CSS `:hover` rule can win (an inline width would not be
+     overridable). overflow:hidden clips the 28px peek button to a 14px sliver
+     at rest. */
+  .rail-shell {
+    position: relative;
+    flex-shrink: 0;
+    overflow: hidden;
+    margin-top: var(--tandem-rail-top-clearance, 0);
+    margin-bottom: var(--tandem-status-clearance-total, 60px);
+    background: var(--tandem-surface-muted);
+  }
+  .rail-shell-left {
+    border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
+    box-shadow: var(--tandem-rail-shadow-left);
+  }
+  .rail-shell-right {
+    z-index: 1;
+    border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
+    box-shadow: var(--tandem-rail-shadow-right);
+  }
+  .rail-shell.collapsed {
+    width: 14px;
+    cursor: pointer;
+  }
+  /* Width-grow is :hover ONLY — never :focus-within. The peek strip is
+     tabindex="-1", so its only focus path is the inert restoration focus that
+     focusToggleTarget() applies after a keyboard collapse (preserving Tab
+     position). Per #859 that restoration focus must be visually inert; a
+     :focus-within widen would silently expand the sliver 14→28px on collapse
+     with no user hover — the exact bug #859 fixed. The PeekStrip's own
+     affordances (chevron/label/tick reveal) are likewise scoped to :hover. */
+  .rail-shell.collapsed:hover {
+    width: 28px;
+  }
+  /* The full layer fills the shell, anchored to the shell's inside edge (left
+     rail → right side, right rail → left side). Only the expanded width is
+     dynamic (set inline); the static box + the display:none-when-collapsed
+     (load-bearing: kills the scroll-pop + drops children from the Tab order)
+     live here, driven by the `collapsed` class already on the shell. */
+  .rail-full {
+    position: absolute;
+    inset-block: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .rail-full-left {
+    right: 0;
+  }
+  .rail-full-right {
+    left: 0;
+  }
+  .rail-shell.collapsed .rail-full {
+    display: none;
+  }
   .rail-tabs-row {
     display: flex;
     align-items: center;
