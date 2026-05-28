@@ -82,9 +82,40 @@ describe("loadSettings — migration chain", () => {
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(false);
-    expect(s.editorWidthPercent).toBe(80);
+    // v11→v12 maps a customized width (≠ 100) to the new Comfortable default.
+    expect(s.editorMeasure).toBe("comfortable");
     expect(s.theme).toBe("dark");
     expect(s.models).toEqual([]);
+  });
+
+  it("v11→v12: default-untouched width (100) maps to editorMeasure=full", () => {
+    writeRaw({ schemaVersion: 11, editorWidthPercent: 100 });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.editorMeasure).toBe("full");
+    // Legacy field is deleted, not round-tripped.
+    expect((s as Record<string, unknown>).editorWidthPercent).toBeUndefined();
+  });
+
+  it("v11→v12: customized width maps to editorMeasure=comfortable", () => {
+    writeRaw({ schemaVersion: 11, editorWidthPercent: 60 });
+    const s = loadSettings();
+    expect(s.editorMeasure).toBe("comfortable");
+  });
+
+  it("v11→v12: absent legacy width (never customized) maps to editorMeasure=full", () => {
+    // A blob that climbed to v11 without ever serializing editorWidthPercent
+    // means the width was never customized → preserve full-width like an
+    // explicit 100, not the Comfortable reset reserved for real customizers.
+    writeRaw({ schemaVersion: 11 });
+    const s = loadSettings();
+    expect(s.editorMeasure).toBe("full");
+  });
+
+  it("v11→v12: an already-present editorMeasure is preserved (cross-branch guard)", () => {
+    writeRaw({ schemaVersion: 11, editorWidthPercent: 100, editorMeasure: "wide" });
+    const s = loadSettings();
+    expect(s.editorMeasure).toBe("wide");
   });
 
   it("v3 forward-compat: schemaVersion=99 loads as _readOnly: true", () => {
@@ -122,14 +153,14 @@ describe("loadSettings — migration chain", () => {
   // Forward-compat sanitization (#735 review finding).
   //
   // Prior implementation spread `...(parsed as Partial<TandemSettings>)`
-  // over DEFAULTS, bypassing every clamp. A future-blob with
-  // `editorWidthPercent: -999` propagated raw garbage to the running UI.
-  // The fix routes both paths through `normalizeKnownFields`.
-  it("forward-compat clamps editorWidthPercent=-999 to 40", () => {
-    writeRaw({ schemaVersion: 99, editorWidthPercent: -999 });
+  // over DEFAULTS, bypassing every clamp. A future-blob with a garbage known
+  // field propagated raw values to the running UI. The fix routes both paths
+  // through `normalizeKnownFields`.
+  it("forward-compat coerces an invalid editorMeasure to the default", () => {
+    writeRaw({ schemaVersion: 99, editorMeasure: "enormous" });
     const s = loadSettings();
     expect(s._readOnly).toBe(true);
-    expect(s.editorWidthPercent).toBe(40);
+    expect(s.editorMeasure).toBe("comfortable");
   });
 
   it("forward-compat clamps accentHue=9999 to default", () => {

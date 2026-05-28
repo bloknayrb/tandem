@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { isUploadPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
-import type { CapturedAnchor, TandemNotification } from "../shared/types";
+import type { Annotation, CapturedAnchor, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
@@ -75,6 +75,12 @@ import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
 import { createViewportWidth } from "./hooks/useViewportWidth.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
+import {
+  createEditorStageModel,
+  MARGIN_VIEW_COLUMN_WIDTH_PX,
+  MARGIN_VIEW_EDGE_INSET_PX,
+  MARGIN_VIEW_GAP_PX,
+} from "./layout/editor-stage.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
@@ -665,70 +671,26 @@ const toggleRightPanel = () => {
 // between the two layers is deferred to motion #798 (bundle `app.css`
 // `.c7-rail` 360ms easeOutQuint width + `.rail-full`/`.rail-peek` crossfade).
 
-// Margin annotation view reserves a column + edge inset + breathing-room gap
-// per side. Subtract from available width so the editor text never sits
-// underneath (or flush against) the absolutely-positioned MarginColumn cards.
-// `MARGIN_VIEW_GAP_PX` is the space between the editor's text edge and the
-// near edge of the margin column — it also defines the horizontal zone where
-// leader lines from anchor text to bubbles are drawn (see MarginColumn).
-const MARGIN_VIEW_COLUMN_WIDTH_PX = 240;
-const MARGIN_VIEW_EDGE_INSET_PX = 8;
-const MARGIN_VIEW_GAP_PX = 24;
-const MARGIN_VIEW_RESERVE_PX =
-  2 * (MARGIN_VIEW_COLUMN_WIDTH_PX + MARGIN_VIEW_EDGE_INSET_PX + MARGIN_VIEW_GAP_PX);
-
-// Below this readable editor width, margin columns auto-hide rather than
-// squeeze the editor into an unreadable strip. Pairs with a 32px hysteresis
-// band (`MARGIN_VIEW_HYSTERESIS_PX`) so a viewport drag through the threshold
-// doesn't flicker columns on/off at 60fps.
-const MIN_EDITOR_WIDTH_PX = 480;
-const MARGIN_VIEW_HYSTERESIS_PX = 32;
-
 const viewport = createViewportWidth();
 
-// Per-side rail-replaces-margin behavior (#683): when a rail is open, hide the
-// margin column on that side. Reasoning: rail + margin on the same side leaves
-// the editor crushed and visually competes for the same gutter. Hiding by side
-// preserves margin annotations on the un-collapsed side and matches the user
-// mental model that "rail replaces margin." Both columns hide together when
-// `narrowSticky === true`.
-//
-// The threshold reads the persisted-at-mount rail widths (not the live
-// `dragResizeLeft/Right.width`) so it stays stable while a user is mid-drag.
-// Without this, the boundary slides under the drag and margin columns flip
-// on/off as the cursor moves — the 32px hysteresis below only absorbs
-// viewport-axis jitter, not threshold drift.
-const railsWidthPx = $derived(
-  (effectiveLeftVisible ? leftPanelWidth : 0) + (effectiveRightVisible ? rightPanelWidth : 0),
-);
-const marginNarrowThresholdPx = $derived(
-  MARGIN_VIEW_RESERVE_PX + railsWidthPx + MIN_EDITOR_WIDTH_PX,
-);
-
-// Hysteresis-debounced narrow flag. A plain `width < threshold` boundary
-// flickers when a user drags through it because each side of the threshold
-// re-evaluates on every frame. Sticky entry at `< threshold`, sticky exit at
-// `> threshold + HYSTERESIS` gives a 32px deadband.
-let narrowSticky = $state(false);
-$effect(() => {
-  const w = viewport.width;
-  const t = marginNarrowThresholdPx;
-  if (w < t) narrowSticky = true;
-  else if (w > t + MARGIN_VIEW_HYSTERESIS_PX) narrowSticky = false;
-});
-
-const marginViewEffectivelyOn = $derived(settingsState.settings.marginView && !narrowSticky);
-const marginLeftVisible = $derived(marginViewEffectivelyOn && !effectiveLeftVisible);
-const marginRightVisible = $derived(marginViewEffectivelyOn && !effectiveRightVisible);
-
-const editorMaxWidth = $derived.by(() => {
-  const pct = settingsState.settings.editorWidthPercent;
-  const reserve = marginViewEffectivelyOn ? MARGIN_VIEW_RESERVE_PX : 0;
-  // `max(0px, ...)` guards against `editorWidthPercent` settings that, on
-  // narrow viewports with marginView on, would compute a negative max-width.
-  // CSS clamps negative max-width to 0 anyway, but the explicit wrap keeps
-  // the resulting style declaration legible in devtools.
-  return reserve > 0 ? `max(0px, calc(${pct}% - ${reserve}px))` : `${pct}%`;
+// Editor stage model (Phase 3.5): owns the horizontal grid layout — a content
+// reading-measure track flanked by per-side margin-annotation tracks, centered
+// by `1fr` gutters. Replaces the old `editorMaxWidth` / global
+// `MARGIN_VIEW_RESERVE_PX` cascade so the margin reserve is taken PER SIDE,
+// only where a margin actually renders (opening a rail that hides one margin
+// no longer subtracts phantom width from the content). Per-side
+// rail-replaces-margin (#683) and the narrow auto-hide threshold + hysteresis
+// live in the model; the threshold reads persisted-at-mount rail widths (not
+// the live drag width) so it stays stable mid-drag. The grid is non-docx only.
+const editorStage = createEditorStageModel({
+  getFormat: () => activeTab?.format,
+  getMarginView: () => settingsState.settings.marginView,
+  getEditorMeasure: () => settingsState.settings.editorMeasure,
+  getLeftRailVisible: () => effectiveLeftVisible,
+  getRightRailVisible: () => effectiveRightVisible,
+  getViewportWidth: () => viewport.width,
+  leftRailWidthPx: leftPanelWidth,
+  rightRailWidthPx: rightPanelWidth,
 });
 
 function captureSelectionForChat() {
@@ -1068,10 +1030,10 @@ const review = useAnnotationReview({
 // via DOM nesting in the positioning layer. Collision resolution lands in
 // PR 2; rail-collapse and narrow-layout auto-disable in PR 3.
 const marginNotes = $derived(
-  marginViewEffectivelyOn ? visibleAnnotations.filter((a) => a.type === "note") : [],
+  editorStage.effectivelyOn ? visibleAnnotations.filter((a) => a.type === "note") : [],
 );
 const marginComments = $derived(
-  marginViewEffectivelyOn
+  editorStage.effectivelyOn
     ? visibleAnnotations.filter((a) => a.author === "import" || a.type === "comment")
     : [],
 );
@@ -1080,7 +1042,7 @@ const marginPositions = createMarginPositions({
   getYdoc: () => activeTab?.ydoc ?? null,
   getAnnotations: () => [...marginNotes, ...marginComments],
   getLayerEl: () => marginLayerEl,
-  getEnabled: () => marginViewEffectivelyOn,
+  getEnabled: () => editorStage.effectivelyOn,
 });
 // Replies feed the bubble reply count + thread preview. We observe the raw
 // Y.Map here; MarginColumn applies the `getVisibleReplies()` ADR-027 filter
@@ -1559,40 +1521,82 @@ const tutorial = createTutorial(
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
       />
     {/snippet}
-    <!-- Positioning layer for margin annotation bubbles (#649). The layer
-         wraps editor content so its block height matches the editor's, and
-         scroll sync between text and bubbles is free (both live inside the
-         same scrolling block).
+    <!-- One snippet, two call sites: left wires `marginNotes`, right wires
+         `marginComments` (the only per-side difference). All other props +
+         handlers are identical, so the distinct annotation wiring lives at the
+         call site rather than in two near-identical bodies. -->
+    {#snippet marginColumn(side: "left" | "right", annotations: readonly Annotation[])}
+      <MarginColumn
+        {side}
+        {annotations}
+        positions={marginPositions.byId}
+        width={MARGIN_VIEW_COLUMN_WIDTH_PX}
+        edgeInset={MARGIN_VIEW_EDGE_INSET_PX}
+        gap={MARGIN_VIEW_GAP_PX}
+        {activeAnnotationId}
+        repliesById={marginReplies.byId}
+        onClick={(ann) => {
+          activeAnnotationId = ann.id;
+          review.scrollToAnnotation(ann);
+        }}
+        onAccept={review.handleAccept}
+        onDismiss={review.handleDismiss}
+        onRemove={marginHandlers.onRemove}
+        onEdit={marginHandlers.onEdit}
+        onReply={marginHandlers.onReply}
+        onSendToClaude={marginHandlers.onSendToClaude}
+      />
+    {/snippet}
+    <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
+         The layer wraps editor content so its block height matches the
+         editor's; bubble Y-positions + scroll sync are measured against it.
 
          INVARIANT 1 — no re-bind: this <div> must remain mounted across
          marginView toggles. `marginLayerEl` is a $state ref read inside
          useMarginPositions's $effect, which subscribes; re-binding via
          {#if}/{#key} would cause listener teardown/rebuild storms (the
-         feedback_svelte_state_bind_this_loop pattern). Use `display:
-         contents` when off — wrapper is layout-invisible, so default-off
-         users get the master-branch layout with no new containing block,
-         and the bind stays stable.
+         feedback_svelte_state_bind_this_loop pattern). Only the element's
+         STYLE changes (grid ⇄ contents/relative); it never remounts.
 
-         INVARIANT 2 — getEnabled() short-circuit ordering: recompute()
-         reads layer.getBoundingClientRect() ONLY after the getEnabled()
-         early-return. `display: contents` elements return a zero-size
-         rect, so bypassing that guard would silently produce
-         layerTop=0 and page-relative bubble offsets. Don't move the
-         guard. -->
-    <div
-      bind:this={marginLayerEl}
-      style={marginViewEffectivelyOn ? "position: relative;" : "display: contents;"}
-    >
-      <!-- Editor renders paged white-sheet layout for .docx via the `.tandem-paged`
-           class (driven by the `format` prop / `isPaged` $derived inside Editor.svelte).
-           For .docx we skip the max-width wrapper so the gray canvas can paint full-width;
-           the inner white sheet is centered by editor.css. -->
+         INVARIANT 2 — getEnabled() short-circuit ordering: recompute() reads
+         layer.getBoundingClientRect() ONLY after the getEnabled() early-return.
+         When margins are off the layer is `display: contents` (docx) or a
+         collapsed grid (non-docx); measuring then would be meaningless, so the
+         guard must stay ahead of the rect read. Don't move it.
+
+         INVARIANT 3 — no padding/border on the stage: useMarginPositions reads
+         the border-box top as the bubble origin, and the grid's first row
+         starts at the content-box top. Any padding-/border-top would offset
+         every bubble. Spacing lives on `.editor-scroll`; the stage and its
+         `.margin-track` cells stay padding/border-free.
+
+         Layout is format-aware (editorStage.layerStyle):
+         - docx keeps its own path — `position: relative` (margin siblings
+           absolutely position against the layer) / `display: contents` off.
+         - non-docx is a CSS Grid stage [1fr · marginL · content · marginR · 1fr]:
+           content track at the reading measure, per-side margin tracks (272px
+           shown / 0 hidden), `1fr` gutters centering the block. Reserve is
+           taken only where a margin renders (the per-side fix). -->
+    <div bind:this={marginLayerEl} data-testid="editor-stage" style={editorStage.layerStyle}>
       {#if activeTab?.format === "docx"}
         {#key activeTab.id}
           {@render editorContent()}
         {/key}
+        {#if editorStage.leftVisible && activeTab}{@render marginColumn("left", marginNotes)}{/if}
+        {#if editorStage.rightVisible && activeTab}{@render marginColumn("right", marginComments)}{/if}
       {:else}
-        <div style={`max-width: ${editorMaxWidth}; margin: 0 auto;`}>
+        <!-- Content track (grid column 3). The grid template caps its width at
+             the reading measure; the `1fr` gutters (columns 1 & 5) center it.
+
+             INVARIANT 5 — every cell pins `grid-row: 1`. The margin tracks are
+             declared AFTER the content in DOM order but at lower column indices
+             (2 & 4 vs 3). Under the default sparse `grid-auto-flow: row`, an
+             item whose explicit column is behind the auto-placement cursor is
+             bumped to the next row — so without an explicit row the margin
+             tracks land in row 2, BELOW the content, dumping every bubble at the
+             bottom of the stage. `grid-row: 1` on all three keeps the single-row
+             layout the bubble-offset math assumes. Don't drop it. -->
+        <div class="editor-content-track" style="grid-column: 3; grid-row: 1;">
           {#if activeTab}
             {#key activeTab.id}
               {@render editorContent()}
@@ -1601,50 +1605,21 @@ const tutorial = createTutorial(
             <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
           {/if}
         </div>
-      {/if}
-      {#if marginLeftVisible && activeTab}
-        <MarginColumn
-          side="left"
-          annotations={marginNotes}
-          positions={marginPositions.byId}
-          width={MARGIN_VIEW_COLUMN_WIDTH_PX}
-          edgeInset={MARGIN_VIEW_EDGE_INSET_PX}
-          gap={MARGIN_VIEW_GAP_PX}
-          {activeAnnotationId}
-          repliesById={marginReplies.byId}
-          onClick={(ann) => {
-            activeAnnotationId = ann.id;
-            review.scrollToAnnotation(ann);
-          }}
-          onAccept={review.handleAccept}
-          onDismiss={review.handleDismiss}
-          onRemove={marginHandlers.onRemove}
-          onEdit={marginHandlers.onEdit}
-          onReply={marginHandlers.onReply}
-          onSendToClaude={marginHandlers.onSendToClaude}
-        />
-      {/if}
-      {#if marginRightVisible && activeTab}
-        <MarginColumn
-          side="right"
-          annotations={marginComments}
-          positions={marginPositions.byId}
-          width={MARGIN_VIEW_COLUMN_WIDTH_PX}
-          edgeInset={MARGIN_VIEW_EDGE_INSET_PX}
-          gap={MARGIN_VIEW_GAP_PX}
-          {activeAnnotationId}
-          repliesById={marginReplies.byId}
-          onClick={(ann) => {
-            activeAnnotationId = ann.id;
-            review.scrollToAnnotation(ann);
-          }}
-          onAccept={review.handleAccept}
-          onDismiss={review.handleDismiss}
-          onRemove={marginHandlers.onRemove}
-          onEdit={marginHandlers.onEdit}
-          onReply={marginHandlers.onReply}
-          onSendToClaude={marginHandlers.onSendToClaude}
-        />
+        <!-- Per-side margin tracks (grid columns 2 & 4): a `position: relative`
+             cell of the reserve width. MarginColumn's existing absolute
+             geometry lands unchanged inside it, and the cell top equals the
+             layer top so layer-relative bubble offsets stay valid. Mounted only
+             when that side renders a margin. -->
+        {#if editorStage.leftVisible && activeTab}
+          <div class="margin-track" style="grid-column: 2; grid-row: 1;">
+            {@render marginColumn("left", marginNotes)}
+          </div>
+        {/if}
+        {#if editorStage.rightVisible && activeTab}
+          <div class="margin-track" style="grid-column: 4; grid-row: 1;">
+            {@render marginColumn("right", marginComments)}
+          </div>
+        {/if}
       {/if}
     </div>
     <!-- End-of-document marker — gives the editor enough trailing scroll
@@ -1783,6 +1758,30 @@ const tutorial = createTutorial(
     align-items: center;
     justify-content: center;
     font-weight: 700;
+  }
+
+  /* Editor stage grid cells (Phase 3.5; non-docx). Both cells are
+     padding/border-free so the grid's first row starts at the stage's
+     border-box top — the origin useMarginPositions measures bubble offsets
+     against (INVARIANT 3). */
+  .editor-content-track {
+    /* `min-width: 0` lets the content shrink below the reading measure when the
+       margin tracks + gutters consume the row (the minmax(0,…) track floor);
+       without it a grid item's `min-width: auto` would force overflow. */
+    min-width: 0;
+  }
+  .margin-track {
+    /* INVARIANT 4 — `position: relative` is load-bearing, NOT cosmetic. A grid
+       container does NOT establish a positioned containing block for its
+       descendants, so without this rule MarginColumn's absolute bubbles + leader
+       SVG would resolve against `.editor-scroll` (the next positioned ancestor),
+       breaking bubble X (off-track) AND Y (`.editor-scroll`'s padding-box top,
+       not the layer's border-box top — the origin useMarginPositions measures).
+       With it, the cell top equals the stage(layer) top (single grid row, no
+       padding), so MarginColumn's layer-relative `top` offsets land correctly.
+       Do not drop it during a CSS tidy. */
+    position: relative;
+    min-width: 0;
   }
 
   .editor-end-marker {

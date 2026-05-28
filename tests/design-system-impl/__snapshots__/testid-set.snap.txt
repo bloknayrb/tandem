@@ -102,8 +102,9 @@ edit-reason-{*}
 edit-save-btn-{*}
 edit-text-{*}
 editor-font-{*}-btn
+editor-measure-{*}
 editor-root
-editor-width-slider
+editor-stage
 error-boundary-recover-btn
 error-boundary-reload-btn
 file-open-browse

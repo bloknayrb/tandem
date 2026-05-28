@@ -58,6 +58,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Editor chrome
 - `editor-root` — top-level editor mount point
+- `editor-stage` — Phase 3.5 grid-stage container (content track + per-side
+  margin tracks); the margin-annotation positioning layer (`marginLayerEl`)
 - `title-bar`, `titlebar-brand-menu`, `titlebar-brand-menu-popover`,
   `titlebar-default-model`, `titlebar-update-available-dot`,
   `brand-menu-{settings,shortcuts,theme-{*}}`
@@ -167,7 +169,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   Replaces the single `annotation-decorations-toggle` (#596 per-type split).
 
 ### Settings — Editor / Accessibility / Network
-- `editor-width-slider`
+- `editor-measure-{*}` (Phase 3.5 Stage B reading-measure preset; one button per
+  `narrow|comfortable|wide|full`, interpolated, so it lands as `editor-measure-{*}`
+  in the snapshot. Replaced `editor-width-slider` when `editorWidthPercent` → `editorMeasure`.)
 - `high-contrast-toggle`, `annotation-patterns-toggle`
 - `network-{restart-sidecar,degraded-delay-slider,retry-strategy,hold-annotations-toggle}`
 

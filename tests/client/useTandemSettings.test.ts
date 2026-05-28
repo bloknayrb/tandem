@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CURRENT_SCHEMA_VERSION,
+  EDITOR_MEASURE_CH,
+  EDITOR_MEASURES,
   loadSettings,
   mergeAndClampSettings,
   type TandemSettings,
@@ -56,7 +58,7 @@ describe("loadSettings — selectionDwellMs clamping", () => {
     expect(settings.leftPanelVisible).toBe(false);
     expect(settings.rightPanelVisible).toBe(true);
     expect(settings.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-    expect(settings.editorWidthPercent).toBe(100);
+    expect(settings.editorMeasure).toBe("comfortable");
     expect(settings.selectionDwellMs).toBe(SELECTION_DWELL_DEFAULT_MS);
   });
 
@@ -130,7 +132,7 @@ describe("loadSettings — selectionDwellMs clamping", () => {
   });
 });
 
-describe("loadSettings — editorWidthPercent clamping (regression guard)", () => {
+describe("loadSettings — editorMeasure validation (regression guard)", () => {
   let store: Map<string, string>;
 
   beforeEach(() => {
@@ -141,14 +143,31 @@ describe("loadSettings — editorWidthPercent clamping (regression guard)", () =
     vi.unstubAllGlobals();
   });
 
-  it("clamps editorWidthPercent above 100 down to 100", () => {
-    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ editorWidthPercent: 250 }));
-    expect(loadSettings().editorWidthPercent).toBe(100);
+  it("preserves a valid editorMeasure preset", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ editorMeasure: "wide" }));
+    expect(loadSettings().editorMeasure).toBe("wide");
   });
 
-  it("clamps editorWidthPercent below 40 up to 40", () => {
-    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ editorWidthPercent: 10 }));
-    expect(loadSettings().editorWidthPercent).toBe(40);
+  it("coerces an invalid editorMeasure to the default", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ editorMeasure: "ginormous" }));
+    expect(loadSettings().editorMeasure).toBe("comfortable");
+  });
+
+  it("EDITOR_MEASURE_CH covers every EDITOR_MEASURES entry (drift guard)", () => {
+    // Adding a fifth preset to EDITOR_MEASURES without updating
+    // EDITOR_MEASURE_CH is a TS error (Record exhaustiveness), but the reverse
+    // — a CH entry without a measure entry — is allowed by TS. This test pins
+    // both directions so the union, the validator, and the CSS map can't drift
+    // apart silently as Stage C/D evolves the presets. The value check is
+    // presence-and-non-empty rather than a `ch | 100%` regex so a legitimate
+    // future fluid preset (e.g. `clamp(58ch, 90vw, 82ch)`) doesn't false-fail
+    // — the test polices "did you add the entry" not "is the value language X."
+    for (const m of EDITOR_MEASURES) {
+      const v = EDITOR_MEASURE_CH[m];
+      expect(v, `EDITOR_MEASURE_CH missing entry for ${m}`).toBeTruthy();
+      expect(typeof v).toBe("string");
+    }
+    expect(Object.keys(EDITOR_MEASURE_CH).sort()).toEqual([...EDITOR_MEASURES].sort());
   });
 });
 
@@ -312,7 +331,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     schemaVersion: 2,
     primaryTab: "chat",
     panelOrder: "chat-editor-annotations",
-    editorWidthPercent: 75,
+    editorMeasure: "wide",
     selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
     showAuthorship: true,
     reduceMotion: false,
@@ -336,19 +355,25 @@ describe("useTandemSettings — updateSettings write path", () => {
     customShortcuts: {},
   } as TandemSettings;
 
-  it("clamps editorWidthPercent above 100 down to 100", () => {
-    const next = mergeAndClampSettings(BASE, { editorWidthPercent: 120 });
-    expect(next.editorWidthPercent).toBe(100);
+  it("merges a new editorMeasure preset through write", () => {
+    const next = mergeAndClampSettings(BASE, { editorMeasure: "narrow" });
+    expect(next.editorMeasure).toBe("narrow");
+  });
+
+  it("coerces a bogus editorMeasure write to the default (clamp-on-write contract)", () => {
+    // Closed-union string fields need the same write-side guard as numeric
+    // clamps — a TS `as EditorMeasure` cast at a call site can land a value
+    // outside the union, and without this clamp the bogus string reaches the
+    // grid as `--editor-measure: <bogus>;` and the layout silently breaks.
+    const next = mergeAndClampSettings(BASE, {
+      editorMeasure: "ginormous" as unknown as TandemSettings["editorMeasure"],
+    });
+    expect(next.editorMeasure).toBe("comfortable");
   });
 
   it("round-trips marginView=true through merge (write-side covers the strict-true load guard)", () => {
     const next = mergeAndClampSettings(BASE, { marginView: true });
     expect(next.marginView).toBe(true);
-  });
-
-  it("clamps editorWidthPercent below 40 up to 40", () => {
-    const next = mergeAndClampSettings(BASE, { editorWidthPercent: 10 });
-    expect(next.editorWidthPercent).toBe(40);
   });
 
   it("clamps selectionDwellMs above max down to SELECTION_DWELL_MAX_MS", () => {
@@ -368,7 +393,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     expect(next.rightPanelVisible).toBe(BASE.rightPanelVisible);
     expect(next.primaryTab).toBe(BASE.primaryTab);
     expect(next.panelOrder).toBe(BASE.panelOrder);
-    expect(next.editorWidthPercent).toBe(BASE.editorWidthPercent);
+    expect(next.editorMeasure).toBe(BASE.editorMeasure);
     expect(next.selectionDwellMs).toBe(BASE.selectionDwellMs);
     expect(next.showAuthorship).toBe(BASE.showAuthorship);
     expect(next.reduceMotion).toBe(BASE.reduceMotion);
@@ -377,10 +402,8 @@ describe("useTandemSettings — updateSettings write path", () => {
 
   it("passes in-range numeric values through unchanged", () => {
     const next = mergeAndClampSettings(BASE, {
-      editorWidthPercent: 80,
       selectionDwellMs: 1500,
     });
-    expect(next.editorWidthPercent).toBe(80);
     expect(next.selectionDwellMs).toBe(1500);
   });
 
