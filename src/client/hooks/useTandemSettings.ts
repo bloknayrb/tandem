@@ -642,7 +642,24 @@ export function loadSettings(): TandemSettings {
         console.warn(
           `[tandem] settings schemaVersion=${parsed.schemaVersion} is newer than v${CURRENT_SCHEMA_VERSION}; loading defensively without writing.`,
         );
+        // Surface forward-compat downgrades on closed-enum fields. Other
+        // unknown future FIELDS pass through verbatim below (the futureFields
+        // loop), but a closed-enum VALUE like `editorMeasure: "extra-wide"`
+        // (introduced in a hypothetical v13) gets silently coerced to the
+        // default by `normalizeKnownFields`. Without this warn the user
+        // bouncing back to the older client would see "comfortable" with no
+        // signal — indistinguishable from "user changed their mind." `_readOnly`
+        // still blocks the write-back so the future-client state isn't damaged.
+        const originalEditorMeasure = parsed.editorMeasure;
         const normalized = normalizeKnownFields(parsed);
+        if (
+          typeof originalEditorMeasure === "string" &&
+          originalEditorMeasure !== normalized.editorMeasure
+        ) {
+          console.warn(
+            `[tandem] editorMeasure=${JSON.stringify(originalEditorMeasure)} from newer client is unknown to v${CURRENT_SCHEMA_VERSION}; displaying as ${JSON.stringify(normalized.editorMeasure)} (your setting is preserved on-disk).`,
+          );
+        }
         // Preserve unknown future fields verbatim so a user bouncing back
         // to the newer client doesn't perceive a regression. `knownKeys`
         // is runtime-derived from the helper output (NOT the type), so

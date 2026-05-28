@@ -476,6 +476,67 @@ test("toggle off after on: margin columns unmount", async ({ page }) => {
 });
 
 /**
+ * INVARIANT 1 (App.svelte:1554-1559): the `marginLayerEl` <div> — the grid
+ * stage container `[data-testid='editor-stage']` — must stay mounted across
+ * `marginView` toggles. If a future refactor wraps it in `{#if marginView}`,
+ * the `bind:this` ref nulls on toggle-off and re-binds to a NEW element on
+ * toggle-on; `useMarginPositions`'s `$effect` would tear down + re-subscribe,
+ * but any `getBoundingClientRect()` reads queued during the gap would return
+ * the wrong rect, and the doc warning at
+ * `feedback_svelte_state_bind_this_loop` becomes a retry storm.
+ *
+ * The pre-existing "toggle off after on" test (above) only proves the inner
+ * margin-column children unmount; it never cycles back ON to verify bubbles
+ * re-anchor against the SAME stage element. The off→on→off→on cycle below
+ * captures stage element identity and asserts it survives the round trip,
+ * plus a margin bubble re-anchors on re-enable.
+ */
+test("INVARIANT 1: editor-stage element survives off→on→off→on toggle cycle", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Margin candidate",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+
+  // Stamp the stage element with a unique session id BEFORE the cycle. The id
+  // is read after each toggle; surviving the cycle == same DOM node throughout
+  // == `bind:this` never re-bound == invariant held.
+  const stage = page.locator("[data-testid='editor-stage']");
+  await expect(stage).toHaveCount(1, { timeout: 5_000 });
+  const stageId = `stage-${Math.random().toString(36).slice(2, 10)}`;
+  await stage.evaluate((el, id) => {
+    el.setAttribute("data-test-stage-id", id);
+  }, stageId);
+
+  // Cycle: on → off → on → off → on.
+  await setMarginView(page, true);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+  await expect(stage).toHaveAttribute("data-test-stage-id", stageId);
+
+  await setMarginView(page, false);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(0);
+  await expect(stage).toHaveAttribute("data-test-stage-id", stageId);
+
+  await setMarginView(page, true);
+  // The bubble must re-render and re-anchor on the SAME stage element. If the
+  // stage had remounted, the bubble would render but `useMarginPositions`
+  // would be working against a stale bind reference and bubble Y would be
+  // wrong (or the bubble would never appear if the effect cleanup ran late).
+  await expect(
+    page.locator("[data-testid='margin-column-right'] [data-testid^='margin-bubble-']").first(),
+  ).toBeVisible({ timeout: 5_000 });
+  await expect(stage).toHaveAttribute("data-test-stage-id", stageId);
+
+  await setMarginView(page, false);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(0);
+  await expect(stage).toHaveAttribute("data-test-stage-id", stageId);
+});
+
+/**
  * #892 — margin visibility is DECOUPLED from rail state. Opening a rail no
  * longer hides that side's margin column: the left rail is the OUTLINE (nothing
  * to do with annotations), so hiding the left-margin notes when the outline

@@ -97,6 +97,13 @@ test("editor-measure presets thread through to the stage's --editor-measure CSS 
   const readMeasureVar = () =>
     stage.evaluate((el) => getComputedStyle(el).getPropertyValue("--editor-measure").trim());
 
+  // Pre-assert the stage carries `--editor-measure` AT ALL before walking the
+  // matrix. If a Stage C/D refactor relocates the var onto a child grid cell
+  // (e.g. per-side `--editor-measure-left/-right`), this baseline check fails
+  // informatively ("stage no longer carries --editor-measure") instead of the
+  // matrix below silently timing out with `"" !== "58ch"` × 4 = 12s wasted.
+  expect(await readMeasureVar(), "stage must carry --editor-measure").not.toBe("");
+
   const cases: Array<{ preset: "narrow" | "comfortable" | "wide" | "full"; expected: string }> = [
     { preset: "narrow", expected: "58ch" },
     { preset: "wide", expected: "82ch" },
@@ -104,16 +111,18 @@ test("editor-measure presets thread through to the stage's --editor-measure CSS 
     { preset: "comfortable", expected: "68ch" },
   ];
 
+  const popover = page.locator("[data-testid='settings-popover']");
   for (const { preset, expected } of cases) {
     await openSettingsPopover(page);
-    const popover = page.locator("[data-testid='settings-popover']");
     await expect(popover).toBeVisible({ timeout: 2_000 });
     await popover.getByRole("button", { name: "Editor" }).click();
     await popover.locator(`[data-testid='editor-measure-${preset}']`).click();
-    // Dismiss the popover so its layer doesn't sit on top of the stage; the
-    // CSS var read is on the stage element regardless, but closing keeps the
-    // next iteration's openSettingsPopover clean.
+    // Dismiss the popover and gate the next iteration's reopen on the
+    // popover ACTUALLY unmounting — without `toHaveCount(0)` the next
+    // `openSettingsPopover` can race the Svelte exit transition on slow CI
+    // (the old node lingers a frame, the open click misses).
     await page.keyboard.press("Escape");
+    await expect(popover).toHaveCount(0, { timeout: 2_000 });
     await expect.poll(readMeasureVar, { timeout: 3_000 }).toBe(expected);
   }
 });

@@ -200,6 +200,10 @@ export function createEditorStageModel(opts: CreateEditorStageModelOpts): Editor
   const leftVisible = $derived(effectivelyOn);
   const rightVisible = $derived(effectivelyOn);
 
+  // Per-session breadcrumb set: each bogus value warns once, not per-frame.
+  // The lookup runs inside a `$derived` that re-evaluates on viewport / rail
+  // / settings changes; a hot-path warn loop would drown other signals.
+  const warnedMeasures = new Set<string>();
   const layerStyle = $derived(
     stageLayerStyle({
       isDocx: opts.getFormat() === "docx",
@@ -211,8 +215,20 @@ export function createEditorStageModel(opts: CreateEditorStageModelOpts): Editor
       // `??` only triggers if a TS-violating cast slips one through. Without
       // the fallback the grid track would render `--editor-measure: undefined`
       // — invalid CSS the browser silently ignores, producing a broken layout
-      // with no console signal.
-      measure: EDITOR_MEASURE_CH[opts.getEditorMeasure()] ?? EDITOR_MEASURE_CH.comfortable,
+      // with no console signal. The warn below is the tripwire: reaching here
+      // means an `as EditorMeasure` cast bypassed both validators, which is a
+      // real bug worth flagging, not silently patching over.
+      measure: (() => {
+        const m = opts.getEditorMeasure();
+        const ch = EDITOR_MEASURE_CH[m];
+        if (ch === undefined && !warnedMeasures.has(m as string)) {
+          warnedMeasures.add(m as string);
+          console.warn(
+            `[tandem] editorMeasure=${JSON.stringify(m)} not in EDITOR_MEASURE_CH; falling back to comfortable. Both useTandemSettings validators should have coerced this upstream — a TS-violating cast slipped past them.`,
+          );
+        }
+        return ch ?? EDITOR_MEASURE_CH.comfortable;
+      })(),
     }),
   );
 

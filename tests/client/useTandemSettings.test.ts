@@ -158,9 +158,14 @@ describe("loadSettings — editorMeasure validation (regression guard)", () => {
     // EDITOR_MEASURE_CH is a TS error (Record exhaustiveness), but the reverse
     // — a CH entry without a measure entry — is allowed by TS. This test pins
     // both directions so the union, the validator, and the CSS map can't drift
-    // apart silently as Stage C/D evolves the presets.
+    // apart silently as Stage C/D evolves the presets. The value check is
+    // presence-and-non-empty rather than a `ch | 100%` regex so a legitimate
+    // future fluid preset (e.g. `clamp(58ch, 90vw, 82ch)`) doesn't false-fail
+    // — the test polices "did you add the entry" not "is the value language X."
     for (const m of EDITOR_MEASURES) {
-      expect(EDITOR_MEASURE_CH[m]).toMatch(/^(\d+ch|100%)$/);
+      const v = EDITOR_MEASURE_CH[m];
+      expect(v, `EDITOR_MEASURE_CH missing entry for ${m}`).toBeTruthy();
+      expect(typeof v).toBe("string");
     }
     expect(Object.keys(EDITOR_MEASURE_CH).sort()).toEqual([...EDITOR_MEASURES].sort());
   });
