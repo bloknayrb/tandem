@@ -167,9 +167,11 @@ function handleTabTrap(e: KeyboardEvent) {
         </button>
       </div>
 
-      <!-- Original comment context -->
+      <!-- Original comment context — italic serif quote (cluster 3.3
+           decision #7) so the quoted source reads as voiced material, not
+           UI chrome. -->
       <div
-        style="padding: var(--tandem-space-2) var(--tandem-space-3); background: var(--tandem-surface-muted); border-radius: var(--tandem-r-2); border-left: 3px solid var(--tandem-author-claude); font-size: var(--tandem-text-sm); color: var(--tandem-fg-muted); white-space: pre-wrap;"
+        style="padding: var(--tandem-space-2) var(--tandem-space-3); background: var(--tandem-surface-muted); border-radius: var(--tandem-r-2); border-left: 3px solid var(--tandem-author-claude); font-family: var(--tandem-font-serif, var(--tandem-font-sans)); font-style: italic; font-size: var(--tandem-text-sm); color: var(--tandem-fg-muted); white-space: pre-wrap;"
       >
         {annotation.content}
       </div>
