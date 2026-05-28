@@ -25,6 +25,7 @@
  */
 import type { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
+import { withBrowser } from "../../shared/origins.js";
 import { isScratchpadPath, scratchpadUuidFromPath } from "../../shared/paths.js";
 import type { OpenTab } from "../types.js";
 import { type Debounced, debounce } from "../utils/debounce.js";
@@ -213,7 +214,7 @@ export function createScratchpadPersistence(getTabs: () => OpenTab[]): Scratchpa
       if (line.length > 0) p.insert(0, [new Y.XmlText(line)]);
       return p;
     });
-    entry.ydoc.transact(() => {
+    withBrowser(entry.ydoc, () => {
       // Clear any default empty paragraph y-prosemirror may have created.
       if (fragment.length > 0) fragment.delete(0, fragment.length);
       fragment.insert(0, paragraphs);
