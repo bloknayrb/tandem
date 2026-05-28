@@ -153,6 +153,12 @@ const MetaSchema = z
   .object({
     filePath: z.string(),
     lastUpdated: z.number(),
+    // Additive (no schema-version bump — MetaSchema is .passthrough()).
+    // SHA-256 of `extractText(doc)` recomputed on EVERY durable write, used by
+    // the rename-recovery path (#313) to re-associate an orphaned envelope with
+    // a renamed-but-byte-identical document. Optional so pre-#313 envelopes
+    // (which lack it) still parse; recovery simply skips them.
+    contentHash: z.string().optional(),
   })
   .passthrough();
 

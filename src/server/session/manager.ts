@@ -5,7 +5,8 @@ import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.j
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import type { SessionData } from "../../shared/types.js";
-import { getAnnotationsDir } from "../annotations/store.js";
+import { parseAnnotationDoc } from "../annotations/schema.js";
+import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
 import { atomicWrite } from "../file-io/index.js";
 import { SESSION_DIR } from "../platform.js";
 
@@ -271,6 +272,91 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<{
     raced: results.filter((r) => r === "raced").length,
     failed: results.filter((r) => r === "failed").length,
   };
+}
+
+/**
+ * Compact stale tombstones from CLOSED documents' annotation envelopes (#318).
+ *
+ * Tombstones prevent a stale reconnecting browser tab from resurrecting a
+ * deleted annotation (the anti-resurrection merge in `sync.ts`). They are only
+ * needed while such a stale peer might reconnect, which is bounded by SESSION
+ * GC: a session older than `SESSION_MAX_AGE` (30d) is itself reaped, so a
+ * tombstone older than that horizon can no longer be contradicted by a
+ * reconnecting peer carrying the pre-deletion copy.
+ *
+ * Safety contract:
+ *   - Only CLOSED docs are swept. `openDocHashes` (the docHashes of currently
+ *     open documents) is the guard: an open doc's in-memory `tombstonesByDoc`
+ *     ledger is authoritative and MUST NOT be contradicted by a disk rewrite.
+ *     (At the current pre-`restoreOpenDocuments` call site this set is empty,
+ *     but the guard is load-bearing if the call site ever moves.)
+ *   - Only tombstones with `deletedAt` older than `SESSION_MAX_AGE` are
+ *     dropped. Annotations, replies, and fresh tombstones are preserved.
+ *   - The rewrite is routed through the store's `queueWrite`/`flush` (atomic
+ *     write + debounce coalescing), never a raw `fs.writeFile`.
+ *   - No-op in read-only mode.
+ *
+ * @param openDocHashes docHashes of documents currently open (skip these).
+ * @returns count of envelopes whose tombstone array was compacted.
+ */
+export async function cleanupStaleTombstones(
+  openDocHashes: ReadonlySet<string> = new Set(),
+): Promise<number> {
+  if (isStoreReadOnly()) return 0;
+
+  const dir = getAnnotationsDir();
+  let files: string[];
+  try {
+    files = await fs.readdir(dir);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    console.error("[Tandem] cleanupStaleTombstones: failed to read annotations dir:", err);
+    return 0;
+  }
+
+  const envelopeRe = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
+  const now = Date.now();
+  let compacted = 0;
+
+  for (const file of files) {
+    if (!envelopeRe.test(file)) continue;
+    const fileHash = file.slice(0, -".json".length);
+    // Open-doc guard: never mutate an open doc's envelope from disk — its
+    // in-memory tombstone ledger is authoritative.
+    if (openDocHashes.has(fileHash)) continue;
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(path.join(dir, file), "utf-8");
+    } catch (err) {
+      console.error(`[Tandem] cleanupStaleTombstones: failed to read ${file}:`, err);
+      continue;
+    }
+
+    const parsed = parseAnnotationDoc(raw);
+    if (!parsed.ok) continue; // corrupt/future files have their own lifecycle
+    const doc = parsed.doc;
+    if (doc.tombstones.length === 0) continue;
+
+    const kept = doc.tombstones.filter((t) => now - t.deletedAt <= SESSION_MAX_AGE);
+    if (kept.length === doc.tombstones.length) continue; // nothing stale
+
+    // Re-key the rewrite to the FILENAME hash, not the envelope's internal
+    // docHash — a hand-edited file whose internal docHash disagrees with its
+    // filename must not write to a different path (which would orphan the
+    // stale file and create a duplicate). The filename is the storage key.
+    const rewritten = { ...doc, docHash: fileHash, tombstones: kept };
+    const store = createStore(fileHash, { filePath: doc.meta.filePath });
+    store.queueWrite(() => rewritten);
+    try {
+      await store.flush();
+      compacted++;
+    } catch (err) {
+      console.error(`[Tandem] cleanupStaleTombstones: failed to rewrite ${file}:`, err);
+    }
+  }
+
+  return compacted;
 }
 
 /** Delete sessions older than 30 days */

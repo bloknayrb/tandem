@@ -333,6 +333,23 @@ function filePathFor(docHash: string): string {
   return path.join(getAnnotationsDir(), `${docHash}.json`);
 }
 
+/**
+ * Does an on-disk envelope exist for this docHash? Used by the rename-recovery
+ * gate (#313): recovery only runs when NO path-hash envelope exists, so it can
+ * never steal annotations from a live document. Feature-off and read errors
+ * report `false` (treat as absent — recovery's own read-only guard handles the
+ * write side).
+ */
+export async function annotationFileExists(docHash: string): Promise<boolean> {
+  if (isFeatureDisabled()) return false;
+  try {
+    await fs.access(filePathFor(docHash));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function performWrite(docHash: string, doc: AnnotationDocV1): Promise<void> {
   await ensureDirReady();
   const target = filePathFor(docHash);
