@@ -2,9 +2,13 @@
 
 /**
  * Tandem Doctor — diagnose common setup issues.
- * Usage: npm run doctor
+ * Usage: npm run doctor [--json]
  *
  * Pure Node.js built-ins only (no external dependencies).
+ *
+ * With --json, suppresses the colored TTY output and prints a single
+ * structured JSON document with every check's result. Exit codes are
+ * unchanged: 0 (all pass), 1 (failures), 2 (crash).
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -17,25 +21,66 @@ import { join } from "node:path";
 const WS_PORT = 3478;
 const MCP_PORT = 3479;
 
-// ── Formatting helpers ──────────────────────────────────────────────
+const JSON_MODE = process.argv.slice(2).includes("--json");
+
+// ── Result recording ────────────────────────────────────────────────
+//
+// Every check routes its pass/warn/fail through the recorder so the TTY
+// printer and the JSON collector observe the same results from a single
+// source of truth. A check groups one or more results under a `name`.
 
 let failures = 0;
 let warnings = 0;
 
-function pass(msg) {
-  console.log(`  \x1b[32m[PASS]\x1b[0m ${msg}`);
+/** Collected results, only populated in JSON mode. @type {Array<object>} */
+const results = [];
+/** The check name currently in scope; set by `check()`. @type {string|null} */
+let currentCheck = null;
+
+/** Print to the TTY only when not in JSON mode (keeps JSON output clean). */
+function out(line) {
+  if (!JSON_MODE) console.log(line);
 }
 
-function warn(msg, fix) {
+/** Run a named check; pass/warn/fail inside it are tagged with `name`. */
+async function check(name, fn) {
+  const prev = currentCheck;
+  currentCheck = name;
+  try {
+    return await fn();
+  } finally {
+    currentCheck = prev;
+  }
+}
+
+/** Record a single result for JSON mode and emit the TTY line. */
+function record(status, msg, fix, fields) {
+  if (JSON_MODE) {
+    const entry = { check: currentCheck, status, message: msg };
+    if (fix) entry.fix = fix;
+    if (fields) entry.data = fields;
+    results.push(entry);
+  }
+}
+
+function pass(msg, fix, fields) {
+  // Original behavior: PASS lines never print a "Fix:" follow-up line.
+  record("pass", msg, fix, fields);
+  out(`  \x1b[32m[PASS]\x1b[0m ${msg}`);
+}
+
+function warn(msg, fix, fields) {
   warnings++;
-  console.log(`  \x1b[33m[WARN]\x1b[0m ${msg}`);
-  if (fix) console.log(`         Fix: ${fix}`);
+  record("warn", msg, fix, fields);
+  out(`  \x1b[33m[WARN]\x1b[0m ${msg}`);
+  if (!JSON_MODE && fix) out(`         Fix: ${fix}`);
 }
 
-function fail(msg, fix) {
+function fail(msg, fix, fields) {
   failures++;
-  console.log(`  \x1b[31m[FAIL]\x1b[0m ${msg}`);
-  if (fix) console.log(`         Fix: ${fix}`);
+  record("fail", msg, fix, fields);
+  out(`  \x1b[31m[FAIL]\x1b[0m ${msg}`);
+  if (!JSON_MODE && fix) out(`         Fix: ${fix}`);
 }
 
 // ── Check: Node.js version ──────────────────────────────────────────
@@ -194,16 +239,18 @@ async function checkPorts() {
   const [ws, mcp] = await Promise.all([probePort(WS_PORT), probePort(MCP_PORT)]);
 
   if (ws && mcp) {
-    pass(`Ports ${WS_PORT} (WebSocket) + ${MCP_PORT} (MCP HTTP) in use`);
+    pass(`Ports ${WS_PORT} (WebSocket) + ${MCP_PORT} (MCP HTTP) in use`, undefined, { ws, mcp });
   } else if (!ws && !mcp) {
     fail(
       `Ports ${WS_PORT} + ${MCP_PORT} not listening — server not running`,
       "npm run dev:standalone",
+      { ws, mcp },
     );
   } else {
     warn(
       `Partial: port ${WS_PORT} ${ws ? "up" : "down"}, port ${MCP_PORT} ${mcp ? "up" : "down"}`,
       "Server may be starting up or partially crashed",
+      { ws, mcp },
     );
   }
 
@@ -258,7 +305,11 @@ async function checkHealth() {
   const d = result.data;
   if (d) {
     const session = d.hasSession ? "session active" : "no MCP session";
-    pass(`Server healthy (v${d.version}, ${d.transport}, ${session})`);
+    pass(`Server healthy (v${d.version}, ${d.transport}, ${session})`, undefined, {
+      version: d.version,
+      transport: d.transport,
+      hasSession: !!d.hasSession,
+    });
     if (!d.hasSession) {
       warn("No active MCP session — Claude Code hasn't connected yet");
     }
@@ -374,30 +425,42 @@ function checkAnnotationStore() {
     }
   }
 
-  pass(`Annotation store: ${jsonFiles.length} doc(s), ${formatBytes(totalBytes)} total`);
+  pass(`Annotation store: ${jsonFiles.length} doc(s), ${formatBytes(totalBytes)} total`, undefined, {
+    dir,
+    docCount: jsonFiles.length,
+    totalBytes,
+    corruptCount: corruptFiles.length,
+  });
 
   if (newest.name) {
     const ageMs = Date.now() - newest.mtime;
     const ageStr =
       ageMs < 60_000 ? `${Math.floor(ageMs / 1000)}s` : `${Math.floor(ageMs / 60_000)}m`;
-    pass(`Most recent annotation write: ${newest.name} (${ageStr} ago)`);
+    pass(`Most recent annotation write: ${newest.name} (${ageStr} ago)`, undefined, {
+      name: newest.name,
+      mtimeMs: newest.mtime,
+      ageMs,
+    });
   }
 
   if (sampleSchemaVersion !== null) {
-    pass(`Annotation schema version: ${sampleSchemaVersion}`);
+    pass(`Annotation schema version: ${sampleSchemaVersion}`, undefined, {
+      schemaVersion: sampleSchemaVersion,
+    });
   }
 
   if (corruptFiles.length > 0) {
     warn(
       `${corruptFiles.length} quarantined annotation file(s) in ${dir}`,
       "Safe to delete after inspection; kept 7d by design.",
+      { corruptCount: corruptFiles.length, dir },
     );
   }
 
   // Lock status
   const lockPath = join(dir, "store.lock");
   if (!existsSync(lockPath)) {
-    pass("Annotation store lock: not held (no running writer)");
+    pass("Annotation store lock: not held (no running writer)", undefined, { lockHeld: false });
     return;
   }
 
@@ -408,15 +471,21 @@ function checkAnnotationStore() {
       warn(
         `Annotation store lock at ${lockPath} has unparseable content: "${raw}"`,
         "Restart Tandem or delete the lock file if no server is running.",
+        { lockHeld: true, lockPath, lockContent: raw },
       );
       return;
     }
     if (isPidLive(pid)) {
-      pass(`Annotation store lock held by live PID ${pid}`);
+      pass(`Annotation store lock held by live PID ${pid}`, undefined, {
+        lockHeld: true,
+        pid,
+        pidLive: true,
+      });
     } else {
       warn(
         `Annotation store lock at ${lockPath} points to dead PID ${pid}`,
         "The next server start will reclaim the stale lock automatically.",
+        { lockHeld: true, pid, pidLive: false },
       );
     }
   } catch (err) {
@@ -427,42 +496,74 @@ function checkAnnotationStore() {
 // ── Main ────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log();
-  console.log("  Tandem Doctor");
-  console.log("  =============");
-  console.log();
+  out("");
+  out("  Tandem Doctor");
+  out("  =============");
+  out("");
 
-  checkNodeVersion();
-  checkNodeModules();
-  checkMcpJson();
-  checkUserMcpConfig();
+  await check("node-version", checkNodeVersion);
+  await check("node-modules", checkNodeModules);
+  await check("mcp-json", checkMcpJson);
+  await check("user-mcp-config", checkUserMcpConfig);
 
-  console.log();
-  checkAnnotationStore();
+  out("");
+  await check("annotation-store", checkAnnotationStore);
 
-  console.log();
-  const { mcp } = await checkPorts();
+  out("");
+  const { mcp } = await check("ports", checkPorts);
 
   if (mcp) {
-    const healthy = await checkHealth();
+    const healthy = await check("health", checkHealth);
     if (healthy) {
-      await checkSseEndpoint();
+      await check("sse", checkSseEndpoint);
     }
   }
 
-  console.log();
+  // Exit code is shared by both output modes.
+  const exitCode = failures > 0 ? 1 : 0;
+
+  if (JSON_MODE) {
+    const summary =
+      failures > 0
+        ? `${failures} issue(s) found.`
+        : warnings > 0
+          ? `${warnings} warning(s) — Tandem should work, but check the items above.`
+          : "All checks passed. Tandem is ready.";
+    const doc = {
+      ok: failures === 0,
+      failures,
+      warnings,
+      summary,
+      results,
+    };
+    console.log(JSON.stringify(doc, null, 2));
+    if (exitCode !== 0) process.exit(exitCode);
+    return;
+  }
+
+  out("");
   if (failures > 0) {
-    console.log(`  ${failures} issue(s) found. Fix the items above and re-run: npm run doctor`);
+    out(`  ${failures} issue(s) found. Fix the items above and re-run: npm run doctor`);
     process.exit(1);
   } else if (warnings > 0) {
-    console.log(`  ${warnings} warning(s) — Tandem should work, but check the items above.`);
+    out(`  ${warnings} warning(s) — Tandem should work, but check the items above.`);
   } else {
-    console.log("  All checks passed. Tandem is ready.");
+    out("  All checks passed. Tandem is ready.");
   }
-  console.log();
+  out("");
 }
 
 main().catch((err) => {
+  if (JSON_MODE) {
+    // Even on crash, emit a single valid JSON document on stdout so consumers
+    // can parse a result; details still go to stderr.
+    console.error(`\n  Tandem Doctor crashed unexpectedly: ${err.message}`);
+    console.error("  Please report this at https://github.com/bloknayrb/tandem/issues\n");
+    console.log(
+      JSON.stringify({ ok: false, crashed: true, error: err.message, results }, null, 2),
+    );
+    process.exit(2);
+  }
   console.error(`\n  Tandem Doctor crashed unexpectedly: ${err.message}`);
   console.error("  Please report this at https://github.com/bloknayrb/tandem/issues\n");
   process.exit(2);
