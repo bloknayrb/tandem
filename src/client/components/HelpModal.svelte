@@ -69,7 +69,7 @@ $effect(() => {
 {#if open}
   <div
     role="presentation"
-    style="position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: var(--tandem-z-above-titlebar);"
+    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); display: flex; align-items: center; justify-content: center; z-index: var(--tandem-z-above-titlebar);"
     onclick={onClose}
     data-testid="help-modal"
   >
@@ -81,7 +81,7 @@ $effect(() => {
       bind:this={dialogEl}
       class="tandem-scroll-fade-y"
       use:scrollFade={"y"}
-      style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-3); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
+      style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-5); box-shadow: var(--tandem-shadow-3); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => {
         if (e.key === "Escape") {
@@ -116,10 +116,10 @@ $effect(() => {
         </h2>
         <button
           type="button"
+          class="modal-close"
           onclick={onClose}
           aria-label="Close help"
           data-testid="help-modal-close"
-          style="background: none; border: none; cursor: pointer; font-size: 18px; color: var(--tandem-fg-muted); line-height: 1; padding: 2px 6px; border-radius: var(--tandem-r-2);"
         >
           ✕
         </button>
@@ -173,3 +173,30 @@ $effect(() => {
     </div>
   </div>
 {/if}
+
+<style>
+  /* Close button — mirrors SettingsModal.svelte's `.settings-modal-close` recipe
+     (28×28, transparent border, fg-subtle on surface-sunk hover) so the modal
+     family reads as one. Lives in a <style> block (not inline) because :hover /
+     :focus-visible can't be expressed in style="..." attributes. */
+  .modal-close {
+    background: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    color: var(--tandem-fg-subtle);
+    font-size: 18px;
+    line-height: 1;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border-radius: var(--tandem-r-2);
+  }
+  .modal-close:hover,
+  .modal-close:focus-visible {
+    color: var(--tandem-fg);
+    background: var(--tandem-surface-sunk);
+    outline: none;
+  }
+</style>
