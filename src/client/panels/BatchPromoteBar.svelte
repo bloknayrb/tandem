@@ -13,9 +13,12 @@ let { selectedCount, onPromote, onClear }: Props = $props();
     data-testid="batch-promote-bar"
     role="region"
     aria-label="Batch promote imported notes"
-    style="position: sticky; top: 0; z-index: var(--tandem-z-base); display: flex; align-items: center; gap: var(--tandem-space-2); padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-accent-bg); border-bottom: 1px solid var(--tandem-accent-border); font-size: var(--tandem-text-xs); color: var(--tandem-accent-fg-strong);"
+    style="position: sticky; top: 0; z-index: var(--tandem-z-base); display: flex; align-items: center; gap: var(--tandem-space-2); padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-surface); border-bottom: 1px solid var(--tandem-border); box-shadow: var(--tandem-shadow-1);"
   >
-    <span data-testid="batch-promote-count" style="flex: 1; font-weight: 500;">
+    <span
+      data-testid="batch-promote-count"
+      style="flex: 1; font-size: var(--tandem-text-2xs); font-weight: 500; color: var(--tandem-fg-subtle);"
+    >
       {selectedCount} selected
     </span>
     <button
