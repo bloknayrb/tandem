@@ -21,6 +21,7 @@
   line-height: 1.4;
   text-align: center;
   border-bottom: 1px solid transparent;
+  box-shadow: var(--tandem-shadow-1);
   /* Subtle slide-in from above on appearance */
   animation: tandem-banner-slide-in 180ms ease-out;
 }
@@ -29,6 +30,37 @@
   background: var(--tandem-info-bg);
   color: var(--tandem-info-fg-strong);
   border-bottom-color: var(--tandem-info-border);
+}
+
+/* Error family — D2 ConnectionBanner. Same shape as info, swaps the color
+   tokens. Specificity-driven overrides on the sub-element rules below
+   (which currently hard-code info-* tokens at the base level). */
+.tandem-banner--error {
+  background: var(--tandem-error-bg);
+  color: var(--tandem-error-fg-strong);
+  border-bottom-color: var(--tandem-error-border);
+}
+.tandem-banner--error .tandem-banner__icon {
+  color: var(--tandem-error-fg-strong);
+}
+.tandem-banner--error .tandem-banner__cta {
+  border-color: var(--tandem-error-border);
+  color: var(--tandem-error-fg-strong);
+}
+.tandem-banner--error .tandem-banner__cta:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tandem-error) 14%, transparent);
+}
+.tandem-banner--error .tandem-banner__cta:focus-visible {
+  outline-color: var(--tandem-error-fg-strong);
+}
+.tandem-banner--error .tandem-banner__dismiss {
+  color: var(--tandem-error-fg-strong);
+}
+.tandem-banner--error .tandem-banner__dismiss:hover {
+  background: color-mix(in srgb, var(--tandem-error) 14%, transparent);
+}
+.tandem-banner--error .tandem-banner__dismiss:focus-visible {
+  outline-color: var(--tandem-error-fg-strong);
 }
 
 .tandem-banner__icon {
