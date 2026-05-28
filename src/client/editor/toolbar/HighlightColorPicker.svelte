@@ -85,8 +85,26 @@ function handleColorSelect(color: HighlightColor) {
           onclick={() => handleColorSelect(value)}
           class="highlight-picker-swatch"
           class:is-selected={value === highlightColor}
-          style="background: {HIGHLIGHT_COLOR_VARS[value]};"
-        ></button>
+        >
+          <span
+            class="highlight-picker-swatch-inner"
+            style="background: {HIGHLIGHT_COLOR_VARS[value]};"
+          ></span>
+          <svg
+            class="highlight-picker-swatch-check"
+            width="10"
+            height="10"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M5 11l3 3 7-9" />
+          </svg>
+        </button>
       {/each}
       <button
         type="button"
@@ -143,26 +161,79 @@ function handleColorSelect(color: HighlightColor) {
     position: absolute;
     top: 100%;
     left: 0;
-    margin-top: 4px;
+    margin-top: 8px;
     background: var(--tandem-surface);
     border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-3);
+    border-radius: var(--tandem-r-4);
     padding: 6px;
     display: flex;
     gap: 4px;
+    align-items: center;
     z-index: var(--tandem-z-dropdown);
     box-shadow: var(--tandem-shadow-2);
   }
+  /* Top-pointing caret — two stacked triangles for a crisp 1px border edge:
+     ::before paints the border-colored caret, ::after overlays the surface-
+     colored caret 1px lower to mask the bottom edge. */
+  .highlight-picker-popover::before,
+  .highlight-picker-popover::after {
+    content: "";
+    position: absolute;
+    left: 12px;
+    border: 5px solid transparent;
+  }
+  .highlight-picker-popover::before {
+    bottom: 100%;
+    border-bottom-color: var(--tandem-border);
+  }
+  .highlight-picker-popover::after {
+    bottom: calc(100% - 1px);
+    border-bottom-color: var(--tandem-surface);
+  }
   .highlight-picker-swatch {
+    position: relative;
     width: 24px;
     height: 24px;
     border-radius: var(--tandem-r-2);
-    border: 1px solid var(--tandem-border);
+    border: 1.5px solid transparent;
+    background: transparent;
     cursor: pointer;
     padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: transform 100ms, box-shadow 100ms, border-color 100ms;
+  }
+  .highlight-picker-swatch-inner {
+    display: block;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--tandem-r-1);
+  }
+  .highlight-picker-swatch:hover:not(.is-selected) {
+    border-color: var(--tandem-border);
+    transform: scale(1.12);
+    box-shadow: var(--tandem-shadow-1);
   }
   .highlight-picker-swatch.is-selected {
-    border: 2px solid var(--tandem-fg);
+    border-color: var(--tandem-border-strong);
+    box-shadow:
+      0 0 0 2px var(--tandem-accent-bg),
+      0 0 0 3.5px var(--tandem-accent);
+  }
+  .highlight-picker-swatch.is-selected:hover {
+    transform: scale(1.06);
+  }
+  .highlight-picker-swatch-check {
+    position: absolute;
+    color: var(--tandem-fg);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 100ms;
+  }
+  .highlight-picker-swatch.is-selected .highlight-picker-swatch-check {
+    opacity: 1;
   }
   .highlight-picker-close {
     width: 24px;
