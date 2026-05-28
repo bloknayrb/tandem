@@ -60,15 +60,15 @@ onDestroy(clearUndoTimer);
 </script>
 
 {#if isPending && !isEditing && (onAccept || onDismiss)}
-  <div style="display: flex; gap: 4px; margin-top: 4px;">
+  <div class="aca-row">
     {#if onAccept}
       <button
         data-testid="accept-btn-{annotationId}"
+        class="aca-btn aca-btn--accept"
         onclick={(e) => {
           e.stopPropagation();
           onAccept!(annotationId);
         }}
-        style="padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-success-bg); color: var(--tandem-success-fg-strong); cursor: pointer;"
       >
         Accept
       </button>
@@ -76,26 +76,26 @@ onDestroy(clearUndoTimer);
     {#if onDismiss}
       <button
         data-testid="dismiss-btn-{annotationId}"
+        class="aca-btn aca-btn--reject"
         onclick={(e) => {
           e.stopPropagation();
           onDismiss!(annotationId);
         }}
-        style="padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); cursor: pointer;"
       >
         Reject
       </button>
     {/if}
   </div>
 {:else if isPending && !isEditing && annotationType === "note"}
-  <div style="display: flex; gap: 4px; margin-top: 4px;">
+  <div class="aca-row">
     {#if onRemove}
       <button
         data-testid="archive-btn-{annotationId}"
+        class="aca-btn aca-btn--ghost"
         onclick={(e) => {
           e.stopPropagation();
           onRemove!(annotationId);
         }}
-        style="padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-surface-muted); color: var(--tandem-fg-muted); cursor: pointer;"
       >
         Archive
       </button>
@@ -103,11 +103,11 @@ onDestroy(clearUndoTimer);
     {#if onSendToClaude}
       <button
         data-testid="send-to-claude-btn-{annotationId}"
+        class="aca-btn aca-btn--send"
         onclick={(e) => {
           e.stopPropagation();
           onSendToClaude!(annotationId);
         }}
-        style="padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-pill); background: var(--tandem-accent-bg); color: var(--tandem-accent); cursor: pointer;"
       >
         Send to Claude
       </button>
@@ -116,27 +116,101 @@ onDestroy(clearUndoTimer);
 {:else if isPending && !isEditing && onRemove}
   <button
     data-testid="remove-btn-{annotationId}"
+    class="aca-btn aca-btn--ghost aca-standalone"
     onclick={(e) => {
       e.stopPropagation();
       onRemove!(annotationId);
     }}
-    style="margin-top: 4px; padding: 4px 12px; font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-surface-muted); color: var(--tandem-fg-muted); cursor: pointer;"
   >
     Remove
   </button>
 {:else if !isPending && undoable && onUndo}
-  <div style="margin-top: 4px;">
-    <button
-      data-testid="undo-btn"
-      onclick={handleUndo}
-    style="padding: 1px 6px; font-size: var(--tandem-text-xs); border: none; background: none; color: var(--tandem-accent); cursor: pointer; text-decoration: underline;"
-    >
+  <div class="aca-undo-row">
+    <button data-testid="undo-btn" class="aca-undo" onclick={handleUndo}>
       Undo
     </button>
     {#if undoError}
-      <div style="font-size: var(--tandem-text-xs); color: var(--tandem-error-fg); margin-top: 2px;">
+      <div class="aca-undo-error">
         Can't undo — text has changed.
       </div>
     {/if}
   </div>
 {/if}
+
+<style>
+  /* Action-row family. All variants share the pill recipe (4×12, r-pill,
+     text-xs); per-variant tokens carry the accept/reject/ghost/send semantic
+     so the row reads as a coherent set. Hover/:focus-visible states only
+     expressible in a <style> block. */
+  .aca-row {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .aca-btn {
+    padding: 4px 12px;
+    font-size: var(--tandem-text-xs);
+    border: 1px solid var(--tandem-border-strong);
+    border-radius: var(--tandem-r-pill);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .aca-standalone {
+    margin-top: 4px;
+  }
+  .aca-btn--accept {
+    background: var(--tandem-success-bg);
+    color: var(--tandem-success-fg-strong);
+  }
+  .aca-btn--reject {
+    background: var(--tandem-error-bg);
+    color: var(--tandem-error-fg-strong);
+  }
+  .aca-btn--ghost {
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg-muted);
+  }
+  .aca-btn--ghost:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .aca-btn--send {
+    border-color: var(--tandem-accent-border);
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent);
+  }
+  .aca-btn--send:hover {
+    background: var(--tandem-accent);
+    color: var(--tandem-accent-fg);
+  }
+  .aca-btn:focus-visible {
+    outline: none;
+    border-color: var(--tandem-accent-border);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .aca-btn {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .aca-btn {
+    transition: none;
+  }
+
+  .aca-undo-row {
+    margin-top: 4px;
+  }
+  .aca-undo {
+    padding: 1px 6px;
+    font-size: var(--tandem-text-xs);
+    border: none;
+    background: none;
+    color: var(--tandem-accent);
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .aca-undo-error {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-error-fg);
+    margin-top: 2px;
+  }
+</style>

@@ -251,7 +251,7 @@ function handleKeyDown(e: KeyboardEvent) {
         e.stopPropagation();
         isThreadOverlayOpen = true;
       }}
-      style="margin-top: var(--tandem-space-1); padding: var(--tandem-space-1) var(--tandem-space-2); font-size: var(--tandem-text-xs); border: none; background: none; color: var(--tandem-fg-subtle); cursor: pointer;"
+      class="tandem-expand-thread"
     >
       Expand thread
     </button>
@@ -293,6 +293,24 @@ function handleKeyDown(e: KeyboardEvent) {
   /* Placed after :hover so the focused-card ring wins at equal specificity. */
   .tandem-annotation-card.is-review-target {
     box-shadow: 0 0 0 3px var(--tandem-accent-bg), var(--tandem-shadow-2);
+  }
+  /* Expand-thread button — quiet ghost pill that doesn't compete with the
+     annotation's own action row. */
+  .tandem-expand-thread {
+    margin-top: var(--tandem-space-1);
+    padding: var(--tandem-space-1) var(--tandem-space-2);
+    font-size: var(--tandem-text-xs);
+    border: none;
+    background: none;
+    color: var(--tandem-fg-subtle);
+    cursor: pointer;
+    border-radius: var(--tandem-r-pill);
+  }
+  .tandem-expand-thread:hover,
+  .tandem-expand-thread:focus-visible {
+    color: var(--tandem-fg);
+    background: var(--tandem-surface-sunk);
+    outline: none;
   }
   /* #651 Claude typing-presence indicator: three pulsing dots in the
      card's top-right corner, colored with the Claude authorship token so
