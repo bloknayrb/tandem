@@ -1,5 +1,4 @@
 import {
-  DEFAULT_FONT_BY_EXTENSION,
   SELECTION_DWELL_DEFAULT_MS,
   SELECTION_DWELL_MAX_MS,
   SELECTION_DWELL_MIN_MS,
@@ -96,8 +95,9 @@ export interface TandemSettings {
   /**
    * Per-format editor-font overrides (#811). Keyed by the normalized document
    * `format` string (`md` / `docx` / `html` / `txt` — see `detectFormat`),
-   * NOT raw extensions. A present entry wins over `DEFAULT_FONT_BY_EXTENSION`,
-   * which in turn wins over the global `editorFont`. See `resolveFont`.
+   * NOT raw extensions. A present entry overrides the global `editorFont`;
+   * absence falls through to the global setting (no seeded default). See
+   * `resolveFont`.
    */
   fontByExtension: Partial<Record<string, EditorFont>>;
   density: Density;
@@ -332,8 +332,7 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  * v9→v10: introduce `fontByExtension: {}` (#811, per-format editor font).
  *   Structural no-op — `normalizeKnownFields` runs `parseFontByExtension` on
  *   whatever is present. Empty default preserves fresh-install behavior: with
- *   no override, `resolveFont` falls back to `DEFAULT_FONT_BY_EXTENSION` then
- *   the global `editorFont`.
+ *   no override, `resolveFont` falls back to the global `editorFont`.
  */
 export const CURRENT_SCHEMA_VERSION = 10;
 
@@ -646,15 +645,23 @@ export function mergeAndClampSettings(
 
 /**
  * Resolve the effective editor font for a document of the given normalized
- * `format` (`md` / `docx` / `html` / `txt` — see `detectFormat`). Resolution
- * order (#811):
+ * `format` (`md` / `docx` / `html` / `txt` — see `detectFormat`).
+ *
+ * Resolution (post-#811 follow-up): two tiers only.
  *
  *   1. Per-format user override (`settings.fontByExtension[format]`)
- *   2. Per-format default (`DEFAULT_FONT_BY_EXTENSION[format]`)
- *   3. Global setting (`settings.editorFont`)
+ *   2. Global setting (`settings.editorFont`)
  *
- * A `null`/`undefined` format (no active tab) skips straight to the global
- * setting so the root font is never undefined during a Y.Doc swap.
+ * The previous third tier — `DEFAULT_FONT_BY_EXTENSION[format]` — was
+ * removed. Seeded defaults silently overrode the user's global pick
+ * for un-customized formats: changing the global font in Settings did
+ * nothing for `.docx` / `.html` / `.txt` until the user also clicked
+ * through every per-format radio group. The new contract: the global
+ * setting is the true default; per-format overrides exist only where
+ * the user has explicitly chosen one.
+ *
+ * A `null`/`undefined` format (no active tab) skips straight to the
+ * global setting so the root font is never undefined during a Y.Doc swap.
  */
 export function resolveFont(
   settings: Pick<TandemSettings, "fontByExtension" | "editorFont">,
@@ -663,8 +670,6 @@ export function resolveFont(
   if (format) {
     const override = settings.fontByExtension?.[format];
     if (override) return override;
-    const def = DEFAULT_FONT_BY_EXTENSION[format];
-    if (def) return def;
   }
   return settings.editorFont;
 }

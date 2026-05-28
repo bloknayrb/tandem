@@ -428,32 +428,40 @@ describe("useTandemSettings — updateSettings write path", () => {
   });
 });
 
-describe("resolveFont — per-format resolution order (#811)", () => {
+describe("resolveFont — per-format resolution order (post-#887)", () => {
   const base = { editorFont: "sans" as const, fontByExtension: {} };
 
   it("falls back to the global editorFont for an unknown format", () => {
     expect(resolveFont({ ...base, editorFont: "mono" }, "rtf")).toBe("mono");
   });
 
-  it("uses the per-format default when no override is set", () => {
-    // DEFAULT_FONT_BY_EXTENSION: docx → serif, txt → mono, md/html → sans.
-    expect(resolveFont(base, "docx")).toBe("serif");
-    expect(resolveFont(base, "txt")).toBe("mono");
+  it("falls through to the global editorFont when no per-format override is set", () => {
+    // #887 follow-up: seeded DEFAULT_FONT_BY_EXTENSION removed. Every format
+    // without an explicit user override resolves to the global setting,
+    // including the ones the old map seeded (docx/txt/md/html).
+    expect(resolveFont(base, "docx")).toBe("sans");
+    expect(resolveFont(base, "txt")).toBe("sans");
     expect(resolveFont(base, "md")).toBe("sans");
     expect(resolveFont(base, "html")).toBe("sans");
   });
 
-  it("prefers a per-format user override over the default", () => {
-    expect(resolveFont({ ...base, fontByExtension: { docx: "mono" } }, "docx")).toBe("mono");
+  it("the global editorFont actually changes resolution for all formats", () => {
+    // Regression test for the silent-default bug: previously, switching the
+    // global font to "mono" did nothing for docx/txt/md/html.
+    const mono = { ...base, editorFont: "mono" as const };
+    expect(resolveFont(mono, "docx")).toBe("mono");
+    expect(resolveFont(mono, "txt")).toBe("mono");
+    expect(resolveFont(mono, "md")).toBe("mono");
+    expect(resolveFont(mono, "html")).toBe("mono");
+  });
+
+  it("prefers a per-format user override over the global setting", () => {
+    expect(resolveFont({ ...base, fontByExtension: { docx: "serif" } }, "docx")).toBe("serif");
   });
 
   it("falls back to the global setting when format is null/undefined", () => {
     expect(resolveFont({ ...base, editorFont: "serif" }, null)).toBe("serif");
     expect(resolveFont({ ...base, editorFont: "serif" }, undefined)).toBe("serif");
-  });
-
-  it("fresh install: md still resolves to sans (preserves prior behavior)", () => {
-    expect(resolveFont({ editorFont: "sans", fontByExtension: {} }, "md")).toBe("sans");
   });
 });
 

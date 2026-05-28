@@ -1,5 +1,4 @@
 <script lang="ts">
-import { DEFAULT_FONT_BY_EXTENSION } from "../../shared/constants";
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type {
   Density,
@@ -29,9 +28,10 @@ const FONT_OPTIONS = [
 ] as const;
 
 // Effective per-format value shown as the active radio: user override wins,
-// else the built-in default. Mirrors `resolveFont`'s first two tiers.
+// else falls through to the global Editor Font setting. Matches the
+// post-#887 `resolveFont` contract — no seeded per-format defaults.
 function effectiveFontFor(format: string): EditorFont {
-  return settings.fontByExtension?.[format] ?? DEFAULT_FONT_BY_EXTENSION[format] ?? "sans";
+  return settings.fontByExtension?.[format] ?? settings.editorFont;
 }
 
 function setFontFor(format: string, font: EditorFont): void {
@@ -90,6 +90,18 @@ const densityRg = createRadioGroup<Density>(
   ["compact", "cozy", "spacious"] as const,
   (d) => onUpdate({ density: d }),
 );
+// Per-format font radio groups (#811). Each group is its own RG instance so
+// arrow-key navigation is scoped to one row at a time. `createRadioGroup`
+// querySelectorAll's `[role="radio"]` within the container — the radio
+// buttons below already carry that attribute (was missing before #887).
+const fontByExtensionRgs: Record<string, ReturnType<typeof createRadioGroup<EditorFont>>> = {};
+for (const row of FONT_FORMAT_ROWS) {
+  fontByExtensionRgs[row.format] = createRadioGroup<EditorFont>(
+    () => effectiveFontFor(row.format),
+    ["sans", "serif", "mono"] as const,
+    (f) => setFontFor(row.format, f),
+  );
+}
 </script>
 
 <!-- Theme -->
@@ -252,6 +264,8 @@ const densityRg = createRadioGroup<Density>(
         <div
           role="radiogroup"
           aria-label={`Default font for ${row.label}`}
+          tabindex="0"
+          onkeydown={fontByExtensionRgs[row.format].handleKeyDown}
           style="display: flex; gap: var(--tandem-space-2); flex: 1;"
         >
           {#each FONT_OPTIONS as [value, label] (value)}
@@ -259,6 +273,7 @@ const densityRg = createRadioGroup<Density>(
               data-testid={`font-by-extension-${row.format}-${value}`}
               role="radio"
               aria-checked={effectiveFontFor(row.format) === value}
+              tabindex={fontByExtensionRgs[row.format].tabIndexFor(value)}
               onclick={() => setFontFor(row.format, value)}
               style={cardStyle(effectiveFontFor(row.format) === value)}
             >
