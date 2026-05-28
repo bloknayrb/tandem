@@ -119,15 +119,21 @@ export async function recoverRenamedEnvelope(
 
       const oldPath = parsed.doc.meta.filePath;
       if (!oldPath || oldPath === currentFilePath) continue;
-      // Reject UNC/device paths (\\server\share or //server/share) — a crafted
-      // envelope could trigger Windows NTLM hash leakage via fs.access().
-      if (oldPath.startsWith("\\\\") || oldPath.startsWith("//")) continue;
+      // Only accept absolute paths — relative paths from untrusted JSON could
+      // resolve to unexpected locations. path.isAbsolute rejects them early.
+      if (!path.isAbsolute(oldPath)) continue;
+      // Normalize via path.resolve so the downstream fs.access receives a
+      // fully-resolved path (CodeQL sanitizer). After resolving, reject any
+      // UNC/network share prefix (\\server\share or //server/share) to prevent
+      // NTLM hash leakage via Windows authentication challenges.
+      const resolvedOldPath = path.resolve(oldPath);
+      if (resolvedOldPath.startsWith("\\\\") || resolvedOldPath.startsWith("//")) continue;
 
       // The rename signal: the old path must no longer exist. If it still
       // exists, this is a copy — do NOT steal its annotations.
       let oldStillExists: boolean;
       try {
-        await fs.access(oldPath);
+        await fs.access(resolvedOldPath);
         oldStillExists = true;
       } catch {
         oldStillExists = false;
