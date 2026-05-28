@@ -1,4 +1,5 @@
 <script lang="ts">
+import { DEFAULT_FONT_BY_EXTENSION } from "../../shared/constants";
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type {
   Density,
@@ -12,6 +13,36 @@ import type { SettingsTabContext } from "./SettingsModal.svelte";
 type Props = SettingsTabContext;
 
 let { settings, onUpdate }: Props = $props();
+
+// #811: per-format editor font. Keyed by the normalized `format` string
+// (matches `detectFormat`: `.markdown`→md, `.htm`→html).
+const FONT_FORMAT_ROWS = [
+  { format: "md", label: "Markdown (.md)" },
+  { format: "docx", label: "Word (.docx)" },
+  { format: "html", label: "HTML (.html)" },
+  { format: "txt", label: "Plain text (.txt)" },
+] as const;
+const FONT_OPTIONS = [
+  ["sans", "Sans"],
+  ["serif", "Serif"],
+  ["mono", "Mono"],
+] as const;
+
+// Effective per-format value shown as the active radio: user override wins,
+// else the built-in default. Mirrors `resolveFont`'s first two tiers.
+function effectiveFontFor(format: string): EditorFont {
+  return settings.fontByExtension?.[format] ?? DEFAULT_FONT_BY_EXTENSION[format] ?? "sans";
+}
+
+function setFontFor(format: string, font: EditorFont): void {
+  onUpdate({ fontByExtension: { ...settings.fontByExtension, [format]: font } });
+}
+
+function resetFontsToDefaults(): void {
+  onUpdate({ fontByExtension: {} });
+}
+
+const hasFontOverrides = $derived(Object.keys(settings.fontByExtension ?? {}).length > 0);
 
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
@@ -192,6 +223,54 @@ const densityRg = createRadioGroup<Density>(
         {label}
       </button>
     {/each}
+  </div>
+</div>
+
+<!-- Default Font by File Type (#811) -->
+<div data-testid="font-by-extension-section">
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+    <div id="settings-font-by-ext-label" style={`${sectionLabelStyle} margin-bottom: 0;`}>
+      Default font by file type
+    </div>
+    <button
+      data-testid="font-by-extension-reset"
+      type="button"
+      disabled={!hasFontOverrides}
+      onclick={resetFontsToDefaults}
+      style={`background: none; border: none; padding: 0; font-size: var(--tandem-text-2xs); color: ${hasFontOverrides ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-subtle)"}; cursor: ${hasFontOverrides ? "pointer" : "default"}; text-decoration: ${hasFontOverrides ? "underline" : "none"};`}
+    >
+      Reset to defaults
+    </button>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: var(--tandem-space-2);">
+    {#each FONT_FORMAT_ROWS as row (row.format)}
+      <div
+        data-testid={`font-by-extension-row-${row.format}`}
+        style="display: flex; align-items: center; gap: var(--tandem-space-2);"
+      >
+        <span style="flex: 0 0 7rem; font-size: 11px; color: var(--tandem-fg-muted);">{row.label}</span>
+        <div
+          role="radiogroup"
+          aria-label={`Default font for ${row.label}`}
+          style="display: flex; gap: var(--tandem-space-2); flex: 1;"
+        >
+          {#each FONT_OPTIONS as [value, label] (value)}
+            <button
+              data-testid={`font-by-extension-${row.format}-${value}`}
+              role="radio"
+              aria-checked={effectiveFontFor(row.format) === value}
+              onclick={() => setFontFor(row.format, value)}
+              style={cardStyle(effectiveFontFor(row.format) === value)}
+            >
+              {label}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/each}
+  </div>
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+    Each file type uses this font; files with no specific choice fall back to the Editor Font above.
   </div>
 </div>
 
