@@ -254,8 +254,12 @@ Each row:
   `--tandem-claude-focus-bg`, `--tandem-claude-focus-border`,
   `--tandem-suggestion*` — all protected by `token-protection.test.ts`.
 - **Motion.** Active-paragraph gutter = A5 (Claude editing) 2s ease-in-out
-  infinite pulse. Honor `prefers-reduced-motion` (the existing CSS
-  already wraps the animation; preserve the wrap).
+  infinite pulse. Honor `prefers-reduced-motion`: cluster 3.10 **added** the
+  reduced-motion wrap (the pulse and the character-cursor blink were
+  previously unwrapped). The guard covers both the OS pref (`@media
+  (prefers-reduced-motion: reduce)`) and the in-app `reduceMotion` setting
+  (`body.tandem-reduce-motion`), matching the dual mechanism `SidePanel`
+  uses — preserve both.
 - **Anti-patterns.** **Do NOT branch decoration color on
   `author === "claude"` for gutter aggregation policy** — see Conflict #7:
   the gutter is a paragraph-level reduction of character-level data; the

@@ -72,6 +72,33 @@ async function flashAnimationName(page: import("@playwright/test").Page): Promis
   });
 }
 
+/**
+ * Computed animationName of a probe element carrying `className` (and optionally
+ * its `pseudo`). Used to verify the editor's Claude-presence animations honor
+ * reduced motion — the rules match by class with no editor-ancestor requirement,
+ * so a bare body-appended probe resolves the same animationName the real
+ * decoration would.
+ */
+async function probeAnimationName(
+  page: import("@playwright/test").Page,
+  className: string,
+  pseudo?: string,
+): Promise<string> {
+  return page.evaluate(
+    ({ className, pseudo }) => {
+      const el = document.createElement("div");
+      el.className = className;
+      document.body.appendChild(el);
+      try {
+        return getComputedStyle(el, pseudo).animationName;
+      } finally {
+        el.remove();
+      }
+    },
+    { className, pseudo: pseudo ?? null },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Viewport layouts
 // ---------------------------------------------------------------------------
@@ -135,6 +162,13 @@ test.describe("reduced motion — baseline", () => {
     await openSample(page);
     expect(await flashAnimationName(page)).not.toBe("none");
   });
+
+  test("Claude-presence animations are active by default", async ({ page }) => {
+    await openSample(page);
+    // A5 active-paragraph gutter pulse (on the ::before) + character-cursor blink.
+    expect(await probeAnimationName(page, "tandem-claude-focus", "::before")).not.toBe("none");
+    expect(await probeAnimationName(page, "tandem-claude-cursor")).not.toBe("none");
+  });
 });
 
 test.describe("reduced motion", () => {
@@ -152,6 +186,20 @@ test.describe("reduced motion", () => {
     await openSample(page);
     await expect(page.locator("body")).toHaveClass(/tandem-reduce-motion/, { timeout: 3_000 });
     expect(await flashAnimationName(page)).toBe("none");
+  });
+
+  test("Claude-presence animations are suppressed under reduced motion", async ({ page }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("tandem:settings", JSON.stringify({ reduceMotion: true }));
+      } catch {}
+    });
+    await openSample(page);
+    await expect(page.locator("body")).toHaveClass(/tandem-reduce-motion/, { timeout: 3_000 });
+    // Both the gutter pulse (::before) and the cursor blink go to animation:none —
+    // the indicators stay visible (3.10), only the motion is removed.
+    expect(await probeAnimationName(page, "tandem-claude-focus", "::before")).toBe("none");
+    expect(await probeAnimationName(page, "tandem-claude-cursor")).toBe("none");
   });
 });
 
