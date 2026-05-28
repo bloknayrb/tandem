@@ -268,55 +268,31 @@ async function handleReplaceAll() {
     tabindex="-1"
     aria-modal="false"
     aria-label="Find and replace"
-    style="
-      position: absolute; bottom: 0; right: 0;
-      background: var(--tandem-surface); border: 1px solid var(--tandem-border);
-      border-radius: var(--tandem-r-3) var(--tandem-r-3) 0 0;
-      padding: var(--tandem-space-3) var(--tandem-space-4);
-      box-shadow: var(--tandem-shadow-3);
-      z-index: var(--tandem-z-overlay, 200);
-      min-width: 320px; max-width: 480px;
-      display: flex; flex-direction: column; gap: var(--tandem-space-2);
-    "
+    class="fr-bar"
     onkeydown={handleKeydown}
   >
     <!-- Scope pills -->
     {#if tabs.length > 1}
-      <div
-        data-testid="find-scope-pills"
-        style="display: flex; gap: var(--tandem-space-1); align-items: center;"
-      >
+      <div data-testid="find-scope-pills" class="fr-scope-row">
         <button
           data-testid="find-scope-doc"
+          class="fr-scope-pill"
+          class:on={scope === "doc"}
           onclick={() => handleScopeChange("doc")}
           aria-pressed={scope === "doc"}
-          style="
-            padding: 2px var(--tandem-space-2); font-size: var(--tandem-text-xs);
-            border: 1px solid {scope === 'doc' ? 'var(--tandem-accent-border)' : 'var(--tandem-border)'};
-            border-radius: var(--tandem-r-pill);
-            background: {scope === 'doc' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'};
-            color: {scope === 'doc' ? 'var(--tandem-accent)' : 'var(--tandem-fg-muted)'};
-            cursor: pointer;
-          "
         >This document</button>
         <button
           data-testid="find-scope-tabs"
+          class="fr-scope-pill"
+          class:on={scope === "tabs"}
           onclick={() => handleScopeChange("tabs")}
           aria-pressed={scope === "tabs"}
-          style="
-            padding: 2px var(--tandem-space-2); font-size: var(--tandem-text-xs);
-            border: 1px solid {scope === 'tabs' ? 'var(--tandem-accent-border)' : 'var(--tandem-border)'};
-            border-radius: var(--tandem-r-pill);
-            background: {scope === 'tabs' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'};
-            color: {scope === 'tabs' ? 'var(--tandem-accent)' : 'var(--tandem-fg-muted)'};
-            cursor: pointer;
-          "
         >Open tabs</button>
       </div>
     {/if}
 
     <!-- Query row -->
-    <div style="display: flex; gap: var(--tandem-space-2); align-items: center;">
+    <div class="fr-row">
       <input
         bind:this={queryInput}
         data-testid="find-input"
@@ -325,18 +301,11 @@ async function handleReplaceAll() {
         aria-label="Find"
         bind:value={query}
         oninput={dispatchFind}
-        style="
-          flex: 1; padding: 4px 8px; font-size: var(--tandem-text-sm);
-          border: 1px solid {regexError ? 'var(--tandem-error)' : 'var(--tandem-border)'};
-          border-radius: var(--tandem-r-2); background: var(--tandem-surface);
-          color: var(--tandem-fg); outline: none;
-        "
+        class="fr-input"
+        class:has-error={!!regexError}
       />
       <!-- Match count -->
-      <span
-        data-testid="find-match-count"
-        style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); white-space: nowrap; min-width: 48px; text-align: right;"
-      >
+      <span data-testid="find-match-count" class="fr-count">
         {#if query}
           {matchCount === 0 ? "No matches" : `${activeIndex + 1} / ${matchCount}`}
         {/if}
@@ -344,45 +313,45 @@ async function handleReplaceAll() {
       <!-- Prev / Next -->
       <button
         data-testid="find-prev-btn"
+        class="fr-nav"
         onclick={() => editor?.commands.findPrev()}
         disabled={matchCount === 0}
         title="Previous match (Shift+Enter)"
         aria-label="Previous match"
-        style="background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); padding: 2px 6px; cursor: pointer; font-size: 12px; color: var(--tandem-fg-muted); opacity: {matchCount === 0 ? 0.4 : 1};"
       >
         ↑
       </button>
       <button
         data-testid="find-next-btn"
+        class="fr-nav"
         onclick={() => editor?.commands.findNext()}
         disabled={matchCount === 0}
         title="Next match (Enter)"
         aria-label="Next match"
-        style="background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); padding: 2px 6px; cursor: pointer; font-size: 12px; color: var(--tandem-fg-muted); opacity: {matchCount === 0 ? 0.4 : 1};"
       >
         ↓
       </button>
       <!-- Close -->
       <button
         data-testid="find-close-btn"
+        class="fr-close"
         onclick={close}
         title="Close (Esc)"
         aria-label="Close find bar"
-        style="background: none; border: none; cursor: pointer; font-size: 16px; color: var(--tandem-fg-muted); padding: 0 2px; line-height: 1;"
       >
         ×
       </button>
     </div>
 
     {#if regexError}
-      <div style="font-size: var(--tandem-text-xs); color: var(--tandem-error-fg);" role="alert">
+      <div class="fr-error" role="alert">
         {regexError}
       </div>
     {/if}
 
     <!-- Options -->
-    <div style="display: flex; gap: var(--tandem-space-3); align-items: center;">
-      <label style="display: flex; align-items: center; gap: 4px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); cursor: pointer; user-select: none;">
+    <div class="fr-options">
+      <label class="fr-toggle">
         <input
           data-testid="find-case-toggle"
           type="checkbox"
@@ -391,7 +360,7 @@ async function handleReplaceAll() {
         />
         Aa
       </label>
-      <label style="display: flex; align-items: center; gap: 4px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); cursor: pointer; user-select: none;">
+      <label class="fr-toggle">
         <input
           data-testid="find-word-toggle"
           type="checkbox"
@@ -400,7 +369,7 @@ async function handleReplaceAll() {
         />
         \b
       </label>
-      <label style="display: flex; align-items: center; gap: 4px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); cursor: pointer; user-select: none;">
+      <label class="fr-toggle">
         <input
           data-testid="find-regex-toggle"
           type="checkbox"
@@ -412,44 +381,30 @@ async function handleReplaceAll() {
     </div>
 
     <!-- Replace row -->
-    <div style="display: flex; gap: var(--tandem-space-2); align-items: center;">
+    <div class="fr-row">
       <input
         data-testid="replace-input"
         type="text"
         placeholder="Replace with…"
         aria-label="Replace with"
         bind:value={replaceText}
-        style="
-          flex: 1; padding: 4px 8px; font-size: var(--tandem-text-sm);
-          border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2);
-          background: var(--tandem-surface); color: var(--tandem-fg); outline: none;
-        "
+        class="fr-input"
       />
       <button
         data-testid="replace-btn"
+        class="fr-replace-btn"
         onclick={() => { if (editor) { replaceActive(editor.view, replaceText); tick++; } }}
         disabled={matchCount === 0 || isReplacing || scope === "tabs"}
         title={scope === "tabs" ? "Replace is not available in Open tabs mode" : undefined}
-        style="
-          padding: 4px 10px; font-size: var(--tandem-text-xs); cursor: pointer;
-          border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2);
-          background: var(--tandem-surface); color: var(--tandem-fg-muted);
-          opacity: {matchCount === 0 || isReplacing || scope === 'tabs' ? 0.4 : 1};
-        "
       >
         Replace
       </button>
       <button
         data-testid="replace-all-btn"
+        class="fr-replace-btn"
         onclick={handleReplaceAll}
         disabled={matchCount === 0 || isReplacing || scope === "tabs"}
         title={scope === "tabs" ? "Replace All is not available in Open tabs mode" : undefined}
-        style="
-          padding: 4px 10px; font-size: var(--tandem-text-xs); cursor: pointer;
-          border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2);
-          background: var(--tandem-surface); color: var(--tandem-fg-muted);
-          opacity: {matchCount === 0 || isReplacing || scope === 'tabs' ? 0.4 : 1};
-        "
       >
         {#if isReplacing && replaceProgress}
           {replaceProgress.replaced}/{replaceProgress.total}
@@ -460,33 +415,27 @@ async function handleReplaceAll() {
     </div>
 
     {#if partialWarning}
-      <div
-        style="font-size: var(--tandem-text-xs); color: var(--tandem-warning-fg); padding: 2px 0;"
-        role="status"
-      >
+      <div class="fr-warning" role="status">
         {partialWarning}
       </div>
     {/if}
 
     <!-- Cross-doc results -->
     {#if scope === "tabs"}
-      <div
-        data-testid="find-cross-doc-results"
-        style="border-top: 1px solid var(--tandem-border); padding-top: var(--tandem-space-2); display: flex; flex-direction: column; gap: var(--tandem-space-1);"
-      >
+      <div data-testid="find-cross-doc-results" class="fr-xdoc">
         {#if crossDocSearching}
-          <div style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle);">Searching…</div>
+          <div class="fr-xdoc-status">Searching…</div>
         {:else if query && crossDocResults.length === 0}
-          <div style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle);">No matches in open tabs</div>
+          <div class="fr-xdoc-status">No matches in open tabs</div>
         {:else}
           {#each crossDocResults as result}
-            <div style="display: flex; flex-direction: column; gap: 2px;">
-              <div style="font-size: var(--tandem-text-xs); color: var(--tandem-fg); font-weight: 500;">
+            <div class="fr-xdoc-row">
+              <div class="fr-xdoc-name">
                 {result.fileName}
-                <span style="color: var(--tandem-fg-subtle); font-weight: normal;">({result.count} {result.count === 1 ? 'match' : 'matches'})</span>
+                <span class="fr-xdoc-count">({result.count} {result.count === 1 ? 'match' : 'matches'})</span>
               </div>
               {#each result.snippets as snippet}
-                <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); padding-left: var(--tandem-space-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                <div class="fr-xdoc-snip">
                   {snippet}
                 </div>
               {/each}
@@ -497,3 +446,204 @@ async function handleReplaceAll() {
     {/if}
   </div>
 {/if}
+
+<style>
+  /* Find/Replace bar — B4 recipe layered onto production's bottom-right
+     anchor (the bar's position is information, not decoration; users have
+     learned where to find it, so we keep `position: absolute; bottom; right`
+     rather than the bundle's top-right). */
+  .fr-bar {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3) var(--tandem-r-3) 0 0;
+    padding: var(--tandem-space-3) var(--tandem-space-4);
+    box-shadow: var(--tandem-shadow-3);
+    z-index: var(--tandem-z-overlay, 200);
+    min-width: 320px;
+    max-width: 480px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+  }
+
+  .fr-row {
+    display: flex;
+    gap: var(--tandem-space-2);
+    align-items: center;
+  }
+
+  /* Scope pills — token names parallel `find-scope-pill.on` for the active
+     state so the recipe stays self-documenting. */
+  .fr-scope-row {
+    display: flex;
+    gap: var(--tandem-space-1);
+    align-items: center;
+  }
+  .fr-scope-pill {
+    padding: 2px var(--tandem-space-2);
+    font-size: var(--tandem-text-xs);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg-muted);
+    cursor: pointer;
+  }
+  .fr-scope-pill.on {
+    border-color: var(--tandem-accent-border);
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent);
+  }
+
+  /* Inputs default to surface-sunk (per B4) so the bar's content area reads
+     as nested into the floating surface, not flat against it. */
+  .fr-input {
+    flex: 1;
+    padding: 4px 8px;
+    font-size: var(--tandem-text-sm);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+    outline: none;
+  }
+  .fr-input::placeholder {
+    color: var(--tandem-fg-subtle);
+  }
+  .fr-input:focus {
+    border-color: var(--tandem-accent-border);
+    background: var(--tandem-surface);
+  }
+  .fr-input.has-error {
+    border-color: var(--tandem-error);
+  }
+
+  /* Match-count chip — monospace pill that reads as state, not content. */
+  .fr-count {
+    font-family: var(--tandem-font-mono, ui-monospace, SFMono-Regular, monospace);
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+    white-space: nowrap;
+    min-width: 48px;
+    text-align: right;
+  }
+
+  .fr-nav {
+    background: none;
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+    padding: 2px 6px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--tandem-fg-muted);
+  }
+  .fr-nav:hover:not(:disabled) {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .fr-nav:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .fr-close {
+    background: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--tandem-fg-muted);
+    padding: 0;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--tandem-r-2);
+    line-height: 1;
+  }
+  .fr-close:hover,
+  .fr-close:focus-visible {
+    color: var(--tandem-fg);
+    background: var(--tandem-surface-sunk);
+    outline: none;
+  }
+
+  .fr-error {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-error-fg);
+  }
+  .fr-warning {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-warning-fg);
+    padding: 2px 0;
+  }
+
+  .fr-options {
+    display: flex;
+    gap: var(--tandem-space-3);
+    align-items: center;
+  }
+  .fr-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .fr-replace-btn {
+    padding: 4px 10px;
+    font-size: var(--tandem-text-xs);
+    cursor: pointer;
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg-muted);
+  }
+  .fr-replace-btn:hover:not(:disabled) {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .fr-replace-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  /* Cross-doc results panel — divider + tighter rhythm than the main rows. */
+  .fr-xdoc {
+    border-top: 1px solid var(--tandem-border);
+    padding-top: var(--tandem-space-2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-1);
+  }
+  .fr-xdoc-status {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-subtle);
+  }
+  .fr-xdoc-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .fr-xdoc-name {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg);
+    font-weight: 500;
+  }
+  .fr-xdoc-count {
+    color: var(--tandem-fg-subtle);
+    font-weight: normal;
+  }
+  .fr-xdoc-snip {
+    font-size: var(--tandem-text-2xs);
+    color: var(--tandem-fg-subtle);
+    padding-left: var(--tandem-space-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+</style>
