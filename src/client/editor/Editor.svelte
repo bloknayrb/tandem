@@ -10,6 +10,7 @@ import Table from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
+import { Fragment, Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { untrack } from "svelte";
 import * as Y from "yjs";
@@ -23,6 +24,7 @@ import { HeadingCollapseExtension } from "./extensions/heading-collapse";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
+import { markdownToSlice } from "./utils/markdown-paste";
 import "./editor.css";
 
 import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
@@ -185,6 +187,29 @@ $effect(() => {
         // would beat the paged-layout selector via specificity and silently
         // lose the 11in sheet height for .docx.
         style: "outline: none; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
+      },
+      // Paste raw markdown as formatted rich text (#788). We return a parsed
+      // ProseMirror Slice so y-prosemirror's sync plugin captures it via the
+      // normal paste transaction — we never touch the Y.Doc directly. When the
+      // user requests plain-text paste (Ctrl+Shift+V → `plain === true`), or the
+      // text isn't markdown-ish, we fall through to plain-text parsing.
+      clipboardTextParser: (text, $context, plain, view) => {
+        if (!plain) {
+          const slice = markdownToSlice(text, view.state.schema);
+          if (slice) return slice;
+        }
+        // Fall back to ProseMirror's built-in plain-text behavior: split on
+        // blank-line groups into paragraphs, carrying the context's active
+        // marks. Mirrors the `else` branch of prosemirror-view's
+        // `parseFromClipboard` so non-markdown paste is unchanged.
+        const schema = view.state.schema;
+        const marks = $context.marks();
+        const nodes = text
+          .split(/(?:\r\n?|\n)+/)
+          .map((block) =>
+            schema.nodes.paragraph.create(null, block ? schema.text(block, marks) : undefined),
+          );
+        return Slice.maxOpen(Fragment.fromArray(nodes));
       },
     },
     editable: untrack(() => !readOnly),
