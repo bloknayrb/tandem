@@ -14,8 +14,8 @@ import {
   CTRL_ROOM,
 } from "../../shared/constants.js";
 import {
-  registerDirtyObserver,
   resetForTesting as dirtyResetForTesting,
+  registerDirtyObserver,
 } from "../documents/dirty.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {

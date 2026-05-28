@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import {
+  registerDirtyObserver,
+  resetForTesting as resetDirtyState,
+} from "../../src/server/documents/dirty.js";
 import type { OpenDoc } from "../../src/server/mcp/document-service.js";
 import {
   addDoc,
@@ -20,10 +24,6 @@ import {
   setActiveDocId,
   toDocListEntry,
 } from "../../src/server/mcp/document-service.js";
-import {
-  registerDirtyObserver,
-  resetForTesting as resetDirtyState,
-} from "../../src/server/documents/dirty.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
