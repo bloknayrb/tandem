@@ -244,6 +244,30 @@
   }
 }
 
+/* Reduced-motion: neutralize the Claude-presence animations (A5 gutter pulse +
+   character-cursor blink) and the authorship-attr crossfade. Both indicators
+   stay fully visible (animation:none freezes them at the opaque keyframe) — only
+   the motion is removed. Mirrors the dual mechanism SidePanel uses: the OS pref
+   AND the in-app `reduceMotion` setting (body.tandem-reduce-motion), since the
+   app exposes a toggle independent of the OS. Motion authoring is #798; this is
+   only the accessibility wrap for animations that already ship. */
+@media (prefers-reduced-motion: reduce) {
+  .tandem-claude-focus::before,
+  .tandem-claude-cursor {
+    animation: none;
+  }
+  .ProseMirror [data-tandem-author] {
+    transition: none;
+  }
+}
+body.tandem-reduce-motion .tandem-claude-focus::before,
+body.tandem-reduce-motion .tandem-claude-cursor {
+  animation: none;
+}
+body.tandem-reduce-motion .ProseMirror [data-tandem-author] {
+  transition: none;
+}
+
 /* -------------------------------------------------------------------------
  * Paged layout — applied when the editor root carries `.tandem-paged`
  * (set conditionally for .docx files via `isPaged` $derived in Editor.svelte).
