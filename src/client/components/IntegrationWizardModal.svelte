@@ -368,7 +368,8 @@ function configBadge(config: IntegrationConfig): string {
   .iw-scrim {
     position: fixed;
     inset: 0;
-    background-color: rgba(0, 0, 0, 0.55);
+    /* Theme-adaptive backdrop (cluster 3.2 modal recipe). */
+    background: color-mix(in srgb, var(--tandem-bg) 70%, transparent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -379,7 +380,7 @@ function configBadge(config: IntegrationConfig): string {
     background-color: var(--tandem-surface);
     color: var(--tandem-fg);
     border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-4);
+    border-radius: var(--tandem-r-5);
     box-shadow: var(--tandem-shadow-3);
     padding: var(--tandem-space-5);
     width: 640px;
@@ -400,12 +401,26 @@ function configBadge(config: IntegrationConfig): string {
     margin: 0;
   }
 
+  /* Close button mirrors the cluster-3.2 modal family. */
   .iw-close {
     background: none;
-    border: none;
-    font-size: var(--tandem-text-2xl);
+    border: 1px solid transparent;
     cursor: pointer;
-    color: var(--tandem-fg-muted);
+    color: var(--tandem-fg-subtle);
+    font-size: 18px;
+    line-height: 1;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border-radius: var(--tandem-r-2);
+  }
+  .iw-close:hover,
+  .iw-close:focus-visible {
+    color: var(--tandem-fg);
+    background: var(--tandem-surface-sunk);
+    outline: none;
   }
 
   .iw-existing,
@@ -458,13 +473,24 @@ function configBadge(config: IntegrationConfig): string {
     margin-top: var(--tandem-space-4);
   }
 
+  /* Default wizard action buttons read as ghost-primary (border + surface).
+     Continue/Save/Close keep this baseline — the primary-color promotion is
+     a follow-up once the step indicator lands so the visual hierarchy reads
+     as one. */
   .iw-actions button {
     padding: var(--tandem-space-2) var(--tandem-space-3);
     border-radius: var(--tandem-r-2);
     border: 1px solid var(--tandem-border);
-    background: var(--tandem-surface-elevated);
+    background: var(--tandem-surface);
     color: var(--tandem-fg);
     cursor: pointer;
+  }
+  .iw-actions button:hover {
+    background: var(--tandem-surface-sunk);
+  }
+  .iw-actions button:focus-visible {
+    outline: none;
+    border-color: var(--tandem-accent-border);
   }
 
   .iw-secret-row {
