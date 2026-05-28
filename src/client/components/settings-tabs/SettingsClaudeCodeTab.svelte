@@ -247,6 +247,12 @@ function handleReset() {
   />
   <span>Margin annotation view (Word-style)</span>
 </label>
+<div
+  data-testid="settings-modal-margin-view-hint"
+  style="font-size: 10px; color: var(--tandem-fg-subtle);"
+>
+  Margin columns appear where rails are collapsed — open rails hide that side.
+</div>
 
 {#if wdLoaded && !hasIntegration && lastLoadError}
   <div
