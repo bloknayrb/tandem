@@ -476,6 +476,117 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
     expect(parsed.data.writtenPath).toBeUndefined();
     await expect(fs.access(sidecarPath)).rejects.toThrow();
   });
+
+  // For Zod schema rejections (refine failures), the MCP server returns a
+  // content payload whose `text` starts with "MCP error -32602: ...". This is
+  // a separate response shape from handler-level mcpError() (which returns
+  // structured JSON). Tests that expect Zod rejection use rawErrorText().
+  function rawErrorText(result: { content: Array<{ type: string; text?: string }> }) {
+    return result.content.find((c) => c.type === "text")?.text ?? "";
+  }
+
+  it("rejects a relative outputPath at schema level", async () => {
+    const docPath = uniqueDocPath();
+    const ydoc = setupDocAtPath("mcp-export-relative", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: { format: "json", writeToDisk: true, outputPath: "subdir/foo.json" },
+    });
+    const errText = rawErrorText(result);
+    expect(errText).toMatch(/MCP error/);
+    expect(errText).toMatch(/absolute path/i);
+  });
+
+  it("appends default sidecar filename when outputPath is an existing directory", async () => {
+    const docPath = uniqueDocPath();
+    const targetDir = join(
+      tmpdir(),
+      `tandem-export-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    await fs.mkdir(targetDir, { recursive: true });
+    const expectedFile = join(targetDir, `${docPath.split("/").pop()}.annotations.json`);
+
+    const ydoc = setupDocAtPath("mcp-export-dir", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "dir-target comment");
+
+    try {
+      const result = await client.callTool({
+        name: "tandem_exportAnnotations",
+        arguments: { format: "json", writeToDisk: true, outputPath: targetDir },
+      });
+      const parsed = parseResult(result);
+      expect(parsed.error).toBe(false);
+      expect(parsed.data.writtenPath).toBe(expectedFile);
+      const raw = await fs.readFile(expectedFile, "utf-8");
+      expect(raw).toContain("dir-target comment");
+    } finally {
+      await fs.rm(targetDir, { recursive: true, force: true });
+    }
+  });
+
+  // Windows-prefix variants are rejected at the schema level (via the second
+  // Zod refine) on every platform — defense in depth even on POSIX servers
+  // since a Windows client can supply crafted paths to a Linux/macOS sidecar.
+  // On Linux these inputs would also fail the isAbsolute refine; we just
+  // confirm the MCP layer rejects them. The exact message can come from
+  // either refine depending on platform ordering.
+  it("rejects outputPath with \\\\?\\ extended-length prefix", async () => {
+    const docPath = uniqueDocPath();
+    const ydoc = setupDocAtPath("mcp-export-unc1", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: {
+        format: "json",
+        writeToDisk: true,
+        outputPath: "\\\\?\\C:\\Users\\foo\\out.json",
+      },
+    });
+    const errText = rawErrorText(result);
+    expect(errText).toMatch(/MCP error/);
+  });
+
+  it("rejects outputPath with \\\\?\\UNC\\ extended UNC prefix", async () => {
+    const docPath = uniqueDocPath();
+    const ydoc = setupDocAtPath("mcp-export-unc2", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: {
+        format: "json",
+        writeToDisk: true,
+        outputPath: "\\\\?\\UNC\\evil\\share\\out.json",
+      },
+    });
+    const errText = rawErrorText(result);
+    expect(errText).toMatch(/MCP error/);
+  });
+
+  it("rejects outputPath with bare \\\\server\\share UNC", async () => {
+    const docPath = uniqueDocPath();
+    const ydoc = setupDocAtPath("mcp-export-unc3", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: {
+        format: "json",
+        writeToDisk: true,
+        outputPath: "\\\\server\\share\\out.json",
+      },
+    });
+    const errText = rawErrorText(result);
+    expect(errText).toMatch(/MCP error/);
+  });
 });
 
 describe("MCP tool integration — navigation tools", () => {

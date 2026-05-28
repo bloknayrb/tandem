@@ -33,6 +33,7 @@ import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
+import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -643,6 +644,9 @@ export function registerAnnotationTools(server: McpServer): void {
           message:
             "outputPath must be an absolute path (a relative path would silently resolve to the server's CWD).",
         })
+        .refine((p) => p === undefined || rejectUnsafeWindowsPrefix(p) === null, {
+          message: "outputPath must not use UNC or extended-length / device-namespace prefixes.",
+        })
         .describe(
           "Custom absolute path for the sidecar file (only used when writeToDisk is true). May be a file path or an existing directory (the default filename is appended). Defaults to <docPath>.annotations.{json|md}.",
         ),
@@ -698,36 +702,49 @@ export function registerAnnotationTools(server: McpServer): void {
 
           // Overwrite-on-collision is intentional: the sidecar mirrors the
           // current annotation state, so a stale copy should be replaced.
-          // Resolve + reject UNC paths to match the rest of the file-writing
-          // MCP surface (convert.ts / document-service.ts) — Windows NTLM
-          // hardening; never write to a `\\host\share` path.
-          let sidecarPath = path.resolve(
-            outputPath ?? `${filePath}.annotations.${isJson ? "json" : "md"}`,
-          );
-          if (sidecarPath.startsWith("\\\\") || sidecarPath.startsWith("//")) {
-            return mcpError("INVALID_PATH", "UNC paths are not supported for security reasons.");
-          }
+          // Cross-platform reject of UNC + `\\?\` extended-length prefixes
+          // (NTLM hardening; bare `\\` reject alone is bypassed by
+          // `\\?\UNC\…` since `path.resolve` doesn't normalise it back to
+          // `\\…`). See `windows-path-safety.ts`.
+          const raw = outputPath ?? `${filePath}.annotations.${isJson ? "json" : "md"}`;
+          const rejectReason = rejectUnsafeWindowsPrefix(raw);
+          if (rejectReason) return mcpError("INVALID_PATH", rejectReason);
+          let sidecarPath = path.resolve(raw);
+          const resolvedReason = rejectUnsafeWindowsPrefix(sidecarPath);
+          if (resolvedReason) return mcpError("INVALID_PATH", resolvedReason);
           // If outputPath points at an existing directory, append the default
           // sidecar filename — otherwise atomicWrite would surface a confusing
           // EISDIR. Stat is best-effort: ENOENT (no such path yet) is the
           // expected fresh-write case; surface any other unexpected error.
+          //
+          // Use `fs.realpath` (not `fs.stat`) so a legitimately symlinked
+          // export directory (e.g. ~/Documents/exports → /mnt/backup) resolves
+          // through; the realpath result is then stat'd and re-prefix-checked
+          // so a symlink swap pointing into a UNC/extended-length location
+          // can't slip past the earlier rejection.
           if (outputPath) {
             try {
-              const stat = await fs.stat(sidecarPath);
+              const real = await fs.realpath(sidecarPath);
+              const realReason = rejectUnsafeWindowsPrefix(real);
+              if (realReason) return mcpError("INVALID_PATH", realReason);
+              const stat = await fs.stat(real);
               if (stat.isDirectory()) {
                 const base = path.basename(filePath);
-                sidecarPath = path.join(
-                  sidecarPath,
-                  `${base}.annotations.${isJson ? "json" : "md"}`,
-                );
+                sidecarPath = path.join(real, `${base}.annotations.${isJson ? "json" : "md"}`);
+              } else {
+                // Realpath resolved to a file (or other non-dir). Use the
+                // resolved path so atomicWrite's rename lands deterministically.
+                sidecarPath = real;
               }
             } catch (err) {
               if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
                 return mcpError(
                   "INVALID_PATH",
-                  `Could not stat outputPath: ${(err as Error).message}`,
+                  `Could not resolve outputPath: ${(err as Error).message}`,
                 );
               }
+              // ENOENT — fresh write to a path that doesn't exist yet. Keep
+              // the already-resolved `sidecarPath` as-is.
             }
           }
           const contents = isJson
