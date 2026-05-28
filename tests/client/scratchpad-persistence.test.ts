@@ -14,7 +14,7 @@ function docWithParagraphs(lines: string[]): Y.Doc {
     if (line.length > 0) p.insert(0, [new Y.XmlText(line)]);
     return p;
   });
-  doc.transact(() => fragment.insert(0, paragraphs));
+  fragment.insert(0, paragraphs);
   return doc;
 }
 
@@ -50,7 +50,7 @@ describe("extractFragmentText", () => {
     para.insert(0, [new Y.XmlText("item text")]);
     item.insert(0, [para]);
     list.insert(0, [item]);
-    doc.transact(() => fragment.insert(0, [list]));
+    fragment.insert(0, [list]);
     expect(extractFragmentText(fragment)).toBe("item text");
   });
 });
