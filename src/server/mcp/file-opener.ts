@@ -25,6 +25,7 @@ import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
+import { markClean, registerDirtyObserver } from "../documents/dirty.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
 import { watchFile } from "../file-watcher.js";
@@ -636,6 +637,16 @@ async function finalizeDocOpen(
   writeDocMeta(doc, id, fileName, format, readOnly);
   await initSavedBaseline(doc, resolved);
   await wireAnnotationStore(id, doc, resolved);
+
+  // Register the autosave dirty-tracking observer NOW (#851), after content has
+  // been loaded into the body — so the open-time baseline is "clean" and a doc
+  // opened to view but never edited never autosaves. Registering here (not only
+  // in the Hocuspocus swap path) ensures MCP-only edits (tandem_edit) are
+  // tracked even when no browser has connected yet. The observer is keyed by
+  // docId in module state and re-registered on swap, so it survives the Y.Doc
+  // replacement in onLoadDocument.
+  registerDirtyObserver(id, doc);
+
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -758,6 +769,12 @@ async function clearAndReload(
 
     // 3. Reattach event queue observers (idempotent — detaches existing first)
     attachObservers(id, doc);
+
+    // The body now mirrors disk content — clear the autosave dirty flag so the
+    // reload itself doesn't trigger a redundant write-back (#851). Done after
+    // attachObservers re-registers the body observer (which preserves the
+    // counter the in-transaction repopulation above may have bumped).
+    markClean(id);
   } catch (err) {
     console.error(
       `[Tandem] clearAndReload: failed for ${id} (format=${format}). Y.Doc may be in a partially cleared state:`,
@@ -934,6 +951,11 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
 
     // 5. Reattach event queue observers (idempotent)
     attachObservers(id, doc);
+
+    // The body now mirrors the on-disk content we just read — clear the
+    // autosave dirty flag so a file-watcher reload doesn't trigger a redundant
+    // write-back (#851).
+    markClean(id);
 
     console.error(`[FileWatcher] reloadFromDisk: complete for ${id}`);
   } finally {
