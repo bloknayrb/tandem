@@ -108,6 +108,57 @@ describe("markdownToSlice", () => {
     expect(href).toBe("https://example.com");
   });
 
+  // #885 follow-up: links with XSS-relevant schemes must never produce a
+  // clickable link in the editor. Either markdown-it's CommonMark URL
+  // validator drops the link token entirely (preferred — link mark never
+  // created) or our `sanitizeHref` returns null at attr-build time. Both
+  // outcomes are safe; assert no link mark carries the literal unsafe href.
+  it.each([
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "data:text/html,x",
+    "vbscript:msgbox",
+  ])("blocks unsafe link scheme: %s", (href) => {
+    const doc = parseToDoc(`click [me](${href})`);
+    const observedHrefs: unknown[] = [];
+    doc.descendants((node) => {
+      const link = node.marks.find((m) => m.type.name === "link");
+      if (link) observedHrefs.push(link.attrs.href);
+    });
+    expect(observedHrefs.every((h) => h !== href && h !== href.toLowerCase())).toBe(true);
+  });
+
+  it("preserves a safe link href when adjacent to an unsafe one", () => {
+    const doc = parseToDoc("[good](https://example.com) and [bad](javascript:alert(1))");
+    const hrefs: unknown[] = [];
+    doc.descendants((node) => {
+      const link = node.marks.find((m) => m.type.name === "link");
+      if (link) hrefs.push(link.attrs.href);
+    });
+    expect(hrefs).toContain("https://example.com");
+    expect(hrefs.every((h) => h !== "javascript:alert(1)")).toBe(true);
+  });
+
+  // #885 follow-up: an image in pasted markdown used to throw an
+  // "unsupported token" parser error and fall back to plain text, losing
+  // ALL surrounding formatting. Now the image is silently dropped and
+  // the rest of the markdown converts normally.
+  it("drops embedded images without losing surrounding formatting", () => {
+    const slice = markdownToSlice(
+      "**bold** then ![alt](https://example.com/x.png) and a [link](https://example.com)",
+      schema,
+    );
+    expect(slice).not.toBeNull();
+    let sawBold = false;
+    let sawLink = false;
+    slice!.content.descendants((node) => {
+      if (node.marks.some((m) => m.type.name === "bold")) sawBold = true;
+      if (node.marks.some((m) => m.type.name === "link")) sawLink = true;
+    });
+    expect(sawBold).toBe(true);
+    expect(sawLink).toBe(true);
+  });
+
   it("converts bullet lists", () => {
     const doc = parseToDoc("- one\n- two\n- three");
     const list = doc.firstChild!;
