@@ -129,3 +129,15 @@ export function docHash(filePath: string): string {
 export function contentHash(text: string): string {
   return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
 }
+
+/**
+ * Security boundary: filename shape for envelopes that rename-recovery and
+ * session-cleanup will read or unlink. Matches `<64-hex>.json` (regular docs)
+ * or `upload_<id>.json` (uploads/scratchpads). Must NOT match dotfiles
+ * (`.tandem-tmp-*`, `.corrupt.*`, `.future`), session files, or any other
+ * sibling we may add to the annotations dir later.
+ *
+ * Hoisted here so all consumers (rename-recovery, session/manager) share a
+ * single definition — drifting copies would silently widen the trust surface.
+ */
+export const ENVELOPE_FILENAME_RE = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;

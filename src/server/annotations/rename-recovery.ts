@@ -39,14 +39,16 @@ import path from "node:path";
 import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
+import { isUploadPath } from "../../shared/paths.js";
 import { extractText } from "../mcp/document-model.js";
-import { contentHash } from "./doc-hash.js";
+import { contentHash, ENVELOPE_FILENAME_RE } from "./doc-hash.js";
 import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "./store.js";
 import { recordTombstone } from "./sync.js";
 
-/** Envelope filename shape — `<64-hex>.json` or `upload_<id>.json`. */
-const ENVELOPE_RE = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
+// Envelope filename shape is hoisted to ./doc-hash.ts as ENVELOPE_FILENAME_RE
+// so rename-recovery + session-cleanup share one source of truth (any drift
+// would silently widen the trust surface).
 
 /**
  * Attempt to recover an orphaned annotation envelope for a renamed document.
@@ -96,13 +98,13 @@ export async function recoverRenamedEnvelope(
 
     // Collect candidate envelopes: content-hash match + old path vanished.
     // Track the source FILENAME alongside the parsed doc — the filename is the
-    // storage key and the only path-safe handle (it passed ENVELOPE_RE). The
+    // storage key and the only path-safe handle (it passed ENVELOPE_FILENAME_RE). The
     // envelope's internal `meta`/`docHash` are unconstrained JSON and must never
     // be used to build a filesystem path (path-injection + a legacy envelope's
     // `docHash` can disagree with its filename, e.g. `docHash: ""`).
     const candidates: { doc: AnnotationDocV1; file: string }[] = [];
     for (const file of files) {
-      if (!ENVELOPE_RE.test(file)) continue;
+      if (!ENVELOPE_FILENAME_RE.test(file)) continue;
       if (file === currentFile) continue; // can't be its own source
 
       let raw: string;
@@ -111,6 +113,14 @@ export async function recoverRenamedEnvelope(
       } catch {
         continue; // unreadable — skip, never fail the whole recovery
       }
+      // Perf: short-circuit on hash mismatch before the Zod parse. The store
+      // serializes `meta.contentHash` as a compact `"contentHash":"<hex>"`
+      // substring (no spacing, JSON.stringify default), so this substring
+      // check is a cheap O(N) filter that rejects 99%+ of envelopes without
+      // paying the parser cost. Whitespace-sensitive: if the writer ever
+      // switches to pretty-printed JSON, this optimization silently stops
+      // working — guarded by the freshly-written-envelope test below.
+      if (!raw.includes(`"contentHash":"${wantHash}"`)) continue;
       const parsed = parseAnnotationDoc(raw);
       if (!parsed.ok) continue;
 
@@ -119,6 +129,13 @@ export async function recoverRenamedEnvelope(
 
       const oldPath = parsed.doc.meta.filePath;
       if (!oldPath || oldPath === currentFilePath) continue;
+      // Exclude upload://… envelopes from rename-source candidacy: their
+      // `oldPath` (e.g. `upload://<id>/<name>`) is never reachable via
+      // `fs.access`, so the "vanished" probe below would always succeed and
+      // a content-matching local doc could be silently re-keyed onto the
+      // upload's envelope — then `fs.unlink` the upload's recovery. The
+      // legitimate upload would lose its annotations.
+      if (isUploadPath(oldPath)) continue;
       // Only accept absolute paths — relative paths from untrusted JSON could
       // resolve to unexpected locations. path.isAbsolute rejects them early.
       if (!path.isAbsolute(oldPath)) continue;
@@ -193,7 +210,7 @@ export async function recoverRenamedEnvelope(
     }
 
     // Unlink the old envelope now that the re-keyed copy is durably flushed.
-    // Use the actual source FILENAME (path-safe, passed ENVELOPE_RE) — never
+    // Use the actual source FILENAME (path-safe, passed ENVELOPE_FILENAME_RE) — never
     // the envelope's internal `docHash`, which is unconstrained JSON.
     try {
       await fs.unlink(path.join(dir, sourceFile));

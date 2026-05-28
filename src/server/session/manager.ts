@@ -5,6 +5,7 @@ import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.j
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import type { SessionData } from "../../shared/types.js";
+import { ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
 import { parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
 import { atomicWrite } from "../file-io/index.js";
@@ -238,14 +239,13 @@ export async function cleanupOrphanedAnnotationFiles(): Promise<{
   // Only consider files that match the known per-doc envelope filename shape.
   // Quarantined (`.corrupt.<ts>`), parked (`.future`), and the lockfile are
   // skipped — they carry their own lifecycles.
-  const envelopeRe = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
 
   // Fan out stat + unlink so this isn't O(N) serial syscalls on startup.
   const now = Date.now();
   type Result = "cleaned" | "raced" | "skipped" | "failed";
   const results = await Promise.all(
     files
-      .filter((file) => envelopeRe.test(file))
+      .filter((file) => ENVELOPE_FILENAME_RE.test(file))
       .map(async (file): Promise<Result> => {
         const filePath = path.join(dir, file);
         try {
@@ -314,12 +314,11 @@ export async function cleanupStaleTombstones(
     return 0;
   }
 
-  const envelopeRe = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;
   const now = Date.now();
   let compacted = 0;
 
   for (const file of files) {
-    if (!envelopeRe.test(file)) continue;
+    if (!ENVELOPE_FILENAME_RE.test(file)) continue;
     const fileHash = file.slice(0, -".json".length);
     // Open-doc guard: never mutate an open doc's envelope from disk — its
     // in-memory tombstone ledger is authoritative.
