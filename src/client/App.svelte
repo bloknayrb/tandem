@@ -90,6 +90,7 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { browseNativeFile } from "./utils/browse-file";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
 
@@ -326,6 +327,26 @@ if (import.meta.env.DEV) {
 let paletteOpen = $state(false);
 let fileOpenDialogOpen = $state(false);
 
+// In the desktop app, open files via the native OS picker directly. The
+// browser distribution has no native picker, so it falls back to the
+// FileOpenDialog modal (HTML upload + recent + browse).
+async function requestOpenFile() {
+  if (isTauriRuntime()) {
+    await browseNativeFile({
+      onError: (message) =>
+        notifications.push({
+          id: generateNotificationId(),
+          type: "general-error",
+          severity: "error",
+          message,
+          timestamp: Date.now(),
+        }),
+    });
+  } else {
+    fileOpenDialogOpen = true;
+  }
+}
+
 // Issue #660 — titlebar settings-icon update-available dot. Acknowledged
 // whenever the user opens settings (popover OR modal — any tab counts). Do
 // NOT destructure: the `showDot` getter loses reactivity when pulled out.
@@ -418,9 +439,7 @@ wireActionDeps({
     const id = yjsSync.activeTabId;
     if (id) closeTabAndRecord(id);
   },
-  openFileDialog: () => {
-    fileOpenDialogOpen = true;
-  },
+  openFileDialog: () => void requestOpenFile(),
   toggleLeftPanel: () => toggleLeftPanel(),
   toggleRightPanel: () => toggleRightPanel(),
   reopenClosedTab: () => void reopenClosedTab(),
@@ -820,7 +839,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "open-file": (e) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    fileOpenDialogOpen = true;
+    void requestOpenFile();
   },
   "pick-tab": (e, ctx) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -1364,7 +1383,7 @@ const tutorial = createTutorial(
     onTabClose={closeTabAndRecord}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
-    onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
+    onRequestOpenDialog={() => void requestOpenFile()}
   />
 {/snippet}
 
