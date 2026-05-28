@@ -589,6 +589,12 @@ function aboutRows() {
               />
               <span>Margin annotation view (Word-style)</span>
             </label>
+            <div
+              data-testid="margin-view-hint"
+              style="font-size: 10px; color: var(--tandem-fg-subtle);"
+            >
+              Margin columns appear where rails are collapsed — open rails hide that side.
+            </div>
             {#if isTauriRuntime()}
               {#await import("./CoworkSettings.svelte")}
                 <div
