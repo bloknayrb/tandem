@@ -6,6 +6,26 @@ export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 
 /** File extensions the server accepts for opening. */
 export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
+
+/**
+ * Default editor font per normalized document format (#811).
+ *
+ * Keys are the format strings produced by `detectFormat` (which already
+ * collapses extensions: `.markdown`→`md`, `.htm`→`html`), NOT raw file
+ * extensions. Values are {@link EditorFont} keys. A format absent from this
+ * map falls back to the global `editorFont` setting via `resolveFont`.
+ *
+ *   .md / .markdown → sans
+ *   .docx           → serif
+ *   .html / .htm    → sans
+ *   .txt            → mono
+ */
+export const DEFAULT_FONT_BY_EXTENSION: Record<string, "serif" | "sans" | "mono"> = {
+  md: "sans",
+  docx: "serif",
+  html: "sans",
+  txt: "mono",
+};
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 export const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const TYPING_DEBOUNCE = 3000; // 3 seconds
