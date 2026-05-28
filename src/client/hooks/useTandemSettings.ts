@@ -21,15 +21,26 @@ export type TextSize = "s" | "m" | "l";
  * holds the same number of characters per line regardless of rail state),
  * "full" keeps the old no-clamp behavior (content fills the available track).
  */
-export type EditorMeasure = "narrow" | "comfortable" | "wide" | "full";
+// Source of truth for the reading-measure union. Driving `EditorMeasure`,
+// `EDITOR_MEASURE_CH`, and the runtime validator off one `as const` array means
+// adding a fifth preset is a single edit — the type-checker propagates it
+// through the `Record<EditorMeasure, …>` exhaustiveness on `EDITOR_MEASURE_CH`,
+// and the `.includes()` validator below picks it up at runtime without a
+// parallel `===` chain to forget. Mirrors `VALID_MODEL_PROVIDERS` (#659).
+export const EDITOR_MEASURES = ["narrow", "comfortable", "wide", "full"] as const;
+export type EditorMeasure = (typeof EDITOR_MEASURES)[number];
 
 /** Preset → CSS length for the grid's `--editor-measure` custom property. */
-export const EDITOR_MEASURE_CH: Record<EditorMeasure, string> = {
+export const EDITOR_MEASURE_CH: Readonly<Record<EditorMeasure, string>> = {
   narrow: "58ch",
   comfortable: "68ch",
   wide: "82ch",
   full: "100%",
 };
+
+function isEditorMeasure(value: unknown): value is EditorMeasure {
+  return typeof value === "string" && (EDITOR_MEASURES as readonly string[]).includes(value);
+}
 export type ThemePreference = "light" | "dark" | "warm" | "system";
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 
@@ -380,13 +391,9 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       parsed.panelOrder === "annotations-editor-chat"
         ? "annotations-editor-chat"
         : "chat-editor-annotations",
-    editorMeasure:
-      parsed.editorMeasure === "narrow" ||
-      parsed.editorMeasure === "comfortable" ||
-      parsed.editorMeasure === "wide" ||
-      parsed.editorMeasure === "full"
-        ? parsed.editorMeasure
-        : DEFAULTS.editorMeasure,
+    editorMeasure: isEditorMeasure(parsed.editorMeasure)
+      ? parsed.editorMeasure
+      : DEFAULTS.editorMeasure,
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,
       Math.min(
@@ -703,6 +710,13 @@ export function mergeAndClampSettings(
     accentHue: Number.isFinite(merged.accentHue)
       ? Math.max(0, Math.min(360, merged.accentHue))
       : DEFAULTS.accentHue,
+    // Closed enum: an `as EditorMeasure` cast at a call site or a JSON-imported
+    // preset payload can land a bogus string here. Reuse the on-load validator
+    // so the clamp-on-write contract holds for `editorMeasure` the same way it
+    // already holds for `accentHue` / `selectionDwellMs` / `defaultModelId`.
+    editorMeasure: isEditorMeasure(merged.editorMeasure)
+      ? merged.editorMeasure
+      : DEFAULTS.editorMeasure,
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
     // Re-run the shape filter on `models` so an unsafe partial update (e.g.
     // hand-rolled call site that pushes an object missing `enabled`) can't

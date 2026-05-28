@@ -79,6 +79,45 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   await expect(popover.locator("[data-testid='editor-measure-comfortable']")).toBeVisible();
 });
 
+test("editor-measure presets thread through to the stage's --editor-measure CSS var", async ({
+  page,
+}) => {
+  // Stage B headline invariant: clicking a preset changes the grid content
+  // track width via the `--editor-measure` custom property on the stage. A
+  // regression where the segmented control writes the setting but the stage
+  // stops subscribing (or EDITOR_MEASURE_CH lookup breaks) would slip through
+  // a visibility-only assertion. it-each-style equivalence-class coverage per
+  // `feedback_iteach_equivalence_classes`.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  const stage = page.locator("[data-testid='editor-stage']");
+  await expect(stage).toBeVisible({ timeout: 5_000 });
+
+  const readMeasureVar = () =>
+    stage.evaluate((el) => getComputedStyle(el).getPropertyValue("--editor-measure").trim());
+
+  const cases: Array<{ preset: "narrow" | "comfortable" | "wide" | "full"; expected: string }> = [
+    { preset: "narrow", expected: "58ch" },
+    { preset: "wide", expected: "82ch" },
+    { preset: "full", expected: "100%" },
+    { preset: "comfortable", expected: "68ch" },
+  ];
+
+  for (const { preset, expected } of cases) {
+    await openSettingsPopover(page);
+    const popover = page.locator("[data-testid='settings-popover']");
+    await expect(popover).toBeVisible({ timeout: 2_000 });
+    await popover.getByRole("button", { name: "Editor" }).click();
+    await popover.locator(`[data-testid='editor-measure-${preset}']`).click();
+    // Dismiss the popover so its layer doesn't sit on top of the stage; the
+    // CSS var read is on the stage element regardless, but closing keeps the
+    // next iteration's openSettingsPopover clean.
+    await page.keyboard.press("Escape");
+    await expect.poll(readMeasureVar, { timeout: 3_000 }).toBe(expected);
+  }
+});
+
 test("settings dialog surfaces default mode and persists it", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 

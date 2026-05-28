@@ -191,6 +191,12 @@ export function createEditorStageModel(opts: CreateEditorStageModelOpts): Editor
   // than the (semantically arbitrary) "outline rail hides my private notes".
   // Both sides therefore track `effectivelyOn` together; the per-side split is
   // retained in the API/grid for Stage C + the docx path.
+  // INVARIANT (Stages A/B): `leftVisible === rightVisible === effectivelyOn`.
+  // The per-side getters are kept in the API surface because Stage C re-splits
+  // them (full → narrow → stub → off can differ side-to-side based on
+  // collision pressure). App.svelte must NOT assume they can diverge today —
+  // any code that fans out behavior per side is premature; collapse it back to
+  // `effectivelyOn` until Stage C lands the real split.
   const leftVisible = $derived(effectivelyOn);
   const rightVisible = $derived(effectivelyOn);
 
@@ -200,7 +206,13 @@ export function createEditorStageModel(opts: CreateEditorStageModelOpts): Editor
       effectivelyOn,
       leftVisible,
       rightVisible,
-      measure: EDITOR_MEASURE_CH[opts.getEditorMeasure()],
+      // Belt-and-suspenders fallback. The on-load + on-write validators in
+      // useTandemSettings already coerce a bogus value to DEFAULTS, so this
+      // `??` only triggers if a TS-violating cast slips one through. Without
+      // the fallback the grid track would render `--editor-measure: undefined`
+      // — invalid CSS the browser silently ignores, producing a broken layout
+      // with no console signal.
+      measure: EDITOR_MEASURE_CH[opts.getEditorMeasure()] ?? EDITOR_MEASURE_CH.comfortable,
     }),
   );
 

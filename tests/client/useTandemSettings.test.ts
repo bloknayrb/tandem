@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CURRENT_SCHEMA_VERSION,
+  EDITOR_MEASURE_CH,
+  EDITOR_MEASURES,
   loadSettings,
   mergeAndClampSettings,
   type TandemSettings,
@@ -149,6 +151,18 @@ describe("loadSettings — editorMeasure validation (regression guard)", () => {
   it("coerces an invalid editorMeasure to the default", () => {
     store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ editorMeasure: "ginormous" }));
     expect(loadSettings().editorMeasure).toBe("comfortable");
+  });
+
+  it("EDITOR_MEASURE_CH covers every EDITOR_MEASURES entry (drift guard)", () => {
+    // Adding a fifth preset to EDITOR_MEASURES without updating
+    // EDITOR_MEASURE_CH is a TS error (Record exhaustiveness), but the reverse
+    // — a CH entry without a measure entry — is allowed by TS. This test pins
+    // both directions so the union, the validator, and the CSS map can't drift
+    // apart silently as Stage C/D evolves the presets.
+    for (const m of EDITOR_MEASURES) {
+      expect(EDITOR_MEASURE_CH[m]).toMatch(/^(\d+ch|100%)$/);
+    }
+    expect(Object.keys(EDITOR_MEASURE_CH).sort()).toEqual([...EDITOR_MEASURES].sort());
   });
 });
 
@@ -339,6 +353,17 @@ describe("useTandemSettings — updateSettings write path", () => {
   it("merges a new editorMeasure preset through write", () => {
     const next = mergeAndClampSettings(BASE, { editorMeasure: "narrow" });
     expect(next.editorMeasure).toBe("narrow");
+  });
+
+  it("coerces a bogus editorMeasure write to the default (clamp-on-write contract)", () => {
+    // Closed-union string fields need the same write-side guard as numeric
+    // clamps — a TS `as EditorMeasure` cast at a call site can land a value
+    // outside the union, and without this clamp the bogus string reaches the
+    // grid as `--editor-measure: <bogus>;` and the layout silently breaks.
+    const next = mergeAndClampSettings(BASE, {
+      editorMeasure: "ginormous" as unknown as TandemSettings["editorMeasure"],
+    });
+    expect(next.editorMeasure).toBe("comfortable");
   });
 
   it("round-trips marginView=true through merge (write-side covers the strict-true load guard)", () => {
