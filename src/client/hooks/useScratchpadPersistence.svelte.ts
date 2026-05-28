@@ -194,9 +194,18 @@ export function createScratchpadPersistence(getTabs: () => OpenTab[]): Scratchpa
 
     // Prefer an exact-UUID match (same room reopened); else fall back to the
     // latest persisted scratchpad for cross-session recovery.
+    //
+    // The `latest`-pointer fallback is GATED to single-open sessions
+    // (`entries.size === 1`). Without this gate, opening a fresh scratchpad
+    // B while A is still open and unsaved would copy A's content into B and
+    // then `removeStorage(scratchpadStorageKey(A))` below — deleting A's
+    // recovery key while A is still open and dirty. Attach order is
+    // load-bearing here: `attach()` calls `entries.set(uuid, entry)` BEFORE
+    // invoking `restoreInto`, so at this point `entries.size === 1` means
+    // "this is the only open scratchpad" regardless of caller timing.
     let sourceUuid = entry.uuid;
     let stored = readStorage(scratchpadStorageKey(sourceUuid));
-    if (stored === null) {
+    if (stored === null && entries.size === 1) {
       const latest = readStorage(SCRATCHPAD_LATEST_KEY);
       if (latest && latest !== entry.uuid) {
         stored = readStorage(scratchpadStorageKey(latest));
@@ -214,6 +223,15 @@ export function createScratchpadPersistence(getTabs: () => OpenTab[]): Scratchpa
       if (line.length > 0) p.insert(0, [new Y.XmlText(line)]);
       return p;
     });
+    // Privacy invariant: BROWSER_ORIGIN is the only origin NOT in CHANNEL_SKIP
+    // (see src/shared/origins.ts and src/server/events/queue.ts). Tagging this
+    // restore as `browser` is safe ONLY because there is no channel observer
+    // over the document's content XmlFragment — existing observers (annotations,
+    // replies, awareness, ctrl-chat, ctrl-meta) don't fire on content inserts,
+    // and ctrl-meta filters document:opened/document:switched by isUploadPath.
+    // If a future change adds a content-XmlFragment channel observer, it MUST
+    // filter on opts.uploadDoc (matching the annotations-observer pattern in
+    // queue.ts) — otherwise scratchpad content would leak via the channel.
     withBrowser(entry.ydoc, () => {
       // Clear any default empty paragraph y-prosemirror may have created.
       if (fragment.length > 0) fragment.delete(0, fragment.length);
