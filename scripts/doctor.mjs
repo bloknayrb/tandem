@@ -21,7 +21,18 @@ import { join } from "node:path";
 const WS_PORT = 3478;
 const MCP_PORT = 3479;
 
-const JSON_MODE = process.argv.slice(2).includes("--json");
+// Argument parsing. The only recognized flag is --json; reject anything else
+// up-front so a typo like `--jsoon` doesn't silently produce TTY output that
+// the calling script can't parse. (Helpful when wiring doctor into CI or
+// editor extensions that depend on JSON for tooling.)
+const cliArgs = process.argv.slice(2);
+const unknownArgs = cliArgs.filter((arg) => arg !== "--json");
+if (unknownArgs.length > 0) {
+  console.error(`tandem doctor: unknown argument(s): ${unknownArgs.join(", ")}`);
+  console.error(`Usage: npm run doctor [--json]`);
+  process.exit(2);
+}
+const JSON_MODE = cliArgs.includes("--json");
 
 // ── Result recording ────────────────────────────────────────────────
 //
@@ -533,11 +544,16 @@ async function main() {
         : warnings > 0
           ? `${warnings} warning(s) — Tandem should work, but check the items above.`
           : "All checks passed. Tandem is ready.";
+    // Success-path JSON shape — kept identical to the crash-path doc below
+    // (same keys, same order) so consumers can parse one schema regardless
+    // of outcome. `crashed: false` is the success discriminant.
     const doc = {
       ok: failures === 0,
+      crashed: false,
       failures,
       warnings,
       summary,
+      error: null,
       results,
     };
     console.log(JSON.stringify(doc, null, 2));
@@ -563,7 +579,25 @@ main().catch((err) => {
     // can parse a result; details still go to stderr.
     console.error(`\n  Tandem Doctor crashed unexpectedly: ${err.message}`);
     console.error("  Please report this at https://github.com/bloknayrb/tandem/issues\n");
-    console.log(JSON.stringify({ ok: false, crashed: true, error: err.message, results }, null, 2));
+    // Mirror the success-path schema so JSON consumers see ONE shape with
+    // `crashed` as the discriminator — no missing/extra keys to special-case.
+    // `results ?? []` defends against a hypothetical future reassignment;
+    // the module-level `const` makes it always-defined today.
+    console.log(
+      JSON.stringify(
+        {
+          ok: false,
+          crashed: true,
+          failures,
+          warnings,
+          summary: `Tandem Doctor crashed unexpectedly: ${err.message}`,
+          error: err.message,
+          results: results ?? [],
+        },
+        null,
+        2,
+      ),
+    );
     process.exit(2);
   }
   console.error(`\n  Tandem Doctor crashed unexpectedly: ${err.message}`);
