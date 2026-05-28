@@ -13,6 +13,23 @@ export type Density = "compact" | "cozy" | "spacious";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
+
+/**
+ * Reading-measure preset for the editor content track (Phase 3.5 Stage B).
+ * Replaces the viewport-relative `editorWidthPercent` with a stable line
+ * length: "narrow"/"comfortable"/"wide" map to ch widths (a measure that
+ * holds the same number of characters per line regardless of rail state),
+ * "full" keeps the old no-clamp behavior (content fills the available track).
+ */
+export type EditorMeasure = "narrow" | "comfortable" | "wide" | "full";
+
+/** Preset → CSS length for the grid's `--editor-measure` custom property. */
+export const EDITOR_MEASURE_CH: Record<EditorMeasure, string> = {
+  narrow: "58ch",
+  comfortable: "68ch",
+  wide: "82ch",
+  full: "100%",
+};
 export type ThemePreference = "light" | "dark" | "warm" | "system";
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 
@@ -84,7 +101,7 @@ export interface TandemSettings {
   schemaVersion: number;
   primaryTab: PrimaryTab;
   panelOrder: PanelOrder;
-  editorWidthPercent: number;
+  editorMeasure: EditorMeasure;
   selectionDwellMs: number;
   showAuthorship: boolean;
   reduceMotion: boolean;
@@ -166,10 +183,10 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 11,
+  schemaVersion: 12,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
-  editorWidthPercent: 100,
+  editorMeasure: "comfortable",
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
   showAuthorship: true,
   reduceMotion: false,
@@ -322,8 +339,17 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  *   shortcuts). Structural no-op like v7→v8 — `normalizeKnownFields` runs
  *   `parseCustomShortcuts` on whatever is present, dropping invalid /
  *   reserved-colliding entries.
+ * v11→v12 (Phase 3.5 Stage B): replace the viewport-relative
+ *   `editorWidthPercent` (40–100) with the `editorMeasure` reading-measure
+ *   preset. `%` and `ch` aren't comparable units, so the mapping is
+ *   intentionally coarse: a default-untouched blob (`editorWidthPercent ===
+ *   100`, or the field absent entirely) → `"full"` (preserve today's
+ *   full-width feel for the silent majority); any explicit non-100 width →
+ *   `"comfortable"` (the new default, an accepted one-time approximate reset).
+ *   `editorWidthPercent` is deleted on read and listed in REMOVED_FIELDS so it
+ *   can't resurrect via forward-compat.
  */
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -334,7 +360,7 @@ export const CURRENT_SCHEMA_VERSION = 11;
  *
  * Both call sites must produce identical normalization of known fields
  * — otherwise a forward-compat load could leak garbage values
- * (`editorWidthPercent: -999`, `theme: "neon"`) into the running UI.
+ * (`accentHue: 9999`, `theme: "neon"`) into the running UI.
  *
  * v5 (Wave I): `leftRailTabs` and `rightRailTabs` no longer exist. The
  * `loadSettings` migration strips them on read; this helper does not
@@ -354,10 +380,13 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       parsed.panelOrder === "annotations-editor-chat"
         ? "annotations-editor-chat"
         : "chat-editor-annotations",
-    editorWidthPercent: Math.max(
-      40,
-      Math.min(100, Number(parsed.editorWidthPercent) || DEFAULTS.editorWidthPercent),
-    ),
+    editorMeasure:
+      parsed.editorMeasure === "narrow" ||
+      parsed.editorMeasure === "comfortable" ||
+      parsed.editorMeasure === "wide" ||
+      parsed.editorMeasure === "full"
+        ? parsed.editorMeasure
+        : DEFAULTS.editorMeasure,
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,
       Math.min(
@@ -556,6 +585,28 @@ export function loadSettings(): TandemSettings {
         // blob already carries.
         parsed = { ...parsed, schemaVersion: 11 };
       }
+      if (parsed.schemaVersion === 11) {
+        // v11→v12: replace `editorWidthPercent` with the `editorMeasure` preset.
+        // Synthesize the preset from the legacy width, preserving full-width for
+        // the default-untouched majority and approximately resetting customized
+        // widths to the new Comfortable default (% and ch aren't comparable).
+        const next: Record<string, unknown> = { ...parsed, schemaVersion: 12 };
+        // Cross-branch guard (mirrors the v9 reconciliation below): if a parallel
+        // branch already wrote `editorMeasure` at v11, keep it — only synthesize
+        // from the legacy field when the new one is absent.
+        if (next.editorMeasure === undefined) {
+          // An absent legacy field means the width was never customized (the v11
+          // default was 100), so it's treated the same as an explicit 100 → "full".
+          // Only an explicit non-100 width is an intentional customization that
+          // gets the approximate reset to the new Comfortable default.
+          const pct = parsed.editorWidthPercent;
+          next.editorMeasure = pct === undefined || pct === 100 ? "full" : "comfortable";
+        }
+        // Explicit delete so the legacy field doesn't round-trip until the next
+        // write; REMOVED_FIELDS additionally blocks it on the forward-compat path.
+        delete next.editorWidthPercent;
+        parsed = next;
+      }
       // Cross-branch reconciliation guard. master and the design-system umbrella
       // independently used schemaVersion 9 — master for `customShortcuts`
       // (ADR-041), the umbrella for the per-type decorations split. A blob
@@ -591,8 +642,7 @@ export function loadSettings(): TandemSettings {
         // any field the current code doesn't actively normalize passes
         // through unmodified — exactly the contract `_readOnly: true`
         // advertises. Known fields are sanitized via the helper so
-        // garbage like `editorWidthPercent: -999` doesn't leak into the
-        // running UI.
+        // garbage like `accentHue: 9999` doesn't leak into the running UI.
         const knownKeys = new Set(Object.keys(normalized));
         // Explicitly-removed schema fields. Without this set, fields that
         // were stripped by a migration step (e.g. v4→v5 dropped
@@ -609,6 +659,7 @@ export function loadSettings(): TandemSettings {
           "rightRailTabs",
           "showIntegrationWizard",
           "showAnnotationDecorations",
+          "editorWidthPercent",
         ]);
         const futureFields: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(parsed)) {
@@ -645,7 +696,6 @@ export function mergeAndClampSettings(
     // persist a junk or reserved-colliding override. Callers pass the WHOLE
     // map (shallow-merge), so this validates the full set on every write.
     customShortcuts: parseCustomShortcuts(merged.customShortcuts),
-    editorWidthPercent: Math.max(40, Math.min(100, merged.editorWidthPercent)),
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,
       Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),

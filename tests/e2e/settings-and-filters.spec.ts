@@ -75,7 +75,8 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   await popover.getByRole("button", { name: "Appearance" }).click();
 
   await popover.getByRole("button", { name: "Editor" }).click();
-  await expect(popover.locator("[data-testid='editor-width-slider']")).toBeVisible();
+  // Reading-measure preset control (Phase 3.5 Stage B; replaced the % slider).
+  await expect(popover.locator("[data-testid='editor-measure-comfortable']")).toBeVisible();
 });
 
 test("settings dialog surfaces default mode and persists it", async ({ page }) => {

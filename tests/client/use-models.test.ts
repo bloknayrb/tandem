@@ -39,7 +39,7 @@ function makeStubState(initialModels: ModelRegistryEntry[] = []): {
     schemaVersion: 7,
     primaryTab: "annotations",
     panelOrder: "chat-editor-annotations",
-    editorWidthPercent: 100,
+    editorMeasure: "comfortable",
     selectionDwellMs: 1000,
     showAuthorship: true,
     reduceMotion: false,

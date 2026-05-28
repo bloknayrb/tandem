@@ -13,9 +13,9 @@
  * old code still subtracted the full both-sides reserve even though zero
  * margins rendered; the grid gives those cases their full content width.
  *
- * Stage A keeps `editorWidthPercent` under the hood (`--editor-measure =
- * <pct>%`); the ch-based reading measure + schema migration land in Stage B,
- * and the narrow → stub continuum + animated tracks in Stages C/D.
+ * Stage B drives `--editor-measure` from the `editorMeasure` reading-measure
+ * preset (ch widths, or `100%` for "full"); the narrow → stub continuum +
+ * animated tracks land in Stages C/D.
  *
  * Factory invoked ONCE in App.svelte's `<script>` scope, mirroring
  * `createLayoutModel` (./model.svelte.ts). Returns getters so consumers see
@@ -25,6 +25,7 @@
  */
 
 import { untrack } from "svelte";
+import { EDITOR_MEASURE_CH, type EditorMeasure } from "../hooks/useTandemSettings";
 
 // Margin-view layout constants. A margin track reserves a fixed-width bubble
 // column (COLUMN_WIDTH) + an edge inset (EDGE_INSET — breathing room against
@@ -83,7 +84,8 @@ export interface StageLayerStyleInput {
   leftVisible: boolean;
   /** A margin renders on the right (= effectivelyOn; rail-independent since #892). */
   rightVisible: boolean;
-  /** Content reading measure as a CSS length (Stage A: `"<pct>%"`). */
+  /** Content reading measure as a CSS length: a ch width (`58ch`/`68ch`/`82ch`)
+   *  or `"100%"` for the "full" preset, mapped via `EDITOR_MEASURE_CH`. */
   measure: string;
 }
 
@@ -127,8 +129,8 @@ export interface CreateEditorStageModelOpts {
   getFormat: () => string | undefined;
   /** `settings.marginView` — the user's on/off intent. */
   getMarginView: () => boolean;
-  /** `settings.editorWidthPercent` (Stage A; replaced by a ch measure in Stage B). */
-  getEditorWidthPercent: () => number;
+  /** `settings.editorMeasure` — the reading-measure preset (→ ch width / `100%`). */
+  getEditorMeasure: () => EditorMeasure;
   /** Rail visibility per side. Feeds the narrow-threshold width budget only
    *  (open rails shrink the editor); since #892 it no longer hides the margin
    *  on that side. */
@@ -198,7 +200,7 @@ export function createEditorStageModel(opts: CreateEditorStageModelOpts): Editor
       effectivelyOn,
       leftVisible,
       rightVisible,
-      measure: `${opts.getEditorWidthPercent()}%`,
+      measure: EDITOR_MEASURE_CH[opts.getEditorMeasure()],
     }),
   );
 
