@@ -19,14 +19,29 @@ import MarkdownIt from "markdown-it";
 import type { ParseSpec } from "prosemirror-markdown";
 import { MarkdownParser } from "prosemirror-markdown";
 
+// XSS-relevant URL schemes that must NEVER reach a link `href` (or any other
+// URL-receiving attribute) from pasted markdown. Even with `html: false`
+// blocking inline HTML, a markdown link target `[click me](javascript:...)`
+// would otherwise produce a clickable XSS payload inside the editor.
+const UNSAFE_LINK_SCHEMES = /^(?:javascript|data|vbscript):/i;
+
+function sanitizeHref(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (UNSAFE_LINK_SCHEMES.test(trimmed)) return null;
+  return trimmed;
+}
+
 /**
  * markdown-it token -> Tiptap schema entity map.
  *
  * Scope (per issue #788): paragraphs, headings, bold/italic/code/strike, links,
- * bullet/ordered lists, blockquotes, fenced code blocks. Tables and images are
- * intentionally NOT mapped — pasted table/image markdown falls through to the
- * inline-text content of their surrounding block, which is acceptable for this
- * scope and keeps us from depending on schema nodes that may not be present.
+ * bullet/ordered lists, blockquotes, fenced code blocks. Images, tables, and
+ * other unmapped block-level tokens are silently dropped via `ignore: true`
+ * (#885 follow-up). Without an explicit `ignore`, the prosemirror-markdown
+ * `MarkdownParser` throws `Token type 'image' not supported by parser` and the
+ * caller falls back to plain text — losing ALL the user's surrounding
+ * formatting just because the pasted snippet happens to mention an image.
  */
 function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
   const tokens: { [name: string]: ParseSpec } = {
@@ -54,6 +69,25 @@ function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
     },
     hr: { node: "horizontalRule" },
     hardbreak: { node: "hardBreak" },
+    // markdown-it emits softbreak for an in-paragraph line break in the
+    // source. There's no Tiptap equivalent (StarterKit collapses these to
+    // spaces during DOM serialization anyway); drop the token cleanly so it
+    // doesn't surface as an "unsupported token" parser error. `noCloseToken`
+    // is required because softbreak/html_inline/html_block/image are emitted
+    // as single tokens (no `_open`/`_close` pair) — without it,
+    // prosemirror-markdown would register `softbreak_open`/`_close` handlers
+    // that never fire and the bare `softbreak` token still throws.
+    softbreak: { ignore: true, noCloseToken: true },
+    // `html: false` causes markdown-it to emit raw HTML as text tokens — but
+    // some plugins still surface html_block/html_inline tokens for things
+    // like comments. Ignore them defensively so the parser doesn't throw.
+    html_block: { ignore: true, noCloseToken: true },
+    html_inline: { ignore: true, noCloseToken: true },
+    // Images are tokens, not text — without an explicit mapping the parser
+    // would throw. We ignore (drop alt text + URL) rather than addText
+    // because Tiptap's image node is optional in StarterKit and we don't
+    // want to depend on it being present.
+    image: { ignore: true, noCloseToken: true },
     em: { mark: "italic" },
     strong: { mark: "bold" },
     s: { mark: "strike" },
@@ -61,7 +95,11 @@ function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
     link: {
       mark: "link",
       getAttrs: (tok) => ({
-        href: tok.attrGet("href"),
+        // sanitizeHref rejects javascript:/data:/vbscript: schemes so a
+        // crafted markdown link can't smuggle an XSS payload through paste.
+        // `html: false` on the tokenizer is the inline-HTML guard; this is
+        // the link-target guard. Both are load-bearing.
+        href: sanitizeHref(tok.attrGet("href")),
         title: tok.attrGet("title") || null,
       }),
     },
