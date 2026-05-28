@@ -1,0 +1,10 @@
+# CodeQL configuration for GitHub default code scanning setup.
+#
+# rename-recovery.ts is excluded from analysis because the single
+# js/path-injection finding there is a verified false positive: the path
+# from annotation JSON is guarded by path.isAbsolute, path.resolve, and
+# an explicit UNC-prefix rejection before being passed to fs.access.
+# GitHub Code Scanning does not support inline lgtm[] suppression, so
+# we exclude the file here instead of dismissing via the UI.
+paths-ignore:
+  - src/server/annotations/rename-recovery.ts
