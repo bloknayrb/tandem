@@ -48,12 +48,14 @@ async function openSettingsAndGotoCowork(page: import("@playwright/test").Page):
 }
 
 /**
- * #683 PR3 — Per-side rail-replaces-margin gates margin columns on rail
- * visibility. The product default has `rightPanelVisible=true`, which would
- * hide the right margin column out of the box. Toggle each rail off only if
- * currently visible (detected via the resize-handle testid) so we exercise
- * the on-state of margin view, not the rail-default. Wave M removed the
- * titlebar panel-toggle buttons; keyboard shortcuts drive the toggle instead.
+ * Margin visibility is rail-independent since #892, but open rails still feed
+ * the narrow auto-hide threshold (open rails shrink the editor). The product
+ * default has `rightPanelVisible=true`; at the default ~1280px test viewport an
+ * open right rail pushes the threshold (≈544 reserve + ~300 rail + 480 editor)
+ * above the viewport, auto-hiding BOTH margins. Closing both rails drops the
+ * threshold to ≈1024 so the on-state actually renders. Toggle each rail off
+ * only if currently visible (detected via the resize-handle testid). Wave M
+ * removed the titlebar panel-toggle buttons; keyboard shortcuts drive it.
  */
 async function closeBothRails(page: import("@playwright/test").Page): Promise<void> {
   if ((await page.locator("[data-testid='left-panel-resize-handle']").count()) > 0) {
@@ -449,9 +451,7 @@ test("tab switch: bubbles rebind to the active doc's annotations", async ({ page
   }
 });
 
-test("toggle off after on: columns disappear (validates display:contents wrapper fix)", async ({
-  page,
-}) => {
+test("toggle off after on: margin columns unmount", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
     from: TITLE_FROM,
@@ -476,13 +476,16 @@ test("toggle off after on: columns disappear (validates display:contents wrapper
 });
 
 /**
- * #683 PR3 — Per-side rail-replaces-margin behavior. Opening the LEFT rail
- * hides only the left margin column; the right column remains. Opening the
- * RIGHT rail hides the right column. Default is per-side so margin
- * annotations on the un-collapsed side stay visible — reasoning lives in
- * App.svelte's `marginLeftVisible` / `marginRightVisible` derived blocks.
+ * #892 — margin visibility is DECOUPLED from rail state. Opening a rail no
+ * longer hides that side's margin column: the left rail is the OUTLINE (nothing
+ * to do with annotations), so hiding the left-margin notes when the outline
+ * opens was semantically arbitrary — a leftover geometric hack from the
+ * absolute-positioning layout. With the grid, the `1fr` gutters + the narrow
+ * threshold handle space, so a rail opening with room to spare leaves both
+ * margins in place. Tested one rail at a time to stay clear of the both-rails
+ * narrow threshold at this viewport (threshold ≈ 544 + railWidth + 480).
  */
-test("PR3: opening a rail hides only that side's margin column", async ({ page }) => {
+test("opening a rail keeps both margin columns (#892 decoupling)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
     from: TITLE_FROM,
@@ -498,21 +501,26 @@ test("PR3: opening a rail hides only that side's margin column", async ({ page }
   await setMarginView(page, true);
   const leftCol = page.locator("[data-testid='margin-column-left']");
   const rightCol = page.locator("[data-testid='margin-column-right']");
+  const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
+  const rightHandle = page.locator("[data-testid='panel-resize-handle']");
   await expect(leftCol).toHaveCount(1);
   await expect(rightCol).toHaveCount(1);
 
-  // Open the LEFT rail → left column hides, right stays. Wave M removed the
-  // titlebar panel-toggle buttons; use the keyboard shortcut instead.
+  // Open the LEFT rail (outline) → it must actually open (handle appears), and
+  // BOTH margins stay (Bryan's complaint: the outline must not hide notes).
   await page.keyboard.press("Alt+Shift+ArrowLeft");
-  await expect(leftCol).toHaveCount(0);
+  await expect(leftHandle).toHaveCount(1, { timeout: 3_000 });
+  await expect(leftCol).toHaveCount(1);
   await expect(rightCol).toHaveCount(1);
 
-  // Close left, open right → right column hides, left returns.
+  // Close the left rail, then open the RIGHT rail alone → both margins still
+  // stay (one rail at a time keeps us under the narrow threshold).
   await page.keyboard.press("Alt+Shift+ArrowLeft");
-  await expect(leftCol).toHaveCount(1);
+  await expect(leftHandle).toHaveCount(0, { timeout: 3_000 });
   await page.keyboard.press("Alt+Shift+ArrowRight");
+  await expect(rightHandle).toHaveCount(1, { timeout: 3_000 });
   await expect(leftCol).toHaveCount(1);
-  await expect(rightCol).toHaveCount(0);
+  await expect(rightCol).toHaveCount(1);
 });
 
 /**
@@ -639,24 +647,96 @@ test("PR3: narrow-collapse does not overwrite persisted rail visibility", async 
 });
 
 /**
- * #683 PR3 — Disabling margin view restores the unreserved editor max-width.
- * Without the reserve, the editor wrapper's `max-width` style is just the
- * raw percent (no `max(0px, calc(…))` wrapping).
+ * Stage A (Phase 3.5) — the editor stage reserves margin width PER SIDE, not
+ * globally. The old `editorMaxWidth` cascade subtracted the full both-sides
+ * reserve whenever margin view was effectively on (defect #1); the grid gives
+ * each side its own track. The runtime residual we can assert at the E2E layer:
+ * tracks carry the reserve only while margins render (on → non-zero, off → 0),
+ * and (since #892) a rail opening does NOT collapse a track. The per-side
+ * asymmetry itself (one side 0, the other reserved) is now a pure-function
+ * property exercised in editor-stage.test.ts, since at runtime both sides track
+ * together. We read the resolved grid-template-columns off the stage — [gutter,
+ * marginL, content, marginR, gutter] — so tokens[1]/tokens[3] are the px reserves.
  */
-test("PR3: disabling margin view restores editor max-width", async ({ page }) => {
+async function marginTracks(
+  page: import("@playwright/test").Page,
+): Promise<{ left: string; right: string }> {
+  return page.locator("[data-testid='editor-stage']").evaluate((el) => {
+    const cols = getComputedStyle(el).gridTemplateColumns.split(/\s+/);
+    return { left: cols[1], right: cols[3] };
+  });
+}
+
+test("Stage A: tracks reserve only while margins render, rail-independent", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Margin candidate",
+    textSnapshot: TITLE_TEXT,
+  });
+  // 1600 keeps a single-rail-open layout clear of the narrow auto-hide band
+  // (threshold with one ~300px rail open ≈ 544 + 300 + 480 = 1324 < 1600).
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto("/");
-  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
 
-  // The editor wrapper is the immediate parent of `.tandem-editor` (when not paged).
-  const wrapper = page
-    .locator(".tandem-editor")
-    .locator("xpath=ancestor::div[contains(@style,'max-width')][1]");
+  // Margins on, both rails closed → both sides reserve a track.
+  await setMarginView(page, true);
+  await expect.poll(async () => (await marginTracks(page)).left).not.toBe("0px");
+  expect((await marginTracks(page)).right).not.toBe("0px");
+
+  // Open the LEFT rail (outline) → tracks UNCHANGED (#892 decoupling): the rail
+  // opening must not collapse either margin's reserve.
+  await page.keyboard.press("Alt+Shift+ArrowLeft");
+  await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(1, {
+    timeout: 3_000,
+  });
+  expect((await marginTracks(page)).left).not.toBe("0px");
+  expect((await marginTracks(page)).right).not.toBe("0px");
+
+  // Disable margin view → both tracks collapse to 0 (no phantom reserve — the
+  // residual of defect #1: the old cascade reserved the full width even off).
+  await page.keyboard.press("Alt+Shift+ArrowLeft"); // re-close the left rail
+  await setMarginView(page, false);
+  await expect.poll(async () => (await marginTracks(page)).left).toBe("0px");
+  expect((await marginTracks(page)).right).toBe("0px");
+});
+
+/**
+ * Regression for the grid-row bug found during Stage A dogfooding: the margin
+ * tracks (grid columns 2 & 4) are declared AFTER the content (column 3) in DOM
+ * order but at LOWER column indices, so under the default sparse
+ * `grid-auto-flow: row` they were bumped into a SECOND row below the content —
+ * dumping every bubble at the bottom of the stage. The fix pins all cells to
+ * `grid-row: 1`. Guard it by asserting each margin track's top coincides with
+ * the stage's top (single row), not content-height below it.
+ */
+test("Stage A: margin tracks share the stage's top row (grid-row regression)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Margin candidate",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
 
   await setMarginView(page, true);
-  await expect.poll(async () => (await wrapper.getAttribute("style")) ?? "").toContain("max(");
+  await expect(page.locator(".margin-track")).toHaveCount(2, { timeout: 5_000 });
 
-  await setMarginView(page, false);
-  await expect.poll(async () => (await wrapper.getAttribute("style")) ?? "").not.toContain("max(");
+  const deltas = await page.evaluate(() => {
+    const stage = document.querySelector("[data-testid='editor-stage']");
+    const tracks = [...document.querySelectorAll(".margin-track")];
+    if (!stage || tracks.length !== 2) return null;
+    const stageTop = stage.getBoundingClientRect().top;
+    return tracks.map((t) => Math.abs(t.getBoundingClientRect().top - stageTop));
+  });
+  expect(deltas).not.toBeNull();
+  // Each track's top within 1px of the stage top → all in grid row 1. The bug
+  // put them a full content-height (hundreds of px) below.
+  for (const delta of deltas as number[]) expect(delta).toBeLessThan(1);
 });
