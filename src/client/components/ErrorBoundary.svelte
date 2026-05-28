@@ -109,6 +109,7 @@ let errorSessionId = $state(0);
   padding: var(--tandem-space-2) var(--tandem-space-4);
   border-radius: var(--tandem-r-2);
   cursor: pointer;
+  min-height: 36px;
 }
 
 .btn-primary {
