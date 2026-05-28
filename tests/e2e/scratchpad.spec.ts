@@ -37,7 +37,17 @@ test.beforeEach(async () => {
   });
 });
 
-test.afterEach(async () => {
+test.afterEach(async ({ page }) => {
+  // Clear scratchpad recovery data so tests never bleed content into each other.
+  try {
+    await page.evaluate(() => {
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith("tandem:scratchpad:")) localStorage.removeItem(key);
+      }
+    });
+  } catch {
+    // Page may not be navigated yet if the test failed during setup.
+  }
   await cleanupAllOpenDocuments(mcp);
   await mcp.close();
   cleanupFixtureDir(tmpDir);
@@ -80,10 +90,10 @@ test("scratchpad tab appears in UI after opening", async ({ page }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Content is ephemeral: close → new scratchpad → content gone
+// Persistence: close → recovery data in localStorage → new scratchpad restores
 // ---------------------------------------------------------------------------
 
-test("scratchpad content is gone after closing and opening a new one", async ({ page }) => {
+test("content typed into a scratchpad is recovered in the next one", async ({ page }) => {
   await page.goto("/");
   await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
 
@@ -94,25 +104,23 @@ test("scratchpad content is gone after closing and opening a new one", async ({ 
   );
   const firstDocId = first.data.documentId;
 
-  // Wait for the tab to appear and the editor to be active
   await expect(
     page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
   ).toBeVisible({ timeout: 5_000 });
 
-  // Type some content
+  // Type content — the persistence hook debounces a localStorage write.
   const editor = page.locator(".tandem-editor");
   await editor.click();
-  await page.keyboard.type("ephemeral content only here");
+  await page.keyboard.type("recovery content here");
 
-  // Close the scratchpad via MCP
+  // Close via MCP: detach() flushes the pending debounce → writes to localStorage.
   await mcp.callTool("tandem_close", { documentId: firstDocId });
 
-  // Tab should be gone
   await expect(
     page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
   ).not.toBeVisible({ timeout: 5_000 });
 
-  // Open a new scratchpad
+  // Open a new scratchpad — the hook should restore the saved content.
   await page.evaluate(
     (base) => fetch(`${base}/scratchpad`, { method: "POST" }).then((r) => r.json()),
     API_BASE,
@@ -122,9 +130,57 @@ test("scratchpad content is gone after closing and opening a new one", async ({ 
     page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
   ).toBeVisible({ timeout: 5_000 });
 
-  // New scratchpad should not contain the text typed in the first one
+  // Restoration is async (waits for Hocuspocus sync); poll until text appears.
+  await expect(editor).toContainText("recovery content here", { timeout: 5_000 });
+});
+
+test("new scratchpad is empty when there is no recovery data", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+
+  // Open first scratchpad and type content.
+  const first = await page.evaluate(
+    (base) => fetch(`${base}/scratchpad`, { method: "POST" }).then((r) => r.json()),
+    API_BASE,
+  );
+  const firstDocId = first.data.documentId;
+
+  await expect(
+    page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
+  ).toBeVisible({ timeout: 5_000 });
+
+  const editor = page.locator(".tandem-editor");
+  await editor.click();
+  await page.keyboard.type("should not appear in next scratchpad");
+
+  // Close via MCP — hook flushes content to localStorage.
+  await mcp.callTool("tandem_close", { documentId: firstDocId });
+
+  await expect(
+    page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
+  ).not.toBeVisible({ timeout: 5_000 });
+
+  // Discard the recovery data (simulates the user clearing it or a clean session).
+  await page.evaluate(() => {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("tandem:scratchpad:")) localStorage.removeItem(key);
+    }
+  });
+
+  // Open a new scratchpad — nothing to restore.
+  await page.evaluate(
+    (base) => fetch(`${base}/scratchpad`, { method: "POST" }).then((r) => r.json()),
+    API_BASE,
+  );
+
+  await expect(
+    page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
+  ).toBeVisible({ timeout: 5_000 });
+
+  // Give the sync + effect a moment; editor should stay empty.
+  await page.waitForTimeout(600);
   const editorText = await editor.textContent();
-  expect(editorText).not.toContain("ephemeral content only here");
+  expect(editorText).not.toContain("should not appear in next scratchpad");
 });
 
 // ---------------------------------------------------------------------------
