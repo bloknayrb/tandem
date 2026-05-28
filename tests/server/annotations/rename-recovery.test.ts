@@ -131,6 +131,33 @@ describe("recoverRenamedEnvelope", () => {
     expect(recovered).toBe(false);
   });
 
+  it("unlinks by FILENAME, not the envelope's internal docHash (path-safe)", async () => {
+    const body = "Envelope whose internal docHash disagrees with its filename.";
+    const oldPath = path.join(env.tmpRoot, "diverged.md");
+    const fileHash = docHash(oldPath);
+
+    // Write the envelope at its real filename (`<fileHash>.json`) but with a
+    // bogus, non-hex internal docHash (a path-traversal attempt). Recovery must
+    // unlink the real filename and never touch the bogus path.
+    const dir = annotationsDir();
+    await fs.mkdir(dir, { recursive: true });
+    const envelope = buildEnvelope(oldPath, body, { docHash: "../escaped" });
+    await fs.writeFile(path.join(dir, `${fileHash}.json`), JSON.stringify(envelope), "utf-8");
+
+    const newPath = path.join(env.tmpRoot, "diverged-renamed.md");
+    const newHash = docHash(newPath);
+    const doc = makeDoc(body);
+
+    const recovered = await recoverRenamedEnvelope(doc, newHash, newPath);
+    expect(recovered).toBe(true);
+
+    // Re-keyed to the new hash; the real source file (by filename) was removed.
+    expect(await readEnvelope(newHash)).not.toBeNull();
+    expect(await readEnvelope(fileHash)).toBeNull();
+    // No stray file escaped the annotations dir.
+    expect(await readEnvelope("../escaped")).toBeNull();
+  });
+
   it("refuses to re-key on an ambiguous (non-unique) content-hash match", async () => {
     const body = "Two orphaned envelopes, identical bodies.";
     const oldA = path.join(env.tmpRoot, "gone-a.md");

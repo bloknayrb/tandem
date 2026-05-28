@@ -95,7 +95,12 @@ export async function recoverRenamedEnvelope(
     const currentFile = `${currentHash}.json`;
 
     // Collect candidate envelopes: content-hash match + old path vanished.
-    const candidates: AnnotationDocV1[] = [];
+    // Track the source FILENAME alongside the parsed doc — the filename is the
+    // storage key and the only path-safe handle (it passed ENVELOPE_RE). The
+    // envelope's internal `meta`/`docHash` are unconstrained JSON and must never
+    // be used to build a filesystem path (path-injection + a legacy envelope's
+    // `docHash` can disagree with its filename, e.g. `docHash: ""`).
+    const candidates: { doc: AnnotationDocV1; file: string }[] = [];
     for (const file of files) {
       if (!ENVELOPE_RE.test(file)) continue;
       if (file === currentFile) continue; // can't be its own source
@@ -126,14 +131,14 @@ export async function recoverRenamedEnvelope(
       }
       if (oldStillExists) continue;
 
-      candidates.push(parsed.doc);
+      candidates.push({ doc: parsed.doc, file });
     }
 
     // Re-key only on a unique 1:1 match. Ambiguity → bail (don't guess).
     if (candidates.length !== 1) return false;
 
-    const source = candidates[0];
-    const oldHash = source.docHash;
+    const source = candidates[0].doc;
+    const sourceFile = candidates[0].file;
 
     // Rewrite the ENTIRE envelope under the new docHash via the store's
     // queueWrite/flush (never a raw fs.rename that could race a pending
@@ -178,19 +183,21 @@ export async function recoverRenamedEnvelope(
     }
 
     // Unlink the old envelope now that the re-keyed copy is durably flushed.
+    // Use the actual source FILENAME (path-safe, passed ENVELOPE_RE) — never
+    // the envelope's internal `docHash`, which is unconstrained JSON.
     try {
-      await fs.unlink(path.join(dir, `${oldHash}.json`));
+      await fs.unlink(path.join(dir, sourceFile));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         console.error(
-          `[ANNOTATION-RECOVERY] re-keyed ${oldHash} -> ${currentHash} but failed to unlink old file:`,
+          `[ANNOTATION-RECOVERY] re-keyed ${sourceFile} -> ${currentFile} but failed to unlink old file:`,
           err,
         );
       }
     }
 
     console.error(
-      `[ANNOTATION-RECOVERY] recovered renamed annotations: ${oldHash} -> ${currentHash} (${rekeyed.annotations.length} annotation(s))`,
+      `[ANNOTATION-RECOVERY] recovered renamed annotations: ${sourceFile} -> ${currentFile} (${rekeyed.annotations.length} annotation(s))`,
     );
     return true;
   } catch (err) {
