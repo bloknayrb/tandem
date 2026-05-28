@@ -146,7 +146,7 @@ function checkMcpJson() {
   } else if (tandem.type !== "http" || !tandem.url?.includes("/mcp")) {
     warn(`.mcp.json tandem: unexpected config — type=${tandem.type}, url=${tandem.url}`);
   } else {
-    pass(`.mcp.json tandem \u2192 ${tandem.url}`);
+    pass(`.mcp.json tandem → ${tandem.url}`);
   }
 
   // Check tandem-channel entry
@@ -165,7 +165,7 @@ function checkMcpJson() {
         'Change to: "command": "npx", "args": ["tsx", "src/channel/index.ts"]',
       );
     } else {
-      pass(`.mcp.json tandem-channel \u2192 ${cmd} ${args}`);
+      pass(`.mcp.json tandem-channel → ${cmd} ${args}`);
     }
 
     if (!channel.env?.TANDEM_URL) {
@@ -425,12 +425,16 @@ function checkAnnotationStore() {
     }
   }
 
-  pass(`Annotation store: ${jsonFiles.length} doc(s), ${formatBytes(totalBytes)} total`, undefined, {
-    dir,
-    docCount: jsonFiles.length,
-    totalBytes,
-    corruptCount: corruptFiles.length,
-  });
+  pass(
+    `Annotation store: ${jsonFiles.length} doc(s), ${formatBytes(totalBytes)} total`,
+    undefined,
+    {
+      dir,
+      docCount: jsonFiles.length,
+      totalBytes,
+      corruptCount: corruptFiles.length,
+    },
+  );
 
   if (newest.name) {
     const ageMs = Date.now() - newest.mtime;
@@ -559,9 +563,7 @@ main().catch((err) => {
     // can parse a result; details still go to stderr.
     console.error(`\n  Tandem Doctor crashed unexpectedly: ${err.message}`);
     console.error("  Please report this at https://github.com/bloknayrb/tandem/issues\n");
-    console.log(
-      JSON.stringify({ ok: false, crashed: true, error: err.message, results }, null, 2),
-    );
+    console.log(JSON.stringify({ ok: false, crashed: true, error: err.message, results }, null, 2));
     process.exit(2);
   }
   console.error(`\n  Tandem Doctor crashed unexpectedly: ${err.message}`);
