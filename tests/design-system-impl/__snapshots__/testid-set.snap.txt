@@ -163,6 +163,7 @@ integration-wizard-step-review
 integration-wizard-step-saving
 integration-wizard-step-secrets
 left-outline-rail
+margin-anchor-dot
 margin-bubble-{*}
 margin-column-{*}
 margin-leaders-{*}
