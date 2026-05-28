@@ -4,6 +4,7 @@ import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import AnnotationCard from "./AnnotationCard.svelte";
 import { prunePlaceableHeights, resolveCollisions } from "./marginCollision";
+import { bezierLeaderPath, leaderColorForAuthor } from "./marginLeaderGeometry";
 
 interface Props {
   /** Annotations destined for this side. Caller filters by type/author. */
@@ -62,13 +63,15 @@ const LEADER_BUBBLE_INSET_PX = 12;
 // Component-level $derived values for the leader SVG. `side`, `edgeInset`,
 // `gap`, `width` come from $props() and are themselves reactive, so these
 // recompute precisely when a prop changes. Hoisting `editorX`/`columnX` out
-// of the {#each} block avoids recomputing the same ternary per iteration;
-// `leaderStyle` collapses the previously dense inline-style template.
-const authorVar = $derived(side === "right" ? "claude" : "user");
+// of the {#each} block avoids recomputing the same ternary per iteration.
+// Per-element stroke/fill colors are resolved at render time from
+// `leaderColorForAuthor` — the SVG root no longer carries an inherited color
+// (side ≠ author after Stage C-3: imports render distinct from Claude even
+// though both sit on the right side).
 const editorX = $derived(side === "right" ? 0 : gap);
 const columnX = $derived(side === "right" ? gap : 0);
 const leaderStyle = $derived(
-  `position: absolute; top: 0; bottom: 0; ${side}: ${edgeInset + width}px; width: ${gap}px; pointer-events: none; color: var(--tandem-author-${authorVar});`,
+  `position: absolute; top: 0; bottom: 0; ${side}: ${edgeInset + width}px; width: ${gap}px; pointer-events: none;`,
 );
 
 // Only render annotations whose position is known this frame; without a top
@@ -138,39 +141,57 @@ function recordHeight(id: string, h: number): void {
 }
 </script>
 
-<!-- Leader-line SVG sits in the gap zone between the editor's text edge and
-     the column's near edge. Top/bottom stretch makes it cover the full layer
-     height so absolute Y coords (relative to the margin layer) line up with
+<!-- Leader SVG sits in the gap zone between the editor's text edge and the
+     column's near edge. Top/bottom stretch covers the full layer height so
+     absolute Y coords (relative to the margin layer) line up with
      `useMarginPositions` output. SVG default user units = pixels (no viewBox),
-     so we render lines directly at the computed Y offsets. Decorative only:
+     so we render at computed Y offsets directly. Decorative only:
      pointer-events: none, aria-hidden.
 
-     Stroke is tinted by side (left = notes / user, right = comments / Claude)
-     to mirror the authorship decoration convention (ADR-026). Default uses
-     stroke-opacity to stay subtle; active review target ramps opacity + width
-     so the focused annotation's connector reads as the dominant line on the
-     page. -->
+     Stroke + dot fill are PER-AUTHOR (ADR-026), not per-side: matches the C4
+     bundle (MarginFrame.svelte:135-137 — claude / user / fg-subtle). Active
+     review target ramps opacity + width so the focused annotation's connector
+     reads as the dominant line on the page.
+
+     `adjTop ?? rawTop` fallback handles a one-frame race where `placeable`
+     updates (annotation added) before `adjustedPositions` `$derived.by`
+     re-runs — without it, the leader+dot disappears for one tick. Consistent
+     with the bubble's own fallback chain in the next block. -->
 <svg data-testid="margin-leaders-{side}" aria-hidden="true" style={leaderStyle}>
   {#each placeable as ann (ann.id)}
     {@const rawTop = positions.get(ann.id)}
-    {@const adjTop = adjustedPositions.get(ann.id)}
-    {#if rawTop !== undefined && adjTop !== undefined}
+    {@const adjTopRaw = adjustedPositions.get(ann.id)}
+    {#if rawTop !== undefined}
       {@const isActive = ann.id === activeAnnotationId}
-      <!-- LEADER_BUBBLE_INSET_PX shifts the bubble endpoint down from the
-           bubble's top edge into its padded content area, so a
-           collision-pushed bubble's connector lands near the title row
-           instead of pointing at the empty corner above it. -->
-      <line
+      {@const adjTop = adjTopRaw ?? rawTop}
+      {@const endY = adjTop + LEADER_BUBBLE_INSET_PX}
+      {@const color = leaderColorForAuthor(ann.author)}
+      {@const d = bezierLeaderPath({
+        startX: editorX,
+        startY: rawTop,
+        endX: columnX,
+        endY,
+        side,
+      })}
+      <path
         data-annotation-id={ann.id}
-        x1={editorX}
-        y1={rawTop}
-        x2={columnX}
-        y2={adjTop + LEADER_BUBBLE_INSET_PX}
-        stroke="currentColor"
-        stroke-width={isActive ? 1.75 : 1}
-        stroke-opacity={isActive ? 0.9 : 0.4}
+        data-tandem-author={ann.author}
+        {d}
+        stroke={color}
+        stroke-width={isActive ? 1.8 : 1.1}
+        stroke-opacity={isActive ? 0.82 : 0.38}
         stroke-linecap="round"
         fill="none"
+      />
+      <circle
+        data-testid="margin-anchor-dot"
+        data-annotation-id={ann.id}
+        data-tandem-author={ann.author}
+        cx={editorX}
+        cy={rawTop}
+        r={isActive ? 3 : 2}
+        fill={color}
+        fill-opacity={isActive ? 0.72 : 0.42}
       />
     {/if}
   {/each}
