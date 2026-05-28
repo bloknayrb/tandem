@@ -1699,8 +1699,14 @@ const tutorial = createTutorial(
     width: 14px;
     cursor: pointer;
   }
-  .rail-shell.collapsed:hover,
-  .rail-shell.collapsed:focus-within {
+  /* Width-grow is :hover ONLY — never :focus-within. The peek strip is
+     tabindex="-1", so its only focus path is the inert restoration focus that
+     focusToggleTarget() applies after a keyboard collapse (preserving Tab
+     position). Per #859 that restoration focus must be visually inert; a
+     :focus-within widen would silently expand the sliver 14→28px on collapse
+     with no user hover — the exact bug #859 fixed. The PeekStrip's own
+     affordances (chevron/label/tick reveal) are likewise scoped to :hover. */
+  .rail-shell.collapsed:hover {
     width: 28px;
   }
   /* The full layer fills the shell, anchored to the shell's inside edge (left
