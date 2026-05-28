@@ -1,3 +1,4 @@
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
 import { z } from "zod";
@@ -692,7 +693,15 @@ export function registerAnnotationTools(server: McpServer): void {
 
           // Overwrite-on-collision is intentional: the sidecar mirrors the
           // current annotation state, so a stale copy should be replaced.
-          const sidecarPath = outputPath ?? `${filePath}.annotations.${isJson ? "json" : "md"}`;
+          // Resolve + reject UNC paths to match the rest of the file-writing
+          // MCP surface (convert.ts / document-service.ts) — Windows NTLM
+          // hardening; never write to a `\\host\share` path.
+          const sidecarPath = path.resolve(
+            outputPath ?? `${filePath}.annotations.${isJson ? "json" : "md"}`,
+          );
+          if (sidecarPath.startsWith("\\\\") || sidecarPath.startsWith("//")) {
+            return mcpError("INVALID_PATH", "UNC paths are not supported for security reasons.");
+          }
           const contents = isJson
             ? JSON.stringify({ annotations: enriched, count: enriched.length }, null, 2)
             : (markdown ?? "");
