@@ -5,7 +5,7 @@ import {
   scratchpadStorageKey,
 } from "../../src/client/hooks/useScratchpadPersistence.svelte";
 
-/** Build a Y.Doc whose "default" fragment holds the given paragraph lines. */
+/** Build a Y.Doc whose "default" XmlFragment holds the given paragraph lines. */
 function docWithParagraphs(lines: string[]): Y.Doc {
   const doc = new Y.Doc();
   const fragment = doc.getXmlFragment("default");
