@@ -18,19 +18,14 @@ import { Slice } from "@tiptap/pm/model";
 import MarkdownIt from "markdown-it";
 import type { ParseSpec } from "prosemirror-markdown";
 import { MarkdownParser } from "prosemirror-markdown";
+import { sanitizeHrefForPaste } from "./url-safety";
 
-// XSS-relevant URL schemes that must NEVER reach a link `href` (or any other
-// URL-receiving attribute) from pasted markdown. Even with `html: false`
-// blocking inline HTML, a markdown link target `[click me](javascript:...)`
-// would otherwise produce a clickable XSS payload inside the editor.
-const UNSAFE_LINK_SCHEMES = /^(?:javascript|data|vbscript):/i;
-
-function sanitizeHref(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (UNSAFE_LINK_SCHEMES.test(trimmed)) return null;
-  return trimmed;
-}
+// Link-href sanitization uses the shared ALLOWLIST in ./url-safety.ts
+// (http://, https://, mailto:, ftp://, //, plus fragments and relative
+// paths). The Editor's click-time anchor intercept uses the same allowlist
+// via isSafeExternalHref — one source of truth means a new XSS-relevant
+// scheme rejected by the click-time check is automatically rejected at
+// paste time too (no drift between the two defense layers).
 
 /**
  * markdown-it token -> Tiptap schema entity map.
@@ -95,11 +90,11 @@ function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
     link: {
       mark: "link",
       getAttrs: (tok) => ({
-        // sanitizeHref rejects javascript:/data:/vbscript: schemes so a
-        // crafted markdown link can't smuggle an XSS payload through paste.
-        // `html: false` on the tokenizer is the inline-HTML guard; this is
-        // the link-target guard. Both are load-bearing.
-        href: sanitizeHref(tok.attrGet("href")),
+        // sanitizeHrefForPaste rejects any unknown scheme (allowlist-based)
+        // so a crafted markdown link can't smuggle an XSS payload through
+        // paste. `html: false` on the tokenizer is the inline-HTML guard;
+        // this is the link-target guard. Both are load-bearing.
+        href: sanitizeHrefForPaste(tok.attrGet("href")),
         title: tok.attrGet("title") || null,
       }),
     },

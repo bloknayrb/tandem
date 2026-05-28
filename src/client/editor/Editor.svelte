@@ -25,6 +25,7 @@ import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
 import { markdownToSlice } from "./utils/markdown-paste";
+import { isSafeExternalHref } from "./utils/url-safety";
 import "./editor.css";
 
 import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
@@ -32,18 +33,9 @@ import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
 /** File extensions that open as new Tandem tabs when clicked as relative links. .docx excluded — not navigable as a link target. */
 const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
 
-/**
- * Whitelist of safe external href prefixes that we'll hand off to the default
- * browser via window.open. Anything not in this list and not a relative path
- * (e.g. `javascript:`, `data:`, `vbscript:`) is treated as unsafe and ignored —
- * preventDefault has already been called by the time we check this, so the
- * browser won't navigate.
- */
-const SAFE_EXTERNAL_PREFIXES = ["http://", "https://", "mailto:", "ftp://", "//"] as const;
-
-function isSafeExternalHref(href: string): boolean {
-  return SAFE_EXTERNAL_PREFIXES.some((p) => href.startsWith(p));
-}
+// SAFE_EXTERNAL_PREFIXES + isSafeExternalHref hoisted to ./utils/url-safety.ts
+// so the click-time anchor intercept and the paste-time link sanitizer share
+// one allowlist (any drift would silently widen the XSS trust surface).
 
 /**
  * Resolve a relative href against an absolute file path.
