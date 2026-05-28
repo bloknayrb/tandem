@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as Y from "yjs";
@@ -638,8 +639,12 @@ export function registerAnnotationTools(server: McpServer): void {
       outputPath: z
         .string()
         .optional()
+        .refine((p) => p === undefined || path.isAbsolute(p), {
+          message:
+            "outputPath must be an absolute path (a relative path would silently resolve to the server's CWD).",
+        })
         .describe(
-          "Custom absolute path for the sidecar file (only used when writeToDisk is true). Defaults to <docPath>.annotations.{json|md}.",
+          "Custom absolute path for the sidecar file (only used when writeToDisk is true). May be a file path or an existing directory (the default filename is appended). Defaults to <docPath>.annotations.{json|md}.",
         ),
     },
     withErrorBoundary(
@@ -696,11 +701,34 @@ export function registerAnnotationTools(server: McpServer): void {
           // Resolve + reject UNC paths to match the rest of the file-writing
           // MCP surface (convert.ts / document-service.ts) — Windows NTLM
           // hardening; never write to a `\\host\share` path.
-          const sidecarPath = path.resolve(
+          let sidecarPath = path.resolve(
             outputPath ?? `${filePath}.annotations.${isJson ? "json" : "md"}`,
           );
           if (sidecarPath.startsWith("\\\\") || sidecarPath.startsWith("//")) {
             return mcpError("INVALID_PATH", "UNC paths are not supported for security reasons.");
+          }
+          // If outputPath points at an existing directory, append the default
+          // sidecar filename — otherwise atomicWrite would surface a confusing
+          // EISDIR. Stat is best-effort: ENOENT (no such path yet) is the
+          // expected fresh-write case; surface any other unexpected error.
+          if (outputPath) {
+            try {
+              const stat = await fs.stat(sidecarPath);
+              if (stat.isDirectory()) {
+                const base = path.basename(filePath);
+                sidecarPath = path.join(
+                  sidecarPath,
+                  `${base}.annotations.${isJson ? "json" : "md"}`,
+                );
+              }
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+                return mcpError(
+                  "INVALID_PATH",
+                  `Could not stat outputPath: ${(err as Error).message}`,
+                );
+              }
+            }
           }
           const contents = isJson
             ? JSON.stringify({ annotations: enriched, count: enriched.length }, null, 2)
