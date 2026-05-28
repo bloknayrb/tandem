@@ -150,12 +150,11 @@ export async function saveDocumentToDisk(
     const doc = getOrCreateDocument(docId);
     // `adapter.save` was guard-checked above; assert it for the type narrow
     // here. Per ADR-036 a missing `save` means the format is read-only.
-    const output = adapter.save(doc);
-
     // Snapshot the dirty version BEFORE the async write so a content edit that
     // lands DURING atomicWrite/saveSession isn't lost — markCleanIfUnchanged
     // only clears the flag if no newer edit arrived (#851).
     const dirtySnapshot = snapshotDirtyVersion(docId);
+    const output = adapter.save(doc);
 
     suppressNextChange(docState.filePath);
     await atomicWrite(docState.filePath, output);
