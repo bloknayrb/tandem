@@ -23,31 +23,58 @@ STATE_DIR=$(_ws_state_dir "$SESSION_ID")
 
 # Newline-delimited extraction (NOT null-delimited: command substitution
 # strips NULs and collapses every field into the first slot). Newlines inside
-# field values are stripped — we only need prefix matches downstream.
-EXTRACTED=$(printf '%s' "$INPUT" | node -e "
-  let d='';
-  process.stdin.on('data', c => d += c);
-  process.stdin.on('end', () => {
-    try {
-      const e = JSON.parse(d);
-      const tr = e.tool_response;
-      let ec = '';
-      if (tr && typeof tr === 'object') {
-        if (typeof tr.exit_code === 'number') ec = String(tr.exit_code);
-        else if (typeof tr.exitCode === 'number') ec = String(tr.exitCode);
-      }
-      const fp = ((e.tool_input && e.tool_input.file_path) || '').replace(/\\\\/g, '/');
-      const esc = v => String(v == null ? '' : v).replace(/\n/g, '');
-      process.stdout.write([
-        esc(e.tool_name || ''),
-        esc(fp),
-        esc((e.tool_input && e.tool_input.skill) || ''),
-        esc((e.tool_input && e.tool_input.command) || ''),
-        esc(ec),
-      ].join('\n'));
-    } catch { process.stdout.write(['','','','',''].join('\n')); }
-  });
-" 2>/dev/null) || exit 0
+# field values are replaced with SOH (0x01) so each field stays on one line --
+# downstream only needs prefix matches, never the embedded newlines.
+#
+# Prefer jq (no interpreter cold-start) and fall back to node when jq is absent
+# so contributors without jq aren't broken. Both emit the same five fields in
+# the same order, newline-joined: tool_name, file_path (\\ -> /), skill,
+# command, exit_code.
+if command -v jq >/dev/null 2>&1; then
+  # esc replaces embedded newlines with SOH (\u0001), matching the node parser;
+  # the file_path branch additionally maps \\ -> / before the newline pass.
+  # exit_code mirrors node exactly: prefer .exit_code if it is a number, else
+  # .exitCode if it is a number, else "" -- per-field number test (not `//`)
+  # avoids picking a non-numeric .exit_code over a numeric .exitCode.
+  EXTRACTED=$(printf '%s' "$INPUT" | jq -j '
+    def esc: (. // "" | tostring | gsub("\n";"\u0001"));
+    def numstr: if type == "number" then tostring else "" end;
+    [ (.tool_name | esc),
+      ((.tool_input.file_path // "" | tostring | gsub("\\\\";"/")) | gsub("\n";"\u0001")),
+      (.tool_input.skill | esc),
+      (.tool_input.command | esc),
+      (if (.tool_response.exit_code | numstr) != ""
+         then (.tool_response.exit_code | numstr)
+         else (.tool_response.exitCode | numstr) end)
+    ] | join("\n")
+  ' 2>/dev/null) || exit 0
+else
+  # Fallback parser when jq is unavailable. Identical field contract.
+  EXTRACTED=$(printf '%s' "$INPUT" | node -e "
+    let d='';
+    process.stdin.on('data', c => d += c);
+    process.stdin.on('end', () => {
+      try {
+        const e = JSON.parse(d);
+        const tr = e.tool_response;
+        let ec = '';
+        if (tr && typeof tr === 'object') {
+          if (typeof tr.exit_code === 'number') ec = String(tr.exit_code);
+          else if (typeof tr.exitCode === 'number') ec = String(tr.exitCode);
+        }
+        const fp = ((e.tool_input && e.tool_input.file_path) || '').replace(/\\\\/g, '/');
+        const esc = v => String(v == null ? '' : v).replace(/\n/g, '');
+        process.stdout.write([
+          esc(e.tool_name || ''),
+          esc(fp),
+          esc((e.tool_input && e.tool_input.skill) || ''),
+          esc((e.tool_input && e.tool_input.command) || ''),
+          esc(ec),
+        ].join('\n'));
+      } catch { process.stdout.write(['','','','',''].join('\n')); }
+    });
+  " 2>/dev/null) || exit 0
+fi
 
 mapfile -t FIELDS <<< "$EXTRACTED"
 TOOL_NAME="${FIELDS[0]:-}"
