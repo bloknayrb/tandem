@@ -14,12 +14,11 @@ afterEach(() => {
   resetForTesting();
 });
 
-function attachAndEdit(docId: string, doc: Y.Doc, text: string): void {
+function attachAndEdit(doc: Y.Doc, text: string): void {
   const fragment = doc.getXmlFragment("default");
   const p = new Y.XmlElement("paragraph");
   p.insert(0, [new Y.XmlText(text)]);
   fragment.insert(fragment.length, [p]);
-  void docId;
 }
 
 describe("dirty.ts — observer + version", () => {
@@ -34,7 +33,7 @@ describe("dirty.ts — observer + version", () => {
     const docId = "doc-b";
     const doc = new Y.Doc();
     registerDirtyObserver(docId, doc);
-    attachAndEdit(docId, doc, "hello");
+    attachAndEdit(doc, "hello");
     expect(isDirty(docId)).toBe(true);
   });
 
@@ -55,7 +54,7 @@ describe("dirty.ts — race handling", () => {
     const docId = "doc-d";
     const doc = new Y.Doc();
     registerDirtyObserver(docId, doc);
-    attachAndEdit(docId, doc, "edit");
+    attachAndEdit(doc, "edit");
     const snap = snapshotDirtyVersion(docId);
     expect(isDirty(docId)).toBe(true);
 
@@ -71,11 +70,11 @@ describe("dirty.ts — race handling", () => {
     const docId = "doc-e";
     const doc = new Y.Doc();
     registerDirtyObserver(docId, doc);
-    attachAndEdit(docId, doc, "first");
+    attachAndEdit(doc, "first");
     const snap = snapshotDirtyVersion(docId);
 
     // Simulate a concurrent edit landing during the (hypothetical) async write.
-    attachAndEdit(docId, doc, "second");
+    attachAndEdit(doc, "second");
 
     const cleared = markCleanIfUnchanged(docId, snap);
     expect(cleared).toBe(false);
@@ -86,8 +85,8 @@ describe("dirty.ts — race handling", () => {
     const docId = "doc-f";
     const doc = new Y.Doc();
     registerDirtyObserver(docId, doc);
-    attachAndEdit(docId, doc, "edit-1");
-    attachAndEdit(docId, doc, "edit-2");
+    attachAndEdit(doc, "edit-1");
+    attachAndEdit(doc, "edit-2");
     expect(isDirty(docId)).toBe(true);
 
     markClean(docId);
@@ -103,7 +102,7 @@ describe("dirty.ts — lifecycle", () => {
     const docId = "doc-g";
     const docA = new Y.Doc();
     registerDirtyObserver(docId, docA);
-    attachAndEdit(docId, docA, "before-swap");
+    attachAndEdit(docA, "before-swap");
     expect(isDirty(docId)).toBe(true);
 
     const docB = new Y.Doc();
@@ -115,11 +114,11 @@ describe("dirty.ts — lifecycle", () => {
     const docId = "doc-h";
     const doc = new Y.Doc();
     registerDirtyObserver(docId, doc);
-    attachAndEdit(docId, doc, "edit");
+    attachAndEdit(doc, "edit");
     clearDirtyState(docId);
 
     // After clear, even further edits don't show up (no observer attached).
-    attachAndEdit(docId, doc, "post-clear");
+    attachAndEdit(doc, "post-clear");
     expect(isDirty(docId)).toBe(false);
   });
 
