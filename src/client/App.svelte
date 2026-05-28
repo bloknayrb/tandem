@@ -90,7 +90,7 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
-import { browseNativeFile } from "./utils/browse-file";
+import { openFileForRuntime } from "./utils/browse-file";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
 
@@ -327,24 +327,25 @@ if (import.meta.env.DEV) {
 let paletteOpen = $state(false);
 let fileOpenDialogOpen = $state(false);
 
-// In the desktop app, open files via the native OS picker directly. The
-// browser distribution has no native picker, so it falls back to the
-// FileOpenDialog modal (HTML upload + recent + browse).
-async function requestOpenFile() {
-  if (isTauriRuntime()) {
-    await browseNativeFile({
-      onError: (message) =>
-        notifications.push({
-          id: generateNotificationId(),
-          type: "general-error",
-          severity: "error",
-          message,
-          timestamp: Date.now(),
-        }),
-    });
-  } else {
-    fileOpenDialogOpen = true;
-  }
+// Open-file action: native picker in Tauri, FileOpenDialog modal in the
+// browser distribution. Error surfacing is owned by `openFileForRuntime` /
+// `browseNativeFile` via the `onError` callback; void callers can fire-and-
+// forget safely.
+function requestOpenFile(): Promise<void> {
+  return openFileForRuntime({
+    isTauri: isTauriRuntime(),
+    openModal: () => {
+      fileOpenDialogOpen = true;
+    },
+    onError: (message) =>
+      notifications.push({
+        id: generateNotificationId(),
+        type: "general-error",
+        severity: "error",
+        message,
+        timestamp: Date.now(),
+      }),
+  });
 }
 
 // Issue #660 — titlebar settings-icon update-available dot. Acknowledged

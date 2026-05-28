@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { browseNativeFile } from "../../src/client/utils/browse-file.js";
+import { browseNativeFile, openFileForRuntime } from "../../src/client/utils/browse-file.js";
 import { loadRecentFiles } from "../../src/client/utils/recentFiles.js";
 import * as serverPaths from "../../src/client/utils/server-paths.js";
 import { RECENT_FILES_KEY } from "../../src/shared/constants.js";
@@ -89,5 +89,41 @@ describe("browseNativeFile (Tauri native picker)", () => {
 
     expect(onError).toHaveBeenCalledWith(expect.stringContaining("File picker unavailable"));
     expect(vi.mocked(serverPaths.openServerPath)).not.toHaveBeenCalled();
+  });
+});
+
+describe("openFileForRuntime (runtime branch)", () => {
+  beforeEach(() => {
+    vi.mocked(serverPaths.openServerPath).mockReset();
+    try {
+      window.localStorage.removeItem(RECENT_FILES_KEY);
+    } catch {
+      // ignore
+    }
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("Tauri branch: calls the native picker, does not open the modal", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue(null);
+    const openModal = vi.fn();
+
+    await openFileForRuntime({ isTauri: true, openModal });
+
+    expect(vi.mocked(open)).toHaveBeenCalledOnce();
+    expect(openModal).not.toHaveBeenCalled();
+  });
+
+  it("browser branch: opens the modal, does not call the native picker", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const openModal = vi.fn();
+
+    await openFileForRuntime({ isTauri: false, openModal });
+
+    expect(openModal).toHaveBeenCalledOnce();
+    expect(vi.mocked(open)).not.toHaveBeenCalled();
   });
 });
