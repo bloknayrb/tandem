@@ -31,8 +31,10 @@ STATE_DIR=$(_ws_state_dir "$SESSION_ID")
 # the same order, newline-joined: tool_name, file_path (\\ -> /), skill,
 # command, exit_code.
 if command -v jq >/dev/null 2>&1; then
-  # esc replaces embedded newlines with SOH (\u0001), matching the node parser;
-  # the file_path branch additionally maps \\ -> / before the newline pass.
+  # esc replaces embedded newlines with SOH (\u0001) as a field-internal placeholder so
+  # each field stays on one line (an improvement over node's newline-stripping,
+  # which loses information). The file_path branch additionally maps \\ -> /
+  # before the newline pass.
   # exit_code mirrors node exactly: prefer .exit_code if it is a number, else
   # .exitCode if it is a number, else "" -- per-field number test (not `//`)
   # avoids picking a non-numeric .exit_code over a numeric .exitCode.
@@ -48,6 +50,13 @@ if command -v jq >/dev/null 2>&1; then
          else (.tool_response.exitCode | numstr) end)
     ] | join("\n")
   ' 2>/dev/null) || exit 0
+  # Windows-native jq (chocolatey build) opens stdout in text mode and emits
+  # CRLF separators. `mapfile -t` strips trailing \n but leaves \r on every
+  # field, so FIELDS[0] becomes "Bash\r" and the case match below never fires
+  # -- every workflow marker (last-source-edit, last-commit, etc.) goes
+  # unwritten on Windows. Strip CRs once here so the jq and node branches emit
+  # byte-identical output.
+  EXTRACTED=$(printf '%s' "$EXTRACTED" | tr -d '\r')
 else
   # Fallback parser when jq is unavailable. Identical field contract.
   EXTRACTED=$(printf '%s' "$INPUT" | node -e "
