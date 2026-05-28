@@ -844,6 +844,50 @@ async function handleViewChangelog(): Promise<void> {
     letter-spacing: 0.5px;
   }
 
+  /* Shared helper-text style for tab bodies — pulls inline 10px hints out of
+     individual tabs into a single typographic recipe matching the bundle's
+     `.settings-hint` (11px / fg-subtle / line-height 1.4). Consumers keep any
+     positional margins (margin-top/-bottom) inline since they vary by row. */
+  :global(.settings-hint) {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--tandem-fg-subtle);
+  }
+
+  /* Shared segmented-control recipe used by per-tab mode toggles
+     (Collaboration: Tandem/Solo default-mode pair). Active state is driven
+     by [aria-checked="true"] so the markup stays semantically a radiogroup.
+     Matches the bundle's `.settings-mode-btn` shape (flex:1, 2px border,
+     accent-active) while using production radii/spacing tokens for visual
+     consistency with the shell's other controls. */
+  :global(.settings-mode-btns) {
+    display: flex;
+    gap: var(--tandem-space-2);
+  }
+  :global(.settings-mode-btn) {
+    flex: 1;
+    padding: var(--tandem-space-2);
+    min-height: 30px;
+    border: 2px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg-muted);
+    font-size: 12px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: background 100ms, color 100ms, border-color 100ms;
+  }
+  :global(.settings-mode-btn[aria-checked="true"]) {
+    border-color: var(--tandem-accent);
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent-fg-strong);
+    font-weight: 600;
+  }
+  :global(.settings-mode-btn:focus-visible) {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+
   /* W9: narrow viewports collapse the persistent sidebar grid column into a
      slide-in drawer toggled by the header hamburger. The drawer is
      absolutely positioned so it overlays the content rather than pushing

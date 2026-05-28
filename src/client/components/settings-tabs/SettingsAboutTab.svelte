@@ -91,12 +91,12 @@ const aboutRows = $derived.by(() => {
     <div style="font-size: 11px; color: var(--tandem-fg-subtle);">Loading...</div>
   {:else if appInfo.info}
     <dl
-      style="display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 12px; margin: 0; font-size: 11px;"
+      style="display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; margin: 0; font-size: 11px;"
     >
       {#each aboutRows as row (row.label)}
         <dt style="color: var(--tandem-fg-subtle);">{row.label}</dt>
         <dd
-          style="margin: 0; color: var(--tandem-fg-muted); overflow-wrap: anywhere;"
+          style="margin: 0; color: var(--tandem-fg-muted); overflow-wrap: anywhere; font-family: var(--tandem-font-mono);"
         >
           {row.value}
         </dd>
