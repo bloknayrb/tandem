@@ -13,6 +13,10 @@ import {
   CHANNEL_EVENT_BUFFER_SIZE,
   CTRL_ROOM,
 } from "../../shared/constants.js";
+import {
+  registerDirtyObserver,
+  resetForTesting as dirtyResetForTesting,
+} from "../documents/dirty.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
   clearFileSyncContext,
@@ -151,6 +155,11 @@ export function attachObservers(docName: string, doc: Y.Doc, opts?: { uploadDoc?
   // rather than firing as standalone events (#188).
   cleanups.push(makeAwarenessObserver({ docName, doc, selectionBuffer }));
 
+  // Track body-content edits so autosave only writes dirty docs (#851). This
+  // observes the ProseMirror XmlFragment directly, so it survives the
+  // Hocuspocus Y.Doc swap (this function is re-run via reattachObservers).
+  registerDirtyObserver(docName, doc);
+
   docObservers.set(docName, cleanups);
   console.error(`[EventQueue] Attached observers for document: ${docName}`);
 }
@@ -215,4 +224,6 @@ export function resetForTesting(): void {
   // Delegate to registry — its cleanup loop is the only way to dispose
   // in-flight tombstone debounces across tests.
   fileSyncResetForTesting();
+
+  dirtyResetForTesting();
 }

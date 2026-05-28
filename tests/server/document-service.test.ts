@@ -20,6 +20,10 @@ import {
   setActiveDocId,
   toDocListEntry,
 } from "../../src/server/mcp/document-service.js";
+import {
+  registerDirtyObserver,
+  resetForTesting as resetDirtyState,
+} from "../../src/server/documents/dirty.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -95,7 +99,19 @@ beforeEach(() => {
     removeDoc(id);
   }
   setActiveDocId(null);
+  resetDirtyState();
 });
+
+/** Insert a paragraph of text into a doc's body AFTER its dirty observer is
+ *  registered, so the edit marks the doc dirty (mirrors a real content edit). */
+function editBody(docId: string, text: string): void {
+  const doc = getOrCreateDocument(docId);
+  registerDirtyObserver(docId, doc);
+  const frag = doc.getXmlFragment("default");
+  const p = new Y.XmlElement("paragraph");
+  frag.insert(frag.length, [p]);
+  p.insert(0, [new Y.XmlText(text)]);
+}
 
 describe("addDoc / removeDoc / hasDoc / docCount", () => {
   it("adds a document and reports it exists", () => {
@@ -939,18 +955,16 @@ describe("serializeDocument", () => {
 });
 
 describe("autoSaveAllToDisk", () => {
-  it("saves only eligible documents", async () => {
+  it("saves only eligible (and dirty) documents", async () => {
     const { atomicWrite } = await import("../../src/server/file-io/index.js");
     vi.mocked(atomicWrite).mockClear();
 
-    // Add one eligible .md doc
+    // Add one eligible .md doc AND edit its body so it's dirty
     addDoc("auto-md", makeOpenDoc("auto-md", "/tmp/auto.md"));
-    const doc1 = getOrCreateDocument("auto-md");
-    const frag1 = doc1.getXmlFragment("default");
-    const p1 = new Y.XmlElement("paragraph");
-    frag1.insert(0, [p1]);
-    p1.insert(0, [new Y.XmlText("content")]);
-    doc1.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_SAVED_AT_VERSION, Date.now());
+    editBody("auto-md", "content");
+    getOrCreateDocument("auto-md")
+      .getMap(Y_MAP_DOCUMENT_META)
+      .set(Y_MAP_SAVED_AT_VERSION, Date.now());
 
     // Add one ineligible .docx doc
     addDoc("auto-docx", {
@@ -965,5 +979,66 @@ describe("autoSaveAllToDisk", () => {
 
     // Only the .md doc should have been saved
     expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+
+  // #851: opening a file to view it (no edits) must produce ZERO disk writes.
+  it("does NOT write a doc that was opened but never edited", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    vi.mocked(atomicWrite).mockClear();
+
+    addDoc("auto-clean", makeOpenDoc("auto-clean", "/tmp/auto-clean.md"));
+    const doc = getOrCreateDocument("auto-clean");
+    // Simulate the open-time content load that happens BEFORE the dirty
+    // observer is registered (finalizeDocOpen order) — content is present but
+    // the doc is not dirty.
+    const frag = doc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    frag.insert(0, [p]);
+    p.insert(0, [new Y.XmlText("pre-existing on-disk content")]);
+    registerDirtyObserver("auto-clean", doc);
+    doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_SAVED_AT_VERSION, Date.now());
+
+    await autoSaveAllToDisk();
+
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  // #851 regression guard: Claude's tandem_edit writes are mcp-origin, NOT
+  // browser-origin. A body edit (regardless of origin) must mark the doc dirty
+  // so autosave persists it — a browser-only gate would silently drop them.
+  it("DOES write a doc after a (mcp-style) body edit", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+    vi.mocked(atomicWrite).mockClear();
+
+    addDoc("auto-edited", makeOpenDoc("auto-edited", "/tmp/auto-edited.md"));
+    editBody("auto-edited", "Claude added this");
+    getOrCreateDocument("auto-edited")
+      .getMap(Y_MAP_DOCUMENT_META)
+      .set(Y_MAP_SAVED_AT_VERSION, Date.now());
+
+    await autoSaveAllToDisk();
+
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+
+  // After a save the doc is clean; a second autosave pass with no new edit
+  // must not write again.
+  it("does not re-write a doc after it was saved with no further edits", async () => {
+    const { atomicWrite } = await import("../../src/server/file-io/index.js");
+
+    addDoc("auto-once", makeOpenDoc("auto-once", "/tmp/auto-once.md"));
+    editBody("auto-once", "edit once");
+    getOrCreateDocument("auto-once")
+      .getMap(Y_MAP_DOCUMENT_META)
+      .set(Y_MAP_SAVED_AT_VERSION, Date.now());
+
+    vi.mocked(atomicWrite).mockClear();
+    await autoSaveAllToDisk();
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+
+    // Second pass — no new edit, so no write.
+    vi.mocked(atomicWrite).mockClear();
+    await autoSaveAllToDisk();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 });
