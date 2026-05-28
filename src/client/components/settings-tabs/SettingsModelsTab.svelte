@@ -167,9 +167,7 @@ async function runLegacyMigration() {
         {@const bucket = grouped.get(provider) ?? []}
         {#if bucket.length > 0}
           <div>
-            <div
-              style="font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;"
-            >
+            <div class="settings-section-label">
               {PROVIDER_LABEL[provider]}
             </div>
             <div style="display: flex; flex-direction: column; gap: 4px;">
