@@ -203,16 +203,33 @@ test("PR2: two overlapping comments produce non-overlapping bubbles", async ({ p
     .toBe(true);
 });
 
-test("PR3: leader lines render and slope with collision adjustment", async ({ page }) => {
+// Extract (startY, endY) from a `bezierLeaderPath` output:
+//   "M sx.x,sy.y C cp1x,sy.y cp2x,ey.y ex.x,ey.y"
+// Both Y coordinates are 1dp-rounded by the helper, so a tight numeric
+// extraction is safe and platform-stable.
+function extractStartEndY(d: string): { startY: number; endY: number } | null {
+  // M <sx>,<sy> C <cp1x>,<cp1y> <cp2x>,<cp2y> <ex>,<ey>
+  const m = d.match(
+    /^M -?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?) C -?\d+(?:\.\d+)?,-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?,-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)$/,
+  );
+  if (!m) return null;
+  const startY = parseFloat(m[1]);
+  const endY = parseFloat(m[2]);
+  if (!Number.isFinite(startY) || !Number.isFinite(endY)) return null;
+  return { startY, endY };
+}
+
+test("PR3 (C-3): bezier leaders render and slope with collision adjustment", async ({ page }) => {
   // Two adjacent comments on the same line force a collision: the lower
   // bubble's `adjTop > rawTop`, so its leader connects raw editor anchor
-  // to pushed-down bubble (sloped). The upper bubble is uncollided, so its
-  // leader's `y2 - y1 === LEADER_BUBBLE_INSET_PX` (12) exactly.
+  // to pushed-down bubble (visibly tall bezier). The upper bubble is
+  // uncollided, so its leader's `endY - startY === LEADER_BUBBLE_INSET_PX`
+  // (12) exactly.
   //
-  // We read `y1`/`y2` directly off the SVG `<line>` attributes — these are
-  // the values the component wrote, untainted by viewport scroll, device
-  // pixel rounding, or layer-relative coordinate math (lesson #71). Sort
-  // by `y1` since `placeable` is annotation-array order, not visual order.
+  // We extract startY/endY from the SVG `<path>` `d` attribute — these are
+  // the values the component wrote, untainted by viewport scroll or device
+  // pixel rounding (lesson #71). Sort by startY since `placeable` is
+  // annotation-array order, not visual order.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
     from: TITLE_FROM,
@@ -234,43 +251,92 @@ test("PR3: leader lines render and slope with collision adjustment", async ({ pa
 
   const leaderSvg = page.locator("[data-testid='margin-leaders-right']");
   await expect(leaderSvg).toHaveCount(1, { timeout: 5_000 });
-  const lines = leaderSvg.locator("line[data-annotation-id]");
-  await expect(lines).toHaveCount(2, { timeout: 5_000 });
+  const leaders = leaderSvg.locator("path[data-annotation-id]");
+  await expect(leaders).toHaveCount(2, { timeout: 5_000 });
 
-  // Poll until the collision sweep has produced a visibly sloped lower line.
-  // The `> 12` predicate is what proves `adjTop > rawTop` (a real push), not
-  // just the constant LEADER_BUBBLE_INSET_PX offset.
+  // Poll until the collision sweep has produced a visibly tall lower leader.
+  // The `> 12` predicate proves `adjTop > rawTop` (a real push), not just
+  // the constant LEADER_BUBBLE_INSET_PX offset.
   await expect
     .poll(
       async () => {
-        const ys = await lines.evaluateAll((els) =>
-          els.map((el) => ({
-            y1: parseFloat(el.getAttribute("y1") ?? "NaN"),
-            y2: parseFloat(el.getAttribute("y2") ?? "NaN"),
-          })),
-        );
+        const ds = await leaders.evaluateAll((els) => els.map((el) => el.getAttribute("d") ?? ""));
+        const ys = ds
+          .map(extractStartEndY)
+          .filter((v): v is { startY: number; endY: number } => v !== null);
         if (ys.length !== 2) return null;
-        if (!ys.every(({ y1, y2 }) => Number.isFinite(y1) && Number.isFinite(y2))) return null;
-        const sorted = [...ys].sort((a, b) => a.y1 - b.y1);
-        return sorted[1].y2 - sorted[1].y1;
+        const sorted = [...ys].sort((a, b) => a.startY - b.startY);
+        return sorted[1].endY - sorted[1].startY;
       },
-      { timeout: 5_000, message: "lower leader line must slope (collision pushed bubble down)" },
+      { timeout: 5_000, message: "lower leader must span > 12px (collision push, not just inset)" },
     )
     .toBeGreaterThan(12);
 
-  // Now snapshot once and verify both lines independently. Upper line is
-  // uncollided — `y2 - y1 === LEADER_BUBBLE_INSET_PX` exactly (no float ops
-  // between the assignment and the attribute), with <1px tolerance for any
-  // future subpixel jitter.
-  const ys = await lines.evaluateAll((els) =>
-    els.map((el) => ({
-      y1: parseFloat(el.getAttribute("y1") ?? "NaN"),
-      y2: parseFloat(el.getAttribute("y2") ?? "NaN"),
-    })),
+  // Snapshot once and verify both leaders independently. Upper leader is
+  // uncollided — `endY - startY === LEADER_BUBBLE_INSET_PX` (12) within 1px
+  // tolerance for the 1dp rounding in `bezierLeaderPath`.
+  const ds = await leaders.evaluateAll((els) => els.map((el) => el.getAttribute("d") ?? ""));
+  const ys = ds
+    .map(extractStartEndY)
+    .filter((v): v is { startY: number; endY: number } => v !== null);
+  const [upper, lower] = [...ys].sort((a, b) => a.startY - b.startY);
+  expect(Math.abs(upper.endY - upper.startY - 12)).toBeLessThan(1);
+  expect(lower.endY - lower.startY).toBeGreaterThan(12);
+});
+
+test("C-3: per-author stroke color (Claude on right) + anchor dot count matches bubbles", async ({
+  page,
+}) => {
+  // Two Claude-authored comments give us a deterministic right-side render
+  // with `data-tandem-author="claude"` on every path + circle. Anchor-dot
+  // count must equal bubble count per side (one dot per pending placeable).
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_FROM + 4,
+    text: "first claude",
+    textSnapshot: TITLE_TEXT.slice(0, 4),
+  });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM + 5,
+    to: TITLE_TO,
+    text: "second claude",
+    textSnapshot: TITLE_TEXT.slice(5),
+  });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+
+  const rightLeaders = page.locator("[data-testid='margin-leaders-right']");
+  await expect(rightLeaders).toHaveCount(1, { timeout: 5_000 });
+
+  const rightBubbles = page.locator(
+    "[data-testid='margin-column-right'] [data-testid^='margin-bubble-']",
   );
-  const [upper, lower] = [...ys].sort((a, b) => a.y1 - b.y1);
-  expect(Math.abs(upper.y2 - upper.y1 - 12)).toBeLessThan(1);
-  expect(lower.y2 - lower.y1).toBeGreaterThan(12);
+  await expect(rightBubbles).toHaveCount(2, { timeout: 5_000 });
+
+  // Per-author stroke on the path attribute (resolution to the CSS variable
+  // is unit-tested elsewhere; here we verify the attribute itself).
+  const claudePaths = rightLeaders.locator("path[data-tandem-author='claude']");
+  await expect(claudePaths).toHaveCount(2, { timeout: 5_000 });
+  const strokes = await claudePaths.evaluateAll((els) =>
+    els.map((el) => el.getAttribute("stroke")),
+  );
+  for (const stroke of strokes) {
+    expect(stroke).toBe("var(--tandem-author-claude)");
+  }
+
+  // Anchor dots: count matches placeable bubbles per side; testid is
+  // non-id-bearing (ADR-027 — note IDs are NOT a queryable testid surface).
+  // Per-id queries continue to use `data-annotation-id` if needed.
+  const rightDots = rightLeaders.locator("circle[data-testid='margin-anchor-dot']");
+  await expect(rightDots).toHaveCount(2, { timeout: 5_000 });
+  const claudeDots = rightLeaders.locator(
+    "circle[data-testid='margin-anchor-dot'][data-tandem-author='claude']",
+  );
+  await expect(claudeDots).toHaveCount(2, { timeout: 5_000 });
 });
 
 test("PR2: comment with a reply shows reply count in the bubble", async ({ page }) => {
