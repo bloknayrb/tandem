@@ -30,6 +30,7 @@ import { acceptPending, dismissPending } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
+import { atomicWrite } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange, refreshAllRanges } from "../positions.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -620,30 +621,47 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_exportAnnotations",
-    "Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files.",
+    "Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files. Set writeToDisk:true to additionally write a sharable sidecar file (e.g. `<doc>.annotations.json`) next to the document.",
     {
       format: ExportFormatSchema.optional().describe("Output format (default: markdown)"),
       documentId: z
         .string()
         .optional()
         .describe("Target document ID (defaults to active document)"),
+      writeToDisk: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true, write the export to a sidecar file next to the document so it can be shared/backed up. Defaults to <docPath>.annotations.json (or .annotations.md for markdown). Overwrites any existing sidecar.",
+        ),
+      outputPath: z
+        .string()
+        .optional()
+        .describe(
+          "Custom absolute path for the sidecar file (only used when writeToDisk is true). Defaults to <docPath>.annotations.{json|md}.",
+        ),
     },
-    withErrorBoundary("tandem_exportAnnotations", async ({ format, documentId }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
+    withErrorBoundary(
+      "tandem_exportAnnotations",
+      async ({ format, documentId, writeToDisk, outputPath }) => {
+        const da = getDocAndAnnotations(documentId);
+        if (!da) return noDocumentError();
 
-      const annotations = refreshAllRanges(
-        collectAnnotations(da.map, da.docHash),
-        da.ydoc,
-        da.map,
-      ).map((r) => r.annotation);
-      // Notes are user-private (ADR-027) — exclude from exports.
-      const exportable = annotations.filter((a) => a.type !== "note");
-      const { ydoc } = da;
+        const annotations = refreshAllRanges(
+          collectAnnotations(da.map, da.docHash),
+          da.ydoc,
+          da.map,
+        ).map((r) => r.annotation);
+        // Notes are user-private (ADR-027) — exclude from exports.
+        const exportable = annotations.filter((a) => a.type !== "note");
+        const { ydoc, filePath } = da;
 
-      const repliesMap = getRepliesMap(ydoc);
+        const repliesMap = getRepliesMap(ydoc);
 
-      if (format === "json") {
+        // Build the enriched JSON list up-front. It is derived from the already
+        // note-filtered `exportable` and is the ONLY annotation collection
+        // serialized to disk, so user-private notes (ADR-027) can never leak
+        // into the sidecar.
         const fullText = extractText(ydoc);
         const enriched = exportable.map((ann) => ({
           ...ann,
@@ -654,12 +672,49 @@ export function registerAnnotationTools(server: McpServer): void {
             Math.min(fullText.length, ann.range.to),
           ),
         }));
-        return mcpSuccess({ annotations: enriched, count: enriched.length });
-      }
 
-      const markdown = exportAnnotations(ydoc, exportable);
-      return mcpSuccess({ markdown, count: exportable.length });
-    }),
+        const isJson = format === "json";
+        // The markdown summary is computed once and reused for both the
+        // response and (when requested) the sidecar — no double work.
+        const markdown = isJson ? undefined : exportAnnotations(ydoc, exportable);
+
+        // Sidecar write (#314): persist a sharable export next to the document.
+        let writtenPath: string | undefined;
+        if (writeToDisk) {
+          // `upload://` (and scratchpad `upload://scratchpad/...`) paths are
+          // synthetic — there is no stable filesystem location to write next to.
+          if (filePath.startsWith("upload://")) {
+            return mcpError(
+              "INVALID_PATH",
+              "Cannot write an annotation sidecar for an uploaded or scratchpad document — it has no file on disk. Save the document to a real path first.",
+            );
+          }
+
+          // Overwrite-on-collision is intentional: the sidecar mirrors the
+          // current annotation state, so a stale copy should be replaced.
+          const sidecarPath = outputPath ?? `${filePath}.annotations.${isJson ? "json" : "md"}`;
+          const contents = isJson
+            ? JSON.stringify({ annotations: enriched, count: enriched.length }, null, 2)
+            : (markdown ?? "");
+          await atomicWrite(sidecarPath, contents);
+          writtenPath = sidecarPath;
+        }
+
+        if (isJson) {
+          return mcpSuccess({
+            annotations: enriched,
+            count: enriched.length,
+            ...(writtenPath ? { writtenPath } : {}),
+          });
+        }
+
+        return mcpSuccess({
+          markdown,
+          count: exportable.length,
+          ...(writtenPath ? { writtenPath } : {}),
+        });
+      },
+    ),
   );
 
   server.tool(

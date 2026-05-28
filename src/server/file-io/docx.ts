@@ -30,21 +30,25 @@ export async function loadDocx(content: Buffer): Promise<string> {
  * Includes a text snippet from the document for context.
  */
 export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string {
-  if (annotations.length === 0) {
+  // Defense-in-depth (ADR-027): notes are user-private and must never appear in
+  // an export, regardless of what the caller passes. The MCP tool already
+  // filters them out, but this function is privacy-safe on its own.
+  const visible = annotations.filter((a) => a.type !== "note");
+  if (visible.length === 0) {
     return "# Document Review\n\nNo annotations found.";
   }
 
   const fragment = doc.getXmlFragment("default");
   const fullText = extractFullText(fragment);
 
-  // Group by derived category using field presence, not raw type
-  type GroupKey = "highlights" | "comments" | "suggestions" | "notes";
+  // Group by derived category using field presence, not raw type.
+  // Notes are already filtered out above (ADR-027), so there is no notes group.
+  type GroupKey = "highlights" | "comments" | "suggestions";
   const groups: Partial<Record<GroupKey, Annotation[]>> = {};
-  for (const ann of annotations) {
+  for (const ann of visible) {
     let key: GroupKey;
     if (ann.type === "highlight") key = "highlights";
     else if (ann.suggestedText !== undefined) key = "suggestions";
-    else if (ann.type === "note") key = "notes";
     else key = "comments";
     if (!groups[key]) groups[key] = [];
     groups[key]?.push(ann);
@@ -56,10 +60,9 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
     highlights: "Highlights",
     comments: "Comments",
     suggestions: "Suggestions",
-    notes: "Notes",
   };
 
-  const groupOrder: GroupKey[] = ["highlights", "comments", "suggestions", "notes"];
+  const groupOrder: GroupKey[] = ["highlights", "comments", "suggestions"];
 
   for (const key of groupOrder) {
     const anns = groups[key];
