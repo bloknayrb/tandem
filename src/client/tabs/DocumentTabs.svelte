@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
 import type { OpenTab } from "../types.js";
@@ -64,16 +65,59 @@ function guardedClose(tabId: string) {
 let scrollEl: HTMLDivElement | undefined = $state();
 let canScrollLeft = $state(false);
 let canScrollRight = $state(false);
+// Reactive: drive the per-tab drop indicator.
 let draggedId = $state<string | null>(null);
 let dropTarget = $state<{ id: string; side: "left" | "right" } | null>(null);
 
-function clearDragState() {
-  draggedId = null;
-  dropTarget = null;
+// Non-reactive gesture bookkeeping — read only inside imperative handlers,
+// never in the template or a $derived (same pattern as `closingIds`).
+let pointerId: number | null = null;
+let pointerStartX = 0;
+let pointerStartY = 0;
+let dragging = false; // crossed the movement threshold?
+let captureEl: HTMLElement | null = null;
+
+const DRAG_THRESHOLD_PX = 5;
+
+function onWindowPointerMove(e: PointerEvent) {
+  handlePointerMove(e);
+}
+function onWindowPointerUp(e: PointerEvent) {
+  handlePointerUp(e);
+}
+function onWindowPointerCancel(e: PointerEvent) {
+  if (pointerId !== null && e.pointerId === pointerId) clearDragState();
+}
+function onWindowKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape") clearDragState();
 }
 
+function clearDragState() {
+  if (captureEl && pointerId !== null) {
+    try {
+      captureEl.releasePointerCapture(pointerId);
+    } catch {
+      // capture may already be lost (element unmounted) — ignore
+    }
+  }
+  window.removeEventListener("pointermove", onWindowPointerMove);
+  window.removeEventListener("pointerup", onWindowPointerUp);
+  window.removeEventListener("pointercancel", onWindowPointerCancel);
+  window.removeEventListener("keydown", onWindowKeyDown);
+  draggedId = null;
+  dropTarget = null;
+  pointerId = null;
+  dragging = false;
+  captureEl = null;
+}
+
+// Safety net: a component unmount (or HMR) mid-drag would otherwise leak the
+// window listeners, since clearDragState is only reached via pointer/keyboard
+// events that won't fire after teardown. clearDragState is idempotent.
+onDestroy(clearDragState);
+
 // Clear drag state if the dragged or target tab is unmounted mid-drag.
-// dragend doesn't fire reliably when the source element leaves the DOM.
+// pointerup doesn't fire reliably when the source element leaves the DOM.
 // No-op unless an id has actually disappeared — must NOT become a broad
 // clearDragState() (would null draggedId on every Yjs awareness ping).
 $effect(() => {
@@ -124,49 +168,91 @@ $effect(() => {
   }
 });
 
-// DnD handlers
-function handleDragStart(e: DragEvent, id: string) {
+// Pointer-based reorder. HTML5 DnD can't be used: in the Tauri desktop app
+// `dragDropEnabled: true` (required by native file-drop-to-open) makes the
+// WebView swallow all HTML5 drag events. Pointer events are not suppressed and
+// work identically in the browser, so this single path covers both.
+function handleTabPointerDown(e: PointerEvent, id: string) {
+  if (e.button !== 0 || singleTab) return;
+  pointerId = e.pointerId;
+  pointerStartX = e.clientX;
+  pointerStartY = e.clientY;
+  dragging = false;
   draggedId = id;
-  if (e.dataTransfer) {
-    e.dataTransfer.setData("text/plain", id);
-    e.dataTransfer.effectAllowed = "move";
+  captureEl = e.currentTarget as HTMLElement;
+  try {
+    captureEl.setPointerCapture(e.pointerId);
+  } catch {
+    // setPointerCapture can throw if the pointer is already gone — ignore
   }
+  // Listeners live on window (not captureEl) so cleanup is reliable even if
+  // the source tab unmounts mid-gesture.
+  window.addEventListener("pointermove", onWindowPointerMove);
+  window.addEventListener("pointerup", onWindowPointerUp);
+  window.addEventListener("pointercancel", onWindowPointerCancel);
+  window.addEventListener("keydown", onWindowKeyDown);
+  // Deliberately no preventDefault here: a press with no movement must still
+  // fire the tab's onclick → switch.
 }
 
-function handleDragOver(e: DragEvent, id: string) {
-  // Gate preventDefault on draggedId so foreign drags (file from Explorer,
-  // reachable because tauri dragDropEnabled is false) get the OS no-drop
-  // cursor instead of being silently swallowed.
-  if (!draggedId) return;
+function tabElementAtPoint(clientX: number, clientY: number): HTMLElement | null {
+  const el = document
+    .elementFromPoint(clientX, clientY)
+    ?.closest('[data-testid^="tab-"][role="tab"]');
+  return (el as HTMLElement) ?? null;
+}
+
+function handlePointerMove(e: PointerEvent) {
+  if (pointerId === null || e.pointerId !== pointerId || !draggedId) return;
+  if (!dragging) {
+    const dx = e.clientX - pointerStartX;
+    const dy = e.clientY - pointerStartY;
+    if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    dragging = true;
+  }
   e.preventDefault();
-  if (draggedId === id) {
+  const overEl = tabElementAtPoint(e.clientX, e.clientY);
+  const overId = overEl?.getAttribute("data-testid")?.slice("tab-".length) ?? null;
+  if (!overEl || !overId || overId === draggedId) {
     dropTarget = null;
     return;
   }
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const rect = overEl.getBoundingClientRect();
   const midX = rect.left + rect.width / 2;
   const side = e.clientX < midX ? "left" : "right";
-  dropTarget = { id, side };
+  dropTarget = { id: overId, side };
 }
 
-function handleDrop(e: DragEvent, targetId: string) {
-  e.preventDefault();
-  const fromId = draggedId || e.dataTransfer?.getData("text/plain") || "";
-  if (fromId && fromId !== targetId && reorder) {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const midX = rect.left + rect.width / 2;
-    const side = e.clientX < midX ? "left" : "right";
-    reorder(fromId, targetId, side);
+function handlePointerUp(e: PointerEvent) {
+  if (pointerId === null || e.pointerId !== pointerId) return;
+  const wasDragging = dragging;
+  if (
+    wasDragging &&
+    draggedId &&
+    dropTarget &&
+    dropTarget.id !== draggedId &&
+    reorder &&
+    tabs.some((t) => t.id === draggedId)
+  ) {
+    reorder(draggedId, dropTarget.id, dropTarget.side);
+  }
+  if (wasDragging) {
+    // A finished drag may emit a trailing synthetic click that would fire the
+    // tab's onclick → switch. Swallow it. A no-move press installs nothing, so
+    // plain click-to-switch is unaffected. The setTimeout(0) fallback removes
+    // the listener if no click arrives (a drag ending over a different tab
+    // often fires no click at all) so it can never eat a later legit click.
+    let timer: ReturnType<typeof setTimeout>;
+    const suppress = (ev: Event) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      window.removeEventListener("click", suppress, true);
+      clearTimeout(timer);
+    };
+    window.addEventListener("click", suppress, true);
+    timer = setTimeout(() => window.removeEventListener("click", suppress, true), 0);
   }
   clearDragState();
-}
-
-function handleDragEnd() {
-  clearDragState();
-}
-
-function handleDragLeave() {
-  dropTarget = null;
 }
 
 // Keyboard reordering (Alt+Arrow swaps with neighbor)
@@ -236,12 +322,7 @@ $effect(() => {
         isActive={tab.id === activeTabId}
         onswitch={onTabSwitch}
         onclose={guardedClose}
-        draggable={!singleTab}
-        ondragstart={handleDragStart}
-        ondragover={handleDragOver}
-        ondrop={handleDrop}
-        ondragend={handleDragEnd}
-        ondragleave={handleDragLeave}
+        onpointerdown={handleTabPointerDown}
         dropIndicator={dropTarget?.id === tab.id ? dropTarget.side : null}
         onkeydown={handleKeyDown}
       />

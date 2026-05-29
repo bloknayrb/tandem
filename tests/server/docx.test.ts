@@ -347,7 +347,7 @@ describe("exportAnnotations", () => {
     expect(result).toContain("No annotations found");
   });
 
-  it("exports notes under the Notes group heading", () => {
+  it("excludes notes entirely (ADR-027 defense-in-depth)", () => {
     loadHtml("<p>Hello world test content</p>");
 
     const annotations: Annotation[] = [
@@ -359,9 +359,36 @@ describe("exportAnnotations", () => {
       }),
     ];
 
+    // A list of only notes is treated as empty — notes are user-private and
+    // must never appear in an export, regardless of the caller.
     const result = exportAnnotations(doc, annotations);
-    expect(result).toContain("## Notes");
-    expect(result).toContain("Personal reminder");
+    expect(result).not.toContain("## Notes");
+    expect(result).not.toContain("Personal reminder");
+    expect(result).toContain("No annotations found");
+  });
+
+  it("filters out notes even when mixed with visible annotations", () => {
+    loadHtml("<p>Hello world test content</p>");
+
+    const annotations: Annotation[] = [
+      makeAnnotation({
+        id: "c1",
+        type: "comment",
+        range: { from: 0, to: 5 },
+        content: "Public comment",
+      }),
+      makeAnnotation({
+        id: "n1",
+        type: "note",
+        range: { from: 6, to: 11 },
+        content: "Private reminder",
+      }),
+    ];
+
+    const result = exportAnnotations(doc, annotations);
+    expect(result).toContain("Public comment");
+    expect(result).not.toContain("Private reminder");
+    expect(result).not.toContain("## Notes");
   });
 
   it("generates markdown grouped by type", () => {

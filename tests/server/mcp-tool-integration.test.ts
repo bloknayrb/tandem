@@ -6,11 +6,14 @@
  * mcpSuccess/mcpError response formatting.
  */
 
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, it } from "vitest";
-import { registerAnnotationTools } from "../../src/server/mcp/annotations.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractMarkdown, extractText } from "../../src/server/mcp/document-model.js";
@@ -29,8 +32,10 @@ import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
+const sidecarTempFiles: string[] = [];
 
 async function setupMcpClient(): Promise<Client> {
   const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
@@ -56,6 +61,21 @@ function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
   populateYDoc(ydoc, text);
   addDoc(id, { id, filePath: `/tmp/${id}.md`, format: "md", readOnly: false, source: "file" });
+  setActiveDocId(id);
+  return ydoc;
+}
+
+/** Register a doc at an explicit filePath (used for sidecar-export disk writes). */
+function setupDocAtPath(id: string, text: string, filePath: string, source = "file") {
+  const ydoc = getOrCreateDocument(id);
+  populateYDoc(ydoc, text);
+  addDoc(id, {
+    id,
+    filePath,
+    format: "md",
+    readOnly: false,
+    source: source as "file" | "upload",
+  });
   setActiveDocId(id);
   return ydoc;
 }
@@ -325,6 +345,247 @@ describe("MCP tool integration — annotation tools", () => {
     expect(filteredParsed.data.annotations.every((a: Annotation) => a.author === "import")).toBe(
       true,
     );
+  });
+});
+
+describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)", () => {
+  afterEach(async () => {
+    for (const f of sidecarTempFiles.splice(0)) {
+      await fs.rm(f, { force: true });
+    }
+  });
+
+  function uniqueDocPath(): string {
+    return join(tmpdir(), `tandem-export-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+  }
+
+  it("writes a JSON sidecar next to the document and omits notes (ADR-027)", async () => {
+    const docPath = uniqueDocPath();
+    const sidecarPath = `${docPath}.annotations.json`;
+    sidecarTempFiles.push(sidecarPath);
+
+    const ydoc = setupDocAtPath("mcp-export-json", "Hello world test content", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // A Claude comment (should appear) and a user-private note (must NOT appear).
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "A public comment");
+    createAnnotation(map, ydoc, "note", rangeOf(6, 11, ydoc), "A private reminder");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: { format: "json", writeToDisk: true },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.writtenPath).toBe(sidecarPath);
+    // Response itself excludes the note.
+    expect(parsed.data.count).toBe(1);
+
+    const raw = await fs.readFile(sidecarPath, "utf-8");
+    // The note content must be entirely absent from the on-disk sidecar.
+    expect(raw).not.toContain("A private reminder");
+    expect(raw).toContain("A public comment");
+
+    const onDisk = JSON.parse(raw);
+    expect(onDisk.count).toBe(1);
+    expect(onDisk.annotations).toHaveLength(1);
+    expect(onDisk.annotations[0].type).toBe("comment");
+    expect(onDisk.annotations.some((a: Annotation) => a.type === "note")).toBe(false);
+  });
+
+  it("writes a markdown sidecar with the .annotations.md extension", async () => {
+    const docPath = uniqueDocPath();
+    const sidecarPath = `${docPath}.annotations.md`;
+    sidecarTempFiles.push(sidecarPath);
+
+    const ydoc = setupDocAtPath("mcp-export-md", "Hello world test content", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "A public comment");
+    createAnnotation(map, ydoc, "note", rangeOf(6, 11, ydoc), "A private reminder");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: { writeToDisk: true },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.writtenPath).toBe(sidecarPath);
+
+    const raw = await fs.readFile(sidecarPath, "utf-8");
+    expect(raw).toContain("# Document Review");
+    expect(raw).toContain("A public comment");
+    expect(raw).not.toContain("A private reminder");
+  });
+
+  it("honors a custom outputPath", async () => {
+    const docPath = uniqueDocPath();
+    const customPath = join(
+      tmpdir(),
+      `tandem-custom-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    );
+    sidecarTempFiles.push(customPath);
+
+    const ydoc = setupDocAtPath("mcp-export-custom", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Custom path comment");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: { format: "json", writeToDisk: true, outputPath: customPath },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.writtenPath).toBe(customPath);
+    const raw = await fs.readFile(customPath, "utf-8");
+    expect(raw).toContain("Custom path comment");
+  });
+
+  it("rejects writeToDisk for upload:// (and scratchpad) documents", async () => {
+    const ydoc = setupDocAtPath(
+      "mcp-export-upload",
+      "Hello world",
+      "upload://abc123/uploaded.md",
+      "upload",
+    );
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "Some comment");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: { format: "json", writeToDisk: true },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("INVALID_PATH");
+  });
+
+  it("does not write a sidecar when writeToDisk is omitted", async () => {
+    const docPath = uniqueDocPath();
+    const sidecarPath = `${docPath}.annotations.json`;
+
+    const ydoc = setupDocAtPath("mcp-export-nodisk", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "A comment");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: { format: "json" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.writtenPath).toBeUndefined();
+    await expect(fs.access(sidecarPath)).rejects.toThrow();
+  });
+
+  // For Zod schema rejections (refine failures), the MCP server returns a
+  // content payload whose `text` starts with "MCP error -32602: ...". This is
+  // a separate response shape from handler-level mcpError() (which returns
+  // structured JSON). Tests that expect Zod rejection use rawErrorText().
+  function rawErrorText(result: { content: Array<{ type: string; text?: string }> }) {
+    return result.content.find((c) => c.type === "text")?.text ?? "";
+  }
+
+  it("rejects a relative outputPath at schema level", async () => {
+    const docPath = uniqueDocPath();
+    const ydoc = setupDocAtPath("mcp-export-relative", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: { format: "json", writeToDisk: true, outputPath: "subdir/foo.json" },
+    });
+    const errText = rawErrorText(result);
+    expect(errText).toMatch(/MCP error/);
+    expect(errText).toMatch(/absolute path/i);
+  });
+
+  it("appends default sidecar filename when outputPath is an existing directory", async () => {
+    const docPath = uniqueDocPath();
+    const targetDir = join(
+      tmpdir(),
+      `tandem-export-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    await fs.mkdir(targetDir, { recursive: true });
+    const expectedFile = join(targetDir, `${docPath.split("/").pop()}.annotations.json`);
+
+    const ydoc = setupDocAtPath("mcp-export-dir", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "dir-target comment");
+
+    try {
+      const result = await client.callTool({
+        name: "tandem_exportAnnotations",
+        arguments: { format: "json", writeToDisk: true, outputPath: targetDir },
+      });
+      const parsed = parseResult(result);
+      expect(parsed.error).toBe(false);
+      expect(parsed.data.writtenPath).toBe(expectedFile);
+      const raw = await fs.readFile(expectedFile, "utf-8");
+      expect(raw).toContain("dir-target comment");
+    } finally {
+      await fs.rm(targetDir, { recursive: true, force: true });
+    }
+  });
+
+  // Windows-prefix variants are rejected at the schema level (via the second
+  // Zod refine) on every platform — defense in depth even on POSIX servers
+  // since a Windows client can supply crafted paths to a Linux/macOS sidecar.
+  // On Linux these inputs would also fail the isAbsolute refine; we just
+  // confirm the MCP layer rejects them. The exact message can come from
+  // either refine depending on platform ordering.
+  it("rejects outputPath with \\\\?\\ extended-length prefix", async () => {
+    const docPath = uniqueDocPath();
+    const ydoc = setupDocAtPath("mcp-export-unc1", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: {
+        format: "json",
+        writeToDisk: true,
+        outputPath: "\\\\?\\C:\\Users\\foo\\out.json",
+      },
+    });
+    const errText = rawErrorText(result);
+    expect(errText).toMatch(/MCP error/);
+  });
+
+  it("rejects outputPath with \\\\?\\UNC\\ extended UNC prefix", async () => {
+    const docPath = uniqueDocPath();
+    const ydoc = setupDocAtPath("mcp-export-unc2", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: {
+        format: "json",
+        writeToDisk: true,
+        outputPath: "\\\\?\\UNC\\evil\\share\\out.json",
+      },
+    });
+    const errText = rawErrorText(result);
+    expect(errText).toMatch(/MCP error/);
+  });
+
+  it("rejects outputPath with bare \\\\server\\share UNC", async () => {
+    const docPath = uniqueDocPath();
+    const ydoc = setupDocAtPath("mcp-export-unc3", "Hello world", docPath);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "x");
+
+    const result = await client.callTool({
+      name: "tandem_exportAnnotations",
+      arguments: {
+        format: "json",
+        writeToDisk: true,
+        outputPath: "\\\\server\\share\\out.json",
+      },
+    });
+    const errText = rawErrorText(result);
+    expect(errText).toMatch(/MCP error/);
   });
 });
 

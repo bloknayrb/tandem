@@ -120,6 +120,14 @@ export interface TandemSettings {
   theme: ThemePreference;
   accentHue: number;
   editorFont: EditorFont;
+  /**
+   * Per-format editor-font overrides (#811). Keyed by the normalized document
+   * `format` string (`md` / `docx` / `html` / `txt` — see `detectFormat`),
+   * NOT raw extensions. A present entry overrides the global `editorFont`;
+   * absence falls through to the global setting (no seeded default). See
+   * `resolveFont`.
+   */
+  fontByExtension: Partial<Record<string, EditorFont>>;
   density: Density;
   defaultMode: TandemMode;
   highContrast: boolean;
@@ -194,7 +202,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 12,
+  schemaVersion: 13,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -205,6 +213,7 @@ const DEFAULTS: TandemSettings = {
   theme: "system",
   accentHue: 275,
   editorFont: "sans",
+  fontByExtension: {},
   density: "cozy",
   defaultMode: "tandem",
   highContrast: false,
@@ -296,6 +305,29 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
   return out;
 }
 
+const VALID_EDITOR_FONTS: readonly EditorFont[] = ["serif", "sans", "mono"];
+
+/**
+ * Strip a corrupt or hand-edited `fontByExtension` map down to entries whose
+ * value is a valid {@link EditorFont}. Keys are arbitrary format strings
+ * (`md` / `docx` / etc.); an unknown key is harmless since `resolveFont` only
+ * ever looks up the active document's format. `__proto__`-style keys are
+ * dropped via the explicit guard so a poked-at blob can't pollute the
+ * resolved object's prototype.
+ */
+function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Partial<Record<string, EditorFont>> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+    if (typeof k !== "string" || k.length === 0 || k.length > 32) continue;
+    if (typeof v === "string" && VALID_EDITOR_FONTS.includes(v as EditorFont)) {
+      out[k] = v as EditorFont;
+    }
+  }
+  return out;
+}
+
 /**
  * Read and normalize settings from localStorage.
  *
@@ -359,8 +391,16 @@ function parseModels(raw: unknown): ModelRegistryEntry[] {
  *   `"comfortable"` (the new default, an accepted one-time approximate reset).
  *   `editorWidthPercent` is deleted on read and listed in REMOVED_FIELDS so it
  *   can't resurrect via forward-compat.
+ * v12→v13: introduce `fontByExtension: {}` (#811, per-format editor font).
+ *   Cross-branch fold-in — master shipped this as its own v9→v10 while the
+ *   design-system umbrella independently used v10–v12; renumbered to v13 to keep
+ *   the migration chain monotonic. Structural no-op — `normalizeKnownFields`
+ *   runs `parseFontByExtension` on whatever is present, so the field's value is
+ *   safe regardless of the version step. Empty default preserves fresh-install
+ *   behavior: with no override, `resolveFont` falls back to the global
+ *   `editorFont`.
  */
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -423,6 +463,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       parsed.editorFont === "serif" || parsed.editorFont === "sans" || parsed.editorFont === "mono"
         ? parsed.editorFont
         : DEFAULTS.editorFont,
+    fontByExtension: parseFontByExtension(parsed.fontByExtension),
     density:
       parsed.density === "compact" || parsed.density === "cozy" || parsed.density === "spacious"
         ? parsed.density
@@ -614,20 +655,27 @@ export function loadSettings(): TandemSettings {
         delete next.editorWidthPercent;
         parsed = next;
       }
-      // Cross-branch reconciliation guard. master and the design-system umbrella
-      // independently used schemaVersion 9 — master for `customShortcuts`
-      // (ADR-041), the umbrella for the per-type decorations split. A blob
-      // written by a master-line v9 build is bumped straight to v11 by the pure
-      // version steps above WITHOUT ever running the v8→v9 split, so it still
-      // carries the legacy `showAnnotationDecorations` flag and lacks the
-      // per-type fields. Re-derive the split here, keyed on the field's value
-      // (not version), so an explicit "all marks off" preference isn't silently
-      // reset to all-on. Only the `=== false` case is lossy: true/absent already
-      // map onto the all-on defaults. No-op for umbrella blobs, which deleted
-      // the legacy field during their own split. (`showAnnotationDecorations` is
-      // dropped regardless by normalizeKnownFields, which only emits known keys.)
+      // Cross-branch reconciliation guard (value-keyed, not version-keyed).
+      // Parallel branches diverged on schemaVersion numbering, so a blob can
+      // reach a version past v9 while still carrying the legacy
+      // `showAnnotationDecorations` flag WITHOUT the v8→v9 split having run on it
+      // (a pure version-bump step advanced it past v9 first). Re-derive the split
+      // here, keyed on the field's value so an explicit "all marks off"
+      // preference isn't silently reset to all-on. Only the `=== false` case is
+      // lossy: true/absent already map onto the all-on defaults. No-op for blobs
+      // that already split (per-type fields present). (`showAnnotationDecorations`
+      // is dropped regardless by normalizeKnownFields, which only emits known keys.)
       if (parsed.showAnnotationDecorations === false && parsed.showComments === undefined) {
         parsed = { ...parsed, showComments: false, showHighlights: false, showNotes: false };
+      }
+      if (parsed.schemaVersion === 12) {
+        // v12→v13: introduce `fontByExtension: {}` (#811). Cross-branch fold-in —
+        // master shipped this as v9→v10, but the design-system umbrella had
+        // independently used v10–v12, so it's renumbered to v13 to keep the chain
+        // monotonic. Structural no-op; normalizeKnownFields runs
+        // `parseFontByExtension`. Empty default keeps fresh-install behavior
+        // intact (resolution falls back to defaults).
+        parsed = { ...parsed, schemaVersion: 13 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
@@ -720,6 +768,9 @@ export function mergeAndClampSettings(
     // persist a junk or reserved-colliding override. Callers pass the WHOLE
     // map (shallow-merge), so this validates the full set on every write.
     customShortcuts: parseCustomShortcuts(merged.customShortcuts),
+    // Re-validate per-format overrides so a partial update can't persist a
+    // junk value (e.g. `{ md: "comic-sans" }`).
+    fontByExtension: parseFontByExtension(merged.fontByExtension),
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,
       Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
@@ -750,4 +801,35 @@ export function mergeAndClampSettings(
         ? merged.defaultModelId
         : null,
   };
+}
+
+/**
+ * Resolve the effective editor font for a document of the given normalized
+ * `format` (`md` / `docx` / `html` / `txt` — see `detectFormat`).
+ *
+ * Resolution (post-#811 follow-up): two tiers only.
+ *
+ *   1. Per-format user override (`settings.fontByExtension[format]`)
+ *   2. Global setting (`settings.editorFont`)
+ *
+ * The previous third tier — `DEFAULT_FONT_BY_EXTENSION[format]` — was
+ * removed. Seeded defaults silently overrode the user's global pick
+ * for un-customized formats: changing the global font in Settings did
+ * nothing for `.docx` / `.html` / `.txt` until the user also clicked
+ * through every per-format radio group. The new contract: the global
+ * setting is the true default; per-format overrides exist only where
+ * the user has explicitly chosen one.
+ *
+ * A `null`/`undefined` format (no active tab) skips straight to the
+ * global setting so the root font is never undefined during a Y.Doc swap.
+ */
+export function resolveFont(
+  settings: Pick<TandemSettings, "fontByExtension" | "editorFont">,
+  format: string | null | undefined,
+): EditorFont {
+  if (format) {
+    const override = settings.fontByExtension?.[format];
+    if (override) return override;
+  }
+  return settings.editorFont;
 }

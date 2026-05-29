@@ -49,7 +49,17 @@ test.beforeEach(async () => {
   await mcp.callTool("tandem_open", { filePath: path.join(fixtureDir, "sample.md") });
 });
 
-test.afterEach(async () => {
+test.afterEach(async ({ page }) => {
+  // Clear scratchpad recovery data so typed content doesn't leak into other tests.
+  try {
+    await page.evaluate(() => {
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith("tandem:scratchpad:")) localStorage.removeItem(key);
+      }
+    });
+  } catch {
+    // Page may not be navigated yet if the test failed during setup.
+  }
   await cleanupAllOpenDocuments(mcp);
   await mcp.close();
   try {

@@ -23,8 +23,10 @@ import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { createStore } from "../annotations/store.js";
+import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
+import { annotationFileExists, createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
+import { markClean, registerDirtyObserver } from "../documents/dirty.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
 import { watchFile } from "../file-watcher.js";
@@ -635,7 +637,18 @@ async function finalizeDocOpen(
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
   await initSavedBaseline(doc, resolved);
-  await wireAnnotationStore(id, doc, resolved);
+  // Normal first open of a real file — enable rename recovery (#313).
+  await wireAnnotationStore(id, doc, resolved, { allowRecovery: true });
+
+  // Register the autosave dirty-tracking observer NOW (#851), after content has
+  // been loaded into the body — so the open-time baseline is "clean" and a doc
+  // opened to view but never edited never autosaves. Registering here (not only
+  // in the Hocuspocus swap path) ensures MCP-only edits (tandem_edit) are
+  // tracked even when no browser has connected yet. The observer is keyed by
+  // docId in module state and re-registered on swap, so it survives the Y.Doc
+  // replacement in onLoadDocument.
+  registerDirtyObserver(id, doc);
+
   broadcastOpenDocs();
   ensureAutoSave();
 
@@ -658,9 +671,29 @@ async function finalizeDocOpen(
  * Errors here MUST NOT fail the open — annotations are additive durability,
  * not required for rendering. We log and continue.
  */
-export async function wireAnnotationStore(id: string, doc: Y.Doc, filePath: string): Promise<void> {
+export async function wireAnnotationStore(
+  id: string,
+  doc: Y.Doc,
+  filePath: string,
+  opts?: { allowRecovery?: boolean },
+): Promise<void> {
   try {
     const hash = docHash(filePath);
+
+    // Rename recovery (#313): on a genuine first open, if NO envelope exists at
+    // this document's path-hash, the file may have been renamed (new path -> new
+    // hash), orphaning its annotations. Try to re-associate an orphaned envelope
+    // by exact content match. Runs BEFORE loadAndMerge so the re-keyed envelope
+    // is the one loadAndMerge picks up. Gating on "no existing envelope"
+    // guarantees recovery never steals from a live envelope.
+    //
+    // Only enabled for the normal-open path. Force-reload (clearAndReload)
+    // deliberately clears the envelope and must NOT resurrect a stale orphan;
+    // upload:// recovery is deferred (see rename-recovery.ts header).
+    if (opts?.allowRecovery && !(await annotationFileExists(hash))) {
+      await recoverRenamedEnvelope(doc, hash, filePath);
+    }
+
     const store = createStore(hash, { filePath });
     const cleanup = await loadAndMerge({
       ydoc: doc,
@@ -758,6 +791,12 @@ async function clearAndReload(
 
     // 3. Reattach event queue observers (idempotent — detaches existing first)
     attachObservers(id, doc);
+
+    // The body now mirrors disk content — clear the autosave dirty flag so the
+    // reload itself doesn't trigger a redundant write-back (#851). Done after
+    // attachObservers re-registers the body observer (which preserves the
+    // counter the in-transaction repopulation above may have bumped).
+    markClean(id);
   } catch (err) {
     console.error(
       `[Tandem] clearAndReload: failed for ${id} (format=${format}). Y.Doc may be in a partially cleared state:`,
@@ -934,6 +973,11 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
 
     // 5. Reattach event queue observers (idempotent)
     attachObservers(id, doc);
+
+    // The body now mirrors the on-disk content we just read — clear the
+    // autosave dirty flag so a file-watcher reload doesn't trigger a redundant
+    // write-back (#851).
+    markClean(id);
 
     console.error(`[FileWatcher] reloadFromDisk: complete for ${id}`);
   } finally {

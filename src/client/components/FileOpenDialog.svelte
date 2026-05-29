@@ -3,6 +3,7 @@ import { API_UPLOAD } from "../../shared/api-paths.js";
 import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
+import { pickNativeFilePath } from "../utils/browse-file.js";
 import { API_BASE, readFileForUpload } from "../utils/fileUpload.js";
 import {
   addRecentFile,
@@ -26,7 +27,6 @@ let recentFiles = $state<string[]>(recentFilePaths(loadRecentFiles()));
 
 const extensionList = Array.from(SUPPORTED_EXTENSIONS).sort();
 const acceptAttr = extensionList.join(",");
-const filterExtensions = extensionList.map((ext) => ext.replace(/^\./, ""));
 
 function pushRecent(path: string) {
   const updated = addRecentFile(loadRecentFiles(), path);
@@ -59,16 +59,8 @@ async function openByPath(pathToOpen: string) {
 async function browseNative() {
   if (loading) return;
   try {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({
-      multiple: false,
-      directory: false,
-      title: "Open file in Tandem",
-      filters: [{ name: "Documents", extensions: filterExtensions }],
-    });
-    if (typeof selected === "string") {
-      await openByPath(selected);
-    }
+    const selected = await pickNativeFilePath();
+    if (selected) await openByPath(selected);
   } catch (err) {
     error = `File picker unavailable: ${err instanceof Error ? err.message : err}`;
   }
