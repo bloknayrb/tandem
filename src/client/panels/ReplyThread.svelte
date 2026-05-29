@@ -56,6 +56,10 @@ async function handleSendReply() {
 }
 </script>
 
+<!-- `art-root` is the density-collapse hook: the card dispatcher hides the
+     whole reply region in clamped/stub via `:global(.art-root)`. Plain block
+     wrapper, so full-density vertical flow is unchanged. -->
+<div class="art-root">
 <CommentThread replies={visibleReplies} />
 
 {#if isPending && onReply && !isEditing}
@@ -115,3 +119,13 @@ async function handleSendReply() {
     {visibleReplies.length === 1 ? "reply" : "replies"}
   </div>
 {/if}
+</div>
+
+<style>
+  /* Layout-transparent in full density (no box) so the reply region keeps its
+     exact vertical flow; the dispatcher's clamped/stub `display:none` override
+     wins on specificity. */
+  .art-root {
+    display: contents;
+  }
+</style>

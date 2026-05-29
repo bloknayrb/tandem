@@ -9,6 +9,57 @@
 > Produced by the `stage-c-coordinate` agent team (svelte + annotation-model review →
 > synthesis). Every `c2MustFix` is folded in and tagged `[MF-n]`.
 
+## 0a. Implementation resolution (2026-05-28, after bundle-source + advisor review)
+
+Reading the source-of-truth C4 bundle (`AnnotationBubble.svelte` / `MarginFrame.svelte`
+in `tandem-design-impl`) + an advisor pass during implementation **superseded three
+points of the reviewed design below.** Recorded here (not silently rewritten) so the
+reviewed plan stays an honest artifact:
+
+1. **`stub` now wins over `isActive` AND `isEditing`** (was: "active/editing always →
+   full"). C-1 merged `stub` as a **~28px-wide** track (PR #927). A 28px track cannot
+   hold a full card OR an edit form. In the bundle a collapsed pill never expands
+   *itself* either — `isCollapsed` and `isActive` are orthogonal axes; clicking a pill
+   swaps it for a full bubble in the *parent's* state, and the bundle's pills live in a
+   **128px-wide** `narrow` column that holds that full bubble. Production's 28px track
+   can't, so a stub stays a pip regardless of active/editing. **This fixes the clipping
+   bug** (a full card spilling the 28px track) that motivated C-2. `cardDensity` order
+   is now: `if (mode==='stub') return 'stub'` first; `AnnotationCard.resolvedDensity` is
+   `density==='stub' ? 'stub' : isEditing ? 'full' : density`.
+2. **`[F4]` import carve-out DROPPED as unreachable.** Imports are `.docx`-only and
+   `.docx` uses the legacy `full|off` margin path — it never enters the narrow/stub
+   continuum — so `author` is not an input to `cardDensity` at all (signature is now
+   `{mode, isActive, isEditing}`).
+3. **`[MF-2]` force-active-on-edit is unnecessary**, and **`[MF-1]`/§3 "KEEP the header
+   visible in stub" was wrong** (advisor: the header's badge + name still overflow 28px).
+   The stub recipe additionally hides `.ach-type` and collapses `.ach-author` text
+   (`font-size:0`), leaving only the 6px `.ach-dot` as the pip. Acceptance gate is now a
+   `scrollWidth ≤ clientWidth` E2E assertion (the card fits its column), not "header
+   visible / body hidden". The editing-stub collision mismatch dissolves because a stub
+   passes `height:undefined` regardless of editing.
+
+4. **Active-full-at-narrow fit VERIFIED (advisor blocker, resolved empirically).** The
+   stub-band `scrollWidth ≤ clientWidth` gate runs on a pip that trivially fits; the case
+   that could still clip is the *active/full* card at narrow=160, where a richer card type
+   renders its full body in the slimmest non-stub track. SuggestionCard is the worst case
+   (its `suggestion-diff-{id}` box holds padded, background-filled old→new spans, wider
+   min-content than a plain comment). Added a 4th C-2 E2E spec — a lone suggestion
+   (auto-selected → active → `full` at narrow) with a realistic multi-word `suggestedText`
+   — asserting the same `scrollWidth ≤ clientWidth + 1` gate plus a within-column box check.
+   **It passes:** the diff-box spans wrap inside the 160px track, no horizontal spill. No
+   recipe fix (`min-width:0` / `overflow-wrap`) was needed; if a future card type fails the
+   gate, that's the documented fix.
+
+**UX cut to bless (Bryan's call):** at the stub band (sub-~600px viewport) the margin
+can no longer read or act on a comment in place — it's a navigation pip only. Clicking it
+selects/scrolls but does not expand. Reading/acting requires widening the viewport (the
+narrow band shows a full card) or the side rail. **Second-order consequence:** two
+annotations anchored to the same text line produce overlapping stub pips (the documented
+STUB-NON-PUSH behavior — stubs don't advance the collision cursor), so in dense same-line
+clusters the pips intercept each other's clicks and you can't reliably select the intended
+one. Edge case, not pervasive, but it strengthens the case for the follow-up. A stub-click
+→ side-rail affordance is filed as a follow-up, NOT part of C-2.
+
 ## 0. Sequencing gate `[MF-8]`
 
 C-1 must merge first — it lands the `mode: MarginMode` prop on `MarginColumn`, threads
@@ -173,9 +224,13 @@ tops); do **not** strengthen it to assert raw-top in mixed full+stub stacks.
   left-column note in stub keeps `data-margin-bubble-reply-count='0'`; (6) **no console
   error** across `full→narrow→stub→full→edit` (effect-depth guard); (7) editing-stub does
   not overlap (force-active-on-edit) `[MF-2]`.
+- **E2E** active-full-at-narrow fit (§0a #4, advisor blocker): a lone suggestion →
+  active → `full` at narrow=160; `scrollWidth ≤ clientWidth + 1` + within-column box. The
+  diff box wraps; no spill. (Covers the *active/full* SuggestionCard — the clamped/stub
+  cases hide or collapse the diff, so only this band renders it at the slim track.)
 - **MANUAL** (claude-in-chrome): all 5 variants at `clamped` + `stub`; SuggestionCard
-  diff-box clamp acceptable; **ImportedCard never stub**; stub pip color per type
-  (`-fg-strong`) actually perceivable; reduced-motion unaffected (C-2 adds no motion).
+  diff-box clamp acceptable (inactive); **ImportedCard never stub**; stub pip color per
+  type (`-fg-strong`) actually perceivable; reduced-motion unaffected (C-2 adds no motion).
 - **REGRESSION:** existing `margin-view.spec.ts` suite stays green (C-2 adds a `full`-
   default prop reproducing today's behavior at `mode==='full'`).
 
