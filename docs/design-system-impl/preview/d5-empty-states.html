@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Tandem · D5 Empty States — production render (#896)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  /* Token values transcribed verbatim from index.html (:root / [data-theme] blocks).
+     This previews the SHIPPED EmptyState.svelte output, not the bundle mock —
+     headline is sans 15px/600 (Bryan's sign-off) and the ghost link is fg-muted
+     (a11y override of the bundle's fg-faint). */
+  .theme-light {
+    --tandem-bg: oklch(0.985 0.004 80);
+    --tandem-fg: oklch(0.22 0.012 280);
+    --tandem-surface: oklch(1 0 0);
+    --tandem-surface-muted: oklch(0.975 0.005 80);
+    --tandem-border-strong: oklch(0.86 0.006 280);
+    --tandem-fg-muted: oklch(0.48 0.008 280);
+    --tandem-fg-subtle: oklch(0.54 0.008 280);
+    --tandem-error: oklch(0.55 0.18 25);
+  }
+  .theme-warm {
+    --tandem-bg: oklch(0.945 0.012 70);
+    --tandem-fg: oklch(0.22 0.012 280);
+    --tandem-surface: oklch(0.975 0.005 75);
+    --tandem-surface-muted: oklch(0.960 0.010 75);
+    --tandem-border-strong: oklch(0.84 0.008 75);
+    --tandem-fg-muted: oklch(0.48 0.008 280);
+    --tandem-fg-subtle: oklch(0.54 0.008 280);
+    --tandem-error: oklch(0.55 0.18 25);
+  }
+  .theme-dark {
+    --tandem-bg: oklch(0.22 0.012 280);
+    --tandem-fg: oklch(0.94 0.006 280);
+    --tandem-surface: oklch(0.27 0.012 280);
+    --tandem-surface-muted: oklch(0.25 0.012 280);
+    --tandem-border-strong: oklch(0.42 0.012 280);
+    --tandem-fg-muted: oklch(0.74 0.008 280);
+    --tandem-fg-subtle: oklch(0.70 0.008 280);
+    --tandem-error: #ef4444;
+  }
+  :root { --tandem-r-pill: 9999px; --tandem-font-sans: "SN Pro", "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+  body { margin: 0; font-family: var(--tandem-font-sans); background: #e9e9ee; color: #1a1a1a; }
+  .page { max-width: 1180px; margin: 0 auto; padding: 36px 28px 80px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  .lede { font-size: 13.5px; line-height: 1.6; color: #555; margin: 0 0 6px; max-width: 80ch; }
+  .note { font-size: 12.5px; line-height: 1.6; color: #666; margin: 0 0 28px; max-width: 80ch; }
+  .note code { background: #dcdce2; padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
+
+  .theme-row { margin-bottom: 26px; }
+  .theme-label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #888; margin: 0 0 8px; font-weight: 600; }
+  .frames { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  /* Each frame simulates the editor content track (bg = --tandem-bg). */
+  .frame { background: var(--tandem-bg); border: 1px solid #cdced6; border-radius: 10px; overflow: hidden; }
+  .frame-cap { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--tandem-fg-subtle); padding: 8px 12px 0; }
+
+  /* ── Verbatim from EmptyState.svelte <style> ── */
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 300px; text-align: center; padding: 8px 16px 28px; }
+  .empty-illus { margin-bottom: 22px; line-height: 0; }
+  .empty-heading { font-family: var(--tandem-font-sans); font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--tandem-fg); margin: 0 0 6px; }
+  .empty-sub { font-family: var(--tandem-font-sans); font-size: 13px; line-height: 1.6; color: var(--tandem-fg-subtle); margin: 0 0 20px; max-width: 25ch; text-wrap: pretty; }
+  .empty-sub-secondary { margin: 14px 0 0; color: var(--tandem-fg-faint, var(--tandem-fg-subtle)); }
+  .empty-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .empty-cta { display: inline-flex; align-items: center; gap: 5px; padding: 7px 16px; border-radius: var(--tandem-r-pill); background: var(--tandem-fg); color: var(--tandem-bg); font-family: var(--tandem-font-sans); font-size: 13px; font-weight: 500; letter-spacing: -0.01em; border: none; cursor: pointer; }
+  .empty-link { font-family: var(--tandem-font-sans); font-size: 12.5px; color: var(--tandem-fg-muted); background: none; border: none; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--tandem-border-strong); }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>D5 Empty States — production render</h1>
+  <p class="lede">The shipped <code style="background:#dcdce2;padding:1px 5px;border-radius:4px;font-size:12px">EmptyState.svelte</code> output for #896, framed as the editor content track. Three states × three themes.</p>
+  <p class="note">Two deviations from the bundle D5 mock, both sanctioned: headline is <strong>sans 15px/600</strong> (your sign-off — empty-state headline is chrome, not reading content); the <strong>Open settings</strong> ghost link rests at <code>--tandem-fg-muted</code> (≥5.5:1 all themes) rather than the bundle's <code>--tandem-fg-faint</code>, which fails WCAG AA 4.5:1 (3.2 / 2.9 / 4.0). State B and the four 44×44 extended surfaces are intentionally not built (no production triggers/consumers). Under #842, state A is largely transient — state C is what users dwell on.</p>
+  <div id="root"></div>
+</div>
+
+<script>
+const svgA = `<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="11" y="10" width="36" height="46" rx="3" stroke="var(--tandem-border-strong)" stroke-width="1.2" fill="var(--tandem-surface-muted)"/>
+  <rect x="20" y="17" width="36" height="46" rx="3" stroke="var(--tandem-fg-faint, var(--tandem-fg-subtle))" stroke-width="1.5" fill="var(--tandem-surface)"/>
+  <line x1="27" y1="27" x2="49" y2="27" stroke="var(--tandem-border-strong)" stroke-width="1.1" stroke-linecap="round"/>
+  <line x1="27" y1="33" x2="46" y2="33" stroke="var(--tandem-border-strong)" stroke-width="1.1" stroke-linecap="round"/>
+  <line x1="27" y1="39" x2="49" y2="39" stroke="var(--tandem-border-strong)" stroke-width="1.1" stroke-linecap="round"/>
+  <line x1="27" y1="45" x2="44" y2="45" stroke="var(--tandem-border-strong)" stroke-width="1.1" stroke-linecap="round"/>
+  <circle cx="56" cy="16" r="9" fill="var(--tandem-surface)" stroke="var(--tandem-fg-faint, var(--tandem-fg-subtle))" stroke-width="1.5"/>
+  <line x1="56" y1="11.5" x2="56" y2="20.5" stroke="var(--tandem-fg-faint, var(--tandem-fg-subtle))" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="51.5" y1="16" x2="60.5" y2="16" stroke="var(--tandem-fg-faint, var(--tandem-fg-subtle))" stroke-width="1.5" stroke-linecap="round"/>
+</svg>`;
+const svgC = `<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="13" cy="36" r="9" stroke="var(--tandem-fg-faint, var(--tandem-fg-subtle))" stroke-width="1.5" fill="var(--tandem-surface)"/>
+  <circle cx="13" cy="36" r="3.5" fill="var(--tandem-fg-faint, var(--tandem-fg-subtle))"/>
+  <circle cx="59" cy="36" r="9" stroke="var(--tandem-border-strong)" stroke-width="1.5" fill="var(--tandem-surface-muted)"/>
+  <circle cx="59" cy="36" r="3.5" fill="var(--tandem-border-strong)"/>
+  <line x1="22" y1="36" x2="30" y2="36" stroke="var(--tandem-fg-faint, var(--tandem-fg-subtle))" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="42" y1="36" x2="50" y2="36" stroke="var(--tandem-border-strong)" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="32" y1="31" x2="40" y2="41" stroke="var(--tandem-error)" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="40" y1="31" x2="32" y2="41" stroke="var(--tandem-error)" stroke-width="1.8" stroke-linecap="round"/>
+</svg>`;
+
+const stateA = (claudeLine) => `<div class="empty-state">
+  <div class="empty-illus" aria-hidden="true">${svgA}</div>
+  <p class="empty-heading">Nothing open yet</p>
+  <p class="empty-sub">Click + in the tab bar, or drop a Markdown file here.</p>
+  <div class="empty-actions"><button class="empty-cta">Open file…</button></div>
+  ${claudeLine ? `<p class="empty-sub empty-sub-secondary">Tandem works alongside Claude (the default integration) or any MCP-capable AI client.</p>` : ``}
+</div>`;
+const stateC = `<div class="empty-state">
+  <div class="empty-illus" aria-hidden="true">${svgC}</div>
+  <p class="empty-heading">Server unavailable</p>
+  <p class="empty-sub">Tandem can't reach its sync server. Make sure it's running locally.</p>
+  <div class="empty-actions"><button class="empty-cta">Retry</button><button class="empty-link">Open settings</button></div>
+</div>`;
+
+const cells = [
+  ["A — no doc (Claude idle)", stateA(true)],
+  ["A — no doc (Claude active)", stateA(false)],
+  ["C — server unavailable", stateC],
+];
+const themes = [["Light", "theme-light"], ["Warm", "theme-warm"], ["Dark", "theme-dark"]];
+
+document.getElementById("root").innerHTML = themes.map(([label, cls]) => `
+  <div class="theme-row ${cls}">
+    <p class="theme-label">${label}</p>
+    <div class="frames">
+      ${cells.map(([cap, body]) => `<div class="frame"><div class="frame-cap">${cap}</div>${body}</div>`).join("")}
+    </div>
+  </div>`).join("");
+</script>
+</body>
+</html>

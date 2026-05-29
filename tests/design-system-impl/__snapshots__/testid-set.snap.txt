@@ -105,6 +105,9 @@ editor-font-{*}-btn
 editor-measure-{*}
 editor-root
 editor-stage
+empty-state-open-file
+empty-state-open-settings
+empty-state-retry
 error-boundary-recover-btn
 error-boundary-reload-btn
 file-open-browse
