@@ -85,6 +85,20 @@ export async function convertToMarkdown(
   const sourceDir = path.dirname(docState.filePath);
   let resolvedOutput: string;
   if (outputPath) {
+    // Reject relative paths — they'd silently resolve against the server's CWD,
+    // never the caller's intent (mirrors tandem_exportAnnotations' schema
+    // refine). The isAbsolute guard also lets static analysis prove the
+    // downstream fs.realpath sink is fed an explicitly-validated path
+    // (CodeQL js/path-injection — the sibling export tool's identical realpath
+    // is unflagged precisely because its outputPath carries this guard).
+    if (!path.isAbsolute(outputPath)) {
+      throw Object.assign(
+        new Error(
+          "outputPath must be an absolute path (a relative path would silently resolve to the server's CWD).",
+        ),
+        { code: "INVALID_PATH" },
+      );
+    }
     // Reject UNC + `\\?\` extended-length prefixes pre- and post-resolve.
     // `path.resolve` does NOT normalise `\\?\UNC\…` back to `\\…`, so the
     // bare `\\` check missed that bypass — shared helper closes it.
