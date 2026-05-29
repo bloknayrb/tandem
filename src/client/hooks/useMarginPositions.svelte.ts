@@ -39,12 +39,20 @@ export interface ComputeResult {
  *   `display: none` ancestor) is skipped — it would render as `top: NaNpx`
  *   and defeat the `mapsEqual` tolerance check (NaN-vs-anything is always
  *   "unequal", causing per-frame re-render storms).
+ *
+ * `getLayerTop` is read per iteration (not once before the loop) so the layer
+ * rect and each annotation's `coordsAtPos` read always observe the same layout.
+ * Today this is defensive, not load-bearing: the loop is synchronous (JS
+ * run-to-completion) and `coordsAtPos` is a pure read, so nothing invalidates
+ * layout mid-loop and a read-once `layerTop` would be identical. The per-call
+ * read future-proofs the invariant against a DOM write ever being introduced
+ * into the loop body, and makes the read-consistency contract explicit.
  */
 export function _computeNextPositionsForTesting(
   annotations: readonly Annotation[],
   resolveRange: (ann: Annotation) => { from: number; to: number } | null,
   coordsAtPos: (pos: number) => { top: number },
-  layerTop: number,
+  getLayerTop: () => number,
 ): ComputeResult {
   const positions = new Map<string, number>();
   let attempted = 0;
@@ -56,7 +64,7 @@ export function _computeNextPositionsForTesting(
     try {
       const coords = coordsAtPos(range.from);
       if (!Number.isFinite(coords.top)) continue;
-      positions.set(ann.id, coords.top - layerTop);
+      positions.set(ann.id, coords.top - getLayerTop());
     } catch {
       thrown++;
     }
@@ -128,13 +136,12 @@ export function createMarginPositions(opts: CreateMarginPositionsOpts): MarginPo
       return;
     }
 
-    const layerTop = layer.getBoundingClientRect().top;
     const annotations = opts.getAnnotations();
     const { positions, attempted, thrown } = _computeNextPositionsForTesting(
       annotations,
       (ann) => annotationToPmRange(ann, editor.state.doc, ydoc),
       (pos) => editor.view.coordsAtPos(pos),
-      layerTop,
+      () => layer.getBoundingClientRect().top,
     );
 
     if (attempted > 0 && thrown === attempted) {
