@@ -2,6 +2,7 @@
 import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
+import type { MarginMode } from "../layout/editor-stage.svelte";
 import AnnotationCard from "./AnnotationCard.svelte";
 import { prunePlaceableHeights, resolveCollisions } from "./marginCollision";
 import { bezierLeaderPath, leaderColorForAuthor } from "./marginLeaderGeometry";
@@ -12,6 +13,11 @@ interface Props {
   /** Computed top offset in pixels (relative to the positioning layer), keyed by annotation id. */
   positions: ReadonlyMap<string, number>;
   side: "left" | "right";
+  /** Resolved track mode for this side (`full` | `narrow` | `stub`). The width
+   *  continuum. A column only mounts when its side is visible, so `off` never
+   *  reaches here. Pure pass-through in C-1 — the bubble density variants that
+   *  consume it (clamp-until-active, stub pill) land in C-2. */
+  mode: MarginMode;
   /** Column width in pixels. */
   width: number;
   /** Distance from the column edge to the nearest scroll-container edge. */
@@ -38,6 +44,10 @@ let {
   annotations,
   positions,
   side,
+  // `mode` is accepted but not yet consumed (C-1 is pure pass-through); C-2
+  // derives bubble density from it. Destructured so the prop typechecks and is
+  // ready at the call site without a later signature change.
+  mode: _mode,
   width,
   edgeInset,
   gap,

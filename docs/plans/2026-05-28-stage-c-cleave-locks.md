@@ -90,9 +90,11 @@ The original C-1 → C-2 → C-3 sequence was rejected because:
 
 ### Global Mode, not per-side (architecture F1)
 
-Decision 3 — "stub triggered by viewport width alone, not collision pressure" — is GLOBAL by nature. With no per-side asymmetry source, `leftMode === rightMode` always holds. The only proposed per-side asymmetry was "density → collision pressure → mode," which was independently rejected on cycle grounds. Therefore: `Mode` is global; `leftMode` / `rightMode` enum is YAGNI.
+Decision 3 — "stub triggered by viewport width alone, not collision pressure" — is GLOBAL by nature. With no per-side *width* asymmetry source, the **shrink continuum** (`widthMode`) is global. The only proposed per-side *width* asymmetry was "density → collision pressure → mode," which was independently rejected on cycle grounds. Therefore: the width continuum is a single global `widthMode`; independent per-side *width* state is YAGNI.
 
-Future Stage E (issue #917) is the durable home for re-splitting if a real per-side asymmetry need ever surfaces.
+**AMENDED 2026-05-28 (Bryan):** there IS one sanctioned per-side exception — **presence, not pressure.** A side with no pending annotations collapses to `off` while the other keeps `widthMode`. Presence is a stable binary input (not density-derived), so it introduces no cycle and needs no hysteresis. Consequence: `leftMode`/`rightMode` are NOT YAGNI — they exist as **pure presence-clamps** over the global `widthMode` (`side.hasPending ? widthMode : 'off'`), and `leftMode === rightMode` no longer always holds. What stays YAGNI is *independent per-side width state* (two `$state`/`$effect` pairs). See [stage-c1 §2 + §3.5](2026-05-28-stage-c1-margin-mode-continuum.md), `[MF-10]`/`[MF-11]`.
+
+Future Stage E (issue #917) is the durable home for genuine per-side *width* re-splitting if a real asymmetry need ever surfaces.
 
 ### Single $effect, not two (CRDT F2 + Svelte F1 converge)
 

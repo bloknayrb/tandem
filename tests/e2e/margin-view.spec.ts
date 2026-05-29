@@ -88,6 +88,31 @@ async function setMarginView(
   await page.keyboard.press("Escape");
 }
 
+/**
+ * Create a user NOTE via the selection popup (no `tandem_note` MCP tool exists
+ * — notes are user-only). Notes are LEFT-side annotations, so this is how a
+ * test gives the left margin content; with Stage C-1 empty-collapse, the left
+ * column only mounts when a pending note exists. Returns the new note's id.
+ * Margin view must already be on so the bubble mounts. Selects the first
+ * paragraph's text as the anchor.
+ */
+async function seedNoteViaPopup(
+  page: import("@playwright/test").Page,
+  text: string,
+): Promise<string> {
+  const editor = page.locator(".tiptap");
+  await editor.click();
+  await editor.locator("p").first().selectText();
+  await openAnnotatePopup(page);
+  await page.locator("[data-testid='popup-annotation-input']").fill(text);
+  await page.locator("[data-testid='popup-note-submit']").click();
+  const annNode = page.locator("[data-annotation-id]").last();
+  await expect(annNode).toBeVisible({ timeout: 10_000 });
+  const id = await annNode.getAttribute("data-annotation-id");
+  if (!id) throw new Error("note popup did not yield an annotation id");
+  return id;
+}
+
 test("default off: margin columns are absent from the DOM", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
@@ -120,11 +145,13 @@ test("toggle on: margin columns appear with a bubble for the comment", async ({ 
 
   await setMarginView(page, true);
 
-  // Both columns mount when marginView is on (column visibility itself isn't a
-  // useful Playwright assertion — the columns have no intrinsic height because
-  // their bubble children are absolutely positioned). Assert presence instead.
-  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(1);
+  // The comment is right-side (outbound). Stage C-1 empty-collapse: the LEFT
+  // side has no pending note, so its track collapses and the left column does
+  // NOT mount — only the side with content appears. (Column presence is the
+  // useful assertion; the columns have no intrinsic height since their bubble
+  // children are absolutely positioned.)
   await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
   // The comment bubble shows up in the right column with real geometry (allow
   // rAF + ResizeObserver to settle).
   const rightBubble = page
@@ -626,6 +653,11 @@ test("opening a rail keeps both margin columns (#892 decoupling)", async ({ page
   await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
 
   await setMarginView(page, true);
+  // Give the LEFT side content too (a note): with Stage C-1 empty-collapse the
+  // left column only mounts when a pending note exists, so #892 rail-decoupling
+  // is only observable on the left once a note is present. Without this the
+  // "left stays mounted when the left rail opens" assertion would be vacuous.
+  await seedNoteViaPopup(page, "left-side note");
   const leftCol = page.locator("[data-testid='margin-column-left']");
   const rightCol = page.locator("[data-testid='margin-column-right']");
   const leftHandle = page.locator("[data-testid='left-panel-resize-handle']");
@@ -669,18 +701,21 @@ test("PR3: narrow viewport hides both margin columns", async ({ page }) => {
   await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
 
   await setMarginView(page, true);
-  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(1);
+  // Comment-only doc: right side has content (mounts), left empty-collapses
+  // (Stage C-1). The right column is the "visible at wide" proxy.
   await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
 
-  // Shrink to a width well below threshold (reserve ≈ 544 + min 480 = 1024).
-  await page.setViewportSize({ width: 700, height: 900 });
+  // Shrink to a width well below the stub→off floor (t3 ≈ 600). Below it BOTH
+  // sides go off regardless of content, so even the populated right side hides.
+  await page.setViewportSize({ width: 500, height: 900 });
   await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
   await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(0);
 
-  // Grow back to a wide viewport → columns return.
+  // Grow back to a wide viewport → the populated right column returns.
   await page.setViewportSize({ width: 1600, height: 900 });
-  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(1);
   await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
 });
 
 /**
@@ -705,24 +740,25 @@ test("PR3: boundary resize does not flicker (hysteresis)", async ({ page }) => {
 
   await setMarginView(page, true);
 
-  // Estimated threshold with no rails open: 544 reserve + 480 min editor = 1024.
-  // Drive narrow first, then a 20px overshoot (still inside the 32px deadband
-  // → must remain narrow), then back below. End state: narrow (both hidden).
-  await page.setViewportSize({ width: 1000, height: 900 });
-  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
+  // Stage C-1: hysteresis is tested at the stub→off floor (t3 ≈ 600, rails
+  // closed). The comment is right-side, so the RIGHT column is the populated
+  // probe. Below t3 → off (right hidden); a small overshoot back above t3 but
+  // inside the 32px deadband must NOT re-show it; then drop below again.
+  const right = page.locator("[data-testid='margin-column-right']");
+  await page.setViewportSize({ width: 560, height: 900 }); // < t3 → off
+  await expect(right).toHaveCount(0);
 
-  await page.setViewportSize({ width: 1044, height: 900 });
-  // Inside the hysteresis band → must NOT flip back to visible. Wait for the
-  // resize → ResizeObserver → useViewportWidth rAF debounce → $effect → DOM
-  // chain to settle. `toHaveCount(0)` auto-retries up to its default timeout,
-  // so even if the chain runs longer than nextFrames covers, the assertion
-  // still holds as long as the column stays hidden.
+  await page.setViewportSize({ width: 620, height: 900 }); // in [t3, t3+H) → hold off
   await nextFrames(page);
-  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
-  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(0);
+  await expect(right).toHaveCount(0);
 
-  await page.setViewportSize({ width: 1000, height: 900 });
-  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
+  await page.setViewportSize({ width: 560, height: 900 });
+  await expect(right).toHaveCount(0);
+
+  // Clear the deadband (> t3 + H ≈ 632) → the stub re-shows, proving the column
+  // wasn't simply stuck off.
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect(right).toHaveCount(1);
 });
 
 /**
@@ -779,11 +815,12 @@ test("PR3: narrow-collapse does not overwrite persisted rail visibility", async 
  * reserve whenever margin view was effectively on (defect #1); the grid gives
  * each side its own track. The runtime residual we can assert at the E2E layer:
  * tracks carry the reserve only while margins render (on → non-zero, off → 0),
- * and (since #892) a rail opening does NOT collapse a track. The per-side
- * asymmetry itself (one side 0, the other reserved) is now a pure-function
- * property exercised in editor-stage.test.ts, since at runtime both sides track
- * together. We read the resolved grid-template-columns off the stage — [gutter,
- * marginL, content, marginR, gutter] — so tokens[1]/tokens[3] are the px reserves.
+ * and (since #892) a rail opening does NOT collapse a track. Stage C-1 adds the
+ * runtime per-side asymmetry: a side with no pending annotation empty-collapses
+ * to 0 while the other reserves — so a comment-only doc reserves the right track
+ * and zeroes the left at runtime. We read the resolved grid-template-columns off
+ * the stage — [gutter, marginL, content, marginR, gutter] — so tokens[1]/
+ * tokens[3] are the px reserves.
  */
 async function marginTracks(
   page: import("@playwright/test").Page,
@@ -808,26 +845,28 @@ test("Stage A: tracks reserve only while margins render, rail-independent", asyn
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
 
-  // Margins on, both rails closed → both sides reserve a track.
+  // Comment-only doc, margins on, both rails closed. Stage C-1 takes the
+  // per-side reserve down to ANNOTATION granularity: the RIGHT side has content
+  // (track reserves), the LEFT side has no pending note → empty-collapses to 0.
   await setMarginView(page, true);
-  await expect.poll(async () => (await marginTracks(page)).left).not.toBe("0px");
-  expect((await marginTracks(page)).right).not.toBe("0px");
+  await expect.poll(async () => (await marginTracks(page)).right).not.toBe("0px");
+  expect((await marginTracks(page)).left).toBe("0px");
 
-  // Open the LEFT rail (outline) → tracks UNCHANGED (#892 decoupling): the rail
-  // opening must not collapse either margin's reserve.
+  // Open the LEFT rail (outline) → the right track is UNCHANGED (#892
+  // decoupling); the left stays 0 (still no note — not because the rail opened).
   await page.keyboard.press("Alt+Shift+ArrowLeft");
   await expect(page.locator("[data-testid='left-panel-resize-handle']")).toHaveCount(1, {
     timeout: 3_000,
   });
-  expect((await marginTracks(page)).left).not.toBe("0px");
   expect((await marginTracks(page)).right).not.toBe("0px");
+  expect((await marginTracks(page)).left).toBe("0px");
 
   // Disable margin view → both tracks collapse to 0 (no phantom reserve — the
   // residual of defect #1: the old cascade reserved the full width even off).
   await page.keyboard.press("Alt+Shift+ArrowLeft"); // re-close the left rail
   await setMarginView(page, false);
-  await expect.poll(async () => (await marginTracks(page)).left).toBe("0px");
-  expect((await marginTracks(page)).right).toBe("0px");
+  await expect.poll(async () => (await marginTracks(page)).right).toBe("0px");
+  expect((await marginTracks(page)).left).toBe("0px");
 });
 
 /**
@@ -853,17 +892,194 @@ test("Stage A: margin tracks share the stage's top row (grid-row regression)", a
   await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
 
   await setMarginView(page, true);
-  await expect(page.locator(".margin-track")).toHaveCount(2, { timeout: 5_000 });
+  // Comment-only doc → only the RIGHT track renders (left empty-collapses,
+  // Stage C-1). One rendered `.margin-track` is enough to guard the grid-row
+  // pin — the bug would dump it a full content-height below the stage top.
+  await expect(page.locator(".margin-track")).toHaveCount(1, { timeout: 5_000 });
 
   const deltas = await page.evaluate(() => {
     const stage = document.querySelector("[data-testid='editor-stage']");
     const tracks = [...document.querySelectorAll(".margin-track")];
-    if (!stage || tracks.length !== 2) return null;
+    if (!stage || tracks.length === 0) return null;
     const stageTop = stage.getBoundingClientRect().top;
     return tracks.map((t) => Math.abs(t.getBoundingClientRect().top - stageTop));
   });
   expect(deltas).not.toBeNull();
-  // Each track's top within 1px of the stage top → all in grid row 1. The bug
+  // Each rendered track's top within 1px of the stage top → grid row 1. The bug
   // put them a full content-height (hundreds of px) below.
   for (const delta of deltas as number[]) expect(delta).toBeLessThan(1);
+});
+
+/**
+ * Stage C-1 — the CYCLE REGRESSION the plan review flagged as the HIGH blocker.
+ * The presence-collapse booleans (`getLeftHasPending`/`getRightHasPending`) MUST
+ * read the ungated `visibleAnnotations`, not the `effectivelyOn`-gated render
+ * arrays. If a future refactor re-wires them off the gated arrays, the `$derived`
+ * graph closes a loop through `effectivelyOn` and latches "all-off" — margin view
+ * silently renders NOTHING despite being on with a pending annotation. This test
+ * fails loudly in exactly that case: margin view on + a pending comment must
+ * render the right column AND its bubble.
+ */
+test("C-1: margin view on with a pending comment renders the column (cycle regression)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Margin candidate",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+
+  // The load-bearing assertion: the column renders (not silently empty).
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+  await expect(
+    page.locator("[data-testid='margin-column-right'] [data-testid^='margin-bubble-']").first(),
+  ).toBeVisible({ timeout: 5_000 });
+});
+
+/**
+ * Stage C-1 empty-collapse — a NOTE (left) + COMMENT (right) make BOTH sides
+ * present, so both columns mount and both tracks reserve width. The complement
+ * to the comment-only tests above (which prove the empty left side collapses).
+ */
+test("C-1: a note + a comment mount both columns (presence on both sides)", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "right-side comment",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+  await seedNoteViaPopup(page, "left-side note");
+
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+  const tracks = await marginTracks(page);
+  expect(tracks.left).not.toBe("0px");
+  expect(tracks.right).not.toBe("0px");
+});
+
+/**
+ * Stage C-1 empty-collapse is LIVE: adding the first note to a previously-empty
+ * left side expands its track (and removing the last would collapse it again —
+ * the symmetric direction is covered by the comment-only static tests). Proves
+ * the presence booleans recompute against `visibleAnnotations` as annotations
+ * change, not just at mount.
+ */
+test("C-1: adding the first note expands the collapsed left side live", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "right-side comment",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+  // Comment-only start: left collapsed, right present.
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(0);
+
+  // Add the first left-side note → left expands live.
+  await seedNoteViaPopup(page, "first note");
+  await expect(page.locator("[data-testid='margin-column-left']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+});
+
+/**
+ * Stage C-1 continuum — as the viewport narrows, the rendered margin track steps
+ * full → narrow → stub → off. We assert the right track (comment side) shrinks
+ * MONOTONICALLY across the bands, then disappears below the off floor —
+ * estimate-independent (it tests the ladder property, not the specific px so it
+ * survives a `narrow`/`stub` width tune). Rails are closed by setMarginView, so
+ * thresholds are t1≈1024 / t2≈864 / t3≈600.
+ */
+test("C-1: narrowing the viewport steps the margin track full→narrow→stub→off", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "Margin candidate",
+    textSnapshot: TITLE_TEXT,
+  });
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+  const rightCol = page.locator("[data-testid='margin-column-right']");
+  const rightTrackPx = async () => parseFloat((await marginTracks(page)).right);
+
+  // full band (> t1): widest reserve.
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await expect.poll(rightTrackPx).toBeGreaterThan(0);
+  const fullPx = await rightTrackPx();
+
+  // narrow band (t2 < w < t1): strictly narrower than full.
+  await page.setViewportSize({ width: 950, height: 900 });
+  await expect.poll(rightTrackPx).toBeLessThan(fullPx);
+  const narrowPx = await rightTrackPx();
+  expect(narrowPx).toBeGreaterThan(0);
+
+  // stub band (t3 < w < t2): strictly narrower than narrow.
+  await page.setViewportSize({ width: 750, height: 900 });
+  await expect.poll(rightTrackPx).toBeLessThan(narrowPx);
+  expect(await rightTrackPx()).toBeGreaterThan(0);
+
+  // off (< t3): the column unmounts entirely.
+  await page.setViewportSize({ width: 500, height: 900 });
+  await expect(rightCol).toHaveCount(0);
+});
+
+/**
+ * Stage C-1 docx carve-out (the CRDT-HIGH guard) — docx keeps its legacy
+ * relative/contents path and NEVER enters the continuum grid, so it can never
+ * receive narrow/stub track geometry. The stage element's computed display must
+ * not be `grid` for a docx tab, at a wide width (margins on → position:relative)
+ * and at an intermediate width where a non-docx doc would be `narrow` (docx →
+ * display:contents, off cliff). Either way: never a grid.
+ */
+test("C-1: docx keeps its legacy path — stage is never a grid", async ({ page }) => {
+  const docxDir = createFixtureDir("single-paragraph.docx");
+  try {
+    await mcp.callTool("tandem_open", { filePath: path.join(docxDir, "single-paragraph.docx") });
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto("/");
+    const stage = page.locator("[data-testid='editor-stage']");
+    await expect(stage).toHaveCount(1, { timeout: 10_000 });
+
+    await setMarginView(page, true);
+
+    const stageDisplay = () => stage.evaluate((el) => getComputedStyle(el as HTMLElement).display);
+
+    // Wide: margins on → docx uses position:relative (display stays block), not grid.
+    expect(await stageDisplay()).not.toBe("grid");
+
+    // Intermediate width (a non-docx doc would be `narrow` here): docx falls to
+    // its off cliff (display:contents) — still never a grid, never narrow geometry.
+    await page.setViewportSize({ width: 950, height: 900 });
+    await nextFrames(page);
+    expect(await stageDisplay()).not.toBe("grid");
+  } finally {
+    cleanupFixtureDir(docxDir);
+  }
 });
