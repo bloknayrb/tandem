@@ -10,6 +10,7 @@ import {
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
 } from "../shared/constants.js";
 import { isUploadPath } from "../shared/paths.js";
+import { docHash } from "./annotations/doc-hash.js";
 import {
   acquireStoreLock,
   getAnnotationsDir,
@@ -46,6 +47,7 @@ import { freePort, LAST_SEEN_VERSION_FILE, SESSION_DIR, waitForPort } from "./pl
 import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
+  cleanupStaleTombstones,
   stopAutoSave,
 } from "./session/manager.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
@@ -295,6 +297,19 @@ async function main() {
       );
   } catch (err) {
     console.error("[Tandem] Failed to clean up orphaned annotation files:", err);
+  }
+
+  // Compact stale tombstones (#318). Runs alongside the orphan-file sweep,
+  // before restoreOpenDocuments (so no docs are open and the open-doc guard's
+  // set is empty — but we pass the live set defensively in case this moves).
+  try {
+    const openDocHashes = new Set<string>();
+    for (const open of getOpenDocs().values()) openDocHashes.add(docHash(open.filePath));
+    const compacted = await cleanupStaleTombstones(openDocHashes);
+    if (compacted > 0)
+      console.error(`[Tandem] Compacted stale tombstones in ${compacted} annotation file(s)`);
+  } catch (err) {
+    console.error("[Tandem] Failed to compact stale tombstones:", err);
   }
 
   // Must complete before Hocuspocus starts to prevent browsers seeing stale openDocuments

@@ -116,3 +116,28 @@ export function docHash(filePath: string): string {
 
   return crypto.createHash("sha256").update(normalized).digest("hex");
 }
+
+/**
+ * Compute the content hash stored in the durable envelope's `meta.contentHash`
+ * (#313). SHA-256 of the document's flat text (`extractText(doc)` output),
+ * recomputed on EVERY durable write so rename-recovery can match an orphaned
+ * envelope to a renamed-but-unedited document by exact byte-identical content.
+ *
+ * Pure function over the already-extracted text — keeps this module I/O- and
+ * Y.Doc-free. Callers pass the result of `extractText(doc)`.
+ */
+export function contentHash(text: string): string {
+  return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
+}
+
+/**
+ * Security boundary: filename shape for envelopes that rename-recovery and
+ * session-cleanup will read or unlink. Matches `<64-hex>.json` (regular docs)
+ * or `upload_<id>.json` (uploads/scratchpads). Must NOT match dotfiles
+ * (`.tandem-tmp-*`, `.corrupt.*`, `.future`), session files, or any other
+ * sibling we may add to the annotations dir later.
+ *
+ * Hoisted here so all consumers (rename-recovery, session/manager) share a
+ * single definition — drifting copies would silently widen the trust surface.
+ */
+export const ENVELOPE_FILENAME_RE = /^(?:[a-f0-9]{64}|upload_.+)\.json$/;

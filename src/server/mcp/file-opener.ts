@@ -23,7 +23,8 @@ import type { Annotation } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { createStore } from "../annotations/store.js";
+import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
+import { annotationFileExists, createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
 import { markClean, registerDirtyObserver } from "../documents/dirty.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
@@ -636,7 +637,8 @@ async function finalizeDocOpen(
   setActiveDocId(id);
   writeDocMeta(doc, id, fileName, format, readOnly);
   await initSavedBaseline(doc, resolved);
-  await wireAnnotationStore(id, doc, resolved);
+  // Normal first open of a real file — enable rename recovery (#313).
+  await wireAnnotationStore(id, doc, resolved, { allowRecovery: true });
 
   // Register the autosave dirty-tracking observer NOW (#851), after content has
   // been loaded into the body — so the open-time baseline is "clean" and a doc
@@ -669,9 +671,29 @@ async function finalizeDocOpen(
  * Errors here MUST NOT fail the open — annotations are additive durability,
  * not required for rendering. We log and continue.
  */
-export async function wireAnnotationStore(id: string, doc: Y.Doc, filePath: string): Promise<void> {
+export async function wireAnnotationStore(
+  id: string,
+  doc: Y.Doc,
+  filePath: string,
+  opts?: { allowRecovery?: boolean },
+): Promise<void> {
   try {
     const hash = docHash(filePath);
+
+    // Rename recovery (#313): on a genuine first open, if NO envelope exists at
+    // this document's path-hash, the file may have been renamed (new path -> new
+    // hash), orphaning its annotations. Try to re-associate an orphaned envelope
+    // by exact content match. Runs BEFORE loadAndMerge so the re-keyed envelope
+    // is the one loadAndMerge picks up. Gating on "no existing envelope"
+    // guarantees recovery never steals from a live envelope.
+    //
+    // Only enabled for the normal-open path. Force-reload (clearAndReload)
+    // deliberately clears the envelope and must NOT resurrect a stale orphan;
+    // upload:// recovery is deferred (see rename-recovery.ts header).
+    if (opts?.allowRecovery && !(await annotationFileExists(hash))) {
+      await recoverRenamedEnvelope(doc, hash, filePath);
+    }
+
     const store = createStore(hash, { filePath });
     const cleanup = await loadAndMerge({
       ydoc: doc,
