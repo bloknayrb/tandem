@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onDestroy } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import type { OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
@@ -16,6 +16,9 @@ interface Props {
   reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
   reduceMotion?: boolean;
   onRequestOpenDialog?: () => void;
+  /** Increment to toggle the new-tab menu from a parent keyboard shortcut
+   * (Ctrl+T). The mount value 0 is skipped; each change flips the menu. */
+  openMenuTrigger?: number;
 }
 
 const {
@@ -26,6 +29,7 @@ const {
   reorder,
   reduceMotion = false,
   onRequestOpenDialog,
+  openMenuTrigger = 0,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
@@ -262,6 +266,15 @@ function handleKeyDown(e: KeyboardEvent, id: string) {
 
 const singleTab = $derived(tabs.length <= 1);
 
+// Single source of truth for opening/closing the new-tab menu. Shared by the
+// `+` button (direct call) and the Ctrl+T trigger effect (wrapped in untrack).
+// Recent files are (re)loaded only on the open transition.
+function toggleNewTabMenu() {
+  const opening = !showRecent;
+  if (opening) recentFiles = loadRecentFilesCached();
+  showRecent = opening;
+}
+
 $effect(() => {
   if (!showRecent) return;
 
@@ -276,6 +289,16 @@ $effect(() => {
 
   window.addEventListener("pointerdown", handlePointerDown, true);
   return () => window.removeEventListener("pointerdown", handlePointerDown, true);
+});
+
+// Ctrl+T (App-level shortcut) toggles the new-tab menu via this counter prop.
+// Only `openMenuTrigger` is a tracked dependency; the mount value 0 is skipped.
+// `toggleNewTabMenu` reads + writes `showRecent`; running it under `untrack`
+// keeps showRecent out of this effect's deps (subscribing would self-retrigger
+// → update-depth loop) so only the counter — not other dismiss paths (Esc,
+// click-outside, +) — re-fires it.
+$effect(() => {
+  if (openMenuTrigger > 0) untrack(toggleNewTabMenu);
 });
 </script>
 
@@ -324,10 +347,7 @@ $effect(() => {
        28×28 floating-pill recipe matches the v7 .c7-tab-add design. -->
   <button
     bind:this={openBtnEl}
-    onclick={() => {
-      recentFiles = loadRecentFilesCached();
-      showRecent = !showRecent;
-    }}
+    onclick={toggleNewTabMenu}
     data-testid="open-file-btn"
     class="tandem-floating-pill tab-add-pill"
     title="Open file"

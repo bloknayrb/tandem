@@ -47,6 +47,7 @@ export const REMAPPABLE_SHORTCUT_IDS = [
   "annotation-next",
   "annotation-prev",
   "select-block",
+  "new-tab-menu",
 ] as const;
 
 export type RemappableShortcutId = (typeof REMAPPABLE_SHORTCUT_IDS)[number];
@@ -78,6 +79,7 @@ export const REMAPPABLE_LABELS: Record<RemappableShortcutId, string> = {
   "annotation-next": "Next annotation",
   "annotation-prev": "Previous annotation",
   "select-block": "Select containing block",
+  "new-tab-menu": "New tab menu",
 };
 
 /**
@@ -108,6 +110,7 @@ export const DEFAULT_BINDINGS: Record<RemappableShortcutId, ShortcutChord> = {
   "annotation-next": { ctrlOrMeta: false, alt: true, shift: false, code: "BracketRight" },
   "annotation-prev": { ctrlOrMeta: false, alt: true, shift: false, code: "BracketLeft" },
   "select-block": { ctrlOrMeta: false, alt: true, shift: false, code: "KeyL" },
+  "new-tab-menu": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyT" },
 };
 
 /**

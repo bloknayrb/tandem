@@ -612,6 +612,7 @@ let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
+let newTabMenuTrigger = $state(0);
 
 const leftPanelWidth = loadPanelWidth("left");
 const rightPanelWidth = loadPanelWidth("right");
@@ -885,6 +886,15 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
     void reopenClosedTab();
+  },
+  "new-tab-menu": (e) => {
+    // shouldIgnoreShortcut suppresses only INPUT/TEXTAREA + IME — not
+    // contenteditable — so Ctrl+T still fires with the cursor in the editor,
+    // the dominant "open a new tab while working" case. DocumentTabs owns the
+    // menu state; toggle it via the trigger counter.
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    newTabMenuTrigger += 1;
   },
   find: (e, ctx) => {
     // Intentionally NOT gated on shouldIgnoreShortcut — Ctrl+F should always
@@ -1409,6 +1419,7 @@ const tutorial = createTutorial(
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     onRequestOpenDialog={() => void requestOpenFile()}
+    openMenuTrigger={newTabMenuTrigger}
   />
 {/snippet}
 

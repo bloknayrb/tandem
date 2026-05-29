@@ -285,6 +285,12 @@ describe("matchShortcut — legacy no-modifier-gate preservation", () => {
       matchShortcut(evt({ code: "KeyT", ctrlKey: true, altKey: true, shiftKey: true })),
     ).toEqual({ id: "reopen-closed-tab" });
   });
+  it("Ctrl+T (no Alt) matches new-tab-menu", () => {
+    expect(matchShortcut(evt({ code: "KeyT", ctrlKey: true }))).toEqual({ id: "new-tab-menu" });
+  });
+  it("Ctrl+Shift+T is inert (new-tab-menu requires !shift; reopen requires alt)", () => {
+    expect(matchShortcut(evt({ code: "KeyT", ctrlKey: true, shiftKey: true }))).toBeNull();
+  });
   it("Ctrl+Alt+Shift+A still matches toggle-authorship (legacy no-shift-gate)", () => {
     expect(
       matchShortcut(evt({ code: "KeyA", ctrlKey: true, altKey: true, shiftKey: true })),

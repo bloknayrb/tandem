@@ -51,6 +51,7 @@ export type ShortcutId =
   | "pick-tab"
   | "toggle-mode"
   | "reopen-closed-tab"
+  | "new-tab-menu"
   | "find"
   | "find-nav"
   | "annotation-accept-or-dismiss"
@@ -233,6 +234,14 @@ export function matchShortcut(
     // Ctrl+Alt+T → reopen closed tab. Legacy: `altKey && KeyT`, no shift gate.
     if (e.altKey && e.code === "KeyT") {
       if (!isOverridden("reopen-closed-tab", overrides)) return { id: "reopen-closed-tab" };
+    }
+
+    // Ctrl+T → open the new-tab menu. Gated `!altKey` so Ctrl+Alt+T still routes
+    // to reopen-closed-tab above (the two are mutually exclusive on altKey, so
+    // relative order is immaterial); `!shiftKey` matches the default chord
+    // exactly and leaves Ctrl+Shift+T inert.
+    if (!e.altKey && !e.shiftKey && e.code === "KeyT") {
+      if (!isOverridden("new-tab-menu", overrides)) return { id: "new-tab-menu" };
     }
 
     // Ctrl+F / Ctrl+Shift+F → find. Legacy outer if: no alt gate.
