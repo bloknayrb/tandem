@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expect, type Page } from "@playwright/test";
+import crypto from "node:crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -12,6 +13,27 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`;
+
+/**
+ * Annotation dir used by the E2E test server (mirrors TANDEM_APP_DATA_DIR in
+ * playwright.config.ts webServer.env). Used to clean up orphaned envelopes in
+ * cleanupFixtureDir so the rename-recovery feature (#313) doesn't mistake a
+ * deleted fixture path as a rename signal for the next test's identical fixture.
+ */
+const E2E_ANNOTATIONS_DIR = path.join(
+  process.env.TANDEM_APP_DATA_DIR ?? "/tmp/tandem-e2e-data",
+  "annotations",
+);
+
+/**
+ * Compute the server's docHash for an absolute file path. Must stay in sync
+ * with `src/server/annotations/doc-hash.ts#docHash`.
+ */
+function fixtureDocHash(filePath: string): string {
+  let normalized = path.resolve(filePath);
+  if (process.platform === "win32") normalized = normalized.toLowerCase();
+  return crypto.createHash("sha256").update(normalized).digest("hex");
+}
 
 /**
  * MCP test client using the SDK's built-in Client + StreamableHTTPClientTransport.
@@ -76,8 +98,34 @@ export function createFixtureDir(...fixtureNames: string[]): string {
   return tmpDir;
 }
 
-/** Clean up a temp directory. */
+/**
+ * Clean up a temp directory AND its orphaned annotation envelopes.
+ *
+ * The rename-recovery feature (#313) re-associates an orphaned annotation
+ * envelope to a new file when: (a) the new file's content hash matches the
+ * old envelope's stored hash, and (b) the old file path no longer exists. In
+ * E2E tests, all tests share the same fixture content (`sample.md`), so after
+ * the fixture dir is deleted the old path "vanishes" and the next test's fresh
+ * fixture (identical content → same hash) satisfies both conditions — causing
+ * stale annotations from a previous test to appear unexpectedly.
+ *
+ * Fix: delete the annotation envelopes for files in `dir` BEFORE removing the
+ * dir itself, so recovery never sees the orphaned envelope.
+ */
 export function cleanupFixtureDir(dir: string): void {
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const abs = path.join(dir, entry.name);
+      try {
+        fs.rmSync(path.join(E2E_ANNOTATIONS_DIR, `${fixtureDocHash(abs)}.json`), { force: true });
+      } catch {
+        /* best effort */
+      }
+    }
+  } catch {
+    /* best effort */
+  }
   try {
     fs.rmSync(dir, { recursive: true, force: true });
   } catch {
