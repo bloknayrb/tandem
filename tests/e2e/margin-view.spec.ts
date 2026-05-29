@@ -1083,3 +1083,269 @@ test("C-1: docx keeps its legacy path — stage is never a grid", async ({ page 
     cleanupFixtureDir(docxDir);
   }
 });
+
+/**
+ * Stage C-2 — density variants. The `MarginMode` continuum (C-1) drives a
+ * per-card density (`cardDensity`): in the NARROW band an inactive card clamps
+ * to a one-line teaser and the active (focused) card expands to full; in the
+ * STUB band EVERY card is a ~22px pip regardless of active/editing — the 28px
+ * stub track can't hold card chrome (see the stub-geometry note in
+ * cardDensity.ts; this is the resolved divergence from plan §5 "stub click →
+ * full in place" and the C4 bundle, where the collapsed pill also never expands
+ * itself but lives in a 128px-wide column that production's 28px track is not).
+ * Widths reuse the C-1 ladder (1200=full / 950=narrow / 750=stub / 500=off),
+ * proven deterministic above. The card carries `data-density` for assertions.
+ *
+ * A lone annotation is auto-selected as the review target by
+ * `useAnnotationReview`, which forces it to `full` in the narrow band. So these
+ * specs seed TWO comments and click one to fix which is active — the other is
+ * then deterministically inactive (clamped at narrow / a pip at stub).
+ */
+async function seedTwoComments(): Promise<{ idA: string; idB: string }> {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  const a = (await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_FROM + 4,
+    text: "first comment — the one these specs activate",
+    textSnapshot: TITLE_TEXT.slice(0, 4),
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  const b = (await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM + 5,
+    to: TITLE_TO,
+    text: "a fairly long second comment body so the clamp visibly collapses it to one line",
+    textSnapshot: TITLE_TEXT.slice(5),
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  if (a.error !== false || b.error !== false) throw new Error("tandem_comment failed");
+  return { idA: a.data.annotationId, idB: b.data.annotationId };
+}
+
+test("C-2: narrow band clamps the inactive card while the active one stays full", async ({
+  page,
+}) => {
+  const { idA, idB } = await seedTwoComments();
+  await page.setViewportSize({ width: 950, height: 900 }); // narrow band
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+
+  // Scope through the `margin-bubble-{id}` wrapper: the `annotation-card-{id}`
+  // testid also appears in the always-mounted (display:none) side panel, so a
+  // bare card selector matches two elements.
+  const cardA = page.locator(
+    `[data-testid='margin-bubble-${idA}'] [data-testid='annotation-card-${idA}']`,
+  );
+  const cardB = page.locator(
+    `[data-testid='margin-bubble-${idB}'] [data-testid='annotation-card-${idB}']`,
+  );
+  await expect(cardA).toBeVisible({ timeout: 5_000 });
+  await expect(cardB).toBeVisible({ timeout: 5_000 });
+
+  // Force A active → A full, B inactive → clamped. Deterministic regardless of
+  // which card the review hook auto-selects on load.
+  await cardA.click();
+  await expect(cardA).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(cardB).toHaveAttribute("data-density", "clamped", { timeout: 5_000 });
+  // Action row is hidden in clamped (the accept button lives in `.aca-row`).
+  await expect(cardB.locator("[data-testid^='accept-btn-']")).toBeHidden();
+
+  // [MF-3] — the clamped card is actually SHORTER, not just missing its action
+  // row. Capture B's clamped height, activate B (which clamps A), assert B grew.
+  const clampedBox = await cardB.boundingBox();
+  expect(clampedBox).not.toBeNull();
+
+  await cardB.click();
+  await expect(cardB).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(cardA).toHaveAttribute("data-density", "clamped", { timeout: 5_000 });
+  await expect(cardB.locator("[data-testid^='accept-btn-']")).toBeVisible();
+  await expect
+    .poll(async () => (await cardB.boundingBox())?.height ?? 0, {
+      timeout: 5_000,
+      message: "activated (full) card must be taller than the clamped teaser",
+    })
+    .toBeGreaterThan((clampedBox as { height: number }).height);
+});
+
+test("C-2: stub band collapses every card to a pip that fits the column and stays a pip when clicked", async ({
+  page,
+}) => {
+  const { idA, idB } = await seedTwoComments();
+  await page.setViewportSize({ width: 750, height: 900 }); // stub band
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+
+  // Scope through `margin-bubble-{id}` — the card testid is also present in the
+  // always-mounted (display:none) side panel.
+  const bubbleA = page.locator(`[data-testid='margin-bubble-${idA}']`);
+  const cardA = bubbleA.locator(`[data-testid='annotation-card-${idA}']`);
+  const cardB = page.locator(
+    `[data-testid='margin-bubble-${idB}'] [data-testid='annotation-card-${idB}']`,
+  );
+  await expect(cardA).toBeVisible({ timeout: 5_000 });
+  await expect(cardB).toBeVisible({ timeout: 5_000 });
+
+  // Both cards are pips in the stub band — active state is irrelevant.
+  await expect(cardA).toHaveAttribute("data-density", "stub", { timeout: 5_000 });
+  await expect(cardB).toHaveAttribute("data-density", "stub", { timeout: 5_000 });
+
+  // Body / snippet / actions collapse in stub; the wrapper persists so the pip
+  // is clickable (stub ≠ display:none).
+  await expect(cardA.locator(".aca-body")).toBeHidden();
+  await expect(cardA.locator("[data-testid^='accept-btn-']")).toBeHidden();
+
+  // THE ACCEPTANCE GATE (advisor): the stub card must FIT inside its column —
+  // no horizontal spill past the column edge (the clipping bug the continuum
+  // exposed). `scrollWidth > clientWidth` is precisely the overflow signature;
+  // a 1px tolerance absorbs sub-pixel rounding.
+  const fit = await cardA.evaluate((el) => {
+    const e = el as HTMLElement;
+    return { scrollWidth: e.scrollWidth, clientWidth: e.clientWidth };
+  });
+  expect(fit.scrollWidth).toBeLessThanOrEqual(fit.clientWidth + 1);
+
+  // The card's rendered box must also sit within its column wrapper.
+  const within = await bubbleA.evaluate((wrapper) => {
+    const card = wrapper.querySelector("[data-testid^='annotation-card-']") as HTMLElement | null;
+    if (!card) return false;
+    const w = wrapper.getBoundingClientRect();
+    const c = card.getBoundingClientRect();
+    return c.right <= w.right + 1 && c.left >= w.left - 1;
+  });
+  expect(within).toBe(true);
+
+  // A stub stays a pip even when it's the ACTIVE review target — the 28px stub
+  // track has no room to expand in place. `useAnnotationReview` auto-selects one
+  // card on load (it carries `is-review-target` / `aria-current`); assert that
+  // active margin card is STILL `stub`. (We assert on the auto-active card
+  // rather than clicking: both comments anchor to the same title line, so their
+  // stub pips overlap — STUB-NON-PUSH — and would intercept each other's click.
+  // The density code path is identical for click- vs auto-set active. Reading/
+  // acting on a stub happens after widening or via the rail — tracked follow-up.)
+  const activeStub = page.locator(
+    "[data-testid='margin-column-right'] .tandem-annotation-card.is-review-target",
+  );
+  await expect(activeStub).toHaveAttribute("data-density", "stub", { timeout: 5_000 });
+  await expect(activeStub.locator(".aca-body")).toBeHidden();
+});
+
+/**
+ * Stage C-2 — the ACTIVE-FULL-AT-NARROW fit guard (advisor). The stub-band
+ * scrollWidth gate above runs on a pip that trivially fits; the case that can
+ * still clip is the *active/full* card at narrow=160, where a richer card type
+ * renders its full body inside the slimmest non-stub track. SuggestionCard is
+ * the worst offender: its diff box (`suggestion-diff-{id}`) holds a
+ * strikethrough-old → new pair of padded, background-filled spans whose
+ * min-content is wider than the plain comment we measured for the stub
+ * diagnosis. A lone annotation auto-selects as the review target → active →
+ * `full` in the narrow band, so a single suggestion exercises exactly this
+ * path. The acceptance gate is the same one the stub spec uses, one band over
+ * and one card type richer: the card root must not spill past its column.
+ */
+test("C-2: an active suggestion at narrow fits its column (no diff-box spill)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  const created = (await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_TO,
+    text: "tighten the heading",
+    // A realistic multi-word replacement — the diff box must wrap it inside the
+    // 160px narrow track, not push the card wider than the column.
+    suggestedText: "Comprehensive Project Title",
+    textSnapshot: TITLE_TEXT,
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  if (created.error !== false) throw new Error("tandem_comment (suggestion) failed");
+  const id = created.data.annotationId;
+
+  await page.setViewportSize({ width: 950, height: 900 }); // narrow band
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+
+  const bubble = page.locator(`[data-testid='margin-bubble-${id}']`);
+  const card = bubble.locator(`[data-testid='annotation-card-${id}']`);
+  await expect(card).toBeVisible({ timeout: 5_000 });
+
+  // Lone annotation → auto review target → active → full at narrow. The diff
+  // box must actually render (this is the body that the stub band hides and the
+  // clamped band collapses — here it's the full, unclamped suggestion).
+  await expect(card).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(card.locator(`[data-testid='suggestion-diff-${id}']`)).toBeVisible({
+    timeout: 5_000,
+  });
+
+  // THE ACCEPTANCE GATE: the full suggestion card must FIT its narrow column —
+  // the diff-box spans must wrap, not spill horizontally past the card edge.
+  // `scrollWidth > clientWidth` is the overflow signature; 1px absorbs rounding.
+  const fit = await card.evaluate((el) => {
+    const e = el as HTMLElement;
+    return { scrollWidth: e.scrollWidth, clientWidth: e.clientWidth };
+  });
+  expect(fit.scrollWidth).toBeLessThanOrEqual(fit.clientWidth + 1);
+
+  // And the rendered box sits within its column wrapper (catches a spill that a
+  // card-internal `overflow:clip` would hide from scrollWidth but still paint
+  // past the column edge).
+  const within = await bubble.evaluate((wrapper) => {
+    const c = wrapper.querySelector("[data-testid^='annotation-card-']") as HTMLElement | null;
+    if (!c) return false;
+    const w = wrapper.getBoundingClientRect();
+    const r = c.getBoundingClientRect();
+    return r.right <= w.right + 1 && r.left >= w.left - 1;
+  });
+  expect(within).toBe(true);
+});
+
+test("C-2: density sweep full→narrow→stub→full emits no console errors", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") errors.push(msg.text());
+  });
+
+  const { idA, idB } = await seedTwoComments();
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+
+  await setMarginView(page, true);
+  // Scope through `margin-bubble-{id}` — the card testid is also present in the
+  // always-mounted (display:none) side panel.
+  const cardA = page.locator(
+    `[data-testid='margin-bubble-${idA}'] [data-testid='annotation-card-${idA}']`,
+  );
+  const cardB = page.locator(
+    `[data-testid='margin-bubble-${idB}'] [data-testid='annotation-card-${idB}']`,
+  );
+  await expect(cardA).toBeVisible({ timeout: 5_000 });
+
+  // Fix A active so B is deterministically inactive — B then steps through every
+  // density as the viewport sweeps the bands (an active card would stay `full`
+  // in the narrow band and never exercise `clamped`). At this 1200 full band
+  // both cards are still `full`; B only diverges once we drop to narrow.
+  await cardA.click();
+  await expect(cardA).toHaveClass(/is-review-target/, { timeout: 5_000 });
+
+  // full → narrow (clamped) → stub → back to full, with a frame settle between
+  // each so the density `$effect` (overlay-close guard) actually runs. A retry
+  // storm from a missing last-value guard would surface as console errors here.
+  await expect(cardB).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await page.setViewportSize({ width: 950, height: 900 });
+  await expect(cardB).toHaveAttribute("data-density", "clamped", { timeout: 5_000 });
+  await page.setViewportSize({ width: 750, height: 900 });
+  await expect(cardB).toHaveAttribute("data-density", "stub", { timeout: 5_000 });
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await expect(cardB).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await nextFrames(page);
+
+  // Filter to app/effect errors — ignore benign Y.js "Invalid access" stderr
+  // noise documented in CLAUDE.md (it can surface as a console error in dev).
+  const appErrors = errors.filter((e) => !/Invalid access|favicon/i.test(e));
+  expect(appErrors, `unexpected console errors: ${appErrors.join("\n")}`).toEqual([]);
+});

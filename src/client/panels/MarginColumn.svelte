@@ -4,6 +4,7 @@ import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import type { MarginMode } from "../layout/editor-stage.svelte";
 import AnnotationCard from "./AnnotationCard.svelte";
+import { cardDensity } from "./cardDensity";
 import { prunePlaceableHeights, resolveCollisions } from "./marginCollision";
 import { bezierLeaderPath, leaderColorForAuthor } from "./marginLeaderGeometry";
 
@@ -15,8 +16,8 @@ interface Props {
   side: "left" | "right";
   /** Resolved track mode for this side (`full` | `narrow` | `stub`). The width
    *  continuum. A column only mounts when its side is visible, so `off` never
-   *  reaches here. Pure pass-through in C-1 — the bubble density variants that
-   *  consume it (clamp-until-active, stub pill) land in C-2. */
+   *  reaches here. C-2 derives bubble density from it (`cardDensity`):
+   *  `narrow`→clamp-until-active, `stub`→anchor pip. */
   mode: MarginMode;
   /** Column width in pixels. */
   width: number;
@@ -44,10 +45,10 @@ let {
   annotations,
   positions,
   side,
-  // `mode` is accepted but not yet consumed (C-1 is pure pass-through); C-2
-  // derives bubble density from it. Destructured so the prop typechecks and is
-  // ready at the call site without a later signature change.
-  mode: _mode,
+  // C-2: drives per-bubble density (`cardDensity`) for both the collision input
+  // and the rendered card. `off` never reaches here (the column unmounts when a
+  // side collapses), so only `full` | `narrow` | `stub` are live.
+  mode,
   width,
   edgeInset,
   gap,
@@ -99,6 +100,21 @@ const placeable = $derived(
 // (`feedback_svelte_effect_depth_guard`).
 let heights = $state<Map<string, number>>(new Map());
 
+// Per-annotation density — the SINGLE source of truth shared by the collision
+// input below and the rendered card prop, so the two can't drift (`isEditing:
+// false`; the dispatcher re-resolves editing→full internally for narrow/full,
+// and at stub mode every card is a pip regardless — cardDensity's stub-geometry
+// rule). Built from the same `placeable` the each-block iterates, both inputs
+// reactive (mode + activeAnnotationId), no collision output read → no cycle.
+const densityById = $derived(
+  new Map(
+    placeable.map((a) => [
+      a.id,
+      cardDensity({ mode, isActive: a.id === activeAnnotationId, isEditing: false }),
+    ]),
+  ),
+);
+
 // Collision-resolved tops. Sweep input is built from `placeable` + `positions`
 // + `heights`; the result is a brand-new Map. Reads from `positions` happen
 // synchronously inside this $derived, so dependency tracking is automatic and
@@ -107,7 +123,11 @@ const adjustedPositions = $derived.by(() => {
   const input = placeable.map((a) => ({
     id: a.id,
     top: positions.get(a.id) ?? 0,
-    height: heights.get(a.id),
+    // A stub passes `height: undefined` so it lands in resolveCollisions'
+    // unknown-height branch: it does not advance the cursor (the STUB-NON-PUSH
+    // contract in marginCollision.ts), though a preceding full bubble can still
+    // push it down.
+    height: densityById.get(a.id) === "stub" ? undefined : heights.get(a.id),
   }));
   return resolveCollisions(input);
 });
@@ -215,6 +235,11 @@ function recordHeight(id: string, h: number): void {
   {#each placeable as ann (ann.id)}
     {@const top = adjustedPositions.get(ann.id) ?? positions.get(ann.id) ?? 0}
     {@const visibleReplies = getVisibleReplies(ann, repliesById.get(ann.id))}
+    <!-- Same `densityById` map the collision input reads — single source of
+         truth, so the rendered density and the stub→undefined-height routing
+         can never diverge. (`?? "full"` only satisfies the non-null type; the
+         key is always present since the map is built from `placeable`.) -->
+    {@const density = densityById.get(ann.id) ?? "full"}
     <!-- Svelte 5 function-binding form on `bind:clientHeight` below
          (`bind:prop={getter, setter}`) — the only form that supports
          per-key dispatch into a Map. A plain `bind:clientHeight={x}`
@@ -239,6 +264,7 @@ function recordHeight(id: string, h: number): void {
         annotation={ann}
         replies={visibleReplies}
         isReviewTarget={ann.id === activeAnnotationId}
+        {density}
         onClick={() => onClick(ann)}
         onAccept={ann.author !== "user" ? onAccept : undefined}
         onDismiss={ann.author !== "user" ? onDismiss : undefined}
