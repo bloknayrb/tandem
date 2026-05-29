@@ -2,7 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { cubicOut } from "svelte/easing";
-import { isUploadPath } from "../shared/paths";
+import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { CapturedAnchor } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
@@ -61,6 +61,7 @@ import { createFirstRunNeeded } from "./hooks/useFirstRunNeeded.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
+import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
@@ -97,6 +98,11 @@ import { openServerPath } from "./utils/server-paths";
 const yjsSync = createYjsSync();
 onDestroy(() => yjsSync.destroy());
 
+// #864: persist unsaved scratchpad content for recovery + warn before losing
+// it. Logic lives in the hook to keep App.svelte minimal.
+const scratchpadPersistence = createScratchpadPersistence(() => yjsSync.tabs);
+onDestroy(() => scratchpadPersistence.destroy());
+
 // In-memory closed-tab history for Ctrl+Alt+T (reopen closed tab). Lifetime is
 // the app session; resets on reload. See useClosedTabStack.ts for rationale.
 const closedTabStack = createClosedTabStack();
@@ -104,6 +110,20 @@ const inflightReopens = new Set<string>();
 
 function closeTabAndRecord(tabId: string) {
   const tab = yjsSync.tabs.find((t) => t.id === tabId);
+  // #864: warn before closing a scratchpad that has unsaved content. Annotations
+  // are intentionally out of scope (accepted loss); only document text matters.
+  if (tab && isScratchpadPath(tab.filePath)) {
+    const uuid = scratchpadUuidFromPath(tab.filePath);
+    if (uuid && scratchpadPersistence.hasUnsavedContent(uuid)) {
+      const ok = window.confirm(
+        "This scratchpad has unsaved content that will be lost. Close it anyway?",
+      );
+      if (!ok) return;
+      // User accepted the loss — discard the recovery copy so the next
+      // scratchpad open doesn't restore the content they just dismissed.
+      scratchpadPersistence.clearUnsaved(uuid);
+    }
+  }
   if (tab && !isUploadPath(tab.filePath)) {
     closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
   }
