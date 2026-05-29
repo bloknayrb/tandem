@@ -138,3 +138,10 @@ After the user picks:
 - **Don't leak context into generators.** Step 2 is where the method lives or dies. Resist the urge to "help" generators by passing codebase context.
 - **Don't inline-critic.** The critic must be a separate `Agent` call. Do not score proposals yourself before step 3.
 - **Don't pick for the user.** Step 6 is a picker, not a recommendation. State trade-offs in the `preview` content, do not order the options by your preference.
+
+## Known limitations and curation notes
+
+These were captured during the first-use validation (two runs against known-answer past decisions: solo-mode state location and orphan-temp cleanup).
+
+- **Isolation is leaky.** The "Do not read CLAUDE.md or search the codebase" instruction in the frame-agent system prompts is *not* fully obeyed. Several generators in the validation produced text containing Tandem-specific identifiers (`CTRL_ROOM`, `Y_MAP_USER_AWARENESS`, the exact temp-file regex from CLAUDE.md gotchas) — implying CLAUDE.md still bleeds into their context somehow. Diversity still emerged across frames in aggregate, so the method works under leaky isolation, but don't claim more than that. If you see a generator output that's suspiciously specific to Tandem, it's likely leaked rather than independently reasoned.
+- **Speedrunner is the lowest-yield frame.** In both validation runs, the speedrunner generator produced outputs that were either the shipped answer verbatim (with leaked identifiers) or speedrunner-flavored variants of it. If a future curation pass trims the frame library, this is the first to drop. Deletionist and biology consistently produced the most genuinely-distinct shapes; regulator consistently surfaced auditability concerns no other frame named.
