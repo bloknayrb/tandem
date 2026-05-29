@@ -338,7 +338,6 @@ function handleClearSelection() {
 // background, so clicks that land on a card or the "resolved" summary pass
 // through untouched.
 function handleRailBackgroundClick(e: MouseEvent) {
-  if (activeAnnotationId === null) return;
   if (e.target !== e.currentTarget) return;
   onActiveAnnotationChange(null);
 }

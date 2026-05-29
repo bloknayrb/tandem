@@ -986,12 +986,17 @@ $effect(() => {
 // that holds focus (settings popover/modal, file/model/wizard modals, command
 // palette, Help, new-tab menu, reply thread) keeps its own Escape-to-close
 // without the deselect piggybacking — no need to teach each overlay a protocol.
-// Belt-and-suspenders: `e.defaultPrevented` also skips overlays that consume
-// Escape but leave focus in the editing context (the selection toolbar does this
-// via capture+stopPropagation; the slash menu via preventDefault). `findBarOpen`
-// is explicit because the find bar closes on Escape WITHOUT preventDefault and
-// can be open while focus is in the editor. Reads happen at event time, outside
-// any tracking scope, so the effect registers exactly once with current values.
+// Belt-and-suspenders for overlays that DO leave focus in the editing context,
+// via two distinct mechanisms: (1) overlays with a capture-phase window listener
+// + stopPropagation (selection toolbar, settings popover, Help) halt Escape
+// before this bubble-phase listener ever runs — `e.defaultPrevented` is moot for
+// them; (2) the slash menu calls preventDefault() in its ProseMirror keydown
+// handler without stopping propagation, so this listener DOES run and the
+// `e.defaultPrevented` guard is what skips it. `findBarOpen` is explicit because
+// the find bar closes on Escape WITHOUT preventDefault, so if focus has returned
+// to the editor (e.g. after jumping to a match) while find is still open, neither
+// guard above would catch the stray deselect. Reads happen at event time, outside
+// any tracking scope, so the effect registers once with current values.
 $effect(() => {
   function onEscape(e: KeyboardEvent) {
     if (e.key !== "Escape" || e.defaultPrevented) return;
