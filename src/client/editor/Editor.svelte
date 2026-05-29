@@ -332,7 +332,9 @@ async function handleEditorClick(e: MouseEvent) {
   } else if (!bestId) {
     // Clicked editor text that isn't an annotation → deselect (empty selection
     // is a valid resting state). Inert for editing: clearing the selection-state
-    // var has no document effect, and the flash effect early-returns on null.
+    // var has no document effect — the active-highlight effect above just strips
+    // the `.tandem-annotation-active` class and skips re-adding it when the id is
+    // null.
     onClearAnnotation?.();
   }
 }

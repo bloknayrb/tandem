@@ -981,12 +981,16 @@ $effect(() => {
 });
 
 // Escape deselects the active annotation — empty selection is a valid resting
-// state. The deselect is SCOPED TO THE EDITING CONTEXT: it only fires when focus
-// is in the editor or the annotation rail. That single guard means every overlay
-// that holds focus (settings popover/modal, file/model/wizard modals, command
-// palette, Help, new-tab menu, reply thread) keeps its own Escape-to-close
-// without the deselect piggybacking — no need to teach each overlay a protocol.
-// Belt-and-suspenders for overlays that DO leave focus in the editing context,
+// state. The deselect is SCOPED TO THE EDITING SURFACE: it fires when focus is in
+// the editor or the annotation rail, OR when nothing in particular is focused
+// (document.body / null). The body case matters because a selection can outlive
+// its focus: e.g. select an editor highlight (which focuses the editor), then
+// click a neutral, non-focusable chrome area that blurs focus back to body — the
+// annotation stays active but focus is no longer in the editor. A focus-trapping
+// overlay instead holds focus INSIDE itself, so any *specific* non-editing
+// element owning focus means an overlay is up and keeps its own Escape-to-close —
+// the deselect doesn't piggyback, no per-overlay protocol needed.
+// Belt-and-suspenders for overlays that DO leave focus in the editing surface,
 // via two distinct mechanisms: (1) overlays with a capture-phase window listener
 // + stopPropagation (selection toolbar, settings popover, Help) halt Escape
 // before this bubble-phase listener ever runs — `e.defaultPrevented` is moot for
@@ -1003,12 +1007,13 @@ $effect(() => {
     if (activeAnnotationId === null || findBarOpen) return;
     const el = document.activeElement as HTMLElement | null;
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
-    if (
-      !el?.closest(
+    const inEditingSurface =
+      !el ||
+      el === document.body ||
+      !!el.closest(
         '.ProseMirror, [data-testid="editor-root"], [data-testid="annotation-list-scroll-container"]',
-      )
-    )
-      return;
+      );
+    if (!inEditingSurface) return;
     e.preventDefault();
     activeAnnotationId = null;
   }
@@ -1071,9 +1076,12 @@ const review = useAnnotationReview({
 // when nothing is selected (the empty resting state) — the first pending review
 // target. Shared by the Ctrl+Enter shortcut and the command-palette
 // accept/dismiss commands so the two surfaces can never diverge (review finding).
-// getReviewTargets() already excludes user notes/highlights, so the fallback is
-// always a Claude target; the `author !== "user"` guard at call sites stays as
-// defense-in-depth.
+// The two branches differ in what they can return: the fallback
+// (getReviewTargets()[0]) is always a Claude target because getReviewTargets()
+// excludes user notes/highlights, but the active branch returns WHATEVER is
+// selected — which can be a user highlight overlapping a Claude comment (#768).
+// So the `author !== "user"` guard at call sites is load-bearing for the active
+// branch, not just defense-in-depth.
 function activeOrFirstPending(): Annotation | undefined {
   return activeAnnotationId
     ? visibleAnnotations.find((a) => a.id === activeAnnotationId)

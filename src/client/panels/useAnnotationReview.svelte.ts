@@ -221,8 +221,11 @@ export function useAnnotationReview({
   // anymore, so we never force-select on null (that was the old bulk-review
   // model that always parked a target on the first pending annotation). We only
   // AUTO-ADVANCE: when the currently-active annotation stops being a live pending
-  // one (deleted/accepted/dismissed), move to the next review target; after the
-  // last one that fallback is null, so selection naturally lands on empty. A
+  // one (deleted/accepted/dismissed), move selection to the FIRST remaining
+  // review target. (`reviewIndex` has no sequential cursor anymore — nothing
+  // increments it, so it sits at 0 and `targets[reviewIndex]` is `targets[0]`;
+  // the second effect below only ever clamps it back down.) When no targets
+  // remain that fallback is null, so selection naturally lands on empty. A
   // deliberate deselect (Escape / click-off) sets null and stays null here.
   //
   // #768 Bug 2 nuance preserved: "still live" checks the full pending annotation
