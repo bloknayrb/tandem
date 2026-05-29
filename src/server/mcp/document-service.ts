@@ -24,6 +24,7 @@ import {
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { atomicWrite, getAdapter } from "../file-io/index.js";
+import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
@@ -277,13 +278,16 @@ export async function saveDocumentAsToDisk(
   // keyed on a slightly different string and never converge.
   const resolved = path.resolve(targetPath);
 
-  // Reject UNC paths on Windows — mirrors openFileByPath's resolveAndValidatePath.
-  if (process.platform === "win32" && (resolved.startsWith("\\\\") || resolved.startsWith("//"))) {
-    return {
-      status: "error",
-      reason: "UNC paths are not supported for security reasons.",
-      errorCode: "INVALID_PATH",
-    };
+  // Reject UNC + `\\?\` extended-length prefixes pre- and post-resolve.
+  // Cross-platform (string check) since a Windows client can supply a
+  // crafted path to a Linux/macOS server. See `windows-path-safety.ts`.
+  const rawReason = rejectUnsafeWindowsPrefix(targetPath);
+  if (rawReason) {
+    return { status: "error", reason: rawReason, errorCode: "INVALID_PATH" };
+  }
+  const resolvedReason = rejectUnsafeWindowsPrefix(resolved);
+  if (resolvedReason) {
+    return { status: "error", reason: resolvedReason, errorCode: "INVALID_PATH" };
   }
 
   // The extension on disk must match the chosen format — otherwise auto-save
