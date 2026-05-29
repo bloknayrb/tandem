@@ -80,7 +80,7 @@ describe("useMarginPositions / computeNextPositions", () => {
       [],
       () => ({ from: 0, to: 0 }),
       () => ({ top: 0 }),
-      0,
+      () => 0,
     );
     expect(r.positions.size).toBe(0);
     expect(r.attempted).toBe(0);
@@ -92,7 +92,7 @@ describe("useMarginPositions / computeNextPositions", () => {
       [ann("a"), ann("b"), ann("c")],
       () => null,
       () => ({ top: 0 }),
-      0,
+      () => 0,
     );
     expect(r.positions.size).toBe(0);
     expect(r.attempted).toBe(0);
@@ -104,7 +104,7 @@ describe("useMarginPositions / computeNextPositions", () => {
       [ann("a")],
       () => ({ from: 5, to: 10 }),
       () => ({ top: 150 }),
-      50,
+      () => 50,
     );
     expect(r.positions.get("a")).toBe(100);
     expect(r.attempted).toBe(1);
@@ -116,7 +116,7 @@ describe("useMarginPositions / computeNextPositions", () => {
       [ann("a")],
       () => ({ from: 0, to: 0 }),
       () => ({ top: Number.NaN }),
-      0,
+      () => 0,
     );
     expect(r.positions.has("a")).toBe(false);
     expect(r.attempted).toBe(1);
@@ -128,10 +128,36 @@ describe("useMarginPositions / computeNextPositions", () => {
       [ann("a")],
       () => ({ from: 0, to: 0 }),
       () => ({ top: Number.POSITIVE_INFINITY }),
-      0,
+      () => 0,
     );
     expect(r.positions.has("a")).toBe(false);
     expect(r.attempted).toBe(1);
+  });
+
+  it("re-reads layerTop per iteration — mid-loop layer reflow does not cause Y drift", () => {
+    // Simulate the layer shifting by 10px after the first coordsAtPos call
+    // (e.g. a ResizeObserver flush or bind:clientHeight reflow). With a
+    // pre-captured layerTop the second annotation's offset would be wrong
+    // (210 - 100 = 110 instead of 100). With getLayerTop() called per
+    // iteration after coordsAtPos, both offsets are 100.
+    let coordsCall = 0;
+    let layerTopCall = 0;
+    const r = computeNextPositions(
+      [ann("a"), ann("b")],
+      () => ({ from: 0, to: 0 }),
+      () => {
+        const top = coordsCall === 0 ? 200 : 210;
+        coordsCall++;
+        return { top };
+      },
+      () => {
+        const top = layerTopCall === 0 ? 100 : 110;
+        layerTopCall++;
+        return top;
+      },
+    );
+    expect(r.positions.get("a")).toBe(100); // 200 - 100
+    expect(r.positions.get("b")).toBe(100); // 210 - 110
   });
 
   it("counts thrown when coordsAtPos throws — one stale anchor doesn't blank the column", () => {
@@ -145,7 +171,7 @@ describe("useMarginPositions / computeNextPositions", () => {
         }
         return { top: 0 };
       },
-      0,
+      () => 0,
     );
     // All three pass — sanity baseline for the next case.
     expect(r.positions.size).toBe(3);
@@ -160,7 +186,7 @@ describe("useMarginPositions / computeNextPositions", () => {
         if (call === 2) throw new Error("stale position");
         return { top: 100 };
       },
-      0,
+      () => 0,
     );
     expect(r2.positions.has("a")).toBe(true);
     expect(r2.positions.has("b")).toBe(false);
@@ -176,7 +202,7 @@ describe("useMarginPositions / computeNextPositions", () => {
       () => {
         throw new Error("view detached");
       },
-      0,
+      () => 0,
     );
     expect(r.positions.size).toBe(0);
     expect(r.attempted).toBe(3);
@@ -193,7 +219,7 @@ describe("useMarginPositions / computeNextPositions", () => {
         if (call % 2 === 0) throw new Error("stale");
         return { top: 100 };
       },
-      0,
+      () => 0,
     );
     expect(r.attempted).toBe(3);
     expect(r.thrown).toBe(1);

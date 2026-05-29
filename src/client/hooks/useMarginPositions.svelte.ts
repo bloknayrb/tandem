@@ -39,12 +39,19 @@ export interface ComputeResult {
  *   `display: none` ancestor) is skipped — it would render as `top: NaNpx`
  *   and defeat the `mapsEqual` tolerance check (NaN-vs-anything is always
  *   "unequal", causing per-frame re-render storms).
+ * - `getLayerTop` is a function, not a pre-captured number, so the layer rect
+ *   is re-read on every iteration. `coordsAtPos` forces a layout flush; if the
+ *   layer reflows between iterations (ResizeObserver, bind:clientHeight, IME
+ *   composition), a single pre-captured rect is stale for subsequent
+ *   annotations, causing Y drift. Calling `getLayerTop()` **after**
+ *   `coordsAtPos` in the same iteration reads the rect in the flush that
+ *   `coordsAtPos` already triggered — free when stable, correct when not.
  */
 export function _computeNextPositionsForTesting(
   annotations: readonly Annotation[],
   resolveRange: (ann: Annotation) => { from: number; to: number } | null,
   coordsAtPos: (pos: number) => { top: number },
-  layerTop: number,
+  getLayerTop: () => number,
 ): ComputeResult {
   const positions = new Map<string, number>();
   let attempted = 0;
@@ -56,7 +63,7 @@ export function _computeNextPositionsForTesting(
     try {
       const coords = coordsAtPos(range.from);
       if (!Number.isFinite(coords.top)) continue;
-      positions.set(ann.id, coords.top - layerTop);
+      positions.set(ann.id, coords.top - getLayerTop());
     } catch {
       thrown++;
     }
@@ -128,13 +135,12 @@ export function createMarginPositions(opts: CreateMarginPositionsOpts): MarginPo
       return;
     }
 
-    const layerTop = layer.getBoundingClientRect().top;
     const annotations = opts.getAnnotations();
     const { positions, attempted, thrown } = _computeNextPositionsForTesting(
       annotations,
       (ann) => annotationToPmRange(ann, editor.state.doc, ydoc),
       (pos) => editor.view.coordsAtPos(pos),
-      layerTop,
+      () => layer.getBoundingClientRect().top,
     );
 
     if (attempted > 0 && thrown === attempted) {
