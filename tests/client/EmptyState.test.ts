@@ -110,6 +110,38 @@ describe("EmptyState", () => {
       expect(byTestId(container, "empty-state-retry")).toBeNull();
       expect(byTestId(container, "empty-state-open-file")).toBeTruthy();
     });
+
+    it("reconnect clears state C and returns to state A", async () => {
+      const { container, rerender } = render(EmptyState, {
+        props: makeProps({ connected: false }),
+      });
+      await vi.advanceTimersByTimeAsync(DISCONNECT_DEBOUNCE_MS);
+      await tick();
+      expect(byTestId(container, "empty-state-retry")).toBeTruthy();
+
+      // Server returns: the $effect's connected branch must reset showDisconnected.
+      // This is the only path that dismisses "Server unavailable" — guard against a
+      // future "tidy" dropping the reset and stranding the user on state C.
+      await rerender(makeProps({ connected: true }));
+      await tick();
+      expect(byTestId(container, "empty-state-retry")).toBeNull();
+      expect(byTestId(container, "empty-state-open-file")).toBeTruthy();
+    });
+
+    it("reconnect within the debounce window cancels the pending flip to state C", async () => {
+      const { container, rerender } = render(EmptyState, {
+        props: makeProps({ connected: false }),
+      });
+      // Reconnect before the deadline; the effect cleanup must clearTimeout the
+      // pending flip so the stale timer never fires state C after recovery.
+      await vi.advanceTimersByTimeAsync(DISCONNECT_DEBOUNCE_MS / 2);
+      await rerender(makeProps({ connected: true }));
+      await vi.advanceTimersByTimeAsync(DISCONNECT_DEBOUNCE_MS);
+      await tick();
+
+      expect(byTestId(container, "empty-state-retry")).toBeNull();
+      expect(byTestId(container, "empty-state-open-file")).toBeTruthy();
+    });
   });
 
   it("decorative illustrations are aria-hidden", () => {
