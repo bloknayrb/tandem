@@ -295,8 +295,8 @@ $effect(() => {
 // Only `openMenuTrigger` is a tracked dependency; the mount value 0 is skipped.
 // `toggleNewTabMenu` reads + writes `showRecent`; running it under `untrack`
 // keeps showRecent out of this effect's deps (subscribing would self-retrigger
-// → update-depth loop) so only the counter — not other dismiss paths (Esc,
-// click-outside, +) — re-fires it.
+// → update-depth loop) so only the counter — not the other paths that mutate
+// showRecent directly (Esc, click-outside, the + toggle) — re-fires it.
 $effect(() => {
   if (openMenuTrigger > 0) untrack(toggleNewTabMenu);
 });

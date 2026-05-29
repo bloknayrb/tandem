@@ -168,7 +168,7 @@ export function parseCustomShortcuts(raw: unknown): Record<string, ShortcutChord
 
 /**
  * Build the runtime override map from the persisted `customShortcuts` record.
- * Returns a fresh Map each call (cheap — ≤17 entries).
+ * Returns a fresh Map each call (cheap — at most one entry per remappable shortcut).
  */
 export function buildOverrides(
   customShortcuts: Record<string, unknown> | undefined,

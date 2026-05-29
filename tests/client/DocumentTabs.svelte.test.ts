@@ -342,3 +342,31 @@ describe("DocumentTabs pointer reorder", () => {
     expect(reorder).not.toHaveBeenCalled();
   });
 });
+
+describe("DocumentTabs new-tab menu (openMenuTrigger)", () => {
+  // NewTabMenu portals to <body>, so query the document, not the container.
+  const menuSelector = '[role="dialog"][aria-label="New tab"]';
+
+  it("openMenuTrigger toggles the new-tab menu (mount 0 closed → 1 open → 2 closed)", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a")];
+    const { rerender } = render(DocumentTabs, {
+      props: { ...baseProps(tabs, reorder), openMenuTrigger: 0 },
+    });
+    await tick();
+
+    // Mount value 0 is skipped by the `> 0` guard — menu stays closed.
+    expect(document.querySelector(menuSelector)).toBeNull();
+
+    // First Ctrl+T (counter → 1) opens it. If the `untrack` wrapper ever
+    // regressed, this rerender would throw effect_update_depth_exceeded.
+    await rerender({ ...baseProps(tabs, reorder), openMenuTrigger: 1 });
+    await tick();
+    expect(document.querySelector(menuSelector)).not.toBeNull();
+
+    // Second Ctrl+T (counter → 2) toggles it closed again.
+    await rerender({ ...baseProps(tabs, reorder), openMenuTrigger: 2 });
+    await tick();
+    expect(document.querySelector(menuSelector)).toBeNull();
+  });
+});
