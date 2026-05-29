@@ -536,7 +536,8 @@ v1.0 series (concrete waves; see "Active — Toward v1.0" for the wave-structure
 | Release    | Concern                                                                                          | Status              |
 | ---------- | ------------------------------------------------------------------------------------------------ | ------------------- |
 | v0.13.0    | Stability bug-bash + redesign chrome + editor surfaces + Settings (Network + Models registry)    | Released 2026-05-25 |
-| v0.14.0    | Annotation migration (#313 + AR5 + AR6) + #477 PR 3c-ii-c (auto-config removal) + #576 docx body export | Planned       |
+| v0.13.5    | Design-system re-skin umbrella (`feat/design-system-impl` #939) + customizable keyboard shortcuts (ADR-041) + annotation GC/content-hash rename recovery (#313/#318) | Released 2026-05-29 |
+| v0.14.0    | Annotation migration (AR5 + AR6) + #477 PR 3c-ii-c (auto-config removal) + #576 docx body export | Planned       |
 | v0.15.0    | Cross-platform install matrix + #316 Cowork macOS/Linux + #428 macOS cert/notarization           | Planned             |
 | v1.0.0     | Final verification, observer soak, accessibility gate, version bump                              | Planned             |
 

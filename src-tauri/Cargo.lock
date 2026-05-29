@@ -5088,7 +5088,7 @@ dependencies = [
 
 [[package]]
 name = "tandem-desktop"
-version = "0.13.0"
+version = "0.13.5"
 dependencies = [
  "base64 0.22.1",
  "dirs",
