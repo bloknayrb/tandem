@@ -548,4 +548,67 @@ describe("loadSettings — migration chain", () => {
     expect(s.showHighlights).toBe(true);
     expect(s.showNotes).toBe(true);
   });
+
+  // fontByExtension (#811), folded into the migration chain at v12→v13 (renumbered
+  // from master's original v9→v10; see CURRENT_SCHEMA_VERSION note). Blobs below
+  // use the versions master originally wrote; normalizeKnownFields parses
+  // fontByExtension on any version, so the field's value survives the renumber.
+
+  it("v9 blob migrates to current with fontByExtension defaulting to {}", () => {
+    writeRaw({ schemaVersion: 9, leftPanelVisible: true });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.fontByExtension).toEqual({});
+    // Fresh-install behavior preserved: global default still sans.
+    expect(s.editorFont).toBe("sans");
+  });
+
+  it("preserves a valid fontByExtension override on load", () => {
+    writeRaw({ schemaVersion: 10, fontByExtension: { md: "serif", docx: "mono" } });
+    const s = loadSettings();
+    expect(s.fontByExtension).toEqual({ md: "serif", docx: "mono" });
+  });
+
+  it("parseFontByExtension drops invalid values and prototype-pollution keys", () => {
+    writeRaw({
+      schemaVersion: 10,
+      fontByExtension: {
+        md: "comic-sans", // invalid font value → dropped
+        docx: "serif", // valid → kept
+        __proto__: "mono", // dangerous key → dropped
+      },
+    });
+    const s = loadSettings();
+    expect(s.fontByExtension).toEqual({ docx: "serif" });
+    // Prototype not polluted.
+    expect(({} as Record<string, unknown>).md).toBeUndefined();
+  });
+
+  it("forward-compat (v99) sanitizes fontByExtension too", () => {
+    writeRaw({ schemaVersion: 99, fontByExtension: { md: "nope", html: "mono" } });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.fontByExtension).toEqual({ html: "mono" });
+  });
+
+  it("v1 blob migrates fully with fontByExtension defaulting to {}", () => {
+    writeRaw({ schemaVersion: 1, layout: "three-panel" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.fontByExtension).toEqual({});
+  });
+
+  // Cross-branch full-chain path: a master-line v10 blob carries the legacy
+  // `editorWidthPercent` (master never removed it) AND predates fontByExtension's
+  // renumber. It must climb v10→v11→v12→v13, converting width→editorMeasure and
+  // defaulting fontByExtension — the exact path the master/umbrella fold-in risks.
+  it("master-line v10 blob converts editorWidthPercent and gains fontByExtension", () => {
+    writeRaw({ schemaVersion: 10, editorWidthPercent: 60, fontByExtension: { md: "serif" } });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.editorMeasure).toBe("comfortable");
+    expect(s.editorWidthPercent).toBeUndefined();
+    expect(s.fontByExtension).toEqual({ md: "serif" });
+    expect(s._readOnly).toBeUndefined();
+  });
 });

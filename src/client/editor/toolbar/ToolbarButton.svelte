@@ -20,6 +20,12 @@ interface Props {
    * via this prop — those properties belong to the .toolbar-btn CSS rules so
    * :hover, .is-active, :disabled, and :focus-visible can win the cascade. */
   style?: string;
+  /** For dropdown-trigger buttons: set to "menu" or "dialog" to advertise
+   *  the popup type to assistive technology. */
+  ariaHasPopup?: "menu" | "listbox" | "tree" | "grid" | "dialog";
+  /** For dropdown-trigger buttons: reflects whether the controlled popup
+   *  is currently expanded. Paired with ariaHasPopup. */
+  ariaExpanded?: boolean;
 }
 
 const {
@@ -35,6 +41,8 @@ const {
   onMouseDown,
   onClick,
   style = "",
+  ariaHasPopup,
+  ariaExpanded,
 }: Props = $props();
 
 const ariaLabelValue = $derived(ariaLabel ?? (typeof label === "string" ? label : undefined));
@@ -53,6 +61,8 @@ const titleAttr = $derived(
   title={titleAttr}
   aria-label={ariaLabelValue}
   aria-pressed={ariaPressed}
+  aria-haspopup={ariaHasPopup}
+  aria-expanded={ariaExpanded}
   onmousedown={onMouseDown}
   onclick={onClick}
   {style}

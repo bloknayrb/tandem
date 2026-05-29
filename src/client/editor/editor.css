@@ -157,14 +157,18 @@
   border-bottom-style: solid;
 }
 
-/* Position context for authorship gutter ::before pseudo-elements */
-.tandem-editor .ProseMirror p,
-.tandem-editor .ProseMirror h1,
-.tandem-editor .ProseMirror h2,
-.tandem-editor .ProseMirror h3,
-.tandem-editor .ProseMirror h4,
-.tandem-editor .ProseMirror h5,
-.tandem-editor .ProseMirror h6 {
+/* Position context for authorship gutter ::before pseudo-elements.
+ * `.tandem-editor` IS the `.ProseMirror` element (Tiptap stacks both classes on
+ * one node), so a `.tandem-editor .ProseMirror p` descendant selector matches
+ * nothing — paragraphs stayed `position: static` and the absolutely-positioned
+ * gutter anchored to `.tandem-editor` (full editor height) instead of the block. */
+.tandem-editor p,
+.tandem-editor h1,
+.tandem-editor h2,
+.tandem-editor h3,
+.tandem-editor h4,
+.tandem-editor h5,
+.tandem-editor h6 {
   position: relative;
 }
 
@@ -277,8 +281,9 @@ body.tandem-reduce-motion .ProseMirror [data-tandem-author] {
  * centered white sheet at 8.5×11in (816×1056px @ 96dpi). No DOM injection —
  * purely a CSS class on existing Tiptap nodes.
  *
- * `position: relative` on the sheet anchors the authorship gutter ::before
- * pseudo-elements at `left: -14px` (must stay inside the sheet's padding).
+ * The gutter ::before anchors to its own paragraph/heading (made `position:
+ * relative` above); since a block's left edge aligns with the sheet's content
+ * box, the gutter's `left: -14px` still lands inside the sheet's left padding.
  * ------------------------------------------------------------------------- */
 .tandem-paged {
   background: var(--tandem-page-bg);

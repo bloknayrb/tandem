@@ -5,6 +5,7 @@ import {
   EDITOR_MEASURES,
   loadSettings,
   mergeAndClampSettings,
+  resolveFont,
   type TandemSettings,
 } from "../../src/client/hooks/useTandemSettings.js";
 import {
@@ -339,6 +340,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     theme: "system",
     accentHue: 275,
     editorFont: "sans",
+    fontByExtension: {},
     density: "cozy",
     defaultMode: "tandem",
     highContrast: false,
@@ -433,6 +435,56 @@ describe("useTandemSettings — updateSettings write path", () => {
       },
     });
     expect(next.customShortcuts).toEqual({});
+  });
+
+  // #811 — fontByExtension merge re-validation.
+  it("passes a valid fontByExtension override through the shape filter", () => {
+    const next = mergeAndClampSettings(BASE, { fontByExtension: { md: "serif", txt: "sans" } });
+    expect(next.fontByExtension).toEqual({ md: "serif", txt: "sans" });
+  });
+
+  it("drops invalid fontByExtension values on merge", () => {
+    const next = mergeAndClampSettings(BASE, {
+      fontByExtension: { md: "wingdings" as unknown as "serif", docx: "mono" },
+    });
+    expect(next.fontByExtension).toEqual({ docx: "mono" });
+  });
+});
+
+describe("resolveFont — per-format resolution order (post-#887)", () => {
+  const base = { editorFont: "sans" as const, fontByExtension: {} };
+
+  it("falls back to the global editorFont for an unknown format", () => {
+    expect(resolveFont({ ...base, editorFont: "mono" }, "rtf")).toBe("mono");
+  });
+
+  it("falls through to the global editorFont when no per-format override is set", () => {
+    // #887 follow-up: seeded DEFAULT_FONT_BY_EXTENSION removed. Every format
+    // without an explicit user override resolves to the global setting,
+    // including the ones the old map seeded (docx/txt/md/html).
+    expect(resolveFont(base, "docx")).toBe("sans");
+    expect(resolveFont(base, "txt")).toBe("sans");
+    expect(resolveFont(base, "md")).toBe("sans");
+    expect(resolveFont(base, "html")).toBe("sans");
+  });
+
+  it("the global editorFont actually changes resolution for all formats", () => {
+    // Regression test for the silent-default bug: previously, switching the
+    // global font to "mono" did nothing for docx/txt/md/html.
+    const mono = { ...base, editorFont: "mono" as const };
+    expect(resolveFont(mono, "docx")).toBe("mono");
+    expect(resolveFont(mono, "txt")).toBe("mono");
+    expect(resolveFont(mono, "md")).toBe("mono");
+    expect(resolveFont(mono, "html")).toBe("mono");
+  });
+
+  it("prefers a per-format user override over the global setting", () => {
+    expect(resolveFont({ ...base, fontByExtension: { docx: "serif" } }, "docx")).toBe("serif");
+  });
+
+  it("falls back to the global setting when format is null/undefined", () => {
+    expect(resolveFont({ ...base, editorFont: "serif" }, null)).toBe("serif");
+    expect(resolveFont({ ...base, editorFont: "serif" }, undefined)).toBe("serif");
   });
 });
 

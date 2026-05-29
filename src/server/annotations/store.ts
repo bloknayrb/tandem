@@ -231,6 +231,16 @@ export function isStoreReadOnly(): boolean {
   return readOnly;
 }
 
+/**
+ * Returns true when the annotation store is entirely disabled via
+ * `TANDEM_ANNOTATION_STORE=off`. In this mode `queueWrite`/`flush` are inert
+ * no-ops, so any flow that relies on a durable write succeeding (e.g. rename
+ * recovery before unlinking the old envelope) MUST bail.
+ */
+export function isStoreFeatureDisabled(): boolean {
+  return isFeatureDisabled();
+}
+
 /** Release the store lock. Safe to call repeatedly; no-op if we don't own it. */
 export async function releaseStoreLock(): Promise<void> {
   if (isFeatureDisabled()) return;
@@ -331,6 +341,23 @@ function emptyDoc(docHash: string, filePath: string): AnnotationDocV1 {
 
 function filePathFor(docHash: string): string {
   return path.join(getAnnotationsDir(), `${docHash}.json`);
+}
+
+/**
+ * Does an on-disk envelope exist for this docHash? Used by the rename-recovery
+ * gate (#313): recovery only runs when NO path-hash envelope exists, so it can
+ * never steal annotations from a live document. Feature-off and read errors
+ * report `false` (treat as absent — recovery's own read-only guard handles the
+ * write side).
+ */
+export async function annotationFileExists(docHash: string): Promise<boolean> {
+  if (isFeatureDisabled()) return false;
+  try {
+    await fs.access(filePathFor(docHash));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function performWrite(docHash: string, doc: AnnotationDocV1): Promise<void> {

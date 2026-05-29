@@ -22,6 +22,7 @@ export type {
 export {
   loadSettings,
   mergeAndClampSettings,
+  resolveFont,
   TEXT_SIZE_PX,
   VALID_MODEL_PROVIDERS,
 } from "./useTandemSettings.js";

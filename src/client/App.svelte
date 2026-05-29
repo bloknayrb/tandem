@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import { isUploadPath } from "../shared/paths";
+import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { Annotation, CapturedAnchor, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
@@ -62,11 +62,12 @@ import { createFirstRunNeeded } from "./hooks/useFirstRunNeeded.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
+import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
-import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+import { createTandemSettings, resolveFont, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
 import { initTauriFileDrop, tauriFileDrop } from "./hooks/useTauriFileDrop.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
@@ -93,11 +94,17 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { openFileForRuntime } from "./utils/browse-file";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
 
 const yjsSync = createYjsSync();
 onDestroy(() => yjsSync.destroy());
+
+// #864: persist unsaved scratchpad content for recovery + warn before losing
+// it. Logic lives in the hook to keep App.svelte minimal.
+const scratchpadPersistence = createScratchpadPersistence(() => yjsSync.tabs);
+onDestroy(() => scratchpadPersistence.destroy());
 
 // In-memory closed-tab history for Ctrl+Alt+T (reopen closed tab). Lifetime is
 // the app session; resets on reload. See useClosedTabStack.ts for rationale.
@@ -106,6 +113,20 @@ const inflightReopens = new Set<string>();
 
 function closeTabAndRecord(tabId: string) {
   const tab = yjsSync.tabs.find((t) => t.id === tabId);
+  // #864: warn before closing a scratchpad that has unsaved content. Annotations
+  // are intentionally out of scope (accepted loss); only document text matters.
+  if (tab && isScratchpadPath(tab.filePath)) {
+    const uuid = scratchpadUuidFromPath(tab.filePath);
+    if (uuid && scratchpadPersistence.hasUnsavedContent(uuid)) {
+      const ok = window.confirm(
+        "This scratchpad has unsaved content that will be lost. Close it anyway?",
+      );
+      if (!ok) return;
+      // User accepted the loss — discard the recovery copy so the next
+      // scratchpad open doesn't restore the content they just dismissed.
+      scratchpadPersistence.clearUnsaved(uuid);
+    }
+  }
   if (tab && !isUploadPath(tab.filePath)) {
     closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
   }
@@ -346,6 +367,27 @@ if (import.meta.env.DEV) {
 let paletteOpen = $state(false);
 let fileOpenDialogOpen = $state(false);
 
+// Open-file action: native picker in Tauri, FileOpenDialog modal in the
+// browser distribution. Error surfacing is owned by `openFileForRuntime` /
+// `browseNativeFile` via the `onError` callback; void callers can fire-and-
+// forget safely.
+function requestOpenFile(): Promise<void> {
+  return openFileForRuntime({
+    isTauri: isTauriRuntime(),
+    openModal: () => {
+      fileOpenDialogOpen = true;
+    },
+    onError: (message) =>
+      notifications.push({
+        id: generateNotificationId(),
+        type: "general-error",
+        severity: "error",
+        message,
+        timestamp: Date.now(),
+      }),
+  });
+}
+
 // Issue #660 — titlebar settings-icon update-available dot. Acknowledged
 // whenever the user opens settings (popover OR modal — any tab counts). Do
 // NOT destructure: the `showDot` getter loses reactivity when pulled out.
@@ -438,9 +480,7 @@ wireActionDeps({
     const id = yjsSync.activeTabId;
     if (id) closeTabAndRecord(id);
   },
-  openFileDialog: () => {
-    fileOpenDialogOpen = true;
-  },
+  openFileDialog: () => void requestOpenFile(),
   toggleLeftPanel: () => toggleLeftPanel(),
   toggleRightPanel: () => toggleRightPanel(),
   reopenClosedTab: () => void reopenClosedTab(),
@@ -583,7 +623,11 @@ $effect(() => {
 
 createTheme(() => settingsState.settings.theme);
 createAccentHue(() => settingsState.settings.accentHue);
-createRootEditorFont(() => settingsState.settings.editorFont);
+// #811: resolve the font from the ACTIVE tab's format so a tab switch
+// re-derives. `activeTab` MUST be dereferenced inside this getter closure —
+// hoisting the format into a const here would freeze the value at init and
+// the $effect would never re-run on tab switch (stale-closure trap).
+createRootEditorFont(() => resolveFont(settingsState.settings, activeTab?.format));
 createDensity(() => settingsState.settings.density);
 createHighContrast(() => settingsState.settings.highContrast);
 createAnnotationPatterns(() => settingsState.settings.annotationPatterns);
@@ -815,7 +859,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "open-file": (e) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    fileOpenDialogOpen = true;
+    void requestOpenFile();
   },
   "pick-tab": (e, ctx) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -1485,7 +1529,7 @@ const tutorial = createTutorial(
     onTabClose={closeTabAndRecord}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
-    onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
+    onRequestOpenDialog={() => void requestOpenFile()}
     closedTabTop={closedTabStack.top}
     onReopenClosed={reopenClosedTab}
   />

@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { atomicWrite } from "../file-io/index.js";
+import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { extractMarkdown } from "./document-model.js";
 import { getCurrentDoc } from "./document-service.js";
@@ -84,19 +85,46 @@ export async function convertToMarkdown(
   const sourceDir = path.dirname(docState.filePath);
   let resolvedOutput: string;
   if (outputPath) {
-    resolvedOutput = path.resolve(outputPath);
-    // Reject UNC paths (Windows NTLM security)
-    if (resolvedOutput.startsWith("\\\\") || resolvedOutput.startsWith("//")) {
-      throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
-        code: "INVALID_PATH",
-      });
+    // Reject relative paths — they'd silently resolve against the server's CWD,
+    // never the caller's intent (mirrors tandem_exportAnnotations' schema
+    // refine). The isAbsolute guard also lets static analysis prove the
+    // downstream fs.realpath sink is fed an explicitly-validated path
+    // (CodeQL js/path-injection — the sibling export tool's identical realpath
+    // is unflagged precisely because its outputPath carries this guard).
+    if (!path.isAbsolute(outputPath)) {
+      throw Object.assign(
+        new Error(
+          "outputPath must be an absolute path (a relative path would silently resolve to the server's CWD).",
+        ),
+        { code: "INVALID_PATH" },
+      );
     }
-    // If they gave a directory, append the filename
+    // Reject UNC + `\\?\` extended-length prefixes pre- and post-resolve.
+    // `path.resolve` does NOT normalise `\\?\UNC\…` back to `\\…`, so the
+    // bare `\\` check missed that bypass — shared helper closes it.
+    const rawReason = rejectUnsafeWindowsPrefix(outputPath);
+    if (rawReason) {
+      throw Object.assign(new Error(rawReason), { code: "INVALID_PATH" });
+    }
+    resolvedOutput = path.resolve(outputPath);
+    const resolvedReason = rejectUnsafeWindowsPrefix(resolvedOutput);
+    if (resolvedReason) {
+      throw Object.assign(new Error(resolvedReason), { code: "INVALID_PATH" });
+    }
+    // If they gave a directory, append the filename. Use realpath to follow
+    // symlinked export dirs and re-check the resolved location's prefix.
     try {
-      const stat = await fs.stat(resolvedOutput);
+      const real = await fs.realpath(resolvedOutput);
+      const realReason = rejectUnsafeWindowsPrefix(real);
+      if (realReason) {
+        throw Object.assign(new Error(realReason), { code: "INVALID_PATH" });
+      }
+      const stat = await fs.stat(real);
       if (stat.isDirectory()) {
         const baseName = path.basename(docState.filePath, path.extname(docState.filePath));
-        resolvedOutput = path.join(resolvedOutput, `${baseName}.md`);
+        resolvedOutput = path.join(real, `${baseName}.md`);
+      } else {
+        resolvedOutput = real;
       }
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;

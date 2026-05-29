@@ -6,6 +6,14 @@ export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 
 /** File extensions the server accepts for opening. */
 export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
+
+// DEFAULT_FONT_BY_EXTENSION removed as a #887 follow-up: seeded defaults
+// silently overrode the user's global editor-font choice for un-customized
+// formats (changing Settings > Editor Font did nothing for .docx / .html /
+// .txt until the user clicked every per-format radio group). The global
+// setting is now the true default; `fontByExtension` is a sparse
+// user-overrides map.
+
 export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 export const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const TYPING_DEBOUNCE = 3000; // 3 seconds

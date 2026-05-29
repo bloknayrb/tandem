@@ -138,6 +138,10 @@ first-run-providers
 first-run-save
 first-run-skip
 first-run-skip-secondary
+font-by-extension-reset
+font-by-extension-row-{*}
+font-by-extension-section
+font-by-extension-{*}-{*}
 formatbar-hide-btn
 formatting-bar
 harness-acknowledge
@@ -171,6 +175,7 @@ margin-anchor-dot
 margin-bubble-{*}
 margin-column-{*}
 margin-leaders-{*}
+margin-view-hint
 margin-view-toggle
 mode-solo-btn
 mode-tandem-btn
@@ -262,6 +267,7 @@ settings-modal-default-mode-solo-btn
 settings-modal-default-mode-tandem-btn
 settings-modal-display-name
 settings-modal-dwell-time-slider
+settings-modal-margin-view-hint
 settings-modal-margin-view-toggle
 settings-modal-mcp-status
 settings-modal-narrow-hamburger

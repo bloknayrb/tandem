@@ -13,6 +13,37 @@ type Props = SettingsTabContext;
 
 let { settings, onUpdate }: Props = $props();
 
+// #811: per-format editor font. Keyed by the normalized `format` string
+// (matches `detectFormat`: `.markdown`→md, `.htm`→html).
+const FONT_FORMAT_ROWS = [
+  { format: "md", label: "Markdown (.md)" },
+  { format: "docx", label: "Word (.docx)" },
+  { format: "html", label: "HTML (.html)" },
+  { format: "txt", label: "Plain text (.txt)" },
+] as const;
+const FONT_OPTIONS = [
+  ["sans", "Sans"],
+  ["serif", "Serif"],
+  ["mono", "Mono"],
+] as const;
+
+// Effective per-format value shown as the active radio: user override wins,
+// else falls through to the global Editor Font setting. Matches the
+// post-#887 `resolveFont` contract — no seeded per-format defaults.
+function effectiveFontFor(format: string): EditorFont {
+  return settings.fontByExtension?.[format] ?? settings.editorFont;
+}
+
+function setFontFor(format: string, font: EditorFont): void {
+  onUpdate({ fontByExtension: { ...settings.fontByExtension, [format]: font } });
+}
+
+function resetFontsToDefaults(): void {
+  onUpdate({ fontByExtension: {} });
+}
+
+const hasFontOverrides = $derived(Object.keys(settings.fontByExtension ?? {}).length > 0);
+
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 
@@ -68,6 +99,18 @@ const densityRg = createRadioGroup<Density>(
   ["compact", "cozy", "spacious"] as const,
   (d) => onUpdate({ density: d }),
 );
+// Per-format font radio groups (#811). Each group is its own RG instance so
+// arrow-key navigation is scoped to one row at a time. `createRadioGroup`
+// querySelectorAll's `[role="radio"]` within the container — the radio
+// buttons below already carry that attribute (was missing before #887).
+const fontByExtensionRgs: Record<string, ReturnType<typeof createRadioGroup<EditorFont>>> = {};
+for (const row of FONT_FORMAT_ROWS) {
+  fontByExtensionRgs[row.format] = createRadioGroup<EditorFont>(
+    () => effectiveFontFor(row.format),
+    ["sans", "serif", "mono"] as const,
+    (f) => setFontFor(row.format, f),
+  );
+}
 </script>
 
 <!-- Theme -->
@@ -201,6 +244,57 @@ const densityRg = createRadioGroup<Density>(
         {label}
       </button>
     {/each}
+  </div>
+</div>
+
+<!-- Default Font by File Type (#811) -->
+<div data-testid="font-by-extension-section">
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+    <div id="settings-font-by-ext-label" style={`${sectionLabelStyle} margin-bottom: 0;`}>
+      Default font by file type
+    </div>
+    <button
+      data-testid="font-by-extension-reset"
+      type="button"
+      disabled={!hasFontOverrides}
+      onclick={resetFontsToDefaults}
+      style={`background: none; border: none; padding: 0; font-size: var(--tandem-text-2xs); color: ${hasFontOverrides ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-subtle)"}; cursor: ${hasFontOverrides ? "pointer" : "default"}; text-decoration: ${hasFontOverrides ? "underline" : "none"};`}
+    >
+      Reset to defaults
+    </button>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: var(--tandem-space-2);">
+    {#each FONT_FORMAT_ROWS as row (row.format)}
+      <div
+        data-testid={`font-by-extension-row-${row.format}`}
+        style="display: flex; align-items: center; gap: var(--tandem-space-2);"
+      >
+        <span style="flex: 0 0 7rem; font-size: 11px; color: var(--tandem-fg-muted);">{row.label}</span>
+        <div
+          role="radiogroup"
+          aria-label={`Default font for ${row.label}`}
+          tabindex="0"
+          onkeydown={fontByExtensionRgs[row.format].handleKeyDown}
+          style="display: flex; gap: var(--tandem-space-2); flex: 1;"
+        >
+          {#each FONT_OPTIONS as [value, label] (value)}
+            <button
+              data-testid={`font-by-extension-${row.format}-${value}`}
+              role="radio"
+              aria-checked={effectiveFontFor(row.format) === value}
+              tabindex={fontByExtensionRgs[row.format].tabIndexFor(value)}
+              onclick={() => setFontFor(row.format, value)}
+              style={cardStyle(effectiveFontFor(row.format) === value)}
+            >
+              {label}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/each}
+  </div>
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+    Each file type uses this font; files with no specific choice fall back to the Editor Font above.
   </div>
 </div>
 

@@ -125,44 +125,26 @@ test("mouse drag reorders tabs", async ({ page }) => {
   expect(s2Id).toBeTruthy();
 
   // Drag the later-positioned tab onto the earlier one — their relative order should flip.
-  // Playwright's locator.dragTo synthesizes mouse events on Chromium and does NOT fire
-  // HTML5 dragstart/dragover/drop, which are what DocumentTabs.svelte listens to. Dispatch
-  // real DragEvents via page.evaluate instead. Chromium ignores `dataTransfer` in the
-  // DragEvent init dict, so build a generic Event and assign dataTransfer via defineProperty.
-  // See docs/lessons-learned.md (Playwright dragTo vs HTML5 DnD).
+  // Reorder is now driven by POINTER events (DocumentTabs.svelte), not HTML5 DnD: in the
+  // Tauri desktop app `dragDropEnabled: true` makes the WebView swallow HTML5 drag events,
+  // so the production handlers listen on pointerdown/move/up. Playwright's page.mouse.*
+  // synthesizes real pointer events, so a native mouse drag now exercises the real path
+  // (it could not with the old HTML5 handlers — see docs/lessons-learned.md #70).
+  const activeBefore = await page
+    .locator('[data-testid^="tab-"][role="tab"][data-active="true"]')
+    .getAttribute("data-testid");
+
   const [fromId, toId] = initialS1 < initialS2 ? [s2Id, s1Id] : [s1Id, s2Id];
-  await page.evaluate(
-    ({ fromSel, toSel }) => {
-      const from = document.querySelector<HTMLElement>(fromSel);
-      const to = document.querySelector<HTMLElement>(toSel);
-      if (!from || !to) throw new Error(`tabs not found: from=${!!from} to=${!!to}`);
-      const rect = to.getBoundingClientRect();
-      // Drop on the LEFT half so handleDragOver picks side: "left".
-      const clientX = rect.left + 5;
-      const clientY = rect.top + rect.height / 2;
-      const store: Record<string, string> = {};
-      const dt = {
-        setData: (k: string, v: string) => {
-          store[k] = v;
-        },
-        getData: (k: string) => store[k] ?? "",
-        effectAllowed: "move",
-        dropEffect: "move",
-      } as unknown as DataTransfer;
-      const fire = (el: HTMLElement, type: string) => {
-        const evt = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
-        Object.defineProperty(evt, "dataTransfer", { value: dt, configurable: true });
-        Object.defineProperty(evt, "clientX", { value: clientX, configurable: true });
-        Object.defineProperty(evt, "clientY", { value: clientY, configurable: true });
-        el.dispatchEvent(evt);
-      };
-      fire(from, "dragstart");
-      fire(to, "dragover");
-      fire(to, "drop");
-      fire(from, "dragend");
-    },
-    { fromSel: `[data-testid="tab-${fromId}"]`, toSel: `[data-testid="tab-${toId}"]` },
-  );
+  const fromBox = await page.locator(`[data-testid="tab-${fromId}"]`).boundingBox();
+  const toBox = await page.locator(`[data-testid="tab-${toId}"]`).boundingBox();
+  if (!fromBox || !toBox) throw new Error("tab bounding boxes not found");
+
+  await page.mouse.move(fromBox.x + fromBox.width / 2, fromBox.y + fromBox.height / 2);
+  await page.mouse.down();
+  // Multi-step move guarantees pointermove events fire and the 5px threshold is crossed.
+  // Drop on the LEFT half of the target so the handler picks side: "left".
+  await page.mouse.move(toBox.x + 5, toBox.y + toBox.height / 2, { steps: 12 });
+  await page.mouse.up();
 
   // Assert the signed index delta flipped sign. Robust to extra tabs from session restore.
   await expect
@@ -171,6 +153,13 @@ test("mouse drag reorders tabs", async ({ page }) => {
       return Math.sign(names.indexOf("sample.md") - names.indexOf("sample2.md"));
     })
     .toBe(-Math.sign(initialDelta));
+
+  // The trailing click after a drag must be suppressed: the active tab should
+  // not change just because we dragged a tab.
+  const activeAfter = await page
+    .locator('[data-testid^="tab-"][role="tab"][data-active="true"]')
+    .getAttribute("data-testid");
+  expect(activeAfter).toBe(activeBefore);
 });
 
 test("open file button is always visible", async ({ page }) => {

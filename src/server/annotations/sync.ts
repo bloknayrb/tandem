@@ -68,6 +68,8 @@ import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/consta
 import { shouldSkipDurableSync, withFileSync } from "../../shared/origins.js";
 import { type RawAnnotation, sanitizeAnnotation } from "../../shared/sanitize.js";
 import { AnnotationTypeSchema } from "../../shared/types.js";
+import { extractText } from "../mcp/document-model.js";
+import { contentHash } from "./doc-hash.js";
 import { forgetDoc, logLegacyMigration, relaySanitizationEvent } from "./migration-log.js";
 import {
   type AnnotationDocV1,
@@ -207,10 +209,15 @@ function snapshot(ydoc: Y.Doc, docHash: string, meta: SyncMeta): AnnotationDocV1
   const tombstoneMap = tombstonesByDoc.get(docHash);
   const tombstones = tombstoneMap ? Array.from(tombstoneMap.values()) : [];
 
+  // Recompute the content hash on EVERY durable write (#313). This keeps the
+  // envelope's content fingerprint in lockstep with the live document so the
+  // rename-recovery path can match a renamed-but-unedited file by exact text.
+  const contentHashValue = contentHash(extractText(ydoc));
+
   return {
     schemaVersion: SCHEMA_VERSION,
     docHash,
-    meta: { filePath: meta.filePath, lastUpdated: Date.now() },
+    meta: { filePath: meta.filePath, lastUpdated: Date.now(), contentHash: contentHashValue },
     annotations,
     tombstones,
     replies,
