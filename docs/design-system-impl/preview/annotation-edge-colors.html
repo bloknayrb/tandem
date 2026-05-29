@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tandem — Annotation Card Chrome (audience-first taxonomy)</title>
+    <style>
+      /* Tokens mirrored from bundle (colors_and_type.css + app.css :491–618). */
+      :root {
+        --tandem-author-user: oklch(0.55 0.14 245);
+        --tandem-author-claude: #d97757;
+        --tandem-suggestion: oklch(0.52 0.18 305);
+
+        /* Light surface family */
+        --l-surface: oklch(1 0 0);
+        --l-surface-sunk: oklch(0.96 0.006 80);
+        --l-border: oklch(0.92 0.005 280);
+        --l-fg: oklch(0.22 0.012 280);
+        --l-fg-subtle: oklch(0.54 0.008 280);
+        --l-fg-faint: oklch(0.66 0.008 280);
+        --l-tint-suggest: oklch(0.985 0.008 295);
+        --l-tint-comment-user: oklch(0.987 0.005 250);
+        --l-author-name-user: oklch(0.35 0.14 245);
+        --l-author-name-claude: oklch(0.40 0.12 45);
+        --l-badge-suggest-bg: oklch(0.94 0.04 305 / 0.6);
+        --l-badge-suggest-fg: oklch(0.36 0.18 305);
+        --l-badge-suggest-border: oklch(0.88 0.08 305 / 0.4);
+        --l-badge-comment-bg: oklch(0.94 0.025 245 / 0.5);
+        --l-badge-comment-fg: oklch(0.35 0.14 245);
+        --l-badge-comment-border: oklch(0.84 0.10 245 / 0.35);
+        --l-diff-del-bg: color-mix(in srgb, #ef4444 7%, var(--l-surface));
+        --l-diff-del-fg: oklch(0.42 0.16 30);
+        --l-diff-add-bg: color-mix(in srgb, #16a34a 7%, var(--l-surface));
+        --l-diff-add-fg: oklch(0.36 0.13 150);
+
+        /* Dark surface family */
+        --d-surface: oklch(0.27 0.012 280);
+        --d-surface-sunk: oklch(0.20 0.012 280);
+        --d-border: oklch(0.34 0.010 280);
+        --d-fg: oklch(0.94 0.006 280);
+        --d-fg-subtle: oklch(0.70 0.008 280);
+        --d-fg-faint: oklch(0.62 0.008 280);
+        --d-tint-suggest: oklch(0.24 0.04 295);
+        --d-tint-comment-user: oklch(0.24 0.03 250);
+        --d-author-name-user: oklch(0.72 0.13 245);
+        --d-author-name-claude: oklch(0.78 0.12 45);
+        --d-badge-suggest-bg: oklch(0.30 0.08 305);
+        --d-badge-suggest-fg: oklch(0.85 0.14 305);
+        --d-badge-suggest-border: oklch(0.40 0.08 305);
+        --d-badge-comment-bg: oklch(0.30 0.06 245);
+        --d-badge-comment-fg: oklch(0.85 0.13 245);
+        --d-badge-comment-border: oklch(0.40 0.08 245);
+        --d-diff-del-bg: color-mix(in srgb, #ef4444 12%, var(--d-surface));
+        --d-diff-del-fg: oklch(0.85 0.14 30);
+        --d-diff-add-bg: color-mix(in srgb, #16a34a 12%, var(--d-surface));
+        --d-diff-add-fg: oklch(0.78 0.14 150);
+
+        --page-bg: oklch(0.985 0.004 80);
+        --page-fg: oklch(0.20 0.010 270);
+        --page-fg-muted: oklch(0.48 0.008 280);
+        --page-border: oklch(0.86 0.006 280);
+      }
+
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0;
+        font-family: "SN Pro", "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background: var(--page-bg);
+        color: var(--page-fg);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .wrap { max-width: 1280px; margin: 0 auto; padding: 40px 32px 80px; }
+      header { margin-bottom: 32px; }
+      h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; font-weight: 600; }
+      h2 { font-size: 18px; margin: 48px 0 16px; letter-spacing: -0.005em; font-weight: 600; }
+      h3 {
+        font-size: 12px; font-weight: 600; margin: 0 0 12px;
+        color: var(--page-fg-muted); letter-spacing: 0.06em; text-transform: uppercase;
+      }
+      p.lead { color: var(--page-fg-muted); max-width: 80ch; margin: 0 0 8px; }
+      code {
+        font-family: "Sono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px; background: oklch(0.96 0.004 80); padding: 1px 5px;
+        border-radius: 3px; color: var(--page-fg);
+      }
+
+      .pair {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+        margin-bottom: 28px;
+      }
+      .surface {
+        padding: 16px; border-radius: 10px;
+        border: 1px solid var(--page-border);
+      }
+      .surface.l { background: var(--l-surface-sunk); }
+      .surface.d { background: var(--d-surface-sunk); }
+
+      /* Bundle's .anno-card recipe — app.css:491–512 */
+      .anno-card {
+        background: var(--l-surface);
+        border: 1px solid var(--l-border);
+        border-radius: 16px;
+        padding: 14px 14px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        box-shadow:
+          0 1px 2px rgba(0,0,0,0.05),
+          0 4px 12px -2px rgba(0,0,0,0.07),
+          0 12px 24px -8px rgba(0,0,0,0.06);
+        margin-bottom: 12px;
+        color: var(--l-fg);
+      }
+      .surface.d .anno-card { background: var(--d-surface); border-color: var(--d-border); color: var(--d-fg); }
+
+      .surface.l .anno-card.suggest        { background: var(--l-tint-suggest); }
+      .surface.l .anno-card.comment-user   { background: var(--l-tint-comment-user); }
+      .surface.d .anno-card.suggest        { background: var(--d-tint-suggest); }
+      .surface.d .anno-card.comment-user   { background: var(--d-tint-comment-user); }
+
+      /* Header — app.css:518–547 */
+      .card-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .author-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+      .author-dot.user { background: var(--tandem-author-user); }
+      .author-dot.claude { background: var(--tandem-author-claude); }
+      .author-name { font-size: 11px; font-weight: 600; }
+      .author-name.user { color: var(--l-author-name-user); }
+      .author-name.claude { color: var(--l-author-name-claude); }
+      .surface.d .author-name.user { color: var(--d-author-name-user); }
+      .surface.d .author-name.claude { color: var(--d-author-name-claude); }
+
+      .imported-byline {
+        font-style: italic; font-size: 11px;
+        color: var(--l-fg-subtle);
+      }
+      .surface.d .imported-byline { color: var(--d-fg-subtle); }
+
+      .type-badge {
+        font-family: "Sono", "JetBrains Mono", ui-monospace, monospace;
+        font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase;
+        padding: 2px 8px; border-radius: 999px;
+        background: var(--l-surface-sunk); color: var(--l-fg-subtle);
+        border: 1px solid var(--l-border);
+      }
+      .type-badge.suggest {
+        background: var(--l-badge-suggest-bg);
+        color: var(--l-badge-suggest-fg);
+        border-color: var(--l-badge-suggest-border);
+      }
+      .type-badge.comment {
+        background: var(--l-badge-comment-bg);
+        color: var(--l-badge-comment-fg);
+        border-color: var(--l-badge-comment-border);
+      }
+      .surface.d .type-badge {
+        background: var(--d-surface-sunk); color: var(--d-fg-subtle); border-color: var(--d-border);
+      }
+      .surface.d .type-badge.suggest {
+        background: var(--d-badge-suggest-bg);
+        color: var(--d-badge-suggest-fg);
+        border-color: var(--d-badge-suggest-border);
+      }
+      .surface.d .type-badge.comment {
+        background: var(--d-badge-comment-bg);
+        color: var(--d-badge-comment-fg);
+        border-color: var(--d-badge-comment-border);
+      }
+
+      .card-time {
+        margin-left: auto;
+        font-family: "Sono", "JetBrains Mono", ui-monospace, monospace;
+        font-size: 9px; color: var(--l-fg-faint);
+      }
+      .surface.d .card-time { color: var(--d-fg-faint); }
+
+      /* Body — app.css:548 */
+      .card-body { font-size: 12.5px; line-height: 1.5; color: inherit; }
+      /* Rationale — app.css:549–556 */
+      .card-rationale {
+        font-family: "Source Serif Pro", "Iowan Old Style", Georgia, serif;
+        font-size: 11.5px; line-height: 1.45;
+        color: var(--l-fg-subtle); font-style: italic;
+        padding: 0 10px;
+      }
+      .surface.d .card-rationale { color: var(--d-fg-subtle); }
+
+      /* Diff — app.css:557–578 */
+      .diff-block { display: flex; flex-direction: column; gap: 3px;
+                    font-size: 11.5px;
+                    font-family: "Source Serif Pro", "Iowan Old Style", Georgia, serif; }
+      .diff-del {
+        padding: 4px 10px; border-radius: 7px;
+        background: var(--l-diff-del-bg); color: var(--l-diff-del-fg);
+        text-decoration: line-through;
+        border: 1px solid color-mix(in srgb, #ef4444 12%, transparent);
+      }
+      .diff-add {
+        padding: 4px 10px; border-radius: 7px;
+        background: var(--l-diff-add-bg); color: var(--l-diff-add-fg);
+        border: 1px solid color-mix(in srgb, #16a34a 12%, transparent);
+      }
+      .surface.d .diff-del { background: var(--d-diff-del-bg); color: var(--d-diff-del-fg); }
+      .surface.d .diff-add { background: var(--d-diff-add-bg); color: var(--d-diff-add-fg); }
+
+      /* Actions — app.css:579–618 */
+      .card-actions {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 4px; margin-top: 2px; flex-wrap: wrap;
+      }
+      .btn-sm {
+        height: 26px; padding: 0 12px; border-radius: 999px;
+        font-family: inherit; font-size: 11.5px; font-weight: 500;
+        letter-spacing: -0.005em;
+        display: inline-flex; align-items: center; gap: 6px;
+        white-space: nowrap; border: 1px solid transparent; cursor: pointer;
+      }
+      .btn-sm.primary { background: oklch(0.30 0.024 55); color: var(--l-surface); font-weight: 600; border: none; }
+      .surface.d .btn-sm.primary { background: var(--d-fg); color: var(--d-surface); }
+      .btn-sm.ghost { background: transparent; color: var(--l-fg-subtle); }
+      .surface.d .btn-sm.ghost { color: var(--d-fg-subtle); }
+      .btn-sm.send { background: oklch(0.50 0.13 250); color: white; font-weight: 600; border: none; }
+
+      /* Meta caption under each card */
+      .meta-caption {
+        font-family: "Sono", "JetBrains Mono", ui-monospace, monospace;
+        font-size: 10.5px; color: var(--page-fg-muted);
+        margin: -4px 0 18px; padding-left: 4px;
+        line-height: 1.5;
+      }
+      .meta-caption strong { color: var(--page-fg); font-weight: 500; }
+
+      .legend {
+        display: flex; gap: 18px; flex-wrap: wrap;
+        padding: 14px 18px; background: oklch(0.98 0.004 80);
+        border: 1px solid var(--page-border); border-radius: 8px;
+        font-size: 12px; color: var(--page-fg); margin-bottom: 32px;
+      }
+      .legend .swatch {
+        display: inline-block; width: 14px; height: 14px;
+        border: 1.5px solid transparent; border-radius: 999px;
+        vertical-align: -3px; margin-right: 6px;
+      }
+      .legend .swatch.user { background: var(--tandem-author-user); }
+      .legend .swatch.claude { background: var(--tandem-author-claude); }
+      .legend .swatch.suggestion {
+        background: var(--tandem-suggestion); border-radius: 3px;
+        width: 18px; height: 12px; vertical-align: -2px;
+      }
+
+      .anti {
+        margin-top: 28px; padding: 18px 22px;
+        background: oklch(0.985 0.04 25 / 0.4);
+        border: 1px solid oklch(0.85 0.10 25); border-radius: 8px;
+        font-size: 13px;
+      }
+      .anti strong { color: oklch(0.45 0.18 25); }
+      .anti ul { margin: 8px 0 0; padding-left: 20px; }
+      .anti li { margin-bottom: 4px; }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <header>
+        <h1>Annotation card chrome — audience-first taxonomy</h1>
+        <p class="lead">
+          Six rows of <code>{audience, author, suggestedText}</code> rendered in the bundle's
+          actual card chrome from <code>ui_kits/app/AnnotationCard.svelte</code> +
+          <code>app.css:491–618</code>. The discriminator is <strong>background tint</strong>
+          (not a left-border edge color); the <strong>header</strong> carries the author dot,
+          name, type badge, and timestamp; the <strong>actions row</strong> is type-specific.
+          This is the load-bearing visual rule for Phase 3.3 — protects ADR-027 + Conflict #8.
+        </p>
+      </header>
+
+      <section class="legend">
+        <span><span class="swatch user"></span>cobalt author dot — <code>--tandem-author-user</code></span>
+        <span><span class="swatch claude"></span>coral author dot — <code>--tandem-author-claude</code></span>
+        <span><span class="swatch suggestion"></span>violet suggestion tint &amp; badge — <code>--tandem-suggestion</code></span>
+      </section>
+
+      <h2>Five taxonomy combinations — light and dark, bundle chrome</h2>
+      <p class="lead" style="margin-bottom: 24px;">
+        Suggestions are <strong>Claude-authored only</strong>. Users author notes, comments,
+        and highlights — never suggestions. The taxonomy below is complete.
+      </p>
+
+      <!-- Row 1: NoteCard -->
+      <div class="pair">
+        <div>
+          <h3>Light · NoteCard (audience=private, author=user)</h3>
+          <div class="surface l">
+            <div class="anno-card">
+              <div class="card-head">
+                <span class="author-dot user"></span>
+                <span class="author-name user">You</span>
+                <span class="card-time">just now</span>
+              </div>
+              <div class="card-body">Remember to ask Bryan about the Q3 launch date.</div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm send">Send to Claude</button>
+                  <button class="btn-sm ghost">Resolve</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Dark · NoteCard</h3>
+          <div class="surface d">
+            <div class="anno-card">
+              <div class="card-head">
+                <span class="author-dot user"></span>
+                <span class="author-name user">You</span>
+                <span class="card-time">just now</span>
+              </div>
+              <div class="card-body">Remember to ask Bryan about the Q3 launch date.</div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm send">Send to Claude</button>
+                  <button class="btn-sm ghost">Resolve</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="meta-caption">
+        audience: <strong>private</strong> · author: <strong>user</strong> · suggestedText: — ·
+        bundle <code>cardType</code>: <strong>note</strong> · tint: <strong>none (default surface)</strong> ·
+        badge: <strong>none</strong> · actions: <strong>Send to Claude · Resolve</strong>
+      </div>
+
+      <!-- Row 2: CommentCard, user→claude -->
+      <div class="pair">
+        <div>
+          <h3>Light · CommentCard (audience=claude, author=user)</h3>
+          <div class="surface l">
+            <div class="anno-card comment-user">
+              <div class="card-head">
+                <span class="author-dot user"></span>
+                <span class="author-name user">You</span>
+                <span class="type-badge comment">Comment</span>
+                <span class="card-time">3m ago</span>
+              </div>
+              <div class="card-body">Should this be reframed as a question to make it more inviting?</div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm primary">Resolve</button>
+                  <button class="btn-sm ghost">Edit</button>
+                  <button class="btn-sm ghost">Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Dark · CommentCard (user→claude)</h3>
+          <div class="surface d">
+            <div class="anno-card comment-user">
+              <div class="card-head">
+                <span class="author-dot user"></span>
+                <span class="author-name user">You</span>
+                <span class="type-badge comment">Comment</span>
+                <span class="card-time">3m ago</span>
+              </div>
+              <div class="card-body">Should this be reframed as a question to make it more inviting?</div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm primary">Resolve</button>
+                  <button class="btn-sm ghost">Edit</button>
+                  <button class="btn-sm ghost">Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="meta-caption">
+        audience: <strong>claude</strong> · author: <strong>user</strong> · suggestedText: — ·
+        bundle <code>cardType</code>: <strong>comment-user</strong> · tint: <strong>cobalt</strong> ·
+        badge: <strong>Comment (cobalt)</strong> · actions: <strong>Resolve · Edit · Delete</strong>
+      </div>
+
+      <!-- Row 3: CommentCard, claude→claude -->
+      <div class="pair">
+        <div>
+          <h3>Light · CommentCard (audience=claude, author=claude)</h3>
+          <div class="surface l">
+            <div class="anno-card">
+              <div class="card-head">
+                <span class="author-dot claude"></span>
+                <span class="author-name claude">Claude</span>
+                <span class="type-badge comment">Comment</span>
+                <span class="card-time">5m ago</span>
+              </div>
+              <div class="card-body">The transition from §2 to §3 feels abrupt — consider a bridge sentence.</div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm primary">Resolve</button>
+                  <button class="btn-sm ghost">Edit</button>
+                  <button class="btn-sm ghost">Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Dark · CommentCard (claude→claude)</h3>
+          <div class="surface d">
+            <div class="anno-card">
+              <div class="card-head">
+                <span class="author-dot claude"></span>
+                <span class="author-name claude">Claude</span>
+                <span class="type-badge comment">Comment</span>
+                <span class="card-time">5m ago</span>
+              </div>
+              <div class="card-body">The transition from §2 to §3 feels abrupt — consider a bridge sentence.</div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm primary">Resolve</button>
+                  <button class="btn-sm ghost">Edit</button>
+                  <button class="btn-sm ghost">Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="meta-caption">
+        audience: <strong>claude</strong> · author: <strong>claude</strong> · suggestedText: — ·
+        bundle: <strong>no <code>comment-claude</code> tint exists</strong> (default surface) ·
+        badge: <strong>Comment (cobalt)</strong> · actions: <strong>Resolve · Edit · Delete</strong>
+      </div>
+
+      <!-- Row 4: SuggestionCard, claude-authored -->
+      <div class="pair">
+        <div>
+          <h3>Light · SuggestionCard (Claude-authored)</h3>
+          <div class="surface l">
+            <div class="anno-card suggest">
+              <div class="card-head">
+                <span class="author-dot claude"></span>
+                <span class="author-name claude">Claude</span>
+                <span class="type-badge suggest">Suggestion</span>
+                <span class="card-time">7m ago</span>
+              </div>
+              <div class="card-rationale">More direct phrasing — reads more confidently.</div>
+              <div class="diff-block">
+                <div class="diff-del">simplify onboarding</div>
+                <div class="diff-add">streamline onboarding</div>
+              </div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm primary">Accept</button>
+                  <button class="btn-sm ghost">Dismiss</button>
+                  <button class="btn-sm ghost">Edit</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Dark · SuggestionCard (Claude-authored)</h3>
+          <div class="surface d">
+            <div class="anno-card suggest">
+              <div class="card-head">
+                <span class="author-dot claude"></span>
+                <span class="author-name claude">Claude</span>
+                <span class="type-badge suggest">Suggestion</span>
+                <span class="card-time">7m ago</span>
+              </div>
+              <div class="card-rationale">More direct phrasing — reads more confidently.</div>
+              <div class="diff-block">
+                <div class="diff-del">simplify onboarding</div>
+                <div class="diff-add">streamline onboarding</div>
+              </div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm primary">Accept</button>
+                  <button class="btn-sm ghost">Dismiss</button>
+                  <button class="btn-sm ghost">Edit</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="meta-caption">
+        audience: <strong>claude</strong> · author: <strong>claude</strong> · suggestedText: <strong>present</strong> ·
+        bundle <code>cardType</code>: <strong>suggest</strong> · tint: <strong>violet</strong> ·
+        badge: <strong>Suggestion (violet)</strong> · actions: <strong>Accept · Dismiss · Edit</strong>
+      </div>
+
+      <!-- Row 5: ImportedCard -->
+      <div class="pair">
+        <div>
+          <h3>Light · ImportedCard (Word commentor)</h3>
+          <div class="surface l">
+            <div class="anno-card">
+              <div class="card-head">
+                <span class="imported-byline">Sarah · 2024-12-05</span>
+                <span class="type-badge">Imported</span>
+                <span class="card-time">12d ago</span>
+              </div>
+              <div class="card-body">Needs a citation here — the survey number is from 2019.</div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm primary">Promote</button>
+                  <button class="btn-sm ghost">Dismiss</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Dark · ImportedCard</h3>
+          <div class="surface d">
+            <div class="anno-card">
+              <div class="card-head">
+                <span class="imported-byline">Sarah · 2024-12-05</span>
+                <span class="type-badge">Imported</span>
+                <span class="card-time">12d ago</span>
+              </div>
+              <div class="card-body">Needs a citation here — the survey number is from 2019.</div>
+              <div class="card-actions">
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-sm primary">Promote</button>
+                  <button class="btn-sm ghost">Dismiss</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="meta-caption">
+        audience: <strong>claude</strong> · author: <strong>import</strong> · suggestedText: — ·
+        production-only variant (no bundle <code>cardType</code>) · tint: <strong>none</strong> ·
+        header: <strong>italic byline (no author dot)</strong> · badge: <strong>Imported (default)</strong> ·
+        actions: <strong>Promote · Dismiss</strong>
+      </div>
+
+      <section class="anti">
+        <strong>Anti-patterns the taxonomy forbids:</strong>
+        <ul>
+          <li><strong>No left-border edge color.</strong> The card border is the standard 1px <code>var(--tandem-border)</code> all the way around. Background tint is the primary signal.</li>
+          <li>No <code>if (annotation.author === "claude")</code> branch in any card render path — the production card variant (<code>NoteCard / CommentCard / SuggestionCard / ImportedCard / HighlightCard</code>) is the predicate.</li>
+          <li><strong>Suggestions are Claude-authored only.</strong> Users author notes, comments, and highlights — never suggestions. <code>tandem_createAnnotation</code> must reject a user-authored annotation with <code>suggestedText</code> set, and the UI must never render one.</li>
+          <li>Imported cards have <strong>no author dot</strong> — the italic byline replaces it.</li>
+          <li>Notes never show a type badge — they're audience-private; the absence of a badge is the visual signal.</li>
+          <li>Highlights are a separate surface entirely — they render as inline editor marks, no card chrome, color from <code>HIGHLIGHT_COLOR_VARS</code>.</li>
+          <li>Do not change the three protected tokens (<code>--tandem-author-user</code>, <code>--tandem-author-claude</code>, <code>--tandem-suggestion</code>) without re-running <code>token-protection.test.ts</code>.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

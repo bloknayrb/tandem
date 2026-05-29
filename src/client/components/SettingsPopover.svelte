@@ -154,6 +154,10 @@ $effect(() => {
   if (!open) return;
   const handler = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      // Capture phase + stopPropagation so the App-level Escape-to-deselect
+      // (a window bubble-phase listener that registers first) never also fires.
+      e.preventDefault();
+      e.stopPropagation();
       onClose();
       return;
     }
@@ -180,8 +184,8 @@ $effect(() => {
       first.focus();
     }
   };
-  window.addEventListener("keydown", handler);
-  return () => window.removeEventListener("keydown", handler);
+  window.addEventListener("keydown", handler, { capture: true });
+  return () => window.removeEventListener("keydown", handler, { capture: true });
 });
 
 async function openReadOnlyFile(
@@ -278,7 +282,7 @@ function aboutRows() {
   <div
     aria-hidden="true"
     onclick={onClose}
-    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: 9998;"
+    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: var(--tandem-z-above-titlebar);"
   ></div>
   <div
     bind:this={popoverEl}
@@ -390,7 +394,7 @@ function aboutRows() {
         </h2>
         <button
           onclick={onClose}
-          style="background: none; border: 1px solid transparent; cursor: pointer; color: var(--tandem-fg-subtle); font-size: 18px; line-height: 1; padding: 4px 8px; min-width: 30px; min-height: 30px; border-radius: var(--tandem-r-2);"
+          class="settings-close-btn"
           aria-label="Close settings"
         >
           ×
@@ -636,9 +640,11 @@ function aboutRows() {
     background: var(--tandem-surface);
     color: var(--tandem-fg);
     border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-4);
+    border-radius: var(--tandem-r-5);
     box-shadow: var(--tandem-shadow-3);
-    z-index: 9999;
+    /* One above the scrim's --tandem-z-above-titlebar (sibling element) so the
+       popover sits over its own backdrop and clears the title bar lift. */
+    z-index: calc(var(--tandem-z-above-titlebar) + 1);
     display: grid;
     grid-template-columns: 188px minmax(0, 1fr);
     outline: none;
@@ -648,7 +654,7 @@ function aboutRows() {
   .settings-sidebar {
     display: flex;
     flex-direction: column;
-    gap: var(--tandem-space-4);
+    gap: var(--tandem-space-3);
     padding: var(--tandem-space-5) var(--tandem-space-3);
     border-right: 1px solid var(--tandem-border);
     background: var(--tandem-surface-muted);
@@ -703,6 +709,17 @@ function aboutRows() {
     font-weight: 500;
     text-align: left;
     cursor: pointer;
+    transition: background 100ms, color 100ms;
+  }
+
+  .settings-nav-btn:hover {
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+  }
+
+  .settings-nav-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
 
   .settings-nav-btn[data-active="true"] {
@@ -786,6 +803,27 @@ function aboutRows() {
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+  }
+
+  .settings-close-btn {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--tandem-fg-subtle);
+    font-size: 18px;
+    line-height: 1;
+    border-radius: var(--tandem-r-2);
+    cursor: pointer;
+  }
+
+  .settings-close-btn:hover,
+  .settings-close-btn:focus-visible {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+    outline: none;
   }
 
   @media (max-width: 640px) {

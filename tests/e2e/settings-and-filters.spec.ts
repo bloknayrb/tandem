@@ -75,7 +75,56 @@ test("settings popover opens via settings-btn and exposes dwell slider", async (
   await popover.getByRole("button", { name: "Appearance" }).click();
 
   await popover.getByRole("button", { name: "Editor" }).click();
-  await expect(popover.locator("[data-testid='editor-width-slider']")).toBeVisible();
+  // Reading-measure preset control (Phase 3.5 Stage B; replaced the % slider).
+  await expect(popover.locator("[data-testid='editor-measure-comfortable']")).toBeVisible();
+});
+
+test("editor-measure presets thread through to the stage's --editor-measure CSS var", async ({
+  page,
+}) => {
+  // Stage B headline invariant: clicking a preset changes the grid content
+  // track width via the `--editor-measure` custom property on the stage. A
+  // regression where the segmented control writes the setting but the stage
+  // stops subscribing (or EDITOR_MEASURE_CH lookup breaks) would slip through
+  // a visibility-only assertion. it-each-style equivalence-class coverage per
+  // `feedback_iteach_equivalence_classes`.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  const stage = page.locator("[data-testid='editor-stage']");
+  await expect(stage).toBeVisible({ timeout: 5_000 });
+
+  const readMeasureVar = () =>
+    stage.evaluate((el) => getComputedStyle(el).getPropertyValue("--editor-measure").trim());
+
+  // Pre-assert the stage carries `--editor-measure` AT ALL before walking the
+  // matrix. If a Stage C/D refactor relocates the var onto a child grid cell
+  // (e.g. per-side `--editor-measure-left/-right`), this baseline check fails
+  // informatively ("stage no longer carries --editor-measure") instead of the
+  // matrix below silently timing out with `"" !== "58ch"` × 4 = 12s wasted.
+  expect(await readMeasureVar(), "stage must carry --editor-measure").not.toBe("");
+
+  const cases: Array<{ preset: "narrow" | "comfortable" | "wide" | "full"; expected: string }> = [
+    { preset: "narrow", expected: "58ch" },
+    { preset: "wide", expected: "82ch" },
+    { preset: "full", expected: "100%" },
+    { preset: "comfortable", expected: "68ch" },
+  ];
+
+  const popover = page.locator("[data-testid='settings-popover']");
+  for (const { preset, expected } of cases) {
+    await openSettingsPopover(page);
+    await expect(popover).toBeVisible({ timeout: 2_000 });
+    await popover.getByRole("button", { name: "Editor" }).click();
+    await popover.locator(`[data-testid='editor-measure-${preset}']`).click();
+    // Dismiss the popover and gate the next iteration's reopen on the
+    // popover ACTUALLY unmounting — without `toHaveCount(0)` the next
+    // `openSettingsPopover` can race the Svelte exit transition on slow CI
+    // (the old node lingers a frame, the open click misses).
+    await page.keyboard.press("Escape");
+    await expect(popover).toHaveCount(0, { timeout: 2_000 });
+    await expect.poll(readMeasureVar, { timeout: 3_000 }).toBe(expected);
+  }
 });
 
 test("settings dialog surfaces default mode and persists it", async ({ page }) => {

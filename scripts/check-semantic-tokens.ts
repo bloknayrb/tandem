@@ -23,8 +23,8 @@ const CSS_KEYWORDS = ["color", "background", "border", "fill", "stroke", "style"
  * Bundle-token blocklist (issue #799 / Conflict #6 in the design-system-impl plan).
  *
  * These hex values were lifted from the redesign-bundle assets
- * (docs/redesign-bundle/tandem/project/*.{css,jsx,html}) and are NOT part of
- * the production-approved `--tandem-*` palette in index.html. They must never
+ * (docs/design-system-impl/bundle/extracted/*.{css,svelte,html}) and are NOT
+ * part of the production-approved `--tandem-*` palette in index.html. They must never
  * appear in src/client because the audit-doc-plus-reviewer-attention pathway
  * is too soft a gate as bundle-explicit ports expand in later phases.
  *
@@ -42,6 +42,10 @@ const CSS_KEYWORDS = ["color", "background", "border", "fill", "stroke", "style"
  */
 export const BUNDLE_BLOCKLIST_HEX: ReadonlySet<string> = new Set([
   "#1095d4",
+  // Prototype dark-theme stand-in in `D7 - Onboarding Tutorial.html`'s BrandMenu
+  // swatch mock. Production has --tandem-swatch-dark for this; cluster 3.11 ports
+  // D7, so guard against the literal leaking in. (2026-05-27 refreshed-bundle pass.)
+  "#1e1e2e",
   "#222222",
   "#28c840",
   "#29261b",

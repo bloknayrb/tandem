@@ -1,10 +1,12 @@
 <script lang="ts">
+import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
 import { getCardLabel, getHighlightBorder } from "./annotation-card-helpers";
 import CommentCard from "./CommentCard.svelte";
+import type { Density } from "./cardDensity";
 import HighlightCard from "./HighlightCard.svelte";
 import ImportedCard from "./ImportedCard.svelte";
 import NoteCard from "./NoteCard.svelte";
@@ -36,6 +38,15 @@ interface Props {
   /** Batch-selection state — forwarded to ImportedCard only. */
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+  /**
+   * Margin-view density. `full` (default) reproduces today's card; `clamped`
+   * (narrow band) shows the header + a single-line body teaser; `stub` (stub
+   * band) collapses to a ~22px anchor pip. Resolved against `isEditing` below
+   * — editing always forces `full`. Only MarginColumn passes a non-default
+   * value; the side panel leaves it `full`, so existing call sites are
+   * unaffected.
+   */
+  density?: Density;
 }
 
 let {
@@ -54,6 +65,7 @@ let {
   onClick,
   selected = false,
   onToggleSelect,
+  density = "full",
 }: Props = $props();
 
 // Shared edit-mode state owned by the dispatcher; variants are presentational
@@ -73,14 +85,49 @@ const visibleReplies = $derived(getVisibleReplies(annotation, replies));
 const canExpandThread = $derived(visibleReplies.length >= 1);
 let isThreadOverlayOpen = $state(false);
 
-const borderColor = $derived.by(() => {
-  if (annotation.type === "highlight") return getHighlightBorder(annotation);
-  if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion)";
-  if (annotation.type === "note") return "var(--tandem-warning)";
-  return "var(--tandem-author-user)";
+// `stub` wins over everything: the ~28px stub track can't hold an edit form any
+// more than it can hold a full card, so a card that is mid-edit when the
+// viewport shrinks to the stub band collapses to a pip (the edit state persists
+// in the parent and the form reappears when the viewport widens). In the
+// narrow/full bands editing forces `full` — the edit form needs the body, and
+// the dispatcher is the only place `isEditing` is known (the pure `cardDensity`
+// helper MarginColumn calls passes `isEditing: false`). This keeps the render in
+// lockstep with `cardDensity`, whose stub-geometry rule already ignores editing.
+const resolvedDensity = $derived<Density>(
+  density === "stub" ? "stub" : isEditing ? "full" : density,
+);
+
+// Close the reply-thread overlay if the card collapses to a stub — the pip has
+// no affordance to manage an open overlay. Last-value guard so the effect can't
+// re-enter under reactive churn (`feedback_svelte_effect_depth_guard`).
+// Seed with the mount-time density via `untrack` (an intentional non-reactive
+// read — the effect below owns subsequent transitions; subscribing here would
+// be the very re-entrancy the guard prevents).
+let prevDensity: Density = untrack(() => resolvedDensity);
+$effect(() => {
+  if (resolvedDensity === prevDensity) return;
+  prevDensity = resolvedDensity;
+  if (resolvedDensity === "stub") isThreadOverlayOpen = false;
 });
 
-const cardBg = $derived(isReviewTarget ? "var(--tandem-accent-bg)" : "var(--tandem-surface)");
+// Per-type body tint replaces the old 3px left-edge border (Conflict #8
+// "lift color" interpretation, sub-PR 1.5 — full-taxonomy tints so every type
+// stays differentiated, not just the two the bundle tints). getHighlightBorder
+// is called inside the derivation so the highlight tint re-tracks annotation.color.
+const cardTint = $derived.by(() => {
+  if (annotation.author === "import") return "var(--tandem-surface-muted)";
+  if (annotation.type === "highlight")
+    return `color-mix(in srgb, ${getHighlightBorder(annotation)} 18%, var(--tandem-surface))`;
+  if (annotation.type === "note") return "var(--tandem-warning-bg)";
+  if (annotation.suggestedText !== undefined) return "var(--tandem-suggestion-bg)";
+  if (annotation.author === "claude") return "var(--tandem-author-claude-bg)";
+  return "var(--tandem-author-user-bg)";
+});
+
+// Review-target override wins over the type tint; the accent ring is applied
+// via the .is-review-target class (see the style block below) so it composes
+// with the hover shadow.
+const cardBg = $derived(isReviewTarget ? "var(--tandem-accent-bg)" : cardTint);
 
 function enterEditMode() {
   if (hasSuggestedText) {
@@ -116,20 +163,20 @@ function handleKeyDown(e: KeyboardEvent) {
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="tandem-annotation-card"
+  class:is-review-target={isReviewTarget}
+  class:is-density-clamped={resolvedDensity === "clamped"}
+  class:is-density-stub={resolvedDensity === "stub"}
   onclick={onClick}
   data-testid="annotation-card-{annotation.id}"
   data-annotation-type={annotation.type}
+  data-density={resolvedDensity}
   data-claude-typing={claudeTyping ? "true" : undefined}
   role="listitem"
   aria-label={cardLabel}
   aria-current={isReviewTarget ? "true" : undefined}
-  style="position: relative; padding: var(--tandem-space-3); margin-bottom: var(--tandem-space-2); border: 1px solid var(--tandem-border); border-left: 3px solid {borderColor}; background: {cardBg}; border-radius: var(--tandem-r-3); font-size: var(--tandem-text-base); opacity: {isPending
-    ? 1
-    : 0.6}; cursor: {onClick
+  style="background: {cardBg}; opacity: {isPending ? 1 : 0.6}; cursor: {onClick
     ? 'pointer'
-    : 'default'}; box-shadow: {isReviewTarget
-    ? '0 0 0 3px var(--tandem-accent-bg)'
-    : 'none'}; transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;"
+    : 'default'};"
 >
   {#if claudeTyping}
     <!--
@@ -244,7 +291,7 @@ function handleKeyDown(e: KeyboardEvent) {
         e.stopPropagation();
         isThreadOverlayOpen = true;
       }}
-      style="margin-top: var(--tandem-space-1); padding: var(--tandem-space-1) var(--tandem-space-2); font-size: var(--tandem-text-xs); border: none; background: none; color: var(--tandem-fg-subtle); cursor: pointer;"
+      class="tandem-expand-thread"
     >
       Expand thread
     </button>
@@ -266,6 +313,54 @@ function handleKeyDown(e: KeyboardEvent) {
 {/if}
 
 <style>
+  /* Static chrome lives here (not inline) so :hover can raise the shadow —
+     an inline style= attribute would beat a class-based :hover on box-shadow.
+     The dynamic background tint / opacity / cursor stay inline on the element.
+     position: relative anchors the #651 Claude typing indicator. */
+  .tandem-annotation-card {
+    position: relative;
+    padding: var(--tandem-space-3);
+    margin-bottom: var(--tandem-space-2);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-5);
+    font-size: var(--tandem-text-base);
+    box-shadow: var(--tandem-shadow-1);
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+  }
+  .tandem-annotation-card:hover {
+    box-shadow: var(--tandem-shadow-2);
+  }
+  /* Placed after :hover so the focused-card ring wins at equal specificity.
+     Selected state is a CONTRASTING accent ring + a soft glow that persists —
+     the old `0 0 0 3px var(--tandem-accent-bg)` used the same color as the card
+     fill (also accent-bg), so once the one-shot flash faded it read as a flat,
+     hard-edged stroke rather than a "selected" glow. A crisp 1.5px accent-border
+     edge gives definition; the blurred accent halo carries the glow language of
+     the flash so the transition settles instead of snapping to a flat border. */
+  .tandem-annotation-card.is-review-target {
+    box-shadow:
+      0 0 0 1.5px var(--tandem-accent-border),
+      0 0 10px -2px color-mix(in srgb, var(--tandem-accent) 30%, transparent),
+      var(--tandem-shadow-2);
+  }
+  /* Expand-thread button — quiet ghost pill that doesn't compete with the
+     annotation's own action row. */
+  .tandem-expand-thread {
+    margin-top: var(--tandem-space-1);
+    padding: var(--tandem-space-1) var(--tandem-space-2);
+    font-size: var(--tandem-text-xs);
+    border: none;
+    background: none;
+    color: var(--tandem-fg-subtle);
+    cursor: pointer;
+    border-radius: var(--tandem-r-pill);
+  }
+  .tandem-expand-thread:hover,
+  .tandem-expand-thread:focus-visible {
+    color: var(--tandem-fg);
+    background: var(--tandem-surface-sunk);
+    outline: none;
+  }
   /* #651 Claude typing-presence indicator: three pulsing dots in the
      card's top-right corner, colored with the Claude authorship token so
      the affordance reads as "Claude is here" at a glance. */
@@ -309,5 +404,75 @@ function handleKeyDown(e: KeyboardEvent) {
       outline: 1px solid ButtonText;
       outline-offset: 1px;
     }
+  }
+
+  /* ───────────────── Density variants (Stage C-2) ─────────────────
+     Margin-view density modifiers layered over the existing dispatcher (NOT a
+     flat data-kind bubble). A clamped/stub card is inactive by construction —
+     active or editing resolves to `full` in cardDensity — so these classes are
+     never present on a focused card; no `:not(.is-review-target)` qualifier is
+     needed. The collapse pierces child-component boundaries via `:global()`:
+     `.aca-body` (variant body), `[data-testid^="annotation-snippet-"]`
+     (AnnotationSnippet), `.aca-row`/`.aca-undo-row`/`.aca-standalone`
+     (AnnotationCardActions), `.art-root` (ReplyThread), and the header pieces
+     `.ach-row`/`.ach-type`/`.ach-author`/`.ach-dot` (AnnotationCardHeader). */
+
+  /* Clamped (narrow band, inactive): keep the full header, hide the snippet,
+     show a single-line body teaser, drop actions + replies. The full
+     `-webkit-box` recipe is required — `-webkit-line-clamp` alone is a no-op —
+     and `overflow: clip` (not `hidden`) avoids creating a focus-autoscroll
+     scroll container (`feedback_overflow_hidden_vs_clip`). */
+  .is-density-clamped :global(.aca-body) {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    overflow: clip;
+  }
+  .is-density-clamped :global([data-testid^="annotation-snippet-"]),
+  .is-density-clamped :global(.aca-row),
+  .is-density-clamped :global(.aca-undo-row),
+  .is-density-clamped :global(.aca-standalone),
+  .is-density-clamped :global(.art-root),
+  .is-density-clamped .tandem-expand-thread {
+    display: none;
+  }
+
+  /* Stub (stub band, inactive): a ~22px anchor pip — the 6px author dot only.
+     The stub column is ~28px wide; the card's default 12px padding + the
+     header's badge/author text would overflow ~100px and clip at the window
+     edge (the bug the continuum exposed). Shrinking the padding, collapsing the
+     header chrome, and `overflow: clip` keep the card's footprint inside the
+     column — verified by the E2E scrollWidth gate. */
+  .is-density-stub {
+    padding: var(--tandem-space-1);
+    min-height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: clip;
+  }
+  .is-density-stub :global([data-testid^="annotation-snippet-"]),
+  .is-density-stub :global(.aca-body),
+  .is-density-stub :global(.aca-row),
+  .is-density-stub :global(.aca-undo-row),
+  .is-density-stub :global(.aca-standalone),
+  .is-density-stub :global(.art-root),
+  .is-density-stub :global(.ach-type),
+  .is-density-stub .tandem-expand-thread {
+    display: none;
+  }
+  .is-density-stub :global(.ach-row) {
+    margin-bottom: 0;
+    justify-content: center;
+    gap: 0;
+  }
+  /* font-size:0 collapses the author label + "(edited)" text to nothing; the
+     6px `.ach-dot` keeps its explicit dimensions, so the dot survives as the
+     pip. (Imports never reach stub density — see cardDensity — and carry no
+     dot, so this only ever shows a user/claude dot.) */
+  .is-density-stub :global(.ach-author) {
+    font-size: 0;
+    gap: 0;
   }
 </style>

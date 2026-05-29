@@ -245,6 +245,29 @@ describe("buildAuthorshipDecorations", () => {
     expect(capturedNodes[0].attrs["data-tandem-author-block"]).toBe("user");
   });
 
+  it("mixed paragraph keeps both per-character tints under a single dominant gutter", () => {
+    const ydoc = new Y.Doc();
+    const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    // One paragraph, both authors contribute characters (user 3, claude 5).
+    addEntry(authorshipMap, "user", "auth-user", 1, 4);
+    addEntry(authorshipMap, "claude", "auth-claude", 4, 9);
+
+    const doc = makeMockDoc([{ typeName: "paragraph", size: 10, offset: 1 }]);
+    buildAuthorshipDecorations(doc, authorshipMap, ydoc, true);
+
+    // The gutter is a paragraph-level reduction, NOT a replacement: both
+    // per-character inline tints must still be emitted so the user can see who
+    // wrote which characters underneath the dominant-author gutter bar.
+    expect(capturedInlines).toHaveLength(2);
+    expect(capturedInlines.map((d) => d.attrs["data-tandem-author"]).sort()).toEqual([
+      "claude",
+      "user",
+    ]);
+    // Exactly one gutter bar, showing the dominant author (claude, 5 > 3 chars).
+    expect(capturedNodes).toHaveLength(1);
+    expect(capturedNodes[0].attrs["data-tandem-author-block"]).toBe("claude");
+  });
+
   it("authorship range spanning two paragraphs gives each its own node decoration", () => {
     const ydoc = new Y.Doc();
     const authorshipMap = ydoc.getMap(Y_MAP_AUTHORSHIP);

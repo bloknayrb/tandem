@@ -252,16 +252,18 @@ function handleSkip() {
 .frm-scrim {
   position: fixed;
   inset: 0;
-  z-index: var(--tandem-z-modal);
+  z-index: var(--tandem-z-above-titlebar);
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: 80px;
-  background: rgba(0, 0, 0, 0.4);
+  /* Theme-adaptive backdrop (cluster 3.2 modal recipe). */
+  background: color-mix(in srgb, var(--tandem-bg) 70%, transparent);
 }
 .frm-dialog {
   background: var(--tandem-surface);
-  border-radius: var(--tandem-r-4);
+  border: 1px solid var(--tandem-border);
+  border-radius: var(--tandem-r-5);
   box-shadow: var(--tandem-shadow-4);
   width: 520px;
   max-width: calc(100vw - 40px);
@@ -287,13 +289,27 @@ function handleSkip() {
   font-size: 12px;
   color: var(--tandem-fg-muted);
 }
+/* Close button mirrors the cluster-3.2 modal family (28×28, fg-subtle on
+   transparent → fg + surface-sunk on hover/focus-visible). */
 .frm-close {
   background: none;
-  border: none;
+  border: 1px solid transparent;
   cursor: pointer;
-  font-size: 20px;
   color: var(--tandem-fg-subtle);
+  font-size: 18px;
   line-height: 1;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: var(--tandem-r-2);
+}
+.frm-close:hover,
+.frm-close:focus-visible {
+  color: var(--tandem-fg);
+  background: var(--tandem-surface-sunk);
+  outline: none;
 }
 .frm-form {
   display: flex;

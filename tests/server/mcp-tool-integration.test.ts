@@ -8,7 +8,7 @@
 
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -507,7 +507,7 @@ describe("MCP tool integration — tandem_exportAnnotations sidecar write (#314)
       `tandem-export-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     await fs.mkdir(targetDir, { recursive: true });
-    const expectedFile = join(targetDir, `${docPath.split("/").pop()}.annotations.json`);
+    const expectedFile = join(targetDir, `${basename(docPath)}.annotations.json`);
 
     const ydoc = setupDocAtPath("mcp-export-dir", "Hello world", docPath);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);

@@ -2,8 +2,11 @@
 import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
+import type { MarginMode } from "../layout/editor-stage.svelte";
 import AnnotationCard from "./AnnotationCard.svelte";
+import { cardDensity } from "./cardDensity";
 import { prunePlaceableHeights, resolveCollisions } from "./marginCollision";
+import { bezierLeaderPath, leaderColorForAuthor } from "./marginLeaderGeometry";
 
 interface Props {
   /** Annotations destined for this side. Caller filters by type/author. */
@@ -11,6 +14,11 @@ interface Props {
   /** Computed top offset in pixels (relative to the positioning layer), keyed by annotation id. */
   positions: ReadonlyMap<string, number>;
   side: "left" | "right";
+  /** Resolved track mode for this side (`full` | `narrow` | `stub`). The width
+   *  continuum. A column only mounts when its side is visible, so `off` never
+   *  reaches here. C-2 derives bubble density from it (`cardDensity`):
+   *  `narrow`→clamp-until-active, `stub`→anchor pip. */
+  mode: MarginMode;
   /** Column width in pixels. */
   width: number;
   /** Distance from the column edge to the nearest scroll-container edge. */
@@ -37,6 +45,10 @@ let {
   annotations,
   positions,
   side,
+  // C-2: drives per-bubble density (`cardDensity`) for both the collision input
+  // and the rendered card. `off` never reaches here (the column unmounts when a
+  // side collapses), so only `full` | `narrow` | `stub` are live.
+  mode,
   width,
   edgeInset,
   gap,
@@ -62,13 +74,15 @@ const LEADER_BUBBLE_INSET_PX = 12;
 // Component-level $derived values for the leader SVG. `side`, `edgeInset`,
 // `gap`, `width` come from $props() and are themselves reactive, so these
 // recompute precisely when a prop changes. Hoisting `editorX`/`columnX` out
-// of the {#each} block avoids recomputing the same ternary per iteration;
-// `leaderStyle` collapses the previously dense inline-style template.
-const authorVar = $derived(side === "right" ? "claude" : "user");
+// of the {#each} block avoids recomputing the same ternary per iteration.
+// Per-element stroke/fill colors are resolved at render time from
+// `leaderColorForAuthor` — the SVG root no longer carries an inherited color
+// (side ≠ author after Stage C-3: imports render distinct from Claude even
+// though both sit on the right side).
 const editorX = $derived(side === "right" ? 0 : gap);
 const columnX = $derived(side === "right" ? gap : 0);
 const leaderStyle = $derived(
-  `position: absolute; top: 0; bottom: 0; ${side}: ${edgeInset + width}px; width: ${gap}px; pointer-events: none; color: var(--tandem-author-${authorVar});`,
+  `position: absolute; top: 0; bottom: 0; ${side}: ${edgeInset + width}px; width: ${gap}px; pointer-events: none;`,
 );
 
 // Only render annotations whose position is known this frame; without a top
@@ -86,6 +100,21 @@ const placeable = $derived(
 // (`feedback_svelte_effect_depth_guard`).
 let heights = $state<Map<string, number>>(new Map());
 
+// Per-annotation density — the SINGLE source of truth shared by the collision
+// input below and the rendered card prop, so the two can't drift (`isEditing:
+// false`; the dispatcher re-resolves editing→full internally for narrow/full,
+// and at stub mode every card is a pip regardless — cardDensity's stub-geometry
+// rule). Built from the same `placeable` the each-block iterates, both inputs
+// reactive (mode + activeAnnotationId), no collision output read → no cycle.
+const densityById = $derived(
+  new Map(
+    placeable.map((a) => [
+      a.id,
+      cardDensity({ mode, isActive: a.id === activeAnnotationId, isEditing: false }),
+    ]),
+  ),
+);
+
 // Collision-resolved tops. Sweep input is built from `placeable` + `positions`
 // + `heights`; the result is a brand-new Map. Reads from `positions` happen
 // synchronously inside this $derived, so dependency tracking is automatic and
@@ -94,7 +123,11 @@ const adjustedPositions = $derived.by(() => {
   const input = placeable.map((a) => ({
     id: a.id,
     top: positions.get(a.id) ?? 0,
-    height: heights.get(a.id),
+    // A stub passes `height: undefined` so it lands in resolveCollisions'
+    // unknown-height branch: it does not advance the cursor (the STUB-NON-PUSH
+    // contract in marginCollision.ts), though a preceding full bubble can still
+    // push it down.
+    height: densityById.get(a.id) === "stub" ? undefined : heights.get(a.id),
   }));
   return resolveCollisions(input);
 });
@@ -138,39 +171,57 @@ function recordHeight(id: string, h: number): void {
 }
 </script>
 
-<!-- Leader-line SVG sits in the gap zone between the editor's text edge and
-     the column's near edge. Top/bottom stretch makes it cover the full layer
-     height so absolute Y coords (relative to the margin layer) line up with
+<!-- Leader SVG sits in the gap zone between the editor's text edge and the
+     column's near edge. Top/bottom stretch covers the full layer height so
+     absolute Y coords (relative to the margin layer) line up with
      `useMarginPositions` output. SVG default user units = pixels (no viewBox),
-     so we render lines directly at the computed Y offsets. Decorative only:
+     so we render at computed Y offsets directly. Decorative only:
      pointer-events: none, aria-hidden.
 
-     Stroke is tinted by side (left = notes / user, right = comments / Claude)
-     to mirror the authorship decoration convention (ADR-026). Default uses
-     stroke-opacity to stay subtle; active review target ramps opacity + width
-     so the focused annotation's connector reads as the dominant line on the
-     page. -->
+     Stroke + dot fill are PER-AUTHOR (ADR-026), not per-side: matches the C4
+     bundle (MarginFrame.svelte:135-137 — claude / user / fg-subtle). Active
+     review target ramps opacity + width so the focused annotation's connector
+     reads as the dominant line on the page.
+
+     `adjTop ?? rawTop` fallback handles a one-frame race where `placeable`
+     updates (annotation added) before `adjustedPositions` `$derived.by`
+     re-runs — without it, the leader+dot disappears for one tick. Consistent
+     with the bubble's own fallback chain in the next block. -->
 <svg data-testid="margin-leaders-{side}" aria-hidden="true" style={leaderStyle}>
   {#each placeable as ann (ann.id)}
     {@const rawTop = positions.get(ann.id)}
-    {@const adjTop = adjustedPositions.get(ann.id)}
-    {#if rawTop !== undefined && adjTop !== undefined}
+    {@const adjTopRaw = adjustedPositions.get(ann.id)}
+    {#if rawTop !== undefined}
       {@const isActive = ann.id === activeAnnotationId}
-      <!-- LEADER_BUBBLE_INSET_PX shifts the bubble endpoint down from the
-           bubble's top edge into its padded content area, so a
-           collision-pushed bubble's connector lands near the title row
-           instead of pointing at the empty corner above it. -->
-      <line
+      {@const adjTop = adjTopRaw ?? rawTop}
+      {@const endY = adjTop + LEADER_BUBBLE_INSET_PX}
+      {@const color = leaderColorForAuthor(ann.author)}
+      {@const d = bezierLeaderPath({
+        startX: editorX,
+        startY: rawTop,
+        endX: columnX,
+        endY,
+        side,
+      })}
+      <path
         data-annotation-id={ann.id}
-        x1={editorX}
-        y1={rawTop}
-        x2={columnX}
-        y2={adjTop + LEADER_BUBBLE_INSET_PX}
-        stroke="currentColor"
-        stroke-width={isActive ? 1.75 : 1}
-        stroke-opacity={isActive ? 0.9 : 0.4}
+        data-tandem-author={ann.author}
+        {d}
+        stroke={color}
+        stroke-width={isActive ? 1.8 : 1.1}
+        stroke-opacity={isActive ? 0.82 : 0.38}
         stroke-linecap="round"
         fill="none"
+      />
+      <circle
+        data-testid="margin-anchor-dot"
+        data-annotation-id={ann.id}
+        data-tandem-author={ann.author}
+        cx={editorX}
+        cy={rawTop}
+        r={isActive ? 3 : 2}
+        fill={color}
+        fill-opacity={isActive ? 0.72 : 0.42}
       />
     {/if}
   {/each}
@@ -184,6 +235,11 @@ function recordHeight(id: string, h: number): void {
   {#each placeable as ann (ann.id)}
     {@const top = adjustedPositions.get(ann.id) ?? positions.get(ann.id) ?? 0}
     {@const visibleReplies = getVisibleReplies(ann, repliesById.get(ann.id))}
+    <!-- Same `densityById` map the collision input reads — single source of
+         truth, so the rendered density and the stub→undefined-height routing
+         can never diverge. (`?? "full"` only satisfies the non-null type; the
+         key is always present since the map is built from `placeable`.) -->
+    {@const density = densityById.get(ann.id) ?? "full"}
     <!-- Svelte 5 function-binding form on `bind:clientHeight` below
          (`bind:prop={getter, setter}`) — the only form that supports
          per-key dispatch into a Map. A plain `bind:clientHeight={x}`
@@ -208,6 +264,7 @@ function recordHeight(id: string, h: number): void {
         annotation={ann}
         replies={visibleReplies}
         isReviewTarget={ann.id === activeAnnotationId}
+        {density}
         onClick={() => onClick(ann)}
         onAccept={ann.author !== "user" ? onAccept : undefined}
         onDismiss={ann.author !== "user" ? onDismiss : undefined}

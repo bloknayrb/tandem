@@ -72,6 +72,33 @@ async function flashAnimationName(page: import("@playwright/test").Page): Promis
   });
 }
 
+/**
+ * Computed animationName of a probe element carrying `className` (and optionally
+ * its `pseudo`). Used to verify the editor's Claude-presence animations honor
+ * reduced motion — the rules match by class with no editor-ancestor requirement,
+ * so a bare body-appended probe resolves the same animationName the real
+ * decoration would.
+ */
+async function probeAnimationName(
+  page: import("@playwright/test").Page,
+  className: string,
+  pseudo?: string,
+): Promise<string> {
+  return page.evaluate(
+    ({ className, pseudo }) => {
+      const el = document.createElement("div");
+      el.className = className;
+      document.body.appendChild(el);
+      try {
+        return getComputedStyle(el, pseudo).animationName;
+      } finally {
+        el.remove();
+      }
+    },
+    { className, pseudo: pseudo ?? null },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Viewport layouts
 // ---------------------------------------------------------------------------
@@ -135,6 +162,13 @@ test.describe("reduced motion — baseline", () => {
     await openSample(page);
     expect(await flashAnimationName(page)).not.toBe("none");
   });
+
+  test("Claude-presence animations are active by default", async ({ page }) => {
+    await openSample(page);
+    // A5 active-paragraph gutter pulse (on the ::before) + character-cursor blink.
+    expect(await probeAnimationName(page, "tandem-claude-focus", "::before")).not.toBe("none");
+    expect(await probeAnimationName(page, "tandem-claude-cursor")).not.toBe("none");
+  });
 });
 
 test.describe("reduced motion", () => {
@@ -152,6 +186,20 @@ test.describe("reduced motion", () => {
     await openSample(page);
     await expect(page.locator("body")).toHaveClass(/tandem-reduce-motion/, { timeout: 3_000 });
     expect(await flashAnimationName(page)).toBe("none");
+  });
+
+  test("Claude-presence animations are suppressed under reduced motion", async ({ page }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("tandem:settings", JSON.stringify({ reduceMotion: true }));
+      } catch {}
+    });
+    await openSample(page);
+    await expect(page.locator("body")).toHaveClass(/tandem-reduce-motion/, { timeout: 3_000 });
+    // Both the gutter pulse (::before) and the cursor blink go to animation:none —
+    // the indicators stay visible (3.10), only the motion is removed.
+    expect(await probeAnimationName(page, "tandem-claude-focus", "::before")).toBe("none");
+    expect(await probeAnimationName(page, "tandem-claude-cursor")).toBe("none");
   });
 });
 
@@ -335,8 +383,29 @@ test.describe("tab order traversal", () => {
     // Click outside the editor to reset focus to the top of the tab sequence.
     await page.locator("body").click({ position: { x: 10, y: 10 } });
 
+    // Wave M: settings/help/theme moved into the brand dropdown; the brand
+    // button itself (aria-label "Tandem menu") is the titlebar's primary
+    // interactive stop alongside the mode toggle and authorship toggle.
+    const toolbarLabels = [
+      "Highlight",
+      "toolbar-highlight-btn",
+      "Solo",
+      "Tandem",
+      "titlebar-brand-menu",
+      "authorship",
+    ];
+    const matchesToolbar = (l: string) =>
+      toolbarLabels.some((t) => l.toLowerCase().includes(t.toLowerCase()));
+    const matchesStatusBar = (l: string) =>
+      l.toLowerCase().includes("display name") || l === "user-name-input";
+
+    // Tab through the focusable chrome. The status-bar display-name input sits
+    // near the END of the sequence, and the redesign + Wave M added many stops
+    // ahead of it — so we use a generous cap (not a fixed 30) and break early
+    // once both a toolbar stop and the status-bar stop have been seen. This
+    // keeps the test fast in the common case and robust to future chrome.
     const focusedLabels: string[] = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 120; i++) {
       await page.keyboard.press("Tab");
       const label = await page.evaluate(() => {
         const el = document.activeElement as HTMLElement | null;
@@ -349,27 +418,10 @@ test.describe("tab order traversal", () => {
         );
       });
       if (label) focusedLabels.push(label);
+      if (focusedLabels.some(matchesToolbar) && focusedLabels.some(matchesStatusBar)) break;
     }
 
-    // Wave M: settings/help/theme moved into the brand dropdown; the brand
-    // button itself (aria-label "Tandem menu") is the titlebar's primary
-    // interactive stop alongside the mode toggle and authorship toggle.
-    const toolbarLabels = [
-      "Highlight",
-      "toolbar-highlight-btn",
-      "Solo",
-      "Tandem",
-      "titlebar-brand-menu",
-      "authorship",
-    ];
-    const hasToolbarStop = focusedLabels.some((l) =>
-      toolbarLabels.some((t) => l.toLowerCase().includes(t.toLowerCase())),
-    );
-    expect(hasToolbarStop).toBe(true);
-
-    const hasStatusBarStop = focusedLabels.some(
-      (l) => l.toLowerCase().includes("display name") || l === "user-name-input",
-    );
-    expect(hasStatusBarStop).toBe(true);
+    expect(focusedLabels.some(matchesToolbar)).toBe(true);
+    expect(focusedLabels.some(matchesStatusBar)).toBe(true);
   });
 });

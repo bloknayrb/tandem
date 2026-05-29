@@ -24,9 +24,6 @@ interface Props {
   theme?: ThemePreference;
   /** Set theme directly — wired from the brand menu's Color scheme section. */
   onSetTheme?: (theme: ThemePreference) => void;
-  /** Authorship-color visibility toggle. */
-  showAuthorship?: boolean;
-  onAuthorshipChange?: (visible: boolean) => void;
   /** Open Help modal. */
   onOpenHelp?: () => void;
   /** Open Settings popover. */
@@ -66,8 +63,6 @@ let {
   claudeActive = false,
   theme = "system",
   onSetTheme,
-  showAuthorship = false,
-  onAuthorshipChange,
   onOpenHelp,
   onOpenSettings,
   onOpenSettingsModal: _onOpenSettingsModal,
@@ -251,6 +246,29 @@ function chooseHelp() {
         aria-label="Tandem menu"
         onkeydown={handleBrandMenuKey}
       >
+        {#if onSetTheme}
+          <div class="brand-menu-heading">Color scheme</div>
+          <div class="brand-theme-grid" role="group" aria-label="Color scheme">
+            {#each THEME_OPTIONS as opt (opt.value)}
+              <button
+                type="button"
+                class="brand-theme-sw"
+                class:on={theme === opt.value}
+                data-testid="brand-menu-theme-{opt.value}"
+                data-theme-swatch={opt.value}
+                role="menuitemradio"
+                aria-checked={theme === opt.value}
+                onclick={() => selectTheme(opt.value)}
+              >
+                <span class="brand-theme-dot" aria-hidden="true"></span>
+                <span class="brand-theme-label">{opt.label}</span>
+              </button>
+            {/each}
+          </div>
+          {#if onOpenSettings || onOpenHelp}
+            <div class="brand-menu-divider" role="separator"></div>
+          {/if}
+        {/if}
         {#if onOpenSettings}
           <button
             type="button"
@@ -274,25 +292,6 @@ function chooseHelp() {
             <span>Keyboard Shortcuts</span>
             <kbd class="brand-menu-kbd">?</kbd>
           </button>
-        {/if}
-        {#if onSetTheme}
-          <div class="brand-menu-divider" role="separator"></div>
-          <div class="brand-menu-heading">Color scheme</div>
-          {#each THEME_OPTIONS as opt (opt.value)}
-            <button
-              type="button"
-              class="brand-menu-item"
-              data-testid="brand-menu-theme-{opt.value}"
-              role="menuitemradio"
-              aria-checked={theme === opt.value}
-              onclick={() => selectTheme(opt.value)}
-            >
-              <span class="brand-menu-check" aria-hidden="true">
-                {theme === opt.value ? "●" : "○"}
-              </span>
-              <span>{opt.label}</span>
-            </button>
-          {/each}
         {/if}
       </div>
     {/if}
@@ -322,24 +321,6 @@ function chooseHelp() {
       ></span>
     {/if}
 
-    {#if onAuthorshipChange}
-      <button
-        type="button"
-        class="icon-btn"
-        class:active={showAuthorship}
-        data-testid="toolbar-authorship-toggle"
-        data-tauri-drag-region="false"
-        aria-label={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
-        aria-pressed={showAuthorship}
-        title={showAuthorship ? "Hide authorship colors" : "Show authorship colors"}
-        onclick={() => onAuthorshipChange(!showAuthorship)}
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="5.5" cy="8" r="3.2" fill="var(--tandem-author-user)" />
-          <circle cx="10.5" cy="8" r="3.2" fill="var(--tandem-author-claude)" opacity="0.85" />
-        </svg>
-      </button>
-    {/if}
     {#if defaultModelLabel && onOpenModelsSettings}
       <button
         type="button"
@@ -487,38 +468,47 @@ function chooseHelp() {
     min-width: 0;
     max-width: 60%;
     position: relative;
-    z-index: 99999;
+    z-index: var(--tandem-z-titlebar);
   }
 
-  /* The Tandem icon IS the menu trigger — no chrome around it. */
+  /* The Tandem icon IS the menu trigger — no chrome around it.
+     40×40 hit box with the 32×32 logo centered inside; the -10px
+     negative margins keep the logo's optical center at the same
+     titlebar coordinate it had when the box was 32×32 with -6px
+     margins (so the rest of the title-bar rhythm is unaffected).
+     Hover/active use transform scale on the logo (not a background
+     fill) so the icon itself feels interactive without a chip ring. */
   .brand-btn {
     position: relative;
     display: inline-grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
     padding: 0;
-    margin: -6px 0 0 -6px;
+    margin: -10px 0 0 -10px;
     border: none;
     background: transparent;
     color: var(--tandem-fg);
     cursor: pointer;
-    transition: transform 140ms ease;
     -webkit-tap-highlight-color: transparent;
   }
 
-  .brand-btn:hover {
-    transform: scale(1.08);
+  .brand-btn :global(.brand-mark) {
+    transition: transform 140ms ease;
+  }
+
+  .brand-btn:hover :global(.brand-mark) {
+    transform: scale(1.12);
+  }
+
+  .brand-btn:active :global(.brand-mark) {
+    transform: scale(0.96);
   }
 
   .brand-btn:focus-visible {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 2px;
-    border-radius: var(--tandem-r-2);
-  }
-
-  .brand-btn:active {
-    transform: scale(0.96);
+    border-radius: var(--tandem-r-pill);
   }
 
   .brand-mark {
@@ -564,22 +554,6 @@ function chooseHelp() {
     outline: none;
   }
 
-  .brand-menu-item[aria-checked="true"] {
-    color: var(--tandem-accent);
-  }
-
-  .brand-menu-check {
-    display: inline-block;
-    width: 14px;
-    margin-right: var(--tandem-space-2);
-    color: var(--tandem-fg-subtle);
-    font-size: var(--tandem-text-xs);
-  }
-
-  .brand-menu-item[aria-checked="true"] .brand-menu-check {
-    color: var(--tandem-accent);
-  }
-
   .brand-menu-kbd {
     color: var(--tandem-fg-subtle);
     font-family: var(--tandem-font-mono);
@@ -600,6 +574,77 @@ function chooseHelp() {
     letter-spacing: 0.04em;
   }
 
+  /* 2×2 swatch grid for the 4 themes (system/light/dark/warm). Each
+     swatch is a square color chip + label. The "system" swatch uses a
+     diagonal half-light/half-dark split, the conventional indicator for
+     auto/match-system in OS theme pickers. */
+  .brand-theme-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 4px 6px 6px;
+  }
+
+  .brand-theme-sw {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--tandem-r-2);
+    background: transparent;
+    color: var(--tandem-fg);
+    font: inherit;
+    font-size: var(--tandem-text-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .brand-theme-sw:hover,
+  .brand-theme-sw:focus-visible {
+    background: var(--tandem-surface-sunk);
+    outline: none;
+  }
+
+  .brand-theme-sw.on {
+    border-color: var(--tandem-accent-border);
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent-fg-strong);
+  }
+
+  .brand-theme-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: var(--tandem-r-circle);
+    border: 1px solid var(--tandem-border-strong);
+    flex-shrink: 0;
+  }
+
+  .brand-theme-sw[data-theme-swatch="system"] .brand-theme-dot {
+    background: linear-gradient(
+      135deg,
+      var(--tandem-bg) 0%,
+      var(--tandem-bg) 50%,
+      var(--tandem-fg) 50%,
+      var(--tandem-fg) 100%
+    );
+  }
+  .brand-theme-sw[data-theme-swatch="light"] .brand-theme-dot {
+    background: var(--tandem-swatch-light);
+  }
+  .brand-theme-sw[data-theme-swatch="dark"] .brand-theme-dot {
+    background: var(--tandem-swatch-dark);
+  }
+  .brand-theme-sw[data-theme-swatch="warm"] .brand-theme-dot {
+    background: var(--tandem-swatch-warm);
+  }
+
+  .brand-theme-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .title-bar-actions {
     display: flex;
     align-items: center;
@@ -609,7 +654,7 @@ function chooseHelp() {
     /* Same z-index lift reason as .title-bar-center — buttons need to sit
        above decorum's overlay drag-region to receive clicks. */
     position: relative;
-    z-index: 99999;
+    z-index: var(--tandem-z-titlebar);
   }
 
   .status-dot {
@@ -620,36 +665,6 @@ function chooseHelp() {
     display: inline-block;
     flex-shrink: 0;
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-author-claude) 18%, transparent);
-  }
-
-  /* 30×30 circular soft-fill chip — always visible, not transparent-until-hover. */
-  .icon-btn {
-    display: inline-grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
-    border: 1px solid transparent;
-    border-radius: var(--tandem-r-pill);
-    background: var(--tandem-surface-sunk);
-    color: var(--tandem-fg-muted);
-    cursor: pointer;
-    padding: 0;
-    transition: background 0.1s, color 0.1s, border-color 0.1s;
-  }
-
-  .icon-btn:hover {
-    background: var(--tandem-surface);
-    color: var(--tandem-fg);
-  }
-
-  .icon-btn:focus-visible {
-    outline: 2px solid var(--tandem-accent);
-    outline-offset: 1px;
-  }
-
-  .icon-btn.active {
-    background: var(--tandem-accent-bg);
-    color: var(--tandem-accent);
   }
 
   /* #659 default-model chip. Sits in the right action cluster; clicking
@@ -726,7 +741,7 @@ function chooseHelp() {
     align-self: flex-start;
     flex-shrink: 0;
     position: relative;
-    z-index: 99999;
+    z-index: var(--tandem-z-titlebar);
   }
 
   .title-bar-btn {
@@ -770,14 +785,12 @@ function chooseHelp() {
       forced-color-adjust: auto;
     }
 
-    .icon-btn,
     .title-bar-btn {
       background: ButtonFace;
       color: ButtonText;
       border: 1px solid ButtonText;
     }
 
-    .icon-btn:hover:not(:disabled),
     .title-bar-btn:hover:not(:disabled) {
       background: Highlight;
       color: HighlightText;

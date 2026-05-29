@@ -48,6 +48,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "capture:screenshots": "cross-env SCREENSHOTS=1 playwright test --config=scripts/screenshots/playwright.config.ts",
+    "capture:design-baselines": "cross-env CAPTURE_DESIGN_BASELINES=1 playwright test --config=scripts/design-baselines/playwright.config.ts",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "biome format --write .",
@@ -71,7 +72,7 @@
       "eslint --fix",
       "biome check --write"
     ],
-    "**/*.{svelte,css,html}": [
+    "src/**/*.{svelte,css,html}": [
       "biome check --write"
     ],
     "**/*.mjs": [

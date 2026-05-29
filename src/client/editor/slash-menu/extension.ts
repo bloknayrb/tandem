@@ -1,7 +1,14 @@
 import { Extension, type Editor as TiptapEditor } from "@tiptap/core";
 import { type EditorState, Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
-import { filterSlashCommands, findSlashCommandMatch, type SlashCommandItem } from "./commands";
+import {
+  filterSlashCommands,
+  findSlashCommandMatch,
+  type SlashCommandIcon,
+  type SlashCommandItem,
+} from "./commands";
 import { isSlashMenuSuppressed } from "./suppression";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 interface ActiveSlashCommand {
   from: number;
@@ -110,6 +117,34 @@ function buildHintRow(): HTMLDivElement {
   return hint;
 }
 
+function buildIconBadge(icon: SlashCommandIcon): HTMLSpanElement {
+  const badge = document.createElement("span");
+  badge.className = "tandem-slash-menu__icon";
+  badge.setAttribute("aria-hidden", "true");
+
+  if (icon.kind === "glyph") {
+    badge.textContent = icon.glyph;
+    return badge;
+  }
+
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.6");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  for (const el of icon.els) {
+    const node = document.createElementNS(SVG_NS, el.tag);
+    for (const [name, value] of Object.entries(el.attrs)) {
+      node.setAttribute(name, value);
+    }
+    svg.appendChild(node);
+  }
+  badge.appendChild(svg);
+  return badge;
+}
+
 function renderSlashCommandMenu(
   element: HTMLDivElement,
   active: ActiveSlashCommand,
@@ -136,8 +171,23 @@ function renderSlashCommandMenu(
     button.id = `slash-command-${command.id}`;
     button.className = "tandem-slash-menu__item";
     button.setAttribute("aria-selected", String(index === active.selectedIndex));
-    button.textContent = command.label;
+    // The icon badge and shortcut alias are decorative (aria-hidden); the
+    // explicit aria-label keeps the option's accessible name exactly the label.
+    button.setAttribute("aria-label", command.label);
     button.dataset.commandId = command.id;
+
+    button.appendChild(buildIconBadge(command.icon));
+
+    const label = document.createElement("span");
+    label.className = "tandem-slash-menu__label";
+    label.textContent = command.label;
+    button.appendChild(label);
+
+    const shortcut = document.createElement("span");
+    shortcut.className = "tandem-slash-menu__shortcut";
+    shortcut.setAttribute("aria-hidden", "true");
+    shortcut.textContent = command.hint;
+    button.appendChild(shortcut);
 
     button.addEventListener("mouseenter", () => dispatchSelection(index));
     button.addEventListener("mousedown", (e) => {

@@ -12,11 +12,6 @@ interface Props {
 
 let { status, onAdvance, onLearnMore }: Props = $props();
 
-const primaryBtnStyle =
-  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-accent); border-radius: var(--tandem-r-2); background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer; font-weight: 600;";
-const secondaryBtnStyle =
-  "padding: 4px 10px; font-size: 12px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer;";
-
 let confirming = $state(false);
 let busy = $state(false);
 let error = $state<string | null>(null);
@@ -54,14 +49,9 @@ function handleSkip(): void {
 }
 </script>
 
-<div
-  data-testid="cowork-onboarding-step"
-  style="display: flex; flex-direction: column; gap: 8px;"
->
-  <div style="font-size: 14px; font-weight: 600; color: var(--tandem-fg);">
-    Claude Desktop Cowork detected
-  </div>
-  <div style="font-size: 13px; line-height: 1.5; color: var(--tandem-fg-muted);">
+<div class="cos-root" data-testid="cowork-onboarding-step">
+  <div class="cos-title">Claude Desktop Cowork detected</div>
+  <div class="cos-description">
     Enable Tandem inside Cowork workspaces?
     {#if status.vethernetCidr !== null}
       Detected VM subnet: <code>{status.vethernetCidr}</code>.
@@ -69,82 +59,75 @@ function handleSkip(): void {
   </div>
 
   {#if error}
-    <div
-      data-testid="cowork-onboarding-error"
-      role="alert"
-      style="font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); padding: 6px 8px;"
-    >
+    <div class="cos-error" data-testid="cowork-onboarding-error" role="alert">
       {error}
     </div>
   {/if}
 
   {#if confirming}
-    <div
-      data-testid="cowork-onboarding-confirm"
-      style="font-size: 12px; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border: 1px solid var(--tandem-warning-border); border-radius: var(--tandem-r-2); padding: 8px 10px;"
-    >
-      <div style="font-weight: 600; margin-bottom: 6px;">Confirm: Enable Cowork</div>
-      <div style="margin-bottom: 8px;">
+    <div class="cos-confirm-banner" data-testid="cowork-onboarding-confirm">
+      <div class="cos-confirm-heading">Confirm: Enable Cowork</div>
+      <div class="cos-confirm-body">
         Windows will prompt for admin permission to modify firewall rules. This is expected.
       </div>
-      <div style="display: flex; gap: 8px;">
+      <div class="cos-actions">
         <button
           data-testid="cowork-onboarding-enable-confirm-btn"
+          class="cos-btn cos-btn--primary"
           type="button"
           onclick={() => void handleEnable()}
           disabled={busy}
-          style={primaryBtnStyle}
         >
           Enable
         </button>
         <button
           data-testid="cowork-onboarding-enable-cancel-btn"
+          class="cos-btn cos-btn--ghost"
           type="button"
           onclick={() => { confirming = false; }}
           disabled={busy}
-          style={secondaryBtnStyle}
         >
           Cancel
         </button>
       </div>
     </div>
   {:else}
-    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+    <div class="cos-actions">
       <button
         data-testid="cowork-onboarding-enable-btn"
+        class="cos-btn cos-btn--primary"
         type="button"
         onclick={() => { confirming = true; }}
         disabled={busy}
-        style={primaryBtnStyle}
       >
         Enable
       </button>
       <button
         data-testid="cowork-onboarding-skip-btn"
+        class="cos-btn cos-btn--ghost"
         type="button"
         onclick={handleSkip}
         disabled={busy}
-        style={secondaryBtnStyle}
       >
         Skip
       </button>
       {#if onLearnMore}
         <button
           data-testid="cowork-onboarding-learn-more-btn"
+          class="cos-btn cos-btn--ghost"
           type="button"
           onclick={onLearnMore}
           disabled={busy}
-          style={secondaryBtnStyle}
         >
           Learn more
         </button>
       {:else}
         <a
+          class="cos-learn-more-link"
           data-testid="cowork-onboarding-learn-more-link"
           href={`${TANDEM_REPO_URL}#cowork`}
           target="_blank"
           rel="noreferrer"
-          style="font-size: 12px; color: var(--tandem-accent); align-self: center; text-decoration: underline;"
         >
           Learn more
         </a>
@@ -152,3 +135,84 @@ function handleSkip(): void {
     </div>
   {/if}
 </div>
+
+<style>
+  .cos-root {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cos-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--tandem-fg);
+  }
+  .cos-description {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--tandem-fg-muted);
+  }
+  .cos-error {
+    font-size: 12px;
+    color: var(--tandem-error-fg-strong);
+    background: var(--tandem-error-bg);
+    border: 1px solid var(--tandem-error-border);
+    border-radius: var(--tandem-r-2);
+    padding: 6px 8px;
+  }
+  .cos-confirm-banner {
+    font-size: 12px;
+    color: var(--tandem-warning-fg-strong);
+    background: var(--tandem-warning-bg);
+    border: 1px solid var(--tandem-warning-border);
+    border-radius: var(--tandem-r-2);
+    padding: 8px 10px;
+  }
+  .cos-confirm-heading {
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .cos-confirm-body {
+    margin-bottom: 8px;
+  }
+  .cos-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .cos-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: var(--tandem-r-2);
+    cursor: pointer;
+  }
+  .cos-btn--primary {
+    border: 1px solid var(--tandem-accent);
+    background: var(--tandem-accent);
+    color: var(--tandem-accent-fg);
+    font-weight: 600;
+  }
+  .cos-btn--primary:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .cos-btn--ghost {
+    border: 1px solid var(--tandem-border-strong);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg-muted);
+  }
+  .cos-btn--ghost:hover:not(:disabled) {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .cos-btn--ghost:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .cos-learn-more-link {
+    font-size: 12px;
+    color: var(--tandem-accent);
+    align-self: center;
+    text-decoration: underline;
+  }
+</style>

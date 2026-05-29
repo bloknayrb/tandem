@@ -85,8 +85,19 @@
         --tandem-author-user: oklch(0.55 0.14 245);
         --tandem-author-claude: #d97757;
         --tandem-author-claude-fg: oklch(0.24 0.03 55);
+        --tandem-author-user-bg: color-mix(in srgb, var(--tandem-author-user) 10%, var(--tandem-surface));
+        --tandem-author-claude-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, var(--tandem-surface));
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* File-type pip colors for the new-tab launcher recents list. These are
+           6px decorative dots (non-text → WCAG text-contrast does not gate).
+           .md/.docx reuse the author tokens; .txt/.html get their own identity
+           so they don't read as authorship. Light seeds are taken verbatim from
+           the Claude Design a7 bundle; dark variants below derive from these by
+           applying the same light→dark lightness lift the author-user token uses
+           (+0.17 L, -0.01 C, hue fixed). */
+        --tandem-filetype-txt: oklch(0.62 0.04 280);
+        --tandem-filetype-html: oklch(0.55 0.14 150);
         --tandem-success: oklch(0.55 0.14 150);
         --tandem-success-fg: #ffffff;
         --tandem-success-fg-strong: #166534;
@@ -121,6 +132,15 @@
         --tandem-highlight-green: rgba(76, 175, 80, 0.3);
         --tandem-highlight-blue: rgba(33, 150, 243, 0.3);
         --tandem-highlight-pink: rgba(236, 72, 153, 0.3);
+        /* Theme-picker swatch chips. Fixed identity colors that PREVIEW
+           each scheme — they do NOT track the active theme (adapting
+           them would defeat the picker visually). Note:
+           --tandem-swatch-dark is oklch(0.22 0.012 280), NOT the dark
+           theme's actual --tandem-bg (oklch(0.18 0.012 270)) —
+           intentional design choice; do not "correct" to match. */
+        --tandem-swatch-light: oklch(1 0 0);
+        --tandem-swatch-dark: oklch(0.22 0.012 280);
+        --tandem-swatch-warm: oklch(0.945 0.012 70);
         --tandem-h-fmtbar: 36px;
         --tandem-page-bg: #e8e8e8;
         --tandem-page-paper: #ffffff;
@@ -149,6 +169,26 @@
         --tandem-text-xl: 20px;
         --tandem-text-2xl: 28px;
         --tandem-text-3xl: 48px;
+        /* Phase 1.3 ADOPT — semantic type role tokens. Theme-invariant; no
+           dark/warm overrides needed. Per token-audit.md §"Semantic type
+           roles": h1/h2 adopt serif; body STAYS sans (PROD WINS override of
+           bundle's serif body — protected by token-audit.md line 84). */
+        --tandem-h1-font: var(--tandem-font-serif);
+        --tandem-h1-size: calc(var(--tandem-text-lg) * 2);
+        --tandem-h1-weight: 600;
+        --tandem-h1-leading: 1.15;
+        --tandem-h1-tracking: -0.02em;
+        --tandem-h2-font: var(--tandem-font-serif);
+        --tandem-h2-size: calc(var(--tandem-text-lg) * 1.4);
+        --tandem-h2-weight: 600;
+        --tandem-h2-leading: 1.2;
+        --tandem-h2-tracking: -0.015em;
+        --tandem-body-font: var(--tandem-font-sans);
+        --tandem-body-size: var(--tandem-editor-font-size, 17px);
+        --tandem-body-leading: 1.65;
+        --tandem-ui-font: var(--tandem-font-sans);
+        --tandem-ui-size: 13px;
+        --tandem-ui-leading: 1.4;
         --tandem-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.08);
         --tandem-shadow-2: 0 8px 24px rgba(0, 0, 0, 0.12);
         --tandem-shadow-3: 0 20px 60px rgba(0, 0, 0, 0.2);
@@ -167,6 +207,12 @@
         --tandem-z-modal: 1000;
         --tandem-z-toast: 1100;
         --tandem-z-tooltip: 10000;
+        /* The title bar lifts its controls above tauri-plugin-decorum's drag
+           overlay; --tandem-z-above-titlebar is for full-screen modal overlays
+           that must cover the title bar (otherwise the +new-tab button and
+           Solo/Tandem toggle poke through the dimming backdrop). */
+        --tandem-z-titlebar: 99999;
+        --tandem-z-above-titlebar: 100000;
         /* v7 floating chrome clearance/position vars — consumed by W2-W6
            rails, fmtbar, status pill. W4a maximalist lifted DocumentTabs
            into the floating TitleBar (44px tall, no in-flow tabs row), so
@@ -241,33 +287,83 @@
          to a card shape (menus aren't pill-shaped) and stacks an item list
          with a keyboard-hint footer. */
       .tandem-slash-menu {
-        border-radius: var(--tandem-r-4);
-        min-width: 200px;
+        border-radius: var(--tandem-r-5);
+        min-width: 256px;
         padding: var(--tandem-space-1);
         z-index: var(--tandem-z-popover, 1100);
       }
       .tandem-slash-menu__item {
         display: flex;
         align-items: center;
+        gap: var(--tandem-space-3);
         width: 100%;
-        padding: var(--tandem-space-1) var(--tandem-space-3);
+        padding: var(--tandem-space-1) var(--tandem-space-2);
+        /* Transparent base border kept so the selected/hover states never
+           shift the row height by 1px. */
         border: 1px solid transparent;
-        border-radius: var(--tandem-r-2);
+        border-radius: var(--tandem-r-3);
         background: transparent;
         color: var(--tandem-fg);
         font: inherit;
         font-size: var(--tandem-text-sm);
+        font-weight: 500;
         text-align: left;
         cursor: pointer;
         white-space: nowrap;
       }
       .tandem-slash-menu__item:hover {
-        background: color-mix(in srgb, var(--tandem-fg) 5%, transparent);
+        background: var(--tandem-surface-sunk);
       }
       .tandem-slash-menu__item[aria-selected="true"] {
         background: var(--tandem-accent-bg);
         color: var(--tandem-accent-fg-strong);
+        border-color: transparent;
+      }
+      .tandem-slash-menu__icon {
+        flex-shrink: 0;
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--tandem-border);
+        border-radius: var(--tandem-r-3);
+        background: var(--tandem-surface-sunk);
+        color: var(--tandem-fg-subtle);
+        font-weight: 700;
+        font-size: var(--tandem-text-2xs);
+        line-height: 1;
+      }
+      .tandem-slash-menu__icon svg {
+        width: 14px;
+        height: 14px;
+        display: block;
+      }
+      .tandem-slash-menu__item[aria-selected="true"] .tandem-slash-menu__icon {
+        background: color-mix(in srgb, var(--tandem-accent) 14%, var(--tandem-surface));
         border-color: var(--tandem-accent-border);
+        color: var(--tandem-accent);
+      }
+      .tandem-slash-menu__label {
+        flex: 1;
+      }
+      .tandem-slash-menu__shortcut {
+        flex-shrink: 0;
+        font-family: var(--tandem-font-mono);
+        font-size: var(--tandem-text-2xs);
+        padding: 0 6px;
+        border: 1px solid var(--tandem-border);
+        border-radius: var(--tandem-r-1);
+        background: var(--tandem-surface-sunk);
+        color: var(--tandem-fg-faint);
+      }
+      .tandem-slash-menu__item[aria-selected="true"] .tandem-slash-menu__shortcut {
+        background: var(--tandem-accent-bg);
+        border-color: var(--tandem-accent-border);
+        /* Matches the selected row's label color rather than the bundle's
+           --tandem-accent: accent-on-accent-bg is only ~4.6:1 in light mode
+           (AA-marginal), accent-fg-strong clears it comfortably (Conflict #6,
+           same call as the 1.7 version chip / 1.8 status pill). */
+        color: var(--tandem-accent-fg-strong);
       }
       .tandem-slash-menu__hint {
         display: flex;
@@ -309,8 +405,19 @@
         --tandem-author-user: oklch(0.72 0.13 245);
         --tandem-author-claude: #e89a78;
         --tandem-author-claude-fg: oklch(0.24 0.03 55);
+        /* Hand-coded saturated card tints (color-mix washes out against the dark
+           neutral, per the dark-mode -bg convention). Chosen distinct from
+           --tandem-warning-bg (#451a03, orange) and --tandem-suggestion-bg
+           (#2e1065, violet): navy-leaning for user, red-peach for claude. */
+        --tandem-author-user-bg: #11243f;
+        --tandem-author-claude-bg: #4d2419;
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* Dark file-type pips — light seeds lifted by the author-user light→dark
+           delta (+0.17 L, -0.01 C, hue fixed) so they stay legible on the dark
+           recents surface. See the light :root block for the rationale. */
+        --tandem-filetype-txt: oklch(0.79 0.03 280);
+        --tandem-filetype-html: oklch(0.72 0.13 150);
         --tandem-success: #22c55e;
         --tandem-success-fg: #0f172a;
         --tandem-success-fg-strong: #bbf7d0;
@@ -436,6 +543,8 @@
           --tandem-accent-fg-strong: HighlightText;
           --tandem-author-user: CanvasText;
           --tandem-author-claude: CanvasText;
+          --tandem-author-user-bg: Canvas;
+          --tandem-author-claude-bg: Canvas;
           --tandem-claude-focus-bg: Canvas;
           --tandem-claude-focus-border: Highlight;
           --tandem-scrollbar-track: Canvas;
@@ -476,6 +585,34 @@
       * {
         scrollbar-width: thin;
         scrollbar-color: var(--tandem-scrollbar-thumb) var(--tandem-scrollbar-track);
+      }
+
+      /* Phase 1.3 ADOPT — semantic type utility classes. Reach for these
+         from chrome surfaces (rail labels, UI captions) instead of inlining
+         font-family/size/leading. Editor heading rules live in editor.css. */
+      .tandem-h1 {
+        font-family: var(--tandem-h1-font);
+        font-size: var(--tandem-h1-size);
+        font-weight: var(--tandem-h1-weight);
+        line-height: var(--tandem-h1-leading);
+        letter-spacing: var(--tandem-h1-tracking);
+      }
+      .tandem-h2 {
+        font-family: var(--tandem-h2-font);
+        font-size: var(--tandem-h2-size);
+        font-weight: var(--tandem-h2-weight);
+        line-height: var(--tandem-h2-leading);
+        letter-spacing: var(--tandem-h2-tracking);
+      }
+      .tandem-body {
+        font-family: var(--tandem-body-font);
+        font-size: var(--tandem-body-size);
+        line-height: var(--tandem-body-leading);
+      }
+      .tandem-ui {
+        font-family: var(--tandem-ui-font);
+        font-size: var(--tandem-ui-size);
+        line-height: var(--tandem-ui-leading);
       }
     </style>
   </head>

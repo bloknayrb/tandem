@@ -784,6 +784,7 @@ describe("mcp-stdio per-request timeout", () => {
     //  3. Test destroys the server connection after the timer has fired.
     //  4. forwardToUpstream.catch fires: pendingRequests.delete() returns false → no second -32000.
     let heldRes: ServerResponse | undefined;
+    const postsReceived = { count: 0 };
     timeoutServer = createServer((req, res) => {
       if (req.method === "GET" && req.url === "/health") {
         res.writeHead(200, { "Content-Type": "text/plain" });
@@ -795,6 +796,7 @@ describe("mcp-stdio per-request timeout", () => {
         req.on("data", (c: Buffer) => chunks.push(c));
         req.on("end", () => {
           heldRes = res;
+          postsReceived.count += 1;
         });
         return;
       }
@@ -821,23 +823,23 @@ describe("mcp-stdio per-request timeout", () => {
     const stdoutChunks: string[] = [];
     child.stdout.on("data", (c: Buffer) => stdoutChunks.push(c.toString("utf8")));
 
-    // Write immediately — the request buffers in preReadyBuffer until httpReady
-    // flips. We poll on `heldRes` below (NOT a fixed sleep) so the test
-    // tolerates subprocess startup latency under concurrent vitest load.
+    // Send the request immediately — preReadyBuffer holds it until httpReady
+    // flips, then forwardToUpstream fires and the 300ms timer starts. Polling
+    // on postsReceived (below) replaces a fixed setTimeout(500) — under
+    // full-suite parallelism, subprocess startup can easily exceed 500ms and
+    // the old fixed delay was flaky (see #687).
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", id: 30, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
     );
 
-    // Poll until the server has the POST (i.e. the per-request timer started).
-    // 200 × 50ms = 10s budget absorbs slow `--import tsx` startup under load.
-    for (let i = 0; i < 200; i++) {
-      if (heldRes) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    // Poll until the POST reaches the fake server — proves the per-request
+    // timer is now running. Generous budget for full-suite load.
+    await waitForPosts(postsReceived, 1);
     expect(heldRes).toBeDefined();
 
-    // Wait for the 300ms timer to fire and produce the -32000.
-    const firstLine = await readOneLine(child, 3_000);
+    // Wait for the 300ms timer to fire and produce the -32000. Loose bound
+    // (5s) to absorb scheduling jitter under parallel test load.
+    const firstLine = await readOneLine(child, 5_000);
     const first = JSON.parse(firstLine) as { id: number; error?: { code: number } };
     expect(first.id).toBe(30);
     expect(first.error?.code).toBe(-32000);
@@ -859,7 +861,7 @@ describe("mcp-stdio per-request timeout", () => {
     }).length;
     // Exactly one -32000 for id=30 — timer fired first, catch found map empty.
     expect(errorCount).toBe(1);
-  }, 15_000);
+  }, 20_000);
 
   it("process exits in <3s after half-open timeout fires (no orphan handles)", async () => {
     // Regression guard: after the per-request timer fires and the proxy sends a
@@ -881,10 +883,10 @@ describe("mcp-stdio per-request timeout", () => {
     });
 
     // Write immediately — the request buffers in preReadyBuffer until httpReady
-    // flips, then forwardToUpstream fires. Poll for the POST (NOT a fixed sleep)
-    // so the test tolerates subprocess startup latency under concurrent vitest
-    // load, where `--import tsx` startup can far exceed 500ms. The ordering is
-    // load-bearing: the 300ms timer is armed just before http.send, so when
+    // flips, then forwardToUpstream fires. Poll for the POST (NOT a fixed sleep,
+    // see #687) so the test tolerates subprocess startup latency under concurrent
+    // vitest load, where `--import tsx` startup can far exceed 500ms. The ordering
+    // is load-bearing: the 300ms timer is armed just before http.send, so when
     // waitForPosts returns (POST received) it has been running only for the
     // network round-trip — ~290ms still remain, so readOneLine's listener
     // attaches well before the -32000 is emitted.
@@ -893,8 +895,8 @@ describe("mcp-stdio per-request timeout", () => {
     );
     await waitForPosts(postsReceived, 1);
 
-    // Wait for the -32000 to arrive (timer fired).
-    const line = await readOneLine(child, 3_000);
+    // Wait for the -32000 to arrive (timer fired). Loose bound for full-suite load.
+    const line = await readOneLine(child, 5_000);
     const parsed = JSON.parse(line) as { id: number; error?: { code: number } };
     expect(parsed.id).toBe(40);
     expect(parsed.error?.code).toBe(-32000);
@@ -911,7 +913,7 @@ describe("mcp-stdio per-request timeout", () => {
       });
     });
     expect(closed).toBe(true);
-  }, 15_000);
+  }, 20_000);
 });
 
 describe("parseTimeoutMs", () => {

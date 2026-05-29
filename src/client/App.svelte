@@ -1,10 +1,9 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import { cubicOut } from "svelte/easing";
 import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
-import type { CapturedAnchor } from "../shared/types";
+import type { Annotation, CapturedAnchor, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
@@ -19,6 +18,8 @@ import {
 import { effectiveBindingLabels } from "./actions/keybindings.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
 import { buildOverrides } from "./actions/shortcut-conflicts.js";
+import ActivityTray from "./components/ActivityTray.svelte";
+import { resolveActivityAction } from "./components/activityActions.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -50,7 +51,7 @@ import {
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
-import { createClosedTabStack } from "./hooks/useClosedTabStack.js";
+import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
@@ -75,6 +76,7 @@ import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
 import { createViewportWidth } from "./hooks/useViewportWidth.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
+import { createEditorStageModel } from "./layout/editor-stage.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
@@ -84,6 +86,7 @@ import {
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
 import MarginColumn from "./panels/MarginColumn.svelte";
+import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
@@ -215,6 +218,7 @@ createWebViewZoom();
 const openDocs = $derived(yjsSync.tabs.map((t) => ({ id: t.id, fileName: t.fileName })));
 
 const notifications = createNotifications();
+let activityOpen = $state(false);
 const fileDrop = createFileDrop();
 initTauriFileDrop(notifications.push);
 
@@ -338,10 +342,26 @@ let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 // event before App.svelte's window-level handler sees it. Exposed only in
 // dev/test builds — stripped by `import.meta.env.DEV` in production.
 if (import.meta.env.DEV) {
-  (window as unknown as { __tandemTest?: { openSettingsModal: () => void } }).__tandemTest = {
+  (
+    window as unknown as {
+      __tandemTest?: {
+        openSettingsModal: () => void;
+        pushNotification: (n: TandemNotification) => void;
+        activeDocumentId: () => string | null;
+      };
+    }
+  ).__tandemTest = {
     openSettingsModal: () => {
       settingsModalOpen = true;
     },
+    // Drives the activity center deterministically in E2E without the
+    // SSE-connect race (the server's notify-stream has no buffer replay,
+    // so a notification pushed before the EventSource connects is lost).
+    // Exercises the real client `push` → ingest → tray + transient-pop path.
+    pushNotification: (n: TandemNotification) => notifications.push(n),
+    // Lets the activity-tray Retry E2E target a genuinely-open doc so the
+    // onAction handler reaches triggerSave instead of the closed-doc fallback.
+    activeDocumentId: () => yjsSync.activeTabId,
   };
 }
 let paletteOpen = $state(false);
@@ -483,17 +503,18 @@ wireActionDeps({
     }
   },
   annotationAccept: () => {
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleAccept(cur.id);
   },
   annotationDismiss: () => {
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleDismiss(cur.id);
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
-  toggleAuthorship: () =>
+  toggleAuthorship: () => setAuthorshipVisible(!settingsState.settings.showAuthorship),
+  toggleFormattingBar: () =>
     settingsState.updateSettings({
-      showAuthorship: !settingsState.settings.showAuthorship,
+      formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
   saveAs: async () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
@@ -532,15 +553,30 @@ wireActionDeps({
   },
 });
 
+// Toggle authorship visibility, auto-unmuting in one updateSettings call when
+// the master overlay is on — same coherence rule as the per-type Decorations
+// rows, so toggling authorship via Ctrl+Alt+A or the command palette while
+// muted is never an invisible no-op (1.13). The Decorations dropdown's own
+// authorship row folds the same unmute inside `toggleRow`.
+function setAuthorshipVisible(visible: boolean): void {
+  settingsState.updateSettings({
+    showAuthorship: visible,
+    ...(settingsState.settings.decorationsMuted ? { decorationsMuted: false } : {}),
+  });
+}
+
 // The authorship plugin reads its initial visibility from localStorage at
 // construction time, so dispatch only on subsequent changes — first-run
 // dispatch was the path that produced an effect-depth loop under prod
 // scheduling (transaction → tick → effect rerun → dispatch …).
+// Effective visibility folds in the master `decorationsMuted` overlay (1.13);
+// reading settings inside the effect body keeps it reactive (NOT a frozen const).
 let lastDispatchedAuthorship: boolean | null = null;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  const visible = settingsState.settings.showAuthorship;
+  const s = settingsState.settings;
+  const visible = !s.decorationsMuted && s.showAuthorship;
   if (lastDispatchedAuthorship === visible) return;
   const firstRun = lastDispatchedAuthorship === null;
   lastDispatchedAuthorship = visible;
@@ -551,15 +587,25 @@ $effect(() => {
   });
 });
 
-// #596: mirrors the authorship toggle pattern; plugin reads localStorage at init, this handles flips.
-let lastDispatchedDecorations: boolean | null = null;
+// #596 → 1.13: per-type decoration visibility. Plugin reads localStorage at
+// init; this handles flips. Effective visibility folds in `decorationsMuted`.
+// The dedupe guard uses a positional encoding (NOT JSON.stringify, which would
+// silently break on a later key reorder/spread → missed or redundant dispatch).
+let lastDispatchedDecorations: string | null = null;
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  const visible = settingsState.settings.showAnnotationDecorations;
-  if (lastDispatchedDecorations === visible) return;
+  const s = settingsState.settings;
+  const muted = s.decorationsMuted;
+  const visible = {
+    comment: !muted && s.showComments,
+    highlight: !muted && s.showHighlights,
+    note: !muted && s.showNotes,
+  };
+  const encoded = `${visible.comment ? 1 : 0}${visible.highlight ? 1 : 0}${visible.note ? 1 : 0}`;
+  if (lastDispatchedDecorations === encoded) return;
   const firstRun = lastDispatchedDecorations === null;
-  lastDispatchedDecorations = visible;
+  lastDispatchedDecorations = encoded;
   if (firstRun) return;
   untrack(() => {
     const tr = ed.state.tr.setMeta(annotationPluginKey, {
@@ -660,92 +706,41 @@ const toggleRightPanel = () => {
   focusToggleTarget("right", nextVisible);
 };
 
-/**
- * Slide transition for the rail containers. Translates the rail off the
- * window edge so showing/hiding the rail reads as a slide rather than a
- * snap. Reduced-motion users get a zero-duration no-op (collapses to a
- * snap, the existing behavior).
- *
- * Known limitation: while the rail's outro is running, its DOM is still
- * mounted alongside the PeekStrip (Svelte default). The editor column
- * briefly reflows around both. Margin-annotation positions catch up via
- * the existing ResizeObserver-driven layout effect; brief lag during the
- * ~220ms transition is acceptable.
- */
-function railSlide(_node: HTMLElement, params: { side: "left" | "right"; reduceMotion: boolean }) {
-  if (params.reduceMotion) return { duration: 0, css: () => "" };
-  const dir = params.side === "left" ? -1 : 1;
-  return {
-    duration: 220,
-    easing: cubicOut,
-    css: (t: number) => `transform: translateX(${(1 - t) * 100 * dir}%);`,
-  };
-}
-
-// Margin annotation view reserves a column + edge inset + breathing-room gap
-// per side. Subtract from available width so the editor text never sits
-// underneath (or flush against) the absolutely-positioned MarginColumn cards.
-// `MARGIN_VIEW_GAP_PX` is the space between the editor's text edge and the
-// near edge of the margin column — it also defines the horizontal zone where
-// leader lines from anchor text to bubbles are drawn (see MarginColumn).
-const MARGIN_VIEW_COLUMN_WIDTH_PX = 240;
-const MARGIN_VIEW_EDGE_INSET_PX = 8;
-const MARGIN_VIEW_GAP_PX = 24;
-const MARGIN_VIEW_RESERVE_PX =
-  2 * (MARGIN_VIEW_COLUMN_WIDTH_PX + MARGIN_VIEW_EDGE_INSET_PX + MARGIN_VIEW_GAP_PX);
-
-// Below this readable editor width, margin columns auto-hide rather than
-// squeeze the editor into an unreadable strip. Pairs with a 32px hysteresis
-// band (`MARGIN_VIEW_HYSTERESIS_PX`) so a viewport drag through the threshold
-// doesn't flicker columns on/off at 60fps.
-const MIN_EDITOR_WIDTH_PX = 480;
-const MARGIN_VIEW_HYSTERESIS_PX = 32;
+// Rail collapse is a snap: the always-mounted dual-layer shells below
+// display-toggle their full/peek layers. The width-slide + opacity crossfade
+// between the two layers is deferred to motion #798 (bundle `app.css`
+// `.c7-rail` 360ms easeOutQuint width + `.rail-full`/`.rail-peek` crossfade).
 
 const viewport = createViewportWidth();
 
-// Per-side rail-replaces-margin behavior (#683): when a rail is open, hide the
-// margin column on that side. Reasoning: rail + margin on the same side leaves
-// the editor crushed and visually competes for the same gutter. Hiding by side
-// preserves margin annotations on the un-collapsed side and matches the user
-// mental model that "rail replaces margin." Both columns hide together when
-// `narrowSticky === true`.
-//
-// The threshold reads the persisted-at-mount rail widths (not the live
-// `dragResizeLeft/Right.width`) so it stays stable while a user is mid-drag.
-// Without this, the boundary slides under the drag and margin columns flip
-// on/off as the cursor moves — the 32px hysteresis below only absorbs
-// viewport-axis jitter, not threshold drift.
-const railsWidthPx = $derived(
-  (effectiveLeftVisible ? leftPanelWidth : 0) + (effectiveRightVisible ? rightPanelWidth : 0),
-);
-const marginNarrowThresholdPx = $derived(
-  MARGIN_VIEW_RESERVE_PX + railsWidthPx + MIN_EDITOR_WIDTH_PX,
-);
-
-// Hysteresis-debounced narrow flag. A plain `width < threshold` boundary
-// flickers when a user drags through it because each side of the threshold
-// re-evaluates on every frame. Sticky entry at `< threshold`, sticky exit at
-// `> threshold + HYSTERESIS` gives a 32px deadband.
-let narrowSticky = $state(false);
-$effect(() => {
-  const w = viewport.width;
-  const t = marginNarrowThresholdPx;
-  if (w < t) narrowSticky = true;
-  else if (w > t + MARGIN_VIEW_HYSTERESIS_PX) narrowSticky = false;
-});
-
-const marginViewEffectivelyOn = $derived(settingsState.settings.marginView && !narrowSticky);
-const marginLeftVisible = $derived(marginViewEffectivelyOn && !effectiveLeftVisible);
-const marginRightVisible = $derived(marginViewEffectivelyOn && !effectiveRightVisible);
-
-const editorMaxWidth = $derived.by(() => {
-  const pct = settingsState.settings.editorWidthPercent;
-  const reserve = marginViewEffectivelyOn ? MARGIN_VIEW_RESERVE_PX : 0;
-  // `max(0px, ...)` guards against `editorWidthPercent` settings that, on
-  // narrow viewports with marginView on, would compute a negative max-width.
-  // CSS clamps negative max-width to 0 anyway, but the explicit wrap keeps
-  // the resulting style declaration legible in devtools.
-  return reserve > 0 ? `max(0px, calc(${pct}% - ${reserve}px))` : `${pct}%`;
+// Editor stage model (Phase 3.5): owns the horizontal grid layout — a content
+// reading-measure track flanked by per-side margin-annotation tracks, centered
+// by `1fr` gutters. Replaces the old `editorMaxWidth` / global
+// `MARGIN_VIEW_RESERVE_PX` cascade so the margin reserve is taken PER SIDE,
+// only where a margin actually renders (opening a rail that hides one margin
+// no longer subtracts phantom width from the content). Per-side
+// rail-replaces-margin (#683) and the narrow auto-hide threshold + hysteresis
+// live in the model; the threshold reads persisted-at-mount rail widths (not
+// the live drag width) so it stays stable mid-drag. The grid is non-docx only.
+const editorStage = createEditorStageModel({
+  getFormat: () => activeTab?.format,
+  getMarginView: () => settingsState.settings.marginView,
+  getEditorMeasure: () => settingsState.settings.editorMeasure,
+  getLeftRailVisible: () => effectiveLeftVisible,
+  getRightRailVisible: () => effectiveRightVisible,
+  getViewportWidth: () => viewport.width,
+  // Presence-collapse inputs. Read the UNGATED `visibleAnnotations` (declared
+  // above, `= yjsSync.annotations`) through the shared side-split predicates +
+  // `status === "pending"` — the same set the column renders. NOT
+  // `marginNotes`/`marginComments` (declared below, `effectivelyOn`-gated):
+  // those would close a `$derived` cycle through `effectivelyOn`. See stage-c1
+  // [MF-11].
+  getLeftHasPending: () =>
+    visibleAnnotations.some((a) => a.status === "pending" && isLeftMarginAnnotation(a)),
+  getRightHasPending: () =>
+    visibleAnnotations.some((a) => a.status === "pending" && isRightMarginAnnotation(a)),
+  leftRailWidthPx: leftPanelWidth,
+  rightRailWidthPx: rightPanelWidth,
 });
 
 function captureSelectionForChat() {
@@ -918,7 +913,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "annotation-accept-or-dismiss": (e, ctx) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") {
       if (ctx?.shift) review.handleDismiss(cur.id);
       else review.handleAccept(cur.id);
@@ -973,9 +968,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "toggle-authorship": (e) => {
     // Works even when focus is in a form input (global UI preference).
     e.preventDefault();
-    settingsState.updateSettings({
-      showAuthorship: !settingsState.settings.showAuthorship,
-    });
+    setAuthorshipVisible(!settingsState.settings.showAuthorship);
   },
   "toggle-left-panel": (e) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -1031,6 +1024,47 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
+// Escape deselects the active annotation — empty selection is a valid resting
+// state. The deselect is SCOPED TO THE EDITING SURFACE: it fires when focus is in
+// the editor or the annotation rail, OR when nothing in particular is focused
+// (document.body / null). The body case matters because a selection can outlive
+// its focus: e.g. select an editor highlight (which focuses the editor), then
+// click a neutral, non-focusable chrome area that blurs focus back to body — the
+// annotation stays active but focus is no longer in the editor. A focus-trapping
+// overlay instead holds focus INSIDE itself, so any *specific* non-editing
+// element owning focus means an overlay is up and keeps its own Escape-to-close —
+// the deselect doesn't piggyback, no per-overlay protocol needed.
+// Belt-and-suspenders for overlays that DO leave focus in the editing surface,
+// via two distinct mechanisms: (1) overlays with a capture-phase window listener
+// + stopPropagation (selection toolbar, settings popover, Help) halt Escape
+// before this bubble-phase listener ever runs — `e.defaultPrevented` is moot for
+// them; (2) the slash menu calls preventDefault() in its ProseMirror keydown
+// handler without stopping propagation, so this listener DOES run and the
+// `e.defaultPrevented` guard is what skips it. `findBarOpen` is explicit because
+// the find bar closes on Escape WITHOUT preventDefault, so if focus has returned
+// to the editor (e.g. after jumping to a match) while find is still open, neither
+// guard above would catch the stray deselect. Reads happen at event time, outside
+// any tracking scope, so the effect registers once with current values.
+$effect(() => {
+  function onEscape(e: KeyboardEvent) {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    if (activeAnnotationId === null || findBarOpen) return;
+    const el = document.activeElement as HTMLElement | null;
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+    const inEditingSurface =
+      !el ||
+      el === document.body ||
+      !!el.closest(
+        '.ProseMirror, [data-testid="editor-root"], [data-testid="annotation-list-scroll-container"]',
+      );
+    if (!inEditingSurface) return;
+    e.preventDefault();
+    activeAnnotationId = null;
+  }
+  window.addEventListener("keydown", onEscape);
+  return () => window.removeEventListener("keydown", onEscape);
+});
+
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
@@ -1082,24 +1116,42 @@ const review = useAnnotationReview({
   getActiveAnnotationId: () => activeAnnotationId,
 });
 
+// Resolve target for accept/dismiss: the explicitly-selected annotation, or —
+// when nothing is selected (the empty resting state) — the first pending review
+// target. Shared by the Ctrl+Enter shortcut and the command-palette
+// accept/dismiss commands so the two surfaces can never diverge (review finding).
+// The two branches differ in what they can return: the fallback
+// (getReviewTargets()[0]) is always a Claude target because getReviewTargets()
+// excludes user notes/highlights, but the active branch returns WHATEVER is
+// selected — which can be a user highlight overlapping a Claude comment (#768).
+// So the `author !== "user"` guard at call sites is load-bearing for the active
+// branch, not just defense-in-depth.
+function activeOrFirstPending(): Annotation | undefined {
+  return activeAnnotationId
+    ? visibleAnnotations.find((a) => a.id === activeAnnotationId)
+    : review.getReviewTargets()[0];
+}
+
 // #649: Word-style margin annotation view.
 // PR 1 ships minimum viable — bubbles appear at correct Y, naive scroll sync
 // via DOM nesting in the positioning layer. Collision resolution lands in
 // PR 2; rail-collapse and narrow-layout auto-disable in PR 3.
+// Side-split via the shared predicates (panels/marginSides) so these render
+// arrays and the editorStage presence-collapse booleans can never diverge.
+// Still gated on `effectivelyOn` here (the column only mounts when on); the
+// presence booleans deliberately read the ungated source instead (see above).
 const marginNotes = $derived(
-  marginViewEffectivelyOn ? visibleAnnotations.filter((a) => a.type === "note") : [],
+  editorStage.effectivelyOn ? visibleAnnotations.filter(isLeftMarginAnnotation) : [],
 );
 const marginComments = $derived(
-  marginViewEffectivelyOn
-    ? visibleAnnotations.filter((a) => a.author === "import" || a.type === "comment")
-    : [],
+  editorStage.effectivelyOn ? visibleAnnotations.filter(isRightMarginAnnotation) : [],
 );
 const marginPositions = createMarginPositions({
   getEditor: () => editor,
   getYdoc: () => activeTab?.ydoc ?? null,
   getAnnotations: () => [...marginNotes, ...marginComments],
   getLayerEl: () => marginLayerEl,
-  getEnabled: () => marginViewEffectivelyOn,
+  getEnabled: () => editorStage.effectivelyOn,
 });
 // Replies feed the bubble reply count + thread preview. We observe the raw
 // Y.Map here; MarginColumn applies the `getVisibleReplies()` ADR-027 filter
@@ -1141,8 +1193,6 @@ const tutorial = createTutorial(
     claudeActive={yjsSync.claudeActive}
     theme={settingsState.settings.theme}
     onSetTheme={(t) => settingsState.updateSettings({ theme: t })}
-    showAuthorship={settingsState.settings.showAuthorship}
-    onAuthorshipChange={(visible) => settingsState.updateSettings({ showAuthorship: visible })}
     onOpenHelp={() => (showHelp = true)}
     onOpenSettings={toggleSettings}
     onOpenSettingsModal={openSettingsModalWithAck}
@@ -1189,12 +1239,31 @@ const tutorial = createTutorial(
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
       requestCommentFocus={commentFocusTrigger}
+      showAuthorship={settingsState.settings.showAuthorship}
+      showComments={settingsState.settings.showComments}
+      showHighlights={settingsState.settings.showHighlights}
+      showNotes={settingsState.settings.showNotes}
+      decorationsMuted={settingsState.settings.decorationsMuted}
+      onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
+      onOpenSettings={toggleSettings}
+      formattingBarVisible={settingsState.settings.formattingBarVisible}
+      onShowFormattingBar={() => settingsState.updateSettings({ formattingBarVisible: true })}
     />
 
-    <FormattingBar
-      {editor}
-      ydoc={activeTab?.ydoc ?? null}
-    />
+    {#if settingsState.settings.formattingBarVisible}
+      <FormattingBar
+        {editor}
+        ydoc={activeTab?.ydoc ?? null}
+        showAuthorship={settingsState.settings.showAuthorship}
+        showComments={settingsState.settings.showComments}
+        showHighlights={settingsState.settings.showHighlights}
+        showNotes={settingsState.settings.showNotes}
+        decorationsMuted={settingsState.settings.decorationsMuted}
+        onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
+        onOpenSettings={toggleSettings}
+        onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
+      />
+    {/if}
 
     <!-- Single persistent container — editor column is always rendered in the same
          DOM position so the Editor component never remounts on panel toggles.
@@ -1214,19 +1283,29 @@ const tutorial = createTutorial(
       style="position: relative; display: flex; flex: 1; overflow: hidden; background: var(--tandem-bg);"
       onscroll={(e) => {
         // TODO: if a future child needs horizontal scroll (overflowing table,
-        // inline overflow toolbar), scope this reset to the railSlide transition
-        // window (~250ms) or move it to a focus listener. Today the row has no
-        // horizontally-scrollable children, so the unconditional reset is safe.
+        // inline overflow toolbar), scope this reset or move it to a focus
+        // listener. Today the row has no horizontally-scrollable children, so
+        // the unconditional reset is safe.
         e.currentTarget.scrollLeft = 0;
       }}
     >
-      {#if effectiveLeftVisible}
-        <!-- Left rail is locked to the outline; the outline rail has no tab
-             bar. Outermost 8px is the edge-click collapse zone. -->
+      <!-- Left rail: always-mounted dual-layer shell. The `.rail-full` layer
+           (the outline panel) display:none's when collapsed — its PanelSlot
+           instance + scroll position persist, but it has no layout box, so its
+           scroll effects can't pop the editor and its children leave the Tab
+           order. The peek layer previews the outline as tick-marks. The shell
+           owns the chrome (bg, radius, shadow) + hover-grow; the outermost 8px
+           of the full layer is the edge-click collapse zone. Opacity-crossfade
+           + width-slide deferred to motion #798. -->
+      <div
+        class="rail-shell rail-shell-left"
+        class:collapsed={!effectiveLeftVisible}
+        style={effectiveLeftVisible ? `width: ${dragResizeLeft.width}px;` : ""}
+      >
         <div
           data-testid="left-outline-rail"
-          transition:railSlide={{ side: "left", reduceMotion: settingsState.settings.reduceMotion }}
-          style={`position: relative; display: flex; flex-direction: column; width: ${dragResizeLeft.width}px; background: var(--tandem-surface-muted); border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0; margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-left);`}
+          class="rail-full rail-full-left"
+          style={`width: ${dragResizeLeft.width}px;`}
         >
           <PanelSlot
             kind="outline"
@@ -1236,20 +1315,29 @@ const tutorial = createTutorial(
           />
           {@render edgeCollapse("left", toggleLeftPanel)}
         </div>
+        <PeekStrip side="left" collapsed={!effectiveLeftVisible} kind="outline" onActivate={toggleLeftPanel} />
+      </div>
+      {#if effectiveLeftVisible}
         {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}
-      {:else}
-        <PeekStrip side="left" onActivate={toggleLeftPanel} />
       {/if}
 
       {@render editorColumn()}
 
       {#if effectiveRightVisible}
         {@render resizeHandle("right", (e) => dragResizeRight.handleResizeStart(e), "panel-resize-handle", dragResizeRight.width)}
-        <!-- Right rail: single node owns width + transition + styling, matching
-             the left rail's shape above so the two slide-in animations stay symmetric. -->
+      {/if}
+      <!-- Right rail: always-mounted dual-layer shell (mirrors the left rail).
+           The `.rail-full` layer (tabs + chat/annotations panels) display:none's
+           when collapsed; the peek layer previews annotations as colored dots.
+           See the left rail for the display-toggle rationale. -->
+      <div
+        class="rail-shell rail-shell-right"
+        class:collapsed={!effectiveRightVisible}
+        style={effectiveRightVisible ? `width: ${dragResizeRight.width}px;` : ""}
+      >
         <div
-          transition:railSlide={{ side: "right", reduceMotion: settingsState.settings.reduceMotion }}
-          style={`position: relative; z-index: 1; display: flex; flex-direction: column; width: ${dragResizeRight.width}px; background: var(--tandem-surface-muted); border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px); margin-top: var(--tandem-rail-top-clearance, 0); margin-bottom: var(--tandem-status-clearance-total, 60px); overflow: hidden; box-shadow: var(--tandem-rail-shadow-right);`}
+          class="rail-full rail-full-right"
+          style={`width: ${dragResizeRight.width}px;`}
         >
           {@render edgeCollapse("right", toggleRightPanel)}
           <div class="rail-tabs-row">
@@ -1305,9 +1393,14 @@ const tutorial = createTutorial(
             visible={activeRailTab === "annotations"}
           />
         </div>
-      {:else}
-        <PeekStrip side="right" onActivate={toggleRightPanel} />
-      {/if}
+        <PeekStrip
+          side="right"
+          collapsed={!effectiveRightVisible}
+          kind="annotations"
+          annotations={visibleAnnotations}
+          onActivate={toggleRightPanel}
+        />
+      </div>
     </div>
 
     <StatusBar
@@ -1385,6 +1478,34 @@ const tutorial = createTutorial(
 
     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
 
+    <ActivityTray
+      items={notifications.activity}
+      open={activityOpen}
+      onToggle={() => (activityOpen = !activityOpen)}
+      onDismiss={notifications.dismissActivity}
+      onClear={notifications.clearActivity}
+      onAction={(item) => {
+        const action = resolveActivityAction(item);
+        if (!action) return;
+        // The failed doc may have been closed since the error fired; triggerSave
+        // would silently skip a closed doc, so tell the user to reopen instead.
+        if (yjsSync.tabs.some((t) => t.id === action.documentId)) {
+          void triggerSave(action.documentId);
+        } else {
+          notifications.push({
+            // Deterministic per-doc id (matches the dedupKey) so repeat clicks
+            // coalesce on one stable row instead of risking a same-ms id clash.
+            id: `retry-unavailable-${action.documentId}`,
+            type: "general-error",
+            severity: "warning",
+            message: "Reopen the document to retry the save.",
+            dedupKey: `retry-unavailable:${action.documentId}`,
+            timestamp: Date.now(),
+          });
+        }
+      }}
+    />
+
     {#if isTauriRuntime()}
       <CoworkAdminDeclinedModal />
     {/if}
@@ -1409,6 +1530,8 @@ const tutorial = createTutorial(
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     onRequestOpenDialog={() => void requestOpenFile()}
+    closedTabTop={closedTabStack.top}
+    onReopenClosed={reopenClosedTab}
   />
 {/snippet}
 
@@ -1455,13 +1578,12 @@ const tutorial = createTutorial(
   ></div>
 {/snippet}
 
-<!-- Edge-click collapse zone: full-height 8px strip at the outer edge of the
-     rail. The right rail insets the top by 40px to clear the rail-tabs-row
-     tab buttons (~36px tall); the left rail has no tab bar and runs edge-
-     to-edge. The right rail's scrollbar shares the outer edge — a known
-     minor conflict; the strip stays 8px so a Windows scrollbar (~17px)
-     remains grabbable from the inside half. Sibling of panel content (not
-     a parent) so descendant clicks never bubble in. -->
+<!-- Edge-click collapse zone: full-height 12px strip at the outer edge of
+     the rail. Both rails run edge-to-edge top-to-bottom; the grip bar inside
+     is vertically centered. The right rail's scrollbar shares the outer edge
+     — a known minor conflict; the strip stays narrow so a Windows scrollbar
+     (~17px) remains grabbable from the inside half. Sibling of panel content
+     (not a parent) so descendant clicks never bubble in. -->
 {#snippet edgeCollapse(side: "left" | "right", onToggle: () => void)}
   <!-- Not in the Tab sequence: keyboard users have Alt+Shift+Arrow for
        the same action, and tab-reachable edge zones would push other
@@ -1503,99 +1625,140 @@ const tutorial = createTutorial(
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
           activeRailTab = "annotations";
-                    activeAnnotationId = id;
+          activeAnnotationId = id;
+        }}
+        onClearAnnotation={() => {
+          activeAnnotationId = null;
         }}
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
       />
     {/snippet}
-    <!-- Positioning layer for margin annotation bubbles (#649). The layer
-         wraps editor content so its block height matches the editor's, and
-         scroll sync between text and bubbles is free (both live inside the
-         same scrolling block).
+    <!-- One snippet, two call sites: left wires `marginNotes`, right wires
+         `marginComments` (the only per-side difference). All other props +
+         handlers are identical, so the distinct annotation wiring lives at the
+         call site rather than in two near-identical bodies. -->
+    {#snippet marginColumn(side: "left" | "right", annotations: readonly Annotation[])}
+      <!-- Per-side geometry + mode resolved from `side`: the format clamp (docx
+           → full|off) and presence-collapse (empty side → off) both live in the
+           editorStage getters, so each call site gets its side-correct width.
+           A side rendered here is never `off` (the {#if leftVisible/rightVisible}
+           guards gate mounting), so `geom` is always the live widthMode track. -->
+      {@const geom = side === "left" ? editorStage.leftGeometry : editorStage.rightGeometry}
+      {@const mode = side === "left" ? editorStage.leftMode : editorStage.rightMode}
+      <MarginColumn
+        {side}
+        {annotations}
+        positions={marginPositions.byId}
+        width={geom.column}
+        edgeInset={geom.inset}
+        gap={geom.gap}
+        {mode}
+        {activeAnnotationId}
+        repliesById={marginReplies.byId}
+        onClick={(ann) => {
+          activeAnnotationId = ann.id;
+          review.scrollToAnnotation(ann);
+        }}
+        onAccept={review.handleAccept}
+        onDismiss={review.handleDismiss}
+        onRemove={marginHandlers.onRemove}
+        onEdit={marginHandlers.onEdit}
+        onReply={marginHandlers.onReply}
+        onSendToClaude={marginHandlers.onSendToClaude}
+      />
+    {/snippet}
+    <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
+         The layer wraps editor content so its block height matches the
+         editor's; bubble Y-positions + scroll sync are measured against it.
 
          INVARIANT 1 — no re-bind: this <div> must remain mounted across
          marginView toggles. `marginLayerEl` is a $state ref read inside
          useMarginPositions's $effect, which subscribes; re-binding via
          {#if}/{#key} would cause listener teardown/rebuild storms (the
-         feedback_svelte_state_bind_this_loop pattern). Use `display:
-         contents` when off — wrapper is layout-invisible, so default-off
-         users get the master-branch layout with no new containing block,
-         and the bind stays stable.
+         feedback_svelte_state_bind_this_loop pattern). Only the element's
+         STYLE changes (grid ⇄ contents/relative); it never remounts.
 
-         INVARIANT 2 — getEnabled() short-circuit ordering: recompute()
-         reads layer.getBoundingClientRect() ONLY after the getEnabled()
-         early-return. `display: contents` elements return a zero-size
-         rect, so bypassing that guard would silently produce
-         layerTop=0 and page-relative bubble offsets. Don't move the
-         guard. -->
-    <div
-      bind:this={marginLayerEl}
-      style={marginViewEffectivelyOn ? "position: relative;" : "display: contents;"}
-    >
-      <!-- Editor renders paged white-sheet layout for .docx via the `.tandem-paged`
-           class (driven by the `format` prop / `isPaged` $derived inside Editor.svelte).
-           For .docx we skip the max-width wrapper so the gray canvas can paint full-width;
-           the inner white sheet is centered by editor.css. -->
+         INVARIANT 2 — getEnabled() short-circuit ordering: recompute() reads
+         layer.getBoundingClientRect() ONLY after the getEnabled() early-return.
+         When margins are off the layer is `display: contents` (docx) or a
+         collapsed grid (non-docx); measuring then would be meaningless, so the
+         guard must stay ahead of the rect read. Don't move it.
+
+         INVARIANT 3 — no padding/border on the stage: useMarginPositions reads
+         the border-box top as the bubble origin, and the grid's first row
+         starts at the content-box top. Any padding-/border-top would offset
+         every bubble. Spacing lives on `.editor-scroll`; the stage and its
+         `.margin-track` cells stay padding/border-free.
+
+         Layout is format-aware (editorStage.layerStyle):
+         - docx keeps its own path — `position: relative` (margin siblings
+           absolutely position against the layer) / `display: contents` off.
+         - non-docx is a CSS Grid stage [1fr · marginL · content · marginR · 1fr]:
+           content track at the reading measure, per-side margin tracks (272px
+           shown / 0 hidden), `1fr` gutters centering the block. Reserve is
+           taken only where a margin renders (the per-side fix). -->
+    <div bind:this={marginLayerEl} data-testid="editor-stage" style={editorStage.layerStyle}>
       {#if activeTab?.format === "docx"}
         {#key activeTab.id}
           {@render editorContent()}
         {/key}
+        {#if editorStage.leftVisible && activeTab}{@render marginColumn("left", marginNotes)}{/if}
+        {#if editorStage.rightVisible && activeTab}{@render marginColumn("right", marginComments)}{/if}
       {:else}
-        <div style={`max-width: ${editorMaxWidth}; margin: 0 auto;`}>
+        <!-- Content track (grid column 3). The grid template caps its width at
+             the reading measure; the `1fr` gutters (columns 1 & 5) center it.
+
+             INVARIANT 5 — every cell pins `grid-row: 1`. The margin tracks are
+             declared AFTER the content in DOM order but at lower column indices
+             (2 & 4 vs 3). Under the default sparse `grid-auto-flow: row`, an
+             item whose explicit column is behind the auto-placement cursor is
+             bumped to the next row — so without an explicit row the margin
+             tracks land in row 2, BELOW the content, dumping every bubble at the
+             bottom of the stage. `grid-row: 1` on all three keeps the single-row
+             layout the bubble-offset math assumes. Don't drop it. -->
+        <div class="editor-content-track" style="grid-column: 3; grid-row: 1;">
           {#if activeTab}
             {#key activeTab.id}
               {@render editorContent()}
             {/key}
           {:else}
-            <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
+            <EmptyState
+              connected={yjsSync.connected}
+              claudeActive={yjsSync.claudeActive}
+              onOpenFile={() => (fileOpenDialogOpen = true)}
+              onRetry={() => yjsSync.reconnect()}
+              onOpenSettings={openSettingsModalWithAck}
+            />
           {/if}
         </div>
-      {/if}
-      {#if marginLeftVisible && activeTab}
-        <MarginColumn
-          side="left"
-          annotations={marginNotes}
-          positions={marginPositions.byId}
-          width={MARGIN_VIEW_COLUMN_WIDTH_PX}
-          edgeInset={MARGIN_VIEW_EDGE_INSET_PX}
-          gap={MARGIN_VIEW_GAP_PX}
-          {activeAnnotationId}
-          repliesById={marginReplies.byId}
-          onClick={(ann) => {
-            activeAnnotationId = ann.id;
-            review.scrollToAnnotation(ann);
-          }}
-          onAccept={review.handleAccept}
-          onDismiss={review.handleDismiss}
-          onRemove={marginHandlers.onRemove}
-          onEdit={marginHandlers.onEdit}
-          onReply={marginHandlers.onReply}
-          onSendToClaude={marginHandlers.onSendToClaude}
-        />
-      {/if}
-      {#if marginRightVisible && activeTab}
-        <MarginColumn
-          side="right"
-          annotations={marginComments}
-          positions={marginPositions.byId}
-          width={MARGIN_VIEW_COLUMN_WIDTH_PX}
-          edgeInset={MARGIN_VIEW_EDGE_INSET_PX}
-          gap={MARGIN_VIEW_GAP_PX}
-          {activeAnnotationId}
-          repliesById={marginReplies.byId}
-          onClick={(ann) => {
-            activeAnnotationId = ann.id;
-            review.scrollToAnnotation(ann);
-          }}
-          onAccept={review.handleAccept}
-          onDismiss={review.handleDismiss}
-          onRemove={marginHandlers.onRemove}
-          onEdit={marginHandlers.onEdit}
-          onReply={marginHandlers.onReply}
-          onSendToClaude={marginHandlers.onSendToClaude}
-        />
+        <!-- Per-side margin tracks (grid columns 2 & 4): a `position: relative`
+             cell of the reserve width. MarginColumn's existing absolute
+             geometry lands unchanged inside it, and the cell top equals the
+             layer top so layer-relative bubble offsets stay valid. Mounted only
+             when that side renders a margin. -->
+        {#if editorStage.leftVisible && activeTab}
+          <div class="margin-track" style="grid-column: 2; grid-row: 1;">
+            {@render marginColumn("left", marginNotes)}
+          </div>
+        {/if}
+        {#if editorStage.rightVisible && activeTab}
+          <div class="margin-track" style="grid-column: 4; grid-row: 1;">
+            {@render marginColumn("right", marginComments)}
+          </div>
+        {/if}
       {/if}
     </div>
+    <!-- End-of-document marker — gives the editor enough trailing scroll
+         room that the last heading can reach the scroll-spy threshold zone
+         (top of the viewport) when clicked from the outline. A faint pill
+         marks where the document ends; the rest is empty whitespace.
+         Hidden when there's no active document so the EmptyState scene
+         isn't dragged down by phantom space. -->
+    {#if activeTab}
+      <div class="editor-end-marker" aria-hidden="true">
+        <span class="editor-end-pill">End of document</span>
+      </div>
+    {/if}
     <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
     <FindReplaceBar
       {editor}
@@ -1608,6 +1771,66 @@ const tutorial = createTutorial(
 {/snippet}
 
 <style>
+  /* Always-mounted dual-layer rail. The shell owns width + chrome (bg, inner
+     radius, side shadow) + the hover-grow; its two children (`.rail-full` via
+     the data-testid divs in markup, and `.rail-peek` via PeekStrip) are
+     absolute layers display-toggled by the `collapsed` class. Expanded width
+     is set inline (`width: <dragWidth>px`); the collapsed width + hover-grow
+     live here so the CSS `:hover` rule can win (an inline width would not be
+     overridable). overflow:hidden clips the 28px peek button to a 14px sliver
+     at rest. */
+  .rail-shell {
+    position: relative;
+    flex-shrink: 0;
+    overflow: hidden;
+    margin-top: var(--tandem-rail-top-clearance, 0);
+    margin-bottom: var(--tandem-status-clearance-total, 60px);
+    background: var(--tandem-surface-muted);
+  }
+  .rail-shell-left {
+    border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
+    box-shadow: var(--tandem-rail-shadow-left);
+  }
+  .rail-shell-right {
+    z-index: 1;
+    border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
+    box-shadow: var(--tandem-rail-shadow-right);
+  }
+  .rail-shell.collapsed {
+    width: 14px;
+    cursor: pointer;
+  }
+  /* Width-grow is :hover ONLY — never :focus-within. The peek strip is
+     tabindex="-1", so its only focus path is the inert restoration focus that
+     focusToggleTarget() applies after a keyboard collapse (preserving Tab
+     position). Per #859 that restoration focus must be visually inert; a
+     :focus-within widen would silently expand the sliver 14→28px on collapse
+     with no user hover — the exact bug #859 fixed. The PeekStrip's own
+     affordances (chevron/label/tick reveal) are likewise scoped to :hover. */
+  .rail-shell.collapsed:hover {
+    width: 28px;
+  }
+  /* The full layer fills the shell, anchored to the shell's inside edge (left
+     rail → right side, right rail → left side). Only the expanded width is
+     dynamic (set inline); the static box + the display:none-when-collapsed
+     (load-bearing: kills the scroll-pop + drops children from the Tab order)
+     live here, driven by the `collapsed` class already on the shell. */
+  .rail-full {
+    position: absolute;
+    inset-block: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .rail-full-left {
+    right: 0;
+  }
+  .rail-full-right {
+    left: 0;
+  }
+  .rail-shell.collapsed .rail-full {
+    display: none;
+  }
   .rail-tabs-row {
     display: flex;
     align-items: center;
@@ -1663,27 +1886,84 @@ const tutorial = createTutorial(
     font-weight: 700;
   }
 
-  /* Edge-click collapse zone. Full-height 8px strip on the rail's outer
-     edge. Left rail goes edge-to-edge; right rail starts below the
-     rail-tabs-row (40px) to clear the rail-tabs-row tab buttons (right
-     rail only). Sibling to panel content so descendant clicks don't
-     bubble in. */
+  /* Editor stage grid cells (Phase 3.5; non-docx). Both cells are
+     padding/border-free so the grid's first row starts at the stage's
+     border-box top — the origin useMarginPositions measures bubble offsets
+     against (INVARIANT 3). */
+  .editor-content-track {
+    /* `min-width: 0` lets the content shrink below the reading measure when the
+       margin tracks + gutters consume the row (the minmax(0,…) track floor);
+       without it a grid item's `min-width: auto` would force overflow. */
+    min-width: 0;
+  }
+  .margin-track {
+    /* INVARIANT 4 — `position: relative` is load-bearing, NOT cosmetic. A grid
+       container does NOT establish a positioned containing block for its
+       descendants, so without this rule MarginColumn's absolute bubbles + leader
+       SVG would resolve against `.editor-scroll` (the next positioned ancestor),
+       breaking bubble X (off-track) AND Y (`.editor-scroll`'s padding-box top,
+       not the layer's border-box top — the origin useMarginPositions measures).
+       With it, the cell top equals the stage(layer) top (single grid row, no
+       padding), so MarginColumn's layer-relative `top` offsets land correctly.
+       Do not drop it during a CSS tidy. */
+    position: relative;
+    min-width: 0;
+  }
+
+  .editor-end-marker {
+    /* Trailing scroll room so the outline's last heading can pin to the top.
+       Pill sits just below content; the remaining height is empty whitespace
+       so the user can scroll the last heading up to the threshold zone. */
+    height: 70vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: var(--tandem-space-5);
+    pointer-events: none;
+  }
+  .editor-end-pill {
+    font-size: var(--tandem-text-2xs, 10px);
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tandem-fg-faint, var(--tandem-fg-subtle));
+    background: var(--tandem-surface-muted);
+    border-radius: var(--tandem-r-pill);
+    padding: var(--tandem-space-1) var(--tandem-space-3);
+    opacity: 0.6;
+  }
   .panel-edge-collapse {
     position: absolute;
-    width: 8px;
+    width: 12px;
     top: 0;
     bottom: 0;
     cursor: pointer;
     z-index: 1;
     background: transparent;
     transition: background 140ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .panel-edge-collapse::before {
+    content: "";
+    width: 1.5px;
+    height: 28px;
+    background: var(--tandem-border-strong);
+    border-radius: 1px;
+    opacity: 0.55;
+    transition: opacity 140ms ease, height 140ms ease, background 140ms ease;
+  }
+  .panel-edge-collapse:hover::before {
+    opacity: 1;
+    height: 36px;
+    background: var(--tandem-accent);
   }
   .panel-edge-collapse-left {
     left: 0;
   }
   .panel-edge-collapse-right {
     right: 0;
-    top: 40px;
   }
   .panel-edge-collapse:hover {
     background: var(--tandem-accent-bg);

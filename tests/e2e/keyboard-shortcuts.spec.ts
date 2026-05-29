@@ -83,7 +83,7 @@ test("'+' button → Browse opens the file dialog", async ({ page }) => {
   await expect(page.locator("[data-testid='open-file-btn']")).toBeVisible();
 
   await page.locator("[data-testid='open-file-btn']").click();
-  await page.getByRole("menuitem", { name: "Browse files…" }).click();
+  await page.locator("[data-testid='new-tab-browse']").click();
 
   await expect(page.locator("[data-testid='file-open-dialog']")).toBeVisible();
 });
@@ -357,9 +357,11 @@ test("Alt+] does not crash with no annotations and no console errors", async ({ 
 });
 
 test("Ctrl+Enter accepts the first pending annotation", async ({ page }) => {
-  // The lifted useAnnotationReview auto-sets activeAnnotationId to the first
-  // pending annotation on initial mount, so Ctrl+Enter immediately operates on
-  // that target without needing Alt+] to establish a cursor first.
+  // Nothing is auto-selected on mount — empty selection is a valid resting state
+  // (the old bulk-review model that parked a cursor on the first pending
+  // annotation is gone). Ctrl+Enter still works from the empty state because
+  // App's activeOrFirstPending() falls back to the first pending review target
+  // when no annotation is selected.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
     from: 2,
@@ -372,6 +374,11 @@ test("Ctrl+Enter accepts the first pending annotation", async ({ page }) => {
 
   const card = page.locator("[data-testid^='annotation-card-']").first();
   await expect(card).toBeVisible({ timeout: 10_000 });
+
+  // Empty resting state: no card is selected until the user picks one.
+  await expect(page.locator("[data-testid^='annotation-card-'][aria-current='true']")).toHaveCount(
+    0,
+  );
 
   await page.keyboard.press("Control+Enter");
 
@@ -400,6 +407,40 @@ test("Ctrl+Shift+Enter dismisses the first pending annotation", async ({ page })
   await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({
     timeout: 5_000,
   });
+});
+
+test("Escape deselects an active annotation even when focus has left the editor", async ({
+  page,
+}) => {
+  // A selection can outlive its focus: select an annotation (which focuses the
+  // editor), then blur focus back to document.body. App's Escape-to-deselect
+  // handler must treat a body/unfocused active element as "in the editing
+  // surface" — otherwise Escape would silently no-op in that state.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "Select then deselect",
+    textSnapshot: "Test Document",
+  });
+  await page.goto("http://127.0.0.1:5173");
+  await switchToAnnotationsTab(page);
+
+  const card = page.locator("[data-testid^='annotation-card-']").first();
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  // Select by clicking the editor highlight — the path that sets activeAnnotationId.
+  await page.locator(".tandem-editor [data-annotation-id]").first().click();
+  await expect(card).toHaveAttribute("aria-current", "true");
+
+  // Blur focus to body: the selection persists, but focus is no longer in the editor.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+  // Escape clears the selection back to the empty resting state.
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-testid^='annotation-card-'][aria-current='true']")).toHaveCount(
+    0,
+  );
 });
 
 test("Ctrl+Alt+M opens the comment popup focused on its textarea", async ({ page }) => {
@@ -461,4 +502,110 @@ test("Ctrl+Alt+T after closing via the X button (DocumentTabs path) reopens", as
 
   await page.keyboard.press("Control+Alt+t");
   await expect(sample2).toBeVisible();
+});
+
+test("Escape closes the command palette even when focus is outside it", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://127.0.0.1:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.keyboard.press("Control+Shift+P");
+  const palette = page.locator("[data-testid='command-palette']");
+  await expect(palette).toBeVisible({ timeout: 3_000 });
+
+  // Move focus out of the palette (the modal-level onkeydown only fired while a
+  // palette descendant held focus — the regression). A window-level Escape
+  // handler must dismiss the palette regardless of where focus sits.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Escape");
+  await expect(palette).toHaveCount(0);
+});
+
+test("command palette Accept action resolves the first pending annotation from empty selection", async ({
+  page,
+}) => {
+  // The palette's "Accept focused annotation" action runs the same
+  // activeOrFirstPending() fallback as Ctrl+Enter: with nothing selected it
+  // resolves the first pending review target. Opening the palette moves focus to
+  // the palette input, so this also proves the fallback is focus-independent.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "Accept me from the palette",
+    textSnapshot: "Test Document",
+  });
+  await page.goto("http://127.0.0.1:5173");
+  await switchToAnnotationsTab(page);
+
+  const card = page.locator("[data-testid^='annotation-card-']").first();
+  await expect(card).toBeVisible({ timeout: 10_000 });
+  // Empty resting state — nothing selected, so the action must use the fallback.
+  await expect(page.locator("[data-testid^='annotation-card-'][aria-current='true']")).toHaveCount(
+    0,
+  );
+
+  await page.keyboard.press("Control+Shift+P");
+  await expect(page.locator("[data-testid='command-palette']")).toBeVisible({ timeout: 3_000 });
+  await page.type("[data-testid='palette-input']", "Accept focused");
+  await page.locator("[data-testid='palette-item-annotation-accept']").click();
+
+  await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({ timeout: 5_000 });
+});
+
+test("command palette overlay covers the title bar +new-tab button", async ({ page }) => {
+  // Dimming-by-proxy: the title bar's +button and Solo/Tandem toggle use a
+  // z-index: 99999 decorum lift. If the palette overlay (z-index 100000) sits
+  // below it, those controls poke through the backdrop and remain clickable.
+  // Clicking at the +button's coordinates must hit the overlay (closing the
+  // palette via handleBackdropClick), NOT the +button underneath.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://127.0.0.1:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.keyboard.press("Control+Shift+P");
+  const palette = page.locator("[data-testid='command-palette']");
+  await expect(palette).toBeVisible({ timeout: 3_000 });
+
+  // The +button's recent-files menu (role=dialog, aria-label="New tab") must be
+  // absent before and after the click — its presence would prove the click
+  // reached the +button beneath the overlay.
+  const newTabMenu = page.locator("[role='dialog'][aria-label='New tab']");
+  await expect(newTabMenu).toHaveCount(0);
+
+  const box = await page.locator("[data-testid='open-file-btn']").boundingBox();
+  if (!box) throw new Error("open-file-btn has no bounding box");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+  // Click landed on the overlay → handleBackdropClick closed the palette.
+  await expect(palette).toHaveCount(0);
+  // …and the +button underneath never fired, so its menu never opened.
+  await expect(newTabMenu).toHaveCount(0);
+});
+
+test("Help modal overlay covers the title bar +new-tab button", async ({ page }) => {
+  // Representative case for the shared --tandem-z-above-titlebar tokenization
+  // (#839): every full-screen modal overlay must cover the title bar's
+  // --tandem-z-titlebar (99999) decorum lift. Same dimming-by-proxy proof as the
+  // palette test — clicking at the +button must hit the overlay (closing the
+  // modal), not the +button beneath it.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://127.0.0.1:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.locator("[data-testid='titlebar-brand-menu']").click();
+  await page.locator("[data-testid='brand-menu-shortcuts']").click();
+  const modal = page.locator("[data-testid='help-modal']");
+  await expect(modal).toBeVisible();
+
+  const newTabMenu = page.locator("[role='dialog'][aria-label='New tab']");
+  await expect(newTabMenu).toHaveCount(0);
+
+  const box = await page.locator("[data-testid='open-file-btn']").boundingBox();
+  if (!box) throw new Error("open-file-btn has no bounding box");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+  // Click landed on the overlay (which dismisses on backdrop click), not the +button.
+  await expect(modal).toHaveCount(0);
+  await expect(newTabMenu).toHaveCount(0);
 });

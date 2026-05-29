@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en" data-theme="warm">
+<head>
+<meta charset="utf-8" />
+<title>Tandem · 1.11 Selection surface — card shapes</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../bundle/extracted/colors_and_type.css" />
+<style>
+  body { background: var(--tandem-bg); color: var(--tandem-fg); font-family: var(--tandem-font-sans); font-feature-settings: "cv11","ss01","ss03"; line-height: 1.45; margin: 0; }
+  .page { max-width: 1180px; margin: 0 auto; padding: 40px 32px 110px; }
+
+  .eyebrow { font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tandem-fg-faint); margin-bottom: 6px; }
+  h1 { font-family: var(--tandem-h1-font); font-size: 34px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 10px; }
+  .lede { font-size: 14px; color: var(--tandem-fg-muted); max-width: 80ch; margin: 0 0 8px; }
+  .lede code, .sec-note code, .decision code { font-family: var(--tandem-font-mono); font-size: 12px; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); padding: 1px 5px; border-radius: var(--tandem-r-2); }
+  .hint { font-size: 11.5px; color: var(--tandem-fg-faint); margin-top: 8px; font-style: italic; }
+
+  .controls { display: flex; gap: 8px; align-items: center; margin: 18px 0 30px; }
+  .controls .lbl { font-family: var(--tandem-font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tandem-fg-faint); }
+  .seg { display: inline-flex; background: var(--tandem-surface-sunk); border-radius: 999px; padding: 3px; border: 1px solid var(--tandem-border); }
+  .seg button { height: 26px; padding: 0 14px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 999px; font-size: 12px; font-weight: 500; font-family: inherit; cursor: pointer; }
+  .seg button.on { background: var(--tandem-surface); color: var(--tandem-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.10); }
+
+  section { margin-bottom: 38px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--tandem-border); padding-bottom: 8px; }
+  .sec-head h2 { font-family: var(--tandem-h2-font); font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .badge { font-family: var(--tandem-font-mono); font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: var(--tandem-r-pill); white-space: nowrap; }
+  .badge.ref { background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); color: var(--tandem-fg-muted); }
+  .badge.rec { background: var(--tandem-accent-bg); border: 1px solid var(--tandem-accent-border); color: var(--tandem-accent-fg-strong); }
+  .sec-note { font-size: 12.5px; color: var(--tandem-fg-muted); margin: 0 0 18px; max-width: 82ch; }
+
+  .stage { position: relative; min-height: 120px; background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-5); box-shadow: var(--tandem-shadow-1); padding: 32px; display: flex; flex-wrap: wrap; gap: 48px; align-items: flex-start; }
+  .specimen { display: flex; flex-direction: column; gap: 12px; }
+  .specimen .cap { font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--tandem-fg-faint); }
+
+  /* ── CARD shell (the point of this page) ── */
+  .card {
+    position: relative;
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-4);
+    box-shadow: var(--tandem-shadow-2);
+    width: max-content; max-width: 380px;
+  }
+  /* down-pointing leader, like the bundle's selection anchor */
+  .card .leader { position: absolute; left: 36px; bottom: -5px; width: 9px; height: 9px; background: var(--tandem-surface); border-right: 1px solid var(--tandem-border); border-bottom: 1px solid var(--tandem-border); transform: rotate(45deg); }
+
+  .zone { padding: 7px 8px; display: flex; flex-direction: column; gap: 3px; }
+  .hr { height: 1px; background: var(--tandem-border); margin: 0; }
+  .grp { display: flex; align-items: center; gap: 1px; }
+  .glabel { font-family: var(--tandem-font-mono); font-size: 9px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--tandem-fg-faint); width: 46px; flex-shrink: 0; }
+  .sep { width: 1px; height: 18px; background: var(--tandem-border); margin: 0 4px; flex-shrink: 0; }
+
+  .b { height: 28px; min-width: 28px; padding: 0 7px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-3); font-family: var(--tandem-font-sans); font-size: 12.5px; font-weight: 500; line-height: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer; transition: background 120ms, color 120ms; }
+  .b:hover { background: var(--tandem-surface-sunk); color: var(--tandem-fg); }
+  .b.on { background: var(--tandem-accent-bg); color: var(--tandem-accent-fg-strong); }
+  .b strong { font-size: 13px; font-weight: 700; }
+  .b em { font-size: 13px; font-style: italic; }
+  .b .strike { font-size: 13px; text-decoration: line-through; }
+  .b.mono { font-family: var(--tandem-font-mono); font-size: 10.5px; letter-spacing: -0.02em; }
+  .b.caret { padding-right: 4px; gap: 2px; }
+  .b .chev { color: var(--tandem-fg-faint); }
+  .b .serifH { font-family: var(--tandem-font-serif); font-weight: 600; font-size: 14px; }
+
+  .swatches { display: inline-flex; gap: 4px; align-items: center; }
+  .sw { width: 18px; height: 18px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); cursor: pointer; padding: 0; }
+  .sw.none { background: var(--tandem-surface); border-color: var(--tandem-border-strong); position: relative; }
+  .sw.none::before { content:""; position:absolute; inset:2px; background: linear-gradient(to top right, transparent 46%, var(--tandem-fg-muted) 46%, var(--tandem-fg-muted) 54%, transparent 54%); border-radius:2px; }
+  .sw.y { background: var(--tandem-highlight-yellow); }
+  .sw.g { background: var(--tandem-highlight-green); }
+  .sw.bl { background: var(--tandem-highlight-blue); }
+  .sw.pk { background: var(--tandem-highlight-pink); }
+
+  /* grid variant */
+  .grid { display: grid; grid-template-columns: repeat(6, 28px); gap: 2px; }
+
+  /* audience footer */
+  .foot { padding: 8px; display: flex; gap: 6px; }
+  .foot button { height: 30px; border-radius: var(--tandem-r-3); font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .foot .note { flex: 1; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); font-weight: 500; }
+  .foot .cmt { flex: 1.4; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); }
+  .foot .cmt.coral { border-color: var(--tandem-claude-focus-border); background: var(--tandem-claude-focus-bg); color: var(--tandem-author-claude-fg); }
+  .foot .cmt.coral .ci { color: var(--tandem-author-claude); }
+  .kbd { font-family: var(--tandem-font-mono); font-size: 9.5px; opacity: 0.7; }
+
+  /* composer textarea */
+  .composer { padding: 0 8px 8px; }
+  .composer textarea { width: 100%; box-sizing: border-box; min-height: 46px; resize: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface); color: var(--tandem-fg); font-size: 12.5px; padding: 6px 8px; outline: none; font-family: inherit; }
+
+  .hidden { display: none !important; }
+
+  .decision { margin-top: 16px; background: var(--tandem-accent-bg); border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-4); padding: 16px 20px; }
+  .decision h3 { font-family: var(--tandem-h2-font); font-size: 15px; font-weight: 600; margin: 0 0 8px; color: var(--tandem-accent-fg-strong); }
+  .decision ul { margin: 6px 0 0; padding: 0 0 0 18px; font-size: 12.5px; color: var(--tandem-fg); }
+  .decision li { margin: 5px 0; line-height: 1.5; }
+  .decision .rec-line { font-weight: 600; color: var(--tandem-accent-fg-strong); }
+  .warn { margin: 14px 0 0; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border-strong); border-left: 3px solid var(--tandem-author-claude); border-radius: var(--tandem-r-3); padding: 12px 16px; font-size: 12.5px; color: var(--tandem-fg); max-width: 82ch; }
+  .warn b { color: var(--tandem-author-claude-fg); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">Sub-PR 1.11 · Option 2 · card-shaped surface (scratch — not committed)</div>
+  <h1>Everything in one surface — as a card, not a pill</h1>
+  <p class="lede">
+    Option 2 holds every formatting control plus the annotate action. A pill's geometry fights that density.
+    A <strong>card</strong> (radius <code>--tandem-r-4</code>, <code>--tandem-shadow-2</code>) lets the content group into
+    a <em>transform</em> zone and an <em>annotate</em> zone with a real divider between them. Three card shapes below.
+    Note: this surface stops sharing the <code>.tandem-floating-pill</code> recipe — a deliberate divergence, since the content differs.
+  </p>
+  <p class="hint">Interactive — heading caret, Annotate, swatches, segment. Switch themes to check contrast.</p>
+
+  <div class="controls">
+    <span class="lbl">Theme</span>
+    <div class="seg" id="theme-seg">
+      <button data-theme-val="">Light</button>
+      <button data-theme-val="warm" class="on">Warm</button>
+      <button data-theme-val="dark">Dark</button>
+    </div>
+  </div>
+
+  <!-- ════════ Grouping principle ════════ -->
+  <div class="warn" style="border-left-color: var(--tandem-accent); margin-bottom: 26px;">
+    <b style="color: var(--tandem-accent-fg-strong);">Grouping follows Tandem's data model, not generic toolbar habit.</b>
+    The honest split is <strong>Format</strong> (operations that change the document text — inline marks + block type)
+    vs <strong>Annotate</strong> (operations that create entries in <code>Y.Map('annotations')</code> — and
+    <em>highlight is an annotation type</em>, not a text mark). So highlight belongs <em>with</em> Note/Comment in the
+    annotate zone, not next to Bold/Italic. Within Format, inline marks (B/I/S/code/link) and block type
+    (heading/lists/quote/code-block/rule) are the two natural sub-rows.
+  </div>
+
+  <!-- ════════ Shape A — sectioned card ════════ -->
+  <section>
+    <div class="sec-head"><h2>Shape A — sectioned card</h2><span class="badge rec">Recommended</span></div>
+    <p class="sec-note">Format zone on top (inline-marks row, then block-type row), a full-width divider, then the Annotate zone (highlight row + Note/Comment). The divider maps exactly to the data-model split: above changes the text, below creates annotations. Heading caret sits at top level of the block row — no nested-popover problem.</p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Default — Comment reveals composer</span>
+        <div class="card" id="cardA">
+          <div class="zone">
+            <div class="grp"><span class="glabel">Format</span>
+              <button class="b"><strong>B</strong></button><button class="b"><em>I</em></button>
+              <button class="b"><span class="strike">S</span></button><button class="b mono">&lt;/&gt;</button>
+              <button class="b">🔗</button>
+            </div>
+            <div class="grp"><span class="glabel"></span>
+              <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+              <span class="sep"></span>
+              <button class="b">•≡</button><button class="b">1≡</button>
+              <button class="b">❝</button><button class="b">▭</button><button class="b">{ }</button>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="zone">
+            <div class="grp"><span class="glabel">Annotate</span>
+              <span class="swatches"><button class="sw none"></button><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            </div>
+          </div>
+          <div class="foot" id="cardA-foot" style="padding-top:0;">
+            <button class="note">Note to self</button>
+            <button class="cmt" id="cardA-annotate"><span class="ci">💬</span> Comment <span class="kbd">⌘⏎</span></button>
+          </div>
+          <div class="composer hidden" id="cardA-composer">
+            <textarea placeholder="Write a note or instruction…"></textarea>
+          </div>
+          <span class="leader"></span>
+        </div>
+      </div>
+      <div class="specimen">
+        <span class="cap">Coral comment variant (Conflict #6 — needs WCAG check)</span>
+        <div class="card">
+          <div class="zone">
+            <div class="grp"><span class="glabel">Format</span>
+              <button class="b"><strong>B</strong></button><button class="b"><em>I</em></button>
+              <button class="b"><span class="strike">S</span></button><button class="b mono">&lt;/&gt;</button>
+              <button class="b">🔗</button>
+            </div>
+            <div class="grp"><span class="glabel"></span>
+              <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+              <span class="sep"></span>
+              <button class="b">•≡</button><button class="b">1≡</button>
+              <button class="b">❝</button><button class="b">▭</button><button class="b">{ }</button>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="zone">
+            <div class="grp"><span class="glabel">Annotate</span>
+              <span class="swatches"><button class="sw none"></button><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            </div>
+          </div>
+          <div class="foot" style="padding-top:0;">
+            <button class="note">Note to self</button>
+            <button class="cmt coral"><span class="ci">💬</span> Comment <span class="kbd">⌘⏎</span></button>
+          </div>
+          <span class="leader"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Shape B — icon grid panel ════════ -->
+  <section>
+    <div class="sec-head"><h2>Shape B — icon-grid panel</h2><span class="badge ref">Alternative</span></div>
+    <p class="sec-note">Same Format/Annotate split as A, but the formatting controls read as a labeled icon grid (Inline / Block sub-rows) and the annotate zone groups highlight with Note/Comment below the divider. Most "panel"-like and scannable; widest footprint, and a grid of glyphs leans on good iconography.</p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Labeled grid, Format above / Annotate below</span>
+        <div class="card" style="max-width:none;">
+          <div class="zone" style="gap:5px;">
+            <div class="grp"><span class="glabel">Inline</span>
+              <button class="b"><strong>B</strong></button><button class="b"><em>I</em></button>
+              <button class="b"><span class="strike">S</span></button><button class="b mono">&lt;/&gt;</button>
+              <button class="b">🔗</button>
+            </div>
+            <div class="grp"><span class="glabel">Block</span>
+              <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+              <button class="b">•≡</button><button class="b">1≡</button>
+              <button class="b">❝</button><button class="b">▭</button><button class="b">{ }</button>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="zone" style="gap:5px;">
+            <div class="grp"><span class="glabel">Highlight</span>
+              <span class="swatches"><button class="sw none"></button><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            </div>
+          </div>
+          <div class="foot" style="padding-top:0;">
+            <button class="note">Note to self</button>
+            <button class="cmt"><span class="ci">💬</span> Comment</button>
+          </div>
+          <span class="leader"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Shape C — composer card ════════ -->
+  <section>
+    <div class="sec-head"><h2>Shape C — composer card</h2><span class="badge ref">Alternative</span></div>
+    <p class="sec-note">Format strip on top (inline + block), then the annotate zone below the divider: highlight, the always-present note input, and Note/Comment. Formatting and writing your comment live in one surface — no Annotate intermediate step. Tallest at rest; best if commenting is the dominant action and formatting is the side errand.</p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Format strip / annotate composer</span>
+        <div class="card" style="min-width:320px;">
+          <div class="zone">
+            <div class="grp"><span class="glabel">Format</span>
+              <button class="b"><strong>B</strong></button><button class="b"><em>I</em></button>
+              <button class="b"><span class="strike">S</span></button><button class="b mono">&lt;/&gt;</button>
+              <button class="b">🔗</button>
+              <span class="sep"></span>
+              <button class="b caret"><span class="serifH">H</span><span class="chev">⌄</span></button>
+              <button class="b">•≡</button><button class="b">❝</button>
+              <button class="b" title="more">⋯</button>
+            </div>
+          </div>
+          <div class="hr"></div>
+          <div class="zone" style="padding-bottom:2px;">
+            <div class="grp"><span class="glabel">Annotate</span>
+              <span class="swatches"><button class="sw none"></button><button class="sw y"></button><button class="sw g"></button><button class="sw bl"></button><button class="sw pk"></button></span>
+            </div>
+          </div>
+          <div class="composer">
+            <textarea placeholder="Write a note or instruction…"></textarea>
+          </div>
+          <div class="foot" style="padding-top:0;">
+            <button class="note">Note to self</button>
+            <button class="cmt"><span class="ci">💬</span> Comment <span class="kbd">⌘⏎</span></button>
+          </div>
+          <span class="leader"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Recommendation ════════ -->
+  <div class="decision">
+    <h3>Recommendation</h3>
+    <p class="rec-line">Shape A — sectioned card. Annotate footer reveals the composer inline (default), so the card stays short until you're actually writing.</p>
+    <ul>
+      <li><strong>Why a card beats the pill here:</strong> the internal divider makes the transform/annotate split legible, the moderate radius reads as "a panel of tools" instead of "a row of quick actions," and rows can group naturally without the pill forcing one tall horizontal run.</li>
+      <li><strong>A over B:</strong> the grid is handsome but wider and more icon-dependent; A's two grouped rows are tighter and the dividers already imply grouping without needing labels.</li>
+      <li><strong>A over C:</strong> C is great <em>if</em> commenting dominates, but it's always tall and pushes formatting into a side role. A keeps formatting first-class and only grows to compose height when you click Comment/Note.</li>
+      <li><strong>Heading caret stays top-level</strong> in all three — this avoids the nested-popover wrinkle that the pill's chevron-expand designs had.</li>
+    </ul>
+  </div>
+  <div class="warn">
+    <b>Still Option 2, so the caveats hold:</b> undo / redo / authorship are not selection-scoped and move to the title bar;
+    this is a 2–3 PR sequence (build card → relocate controls → delete <code>FormattingBar</code> → retire its testids →
+    re-point tutorial anchors → Conflict #2/#5 override). Leaving the pill recipe is an added, intentional divergence.
+  </div>
+  <div class="decision" style="background:var(--tandem-surface-sunk); border-color:var(--tandem-border);">
+    <h3 style="color:var(--tandem-fg);">What I need from you</h3>
+    <ul style="color:var(--tandem-fg);">
+      <li>Card shape A, B, or C — or a different shape?</li>
+      <li>Footer: Annotate-reveals-composer (A default) vs. always-visible composer (C)?</li>
+      <li>Comment button: outlined-blue or coral (coral = WCAG re-check)?</li>
+      <li>Confirm undo/redo + authorship → title bar, and that you accept the multi-PR scope + Conflict #2/#5 override.</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+  const seg = document.getElementById("theme-seg");
+  seg.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-theme-val]");
+    if (!btn) return;
+    seg.querySelectorAll("button").forEach((b) => b.classList.remove("on"));
+    btn.classList.add("on");
+    const val = btn.getAttribute("data-theme-val");
+    if (val) document.documentElement.setAttribute("data-theme", val);
+    else document.documentElement.removeAttribute("data-theme");
+  });
+  // Shape A: Comment reveals composer inline
+  document.getElementById("cardA-annotate").addEventListener("click", () => {
+    document.getElementById("cardA-composer").classList.toggle("hidden");
+  });
+</script>
+</body>
+</html>

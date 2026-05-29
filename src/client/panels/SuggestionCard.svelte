@@ -30,7 +30,7 @@ let { annotation, isPending, isReviewTarget, isEditing, canEdit, onEnterEdit }: 
 <AnnotationSnippet annotationId={annotation.id} text={annotation.textSnapshot} />
 
 {#if !isEditing}
-<div style="margin: 0; color: var(--tandem-fg); line-height: 1.45;">
+<div class="aca-body" style="margin: 0; color: var(--tandem-fg); line-height: 1.45;">
   <div
     data-testid="suggestion-diff-{annotation.id}"
     style="padding: 4px 8px; margin-bottom: {annotation.content

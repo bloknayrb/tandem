@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en" data-theme="warm">
+<head>
+<meta charset="utf-8" />
+<title>Tandem · 1.11 Selection Toolbar — decision aid</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Real design tokens from the bundle so every pill renders faithfully. -->
+<link rel="stylesheet" href="../bundle/extracted/colors_and_type.css" />
+<style>
+  body {
+    background: var(--tandem-bg); color: var(--tandem-fg);
+    font-family: var(--tandem-font-sans);
+    font-feature-settings: "cv11","ss01","ss03"; line-height: 1.45;
+    margin: 0;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 40px 32px 96px; }
+
+  .eyebrow { font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tandem-fg-faint); margin-bottom: 6px; }
+  h1 { font-family: var(--tandem-h1-font); font-size: 34px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 10px; }
+  .lede { font-size: 14px; color: var(--tandem-fg-muted); max-width: 76ch; margin: 0 0 8px; }
+  .lede code { font-family: var(--tandem-font-mono); font-size: 12px; background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); padding: 1px 5px; border-radius: var(--tandem-r-2); }
+
+  .controls { display: flex; gap: 8px; align-items: center; margin: 18px 0 36px; }
+  .controls .lbl { font-family: var(--tandem-font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tandem-fg-faint); }
+  .seg { display: inline-flex; background: var(--tandem-surface-sunk); border-radius: 999px; padding: 3px; border: 1px solid var(--tandem-border); }
+  .seg button { height: 26px; padding: 0 14px; border: none; background: transparent; color: var(--tandem-fg-muted); border-radius: 999px; font-size: 12px; font-weight: 500; font-family: inherit; cursor: pointer; }
+  .seg button.on { background: var(--tandem-surface); color: var(--tandem-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.10); }
+
+  section { margin-bottom: 44px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--tandem-border); padding-bottom: 10px; }
+  .sec-head h2 { font-family: var(--tandem-h2-font); font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .badge { font-family: var(--tandem-font-mono); font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: var(--tandem-r-pill); white-space: nowrap; }
+  .badge.ship { background: var(--tandem-claude-focus-bg); border: 1px solid var(--tandem-claude-focus-border); color: var(--tandem-author-claude-fg); }
+  .badge.ref { background: var(--tandem-surface-sunk); border: 1px solid var(--tandem-border); color: var(--tandem-fg-muted); }
+  .badge.rec { background: var(--tandem-accent-bg); border: 1px solid var(--tandem-accent-border); color: var(--tandem-accent-fg-strong); }
+  .sec-note { font-size: 12.5px; color: var(--tandem-fg-muted); margin: 0 0 22px; max-width: 80ch; }
+
+  /* Stage: a calm document surface to float the pills over */
+  .stage {
+    position: relative; min-height: 150px;
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-5);
+    box-shadow: var(--tandem-shadow-1);
+    padding: 30px;
+    display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start;
+  }
+  .stage.two { gap: 56px; }
+  .specimen { display: flex; flex-direction: column; gap: 10px; }
+  .specimen .cap { font-family: var(--tandem-font-mono); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--tandem-fg-faint); }
+
+  /* ── Shared pill recipe (mirrors .tandem-floating-pill) ── */
+  .pill {
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    box-shadow: var(--c7-pill-shadow);
+    border-radius: var(--tandem-r-pill);
+    display: inline-flex; flex-direction: column;
+    width: max-content;
+  }
+  .row { display: flex; align-items: center; gap: 1px; padding: 4px; }
+  .sep { width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0; }
+
+  /* Format button — production ToolbarButton recipe (post-1.2) */
+  .b {
+    height: 26px; min-width: 26px; padding: 0 7px;
+    border: 1px solid transparent; background: transparent;
+    color: var(--tandem-fg-muted);
+    border-radius: var(--tandem-r-pill);
+    font-family: var(--tandem-font-sans); font-size: 12px; font-weight: 500;
+    line-height: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    cursor: pointer; transition: background 120ms, color 120ms;
+  }
+  .b:hover { background: var(--tandem-surface-sunk); color: var(--tandem-fg); }
+  .b.on { background: var(--tandem-accent-bg); color: var(--tandem-accent-fg-strong); }
+  .b strong { font-size: 13px; font-weight: 700; }
+  .b em { font-size: 13px; font-style: italic; }
+  .b .strike { font-size: 13px; text-decoration: line-through; }
+  .b.mono { font-family: var(--tandem-font-mono); font-size: 10.5px; letter-spacing: -0.02em; }
+  .b.caret { padding-right: 4px; gap: 2px; }
+  .b .chev { color: var(--tandem-fg-faint); display: inline-grid; place-items: center; }
+
+  /* Highlight swatches — production recipe (16px, r-2) */
+  .swatches { display: inline-flex; gap: 3px; padding: 0 4px; align-items: center; }
+  .sw { width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); cursor: pointer; padding: 0; }
+  .sw.y { background: var(--tandem-highlight-yellow); }
+  .sw.g { background: var(--tandem-highlight-green); }
+  .sw.bl { background: var(--tandem-highlight-blue); }
+  .sw.pk { background: var(--tandem-highlight-pink); }
+
+  /* Annotate — production outlined-blue pill */
+  .annotate {
+    height: 24px; padding: 0 12px; border: 1px solid var(--tandem-author-user);
+    background: transparent; color: var(--tandem-author-user);
+    border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer;
+    font-family: inherit; white-space: nowrap;
+  }
+
+  /* Annotate-mode textarea card (production) */
+  .annote-card { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; min-width: 260px; }
+  .annote-card textarea {
+    width: 100%; box-sizing: border-box; min-height: 28px; resize: none;
+    border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface); color: var(--tandem-fg);
+    font-size: 12px; padding: 4px 6px; outline: none; font-family: inherit;
+  }
+  .annote-card .acts { display: flex; justify-content: space-between; gap: 6px; }
+  .annote-card .acts button { flex: 1; height: 28px; padding: 0 10px; border-radius: var(--tandem-r-2); font-size: 12px; cursor: pointer; font-family: inherit; }
+  .annote-card .note { border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); font-weight: 500; }
+  .annote-card .cmt { border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); font-weight: 600; }
+
+  /* Coral comment button (bundle A8) */
+  .notebtn {
+    display: inline-flex; align-items: center; gap: 7px; padding: 0 22px;
+    border: 1px solid var(--tandem-claude-focus-border);
+    background: var(--tandem-claude-focus-bg); color: var(--tandem-author-claude-fg);
+    border-radius: calc(var(--tandem-r-pill) - 6px);
+    font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    align-self: stretch;
+  }
+  .notebtn .nicon { display: inline-grid; place-items: center; color: var(--tandem-author-claude); }
+
+  /* Bundle A8 two-row left cluster */
+  .fmt2 { display: grid; grid-template-rows: 28px 28px; row-gap: 2px; padding: 1px 4px 1px 2px; }
+  .fmt2 .fmt-row { display: flex; align-items: center; gap: 0; }
+  .pill.a8 { flex-direction: row; align-items: stretch; padding: 5px 10px 5px 16px; gap: 3px; }
+
+  /* Expandable second row (Option A / C) */
+  .row.more { padding-top: 0; }
+  .row.more.hidden { display: none; }
+  .row.inline-extra.hidden { display: none; }
+
+  /* The decision callout */
+  .decision { margin-top: 12px; background: var(--tandem-accent-bg); border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-4); padding: 16px 20px; }
+  .decision h3 { font-family: var(--tandem-h2-font); font-size: 15px; font-weight: 600; margin: 0 0 8px; color: var(--tandem-accent-fg-strong); }
+  .decision ul { margin: 6px 0 0; padding: 0 0 0 18px; font-size: 12.5px; color: var(--tandem-fg); }
+  .decision li { margin: 5px 0; line-height: 1.5; }
+  .decision code { font-family: var(--tandem-font-mono); font-size: 11px; background: var(--tandem-surface); border: 1px solid var(--tandem-accent-border); padding: 1px 5px; border-radius: var(--tandem-r-2); }
+
+  .hint { font-size: 11.5px; color: var(--tandem-fg-faint); margin-top: 8px; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">Sub-PR 1.11 · Conflict #5 · decision aid (scratch — not committed)</div>
+  <h1>Selection toolbar — affordance options</h1>
+  <p class="lede">
+    Conflict #5 is locked at the <strong>principle</strong> level: the production audience-first popup stays
+    primary; the bundle's formatting controls become a <em>secondary affordance, collapsed by default, expandable</em>.
+    What's open is the <strong>shape</strong> of that affordance. Below: what ships today, the bundle reference
+    (not adopted wholesale — it regresses ADR-027), then three candidate shapes. All preserve <code>popup-*</code> testids.
+  </p>
+  <p class="hint">Pills are interactive — click expanders, Annotate, swatches. Toggle the theme to sanity-check contrast.</p>
+
+  <div class="controls">
+    <span class="lbl">Theme</span>
+    <div class="seg" id="theme-seg">
+      <button data-theme-val="">Light</button>
+      <button data-theme-val="warm" class="on">Warm</button>
+      <button data-theme-val="dark">Dark</button>
+    </div>
+  </div>
+
+  <!-- ════════ Current production ════════ -->
+  <section>
+    <div class="sec-head">
+      <h2>Production today</h2>
+      <span class="badge ship">Ships now · primary</span>
+    </div>
+    <p class="sec-note">
+      Audience-first. Single row: B / I, highlight swatches, then <strong>Annotate</strong> (outlined in the user-blue).
+      Clicking Annotate swaps the pill to the note card — Enter = Comment (to Claude), or "Note to self" (private).
+      Strike / inline-code / link were intentionally dropped from the popup; they live on the persistent FormattingBar.
+    </p>
+    <div class="stage two">
+      <div class="specimen">
+        <span class="cap">Default — audience row</span>
+        <div class="pill">
+          <div class="row">
+            <button class="b"><strong>B</strong></button>
+            <button class="b"><em>I</em></button>
+            <span class="sep"></span>
+            <span class="swatches">
+              <button class="sw y"></button><button class="sw g"></button>
+              <button class="sw bl"></button><button class="sw pk"></button>
+            </span>
+            <span class="sep"></span>
+            <button class="annotate">Annotate</button>
+          </div>
+        </div>
+      </div>
+      <div class="specimen">
+        <span class="cap">Annotate mode — note card</span>
+        <div class="pill">
+          <div class="annote-card">
+            <textarea rows="2" placeholder="Write a note or instruction...">Tighten this paragraph</textarea>
+            <div class="acts">
+              <button class="note">Note to self</button>
+              <button class="cmt">Comment</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Bundle A8 reference ════════ -->
+  <section>
+    <div class="sec-head">
+      <h2>Bundle A8 reference</h2>
+      <span class="badge ref">Reference only · not adopted</span>
+    </div>
+    <p class="sec-note">
+      Formatting-first two-row pill with a coral comment icon on the right. No audience awareness — adopting it
+      wholesale regresses ADR-027's "Note vs Send to Claude" model. We mine its <em>formatting controls</em> and
+      <em>coral comment treatment</em>, not its information architecture.
+    </p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">A8 — two-row formatting + coral comment</span>
+        <div class="pill a8">
+          <div class="fmt2">
+            <div class="fmt-row">
+              <button class="b caret"><span style="font-family: var(--tandem-font-serif); font-weight:600; font-size:13.5px;">H</span><span class="chev">⌄</span></button>
+              <span class="sep"></span>
+              <button class="b"><strong>B</strong></button>
+              <button class="b"><em>I</em></button>
+              <button class="b"><span class="strike">S</span></button>
+              <button class="b mono">&lt;/&gt;</button>
+              <span class="sep"></span>
+              <button class="b">🔗</button>
+            </div>
+            <div class="fmt-row">
+              <button class="b">•≡</button>
+              <button class="b">1≡</button>
+              <button class="b">❝</button>
+              <span class="sep"></span>
+              <span class="swatches">
+                <button class="sw" style="background:var(--tandem-surface); border-color:var(--tandem-border-strong);"></button>
+                <button class="sw y"></button><button class="sw g"></button>
+                <button class="sw bl"></button><button class="sw pk"></button>
+              </span>
+            </div>
+          </div>
+          <button class="notebtn"><span class="nicon">💬</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Option A ════════ -->
+  <section>
+    <div class="sec-head">
+      <h2>Option A — chevron reveals a second row</h2>
+      <span class="badge rec">Recommended</span>
+    </div>
+    <p class="sec-note">
+      Audience row is unchanged and primary. A chevron at the right edge expands a <strong>second row below</strong>
+      with the extra formatting controls (S, code, link, lists, quote, heading). Default = collapsed = audience-first intact.
+    </p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Click the ⌄ chevron</span>
+        <div class="pill" id="optA">
+          <div class="row">
+            <button class="b"><strong>B</strong></button>
+            <button class="b"><em>I</em></button>
+            <span class="sep"></span>
+            <span class="swatches">
+              <button class="sw y"></button><button class="sw g"></button>
+              <button class="sw bl"></button><button class="sw pk"></button>
+            </span>
+            <span class="sep"></span>
+            <button class="annotate">Annotate</button>
+            <button class="b" id="optA-toggle" title="More formatting" style="margin-left:1px;"><span class="chev">⌄</span></button>
+          </div>
+          <div class="row more hidden" id="optA-more">
+            <button class="b"><span class="strike">S</span></button>
+            <button class="b mono">&lt;/&gt;</button>
+            <button class="b">🔗</button>
+            <span class="sep"></span>
+            <button class="b">•≡</button>
+            <button class="b">1≡</button>
+            <button class="b">❝</button>
+            <button class="b caret"><span style="font-family:var(--tandem-font-serif); font-weight:600;">H</span><span class="chev">⌄</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Option B ════════ -->
+  <section>
+    <div class="sec-head">
+      <h2>Option B — "Aa" toggle swaps the row</h2>
+      <span class="badge ref">Alternative</span>
+    </div>
+    <p class="sec-note">
+      A single <strong>Aa</strong> button on the audience row. Clicking it <strong>replaces</strong> the row contents with
+      the full formatting set plus a back arrow; the pill never grows taller. Tradeoff: formatting and audience are never
+      visible at the same time.
+    </p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Click Aa, then ←</span>
+        <div class="pill" id="optB">
+          <div class="row" id="optB-audience">
+            <button class="b"><strong>B</strong></button>
+            <button class="b"><em>I</em></button>
+            <span class="sep"></span>
+            <span class="swatches">
+              <button class="sw y"></button><button class="sw g"></button>
+              <button class="sw bl"></button><button class="sw pk"></button>
+            </span>
+            <span class="sep"></span>
+            <button class="b" id="optB-to-fmt" title="Formatting" style="font-weight:600;">Aa</button>
+            <button class="annotate">Annotate</button>
+          </div>
+          <div class="row hidden" id="optB-fmt">
+            <button class="b" id="optB-back" title="Back">←</button>
+            <span class="sep"></span>
+            <button class="b"><span class="strike">S</span></button>
+            <button class="b mono">&lt;/&gt;</button>
+            <button class="b">🔗</button>
+            <button class="b">•≡</button>
+            <button class="b">1≡</button>
+            <button class="b">❝</button>
+            <button class="b caret"><span style="font-family:var(--tandem-font-serif); font-weight:600;">H</span><span class="chev">⌄</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Option C ════════ -->
+  <section>
+    <div class="sec-head">
+      <h2>Option C — chevron grows the row inline</h2>
+      <span class="badge ref">Alternative</span>
+    </div>
+    <p class="sec-note">
+      Same chevron as A, but the extra controls slide in <strong>on the same row</strong> rather than dropping a second row.
+      Keeps a single-row silhouette; tradeoff: the pill gets wide and may need edge-clamping near the viewport border.
+    </p>
+    <div class="stage">
+      <div class="specimen">
+        <span class="cap">Click the ⌄ chevron</span>
+        <div class="pill" id="optC">
+          <div class="row">
+            <button class="b"><strong>B</strong></button>
+            <button class="b"><em>I</em></button>
+            <span class="row inline-extra hidden" id="optC-extra" style="padding:0; gap:1px;">
+              <button class="b"><span class="strike">S</span></button>
+              <button class="b mono">&lt;/&gt;</button>
+              <button class="b">🔗</button>
+            </span>
+            <span class="sep"></span>
+            <span class="swatches">
+              <button class="sw y"></button><button class="sw g"></button>
+              <button class="sw bl"></button><button class="sw pk"></button>
+            </span>
+            <button class="b" id="optC-toggle" title="More formatting"><span class="chev">⌄</span></button>
+            <span class="sep"></span>
+            <button class="annotate">Annotate</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Decision ════════ -->
+  <div class="decision">
+    <h3>What I need from you</h3>
+    <ul>
+      <li>Pick a shape: <strong>A</strong> (second row), <strong>B</strong> (Aa swap), or <strong>C</strong> (inline grow) — or describe a different one.</li>
+      <li>Confirm the secondary row carries: <code>S</code>, <code>&lt;/&gt;</code>, link, bullet/numbered list, quote, heading. (Drop any you don't want in the popup.)</li>
+      <li>Coral comment treatment: keep production's outlined-blue <strong>Annotate</strong>, or adopt A8's coral comment icon? (Conflict #6 — coral would need a WCAG check.)</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+  // Theme switcher
+  const seg = document.getElementById("theme-seg");
+  seg.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-theme-val]");
+    if (!btn) return;
+    seg.querySelectorAll("button").forEach((b) => b.classList.remove("on"));
+    btn.classList.add("on");
+    const val = btn.getAttribute("data-theme-val");
+    if (val) document.documentElement.setAttribute("data-theme", val);
+    else document.documentElement.removeAttribute("data-theme");
+  });
+
+  // Option A — toggle second row
+  document.getElementById("optA-toggle").addEventListener("click", () => {
+    const more = document.getElementById("optA-more");
+    const hidden = more.classList.toggle("hidden");
+    document.querySelector("#optA-toggle .chev").textContent = hidden ? "⌄" : "⌃";
+  });
+
+  // Option B — swap rows
+  const bAud = document.getElementById("optB-audience");
+  const bFmt = document.getElementById("optB-fmt");
+  document.getElementById("optB-to-fmt").addEventListener("click", () => {
+    bAud.classList.add("hidden"); bFmt.classList.remove("hidden");
+  });
+  document.getElementById("optB-back").addEventListener("click", () => {
+    bFmt.classList.add("hidden"); bAud.classList.remove("hidden");
+  });
+
+  // Option C — inline grow
+  document.getElementById("optC-toggle").addEventListener("click", () => {
+    const extra = document.getElementById("optC-extra");
+    const hidden = extra.classList.toggle("hidden");
+    document.querySelector("#optC-toggle .chev").textContent = hidden ? "⌄" : "⌃";
+  });
+</script>
+</body>
+</html>

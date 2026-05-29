@@ -10,10 +10,28 @@ export type SlashCommandId =
   | "code-block"
   | "horizontal-rule";
 
+// One SVG primitive inside an icon badge. `attrs` are applied verbatim via
+// setAttribute; the extension wraps these in a 16x16 stroke=currentColor svg.
+export interface SvgIconElement {
+  tag: "path" | "circle";
+  attrs: Record<string, string>;
+}
+
+// Per-row icon for the menu. A `glyph` renders as text in the badge (e.g. "H¹",
+// "—"); an `svg` renders 16x16 primitives via createElementNS in the extension
+// (some B3 icons mix filled circles with stroke paths). Display-only — never
+// enters `label`/`keywords`, so it cannot drift the filter set.
+export type SlashCommandIcon =
+  | { kind: "glyph"; glyph: string }
+  | { kind: "svg"; els: SvgIconElement[] };
+
 export interface SlashCommandItem {
   id: SlashCommandId;
   label: string;
   keywords: string[];
+  // Short alias shown right-aligned in the row (e.g. "h1", "ul"). Display-only.
+  hint: string;
+  icon: SlashCommandIcon;
   run: (editor: TiptapEditor) => void;
 }
 
@@ -32,53 +50,113 @@ function chain(editor: TiptapEditor): SlashCommandChain {
   return editor.chain().focus() as SlashCommandChain;
 }
 
+// SVG primitives lifted verbatim from the B3 bundle mockup
+// (`B3 - Slash Menu.html`). All render at viewBox 0 0 16 16.
+const LIST_LINES: SvgIconElement = { tag: "path", attrs: { d: "M6 4.5h7M6 8h7M6 11.5h7" } };
+
 export const SLASH_COMMANDS: SlashCommandItem[] = [
   {
     id: "heading-1",
     label: "Heading 1",
     keywords: ["h1", "heading", "title"],
+    hint: "h1",
+    icon: { kind: "glyph", glyph: "H¹" },
     run: (editor) => chain(editor).toggleHeading({ level: 1 }).run(),
   },
   {
     id: "heading-2",
     label: "Heading 2",
     keywords: ["h2", "heading", "subtitle"],
+    hint: "h2",
+    icon: { kind: "glyph", glyph: "H²" },
     run: (editor) => chain(editor).toggleHeading({ level: 2 }).run(),
   },
   {
     id: "heading-3",
     label: "Heading 3",
     keywords: ["h3", "heading", "subheading"],
+    hint: "h3",
+    icon: { kind: "glyph", glyph: "H³" },
     run: (editor) => chain(editor).toggleHeading({ level: 3 }).run(),
   },
   {
     id: "bullet-list",
     label: "Bullet list",
     keywords: ["bullet", "ul", "list"],
+    hint: "ul",
+    icon: {
+      kind: "svg",
+      els: [
+        {
+          tag: "circle",
+          attrs: { cx: "3", cy: "4.5", r: "0.7", fill: "currentColor", stroke: "none" },
+        },
+        {
+          tag: "circle",
+          attrs: { cx: "3", cy: "8", r: "0.7", fill: "currentColor", stroke: "none" },
+        },
+        {
+          tag: "circle",
+          attrs: { cx: "3", cy: "11.5", r: "0.7", fill: "currentColor", stroke: "none" },
+        },
+        LIST_LINES,
+      ],
+    },
     run: (editor) => chain(editor).toggleBulletList().run(),
   },
   {
     id: "numbered-list",
     label: "Numbered list",
     keywords: ["numbered", "ordered", "ol", "list"],
+    hint: "ol",
+    icon: {
+      kind: "svg",
+      els: [
+        {
+          tag: "path",
+          attrs: { d: "M2 3.5h1V6M2 6h2M2 9.5c0-.5.5-1 1-1s1 .5 1 1c0 1-2 1.3-2 2.5h2" },
+        },
+        LIST_LINES,
+      ],
+    },
     run: (editor) => chain(editor).toggleOrderedList().run(),
   },
   {
     id: "quote",
     label: "Quote",
     keywords: ["blockquote", "quote"],
+    hint: "q",
+    icon: {
+      kind: "svg",
+      els: [
+        { tag: "path", attrs: { d: "M3 6c0-1.5 1-2.5 2-2.5" } },
+        { tag: "path", attrs: { d: "M3 6v3h3V6z" } },
+        { tag: "path", attrs: { d: "M9 6c0-1.5 1-2.5 2-2.5" } },
+        { tag: "path", attrs: { d: "M9 6v3h3V6z" } },
+      ],
+    },
     run: (editor) => chain(editor).toggleBlockquote().run(),
   },
   {
     id: "code-block",
     label: "Code block",
     keywords: ["code", "pre", "snippet"],
+    hint: "code",
+    icon: {
+      kind: "svg",
+      els: [
+        { tag: "path", attrs: { d: "M5 4l-3 4 3 4" } },
+        { tag: "path", attrs: { d: "M11 4l3 4-3 4" } },
+      ],
+    },
     run: (editor) => chain(editor).toggleCodeBlock().run(),
   },
   {
     id: "horizontal-rule",
     label: "Horizontal rule",
     keywords: ["hr", "divider", "rule", "separator"],
+    hint: "hr",
+    icon: { kind: "glyph", glyph: "—" },
     run: (editor) => chain(editor).setHorizontalRule().run(),
   },
 ];

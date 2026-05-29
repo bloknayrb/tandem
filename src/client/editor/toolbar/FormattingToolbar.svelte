@@ -8,9 +8,18 @@ import ToolbarButton from "./ToolbarButton.svelte";
 interface Props {
   editor: TiptapEditor | null;
   disabled?: boolean;
+  /**
+   * "bar" (default) = the persistent floating bar: shows Undo/Redo.
+   * "popup" = the selection popup's format pill: omits Undo/Redo (they stay on
+   * the bar + Ctrl+Z/Y; the popup mirrors only the mark/block controls).
+   */
+  variant?: "bar" | "popup";
 }
 
-const { editor, disabled = false }: Props = $props();
+const { editor, disabled = false, variant = "bar" }: Props = $props();
+
+// $derived (not a plain const) so it tracks if `variant` ever becomes dynamic.
+const showHistory = $derived(variant === "bar");
 
 type HeadingLevel = 1 | 2 | 3;
 const HEADING_LEVELS: HeadingLevel[] = [1, 2, 3];
@@ -185,47 +194,53 @@ function dismissLinkInput() {
 function handleLinkInputKeyDown(e: KeyboardEvent) {
   if (e.key === "Enter") {
     e.preventDefault();
+    // Stop bubbling: when this toolbar renders inside the selection popup, the
+    // popup mounts a window-level Escape listener that calls dismissPopup().
+    // Without stopPropagation an Escape (or Enter) while editing the URL would
+    // tear down the whole popup instead of just closing the link input.
+    e.stopPropagation();
     submitLinkInput();
   } else if (e.key === "Escape") {
     e.preventDefault();
+    e.stopPropagation();
     dismissLinkInput();
   }
 }
 </script>
 
 {#if editor}
-  <div style="display: flex; align-items: center; gap: 2px;">
-    <ToolbarButton
-      ariaLabel="Undo"
-      shortcut="Ctrl+Z"
-      disabled={!canUndo}
-      onMouseDown={handleUndo}
-      onClick={onKeyActivate(handleUndo)}
-      style="min-width: 30px; padding: 4px 6px;"
-    >
-      {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <path d="M4 7L1 4l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M1 4h9a5 5 0 0 1 0 10H7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      {/snippet}
-    </ToolbarButton>
-    <ToolbarButton
-      ariaLabel="Redo"
-      shortcut="Ctrl+Shift+Z"
-      disabled={!canRedo}
-      onMouseDown={handleRedo}
-      onClick={onKeyActivate(handleRedo)}
-      style="min-width: 30px; padding: 4px 6px;"
-    >
-      {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 7l3-3-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M15 4H6a5 5 0 0 0 0 10h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      {/snippet}
-    </ToolbarButton>
-    <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
+  <div style="display: flex; align-items: center; gap: 1px;">
+    {#if showHistory}
+      <ToolbarButton
+        ariaLabel="Undo"
+        shortcut="Ctrl+Z"
+        disabled={!canUndo}
+        onMouseDown={handleUndo}
+        onClick={onKeyActivate(handleUndo)}
+      >
+        {#snippet children()}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 7L1 4l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M1 4h9a5 5 0 0 1 0 10H7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        {/snippet}
+      </ToolbarButton>
+      <ToolbarButton
+        ariaLabel="Redo"
+        shortcut="Ctrl+Shift+Z"
+        disabled={!canRedo}
+        onMouseDown={handleRedo}
+        onClick={onKeyActivate(handleRedo)}
+      >
+        {#snippet children()}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 7l3-3-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M15 4H6a5 5 0 0 0 0 10h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        {/snippet}
+      </ToolbarButton>
+      <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
+    {/if}
 
     <ToolbarButton
       label="B"
@@ -234,7 +249,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       active={isActiveBold}
       onMouseDown={handleBold}
       onClick={onKeyActivate(handleBold)}
-      style="font-weight: 700; min-width: 30px;"
+      style="font-weight: 700;"
     />
     <ToolbarButton
       label="I"
@@ -243,7 +258,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       active={isActiveItalic}
       onMouseDown={handleItalic}
       onClick={onKeyActivate(handleItalic)}
-      style="font-style: italic; min-width: 30px;"
+      style="font-style: italic;"
     />
     <ToolbarButton
       label="S"
@@ -252,7 +267,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       active={isActiveStrike}
       onMouseDown={handleStrike}
       onClick={onKeyActivate(handleStrike)}
-      style="text-decoration: line-through; min-width: 30px;"
+      style="text-decoration: line-through;"
     />
     <ToolbarButton
       label="<>"
@@ -261,7 +276,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       active={isActiveCode}
       onMouseDown={handleCode}
       onClick={onKeyActivate(handleCode)}
-      style="font-family: monospace; min-width: 30px;"
+      style="font-family: monospace;"
     />
 
     <!-- Heading dropdown -->
@@ -287,7 +302,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
           e.preventDefault();
           showHeadingMenu = !showHeadingMenu;
         })}
-        style="min-width: 30px;"
       />
       {#if showHeadingMenu}
         <div
@@ -329,7 +343,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       active={isActiveBulletList}
       onMouseDown={handleBulletList}
       onClick={onKeyActivate(handleBulletList)}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -349,7 +362,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       active={isActiveOrderedList}
       onMouseDown={handleOrderedList}
       onClick={onKeyActivate(handleOrderedList)}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -369,7 +381,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       active={isActiveBlockquote}
       onMouseDown={handleBlockquote}
       onClick={onKeyActivate(handleBlockquote)}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -400,7 +411,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
         ariaExpanded={showLinkInput}
         onMouseDown={handleLinkMouseDown}
         onClick={onKeyActivate(handleLinkMouseDown)}
-        style="min-width: 30px; padding: 4px 6px;"
       >
         {#snippet children()}
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -459,7 +469,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       disabled={isDisabled}
       onMouseDown={handleHorizontalRule}
       onClick={onKeyActivate(handleHorizontalRule)}
-      style="min-width: 30px;"
     />
     <ToolbarButton
       ariaLabel="Code block"
@@ -467,7 +476,6 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       active={isActiveCodeBlock}
       onMouseDown={handleCodeBlock}
       onClick={onKeyActivate(handleCodeBlock)}
-      style="min-width: 30px; padding: 4px 6px;"
     >
       {#snippet children()}
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
