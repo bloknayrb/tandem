@@ -532,17 +532,17 @@ pub fn run() {
             }
         }));
 
-        // CrabNebula DevTools — opt-in `devtools` feature, development only.
-        // Registered immediately after single-instance (which MUST stay the
-        // FIRST plugin) so it still captures the other plugins' events.
-        // Mutually exclusive with tauri-plugin-log (see the setup() gate): both
-        // install a global `tracing` subscriber and panic if both are active.
-        #[cfg(feature = "devtools")]
-        {
-            builder = builder.plugin(tauri_plugin_devtools::init());
-        }
+    // CrabNebula DevTools — opt-in `devtools` feature, development only.
+    // Registered immediately after single-instance (which MUST stay the
+    // FIRST plugin) so it still captures the other plugins' events.
+    // Mutually exclusive with tauri-plugin-log (see the setup() gate): both
+    // install a global `tracing` subscriber and panic if both are active.
+    #[cfg(feature = "devtools")]
+    {
+        builder = builder.plugin(tauri_plugin_devtools::init());
+    }
 
-        builder
+    builder
         // Blocks reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) only.
         // DevTools, Find, Print, and right-click are preserved. Fixes #541.
         .plugin(tauri_plugin_prevent_default::Builder::new()
