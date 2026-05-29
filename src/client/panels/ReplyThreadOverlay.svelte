@@ -94,6 +94,10 @@ async function handleSendReply() {
 
 function handleTabTrap(e: KeyboardEvent) {
   if (e.key === "Escape") {
+    // Consume Escape so the global Escape-to-deselect handler (App.svelte) does
+    // not also clear the active annotation when the user closes this overlay.
+    e.preventDefault();
+    e.stopPropagation();
     onClose();
     return;
   }

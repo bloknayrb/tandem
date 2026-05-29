@@ -463,11 +463,11 @@ wireActionDeps({
     }
   },
   annotationAccept: () => {
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleAccept(cur.id);
   },
   annotationDismiss: () => {
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleDismiss(cur.id);
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
@@ -869,7 +869,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "annotation-accept-or-dismiss": (e, ctx) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") {
       if (ctx?.shift) review.handleDismiss(cur.id);
       else review.handleAccept(cur.id);
@@ -980,6 +980,37 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
+// Escape deselects the active annotation — empty selection is a valid resting
+// state. The deselect is SCOPED TO THE EDITING CONTEXT: it only fires when focus
+// is in the editor or the annotation rail. That single guard means every overlay
+// that holds focus (settings popover/modal, file/model/wizard modals, command
+// palette, Help, new-tab menu, reply thread) keeps its own Escape-to-close
+// without the deselect piggybacking — no need to teach each overlay a protocol.
+// Belt-and-suspenders: `e.defaultPrevented` also skips overlays that consume
+// Escape but leave focus in the editing context (the selection toolbar does this
+// via capture+stopPropagation; the slash menu via preventDefault). `findBarOpen`
+// is explicit because the find bar closes on Escape WITHOUT preventDefault and
+// can be open while focus is in the editor. Reads happen at event time, outside
+// any tracking scope, so the effect registers exactly once with current values.
+$effect(() => {
+  function onEscape(e: KeyboardEvent) {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    if (activeAnnotationId === null || findBarOpen) return;
+    const el = document.activeElement as HTMLElement | null;
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+    if (
+      !el?.closest(
+        '.ProseMirror, [data-testid="editor-root"], [data-testid="annotation-list-scroll-container"]',
+      )
+    )
+      return;
+    e.preventDefault();
+    activeAnnotationId = null;
+  }
+  window.addEventListener("keydown", onEscape);
+  return () => window.removeEventListener("keydown", onEscape);
+});
+
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
@@ -1030,6 +1061,19 @@ const review = useAnnotationReview({
   // (e.g., from Alt+]/Alt+[ keyboard navigation).
   getActiveAnnotationId: () => activeAnnotationId,
 });
+
+// Resolve target for accept/dismiss: the explicitly-selected annotation, or —
+// when nothing is selected (the empty resting state) — the first pending review
+// target. Shared by the Ctrl+Enter shortcut and the command-palette
+// accept/dismiss commands so the two surfaces can never diverge (review finding).
+// getReviewTargets() already excludes user notes/highlights, so the fallback is
+// always a Claude target; the `author !== "user"` guard at call sites stays as
+// defense-in-depth.
+function activeOrFirstPending(): Annotation | undefined {
+  return activeAnnotationId
+    ? visibleAnnotations.find((a) => a.id === activeAnnotationId)
+    : review.getReviewTargets()[0];
+}
 
 // #649: Word-style margin annotation view.
 // PR 1 ships minimum viable — bubbles appear at correct Y, naive scroll sync
@@ -1524,7 +1568,10 @@ const tutorial = createTutorial(
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
           activeRailTab = "annotations";
-                    activeAnnotationId = id;
+          activeAnnotationId = id;
+        }}
+        onClearAnnotation={() => {
+          activeAnnotationId = null;
         }}
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
       />

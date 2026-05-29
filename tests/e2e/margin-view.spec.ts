@@ -1096,10 +1096,10 @@ test("C-1: docx keeps its legacy path — stage is never a grid", async ({ page 
  * Widths reuse the C-1 ladder (1200=full / 950=narrow / 750=stub / 500=off),
  * proven deterministic above. The card carries `data-density` for assertions.
  *
- * A lone annotation is auto-selected as the review target by
- * `useAnnotationReview`, which forces it to `full` in the narrow band. So these
- * specs seed TWO comments and click one to fix which is active — the other is
- * then deterministically inactive (clamped at narrow / a pip at stub).
+ * Nothing is selected on load (empty is the resting state — the dedicated
+ * review mode was removed), so these specs seed TWO comments and click one to
+ * fix which is active. The active card is `full` in the narrow band; the other
+ * is then deterministically inactive (clamped at narrow / a pip at stub).
  */
 async function seedTwoComments(): Promise<{ idA: string; idB: string }> {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
@@ -1218,13 +1218,15 @@ test("C-2: stub band collapses every card to a pip that fits the column and stay
   expect(within).toBe(true);
 
   // A stub stays a pip even when it's the ACTIVE review target — the 28px stub
-  // track has no room to expand in place. `useAnnotationReview` auto-selects one
-  // card on load (it carries `is-review-target` / `aria-current`); assert that
-  // active margin card is STILL `stub`. (We assert on the auto-active card
-  // rather than clicking: both comments anchor to the same title line, so their
-  // stub pips overlap — STUB-NON-PUSH — and would intercept each other's click.
-  // The density code path is identical for click- vs auto-set active. Reading/
-  // acting on a stub happens after widening or via the rail — tracked follow-up.)
+  // track has no room to expand in place. Selection no longer auto-loads (empty
+  // is the resting state since the dedicated review mode was removed), so make a
+  // card active by clicking the comment's anchor span in the EDITOR. The
+  // overlapping stub pips can't be clicked directly (STUB-NON-PUSH — they'd
+  // intercept each other's click), but the editor anchor sits in the center
+  // column (not the margins) and routes through handleEditorClick → selects one
+  // of the two comments. The density code path is identical regardless of how the
+  // card became active.
+  await page.locator(".tandem-editor [data-annotation-id]").first().click();
   const activeStub = page.locator(
     "[data-testid='margin-column-right'] .tandem-annotation-card.is-review-target",
   );
@@ -1240,10 +1242,10 @@ test("C-2: stub band collapses every card to a pip that fits the column and stay
  * the worst offender: its diff box (`suggestion-diff-{id}`) holds a
  * strikethrough-old → new pair of padded, background-filled spans whose
  * min-content is wider than the plain comment we measured for the stub
- * diagnosis. A lone annotation auto-selects as the review target → active →
- * `full` in the narrow band, so a single suggestion exercises exactly this
- * path. The acceptance gate is the same one the stub spec uses, one band over
- * and one card type richer: the card root must not spill past its column.
+ * diagnosis. Clicking the suggestion's editor anchor makes it the active review
+ * target → `full` in the narrow band, so a single suggestion exercises exactly
+ * this path. The acceptance gate is the same one the stub spec uses, one band
+ * over and one card type richer: the card root must not spill past its column.
  */
 test("C-2: an active suggestion at narrow fits its column (no diff-box spill)", async ({
   page,
@@ -1272,9 +1274,16 @@ test("C-2: an active suggestion at narrow fits its column (no diff-box spill)", 
   const card = bubble.locator(`[data-testid='annotation-card-${id}']`);
   await expect(card).toBeVisible({ timeout: 5_000 });
 
-  // Lone annotation → auto review target → active → full at narrow. The diff
-  // box must actually render (this is the body that the stub band hides and the
-  // clamped band collapses — here it's the full, unclamped suggestion).
+  // Selection no longer auto-loads (empty is the resting state since the
+  // dedicated review mode was removed), so click the suggestion's editor anchor
+  // to make it the active review target — only then does it render `full`
+  // (active) rather than the clamped resting density. Clicking the center-column
+  // anchor routes through handleEditorClick → selects this annotation.
+  await page.locator(".tandem-editor [data-annotation-id]").first().click();
+
+  // Active suggestion → full at narrow. The diff box must actually render (this
+  // is the body that the stub band hides and the clamped band collapses — here
+  // it's the full, unclamped suggestion).
   await expect(card).toHaveAttribute("data-density", "full", { timeout: 5_000 });
   await expect(card.locator(`[data-testid='suggestion-diff-${id}']`)).toBeVisible({
     timeout: 5_000,

@@ -330,9 +330,18 @@ function handleKeyDown(e: KeyboardEvent) {
   .tandem-annotation-card:hover {
     box-shadow: var(--tandem-shadow-2);
   }
-  /* Placed after :hover so the focused-card ring wins at equal specificity. */
+  /* Placed after :hover so the focused-card ring wins at equal specificity.
+     Selected state is a CONTRASTING accent ring + a soft glow that persists —
+     the old `0 0 0 3px var(--tandem-accent-bg)` used the same color as the card
+     fill (also accent-bg), so once the one-shot flash faded it read as a flat,
+     hard-edged stroke rather than a "selected" glow. A crisp 1.5px accent-border
+     edge gives definition; the blurred accent halo carries the glow language of
+     the flash so the transition settles instead of snapping to a flat border. */
   .tandem-annotation-card.is-review-target {
-    box-shadow: 0 0 0 3px var(--tandem-accent-bg), var(--tandem-shadow-2);
+    box-shadow:
+      0 0 0 1.5px var(--tandem-accent-border),
+      0 0 10px -2px color-mix(in srgb, var(--tandem-accent) 30%, transparent),
+      var(--tandem-shadow-2);
   }
   /* Expand-thread button — quiet ghost pill that doesn't compete with the
      annotation's own action row. */

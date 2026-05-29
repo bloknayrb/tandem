@@ -305,14 +305,19 @@ $effect(() => {
 $effect(() => {
   if (!showPopup) return;
 
+  // Capture phase + stopPropagation so this preempts the global bubble-phase
+  // Escape-to-deselect handler (App.svelte) — same-target window listeners fire
+  // in registration order, and App's is registered first, so a bubble listener
+  // here would let Escape both close the popup AND clear the active annotation.
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key !== "Escape") return;
     e.preventDefault();
+    e.stopPropagation();
     dismissPopup();
   }
 
-  window.addEventListener("keydown", handleKeyDown);
-  return () => window.removeEventListener("keydown", handleKeyDown);
+  window.addEventListener("keydown", handleKeyDown, { capture: true });
+  return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
 });
 
 function createAnnotation(
