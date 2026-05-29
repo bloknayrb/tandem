@@ -479,8 +479,10 @@ test("formatting from the popup survives the click, then Annotate produces a cor
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
 
   // Apply Heading 2 via the popup's format pill (open the H dropdown, pick H2).
+  // The heading items are role="menuitemradio" (single-select level picker with
+  // aria-checked) since the #ecf9252 a11y pass — not plain menuitem.
   await toolbar.getByRole("button", { name: "H", exact: true }).click();
-  await toolbar.getByRole("menuitem", { name: "Heading 2" }).click();
+  await toolbar.getByRole("menuitemradio", { name: "Heading 2" }).click();
   // The heading applied to the selected paragraph, and the popup did NOT
   // dismiss (selection survived the format click). Scope to the selected text —
   // the fixture already contains other h2 headings.
