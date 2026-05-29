@@ -214,6 +214,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `apply-changes-btn`
 - Collapsible passthrough: `testid ? \`{*}-toggle\` : undefined` (CollapsibleSection wrapper — actual selectors live at call sites)
 
+### Empty states (3.11 D5)
+- `empty-state-open-file` (state A primary), `empty-state-retry` + `empty-state-open-settings` (state C)
+
 ### Test harnesses (not user-facing, kept for vitest)
 - `notifications-harness`, `throw-on-render-ok`,
   `harness-{acknowledge,version,banner-dismiss,banner-version}`

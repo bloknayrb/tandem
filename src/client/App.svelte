@@ -1602,7 +1602,13 @@ const tutorial = createTutorial(
               {@render editorContent()}
             {/key}
           {:else}
-            <EmptyState connected={yjsSync.connected} claudeActive={yjsSync.claudeActive} />
+            <EmptyState
+              connected={yjsSync.connected}
+              claudeActive={yjsSync.claudeActive}
+              onOpenFile={() => (fileOpenDialogOpen = true)}
+              onRetry={() => yjsSync.reconnect()}
+              onOpenSettings={openSettingsModalWithAck}
+            />
           {/if}
         </div>
         <!-- Per-side margin tracks (grid columns 2 & 4): a `position: relative`
