@@ -7,30 +7,13 @@ interface Props {
   isActive: boolean;
   onswitch: (id: string) => void;
   onclose: (id: string) => void;
-  draggable: boolean;
-  ondragstart: (e: DragEvent, id: string) => void;
-  ondragover: (e: DragEvent, id: string) => void;
-  ondrop: (e: DragEvent, id: string) => void;
-  ondragend: () => void;
-  ondragleave: () => void;
+  onpointerdown: (e: PointerEvent, id: string) => void;
   dropIndicator: "left" | "right" | null;
   onkeydown: (e: KeyboardEvent, id: string) => void;
 }
 
-const {
-  tab,
-  isActive,
-  onswitch,
-  onclose,
-  draggable,
-  ondragstart,
-  ondragover,
-  ondrop,
-  ondragend,
-  ondragleave,
-  dropIndicator,
-  onkeydown,
-}: Props = $props();
+const { tab, isActive, onswitch, onclose, onpointerdown, dropIndicator, onkeydown }: Props =
+  $props();
 
 // ---- useTabDirty logic inlined (hooks can't be imported into Svelte) ----
 let dirty = $state(false);
@@ -105,6 +88,7 @@ const tabStyle = $derived(
     "border-radius: var(--tandem-r-pill)",
     `box-shadow: ${isActive ? "var(--tandem-shadow-1)" : "0 1px 3px rgba(0, 0, 0, 0.08)"}`,
     "user-select: none",
+    "touch-action: none",
     "white-space: nowrap",
     "transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s",
     "flex-shrink: 0",
@@ -134,14 +118,9 @@ function handleMouseLeaveClose() {
   tabindex={0}
   aria-selected={isActive}
   aria-label={tab.fileName}
-  {draggable}
   style={tabStyle}
   onclick={() => onswitch(tab.id)}
-  ondragstart={(e) => ondragstart(e, tab.id)}
-  ondragover={(e) => ondragover(e, tab.id)}
-  ondrop={(e) => ondrop(e, tab.id)}
-  ondragend={ondragend}
-  ondragleave={ondragleave}
+  onpointerdown={(e) => onpointerdown(e, tab.id)}
   onkeydown={(e) => onkeydown(e, tab.id)}
 >
   <!-- Stable slot: always in layout, hidden when clean to prevent tab-width shift -->
@@ -176,14 +155,7 @@ function handleMouseLeaveClose() {
       e.stopPropagation();
       onclose(tab.id);
     }}
-    ondragover={(e) => {
-      e.stopPropagation();
-      e.preventDefault();
-    }}
-    ondrop={(e) => {
-      e.stopPropagation();
-      e.preventDefault();
-    }}
+    onpointerdown={(e) => e.stopPropagation()}
     onmouseenter={handleMouseEnterClose}
     onmouseleave={handleMouseLeaveClose}
     style="background: none; border: none; cursor: pointer; font-size: var(--tandem-text-md); line-height: 1; color: var(--tandem-fg-muted); padding: 0 2px; border-radius: var(--tandem-r-1);"

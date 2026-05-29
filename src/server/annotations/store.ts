@@ -231,6 +231,16 @@ export function isStoreReadOnly(): boolean {
   return readOnly;
 }
 
+/**
+ * Returns true when the annotation store is entirely disabled via
+ * `TANDEM_ANNOTATION_STORE=off`. In this mode `queueWrite`/`flush` are inert
+ * no-ops, so any flow that relies on a durable write succeeding (e.g. rename
+ * recovery before unlinking the old envelope) MUST bail.
+ */
+export function isStoreFeatureDisabled(): boolean {
+  return isFeatureDisabled();
+}
+
 /** Release the store lock. Safe to call repeatedly; no-op if we don't own it. */
 export async function releaseStoreLock(): Promise<void> {
   if (isFeatureDisabled()) return;

@@ -9,12 +9,16 @@ import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
   createScratchpad,
+  SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS,
   saveStore,
+  shouldAutoOpenScratchpad,
   triggerSave,
   triggerSaveAs,
   wireActionDeps,
 } from "./actions/builtin.svelte.js";
+import { effectiveBindingLabels } from "./actions/keybindings.js";
 import { scrollFade } from "./actions/scrollFade.svelte.js";
+import { buildOverrides } from "./actions/shortcut-conflicts.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -61,7 +65,7 @@ import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
 import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
-import { createTandemSettings, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
+import { createTandemSettings, resolveFont, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
 import { initTauriFileDrop, tauriFileDrop } from "./hooks/useTauriFileDrop.svelte";
 import { createTheme } from "./hooks/useTheme.svelte";
 import { createTutorial } from "./hooks/useTutorial.svelte";
@@ -86,6 +90,7 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { openFileForRuntime } from "./utils/browse-file";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
 
@@ -172,6 +177,13 @@ const modeState = createTandemModeBroadcast(
   () => settingsState.settings.selectionDwellMs,
 );
 const layoutModel = createLayoutModel(settingsState, modeState);
+
+// Remapped-shortcut override layer (ADR-041). Rebuilt whenever the user's
+// customShortcuts change; the keydown handler reads it at call time.
+const shortcutOverrides = $derived(buildOverrides(settingsState.settings.customShortcuts));
+// Effective (override ?? default) formatted labels for Help-modal reflection.
+const effectiveShortcutLabels = $derived(effectiveBindingLabels(shortcutOverrides));
+
 const visibleAnnotations = $derived(yjsSync.annotations);
 const connectionBanner = createConnectionBanner(
   () => yjsSync.disconnectedSince,
@@ -315,6 +327,27 @@ if (import.meta.env.DEV) {
 let paletteOpen = $state(false);
 let fileOpenDialogOpen = $state(false);
 
+// Open-file action: native picker in Tauri, FileOpenDialog modal in the
+// browser distribution. Error surfacing is owned by `openFileForRuntime` /
+// `browseNativeFile` via the `onError` callback; void callers can fire-and-
+// forget safely.
+function requestOpenFile(): Promise<void> {
+  return openFileForRuntime({
+    isTauri: isTauriRuntime(),
+    openModal: () => {
+      fileOpenDialogOpen = true;
+    },
+    onError: (message) =>
+      notifications.push({
+        id: generateNotificationId(),
+        type: "general-error",
+        severity: "error",
+        message,
+        timestamp: Date.now(),
+      }),
+  });
+}
+
 // Issue #660 — titlebar settings-icon update-available dot. Acknowledged
 // whenever the user opens settings (popover OR modal — any tab counts). Do
 // NOT destructure: the `showDot` getter loses reactivity when pulled out.
@@ -407,9 +440,7 @@ wireActionDeps({
     const id = yjsSync.activeTabId;
     if (id) closeTabAndRecord(id);
   },
-  openFileDialog: () => {
-    fileOpenDialogOpen = true;
-  },
+  openFileDialog: () => void requestOpenFile(),
   toggleLeftPanel: () => toggleLeftPanel(),
   toggleRightPanel: () => toggleRightPanel(),
   reopenClosedTab: () => void reopenClosedTab(),
@@ -526,7 +557,11 @@ $effect(() => {
 
 createTheme(() => settingsState.settings.theme);
 createAccentHue(() => settingsState.settings.accentHue);
-createRootEditorFont(() => settingsState.settings.editorFont);
+// #811: resolve the font from the ACTIVE tab's format so a tab switch
+// re-derives. `activeTab` MUST be dereferenced inside this getter closure —
+// hoisting the format into a const here would freeze the value at init and
+// the $effect would never re-run on tab switch (stale-closure trap).
+createRootEditorFont(() => resolveFont(settingsState.settings, activeTab?.format));
 createDensity(() => settingsState.settings.density);
 createHighContrast(() => settingsState.settings.highContrast);
 createAnnotationPatterns(() => settingsState.settings.annotationPatterns);
@@ -809,7 +844,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "open-file": (e) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    fileOpenDialogOpen = true;
+    void requestOpenFile();
   },
   "pick-tab": (e, ctx) => {
     if (shouldIgnoreShortcut(e)) return;
@@ -963,7 +998,12 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
 
 $effect(() => {
   function handler(e: KeyboardEvent) {
-    const match = matchShortcut(e);
+    // Read overrides at call time (not as an effect dep) so the listener is
+    // registered exactly once and never churns / captures a stale map.
+    const match = matchShortcut(
+      e,
+      untrack(() => shortcutOverrides),
+    );
     if (!match) return;
     dispatch[match.id]?.(e, match.context);
   }
@@ -972,6 +1012,35 @@ $effect(() => {
 });
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
+
+// #842: when the user reaches the empty tab-bar state (e.g. closes the last
+// tab) with a live connection, auto-open a fresh scratchpad instead of
+// stranding them on "No document open."
+//
+// The debounce is load-bearing, not cosmetic: on initial connect `connected`
+// flips true before the server's `openDocuments` list syncs, so `tabs` is
+// briefly empty. Firing immediately would race the startup doc
+// (welcome.md / CHANGELOG.md, opened server-side before HTTP bind) and open a
+// stray scratchpad ahead of it. The timer also rides out the transient
+// `activeTab === null` during a Y.Doc swap (reload-from-disk) and never fires
+// during the disconnect-debounce window (gate requires `connected`). The
+// startup doc arriving within the window re-runs this effect, cleanup clears
+// the pending timer, and the gate no longer passes — so no scratchpad opens.
+$effect(() => {
+  if (
+    !shouldAutoOpenScratchpad({
+      connected: yjsSync.connected,
+      tabCount: yjsSync.tabs.length,
+      activeTabId: yjsSync.activeTabId,
+    })
+  ) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    void createScratchpad();
+  }, SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS);
+  return () => clearTimeout(timer);
+});
 
 // Lifted from SidePanel.svelte so that:
 //   1. There's exactly one review instance (both rails would otherwise mount
@@ -1270,7 +1339,11 @@ const tutorial = createTutorial(
         })}
     />
 
-    <HelpModal open={showHelp} onClose={() => (showHelp = false)} />
+    <HelpModal
+      open={showHelp}
+      onClose={() => (showHelp = false)}
+      effectiveShortcutLabels={effectiveShortcutLabels}
+    />
 
     {#if shouldShowModelPicker}
       <FirstRunModelPickerModal onComplete={() => (modelPickerHandled = true)} />
@@ -1315,7 +1388,7 @@ const tutorial = createTutorial(
     onTabClose={closeTabAndRecord}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
-    onRequestOpenDialog={() => { fileOpenDialogOpen = true; }}
+    onRequestOpenDialog={() => void requestOpenFile()}
   />
 {/snippet}
 
@@ -1595,9 +1668,13 @@ const tutorial = createTutorial(
   .panel-edge-collapse:hover {
     background: var(--tandem-accent-bg);
   }
+  /* tabindex="-1": never reachable via Tab, so the only focus paths are the
+     keyboard-toggle restoration helper (focusToggleTarget) and a mouse click
+     — neither warrants a keyboard-style focus ring. The restoration focus
+     follows a keydown, so :focus-visible matches and would draw a lingering
+     blue ring after Alt+Shift+Arrow toggles (#859). Suppress the ring; the
+     :hover background still signals the zone on pointer interaction. */
   .panel-edge-collapse:focus-visible {
-    background: var(--tandem-accent-bg);
-    outline: 2px solid var(--tandem-accent);
-    outline-offset: -2px;
+    outline: none;
   }
 </style>

@@ -3,6 +3,7 @@ import {
   CURRENT_SCHEMA_VERSION,
   loadSettings,
   mergeAndClampSettings,
+  resolveFont,
   type TandemSettings,
 } from "../../src/client/hooks/useTandemSettings.js";
 import {
@@ -320,6 +321,7 @@ describe("useTandemSettings — updateSettings write path", () => {
     theme: "system",
     accentHue: 275,
     editorFont: "sans",
+    fontByExtension: {},
     density: "cozy",
     defaultMode: "tandem",
     highContrast: false,
@@ -330,7 +332,11 @@ describe("useTandemSettings — updateSettings write path", () => {
     sidecarRetryStrategy: "exponential",
     holdAnnotationsWhileOffline: true,
     marginView: false,
-  };
+    showAnnotationDecorations: true,
+    models: [],
+    defaultModelId: null,
+    customShortcuts: {},
+  } as TandemSettings;
 
   it("clamps editorWidthPercent above 100 down to 100", () => {
     const next = mergeAndClampSettings(BASE, { editorWidthPercent: 120 });
@@ -388,6 +394,74 @@ describe("useTandemSettings — updateSettings write path", () => {
 
   it("falls back to default accentHue for NaN", () => {
     expect(mergeAndClampSettings(BASE, { accentHue: NaN }).accentHue).toBe(275);
+  });
+
+  it("passes a valid customShortcuts override through the shape filter", () => {
+    const chord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
+    const next = mergeAndClampSettings(BASE, { customShortcuts: { "new-scratchpad": chord } });
+    expect(next.customShortcuts).toEqual({ "new-scratchpad": chord });
+  });
+
+  it("drops junk / fixed-colliding / non-bindable customShortcuts on merge", () => {
+    const next = mergeAndClampSettings(BASE, {
+      customShortcuts: {
+        "bogus-id": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" },
+        save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyA" }, // Ctrl+A → select-all (fixed)
+        "close-tab": { ctrlOrMeta: true, alt: false, shift: true, code: "Slash" }, // Ctrl+Shift+/ → help (fixed family)
+        "open-file": { ctrlOrMeta: false, alt: false, shift: true, code: "KeyB" }, // plain Shift+B → not bindable
+      },
+    });
+    expect(next.customShortcuts).toEqual({});
+  });
+
+  // #811 — fontByExtension merge re-validation.
+  it("passes a valid fontByExtension override through the shape filter", () => {
+    const next = mergeAndClampSettings(BASE, { fontByExtension: { md: "serif", txt: "sans" } });
+    expect(next.fontByExtension).toEqual({ md: "serif", txt: "sans" });
+  });
+
+  it("drops invalid fontByExtension values on merge", () => {
+    const next = mergeAndClampSettings(BASE, {
+      fontByExtension: { md: "wingdings" as unknown as "serif", docx: "mono" },
+    });
+    expect(next.fontByExtension).toEqual({ docx: "mono" });
+  });
+});
+
+describe("resolveFont — per-format resolution order (post-#887)", () => {
+  const base = { editorFont: "sans" as const, fontByExtension: {} };
+
+  it("falls back to the global editorFont for an unknown format", () => {
+    expect(resolveFont({ ...base, editorFont: "mono" }, "rtf")).toBe("mono");
+  });
+
+  it("falls through to the global editorFont when no per-format override is set", () => {
+    // #887 follow-up: seeded DEFAULT_FONT_BY_EXTENSION removed. Every format
+    // without an explicit user override resolves to the global setting,
+    // including the ones the old map seeded (docx/txt/md/html).
+    expect(resolveFont(base, "docx")).toBe("sans");
+    expect(resolveFont(base, "txt")).toBe("sans");
+    expect(resolveFont(base, "md")).toBe("sans");
+    expect(resolveFont(base, "html")).toBe("sans");
+  });
+
+  it("the global editorFont actually changes resolution for all formats", () => {
+    // Regression test for the silent-default bug: previously, switching the
+    // global font to "mono" did nothing for docx/txt/md/html.
+    const mono = { ...base, editorFont: "mono" as const };
+    expect(resolveFont(mono, "docx")).toBe("mono");
+    expect(resolveFont(mono, "txt")).toBe("mono");
+    expect(resolveFont(mono, "md")).toBe("mono");
+    expect(resolveFont(mono, "html")).toBe("mono");
+  });
+
+  it("prefers a per-format user override over the global setting", () => {
+    expect(resolveFont({ ...base, fontByExtension: { docx: "serif" } }, "docx")).toBe("serif");
+  });
+
+  it("falls back to the global setting when format is null/undefined", () => {
+    expect(resolveFont({ ...base, editorFont: "serif" }, null)).toBe("serif");
+    expect(resolveFont({ ...base, editorFont: "serif" }, undefined)).toBe("serif");
   });
 });
 

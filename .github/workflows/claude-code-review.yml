@@ -16,6 +16,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: read # gh issue view (in --allowedTools) needs read; omitting the key entirely would set it to none
+  id-token: write # claude-code-action fetches an OIDC token; the permissions block zeroes unlisted scopes
 
 jobs:
   review:

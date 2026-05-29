@@ -43,7 +43,12 @@ import { isUploadPath } from "../../shared/paths.js";
 import { extractText } from "../mcp/document-model.js";
 import { contentHash, ENVELOPE_FILENAME_RE } from "./doc-hash.js";
 import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
-import { createStore, getAnnotationsDir, isStoreReadOnly } from "./store.js";
+import {
+  createStore,
+  getAnnotationsDir,
+  isStoreFeatureDisabled,
+  isStoreReadOnly,
+} from "./store.js";
 import { recordTombstone } from "./sync.js";
 
 // Envelope filename shape is hoisted to ./doc-hash.ts as ENVELOPE_FILENAME_RE
@@ -74,10 +79,14 @@ export async function recoverRenamedEnvelope(
   currentFilePath: string,
 ): Promise<boolean> {
   try {
-    // Read-only mode: queueWrite is a no-op and flush won't persist the
-    // re-keyed envelope. Injecting + unlinking the old file would then lose
-    // data. Bail before mutating anything.
-    if (isStoreReadOnly()) return false;
+    // Read-only mode OR the feature kill-switch (`TANDEM_ANNOTATION_STORE=off`):
+    // queueWrite is a no-op and flush won't persist the re-keyed envelope.
+    // Injecting + unlinking the old file would then lose data. The feature-off
+    // case is the dangerous one — `annotationFileExists` short-circuits to
+    // false when disabled, so recovery is entered, the inert flush "succeeds"
+    // silently, and the old envelope would be unlinked with no durable copy.
+    // Bail before mutating anything.
+    if (isStoreReadOnly() || isStoreFeatureDisabled()) return false;
 
     const text = extractText(doc);
     // Empty/whitespace bodies carry no rename signal — every new file collides
@@ -216,21 +225,29 @@ export async function recoverRenamedEnvelope(
       await fs.unlink(path.join(dir, sourceFile));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        // Constant format string + args (filenames are user-controlled — keep
+        // them out of the printf-style format slot; CodeQL js/format-string).
         console.error(
-          `[ANNOTATION-RECOVERY] re-keyed ${sourceFile} -> ${currentFile} but failed to unlink old file:`,
+          "[ANNOTATION-RECOVERY] re-keyed %s -> %s but failed to unlink old file:",
+          sourceFile,
+          currentFile,
           err,
         );
       }
     }
 
     console.error(
-      `[ANNOTATION-RECOVERY] recovered renamed annotations: ${sourceFile} -> ${currentFile} (${rekeyed.annotations.length} annotation(s))`,
+      "[ANNOTATION-RECOVERY] recovered renamed annotations: %s -> %s (%d annotation(s))",
+      sourceFile,
+      currentFile,
+      rekeyed.annotations.length,
     );
     return true;
   } catch (err) {
     // Best-effort — never block a doc open.
     console.error(
-      `[ANNOTATION-RECOVERY] recovery failed for ${currentFilePath}:`,
+      "[ANNOTATION-RECOVERY] recovery failed for %s:",
+      currentFilePath,
       err instanceof Error ? err.message : err,
     );
     return false;

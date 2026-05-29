@@ -124,6 +124,29 @@ describe("recoverRenamedEnvelope", () => {
     expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(0); // no injection
   });
 
+  it("does NOT unlink the old envelope when the store feature is disabled (TANDEM_ANNOTATION_STORE=off)", async () => {
+    // Feature-off makes queueWrite/flush inert no-ops AND annotationFileExists
+    // short-circuit to false (so recovery is entered). Without a feature-flag
+    // guard, recovery would inject + unlink the old envelope with no durable
+    // re-keyed copy — silent data loss. Recovery must bail before mutating.
+    const body = "Content present in an orphaned envelope, store turned off.";
+    const oldPath = path.join(env.tmpRoot, "renamed-while-off.md");
+    await writeEnvelope(buildEnvelope(oldPath, body));
+
+    const newPath = path.join(env.tmpRoot, "now-open.md");
+    const newHash = docHash(newPath);
+    const doc = makeDoc(body);
+
+    process.env.TANDEM_ANNOTATION_STORE = "off";
+    const recovered = await recoverRenamedEnvelope(doc, newHash, newPath);
+
+    expect(recovered).toBe(false);
+    // Old envelope still on disk (not unlinked), nothing re-keyed, no injection.
+    expect(await readEnvelope(docHash(oldPath))).not.toBeNull();
+    expect(await readEnvelope(newHash)).toBeNull();
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(0);
+  });
+
   it("skips empty/whitespace documents (every new file collides on the empty hash)", async () => {
     const emptyDoc = makeDoc("");
     const newPath = path.join(env.tmpRoot, "fresh.md");

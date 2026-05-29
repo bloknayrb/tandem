@@ -8,7 +8,7 @@ A complete guide to using Tandem — from first launch to advanced workflows.
 
 ## Overview
 
-Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — a progress report, RFP response, compliance filing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, flag issues, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
+Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, flag issues, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
 
 Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
 

@@ -14,6 +14,13 @@ import {
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { closeStore } from "../annotations/store.js";
+import {
+  clearDirtyState,
+  isDirty,
+  markClean,
+  markCleanIfUnchanged,
+  snapshotDirtyVersion,
+} from "../documents/dirty.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { atomicWrite, getAdapter } from "../file-io/index.js";
@@ -143,6 +150,10 @@ export async function saveDocumentToDisk(
     const doc = getOrCreateDocument(docId);
     // `adapter.save` was guard-checked above; assert it for the type narrow
     // here. Per ADR-036 a missing `save` means the format is read-only.
+    // Snapshot the dirty version BEFORE the async write so a content edit that
+    // lands DURING atomicWrite/saveSession isn't lost — markCleanIfUnchanged
+    // only clears the flag if no newer edit arrived (#851).
+    const dirtySnapshot = snapshotDirtyVersion(docId);
     const output = adapter.save(doc);
 
     suppressNextChange(docState.filePath);
@@ -152,6 +163,7 @@ export async function saveDocumentToDisk(
     // Mark document clean
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
     withMcp(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
+    markCleanIfUnchanged(docId, dirtySnapshot);
 
     return { status: "saved" };
   } catch (err) {
@@ -403,6 +415,12 @@ export async function saveDocumentAsToDisk(
     // attach as a non-upload doc so post-promote annotations reach Claude.
     attachObservers(docId, doc);
 
+    // The promoted doc's body was just written to disk, so its dirty baseline
+    // is the current content — clear the flag so the next autosave pass doesn't
+    // immediately re-write it (#851). attachObservers re-registered the body
+    // observer above (preserving the version counter), so mark clean here.
+    markClean(docId);
+
     // Broadcast the new openDocuments list so every connected tab bar reflects
     // the new basename + format.
     broadcastOpenDocs();
@@ -471,6 +489,9 @@ export async function autoSaveAllToDisk(): Promise<void> {
   for (const [docId, state] of openDocs) {
     if (state.source === "upload" || state.readOnly) continue;
     if (!AUTO_SAVE_FORMATS.has(state.format)) continue;
+    // #851: skip docs with no unsaved body edits. Merely opening a file to view
+    // it must not round-trip it through the serializer + rewrite it on disk.
+    if (!isDirty(docId)) continue;
     try {
       const result = await saveDocumentToDisk(docId);
       if (result.status === "saved") {
@@ -566,6 +587,9 @@ export async function closeDocumentById(
 
   // Clear save lock to prevent a close-reopen race where the old lock blocks new saves
   savingDocs.delete(id);
+
+  // Drop dirty-tracking state + detach its body observer (#851).
+  clearDirtyState(id);
 
   removeDoc(id);
 

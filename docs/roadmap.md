@@ -18,11 +18,11 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 | Wave | Focus | Notes |
 |------|-------|-------|
 | 0 | Apple Developer cert procurement (Bryan-led calendar gate); §1H verification audit (done, zero hits) | In flight |
-| 1 | Stability bug-bash + redesign chrome + editor surfaces (shipped 2026-05-15) | #631 #616 #244 done; SettingsModal, status-bar held-count, ConnectionBanner polish, updater banner+dot, slash menu, paged docx, ReplyThreadOverlay, margin view PR1+PR2 shipped via #662–#674, #679. D11 bundled fonts reverted (#678) — see #680 |
-| 1b | Wave-1 follow-ups | **#680** re-land D11 fonts with BubbleMenu positioning fix; **#681** retrofit `/api/open` callers to `openServerPath`; **#682** strict `SettingsTabContext` registry typing; **#683** #649 margin view PR 3 of 3 (rail-collapse + narrow viewport) |
-| 2 | Settings → Network panel + multi-provider models registry (D4) | Two-tier UX (Connection visible + Advanced collapsed); models registry CRUDs Anthropic + #477 local + others |
+| 1 | Stability bug-bash + redesign chrome + editor surfaces (shipped 2026-05-15; released in v0.13.0) | #631 #616 #244 done; SettingsModal, status-bar held-count, ConnectionBanner polish, updater banner+dot, slash menu, paged docx, ReplyThreadOverlay, margin view PR1+PR2 shipped via #662–#674, #679. D11 bundled fonts reverted (#678) — see #680 |
+| 1b | Wave-1 follow-ups (released in v0.13.0) | **#680** re-land D11 fonts with BubbleMenu positioning fix; **#681** retrofit `/api/open` callers to `openServerPath`; **#682** strict `SettingsTabContext` registry typing; **#683** #649 margin view PR 3 of 3 (rail-collapse + narrow viewport) |
+| 2 | Settings → Network panel + multi-provider models registry (D4) — released in v0.13.0 | Two-tier UX (Connection visible + Advanced collapsed); models registry CRUDs Anthropic + #477 local + others |
 | 3 | Annotation migration (single coordinated release) | #313 content-hash identity + AR5 Word-import batch-promote + AR6 tutorial annotations. One upgrade-toast cycle. |
-| 4 | #477 + #576 | #477 PRs 1/3/4/5 (PR-4 quartet #642–#645 hardens; ≥2-week feature-flag soak). #576 docx body export (kill date 2026-05-28; LibreOffice fallback ready) |
+| 4 | #477 remainder + #576 | #477 mostly shipped **default-on in v0.13.0** (PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b; no feature-flag soak). The Wave-4 remainder is **PR 3c-ii-c** (auto-config removal). #576 docx body export (kill date 2026-05-28; LibreOffice fallback ready). The non-MCP-provider adapter (unshipped half of PR 5) is Wave 6 / v1.0, not Wave 4. |
 | 5 | Cross-platform install + #316 Cowork macOS/Linux + #428 cert | Notarization, install matrix, observer soak, accessibility gate |
 | 6 | Final | Version bump, CHANGELOG `[1.0.0]`, npm publish, Tauri release |
 
@@ -144,7 +144,7 @@ Implemented in Phase 1:
 
 Deferred — only if demand appears:
 
-- Named groups (e.g., "February DRPA Review") with `tandem_createGroup`
+- Named groups (e.g., "February Report Review") with `tandem_createGroup`
 - Cross-reference tools (`tandem_crossReference`, `tandem_searchGroup`)
 - Split-pane UI for side-by-side documents
 - Tab drag-to-split functionality
@@ -413,7 +413,7 @@ Each release targets **one coherent concern** so that a bad PR is bisectable and
 
 Cowork integration is **verified end-to-end** as of v0.7.1 (2026-04-20). Both Claude Code CLI and Claude Desktop Cowork workspaces surface `tandem_*` tools via the stdio bridge (`npx -y tandem-editor mcp-stdio`). The Cowork plugin bridge was introduced in tandem-editor@0.6.0 and first cross-platform working in @0.6.2 (Windows `workspaces` packaging bug). See [ADR-023](decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304--claude-default-integration) for the decision trail.
 
-Remaining Cowork work (#316, #317, #322) is polish — making the installer turnkey on macOS/Linux and adding cross-platform firewall scoping. Not a capability blocker. Deferred from v0.9.0 to v0.13.0 (requires macOS/Linux validation hardware).
+Remaining Cowork work (#316, #317, #322) is polish — making the installer turnkey on macOS/Linux and adding cross-platform firewall scoping. Not a capability blocker. Deferred from v0.9.0 to v0.15.0 (requires macOS/Linux validation hardware).
 
 ---
 
@@ -440,14 +440,14 @@ All three Phase 0 spikes shipped. The two CLI integration spikes resolved 2026-0
 | 3 | First-run wizard UI — integration picker (D4 picked **option a, full-screen modal**), existing-user detection via `last-seen-version`, pre-selection from existing MCP config. **Replaces auto-configuration of Claude** per ADR-038 §2b — every integration (Claude included) is configured via the wizard, never silently. `tandem setup` CLI becomes a TTY-mode wrapper around the wizard; auto-configuration code in `src-tauri/src/lib.rs` and `src/cli/setup.ts` is removed in the final sub-PR. **Broken into sub-PRs for review tractability** — each ships independently. | PR 1 | v1.0 wave 6 |
 | 3a | Existing-MCP-config introspection (`readExistingTandemEntries` — reads `~/.claude.json` + Claude Desktop config without mutating them). Foundation for the wizard's pre-population + migration UX. **SHIPPED** PR #729 (2026-05-17). | PR 1 | v1.0 wave 6 |
 | 3b | v1→v2 schema migration: re-adds `tokenSecretRef` to integration kinds + `other-mcp` kind (cut from PR 1 per adversarial review). Keychain backend: `@napi-rs/keyring` (lazy-loaded via `createRequire` so headless CI does not crash on import; dependency-injectable for tests). **SHIPPED** PR #730 (2026-05-17). | PR 3a | v1.0 wave 6 |
-| 3c-i | Wizard UI (full-screen modal, Svelte 5) behind a Settings toggle. Wizard consumes `readExistingTandemEntries` (PR 3a), `IntegrationsStore` (PR 1), and `Keychain` (PR 3b); keychain features gracefully degrade on Tauri (`KeychainUnavailableError` → env-var fallback guidance) pending the Rust bridge follow-up. **SHIPPED** PR #731 (2026-05-17). | PR 3a + PR 3b | v0.13.0 (hidden) → v1.0 (exposed) |
+| 3c-i | Wizard UI (full-screen modal, Svelte 5) behind a Settings toggle. Wizard consumes `readExistingTandemEntries` (PR 3a), `IntegrationsStore` (PR 1), and `Keychain` (PR 3b); keychain features gracefully degrade on Tauri (`KeychainUnavailableError` → env-var fallback guidance) pending the Rust bridge follow-up. **SHIPPED** PR #731 (2026-05-17). | PR 3a + PR 3b | v0.13.0 (shipped; first-run auto-open default-on via 3c-ii-b) |
 | 3c-ii | Auto-configuration removal from `src-tauri/src/lib.rs` and `src/cli/setup.ts` per ADR-038 §2b. **Split into three sub-PRs after adversarial review** — see `docs/plans/477-pr-3c-ii-auto-config-removal.md`. ≥1-week soak gate on PR 3c-i was waived by user decision (2026-05-18). | PR 3c-i (soak waived) | v0.13.0 |
 | 3c-ii-a | Server library factor: move `applyConfig`, `applyConfigWithToken`, `detectTargets`, `buildMcpEntries`, `installSkill`, `validateChannelShimPrereq` from `src/cli/setup.ts` to `src/server/integrations/apply.ts`. Pure refactor, zero behavior change. `src/cli/setup.ts` keeps back-compat re-exports until 3c-ii-c. **SHIPPED** PR #747 (2026-05-18). | PR 3c-i | v0.13.0 |
 | 3c-ii-b | Wizard apply path + first-run auto-open. Schema bump v2→v3 (adds `apply: "create" \| "update" \| "skip"` field). New `POST /api/integrations/apply` endpoint separate from persistence. Path-traversal hardening per security review B1 (apply validates `configPath` against `detectTargets()` enumeration, ignores request-body paths; UNC rejected). Existing-entry re-validation per security review B3 (HTTP `url` must be loopback; stdio `command` allowlisted). First-run auto-open driven by `integrations.json` state — transport-agnostic, covers both Tauri AND npm-browser per contrarian review B3. Settings toggle becomes "Reopen wizard" affordance. Channel-shim removal surfaced as confirmation diff item, not silent delete. **Gated on redesign-wave settling** — touches `src/client/App.svelte` and wizard UI surfaces in motion. | PR 3c-ii-a + redesign-wave settling | v0.13.0 |
-| 3c-ii-c | Delete `/api/setup` route, `src-tauri/src/lib.rs:run_setup()`, `SETUP_URL` const. Rewrite `tandem setup` as non-interactive `tandem setup --apply [--target=…]` (per contrarian review S2 — amends ADR-038 §2b wording from "TTY-mode wrapper" to "non-interactive `--apply`"; ADR amendment landed in this PR). Drop back-compat re-exports from `src/cli/setup.ts`. Full doc sweep across README / architecture / user-guide / workflows / CLAUDE.md / ADR-038 §2b status / CHANGELOG breaking-changes entry. | PR 3c-ii-a + PR 3c-ii-b + manual Tauri-build confirmation | v0.13.0 |
+| 3c-ii-c | Delete `/api/setup` route, `src-tauri/src/lib.rs:run_setup()`, `SETUP_URL` const. Rewrite `tandem setup` as non-interactive `tandem setup --apply [--target=…]` (per contrarian review S2 — amends ADR-038 §2b wording from "TTY-mode wrapper" to "non-interactive `--apply`"; ADR amendment landed in this PR). Drop back-compat re-exports from `src/cli/setup.ts`. Full doc sweep across README / architecture / user-guide / workflows / CLAUDE.md / ADR-038 §2b status / CHANGELOG breaking-changes entry. | PR 3c-ii-a + PR 3c-ii-b + manual Tauri-build confirmation | v0.14.0 (not yet shipped) |
 | 3c-tauri-keychain | `src-tauri/src/keychain.rs` exposes `keychain_get` / `keychain_set` / `keychain_delete` Tauri commands backed by the `keyring` crate (already in `Cargo.toml`). Client-side `ClientKeychainBackend` abstraction picks Tauri commands when `isTauriRuntime()` is true and HTTP loopback otherwise — secrets never traverse the loopback HTTP boundary on the desktop app. **SHIPPED** PR #732 (2026-05-17). | PR 3c-i | v1.0 wave 6 |
 | Phase-3-docs | MCP-first reframe of marketing surfaces per ADR-038: README audience-tier restructure (Just want to use it / Power-user setup / Connecting other MCP clients); `docs/positioning.md` policy quote + distribution-risk resolution; `docs/architecture.md` Integration Compatibility section + four-term glossary + "Claude-default" prefixes on channel-specific sections; framing sentences on `docs/mcp-tools.md` / `docs/user-guide.md` / `docs/workflows.md`; scope note on `docs/lessons-learned.md` and `skills/tandem/SKILL.md`. Pure docs sweep — no code risk. **Post-merge manual task:** update the GitHub repo description and "About" sidebar (set via `gh repo edit` outside the source tree) to match the new framing — neither is in the source tree so this PR cannot do it automatically. **SHIPPED** PR #734 (2026-05-17). | PR 3c-i | v0.13.0 |
-| 4 | Auto-launch + supervisor — spawn Claude Code CLI with correct flags, hook point after `Promise.all([startMcpServerHttp, startHocuspocus])`. **PR-4 quartet (#642–#645) hardens:** atomic `O_EXCL` temp+rename, mandatory `.claude.json` backup, schema validation, "backup-or-prompt" UX. **Claude-specific by design** per ADR-038 §2 — other providers in the registry are user-driven startup for v1.0; per-provider auto-launchers are future work. | PR 1 + #642–#645 quartet + ≥2-week feature-flag soak | v0.13.0 (hidden) → v1.0 (exposed) |
+| 4 | Auto-launch + supervisor — spawn Claude Code CLI with correct flags, hook point after `Promise.all([startMcpServerHttp, startHocuspocus])`. **PR-4 quartet (#642–#645) hardens:** atomic `O_EXCL` temp+rename, mandatory `.claude.json` backup, schema validation, "backup-or-prompt" UX. **Claude-specific by design** per ADR-038 §2 — other providers in the registry are user-driven startup for v1.0; per-provider auto-launchers are future work. | PR 1 + #642–#645 quartet | v0.13.0 (shipped; default-on, opt-out via `TANDEM_DISABLE_LAUNCHER=1`) |
 | 5 | Multi-provider model registry (D4) — Anthropic + local LLM (#477) + OpenAI / Gemini / others; CRUD with per-model config; new Settings → Models page beyond the wizard. Non-MCP providers (OpenAI, Gemini) integrate via Tandem's Agent SDK adapter per ADR-038 §3, not as direct MCP clients — adapter design owned by a future ADR (likely ADR-039); whether the adapter ships in v1.0 wave 6 or slips to v1.1 is open. | PR 4 | v1.0 wave 6 |
 
 ### Key Decisions (locked)
@@ -502,7 +502,7 @@ Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave pl
 Full per-row table is in `docs/v10-triage.md`. Highlights:
 
 **Strategic (all Core; were TBD in original plan):**
-- **#477 Local LLM** — PR-2 + all three Phase 0 spikes (A/B/C) merged; PRs 1/3/4/5 in wave 6. PR-4 needs ≥2-week feature-flag soak (v0.13.0 hidden → v1.0 exposed). Spike B's NO-GO means PR 4 retains `--dangerously-load-development-channels server:tandem-channel`.
+- **#477 Local LLM** — PR-2 + all three Phase 0 spikes (A/B/C) merged; PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b shipped **default-on in v0.13.0** (no feature-flag soak). PR 3c-ii-c (auto-config removal) lands v0.14.0; the non-MCP-provider adapter (PR 5) targets v1.0. Spike B's NO-GO means PR 4 retains `--dangerously-load-development-channels server:tandem-channel`.
 - **#576 .docx write-back (body export only)** — comment round-trip stays v1.1. HIGH risk; kill date 2026-05-28; LibreOffice fallback ready.
 - **#316 Cowork macOS/Linux auto-setup** — Core (was Defer). Couples to #428 cert work.
 
@@ -531,17 +531,16 @@ Historical compressed (full detail in CHANGELOG + git log):
 | v0.11.2   | Hotfix: Svelte effect_update_depth_exceeded on Tauri launch        | Released 2026-05-13 |
 | v0.12.0   | 8-unit prep batch (#634–#641): #477 PR-2 browser deprecation, #477 Phase 0 sidecar spike, #576 spikes A+B, AR4, anchor-drift test, release scaffolding | Shipped 2026-05-14 |
 
-v1.0 series (concrete waves; see "Active — Toward v1.0" for the wave map):
+v1.0 series (concrete waves; see "Active — Toward v1.0" for the wave-structure table):
 
-| Release    | Concern                                                                                | Targets waves |
-| ---------- | -------------------------------------------------------------------------------------- | ------------- |
-| v0.13.0    | Stability bug-bash + redesign chrome (sibling-component pattern)                       | Waves 1, 2    |
-| v0.14.0    | Redesign editor surfaces + Settings (Network + Models registry)                        | Waves 3, 4    |
-| v0.15.0    | Annotation migration (#313 + AR5 + AR6) + #477 PRs 1/3/4/5 hidden behind feature flag | Wave 5, wave 6 (hidden) |
-| v0.16.0    | #477 feature flag exposed + #576 docx body export + #316 Cowork macOS/Linux + #428 cert | Wave 6 (exposed), wave 7 |
-| v1.0.0     | Final verification, observer soak, accessibility gate, version bump                    | Wave 8        |
+| Release    | Concern                                                                                          | Status              |
+| ---------- | ------------------------------------------------------------------------------------------------ | ------------------- |
+| v0.13.0    | Stability bug-bash + redesign chrome + editor surfaces + Settings (Network + Models registry)    | Released 2026-05-25 |
+| v0.14.0    | Annotation migration (#313 + AR5 + AR6) + #477 PR 3c-ii-c (auto-config removal) + #576 docx body export | Planned       |
+| v0.15.0    | Cross-platform install matrix + #316 Cowork macOS/Linux + #428 macOS cert/notarization           | Planned             |
+| v1.0.0     | Final verification, observer soak, accessibility gate, version bump                              | Planned             |
 
-Wave-to-version mapping is approximate; waves can split/recombine across versions based on review bandwidth and merge cadence. Source of truth for wave membership is the wave plan in `~/.claude/plans/it-occurs-to-rustling-newt.md` (Bryan-local; not in repo).
+The wave-structure table (top of "Active — Toward v1.0") owns wave numbering and membership; this cadence table maps versions to concerns. Waves recombine across versions based on review bandwidth and merge cadence — v0.14.0 bundles Waves 3–4, v0.15.0 is Wave 5, v1.0.0 is Wave 6. The soft v1.0 target is ~2026-06-10. Source of truth for wave membership remains the wave plan in `~/.claude/plans/it-occurs-to-rustling-newt.md` (Bryan-local; not in repo).
 
 ### v1.0.0 Exit Criteria
 
@@ -623,7 +622,7 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 | Annotation thread emoji reactions | D5 — explicit cut, not just defer. |
 | Diff/Apply-edit hunk staging surface | D3 option B locked for v1.1 revisit; surface defers from v1.0. |
 | #316/#317 firewall scoping (#317 only) | #316 is now Core; #317 paired-defer. |
-| #394 Monetization potential | Strategic; tracked outside engineering roadmap. |
+| #394 Monetization | **Decided — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license).** Free beta → one-time paid license at v1.0; offline signed-license activation; beta users grandfathered. In-app license verification + server-side trial gate + license-checked updater are v1.0 features, planned in their own PR. The *strategic* decision is settled; the *engineering* work lands as scheduled v1.0 tasks. |
 | Desktop UI Tier 3 remainder (§3.2 tray, §3.3 context menus) | Polish. |
 | Desktop UI deferred (frameless window, vibrancy, multi-window, file explorer sidebar) | Out of scope per HANDOFF. |
 | Smaller follow-ups (#283, #284, #287, #292, #300) | Rolling maintenance; not blocking v1.0 quality. |

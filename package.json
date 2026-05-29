@@ -1,6 +1,6 @@
 {
   "name": "tandem-editor",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Edit and iterate on documents with any MCP-capable AI (Claude by default). Real-time push via plugin monitor or channel shim.",
   "repository": {
     "type": "git",
@@ -113,6 +113,8 @@
     "htmlparser2": "^12.0.0",
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
+    "markdown-it": "^14.1.1",
+    "prosemirror-markdown": "^1.13.4",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-stringify": "^11.0.0",
@@ -130,6 +132,7 @@
     "@playwright/test": "^1.58.2",
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@testing-library/svelte": "^5.0.0",
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^25.5.0",
     "@types/update-notifier": "^6.0.8",
     "cross-env": "^10.1.0",

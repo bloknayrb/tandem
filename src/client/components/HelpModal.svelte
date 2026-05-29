@@ -1,17 +1,33 @@
 <script lang="ts">
 import { untrack } from "svelte";
+import { REGISTRY_TO_SHORTCUT_ID, type RemappableShortcutId } from "../actions/keybindings.js";
 import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
 
-// Registry-derived sections — same source as Settings → Shortcuts tab
+interface Props {
+  open: boolean;
+  onClose: () => void;
+  /** Effective (override ?? default) formatted labels per remappable id.
+   * Rows whose registry id maps through `REGISTRY_TO_SHORTCUT_ID` display the
+   * effective combo so the catalog reflects user remaps. */
+  effectiveShortcutLabels?: Map<RemappableShortcutId, string>;
+}
+
+let { open, onClose, effectiveShortcutLabels }: Props = $props();
+
+// Registry-derived sections — same source as Settings → Shortcuts tab. Rows
+// for remappable actions reflect the user's effective binding.
 const registryShortcutSections = $derived.by(() => {
   const actionsMap = getActionsMap();
+  const labels = effectiveShortcutLabels;
   const byGroup = new Map<string, Array<{ keys: string; description: string }>>();
   for (const action of actionsMap.values()) {
     if (!action.shortcut) continue;
+    const remappableId = REGISTRY_TO_SHORTCUT_ID[action.id];
+    const keys = (remappableId && labels?.get(remappableId)) || action.shortcut;
     const rows = byGroup.get(action.group) ?? [];
-    rows.push({ keys: action.shortcut, description: action.label });
+    rows.push({ keys, description: action.label });
     byGroup.set(action.group, rows);
   }
   return ACTION_GROUPS.map((g) => ({
@@ -19,13 +35,6 @@ const registryShortcutSections = $derived.by(() => {
     rows: byGroup.get(g) ?? [],
   })).filter((s) => s.rows.length > 0);
 });
-
-interface Props {
-  open: boolean;
-  onClose: () => void;
-}
-
-let { open, onClose }: Props = $props();
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
 

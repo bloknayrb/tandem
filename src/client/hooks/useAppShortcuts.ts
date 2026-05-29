@@ -28,6 +28,13 @@
  * Ctrl+Alt+M) live in the dispatch table, not in the matcher.
  */
 
+import {
+  chordMatches,
+  REMAPPABLE_SHORTCUT_IDS,
+  type RemappableShortcutId,
+  type ShortcutChord,
+} from "../actions/keybindings.js";
+
 export type ShortcutId =
   // bare "?" or Ctrl+/ — show keyboard shortcuts modal
   | "toggle-help"
@@ -101,9 +108,39 @@ export type KeyboardEventLike = Pick<
  * shortcut. Centralizing the suppression here would over-suppress
  * shortcuts that intentionally fire in form fields (Ctrl+S, Ctrl+F, etc.).
  */
-export function matchShortcut(e: KeyboardEventLike): ShortcutMatch | null {
+/**
+ * Typed guard for the in-place fall-through guards below. Using this (rather
+ * than a bare `overrides?.has(...)`) keeps each guard's id literal checked
+ * against `RemappableShortcutId` — a typo is a compile error, not a silent
+ * no-op that would leave a remapped default still firing.
+ */
+function isOverridden(
+  id: RemappableShortcutId,
+  overrides: ReadonlyMap<RemappableShortcutId, ShortcutChord> | undefined,
+): boolean {
+  return overrides ? overrides.has(id) : false;
+}
+
+export function matchShortcut(
+  e: KeyboardEventLike,
+  overrides?: ReadonlyMap<RemappableShortcutId, ShortcutChord>,
+): ShortcutMatch | null {
   // IME composition: never dispatch a shortcut mid-composition.
   if (e.isComposing) return null;
+
+  // Override layer wins first. The persisted override map is deduped by chord
+  // at load (`parseCustomShortcuts` keeps the entry earliest in
+  // `REMAPPABLE_SHORTCUT_IDS` order), so no two ids can share a chord — which
+  // is the real hazard, not "two distinct chords matching one event". With
+  // duplicates impossible, this loop's order is deterministic and fires the
+  // same id that the load-time dedupe kept. A remapped combo short-circuits the
+  // entire legacy chain below.
+  if (overrides && overrides.size > 0) {
+    for (const id of REMAPPABLE_SHORTCUT_IDS) {
+      const chord = overrides.get(id);
+      if (chord && chordMatches(chord, e)) return { id };
+    }
+  }
 
   const mod = e.ctrlKey || e.metaKey;
 
@@ -128,11 +165,11 @@ export function matchShortcut(e: KeyboardEventLike): ShortcutMatch | null {
     // to the popover predicate can't accidentally claim the shifted form.
     // Legacy `isSettingsModalShortcut`: `code === "Comma" && shiftKey`.
     if (e.shiftKey && e.code === "Comma") {
-      return { id: "settings-modal" };
+      if (!isOverridden("settings-modal", overrides)) return { id: "settings-modal" };
     }
     // Ctrl+, → settings popover. Legacy `isSettingsShortcut`: rejects shift.
     if (!e.shiftKey && e.code === "Comma") {
-      return { id: "settings" };
+      if (!isOverridden("settings", overrides)) return { id: "settings" };
     }
 
     // Ctrl+/ → toggle help. (Layout-stable; appears in the legacy chain after
@@ -152,32 +189,32 @@ export function matchShortcut(e: KeyboardEventLike): ShortcutMatch | null {
     // Ctrl+S so the shift-bearing combo wins. `!altKey` so Ctrl+Shift+Alt+S
     // falls through to the ungated save branch (legacy behavior).
     if (e.shiftKey && !e.altKey && e.code === "KeyS") {
-      return { id: "save-as" };
+      if (!isOverridden("save-as", overrides)) return { id: "save-as" };
     }
 
     // Ctrl+S → save. Legacy: no modifier gate.
     if (e.code === "KeyS") {
-      return { id: "save" };
+      if (!isOverridden("save", overrides)) return { id: "save" };
     }
 
     // Ctrl+Shift+P → toggle palette. Legacy: `shiftKey && KeyP`, no alt gate.
     if (e.shiftKey && e.code === "KeyP") {
-      return { id: "toggle-palette" };
+      if (!isOverridden("toggle-palette", overrides)) return { id: "toggle-palette" };
     }
 
     // Ctrl+N → new scratchpad. Legacy: no modifier gate.
     if (e.code === "KeyN") {
-      return { id: "new-scratchpad" };
+      if (!isOverridden("new-scratchpad", overrides)) return { id: "new-scratchpad" };
     }
 
     // Ctrl+W → close active tab. Legacy: no modifier gate.
     if (e.code === "KeyW") {
-      return { id: "close-tab" };
+      if (!isOverridden("close-tab", overrides)) return { id: "close-tab" };
     }
 
     // Ctrl+O → open file dialog. Legacy: no modifier gate.
     if (e.code === "KeyO") {
-      return { id: "open-file" };
+      if (!isOverridden("open-file", overrides)) return { id: "open-file" };
     }
 
     // Ctrl+Digit[1-9] → pick tab. Legacy: no modifier gate.
@@ -190,12 +227,12 @@ export function matchShortcut(e: KeyboardEventLike): ShortcutMatch | null {
 
     // Ctrl+Shift+M (no Alt) → toggle Solo / Tandem. Explicit shift+!alt gate.
     if (e.shiftKey && !e.altKey && e.code === "KeyM") {
-      return { id: "toggle-mode" };
+      if (!isOverridden("toggle-mode", overrides)) return { id: "toggle-mode" };
     }
 
     // Ctrl+Alt+T → reopen closed tab. Legacy: `altKey && KeyT`, no shift gate.
     if (e.altKey && e.code === "KeyT") {
-      return { id: "reopen-closed-tab" };
+      if (!isOverridden("reopen-closed-tab", overrides)) return { id: "reopen-closed-tab" };
     }
 
     // Ctrl+F / Ctrl+Shift+F → find. Legacy outer if: no alt gate.
@@ -220,14 +257,14 @@ export function matchShortcut(e: KeyboardEventLike): ShortcutMatch | null {
     // Ctrl+Alt+M → comment-on-selection. Legacy outer if: `altKey && KeyM`,
     // no shift gate (so Ctrl+Alt+Shift+M also fires; matches legacy).
     if (e.altKey && e.code === "KeyM") {
-      return { id: "comment-on-selection" };
+      if (!isOverridden("comment-on-selection", overrides)) return { id: "comment-on-selection" };
     }
 
     // Ctrl+Alt+A → toggle-authorship. Legacy: `altKey && KeyA`, no shift gate.
     // Comes AFTER select-all (which requires !alt), so Ctrl+Alt+A correctly
     // routes here rather than to select-all.
     if (e.altKey && e.code === "KeyA") {
-      return { id: "toggle-authorship" };
+      if (!isOverridden("toggle-authorship", overrides)) return { id: "toggle-authorship" };
     }
   }
 
@@ -236,18 +273,23 @@ export function matchShortcut(e: KeyboardEventLike): ShortcutMatch | null {
     // Alt+Shift+ArrowLeft / Alt+Shift+ArrowRight → toggle left/right panel.
     // Plain Alt+Arrow stays available for browser history navigation.
     if (e.shiftKey) {
-      if (e.code === "ArrowLeft") return { id: "toggle-left-panel" };
-      if (e.code === "ArrowRight") return { id: "toggle-right-panel" };
+      if (e.code === "ArrowLeft" && !isOverridden("toggle-left-panel", overrides))
+        return { id: "toggle-left-panel" };
+      if (e.code === "ArrowRight" && !isOverridden("toggle-right-panel", overrides))
+        return { id: "toggle-right-panel" };
     }
 
     // Alt+] / Alt+[ → next / previous annotation. No Shift.
     if (!e.shiftKey) {
-      if (e.code === "BracketRight") return { id: "annotation-next" };
-      if (e.code === "BracketLeft") return { id: "annotation-prev" };
+      if (e.code === "BracketRight" && !isOverridden("annotation-next", overrides))
+        return { id: "annotation-next" };
+      if (e.code === "BracketLeft" && !isOverridden("annotation-prev", overrides))
+        return { id: "annotation-prev" };
     }
 
     // Alt+L → select containing block.
-    if (!e.shiftKey && e.code === "KeyL") return { id: "select-block" };
+    if (!e.shiftKey && e.code === "KeyL" && !isOverridden("select-block", overrides))
+      return { id: "select-block" };
   }
 
   return null;

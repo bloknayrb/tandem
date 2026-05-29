@@ -5,7 +5,6 @@ import {
   TANDEM_ISSUES_NEW_URL,
   USER_NAME_MAX_LEN,
 } from "../../shared/constants";
-import { ACTION_GROUPS, getActionsMap } from "../actions/registry.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
@@ -15,6 +14,7 @@ import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
 import NetworkSettings from "./NetworkSettings.svelte";
+import ShortcutEditorList from "./ShortcutEditorList.svelte";
 
 const HEADING_ID = "tandem-settings-heading";
 const FOCUSABLE_SELECTOR =
@@ -71,35 +71,6 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; icon: string }> = [
     icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4v6m0 4h.01",
   },
 ];
-
-// Static shortcuts not yet in the action registry (nav, help, modifier keys)
-const STATIC_SHORTCUT_ROWS = [
-  { keys: "Ctrl+B", description: "Bold" },
-  { keys: "Ctrl+I", description: "Italic" },
-  { keys: "Ctrl+Z", description: "Undo" },
-  { keys: "Ctrl+Y", description: "Redo" },
-  { keys: "Ctrl+F", description: "Find / Replace" },
-  { keys: "?", description: "Show keyboard shortcuts" },
-  { keys: "Ctrl+Tab", description: "Next document tab" },
-  { keys: "Ctrl+Shift+Tab", description: "Previous document tab" },
-];
-
-// Derive sections from registry — groups with shortcut-bearing actions
-const registryShortcutSections = $derived.by(() => {
-  const actionsMap = getActionsMap();
-  const byGroup = new Map<string, Array<{ keys: string; description: string }>>();
-  for (const action of actionsMap.values()) {
-    if (!action.shortcut) continue;
-    const group = action.group;
-    const rows = byGroup.get(group) ?? [];
-    rows.push({ keys: action.shortcut, description: action.label });
-    byGroup.set(group, rows);
-  }
-  return ACTION_GROUPS.map((g) => ({
-    title: g.charAt(0).toUpperCase() + g.slice(1),
-    rows: byGroup.get(g) ?? [],
-  })).filter((s) => s.rows.length > 0);
-});
 
 interface Props {
   open: boolean;
@@ -589,6 +560,12 @@ function aboutRows() {
               />
               <span>Margin annotation view (Word-style)</span>
             </label>
+            <div
+              data-testid="margin-view-hint"
+              style="font-size: 10px; color: var(--tandem-fg-subtle);"
+            >
+              Margin columns appear where rails are collapsed — open rails hide that side.
+            </div>
             {#if isTauriRuntime()}
               {#await import("./CoworkSettings.svelte")}
                 <div
@@ -603,35 +580,8 @@ function aboutRows() {
               {/await}
             {/if}
           {:else if activeSection === "shortcuts"}
-            <div
-              data-testid="settings-shortcuts-list"
-              style="display: flex; flex-direction: column; gap: var(--tandem-space-4);"
-            >
-              {#each registryShortcutSections as section (section.title)}
-                <section>
-                  <div style={sectionLabelStyle}>{section.title}</div>
-                  <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
-                    {#each section.rows as row (row.keys + row.description)}
-                      <kbd style="justify-self: start; padding: 1px 6px; font-family: var(--tandem-font-mono); font-size: 11px; color: var(--tandem-fg); background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom-width: 2px; border-radius: var(--tandem-r-2);">
-                        {row.keys}
-                      </kbd>
-                      <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
-                    {/each}
-                  </div>
-                </section>
-              {/each}
-              <!-- Static shortcuts not yet in the action registry -->
-              <section>
-                <div style={sectionLabelStyle}>Other</div>
-                <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
-                  {#each STATIC_SHORTCUT_ROWS as row (row.keys + row.description)}
-                    <kbd style="justify-self: start; padding: 1px 6px; font-family: var(--tandem-font-mono); font-size: 11px; color: var(--tandem-fg); background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom-width: 2px; border-radius: var(--tandem-r-2);">
-                      {row.keys}
-                    </kbd>
-                    <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
-                  {/each}
-                </div>
-              </section>
+            <div data-testid="settings-shortcuts-list">
+              <ShortcutEditorList {settings} {onUpdate} notify={noopNotify} />
             </div>
           {:else}
             <div>
