@@ -494,7 +494,8 @@ pub fn run() {
     let tray_flag_for_setup = tray_available.clone();
     let tray_flag_for_close = tray_available.clone();
 
-    tauri::Builder::default()
+    #[allow(unused_mut)] // `mut` is only exercised when the `devtools` feature is on
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             log::info!("Second instance detected — args: {args:?}, cwd: {cwd}");
             show_main_window(app);
@@ -529,7 +530,19 @@ pub fn run() {
                     );
                 }
             }
-        }))
+        }));
+
+        // CrabNebula DevTools — opt-in `devtools` feature, development only.
+        // Registered immediately after single-instance (which MUST stay the
+        // FIRST plugin) so it still captures the other plugins' events.
+        // Mutually exclusive with tauri-plugin-log (see the setup() gate): both
+        // install a global `tracing` subscriber and panic if both are active.
+        #[cfg(feature = "devtools")]
+        {
+            builder = builder.plugin(tauri_plugin_devtools::init());
+        }
+
+        builder
         // Blocks reload shortcuts (F5, Ctrl+F5, Shift+F5, Ctrl+R, Ctrl+Shift+R) only.
         // DevTools, Find, Print, and right-click are preserved. Fixes #541.
         .plugin(tauri_plugin_prevent_default::Builder::new()
@@ -548,16 +561,38 @@ pub fn run() {
         .manage(SidecarState(Mutex::new(None)))
         .manage(PendingOpens(Mutex::new(Vec::new())))
         .setup(move |app| {
-            let log_level = if cfg!(debug_assertions) {
-                log::LevelFilter::Info
-            } else {
-                log::LevelFilter::Warn
-            };
-            app.handle().plugin(
-                tauri_plugin_log::Builder::default()
-                    .level(log_level)
-                    .build(),
-            )?;
+            // tauri-plugin-log installs a global `tracing` subscriber. The
+            // optional `devtools` feature installs its own, and two global
+            // subscribers in one process panic — so the log plugin is gated off
+            // when `devtools` is enabled (DevTools then owns logging). In every
+            // normal build the log plugin runs with size-capped rotation so a
+            // long-running install can't grow the log file unbounded (#922).
+            #[cfg(not(feature = "devtools"))]
+            {
+                use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+                let log_level = if cfg!(debug_assertions) {
+                    log::LevelFilter::Info
+                } else {
+                    log::LevelFilter::Warn
+                };
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log_level)
+                        // NB: this Stdout target is the Tauri shell's stdout
+                        // (HTTP mode) — NOT the MCP stdio wire, which lives in
+                        // the sidecar. The "stdout is reserved" rule is unaffected.
+                        .targets([
+                            Target::new(TargetKind::Stdout),
+                            Target::new(TargetKind::LogDir {
+                                file_name: Some("tandem".into()),
+                            }),
+                            Target::new(TargetKind::Webview),
+                        ])
+                        .max_file_size(25 * 1024 * 1024) // 25 MB per file
+                        .rotation_strategy(RotationStrategy::KeepOne)
+                        .build(),
+                )?;
+            }
 
             let client = build_http_client(HTTP_CLIENT_TIMEOUT)
                 .expect("Failed to build HTTP client");

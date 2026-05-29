@@ -110,6 +110,7 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - `kill_sidecar()` is called **before** `app.restart()` after update install; Rust then polls the health endpoint (up to 5s) waiting for port release before restarting.
 - **CI:** `tauri-release.yml` validates the signing key before building and has a `release-check` summary job that fails if any matrix build failed.
 - **`create_overlay_titlebar()` must be called post-page-load** — the hit-test JS injected by `tauri-plugin-decorum` is cleared on WebView navigation; expose it as a `#[tauri::command]` and invoke from the component's `onMount` instead of from `setup()`.
+- **Debugging the shell↔sidecar boundary:** run `cargo tauri dev --features devtools` to enable CrabNebula DevTools (IPC/event/log time-travel inspector); open the DevTools desktop app and connect to the running Tandem instance. The `devtools` feature is an opt-in optional dependency (Cargo can't gate deps on `cfg(debug_assertions)`), so it never reaches release builds. It is **mutually exclusive** with `tauri-plugin-log` — both install a global `tracing` subscriber, so the log plugin is `#[cfg(not(feature = "devtools"))]`-gated; DevTools owns logging when the feature is on. Normal builds (no feature) run the log plugin with 25 MB size-capped rotation (`RotationStrategy::KeepOne`) writing `tandem.log` to the OS log dir (`%LOCALAPPDATA%\tandem\logs` / `~/Library/Logs/tandem` / `$XDG_DATA_HOME/.../logs`).
 
 ## Gotchas
 
