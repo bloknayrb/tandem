@@ -75,12 +75,7 @@ import { createUpdaterBanner } from "./hooks/useUpdaterBanner.svelte";
 import { createViewportWidth } from "./hooks/useViewportWidth.svelte";
 import { createWebViewZoom } from "./hooks/useWebViewZoom.svelte";
 import { createYjsSync } from "./hooks/yjsSync.svelte";
-import {
-  createEditorStageModel,
-  MARGIN_VIEW_COLUMN_WIDTH_PX,
-  MARGIN_VIEW_EDGE_INSET_PX,
-  MARGIN_VIEW_GAP_PX,
-} from "./layout/editor-stage.svelte";
+import { createEditorStageModel } from "./layout/editor-stage.svelte";
 import { createLayoutModel } from "./layout/model.svelte";
 import { loadPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "./panel-layout";
 import {
@@ -90,6 +85,7 @@ import {
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
 import MarginColumn from "./panels/MarginColumn.svelte";
+import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
@@ -689,6 +685,16 @@ const editorStage = createEditorStageModel({
   getLeftRailVisible: () => effectiveLeftVisible,
   getRightRailVisible: () => effectiveRightVisible,
   getViewportWidth: () => viewport.width,
+  // Presence-collapse inputs. Read the UNGATED `visibleAnnotations` (declared
+  // above, `= yjsSync.annotations`) through the shared side-split predicates +
+  // `status === "pending"` — the same set the column renders. NOT
+  // `marginNotes`/`marginComments` (declared below, `effectivelyOn`-gated):
+  // those would close a `$derived` cycle through `effectivelyOn`. See stage-c1
+  // [MF-11].
+  getLeftHasPending: () =>
+    visibleAnnotations.some((a) => a.status === "pending" && isLeftMarginAnnotation(a)),
+  getRightHasPending: () =>
+    visibleAnnotations.some((a) => a.status === "pending" && isRightMarginAnnotation(a)),
   leftRailWidthPx: leftPanelWidth,
   rightRailWidthPx: rightPanelWidth,
 });
@@ -1029,13 +1035,15 @@ const review = useAnnotationReview({
 // PR 1 ships minimum viable — bubbles appear at correct Y, naive scroll sync
 // via DOM nesting in the positioning layer. Collision resolution lands in
 // PR 2; rail-collapse and narrow-layout auto-disable in PR 3.
+// Side-split via the shared predicates (panels/marginSides) so these render
+// arrays and the editorStage presence-collapse booleans can never diverge.
+// Still gated on `effectivelyOn` here (the column only mounts when on); the
+// presence booleans deliberately read the ungated source instead (see above).
 const marginNotes = $derived(
-  editorStage.effectivelyOn ? visibleAnnotations.filter((a) => a.type === "note") : [],
+  editorStage.effectivelyOn ? visibleAnnotations.filter(isLeftMarginAnnotation) : [],
 );
 const marginComments = $derived(
-  editorStage.effectivelyOn
-    ? visibleAnnotations.filter((a) => a.author === "import" || a.type === "comment")
-    : [],
+  editorStage.effectivelyOn ? visibleAnnotations.filter(isRightMarginAnnotation) : [],
 );
 const marginPositions = createMarginPositions({
   getEditor: () => editor,
@@ -1526,13 +1534,21 @@ const tutorial = createTutorial(
          handlers are identical, so the distinct annotation wiring lives at the
          call site rather than in two near-identical bodies. -->
     {#snippet marginColumn(side: "left" | "right", annotations: readonly Annotation[])}
+      <!-- Per-side geometry + mode resolved from `side`: the format clamp (docx
+           → full|off) and presence-collapse (empty side → off) both live in the
+           editorStage getters, so each call site gets its side-correct width.
+           A side rendered here is never `off` (the {#if leftVisible/rightVisible}
+           guards gate mounting), so `geom` is always the live widthMode track. -->
+      {@const geom = side === "left" ? editorStage.leftGeometry : editorStage.rightGeometry}
+      {@const mode = side === "left" ? editorStage.leftMode : editorStage.rightMode}
       <MarginColumn
         {side}
         {annotations}
         positions={marginPositions.byId}
-        width={MARGIN_VIEW_COLUMN_WIDTH_PX}
-        edgeInset={MARGIN_VIEW_EDGE_INSET_PX}
-        gap={MARGIN_VIEW_GAP_PX}
+        width={geom.column}
+        edgeInset={geom.inset}
+        gap={geom.gap}
+        {mode}
         {activeAnnotationId}
         repliesById={marginReplies.byId}
         onClick={(ann) => {
