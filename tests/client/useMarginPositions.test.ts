@@ -115,8 +115,10 @@ describe("useMarginPositions / computeNextPositions", () => {
     // The layer rect and each annotation's coordsAtPos read must observe the
     // same layout. We model a layer whose top differs per call (50, 80, 110)
     // against a constant coords.top of 150. Per-iteration reading yields
-    // 150-50, 150-80, 150-110 → 100/70/40. A read-once impl would capture 50
-    // for all three and return 100/100/100, so this fails if the fix regresses.
+    // 150-50, 150-80, 150-110 → 100/70/40. The regression this guards is a
+    // refactor that hoists getLayerTop() above the loop: it would increment
+    // `call` once (capturing 50) and return 100/100/100, failing b and c.
+    // (All inputs succeed here, so getLayerTop is called once per annotation.)
     let call = 0;
     const layerTops = [50, 80, 110];
     const r = computeNextPositions(
@@ -130,6 +132,34 @@ describe("useMarginPositions / computeNextPositions", () => {
     expect(r.positions.get("c")).toBe(40);
     expect(r.attempted).toBe(3);
     expect(r.thrown).toBe(0);
+    expect(call).toBe(3); // one read per placed annotation, in order
+  });
+
+  it("calls getLayerTop once per placed annotation, skipping throws (per-iteration × throw)", () => {
+    // getLayerTop() sits on the success path (RHS of positions.set), so a
+    // thrown coordsAtPos must NOT consume a layerTops entry. Here `b` throws:
+    // `a` pairs with layerTops[0]=50 → 100, and `c` pairs with the NEXT entry
+    // layerTops[1]=80 → 70 (not [2]). If a refactor read layer tops eagerly or
+    // off a shared counter that advanced on the throw, `c` would mispair.
+    let layerCall = 0;
+    const layerTops = [50, 80];
+    let coordsCall = 0;
+    const r = computeNextPositions(
+      [ann("a"), ann("b"), ann("c")],
+      () => ({ from: 0, to: 0 }),
+      () => {
+        coordsCall++;
+        if (coordsCall === 2) throw new Error("stale position");
+        return { top: 150 };
+      },
+      () => layerTops[layerCall++],
+    );
+    expect(r.positions.get("a")).toBe(100); // 150 - 50
+    expect(r.positions.has("b")).toBe(false); // threw
+    expect(r.positions.get("c")).toBe(70); // 150 - 80, the second (not third) read
+    expect(r.attempted).toBe(3);
+    expect(r.thrown).toBe(1);
+    expect(layerCall).toBe(2); // only the two placed annotations consumed a read
   });
 
   it("skips annotations where coords.top is NaN (would defeat mapsEqual tolerance)", () => {

@@ -43,10 +43,12 @@ export interface ComputeResult {
  * `getLayerTop` is read per iteration (not once before the loop) so the layer
  * rect and each annotation's `coordsAtPos` read always observe the same layout.
  * Today this is defensive, not load-bearing: the loop is synchronous (JS
- * run-to-completion) and `coordsAtPos` is a pure read, so nothing invalidates
- * layout mid-loop and a read-once `layerTop` would be identical. The per-call
- * read future-proofs the invariant against a DOM write ever being introduced
- * into the loop body, and makes the read-consistency contract explicit.
+ * run-to-completion) and `coordsAtPos` is a read-only call (it may force a
+ * layout reflow, but writes nothing), so nothing invalidates layout mid-loop
+ * and a read-once `layerTop` would be identical. The per-call read future-proofs
+ * the invariant against a DOM write ever being introduced *between* iterations
+ * (it does not guard a write placed before `coordsAtPos` within one iteration),
+ * and makes the read-consistency contract explicit.
  */
 export function _computeNextPositionsForTesting(
   annotations: readonly Annotation[],
