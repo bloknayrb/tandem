@@ -154,6 +154,10 @@ $effect(() => {
   if (!open) return;
   const handler = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      // Capture phase + stopPropagation so the App-level Escape-to-deselect
+      // (a window bubble-phase listener that registers first) never also fires.
+      e.preventDefault();
+      e.stopPropagation();
       onClose();
       return;
     }
@@ -180,8 +184,8 @@ $effect(() => {
       first.focus();
     }
   };
-  window.addEventListener("keydown", handler);
-  return () => window.removeEventListener("keydown", handler);
+  window.addEventListener("keydown", handler, { capture: true });
+  return () => window.removeEventListener("keydown", handler, { capture: true });
 });
 
 async function openReadOnlyFile(

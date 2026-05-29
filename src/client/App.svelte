@@ -463,11 +463,11 @@ wireActionDeps({
     }
   },
   annotationAccept: () => {
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleAccept(cur.id);
   },
   annotationDismiss: () => {
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") review.handleDismiss(cur.id);
   },
   selectBlock: () => editor?.chain().focus().selectParentNode().run(),
@@ -869,7 +869,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   "annotation-accept-or-dismiss": (e, ctx) => {
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    const cur = visibleAnnotations.find((a) => a.id === activeAnnotationId);
+    const cur = activeOrFirstPending();
     if (cur && cur.author !== "user") {
       if (ctx?.shift) review.handleDismiss(cur.id);
       else review.handleAccept(cur.id);
@@ -980,6 +980,47 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
+// Escape deselects the active annotation — empty selection is a valid resting
+// state. The deselect is SCOPED TO THE EDITING SURFACE: it fires when focus is in
+// the editor or the annotation rail, OR when nothing in particular is focused
+// (document.body / null). The body case matters because a selection can outlive
+// its focus: e.g. select an editor highlight (which focuses the editor), then
+// click a neutral, non-focusable chrome area that blurs focus back to body — the
+// annotation stays active but focus is no longer in the editor. A focus-trapping
+// overlay instead holds focus INSIDE itself, so any *specific* non-editing
+// element owning focus means an overlay is up and keeps its own Escape-to-close —
+// the deselect doesn't piggyback, no per-overlay protocol needed.
+// Belt-and-suspenders for overlays that DO leave focus in the editing surface,
+// via two distinct mechanisms: (1) overlays with a capture-phase window listener
+// + stopPropagation (selection toolbar, settings popover, Help) halt Escape
+// before this bubble-phase listener ever runs — `e.defaultPrevented` is moot for
+// them; (2) the slash menu calls preventDefault() in its ProseMirror keydown
+// handler without stopping propagation, so this listener DOES run and the
+// `e.defaultPrevented` guard is what skips it. `findBarOpen` is explicit because
+// the find bar closes on Escape WITHOUT preventDefault, so if focus has returned
+// to the editor (e.g. after jumping to a match) while find is still open, neither
+// guard above would catch the stray deselect. Reads happen at event time, outside
+// any tracking scope, so the effect registers once with current values.
+$effect(() => {
+  function onEscape(e: KeyboardEvent) {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    if (activeAnnotationId === null || findBarOpen) return;
+    const el = document.activeElement as HTMLElement | null;
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+    const inEditingSurface =
+      !el ||
+      el === document.body ||
+      !!el.closest(
+        '.ProseMirror, [data-testid="editor-root"], [data-testid="annotation-list-scroll-container"]',
+      );
+    if (!inEditingSurface) return;
+    e.preventDefault();
+    activeAnnotationId = null;
+  }
+  window.addEventListener("keydown", onEscape);
+  return () => window.removeEventListener("keydown", onEscape);
+});
+
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
@@ -1030,6 +1071,22 @@ const review = useAnnotationReview({
   // (e.g., from Alt+]/Alt+[ keyboard navigation).
   getActiveAnnotationId: () => activeAnnotationId,
 });
+
+// Resolve target for accept/dismiss: the explicitly-selected annotation, or —
+// when nothing is selected (the empty resting state) — the first pending review
+// target. Shared by the Ctrl+Enter shortcut and the command-palette
+// accept/dismiss commands so the two surfaces can never diverge (review finding).
+// The two branches differ in what they can return: the fallback
+// (getReviewTargets()[0]) is always a Claude target because getReviewTargets()
+// excludes user notes/highlights, but the active branch returns WHATEVER is
+// selected — which can be a user highlight overlapping a Claude comment (#768).
+// So the `author !== "user"` guard at call sites is load-bearing for the active
+// branch, not just defense-in-depth.
+function activeOrFirstPending(): Annotation | undefined {
+  return activeAnnotationId
+    ? visibleAnnotations.find((a) => a.id === activeAnnotationId)
+    : review.getReviewTargets()[0];
+}
 
 // #649: Word-style margin annotation view.
 // PR 1 ships minimum viable — bubbles appear at correct Y, naive scroll sync
@@ -1524,7 +1581,10 @@ const tutorial = createTutorial(
         onEditorReady={(ed) => (editor = ed)}
         onAnnotationClick={(id) => {
           activeRailTab = "annotations";
-                    activeAnnotationId = id;
+          activeAnnotationId = id;
+        }}
+        onClearAnnotation={() => {
+          activeAnnotationId = null;
         }}
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
       />

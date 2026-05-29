@@ -58,11 +58,18 @@ $effect(() => {
 
 $effect(() => {
   if (!open) return;
+  // Capture phase + stopPropagation so closing the modal with Escape doesn't also
+  // trip the global Escape-to-deselect handler (App.svelte), which is a
+  // bubble-phase window listener — capture runs first regardless of registration
+  // order, so stopPropagation here keeps Escape from ever reaching it.
   const handler = (e: KeyboardEvent) => {
-    if (e.key === "Escape") onClose();
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    onClose();
   };
-  window.addEventListener("keydown", handler);
-  return () => window.removeEventListener("keydown", handler);
+  window.addEventListener("keydown", handler, { capture: true });
+  return () => window.removeEventListener("keydown", handler, { capture: true });
 });
 </script>
 

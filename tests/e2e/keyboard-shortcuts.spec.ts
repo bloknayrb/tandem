@@ -357,9 +357,11 @@ test("Alt+] does not crash with no annotations and no console errors", async ({ 
 });
 
 test("Ctrl+Enter accepts the first pending annotation", async ({ page }) => {
-  // The lifted useAnnotationReview auto-sets activeAnnotationId to the first
-  // pending annotation on initial mount, so Ctrl+Enter immediately operates on
-  // that target without needing Alt+] to establish a cursor first.
+  // Nothing is auto-selected on mount — empty selection is a valid resting state
+  // (the old bulk-review model that parked a cursor on the first pending
+  // annotation is gone). Ctrl+Enter still works from the empty state because
+  // App's activeOrFirstPending() falls back to the first pending review target
+  // when no annotation is selected.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_comment", {
     from: 2,
@@ -372,6 +374,11 @@ test("Ctrl+Enter accepts the first pending annotation", async ({ page }) => {
 
   const card = page.locator("[data-testid^='annotation-card-']").first();
   await expect(card).toBeVisible({ timeout: 10_000 });
+
+  // Empty resting state: no card is selected until the user picks one.
+  await expect(page.locator("[data-testid^='annotation-card-'][aria-current='true']")).toHaveCount(
+    0,
+  );
 
   await page.keyboard.press("Control+Enter");
 
@@ -400,6 +407,40 @@ test("Ctrl+Shift+Enter dismisses the first pending annotation", async ({ page })
   await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({
     timeout: 5_000,
   });
+});
+
+test("Escape deselects an active annotation even when focus has left the editor", async ({
+  page,
+}) => {
+  // A selection can outlive its focus: select an annotation (which focuses the
+  // editor), then blur focus back to document.body. App's Escape-to-deselect
+  // handler must treat a body/unfocused active element as "in the editing
+  // surface" — otherwise Escape would silently no-op in that state.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "Select then deselect",
+    textSnapshot: "Test Document",
+  });
+  await page.goto("http://127.0.0.1:5173");
+  await switchToAnnotationsTab(page);
+
+  const card = page.locator("[data-testid^='annotation-card-']").first();
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  // Select by clicking the editor highlight — the path that sets activeAnnotationId.
+  await page.locator(".tandem-editor [data-annotation-id]").first().click();
+  await expect(card).toHaveAttribute("aria-current", "true");
+
+  // Blur focus to body: the selection persists, but focus is no longer in the editor.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+  // Escape clears the selection back to the empty resting state.
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-testid^='annotation-card-'][aria-current='true']")).toHaveCount(
+    0,
+  );
 });
 
 test("Ctrl+Alt+M opens the comment popup focused on its textarea", async ({ page }) => {
@@ -478,6 +519,38 @@ test("Escape closes the command palette even when focus is outside it", async ({
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press("Escape");
   await expect(palette).toHaveCount(0);
+});
+
+test("command palette Accept action resolves the first pending annotation from empty selection", async ({
+  page,
+}) => {
+  // The palette's "Accept focused annotation" action runs the same
+  // activeOrFirstPending() fallback as Ctrl+Enter: with nothing selected it
+  // resolves the first pending review target. Opening the palette moves focus to
+  // the palette input, so this also proves the fallback is focus-independent.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await mcp.callTool("tandem_comment", {
+    from: 2,
+    to: 15,
+    text: "Accept me from the palette",
+    textSnapshot: "Test Document",
+  });
+  await page.goto("http://127.0.0.1:5173");
+  await switchToAnnotationsTab(page);
+
+  const card = page.locator("[data-testid^='annotation-card-']").first();
+  await expect(card).toBeVisible({ timeout: 10_000 });
+  // Empty resting state — nothing selected, so the action must use the fallback.
+  await expect(page.locator("[data-testid^='annotation-card-'][aria-current='true']")).toHaveCount(
+    0,
+  );
+
+  await page.keyboard.press("Control+Shift+P");
+  await expect(page.locator("[data-testid='command-palette']")).toBeVisible({ timeout: 3_000 });
+  await page.type("[data-testid='palette-input']", "Accept focused");
+  await page.locator("[data-testid='palette-item-annotation-accept']").click();
+
+  await expect(page.locator("summary", { hasText: "1 resolved" })).toBeVisible({ timeout: 5_000 });
 });
 
 test("command palette overlay covers the title bar +new-tab button", async ({ page }) => {
