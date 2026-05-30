@@ -59,8 +59,9 @@ export function isRemappableShortcutId(id: string): id is RemappableShortcutId {
 }
 
 /** Human label per remappable id. Used by the editor list and conflict
- * messages. Kept local (not sourced from the registry) because two remappable
- * ids — `toggle-palette` and `comment-on-selection` — have no registry row. */
+ * messages. Kept local (not sourced from the registry) because three remappable
+ * ids — `toggle-palette`, `comment-on-selection`, and `new-tab-menu` — have no
+ * registry row. */
 export const REMAPPABLE_LABELS: Record<RemappableShortcutId, string> = {
   save: "Save document",
   "save-as": "Save As…",
@@ -169,7 +170,7 @@ export const RESERVED_CHORDS: ReadonlyArray<{ chord: ShortcutChord; label: strin
 /** Crosswalk from registry action id → RemappableShortcutId for Help / catalog
  * reflection. Registry ids differ from matcher ids; the one spelling mismatch
  * is `annotation-previous` (registry) → `annotation-prev` (matcher).
- * `toggle-palette` and `comment-on-selection` have no registry row. */
+ * `toggle-palette`, `comment-on-selection`, and `new-tab-menu` have no registry row. */
 export const REGISTRY_TO_SHORTCUT_ID: Record<string, RemappableShortcutId> = {
   save: "save",
   "save-as": "save-as",
