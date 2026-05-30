@@ -45,6 +45,20 @@ describe("slash command filtering", () => {
   });
 });
 
+describe("slash command display metadata", () => {
+  // Guards against a future command shipping without the icon/hint the B3
+  // re-skin renders. Display-only fields, so this lives outside the filter
+  // contract above.
+  it.each(SLASH_COMMANDS)("$id has a non-empty hint and a well-formed icon", (command) => {
+    expect(command.hint).not.toBe("");
+    if (command.icon.kind === "glyph") {
+      expect(command.icon.glyph).not.toBe("");
+    } else {
+      expect(command.icon.els.length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe("slash command plugin state", () => {
   let editor: Editor;
   let container: HTMLDivElement;

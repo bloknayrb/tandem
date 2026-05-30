@@ -51,7 +51,7 @@ $effect(() => {
   <div
     role="radiogroup"
     aria-labelledby="settings-modal-default-mode-label"
-    style="display: flex; gap: var(--tandem-space-2);"
+    class="settings-mode-btns"
   >
     <button
       type="button"
@@ -59,7 +59,7 @@ $effect(() => {
       role="radio"
       aria-checked={ctx.settings.defaultMode === "tandem"}
       onclick={() => ctx.onUpdate({ defaultMode: "tandem" })}
-      style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {ctx.settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {ctx.settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {ctx.settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {ctx.settings.defaultMode === 'tandem' ? 600 : 400}; cursor: pointer;"
+      class="settings-mode-btn"
     >
       Tandem
     </button>
@@ -69,12 +69,12 @@ $effect(() => {
       role="radio"
       aria-checked={ctx.settings.defaultMode === "solo"}
       onclick={() => ctx.onUpdate({ defaultMode: "solo" })}
-      style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {ctx.settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {ctx.settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {ctx.settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {ctx.settings.defaultMode === 'solo' ? 600 : 400}; cursor: pointer;"
+      class="settings-mode-btn"
     >
       Solo
     </button>
   </div>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+  <div class="settings-hint" style="margin-top: var(--tandem-space-1);">
     Sets the preferred starting mode for new sessions.
   </div>
 </div>
@@ -91,7 +91,7 @@ $effect(() => {
   />
   <span>Hide side panel in Solo mode</span>
 </label>
-<div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+<div class="settings-hint" style="margin-top: var(--tandem-space-1);">
   When enabled, the annotation panel hides automatically when you enter Solo mode and
   restores when you return to Tandem.
 </div>

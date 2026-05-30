@@ -30,17 +30,20 @@
   background-color: transparent;
 }
 .tandem-editor h1 {
-  font-family: var(--tandem-editor-font-family);
-  font-size: 2em;
-  font-weight: 600;
+  font-family: var(--tandem-h1-font);
+  font-size: var(--tandem-h1-size);
+  font-weight: var(--tandem-h1-weight);
+  letter-spacing: var(--tandem-h1-tracking);
   margin: 0 0 0.5em;
-  line-height: 1.15;
+  line-height: var(--tandem-h1-leading);
 }
 .tandem-editor h2 {
-  font-size: 1.4em;
-  font-weight: 600;
-  margin: 1.6em 0 0.4em;
-  line-height: 1.2;
+  font-family: var(--tandem-h2-font);
+  font-size: var(--tandem-h2-size);
+  font-weight: var(--tandem-h2-weight);
+  letter-spacing: var(--tandem-h2-tracking);
+  margin: 1.8em 0 0.5em;
+  line-height: var(--tandem-h2-leading);
 }
 .tandem-editor h3 {
   font-size: 1.17em;
@@ -243,6 +246,30 @@
   50% {
     opacity: 0;
   }
+}
+
+/* Reduced-motion: neutralize the Claude-presence animations (A5 gutter pulse +
+   character-cursor blink) and the authorship-attr crossfade. Both indicators
+   stay fully visible (animation:none freezes them at the opaque keyframe) — only
+   the motion is removed. Mirrors the dual mechanism SidePanel uses: the OS pref
+   AND the in-app `reduceMotion` setting (body.tandem-reduce-motion), since the
+   app exposes a toggle independent of the OS. Motion authoring is #798; this is
+   only the accessibility wrap for animations that already ship. */
+@media (prefers-reduced-motion: reduce) {
+  .tandem-claude-focus::before,
+  .tandem-claude-cursor {
+    animation: none;
+  }
+  .ProseMirror [data-tandem-author] {
+    transition: none;
+  }
+}
+body.tandem-reduce-motion .tandem-claude-focus::before,
+body.tandem-reduce-motion .tandem-claude-cursor {
+  animation: none;
+}
+body.tandem-reduce-motion .ProseMirror [data-tandem-author] {
+  transition: none;
 }
 
 /* -------------------------------------------------------------------------

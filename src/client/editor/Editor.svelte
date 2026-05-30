@@ -88,6 +88,8 @@ interface Props {
   activeAnnotationId?: string | null;
   onEditorReady?: (editor: TiptapEditor | null) => void;
   onAnnotationClick?: (annotationId: string) => void;
+  /** Clicking editor text that is NOT an annotation clears the active selection. */
+  onClearAnnotation?: () => void;
   onSlashCommandMenuChange?: (open: boolean) => void;
 }
 
@@ -100,6 +102,7 @@ const {
   activeAnnotationId,
   onEditorReady,
   onAnnotationClick,
+  onClearAnnotation,
   onSlashCommandMenuChange,
 }: Props = $props();
 
@@ -343,6 +346,13 @@ async function handleEditorClick(e: MouseEvent) {
   }
   if (bestId && onAnnotationClick) {
     onAnnotationClick(bestId);
+  } else if (!bestId) {
+    // Clicked editor text that isn't an annotation → deselect (empty selection
+    // is a valid resting state). Inert for editing: clearing the selection-state
+    // var has no document effect — the active-highlight effect above just strips
+    // the `.tandem-annotation-active` class and skips re-adding it when the id is
+    // null.
+    onClearAnnotation?.();
   }
 }
 </script>

@@ -1,6 +1,6 @@
 import {
-  ANNOTATION_DECORATIONS_TOGGLE_KEY,
   AUTHORSHIP_TOGGLE_KEY,
+  DECORATION_VISIBILITY_KEY,
   TANDEM_SETTINGS_KEY,
 } from "../../shared/constants.js";
 import type { TandemSettings } from "./useTandemSettings.js";
@@ -36,6 +36,29 @@ export interface TandemSettingsState {
 let _instance: TandemSettingsState | null = null;
 
 /**
+ * Mirror the *effective* decoration visibility (master mute folded in) to the
+ * dedicated localStorage keys the ProseMirror plugins read at init, before any
+ * Svelte effect runs. Seeded on initial load AND rewritten on every update so a
+ * user who has decorations muted/off never sees a flash of marks on cold load.
+ */
+function mirrorDecorationKeys(s: TandemSettings): void {
+  const muted = s.decorationsMuted;
+  try {
+    localStorage.setItem(AUTHORSHIP_TOGGLE_KEY, String(!muted && s.showAuthorship));
+    localStorage.setItem(
+      DECORATION_VISIBILITY_KEY,
+      JSON.stringify({
+        comment: !muted && s.showComments,
+        highlight: !muted && s.showHighlights,
+        note: !muted && s.showNotes,
+      }),
+    );
+  } catch {
+    // localStorage unavailable (incognito/storage-disabled)
+  }
+}
+
+/**
  * Svelte 5 port of `useTandemSettings`.
  *
  * Manages persistent application settings with localStorage backing.
@@ -57,22 +80,24 @@ let _instance: TandemSettingsState | null = null;
 export function createTandemSettings(): TandemSettingsState {
   if (_instance) return _instance;
 
-  let settings = $state<TandemSettings>(loadSettings());
+  const loaded = loadSettings();
+  let settings = $state<TandemSettings>(loaded);
+
+  // Seed the plugin-init keys from loaded settings so the annotation/authorship
+  // plugins read the correct visibility on cold load (before the first update).
+  // References `loaded` (not the $state) — this is a deliberate one-time seed.
+  mirrorDecorationKeys(loaded);
 
   const updateSettings = (partial: Partial<TandemSettings>) => {
     if (settings._readOnly) return;
     const next = mergeAndClampSettings(settings, partial);
     try {
       localStorage.setItem(TANDEM_SETTINGS_KEY, JSON.stringify(next));
-      // Mirror authorship toggle to dedicated key for ProseMirror plugin init
-      localStorage.setItem(AUTHORSHIP_TOGGLE_KEY, String(next.showAuthorship));
-      localStorage.setItem(
-        ANNOTATION_DECORATIONS_TOGGLE_KEY,
-        String(next.showAnnotationDecorations),
-      );
     } catch {
       // localStorage unavailable (incognito/storage-disabled)
     }
+    // Mirror the effective decoration keys for ProseMirror plugin init.
+    mirrorDecorationKeys(next);
     settings = next;
   };
 

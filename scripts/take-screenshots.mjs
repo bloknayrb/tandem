@@ -279,8 +279,9 @@ async function main() {
     }
     await sleep(500);
 
-    // Make sure we're on the Annotations tab
-    const annotationsTab = page.locator("button", { hasText: "Annotations" });
+    // Make sure we're on the Annotations tab (testid disambiguates from the
+    // always-mounted peek-strip button, which also carries "Annotations" text)
+    const annotationsTab = page.getByTestId("annotations-tab");
     if (await annotationsTab.isVisible()) {
       await annotationsTab.click();
       await sleep(500);
@@ -357,7 +358,7 @@ async function main() {
       await mcp.call("tandem_switchDocument", { documentId: docId });
       await sleep(500);
     }
-    const annTabBtn = page.locator("button", { hasText: "Annotations" });
+    const annTabBtn = page.getByTestId("annotations-tab");
     if (await annTabBtn.isVisible()) {
       await annTabBtn.click();
       await sleep(300);
@@ -376,13 +377,15 @@ async function main() {
     // ── Screenshot 2: Chat sidebar ───────────────────────────────────────
     console.log("\n6. Taking 02-chat-sidebar.png...");
     // Click the Chat tab first so the input is visible
-    const chatTabBtn = page.locator("button", { hasText: "Chat" });
+    const chatTabBtn = page.getByTestId("chat-tab");
     if (await chatTabBtn.isVisible()) {
       await chatTabBtn.click();
       await sleep(500);
     }
-    // Send a user message via the chat input so it appears in the conversation
-    const chatInput = page.locator('[data-testid="chat-input"]').first();
+    // Send a user message via the chat input so it appears in the conversation.
+    // The composer textarea (ChatPanel.svelte) carries no testid — target its
+    // stable class instead (the prior `chat-input` testid never existed).
+    const chatInput = page.locator("textarea.chat-composer-input").first();
     if (await chatInput.isVisible({ timeout: 2000 }).catch(() => false)) {
       await chatInput.click();
       await chatInput.fill(

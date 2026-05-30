@@ -198,7 +198,7 @@ function handleReset() {
       {(ctx.settings.selectionDwellMs / 1000).toFixed(1)}s
     </span>
   </div>
-  <div style="font-size: 10px; color: var(--tandem-fg-subtle); margin-bottom: 6px;">
+  <div class="settings-hint" style="margin-bottom: 6px;">
     How long you must hold a selection before your AI notices it
   </div>
   <input
@@ -267,7 +267,7 @@ function handleReset() {
 {#if wdLoaded && hasIntegration}
   <div data-testid="settings-modal-working-directory" style="display: flex; flex-direction: column; gap: var(--tandem-space-2);">
     <div class="settings-section-label">Claude working directory</div>
-    <div style="font-size: 10px; color: var(--tandem-fg-subtle);">
+    <div class="settings-hint">
       Folder where Claude launches. Defaults to your home directory if empty.
     </div>
     <form onsubmit={handleManualSave} style="display: flex; gap: var(--tandem-space-2);">

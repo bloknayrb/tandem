@@ -1,6 +1,7 @@
 <script lang="ts">
 import { API_CONVERT } from "../../shared/api-paths";
 import { API_BASE } from "../utils/fileUpload";
+import "./tandem-banner.css";
 
 const DISMISS_KEY = "tandem:reviewOnlyBannerDismissed";
 
@@ -57,38 +58,53 @@ function handleDismiss() {
 
 {#if visible && !dismissed}
   <div
+    class="tandem-banner tandem-banner--info"
+    role="status"
+    aria-live="polite"
     data-testid="review-only-banner"
-    style="padding: var(--tandem-space-2) var(--tandem-space-4); background-color: var(--tandem-info-bg); border-bottom: 1px solid var(--tandem-info-border); display: flex; align-items: center; justify-content: space-between; font-size: var(--tandem-text-base); color: var(--tandem-info-fg-strong); gap: var(--tandem-space-3);"
   >
-    <span>
+    <span class="tandem-banner__message">
       This document is open in review-only mode. You can add annotations and review, but cannot
       edit directly.
     </span>
-    <div style="display: flex; align-items: center; gap: var(--tandem-space-2); flex-shrink: 0;">
-      {#if error}
-        <span style="color: var(--tandem-error-fg-strong); font-size: 12px; max-width: 200px;">
-          {error}
-        </span>
-      {/if}
-      {#if documentId}
-        <button
-          type="button"
-          data-testid="convert-to-markdown-btn"
-          onclick={handleConvert}
-          disabled={converting}
-          style="background: var(--tandem-info); border: none; color: var(--tandem-info-fg); cursor: {converting ? 'default' : 'pointer'}; font-weight: 500; font-size: var(--tandem-text-sm); padding: 4px 10px; border-radius: var(--tandem-r-2); white-space: nowrap; opacity: {converting ? 0.6 : 1};"
-        >
-          {converting ? "Converting…" : "Convert to Markdown"}
-        </button>
-      {/if}
+    {#if error}
+      <span
+        style="color: var(--tandem-error-fg-strong); font-size: var(--tandem-text-xs); max-width: 200px;"
+      >
+        {error}
+      </span>
+    {/if}
+    {#if documentId}
       <button
         type="button"
-        data-testid="review-only-dismiss"
-        onclick={handleDismiss}
-        style="background: none; border: none; color: var(--tandem-info-fg-strong); cursor: pointer; font-weight: 500; font-size: 13px; padding: 2px 8px; white-space: nowrap;"
+        class="tandem-banner__cta"
+        data-testid="convert-to-markdown-btn"
+        onclick={handleConvert}
+        disabled={converting}
       >
-        Dismiss
+        {converting ? "Converting…" : "Convert to Markdown"}
       </button>
-    </div>
+    {/if}
+    <button
+      type="button"
+      class="tandem-banner__dismiss"
+      data-testid="review-only-dismiss"
+      onclick={handleDismiss}
+      aria-label="Dismiss review-only banner"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M6 6l12 12M6 18L18 6" />
+      </svg>
+    </button>
   </div>
 {/if}

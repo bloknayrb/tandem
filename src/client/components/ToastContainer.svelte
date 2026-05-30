@@ -1,23 +1,6 @@
 <script lang="ts">
 import type { Toast } from "../hooks/useNotifications.svelte";
-
-const SEVERITY_TOKENS: Record<Toast["severity"], string> = {
-  error: "var(--tandem-error)",
-  warning: "var(--tandem-warning)",
-  info: "var(--tandem-accent)",
-};
-
-const SEVERITY_BG_TOKENS: Record<Toast["severity"], string> = {
-  error: "var(--tandem-error-bg)",
-  warning: "var(--tandem-warning-bg)",
-  info: "var(--tandem-accent-bg)",
-};
-
-const SEVERITY_TEXT_TOKENS: Record<Toast["severity"], string> = {
-  error: "var(--tandem-error-fg-strong)",
-  warning: "var(--tandem-warning-fg-strong)",
-  info: "var(--tandem-accent-fg-strong)",
-};
+import { SEVERITY_GLYPHS } from "./activityCenter.js";
 
 interface Props {
   toasts: Toast[];
@@ -26,6 +9,64 @@ interface Props {
 
 let { toasts, onDismiss }: Props = $props();
 </script>
+
+{#if toasts.length > 0}
+  <div data-testid="toast-container" class="toast-stack">
+    {#each toasts as toast (toast.id)}
+      <div
+        role={toast.severity === "info" ? "status" : "alert"}
+        data-testid={`toast-${toast.id}`}
+        class="toast-card {toast.severity}"
+      >
+        <span class="glyph">
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            {#each SEVERITY_GLYPHS[toast.severity] as d (d)}
+              <path {d} />
+            {/each}
+          </svg>
+        </span>
+        <div class="body">
+          <span class="msg">{toast.message}</span>
+          {#if toast.count > 1}
+            <span class="badge" data-testid={`toast-count-${toast.id}`}>×{toast.count}</span>
+          {/if}
+        </div>
+        <button
+          type="button"
+          class="dismiss"
+          data-testid={`toast-dismiss-${toast.id}`}
+          onclick={() => onDismiss(toast.id)}
+          aria-label="Dismiss notification"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M6 6l12 12" />
+            <path d="M6 18L18 6" />
+          </svg>
+        </button>
+      </div>
+    {/each}
+  </div>
+{/if}
 
 <style>
   :global {
@@ -41,47 +82,118 @@ let { toasts, onDismiss }: Props = $props();
     }
   }
 
+  .toast-stack {
+    position: fixed;
+    /* Sits above the activity pill (bottom: space-3, ~26px tall) + a gap. */
+    bottom: calc(var(--tandem-space-3) + 26px + var(--tandem-space-2));
+    right: var(--tandem-space-4);
+    z-index: var(--tandem-z-toast);
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+    max-width: 360px;
+    pointer-events: none;
+  }
+
+  .toast-card {
+    pointer-events: auto;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+    box-shadow: var(--tandem-shadow-4);
+    padding: 10px;
+    position: relative;
+    animation: tandem-toast-slide-in 0.2s ease-out;
+  }
+
+  .toast-card .glyph {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--tandem-r-3);
+    display: inline-grid;
+    place-items: center;
+  }
+  .toast-card.info .glyph {
+    background: color-mix(in srgb, var(--tandem-info) 14%, transparent);
+    color: var(--tandem-info);
+  }
+  .toast-card.warning .glyph {
+    background: color-mix(in srgb, var(--tandem-warning) 18%, transparent);
+    color: var(--tandem-warning);
+  }
+  .toast-card.error .glyph {
+    background: color-mix(in srgb, var(--tandem-error) 18%, transparent);
+    color: var(--tandem-error);
+  }
+
+  .toast-card .body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--tandem-font-sans);
+    font-size: var(--tandem-text-base);
+    line-height: 1.4;
+    color: var(--tandem-fg);
+    padding-top: 2px;
+  }
+  .toast-card .msg {
+    min-width: 0;
+  }
+  .toast-card .badge {
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: var(--tandem-r-pill);
+    border: 1px solid transparent;
+  }
+  .toast-card.info .badge {
+    background: var(--tandem-info-bg);
+    color: var(--tandem-info-fg-strong);
+    border-color: var(--tandem-info-border);
+  }
+  .toast-card.warning .badge {
+    background: var(--tandem-warning-bg);
+    color: var(--tandem-warning-fg-strong);
+    border-color: var(--tandem-warning-border);
+  }
+  .toast-card.error .badge {
+    background: var(--tandem-error-bg);
+    color: var(--tandem-error-fg-strong);
+    border-color: var(--tandem-error-border);
+  }
+
+  .toast-card .dismiss {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--tandem-r-2);
+    background: transparent;
+    border: none;
+    color: var(--tandem-fg-subtle);
+    cursor: pointer;
+    display: inline-grid;
+    place-items: center;
+    transition: background 100ms, color 100ms;
+  }
+  .toast-card .dismiss:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+
   @media (forced-colors: active) {
-    .toast-badge {
+    .toast-card {
+      border: 1px solid CanvasText;
+    }
+    .toast-card .badge {
       border: 1px solid ButtonText;
     }
   }
 </style>
-
-{#if toasts.length > 0}
-  <div
-    data-testid="toast-container"
-    style="position: fixed; bottom: 40px; right: var(--tandem-space-4); z-index: var(--tandem-z-toast); display: flex; flex-direction: column; gap: var(--tandem-space-2); max-width: 360px; pointer-events: none;"
-  >
-    {#each toasts as toast (toast.id)}
-      {@const borderColor = SEVERITY_TOKENS[toast.severity]}
-      {@const bgColor = SEVERITY_BG_TOKENS[toast.severity]}
-      {@const textColor = SEVERITY_TEXT_TOKENS[toast.severity]}
-      {@const ariaRole = toast.severity === "info" ? "status" : "alert"}
-      <div
-        role={ariaRole}
-        data-testid={`toast-${toast.id}`}
-        style="pointer-events: auto; background: var(--tandem-surface); border-radius: var(--tandem-r-3); border-left: 4px solid {borderColor}; box-shadow: var(--tandem-shadow-4); padding: 10px 32px 10px 12px; position: relative; animation: tandem-toast-slide-in 0.2s ease-out; font-size: var(--tandem-text-base); line-height: 1.4; color: var(--tandem-fg);"
-      >
-        <span>{toast.message}</span>
-        {#if toast.count > 1}
-          <span
-            class="toast-badge"
-            data-testid={`toast-count-${toast.id}`}
-            style="margin-left: 6px; font-size: 11px; font-weight: 600; color: {textColor}; background: {bgColor}; padding: 1px 5px; border-radius: var(--tandem-r-4);"
-          >
-            ×{toast.count}
-          </span>
-        {/if}
-        <button
-          data-testid={`toast-dismiss-${toast.id}`}
-          onclick={() => onDismiss(toast.id)}
-          style="position: absolute; top: 6px; right: 6px; border: none; background: transparent; cursor: pointer; font-size: 14px; color: var(--tandem-fg-subtle); line-height: 1; padding: 2px 4px;"
-          aria-label="Dismiss notification"
-        >
-          ×
-        </button>
-      </div>
-    {/each}
-  </div>
-{/if}

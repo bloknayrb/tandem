@@ -49,7 +49,9 @@ describe("browseNativeFile (Tauri native picker)", () => {
       }),
     );
     expect(vi.mocked(serverPaths.openServerPath)).toHaveBeenCalledWith("C:/path/to/file.md");
-    expect(loadRecentFiles()).toContain("C:/path/to/file.md");
+    expect(loadRecentFiles()).toContainEqual(
+      expect.objectContaining({ path: "C:/path/to/file.md" }),
+    );
     expect(onError).not.toHaveBeenCalled();
   });
 

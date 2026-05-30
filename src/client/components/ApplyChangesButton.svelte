@@ -75,19 +75,53 @@ async function handleClick() {
   <button
     type="button"
     data-testid="apply-changes-btn"
+    class="acb-btn"
+    class:is-disabled={disabled}
+    class:is-applying={applying}
     onclick={handleClick}
     disabled={disabled}
     title={accepted.length === 0 ? "No accepted suggestions to apply" : undefined}
-    style="width: 100%; padding: var(--tandem-space-1) var(--tandem-space-3); font-size: var(--tandem-text-xs); font-weight: 500; border: 1px solid {disabled
-      ? 'var(--tandem-border)'
-      : 'var(--tandem-info-border)'}; border-radius: var(--tandem-r-2); background: {disabled
-      ? 'var(--tandem-surface-muted)'
-      : 'var(--tandem-info)'}; color: {disabled
-      ? 'var(--tandem-fg-subtle)'
-      : 'var(--tandem-info-fg)'}; cursor: {disabled
-      ? 'default'
-      : 'pointer'}; opacity: {applying ? 0.6 : 1}; white-space: nowrap;"
   >
     {applying ? "Applying…" : `Apply as Tracked Changes (${accepted.length})`}
   </button>
 {/if}
+
+<style>
+  /* Apply-Changes button — info family by design. "Apply as Tracked Changes"
+     reads as an informational action (it hands work off to Word's tracked-
+     changes UI for explicit Accept/Reject), not a primary commit, so the
+     accent-family is intentionally avoided here. */
+  .acb-btn {
+    width: 100%;
+    padding: var(--tandem-space-1) var(--tandem-space-3);
+    font-size: var(--tandem-text-xs);
+    font-weight: 500;
+    border: 1px solid var(--tandem-info-border);
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-info);
+    color: var(--tandem-info-fg);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 140ms ease, color 140ms ease;
+  }
+  .acb-btn:hover:not(.is-disabled):not(.is-applying) {
+    background: var(--tandem-info-fg-strong, var(--tandem-info));
+  }
+  .acb-btn.is-disabled {
+    border-color: var(--tandem-border);
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg-subtle);
+    cursor: default;
+  }
+  .acb-btn.is-applying {
+    opacity: 0.6;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .acb-btn {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .acb-btn {
+    transition: none;
+  }
+</style>

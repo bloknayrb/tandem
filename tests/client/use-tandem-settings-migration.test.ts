@@ -82,9 +82,40 @@ describe("loadSettings — migration chain", () => {
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.leftPanelVisible).toBe(true);
     expect(s.rightPanelVisible).toBe(false);
-    expect(s.editorWidthPercent).toBe(80);
+    // v11→v12 maps a customized width (≠ 100) to the new Comfortable default.
+    expect(s.editorMeasure).toBe("comfortable");
     expect(s.theme).toBe("dark");
     expect(s.models).toEqual([]);
+  });
+
+  it("v11→v12: default-untouched width (100) maps to editorMeasure=full", () => {
+    writeRaw({ schemaVersion: 11, editorWidthPercent: 100 });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.editorMeasure).toBe("full");
+    // Legacy field is deleted, not round-tripped.
+    expect((s as Record<string, unknown>).editorWidthPercent).toBeUndefined();
+  });
+
+  it("v11→v12: customized width maps to editorMeasure=comfortable", () => {
+    writeRaw({ schemaVersion: 11, editorWidthPercent: 60 });
+    const s = loadSettings();
+    expect(s.editorMeasure).toBe("comfortable");
+  });
+
+  it("v11→v12: absent legacy width (never customized) maps to editorMeasure=full", () => {
+    // A blob that climbed to v11 without ever serializing editorWidthPercent
+    // means the width was never customized → preserve full-width like an
+    // explicit 100, not the Comfortable reset reserved for real customizers.
+    writeRaw({ schemaVersion: 11 });
+    const s = loadSettings();
+    expect(s.editorMeasure).toBe("full");
+  });
+
+  it("v11→v12: an already-present editorMeasure is preserved (cross-branch guard)", () => {
+    writeRaw({ schemaVersion: 11, editorWidthPercent: 100, editorMeasure: "wide" });
+    const s = loadSettings();
+    expect(s.editorMeasure).toBe("wide");
   });
 
   it("v3 forward-compat: schemaVersion=99 loads as _readOnly: true", () => {
@@ -122,14 +153,14 @@ describe("loadSettings — migration chain", () => {
   // Forward-compat sanitization (#735 review finding).
   //
   // Prior implementation spread `...(parsed as Partial<TandemSettings>)`
-  // over DEFAULTS, bypassing every clamp. A future-blob with
-  // `editorWidthPercent: -999` propagated raw garbage to the running UI.
-  // The fix routes both paths through `normalizeKnownFields`.
-  it("forward-compat clamps editorWidthPercent=-999 to 40", () => {
-    writeRaw({ schemaVersion: 99, editorWidthPercent: -999 });
+  // over DEFAULTS, bypassing every clamp. A future-blob with a garbage known
+  // field propagated raw values to the running UI. The fix routes both paths
+  // through `normalizeKnownFields`.
+  it("forward-compat coerces an invalid editorMeasure to the default", () => {
+    writeRaw({ schemaVersion: 99, editorMeasure: "enormous" });
     const s = loadSettings();
     expect(s._readOnly).toBe(true);
-    expect(s.editorWidthPercent).toBe(40);
+    expect(s.editorMeasure).toBe("comfortable");
   });
 
   it("forward-compat clamps accentHue=9999 to default", () => {
@@ -349,6 +380,69 @@ describe("loadSettings — migration chain", () => {
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 
+  // v8→v9 (1.13): split the single showAnnotationDecorations into per-type
+  // showComments / showHighlights / showNotes + a decorationsMuted overlay.
+  // The old flag was a persistent "all marks off" preference, so it maps onto
+  // all three per-type flags by intent (mute starts off). Equivalence classes
+  // on the old flag: false (all off), true (all on), absent (default on).
+  it.each([
+    { why: "old=false → all three per-type flags off", old: false, expected: false },
+    { why: "old=true → all three per-type flags on", old: true, expected: true },
+  ])("v8→v9: $why", ({ old, expected }) => {
+    writeRaw({ schemaVersion: 8, showAnnotationDecorations: old, theme: "dark" });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.showComments).toBe(expected);
+    expect(s.showHighlights).toBe(expected);
+    expect(s.showNotes).toBe(expected);
+    // Mute is transient — never derived from the old persistent flag.
+    expect(s.decorationsMuted).toBe(false);
+    // The retired field name must not survive the split.
+    expect(s.showAnnotationDecorations).toBeUndefined();
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it("v8→v9: old flag absent → per-type flags default on", () => {
+    writeRaw({ schemaVersion: 8, theme: "warm" });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.showComments).toBe(true);
+    expect(s.showHighlights).toBe(true);
+    expect(s.showNotes).toBe(true);
+    expect(s.decorationsMuted).toBe(false);
+  });
+
+  it("forward-compat strips showAnnotationDecorations via REMOVED_FIELDS", () => {
+    // A future-blob carrying the retired field must not leak it through the
+    // forward-compat passthrough into a schema that re-uses the name.
+    writeRaw({ schemaVersion: 99, showAnnotationDecorations: false });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s._readOnly).toBe(true);
+    expect(s.showAnnotationDecorations).toBeUndefined();
+  });
+
+  // v9→v10 (1.11): introduce formattingBarVisible (default true). Pure bump —
+  // a v9 blob with no formattingBarVisible defaults to true (today's behavior).
+  it("v9→v10: formattingBarVisible defaults true when absent", () => {
+    writeRaw({ schemaVersion: 9, theme: "dark" });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.formattingBarVisible).toBe(true);
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it.each([
+    { why: "explicit false survives the bump", val: false, expected: false },
+    { why: "explicit true survives the bump", val: true, expected: true },
+  ])("v9→v10: formattingBarVisible=$val — $why", ({ val, expected }) => {
+    writeRaw({ schemaVersion: 9, formattingBarVisible: val });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.formattingBarVisible).toBe(expected);
+  });
+
   it("v8 blob migrates to current with customShortcuts defaulting to {}", () => {
     writeRaw({ schemaVersion: 8, leftPanelVisible: true });
     const s = loadSettings();
@@ -412,7 +506,53 @@ describe("loadSettings — migration chain", () => {
     expect(s.customShortcuts).toEqual({});
   });
 
-  // v9→v10 (#811): introduce fontByExtension: {}.
+  // Cross-branch reconciliation: master and the umbrella both used schemaVersion
+  // 9 (master = customShortcuts, umbrella = decorations split). A blob written by
+  // a master-line v9 build carries the legacy showAnnotationDecorations flag and
+  // no per-type fields; bumping it straight to v11 must not silently reset an
+  // explicit "all marks off" preference. The presence-keyed fallback re-derives
+  // the split.
+  it.each([
+    { why: "master-v9 all-off → per-type flags off", deco: false, expected: false },
+    { why: "master-v9 all-on → per-type flags on", deco: true, expected: true },
+  ])("master-line v9 (showAnnotationDecorations) reconciles: $why", ({ deco, expected }) => {
+    writeRaw({
+      schemaVersion: 9,
+      showAnnotationDecorations: deco,
+      customShortcuts: {},
+      theme: "dark",
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.showComments).toBe(expected);
+    expect(s.showHighlights).toBe(expected);
+    expect(s.showNotes).toBe(expected);
+    expect(s.decorationsMuted).toBe(false);
+    expect(s.showAnnotationDecorations).toBeUndefined();
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it("umbrella v9 blob (already split) is untouched by the reconciliation guard", () => {
+    // Per-type fields present + no legacy flag → guard must not fire. An explicit
+    // showComments:false must survive (not be clobbered back to the default).
+    writeRaw({
+      schemaVersion: 9,
+      showComments: false,
+      showHighlights: true,
+      showNotes: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.showComments).toBe(false);
+    expect(s.showHighlights).toBe(true);
+    expect(s.showNotes).toBe(true);
+  });
+
+  // fontByExtension (#811), folded into the migration chain at v12→v13 (renumbered
+  // from master's original v9→v10; see CURRENT_SCHEMA_VERSION note). Blobs below
+  // use the versions master originally wrote; normalizeKnownFields parses
+  // fontByExtension on any version, so the field's value survives the renumber.
 
   it("v9 blob migrates to current with fontByExtension defaulting to {}", () => {
     writeRaw({ schemaVersion: 9, leftPanelVisible: true });
@@ -456,5 +596,19 @@ describe("loadSettings — migration chain", () => {
     const s = loadSettings();
     expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(s.fontByExtension).toEqual({});
+  });
+
+  // Cross-branch full-chain path: a master-line v10 blob carries the legacy
+  // `editorWidthPercent` (master never removed it) AND predates fontByExtension's
+  // renumber. It must climb v10→v11→v12→v13, converting width→editorMeasure and
+  // defaulting fontByExtension — the exact path the master/umbrella fold-in risks.
+  it("master-line v10 blob converts editorWidthPercent and gains fontByExtension", () => {
+    writeRaw({ schemaVersion: 10, editorWidthPercent: 60, fontByExtension: { md: "serif" } });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.editorMeasure).toBe("comfortable");
+    expect(s.editorWidthPercent).toBeUndefined();
+    expect(s.fontByExtension).toEqual({ md: "serif" });
+    expect(s._readOnly).toBeUndefined();
   });
 });

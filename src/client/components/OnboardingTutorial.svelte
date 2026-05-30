@@ -97,7 +97,7 @@ const isCoworkStep = $derived(step?.id === "cowork");
           <button
             data-testid="tutorial-next-btn"
             onclick={onNext}
-            style="padding: var(--tandem-space-1) var(--tandem-space-3); font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer; font-weight: 500;"
+            style="padding: var(--tandem-space-1) var(--tandem-space-3); font-size: var(--tandem-text-xs); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-pill); background: var(--tandem-surface); color: var(--tandem-fg-muted); cursor: pointer; font-weight: 500;"
           >
             {currentStep === totalActionable - 1 ? "Done" : "Next"}
           </button>

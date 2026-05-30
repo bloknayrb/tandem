@@ -3,6 +3,7 @@ dist/
 .tandem/
 .worktrees/
 private/
+scripts/design-baselines/.parts/
 *.log
 
 # Knowledge-graph generator output (regenerable artifact dump)

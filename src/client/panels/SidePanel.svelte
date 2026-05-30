@@ -43,7 +43,7 @@ interface Props {
   /**
    * Annotation-review API lifted to App.svelte so there's exactly one
    * instance across both rails. Provides accept/dismiss/scrollToAnnotation
-   * + getReviewTargets/getActiveReviewAnn for the bulk-confirm UI.
+   * + getReviewTargets for the bulk-confirm UI.
    */
   review: UseAnnotationReviewReturn;
 }
@@ -57,9 +57,9 @@ let {
   activeDocFormat,
   documentId,
   activeAnnotationId,
-  // onActiveAnnotationChange likewise: the lifted review writes activeAnnotationId
-  // directly via App.svelte's setter.
-  onActiveAnnotationChange: _onActiveAnnotationChange,
+  // The lifted review writes activeAnnotationId directly via App.svelte's setter,
+  // but we also call this to CLEAR selection (null) on an empty-rail click.
+  onActiveAnnotationChange,
   reduceMotion,
   onFilterChange,
   storeReadOnly = false,
@@ -331,6 +331,16 @@ function handleBatchPromote() {
 function handleClearSelection() {
   selectedImportIds = new Set();
 }
+
+// Deselect the active annotation when the user clicks empty rail background (not
+// a card). Mirrors the Escape-key deselect — a pointer affordance for the same
+// intent. `target === currentTarget` restricts this to the list container's own
+// background, so clicks that land on a card or the "resolved" summary pass
+// through untouched.
+function handleRailBackgroundClick(e: MouseEvent) {
+  if (e.target !== e.currentTarget) return;
+  onActiveAnnotationChange(null);
+}
 </script>
 
 <div
@@ -439,7 +449,13 @@ function handleClearSelection() {
   <!-- Annotation list -->
   <!-- Empty state lives outside role="list" — role="list" must only contain role="listitem" children -->
   {#if filteredData.filtered.length === 0}
-    <div style="padding: var(--tandem-space-3); flex: 1;" aria-live="polite">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      style="padding: var(--tandem-space-3); flex: 1;"
+      aria-live="polite"
+      onclick={handleRailBackgroundClick}
+    >
       <p style="font-size: var(--tandem-text-base); color: var(--tandem-fg-subtle); margin-top: 8px;">
         {hasFilters
           ? "No annotations match filters."
@@ -447,12 +463,16 @@ function handleClearSelection() {
       </p>
     </div>
   {:else}
-  <div style="padding: var(--tandem-space-3); flex: 1;" role="list" aria-label="Annotations">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    style="padding: var(--tandem-space-3); flex: 1;"
+    role="list"
+    aria-label="Annotations"
+    onclick={handleRailBackgroundClick}
+  >
       {#each filteredData.pending as ann (ann.id)}
-        {@const isTarget =
-          activeAnnotationId !== null
-            ? activeAnnotationId === ann.id
-            : review.getActiveReviewAnn()?.id === ann.id}
+        {@const isTarget = activeAnnotationId === ann.id}
         <AnnotationCard
           annotation={ann}
           replies={repliesMap.get(ann.id) ?? []}

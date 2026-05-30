@@ -10,7 +10,7 @@ let { onDismiss, onRetry }: Props = $props();
 </script>
 
 <div
-  class="tandem-banner tandem-banner--info"
+  class="tandem-banner tandem-banner--error"
   role="status"
   aria-live="polite"
   data-testid="connection-banner"

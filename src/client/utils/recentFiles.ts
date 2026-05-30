@@ -1,25 +1,92 @@
 import { RECENT_FILES_CAP, RECENT_FILES_KEY } from "../../shared/constants.js";
 
-/** Add a path to the recent files list. Deduplicates, caps at RECENT_FILES_CAP, most recent first. */
-export function addRecentFile(list: string[], path: string, cap = RECENT_FILES_CAP): string[] {
-  const filtered = list.filter((p) => p !== path);
-  return [path, ...filtered].slice(0, cap);
+export interface RecentFileEntry {
+  path: string;
+  /**
+   * ms epoch when the path first entered the recents list. `0` means unknown —
+   * either migrated from the legacy `string[]` storage shape or a malformed
+   * entry coerced on load. The launcher UI omits the "when" label for `0`.
+   */
+  openedAt: number;
 }
 
-export function loadRecentFiles(): string[] {
+/**
+ * Add a path to the recent files list. Dedupes by path (newest first), caps at
+ * RECENT_FILES_CAP.
+ *
+ * An already-present path KEEPS its original `openedAt` (the existing entry
+ * object is reused, just moved to the front). This matters because the
+ * recents-sync effect in `App.svelte` re-adds every open tab on each tab
+ * change — re-stamping `openedAt` there would peg all open files to "just now"
+ * and spam `saveRecentFiles`. Only a genuinely new path is stamped.
+ */
+export function addRecentFile(
+  list: RecentFileEntry[],
+  path: string,
+  openedAt: number = Date.now(),
+  cap = RECENT_FILES_CAP,
+): RecentFileEntry[] {
+  const existing = list.find((e) => e.path === path);
+  const entry: RecentFileEntry = existing ?? { path, openedAt };
+  const filtered = list.filter((e) => e.path !== path);
+  return [entry, ...filtered].slice(0, cap);
+}
+
+/** Project just the paths (newest first) — for call sites that render path strings. */
+export function recentFilePaths(list: RecentFileEntry[]): string[] {
+  return list.map((e) => e.path);
+}
+
+/**
+ * Compact relative-time label for a recents row's "when" column.
+ *
+ * Returns "" for `openedAt === 0` (unknown — legacy/migrated entry; the launcher
+ * omits the label entirely). Future timestamps (clock skew) collapse to "just
+ * now". Resolution is intentionally coarse — minutes, then hours, then days —
+ * because the launcher only needs a rough recency cue, not a precise duration.
+ */
+export function formatWhen(openedAt: number, now: number = Date.now()): string {
+  if (!openedAt) return "";
+  const deltaMs = now - openedAt;
+  if (deltaMs < 60_000) return "just now";
+  const minutes = Math.floor(deltaMs / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+export function loadRecentFiles(): RecentFileEntry[] {
   try {
     const raw = localStorage.getItem(RECENT_FILES_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((x): x is string => typeof x === "string");
+    return parsed
+      .map((x): RecentFileEntry | null => {
+        // Legacy shape: a bare path string → migrate with unknown timestamp.
+        if (typeof x === "string") return { path: x, openedAt: 0 };
+        // Current shape: { path, openedAt }. Tolerate a missing/non-numeric
+        // openedAt (coerce to 0); drop anything without a string path.
+        if (
+          x !== null &&
+          typeof x === "object" &&
+          typeof (x as RecentFileEntry).path === "string"
+        ) {
+          const e = x as Partial<RecentFileEntry> & { path: string };
+          return { path: e.path, openedAt: typeof e.openedAt === "number" ? e.openedAt : 0 };
+        }
+        return null;
+      })
+      .filter((e): e is RecentFileEntry => e !== null);
   } catch (err) {
     console.warn("[tandem] failed to load recent files:", err);
     return [];
   }
 }
 
-export function saveRecentFiles(list: string[]): void {
+export function saveRecentFiles(list: RecentFileEntry[]): void {
   try {
     localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(list));
     invalidateRecentFilesCache();
@@ -42,9 +109,9 @@ export function clearRecentFiles(): void {
 // ---------------------------------------------------------------------------
 
 const CACHE_TTL = 30_000;
-let _cache: { files: string[]; ts: number } | null = null;
+let _cache: { files: RecentFileEntry[]; ts: number } | null = null;
 
-export function loadRecentFilesCached(): string[] {
+export function loadRecentFilesCached(): RecentFileEntry[] {
   const now = Date.now();
   if (_cache && now - _cache.ts < CACHE_TTL) return _cache.files;
   const files = loadRecentFiles();

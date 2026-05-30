@@ -2,6 +2,7 @@
 import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
+import { portal } from "../utils/portal.js";
 import CommentThread from "./CommentThread.svelte";
 import { SECONDARY_BUTTON_STYLE, TEXTAREA_STYLE } from "./panel-styles";
 
@@ -93,6 +94,10 @@ async function handleSendReply() {
 
 function handleTabTrap(e: KeyboardEvent) {
   if (e.key === "Escape") {
+    // Consume Escape so the global Escape-to-deselect handler (App.svelte) does
+    // not also clear the active annotation when the user closes this overlay.
+    e.preventDefault();
+    e.stopPropagation();
     onClose();
     return;
   }
@@ -122,13 +127,20 @@ function handleTabTrap(e: KeyboardEvent) {
 {#if open}
   <!-- Backdrop. role="presentation" + click-outside dismiss. Per
        feedback_click_outside_exempt_menu: dialog stops propagation,
-       so clicks inside the overlay container never reach the backdrop. -->
+       so clicks inside the overlay container never reach the backdrop.
+       use:portal moves the overlay to <body>: this component renders inside the
+       right-rail wrapper (position: relative; z-index: 1; overflow: hidden), so
+       a fixed descendant's z-index would resolve within that z:1 context and
+       still stack below the title bar's lift. Portaling to the root context lets
+       --tandem-z-above-titlebar actually cover the title bar. Dismiss is
+       backdrop-target/propagation based (not el.contains), so the move is safe. -->
   <div
+    use:portal
     role="presentation"
     data-testid="reply-thread-overlay"
     onclick={onClose}
     onkeydown={() => {}}
-    style="position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 1000;"
+    style="position: fixed; inset: 0; background-color: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: var(--tandem-z-above-titlebar);"
   >
     <div
       role="dialog"
@@ -159,9 +171,11 @@ function handleTabTrap(e: KeyboardEvent) {
         </button>
       </div>
 
-      <!-- Original comment context -->
+      <!-- Original comment context — italic serif quote (cluster 3.3
+           decision #7) so the quoted source reads as voiced material, not
+           UI chrome. -->
       <div
-        style="padding: var(--tandem-space-2) var(--tandem-space-3); background: var(--tandem-surface-muted); border-radius: var(--tandem-r-2); border-left: 3px solid var(--tandem-author-claude); font-size: var(--tandem-text-sm); color: var(--tandem-fg-muted); white-space: pre-wrap;"
+        style="padding: var(--tandem-space-2) var(--tandem-space-3); background: var(--tandem-surface-muted); border-radius: var(--tandem-r-2); border-left: 3px solid var(--tandem-author-claude); font-family: var(--tandem-font-serif, var(--tandem-font-sans)); font-style: italic; font-size: var(--tandem-text-sm); color: var(--tandem-fg-muted); white-space: pre-wrap;"
       >
         {annotation.content}
       </div>

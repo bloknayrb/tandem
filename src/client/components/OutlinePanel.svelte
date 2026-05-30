@@ -75,13 +75,21 @@ $effect(() => {
   const ed = editor;
   if (!ed || ed.isDestroyed) return;
 
+  const scrollEl = (ed.view.dom.closest(".editor-scroll") ??
+    ed.view.dom.parentElement) as HTMLElement | null;
+
   function updateScrollSpy() {
     if (!ed || ed.isDestroyed || headings.length === 0) {
       scrollSpyIndex = -1;
       return;
     }
-    const editorRect = ed.view.dom.getBoundingClientRect();
-    const threshold = editorRect.top + 48;
+    // Threshold is measured from the SCROLL CONTAINER's viewport top, not the
+    // ProseMirror element's. The ProseMirror DIV scrolls with content inside
+    // .editor-scroll, so its getBoundingClientRect().top goes negative as the
+    // user scrolls — using it makes the threshold drift below every heading
+    // except the topmost, freezing scrollSpyIndex at 0.
+    const referenceTop = scrollEl?.getBoundingClientRect().top ?? 0;
+    const threshold = referenceTop + 48;
     let activeIdx = -1;
     for (let i = 0; i < headings.length; i++) {
       try {
@@ -96,7 +104,6 @@ $effect(() => {
 
   updateScrollSpy();
 
-  const scrollEl = ed.view.dom.closest(".editor-scroll") ?? ed.view.dom.parentElement;
   scrollEl?.addEventListener("scroll", updateScrollSpy);
   return () => scrollEl?.removeEventListener("scroll", updateScrollSpy);
 });
@@ -223,6 +230,10 @@ function handleKeyDown(e: KeyboardEvent) {
   onkeydown={handleKeyDown}
   style="display: flex; flex-direction: column; flex: 1; overflow-y: auto;"
 >
+  <!-- Sub-PR 1.3: static section label above the search pill. Strictly
+       non-interactive (no tabindex, no click handler) so the nav-level
+       keydown handler does not route through it. -->
+  <div class="outline-header-label tandem-ui">Outline</div>
   <!-- Search pill — no container border; surface-sunk background carries the
        shape per calm-v7 outline rail pattern. Inline magnifying-glass icon
        sits inside the input padding. -->
@@ -308,6 +319,13 @@ function handleKeyDown(e: KeyboardEvent) {
                 if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "none";
               }}
             >
+              <span
+                class="outline-tick"
+                aria-hidden="true"
+                style={isActive
+                  ? "background-color: var(--tandem-accent); opacity: 1;"
+                  : ""}
+              ></span>
               <span style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                 {entry.text || "(untitled)"}
               </span>
@@ -315,6 +333,7 @@ function handleKeyDown(e: KeyboardEvent) {
                 <span
                   style="
                     flex-shrink: 0;
+                    font-family: var(--tandem-font-mono);
                     font-size: var(--tandem-text-2xs, 10px);
                     font-weight: 500;
                     color: var(--tandem-fg-subtle);
@@ -367,5 +386,26 @@ function handleKeyDown(e: KeyboardEvent) {
   }
   .outline-search-pill:focus-within {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-accent) 30%, transparent);
+  }
+  .outline-header-label {
+    color: var(--tandem-fg-muted);
+    padding: var(--tandem-space-3) var(--tandem-space-3) 0;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .outline-tick {
+    display: block;
+    flex-shrink: 0;
+    width: 2px;
+    height: 12px;
+    background-color: var(--tandem-border-strong);
+    border-radius: 1px;
+    opacity: 0.55;
+    /* No transition. A scoped-CSS descendant override
+       (.outline-item-active .outline-tick) failed to settle on first paint
+       — discovered via live smoke in claude-in-chrome during sub-PR 1.3.
+       Active state is now driven via reactive style= on the span itself
+       (matches how the parent button already conditionally applies
+       background/color). Snapping looks fine at 2x12px. */
   }
 </style>

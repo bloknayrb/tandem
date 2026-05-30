@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tandem — Token Comparison (production vs bundle)</title>
+    <style>
+      /* Production light/dark tokens (from index.html). Used for the LEFT column. */
+      :root {
+        --prod-bg-light: oklch(0.985 0.004 80);
+        --prod-surface-light: oklch(1 0 0);
+        --prod-surface-muted-light: oklch(0.975 0.005 80);
+        --prod-surface-sunk-light: oklch(0.96 0.006 80);
+        --prod-fg-light: oklch(0.22 0.012 280);
+        --prod-border-light: oklch(0.92 0.005 280);
+
+        --prod-bg-dark: oklch(0.22 0.012 280);
+        --prod-surface-dark: oklch(0.27 0.012 280);
+        --prod-surface-muted-dark: oklch(0.25 0.012 280);
+        --prod-surface-sunk-dark: oklch(0.20 0.012 280);
+        --prod-fg-dark: oklch(0.94 0.006 280);
+        --prod-border-dark: oklch(0.34 0.010 280);
+
+        /* Bundle equivalents (RIGHT column). */
+        --bundle-bg-dark: oklch(0.18 0.012 270);
+        --bundle-surface-dark: oklch(0.22 0.012 270);
+        --bundle-surface-muted-dark: oklch(0.20 0.012 270);
+        --bundle-surface-sunk-dark: oklch(0.16 0.012 270);
+        --bundle-fg-dark: oklch(0.94 0.005 80);
+        --bundle-border-dark: oklch(0.30 0.012 270);
+
+        /* Shared (SAME in both production and bundle). */
+        --author-user-light: oklch(0.55 0.14 245);
+        --author-user-dark: oklch(0.72 0.13 245);
+        --author-claude-light: #d97757;
+        --author-claude-dark: #e89a78;
+        --suggestion-light: oklch(0.52 0.18 305);
+        --suggestion-dark: #a78bfa;
+        --suggestion-bg-light: color-mix(in srgb, var(--suggestion-light) 10%, var(--prod-surface-light));
+        --suggestion-bg-dark: #2e1065;
+
+        --page-fg: oklch(0.20 0.010 270);
+        --page-fg-muted: oklch(0.48 0.008 280);
+        --page-border: oklch(0.86 0.006 280);
+        --page-accent: oklch(0.52 0.16 275);
+      }
+
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0;
+        font-family: "SN Pro", "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        background: oklch(0.985 0.004 80);
+        color: var(--page-fg);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .wrap { max-width: 1280px; margin: 0 auto; padding: 40px 32px 80px; }
+      header { margin-bottom: 32px; }
+      h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; font-weight: 600; }
+      h2 { font-size: 18px; margin: 48px 0 16px; letter-spacing: -0.005em; font-weight: 600; }
+      h3 { font-size: 13px; margin: 0 0 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--page-fg-muted); font-weight: 600; }
+      p { margin: 0 0 12px; color: var(--page-fg-muted); }
+      .lede { font-size: 16px; color: var(--page-fg); margin-bottom: 8px; }
+      .meta { font-size: 12px; color: var(--page-fg-muted); }
+      code, kbd { font-family: "Sono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+
+      .legend {
+        display: flex; gap: 16px; flex-wrap: wrap;
+        font-size: 12px; padding: 12px 16px; margin: 24px 0;
+        background: oklch(0.96 0.006 80); border: 1px solid var(--page-border);
+        border-radius: 8px;
+      }
+      .legend span { display: inline-flex; align-items: center; gap: 6px; }
+      .legend span::before {
+        content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+      }
+      .legend .same::before { background: oklch(0.55 0.14 150); }
+      .legend .divergence::before { background: oklch(0.55 0.18 25); }
+      .legend .protected::before { background: var(--suggestion-light); }
+
+      /* Two-column comparison row. Each row = one canvas mode (light/dark), with prod swatches on the left half and bundle on the right. */
+      .row {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+        margin-bottom: 28px;
+      }
+      .panel { border: 1px solid var(--page-border); border-radius: 12px; overflow: hidden; }
+      .panel-header { padding: 10px 14px; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; }
+      .panel.prod .panel-header { background: oklch(0.92 0.04 150 / 0.4); color: oklch(0.30 0.10 150); }
+      .panel.bundle .panel-header { background: oklch(0.92 0.04 25 / 0.4); color: oklch(0.40 0.18 25); }
+
+      .swatch-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+        background: var(--page-border);
+      }
+      .swatch {
+        padding: 16px 12px; min-height: 96px;
+        display: flex; flex-direction: column; justify-content: space-between;
+        font-size: 11px;
+      }
+      .swatch .name { font-family: "Sono", "JetBrains Mono", monospace; font-weight: 500; font-size: 11px; }
+      .swatch .val { font-family: "Sono", "JetBrains Mono", monospace; font-size: 10px; opacity: 0.7; word-break: break-all; }
+
+      /* Light-mode swatches (used inside .panel.prod and .panel.bundle alike). */
+      .sw-bg-light { background: var(--prod-bg-light); color: var(--prod-fg-light); }
+      .sw-surface-light { background: var(--prod-surface-light); color: var(--prod-fg-light); }
+      .sw-surface-muted-light { background: var(--prod-surface-muted-light); color: var(--prod-fg-light); }
+      .sw-surface-sunk-light { background: var(--prod-surface-sunk-light); color: var(--prod-fg-light); }
+      .sw-fg-light { background: var(--prod-fg-light); color: var(--prod-bg-light); }
+      .sw-border-light { background: var(--prod-border-light); color: var(--prod-fg-light); }
+
+      /* Production dark */
+      .sw-bg-prod-dark { background: var(--prod-bg-dark); color: var(--prod-fg-dark); }
+      .sw-surface-prod-dark { background: var(--prod-surface-dark); color: var(--prod-fg-dark); }
+      .sw-surface-muted-prod-dark { background: var(--prod-surface-muted-dark); color: var(--prod-fg-dark); }
+      .sw-surface-sunk-prod-dark { background: var(--prod-surface-sunk-dark); color: var(--prod-fg-dark); }
+      .sw-fg-prod-dark { background: var(--prod-fg-dark); color: var(--prod-bg-dark); }
+      .sw-border-prod-dark { background: var(--prod-border-dark); color: var(--prod-fg-dark); }
+
+      /* Bundle dark */
+      .sw-bg-bundle-dark { background: var(--bundle-bg-dark); color: var(--bundle-fg-dark); }
+      .sw-surface-bundle-dark { background: var(--bundle-surface-dark); color: var(--bundle-fg-dark); }
+      .sw-surface-muted-bundle-dark { background: var(--bundle-surface-muted-dark); color: var(--bundle-fg-dark); }
+      .sw-surface-sunk-bundle-dark { background: var(--bundle-surface-sunk-dark); color: var(--bundle-fg-dark); }
+      .sw-fg-bundle-dark { background: var(--bundle-fg-dark); color: var(--bundle-bg-dark); }
+      .sw-border-bundle-dark { background: var(--bundle-border-dark); color: var(--bundle-fg-dark); }
+
+      .protected-row {
+        background: linear-gradient(135deg, oklch(0.95 0.06 305 / 0.3), transparent);
+        border: 1px solid color-mix(in srgb, var(--suggestion-light) 25%, var(--page-border));
+        border-radius: 12px; padding: 18px 20px; margin-bottom: 28px;
+      }
+      .protected-row .swatch-grid { grid-template-columns: repeat(4, 1fr); }
+      .protected-row .swatch { min-height: 80px; }
+      .protected-row h3 { color: var(--suggestion-light); }
+
+      .verdict {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 4px 10px; border-radius: 999px;
+        font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+        margin-left: 8px;
+      }
+      .v-same { background: oklch(0.95 0.06 150 / 0.5); color: oklch(0.30 0.10 150); }
+      .v-prod-wins { background: oklch(0.95 0.06 25 / 0.5); color: oklch(0.40 0.18 25); }
+      .v-protected { background: color-mix(in srgb, var(--suggestion-light) 12%, transparent); color: oklch(0.40 0.20 305); }
+
+      footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--page-border); font-size: 12px; color: var(--page-fg-muted); }
+      footer a { color: var(--page-accent); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>Token Comparison — production vs bundle</h1>
+        <p class="lede">Side-by-side swatches for the dark-mode canvas divergence flagged in <code>token-audit.md</code>. The light-mode canvas family is identical in both sources.</p>
+        <p class="meta">Phase 0c · feat/design-system-impl umbrella · 2026-05-21</p>
+        <div class="legend">
+          <span class="same">Identical (SAME ✓)</span>
+          <span class="divergence">Divergent (PROD WINS)</span>
+          <span class="protected">PROTECTED — change requires per-token re-audit</span>
+        </div>
+      </header>
+
+      <h2>Light mode canvas — <span class="verdict v-same">Same</span></h2>
+      <p>Both sources declare the same OKLCH values for the warm-white canvas family. No action needed.</p>
+      <div class="row">
+        <div class="panel prod">
+          <div class="panel-header">Production · :root</div>
+          <div class="swatch-grid">
+            <div class="swatch sw-bg-light"><div class="name">--tandem-bg</div><div class="val">oklch(0.985 0.004 80)</div></div>
+            <div class="swatch sw-surface-light"><div class="name">--tandem-surface</div><div class="val">oklch(1 0 0)</div></div>
+            <div class="swatch sw-surface-muted-light"><div class="name">--tandem-surface-muted</div><div class="val">oklch(0.975 0.005 80)</div></div>
+            <div class="swatch sw-surface-sunk-light"><div class="name">--tandem-surface-sunk</div><div class="val">oklch(0.96 0.006 80)</div></div>
+            <div class="swatch sw-border-light"><div class="name">--tandem-border</div><div class="val">oklch(0.92 0.005 280)</div></div>
+            <div class="swatch sw-fg-light"><div class="name">--tandem-fg</div><div class="val">oklch(0.22 0.012 280)</div></div>
+          </div>
+        </div>
+        <div class="panel bundle">
+          <div class="panel-header">Bundle · colors_and_type.css</div>
+          <div class="swatch-grid">
+            <div class="swatch sw-bg-light"><div class="name">--tandem-bg</div><div class="val">oklch(0.985 0.004 80)</div></div>
+            <div class="swatch sw-surface-light"><div class="name">--tandem-surface</div><div class="val">oklch(1 0 0)</div></div>
+            <div class="swatch sw-surface-muted-light"><div class="name">--tandem-surface-muted</div><div class="val">oklch(0.975 0.005 80)</div></div>
+            <div class="swatch sw-surface-sunk-light"><div class="name">--tandem-surface-sunk</div><div class="val">oklch(0.96 0.006 80)</div></div>
+            <div class="swatch sw-border-light"><div class="name">--tandem-border</div><div class="val">oklch(0.92 0.005 280)</div></div>
+            <div class="swatch sw-fg-light"><div class="name">--tandem-fg</div><div class="val">oklch(0.22 0.012 280)</div></div>
+          </div>
+        </div>
+      </div>
+
+      <h2>Dark mode canvas — <span class="verdict v-prod-wins">Prod wins</span></h2>
+      <p>The divergence: bundle uses hue 270° / lightness 0.18 (pre-v7 baseline); production uses hue 280° / lightness 0.22 (calm-v7 canon shipped via #776 and #621). Side-by-side, the bundle's dark canvas reads as colder and deeper; production reads warmer and slightly lifted. The fg color also differs in hue (bundle 80° warm vs production 280° cool) — bundle's warm fg can read as off-balance against the cool dark surface.</p>
+      <div class="row">
+        <div class="panel prod">
+          <div class="panel-header">Production · [data-theme="dark"]</div>
+          <div class="swatch-grid">
+            <div class="swatch sw-bg-prod-dark"><div class="name">--tandem-bg</div><div class="val">oklch(0.22 0.012 280)</div></div>
+            <div class="swatch sw-surface-prod-dark"><div class="name">--tandem-surface</div><div class="val">oklch(0.27 0.012 280)</div></div>
+            <div class="swatch sw-surface-muted-prod-dark"><div class="name">--tandem-surface-muted</div><div class="val">oklch(0.25 0.012 280)</div></div>
+            <div class="swatch sw-surface-sunk-prod-dark"><div class="name">--tandem-surface-sunk</div><div class="val">oklch(0.20 0.012 280)</div></div>
+            <div class="swatch sw-border-prod-dark"><div class="name">--tandem-border</div><div class="val">oklch(0.34 0.010 280)</div></div>
+            <div class="swatch sw-fg-prod-dark"><div class="name">--tandem-fg</div><div class="val">oklch(0.94 0.006 280)</div></div>
+          </div>
+        </div>
+        <div class="panel bundle">
+          <div class="panel-header">Bundle · [data-theme="dark"]</div>
+          <div class="swatch-grid">
+            <div class="swatch sw-bg-bundle-dark"><div class="name">--tandem-bg</div><div class="val">oklch(0.18 0.012 270)</div></div>
+            <div class="swatch sw-surface-bundle-dark"><div class="name">--tandem-surface</div><div class="val">oklch(0.22 0.012 270)</div></div>
+            <div class="swatch sw-surface-muted-bundle-dark"><div class="name">--tandem-surface-muted</div><div class="val">oklch(0.20 0.012 270)</div></div>
+            <div class="swatch sw-surface-sunk-bundle-dark"><div class="name">--tandem-surface-sunk</div><div class="val">oklch(0.16 0.012 270)</div></div>
+            <div class="swatch sw-border-bundle-dark"><div class="name">--tandem-border</div><div class="val">oklch(0.30 0.012 270)</div></div>
+            <div class="swatch sw-fg-bundle-dark"><div class="name">--tandem-fg</div><div class="val">oklch(0.94 0.005 80)</div></div>
+          </div>
+        </div>
+      </div>
+
+      <h2>Authorship + Suggestion (PROTECTED) — <span class="verdict v-protected">Same · protected</span></h2>
+      <p>These tokens encode ADR-026 (character-level authorship) and ADR-027 (audience-first suggestion). Identical in both sources; the vitest snapshot gate at <code>tests/design-system-impl/token-protection.test.ts</code> blocks any drift in the umbrella branch.</p>
+      <div class="protected-row">
+        <h3>Light mode</h3>
+        <div class="swatch-grid" style="margin-top: 12px;">
+          <div class="swatch" style="background: var(--author-user-light); color: white;">
+            <div class="name">--tandem-author-user</div><div class="val">oklch(0.55 0.14 245)</div>
+          </div>
+          <div class="swatch" style="background: var(--author-claude-light); color: white;">
+            <div class="name">--tandem-author-claude</div><div class="val">#d97757</div>
+          </div>
+          <div class="swatch" style="background: var(--suggestion-light); color: white;">
+            <div class="name">--tandem-suggestion</div><div class="val">oklch(0.52 0.18 305)</div>
+          </div>
+          <div class="swatch" style="background: var(--suggestion-bg-light); color: var(--page-fg);">
+            <div class="name">--tandem-suggestion-bg</div><div class="val">color-mix 10%</div>
+          </div>
+        </div>
+      </div>
+      <div class="protected-row">
+        <h3>Dark mode</h3>
+        <div class="swatch-grid" style="margin-top: 12px;">
+          <div class="swatch" style="background: var(--author-user-dark); color: oklch(0.15 0.01 245);">
+            <div class="name">--tandem-author-user</div><div class="val">oklch(0.72 0.13 245)</div>
+          </div>
+          <div class="swatch" style="background: var(--author-claude-dark); color: oklch(0.24 0.03 55);">
+            <div class="name">--tandem-author-claude</div><div class="val">#e89a78</div>
+          </div>
+          <div class="swatch" style="background: var(--suggestion-dark); color: oklch(0.20 0.05 305);">
+            <div class="name">--tandem-suggestion</div><div class="val">#a78bfa</div>
+          </div>
+          <div class="swatch" style="background: var(--suggestion-bg-dark); color: #ddd6fe;">
+            <div class="name">--tandem-suggestion-bg</div><div class="val">#2e1065</div>
+          </div>
+        </div>
+      </div>
+
+      <h2>What this means for sub-PRs</h2>
+      <p>Production stays on the calm-v7 dark canvas. Bundle <code>colors_and_type.css</code> remains the source of truth for everything ELSE — type scale, spacing, radius, shadows, semantic type roles, utility classes, light-mode tokens, dark-mode authorship + status + suggestion + highlights. Sub-PRs touching token usage should reference the right-hand "Bundle · ..." column for everything except the dark canvas, fg-pair, and the protected tokens, which all stay on production values.</p>
+
+      <footer>
+        Companion to <a href="../token-audit.md">token-audit.md</a> · part of the <code>feat/design-system-impl</code> umbrella branch.
+      </footer>
+    </div>
+  </body>
+</html>

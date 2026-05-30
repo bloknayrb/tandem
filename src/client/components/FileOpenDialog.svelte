@@ -9,6 +9,7 @@ import {
   addRecentFile,
   clearRecentFiles,
   loadRecentFiles,
+  recentFilePaths,
   saveRecentFiles,
 } from "../utils/recentFiles.js";
 import { openServerPath } from "../utils/server-paths.js";
@@ -22,17 +23,15 @@ const { onClose }: Props = $props();
 let error = $state<string | null>(null);
 let loading = $state(false);
 let fileInputEl: HTMLInputElement | undefined = $state();
-let recentFiles = $state<string[]>(loadRecentFiles());
+let recentFiles = $state<string[]>(recentFilePaths(loadRecentFiles()));
 
 const extensionList = Array.from(SUPPORTED_EXTENSIONS).sort();
 const acceptAttr = extensionList.join(",");
 
 function pushRecent(path: string) {
-  recentFiles = (() => {
-    const updated = addRecentFile(recentFiles, path);
-    saveRecentFiles(updated);
-    return updated;
-  })();
+  const updated = addRecentFile(loadRecentFiles(), path);
+  saveRecentFiles(updated);
+  recentFiles = recentFilePaths(updated);
 }
 
 function handleClearRecent() {
@@ -118,7 +117,7 @@ function handleBrowse() {
   aria-modal="true"
   aria-label="Open File"
   tabindex={-1}
-  style="position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; background: rgba(0,0,0,0.3);"
+  style="position: fixed; inset: 0; z-index: var(--tandem-z-above-titlebar); display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent);"
   onclick={(e) => {
     if (e.target === e.currentTarget) onClose();
   }}
@@ -127,7 +126,7 @@ function handleBrowse() {
   }}
 >
   <div
-    style="background: var(--tandem-surface); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-3); width: 440px; padding: 20px;"
+    style="background: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-5); box-shadow: var(--tandem-shadow-3); width: 440px; padding: 20px;"
     data-testid="file-open-dialog"
   >
     <div style="display: flex; justify-content: space-between; margin-bottom: 16px;">
@@ -135,8 +134,9 @@ function handleBrowse() {
         Open File
       </h3>
       <button
+        class="modal-close"
         onclick={onClose}
-        style="background: none; border: none; cursor: pointer; font-size: 16px; color: var(--tandem-fg-subtle);"
+        aria-label="Close"
       >
         ×
       </button>
@@ -234,3 +234,29 @@ function handleBrowse() {
     {/if}
   </div>
 </div>
+
+<style>
+  /* Close button — mirrors SettingsModal.svelte's `.settings-modal-close` recipe
+     so the modal family reads as one. Inline style cannot express :hover /
+     :focus-visible. */
+  .modal-close {
+    background: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    color: var(--tandem-fg-subtle);
+    font-size: 18px;
+    line-height: 1;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border-radius: var(--tandem-r-2);
+  }
+  .modal-close:hover,
+  .modal-close:focus-visible {
+    color: var(--tandem-fg);
+    background: var(--tandem-surface-sunk);
+    outline: none;
+  }
+</style>

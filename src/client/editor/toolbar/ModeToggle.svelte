@@ -37,24 +37,31 @@ const { tandemMode, onModeChange }: Props = $props();
 <style>
   .mode-toggle {
     display: inline-flex;
-    padding: 3px;
+    /* Bundle's `.a8 .seg` recipe: 2px track padding + a 1px border so the
+       segmented control reads as a chip rather than a recessed plate. The
+       surface-sunk track is preserved from the prior version because the
+       lighter `surface` active pill needs the contrast in both themes. */
+    padding: 2px;
     background: var(--tandem-surface-sunk);
     border: 1px solid var(--tandem-border);
     border-radius: var(--tandem-r-pill);
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 600;
     gap: 0;
   }
   .mode-toggle button {
-    padding: 4px 12px;
+    padding: 5px 14px;
     border-radius: var(--tandem-r-pill);
     color: var(--tandem-fg-muted);
     background: transparent;
     border: none;
     cursor: pointer;
     font: inherit;
-    font-weight: 500;
     line-height: 1;
-    transition: background 140ms ease, color 140ms ease;
+    /* The active pill currently swaps `background` directly. The bundle's A8
+       motion vocabulary uses a sliding `.thumb` element — deferred to motion
+       (#798) so the rest of the family stays cohesive when it lands. */
+    transition: color 140ms ease;
   }
   .mode-toggle button:hover:not(.on) {
     color: var(--tandem-fg);
@@ -62,7 +69,7 @@ const { tandemMode, onModeChange }: Props = $props();
   .mode-toggle button.on {
     background: var(--tandem-surface);
     color: var(--tandem-fg);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    box-shadow: var(--tandem-shadow-1);
   }
   @media (forced-colors: active) {
     .mode-toggle button[aria-pressed="true"] {

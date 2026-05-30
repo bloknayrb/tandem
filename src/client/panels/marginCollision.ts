@@ -32,6 +32,12 @@ const DEFAULT_GAP = 6;
  * still emitted at their natural `top` (they just don't participate as
  * push-sources, since we don't know their bottom edge).
  *
+ * STUB-NON-PUSH CONTRACT (Stage C): a `stub`-density bubble must not advance the
+ * collision cursor — stubs are anchor pips that overlap freely, not space-
+ * claiming cards. C-2 honors this by passing `height: undefined` for stubs,
+ * which lands in the unknown-height branch below (the cursor is not advanced).
+ * No logic change is needed here; this comment is the contract C-2 relies on.
+ *
  * Stable ordering for equal tops: input order is preserved by tagging the
  * original index pre-sort.
  */

@@ -1,6 +1,6 @@
 {
   "name": "tandem-editor",
-  "version": "0.13.0",
+  "version": "0.13.5",
   "description": "Edit and iterate on documents with any MCP-capable AI (Claude by default). Real-time push via plugin monitor or channel shim.",
   "repository": {
     "type": "git",
@@ -48,6 +48,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "capture:screenshots": "cross-env SCREENSHOTS=1 playwright test --config=scripts/screenshots/playwright.config.ts",
+    "capture:design-baselines": "cross-env CAPTURE_DESIGN_BASELINES=1 playwright test --config=scripts/design-baselines/playwright.config.ts",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "biome format --write .",
@@ -71,7 +72,7 @@
       "eslint --fix",
       "biome check --write"
     ],
-    "**/*.{svelte,css,html}": [
+    "src/**/*.{svelte,css,html}": [
       "biome check --write"
     ],
     "**/*.mjs": [

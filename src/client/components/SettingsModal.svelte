@@ -431,7 +431,7 @@ async function handleViewChangelog(): Promise<void> {
       }
     }}
     data-testid="settings-modal-scrim"
-    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: 100000;"
+    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: var(--tandem-z-above-titlebar);"
   ></div>
   <div
     bind:this={modalEl}
@@ -612,12 +612,13 @@ async function handleViewChangelog(): Promise<void> {
     background: var(--tandem-surface);
     color: var(--tandem-fg);
     border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-4);
+    border-radius: var(--tandem-r-5);
     box-shadow: var(--tandem-shadow-3);
-    /* Sits above the title bar's z-index: 99999 lift (used to clear
-       tauri-plugin-decorum's overlay). Without this the title bar's tab
-       strip would intercept clicks targeting the modal content area. */
-    z-index: 100001;
+    /* One above the scrim's --tandem-z-above-titlebar so the dialog sits over
+       its own backdrop. The above-titlebar tier clears the title bar's
+       --tandem-z-titlebar lift (tauri-plugin-decorum's overlay); without it the
+       title bar's tab strip would intercept clicks on the modal content. */
+    z-index: calc(var(--tandem-z-above-titlebar) + 1);
     display: grid;
     grid-template-columns: 188px minmax(0, 1fr);
     outline: none;
@@ -627,7 +628,7 @@ async function handleViewChangelog(): Promise<void> {
   .settings-modal-sidebar {
     display: flex;
     flex-direction: column;
-    gap: var(--tandem-space-4);
+    gap: var(--tandem-space-3);
     padding: var(--tandem-space-5) var(--tandem-space-3);
     border-right: 1px solid var(--tandem-border);
     background: var(--tandem-surface-muted);
@@ -682,6 +683,7 @@ async function handleViewChangelog(): Promise<void> {
     font-weight: 500;
     text-align: left;
     cursor: pointer;
+    transition: background 100ms, color 100ms;
   }
 
   .settings-modal-nav-btn:hover {
@@ -801,16 +803,18 @@ async function handleViewChangelog(): Promise<void> {
     color: var(--tandem-fg-subtle);
     font-size: 18px;
     line-height: 1;
-    padding: 4px 8px;
-    min-width: 30px;
-    min-height: 30px;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0;
     border-radius: var(--tandem-r-2);
   }
 
   .settings-modal-close:hover,
   .settings-modal-close:focus-visible {
     color: var(--tandem-fg);
-    background: var(--tandem-surface-muted);
+    background: var(--tandem-surface-sunk);
     outline: none;
   }
 
@@ -838,6 +842,50 @@ async function handleViewChangelog(): Promise<void> {
     margin-bottom: 6px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+  }
+
+  /* Shared helper-text style for tab bodies — pulls inline 10px hints out of
+     individual tabs into a single typographic recipe matching the bundle's
+     `.settings-hint` (11px / fg-subtle / line-height 1.4). Consumers keep any
+     positional margins (margin-top/-bottom) inline since they vary by row. */
+  :global(.settings-hint) {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--tandem-fg-subtle);
+  }
+
+  /* Shared segmented-control recipe used by per-tab mode toggles
+     (Collaboration: Tandem/Solo default-mode pair). Active state is driven
+     by [aria-checked="true"] so the markup stays semantically a radiogroup.
+     Matches the bundle's `.settings-mode-btn` shape (flex:1, 2px border,
+     accent-active) while using production radii/spacing tokens for visual
+     consistency with the shell's other controls. */
+  :global(.settings-mode-btns) {
+    display: flex;
+    gap: var(--tandem-space-2);
+  }
+  :global(.settings-mode-btn) {
+    flex: 1;
+    padding: var(--tandem-space-2);
+    min-height: 30px;
+    border: 2px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg-muted);
+    font-size: 12px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: background 100ms, color 100ms, border-color 100ms;
+  }
+  :global(.settings-mode-btn[aria-checked="true"]) {
+    border-color: var(--tandem-accent);
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent-fg-strong);
+    font-weight: 600;
+  }
+  :global(.settings-mode-btn:focus-visible) {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
 
   /* W9: narrow viewports collapse the persistent sidebar grid column into a

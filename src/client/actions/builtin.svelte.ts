@@ -56,6 +56,7 @@ interface ActionDeps {
   annotationDismiss: () => void;
   selectBlock: () => void;
   toggleAuthorship: () => void;
+  toggleFormattingBar: () => void;
   /**
    * Save the active document under a new file path. Used to promote an
    * ephemeral scratchpad (or any `upload://`-backed doc) into a real file.
@@ -749,6 +750,17 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+Alt+A",
     run() {
       guardedRun("toggle-authorship", (d) => d.toggleAuthorship());
+    },
+  },
+  {
+    // Palette-only (no keyboard shortcut): Ctrl+Alt+F is a Linux VT switch, so
+    // it's deliberately not bound. Restoring a hidden bar is via this action,
+    // the Appearance setting, or the always-full selection popup.
+    id: "toggle-formatting-bar",
+    label: "Toggle formatting bar",
+    group: "view",
+    run() {
+      guardedRun("toggle-formatting-bar", (d) => d.toggleFormattingBar());
     },
   },
   {

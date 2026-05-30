@@ -13,6 +13,34 @@ export type Density = "compact" | "cozy" | "spacious";
 export type PrimaryTab = "chat" | "annotations";
 export type PanelOrder = "chat-editor-annotations" | "annotations-editor-chat";
 export type TextSize = "s" | "m" | "l";
+
+/**
+ * Reading-measure preset for the editor content track (Phase 3.5 Stage B).
+ * Replaces the viewport-relative `editorWidthPercent` with a stable line
+ * length: "narrow"/"comfortable"/"wide" map to ch widths (a measure that
+ * holds the same number of characters per line regardless of rail state),
+ * "full" keeps the old no-clamp behavior (content fills the available track).
+ */
+// Source of truth for the reading-measure union. Driving `EditorMeasure`,
+// `EDITOR_MEASURE_CH`, and the runtime validator off one `as const` array means
+// adding a fifth preset is a single edit — the type-checker propagates it
+// through the `Record<EditorMeasure, …>` exhaustiveness on `EDITOR_MEASURE_CH`,
+// and the `.includes()` validator below picks it up at runtime without a
+// parallel `===` chain to forget. Mirrors `VALID_MODEL_PROVIDERS` (#659).
+export const EDITOR_MEASURES = ["narrow", "comfortable", "wide", "full"] as const;
+export type EditorMeasure = (typeof EDITOR_MEASURES)[number];
+
+/** Preset → CSS length for the grid's `--editor-measure` custom property. */
+export const EDITOR_MEASURE_CH: Readonly<Record<EditorMeasure, string>> = {
+  narrow: "58ch",
+  comfortable: "68ch",
+  wide: "82ch",
+  full: "100%",
+};
+
+function isEditorMeasure(value: unknown): value is EditorMeasure {
+  return typeof value === "string" && (EDITOR_MEASURES as readonly string[]).includes(value);
+}
 export type ThemePreference = "light" | "dark" | "warm" | "system";
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 
@@ -84,7 +112,7 @@ export interface TandemSettings {
   schemaVersion: number;
   primaryTab: PrimaryTab;
   panelOrder: PanelOrder;
-  editorWidthPercent: number;
+  editorMeasure: EditorMeasure;
   selectionDwellMs: number;
   showAuthorship: boolean;
   reduceMotion: boolean;
@@ -105,6 +133,10 @@ export interface TandemSettings {
   highContrast: boolean;
   annotationPatterns: boolean;
   selectionToolbar: boolean;
+  // 1.11: when false, the persistent floating formatting bar is hidden. The
+  // always-full selection popup mirrors every bar control, so formatting stays
+  // reachable while hidden (and Ctrl+Z/Y still drive undo/redo). Default true.
+  formattingBarVisible: boolean;
   soloRailHidden: boolean;
   degradedBannerDelayMs: number;
   // TODO(v0.11.0): wire to yjsSync reconnect strategy
@@ -113,8 +145,17 @@ export interface TandemSettings {
   holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
-  // #596: when false, suppresses inline annotation marks in the editor; side-panel cards stay.
-  showAnnotationDecorations: boolean;
+  // #596 → 1.13: per-annotation-type display toggles (split from the old single
+  // showAnnotationDecorations). When false, suppresses that type's inline marks
+  // in the editor; side-panel cards stay. Display-only — `showNotes:false` hides
+  // the user's own note marks in their own view but never affects ADR-027.
+  showComments: boolean;
+  showHighlights: boolean;
+  showNotes: boolean;
+  // 1.13: transient master "mute all decorations" overlay (clean reading view).
+  // Suppresses all decoration rendering without clobbering the per-type prefs,
+  // so restoring returns exactly the prior set. Editing a per-type row auto-unmutes.
+  decorationsMuted: boolean;
   // #659: AI provider registry. API keys live in the OS keychain
   // (`tandem-models` service) via `POST /api/models/secrets/:ref`; the
   // entries here only carry the opaque `apiKeyRef`.
@@ -161,10 +202,10 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 10,
+  schemaVersion: 13,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
-  editorWidthPercent: 100,
+  editorMeasure: "comfortable",
   selectionDwellMs: SELECTION_DWELL_DEFAULT_MS,
   showAuthorship: true,
   reduceMotion: false,
@@ -178,12 +219,16 @@ const DEFAULTS: TandemSettings = {
   highContrast: false,
   annotationPatterns: false,
   selectionToolbar: true,
+  formattingBarVisible: true,
   soloRailHidden: true,
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
   holdAnnotationsWhileOffline: true,
   marginView: false,
-  showAnnotationDecorations: true,
+  showComments: true,
+  showHighlights: true,
+  showNotes: true,
+  decorationsMuted: false,
   models: [],
   defaultModelId: null,
   customShortcuts: {},
@@ -325,16 +370,37 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  * v7→v8: introduce `showAnnotationDecorations: true` (#596). Default
  *   preserves prior visual behavior; users opt in to suppress inline
  *   annotation marks in the editor.
- * v8→v9: introduce `customShortcuts: {}` (ADR-041, remappable keyboard
+ * v8→v9 (1.13): split the single `showAnnotationDecorations` into per-type
+ *   `showComments` / `showHighlights` / `showNotes` + a transient
+ *   `decorationsMuted` master overlay. The old flag was a persistent "all
+ *   marks off" preference, so it maps onto all three per-type flags by
+ *   intent (mute stays off). This migration sets values (derives three
+ *   fields from one) rather than being a pure version bump.
+ * v9→v10 (1.11): introduce `formattingBarVisible: true`. Pure version bump —
+ *   default preserves today's always-shown bar; normalizeKnownFields coerces.
+ * v10→v11: introduce `customShortcuts: {}` (ADR-041, remappable keyboard
  *   shortcuts). Structural no-op like v7→v8 — `normalizeKnownFields` runs
  *   `parseCustomShortcuts` on whatever is present, dropping invalid /
  *   reserved-colliding entries.
- * v9→v10: introduce `fontByExtension: {}` (#811, per-format editor font).
- *   Structural no-op — `normalizeKnownFields` runs `parseFontByExtension` on
- *   whatever is present. Empty default preserves fresh-install behavior: with
- *   no override, `resolveFont` falls back to the global `editorFont`.
+ * v11→v12 (Phase 3.5 Stage B): replace the viewport-relative
+ *   `editorWidthPercent` (40–100) with the `editorMeasure` reading-measure
+ *   preset. `%` and `ch` aren't comparable units, so the mapping is
+ *   intentionally coarse: a default-untouched blob (`editorWidthPercent ===
+ *   100`, or the field absent entirely) → `"full"` (preserve today's
+ *   full-width feel for the silent majority); any explicit non-100 width →
+ *   `"comfortable"` (the new default, an accepted one-time approximate reset).
+ *   `editorWidthPercent` is deleted on read and listed in REMOVED_FIELDS so it
+ *   can't resurrect via forward-compat.
+ * v12→v13: introduce `fontByExtension: {}` (#811, per-format editor font).
+ *   Cross-branch fold-in — master shipped this as its own v9→v10 while the
+ *   design-system umbrella independently used v10–v12; renumbered to v13 to keep
+ *   the migration chain monotonic. Structural no-op — `normalizeKnownFields`
+ *   runs `parseFontByExtension` on whatever is present, so the field's value is
+ *   safe regardless of the version step. Empty default preserves fresh-install
+ *   behavior: with no override, `resolveFont` falls back to the global
+ *   `editorFont`.
  */
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -345,7 +411,7 @@ export const CURRENT_SCHEMA_VERSION = 10;
  *
  * Both call sites must produce identical normalization of known fields
  * — otherwise a forward-compat load could leak garbage values
- * (`editorWidthPercent: -999`, `theme: "neon"`) into the running UI.
+ * (`accentHue: 9999`, `theme: "neon"`) into the running UI.
  *
  * v5 (Wave I): `leftRailTabs` and `rightRailTabs` no longer exist. The
  * `loadSettings` migration strips them on read; this helper does not
@@ -365,10 +431,9 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       parsed.panelOrder === "annotations-editor-chat"
         ? "annotations-editor-chat"
         : "chat-editor-annotations",
-    editorWidthPercent: Math.max(
-      40,
-      Math.min(100, Number(parsed.editorWidthPercent) || DEFAULTS.editorWidthPercent),
-    ),
+    editorMeasure: isEditorMeasure(parsed.editorMeasure)
+      ? parsed.editorMeasure
+      : DEFAULTS.editorMeasure,
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,
       Math.min(
@@ -410,6 +475,8 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     highContrast: parsed.highContrast === true,
     annotationPatterns: parsed.annotationPatterns === true,
     selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
+    formattingBarVisible:
+      parsed.formattingBarVisible === false ? false : DEFAULTS.formattingBarVisible,
     soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
     degradedBannerDelayMs:
       typeof parsed.degradedBannerDelayMs === "number" &&
@@ -428,8 +495,10 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
         ? parsed.holdAnnotationsWhileOffline
         : DEFAULTS.holdAnnotationsWhileOffline,
     marginView: parsed.marginView === true,
-    showAnnotationDecorations:
-      parsed.showAnnotationDecorations === false ? false : DEFAULTS.showAnnotationDecorations,
+    showComments: parsed.showComments === false ? false : DEFAULTS.showComments,
+    showHighlights: parsed.showHighlights === false ? false : DEFAULTS.showHighlights,
+    showNotes: parsed.showNotes === false ? false : DEFAULTS.showNotes,
+    decorationsMuted: parsed.decorationsMuted === true,
     models: parseModels(parsed.models),
     defaultModelId:
       typeof parsed.defaultModelId === "string" && parsed.defaultModelId.length > 0
@@ -534,16 +603,79 @@ export function loadSettings(): TandemSettings {
         parsed = { ...parsed, schemaVersion: 8 };
       }
       if (parsed.schemaVersion === 8) {
-        // v8→v9: introduce `customShortcuts: {}` (ADR-041). Structural no-op;
-        // normalizeKnownFields runs `parseCustomShortcuts` on whatever the
-        // blob already carries.
-        parsed = { ...parsed, schemaVersion: 9 };
+        // v8→v9: split the single `showAnnotationDecorations` into per-type
+        // flags. The old flag meant "all marks off" (a persistent preference,
+        // not a transient mute), so map `false` onto all three per-type flags
+        // by intent; mute starts off. Sets values because it derives three
+        // fields from one — normalizeKnownFields can't infer the split.
+        const allOff = parsed.showAnnotationDecorations === false;
+        const next: Record<string, unknown> = {
+          ...parsed,
+          showComments: allOff ? false : true,
+          showHighlights: allOff ? false : true,
+          showNotes: allOff ? false : true,
+          decorationsMuted: false,
+          schemaVersion: 9,
+        };
+        delete next.showAnnotationDecorations;
+        parsed = next;
       }
       if (parsed.schemaVersion === 9) {
-        // v9→v10: introduce `fontByExtension: {}` (#811). Structural no-op;
-        // normalizeKnownFields runs `parseFontByExtension`. Empty default keeps
-        // fresh-install behavior intact (resolution falls back to defaults).
+        // v9→v10: introduce `formattingBarVisible`. Pure version bump — do NOT
+        // set the field here (that would clobber an explicit `false`).
+        // normalizeKnownFields defaults a missing field to true and preserves
+        // an explicit false.
         parsed = { ...parsed, schemaVersion: 10 };
+      }
+      if (parsed.schemaVersion === 10) {
+        // v10→v11: introduce `customShortcuts: {}` (ADR-041). Structural no-op;
+        // normalizeKnownFields runs `parseCustomShortcuts` on whatever the
+        // blob already carries.
+        parsed = { ...parsed, schemaVersion: 11 };
+      }
+      if (parsed.schemaVersion === 11) {
+        // v11→v12: replace `editorWidthPercent` with the `editorMeasure` preset.
+        // Synthesize the preset from the legacy width, preserving full-width for
+        // the default-untouched majority and approximately resetting customized
+        // widths to the new Comfortable default (% and ch aren't comparable).
+        const next: Record<string, unknown> = { ...parsed, schemaVersion: 12 };
+        // Cross-branch guard (mirrors the v9 reconciliation below): if a parallel
+        // branch already wrote `editorMeasure` at v11, keep it — only synthesize
+        // from the legacy field when the new one is absent.
+        if (next.editorMeasure === undefined) {
+          // An absent legacy field means the width was never customized (the v11
+          // default was 100), so it's treated the same as an explicit 100 → "full".
+          // Only an explicit non-100 width is an intentional customization that
+          // gets the approximate reset to the new Comfortable default.
+          const pct = parsed.editorWidthPercent;
+          next.editorMeasure = pct === undefined || pct === 100 ? "full" : "comfortable";
+        }
+        // Explicit delete so the legacy field doesn't round-trip until the next
+        // write; REMOVED_FIELDS additionally blocks it on the forward-compat path.
+        delete next.editorWidthPercent;
+        parsed = next;
+      }
+      // Cross-branch reconciliation guard (value-keyed, not version-keyed).
+      // Parallel branches diverged on schemaVersion numbering, so a blob can
+      // reach a version past v9 while still carrying the legacy
+      // `showAnnotationDecorations` flag WITHOUT the v8→v9 split having run on it
+      // (a pure version-bump step advanced it past v9 first). Re-derive the split
+      // here, keyed on the field's value so an explicit "all marks off"
+      // preference isn't silently reset to all-on. Only the `=== false` case is
+      // lossy: true/absent already map onto the all-on defaults. No-op for blobs
+      // that already split (per-type fields present). (`showAnnotationDecorations`
+      // is dropped regardless by normalizeKnownFields, which only emits known keys.)
+      if (parsed.showAnnotationDecorations === false && parsed.showComments === undefined) {
+        parsed = { ...parsed, showComments: false, showHighlights: false, showNotes: false };
+      }
+      if (parsed.schemaVersion === 12) {
+        // v12→v13: introduce `fontByExtension: {}` (#811). Cross-branch fold-in —
+        // master shipped this as v9→v10, but the design-system umbrella had
+        // independently used v10–v12, so it's renumbered to v13 to keep the chain
+        // monotonic. Structural no-op; normalizeKnownFields runs
+        // `parseFontByExtension`. Empty default keeps fresh-install behavior
+        // intact (resolution falls back to defaults).
+        parsed = { ...parsed, schemaVersion: 13 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
@@ -558,15 +690,31 @@ export function loadSettings(): TandemSettings {
         console.warn(
           `[tandem] settings schemaVersion=${parsed.schemaVersion} is newer than v${CURRENT_SCHEMA_VERSION}; loading defensively without writing.`,
         );
+        // Surface forward-compat downgrades on closed-enum fields. Other
+        // unknown future FIELDS pass through verbatim below (the futureFields
+        // loop), but a closed-enum VALUE like `editorMeasure: "extra-wide"`
+        // (introduced in a hypothetical v13) gets silently coerced to the
+        // default by `normalizeKnownFields`. Without this warn the user
+        // bouncing back to the older client would see "comfortable" with no
+        // signal — indistinguishable from "user changed their mind." `_readOnly`
+        // still blocks the write-back so the future-client state isn't damaged.
+        const originalEditorMeasure = parsed.editorMeasure;
         const normalized = normalizeKnownFields(parsed);
+        if (
+          typeof originalEditorMeasure === "string" &&
+          originalEditorMeasure !== normalized.editorMeasure
+        ) {
+          console.warn(
+            `[tandem] editorMeasure=${JSON.stringify(originalEditorMeasure)} from newer client is unknown to v${CURRENT_SCHEMA_VERSION}; displaying as ${JSON.stringify(normalized.editorMeasure)} (your setting is preserved on-disk).`,
+          );
+        }
         // Preserve unknown future fields verbatim so a user bouncing back
         // to the newer client doesn't perceive a regression. `knownKeys`
         // is runtime-derived from the helper output (NOT the type), so
         // any field the current code doesn't actively normalize passes
         // through unmodified — exactly the contract `_readOnly: true`
         // advertises. Known fields are sanitized via the helper so
-        // garbage like `editorWidthPercent: -999` doesn't leak into the
-        // running UI.
+        // garbage like `accentHue: 9999` doesn't leak into the running UI.
         const knownKeys = new Set(Object.keys(normalized));
         // Explicitly-removed schema fields. Without this set, fields that
         // were stripped by a migration step (e.g. v4→v5 dropped
@@ -578,7 +726,13 @@ export function loadSettings(): TandemSettings {
         // One-way ratchet: removing an entry from this set requires bumping
         // CURRENT_SCHEMA_VERSION such that no older client ever observes
         // the resurrected field name on a write-through round-trip.
-        const REMOVED_FIELDS = new Set(["leftRailTabs", "rightRailTabs", "showIntegrationWizard"]);
+        const REMOVED_FIELDS = new Set([
+          "leftRailTabs",
+          "rightRailTabs",
+          "showIntegrationWizard",
+          "showAnnotationDecorations",
+          "editorWidthPercent",
+        ]);
         const futureFields: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(parsed)) {
           if (!knownKeys.has(k) && k !== "_readOnly" && !REMOVED_FIELDS.has(k)) {
@@ -617,7 +771,6 @@ export function mergeAndClampSettings(
     // Re-validate per-format overrides so a partial update can't persist a
     // junk value (e.g. `{ md: "comic-sans" }`).
     fontByExtension: parseFontByExtension(merged.fontByExtension),
-    editorWidthPercent: Math.max(40, Math.min(100, merged.editorWidthPercent)),
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,
       Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
@@ -625,6 +778,13 @@ export function mergeAndClampSettings(
     accentHue: Number.isFinite(merged.accentHue)
       ? Math.max(0, Math.min(360, merged.accentHue))
       : DEFAULTS.accentHue,
+    // Closed enum: an `as EditorMeasure` cast at a call site or a JSON-imported
+    // preset payload can land a bogus string here. Reuse the on-load validator
+    // so the clamp-on-write contract holds for `editorMeasure` the same way it
+    // already holds for `accentHue` / `selectionDwellMs` / `defaultModelId`.
+    editorMeasure: isEditorMeasure(merged.editorMeasure)
+      ? merged.editorMeasure
+      : DEFAULTS.editorMeasure,
     degradedBannerDelayMs: Math.max(5000, Math.min(120000, merged.degradedBannerDelayMs)),
     // Re-run the shape filter on `models` so an unsafe partial update (e.g.
     // hand-rolled call site that pushes an object missing `enabled`) can't

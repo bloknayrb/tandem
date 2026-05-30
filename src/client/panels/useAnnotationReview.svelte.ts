@@ -66,7 +66,6 @@ export interface UseAnnotationReviewReturn {
   getRecentlyResolved: () => Set<string>;
   getReviewIndex: () => number;
   getReviewTargets: () => Annotation[];
-  getActiveReviewAnn: () => Annotation | null;
 }
 
 export function useAnnotationReview({
@@ -91,11 +90,6 @@ export function useAnnotationReview({
 
   function getReviewTargets(): Annotation[] {
     return getAnnotations().filter(isPendingReviewTarget);
-  }
-
-  function getActiveReviewAnn(): Annotation | null {
-    const targets = getReviewTargets();
-    return targets.length > 0 ? (targets[reviewIndex] ?? null) : null;
   }
 
   function resolveAnnotation(id: string, status: "accepted" | "dismissed") {
@@ -223,31 +217,30 @@ export function useAnnotationReview({
     el?.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
   }
 
-  // Auto-set activeAnnotationId to the bulk-review target (default: first
-  // pending annotation) on initial mount AND whenever the previously-active
-  // annotation goes missing entirely (e.g., it was resolved or deleted). DOES
-  // NOT clobber an externally-set active id — that's the contract that makes
-  // App.svelte's Alt+]/Alt+[ keyboard nav stick.
+  // Empty selection is a valid resting state — there's no dedicated review mode
+  // anymore, so we never force-select on null (that was the old bulk-review
+  // model that always parked a target on the first pending annotation). We only
+  // AUTO-ADVANCE: when the currently-active annotation stops being a live pending
+  // one (deleted/accepted/dismissed), move selection to the FIRST remaining
+  // review target. (`reviewIndex` has no sequential cursor anymore — nothing
+  // increments it, so it sits at 0 and `targets[reviewIndex]` is `targets[0]`;
+  // the second effect below only ever clamps it back down.) When no targets
+  // remain that fallback is null, so selection naturally lands on empty. A
+  // deliberate deselect (Escape / click-off) sets null and stays null here.
+  //
+  // #768 Bug 2 nuance preserved: "still live" checks the full pending annotation
+  // set, not just review targets, so a user-clicked highlight overlapping a Claude
+  // comment (author === "user", excluded from getReviewTargets) stays focused
+  // instead of being clobbered back to the comment.
   $effect(() => {
-    const targets = getReviewTargets();
-    const fallbackId = targets[reviewIndex]?.id ?? null;
     const currentActive = getActiveAnnotationId?.() ?? null;
-    if (currentActive === null) {
-      onActiveAnnotationChange(fallbackId);
-      return;
-    }
-    // #768 Bug 2: only fall back when the active annotation no longer EXISTS as
-    // a live, pending annotation (it was deleted, accepted, or dismissed). A
-    // user-clicked highlight that overlaps a Claude comment is a valid focus
-    // target even though it is NOT a review target (`author === "user"`); the
-    // old `!targets.some(...)` check wrongly clobbered it back to the comment
-    // because highlights are excluded from `getReviewTargets()`. Checking the
-    // full live annotation set instead keeps the clicked highlight focused.
+    if (currentActive === null) return;
     const stillLive = getAnnotations().some(
       (a) => a.id === currentActive && a.status === "pending",
     );
     if (!stillLive) {
-      onActiveAnnotationChange(fallbackId);
+      const targets = getReviewTargets();
+      onActiveAnnotationChange(targets[reviewIndex]?.id ?? null);
     }
   });
 
@@ -268,6 +261,5 @@ export function useAnnotationReview({
     getRecentlyResolved: () => recentlyResolved,
     getReviewIndex: () => reviewIndex,
     getReviewTargets,
-    getActiveReviewAnn,
   };
 }
