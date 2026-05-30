@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Ctrl+T` opens the new-tab menu** — the tab strip's `+` dropdown (recent files / New Scratchpad / Browse) now has a keyboard entry point, matching the universal "new tab" convention. Registered as a remappable shortcut (`new-tab-menu`, default `Ctrl+T`), so it's customizable in Settings → Shortcuts like its siblings; pressing it again toggles the menu closed. Distinct from `Ctrl+Alt+T` (reopen closed tab).
 - **Customizable keyboard shortcuts (ADR-041)** — the ~17 App-level discrete shortcuts (Save, Save As, Settings, command palette, New Scratchpad, Close/Open/Reopen tab, toggle mode/authorship/panels, next/previous annotation, comment on selection, select block) are now user-remappable in Settings → Shortcuts via click-to-record. Remaps layer over the matcher (override-first), so users who don't customize see byte-identical behavior; text-formatting / Tiptap keymaps and family shortcuts (`Ctrl+1..9`, find, accept/dismiss, `?`) stay fixed. Conflict detection blocks a remap onto any shortcut already in use — including the fixed matcher branches it derives live from the matcher itself, so loose branches like `Ctrl+Shift+/` (help), `Ctrl+Alt+F` (find), and `Ctrl+Shift+3` (jump-to-tab) can't be silently shadowed. Overrides are validated on load/merge (junk, non-bindable, fixed-colliding, and duplicate-chord entries are dropped). The Help modal reflects effective bindings.
 
 ### Changed
