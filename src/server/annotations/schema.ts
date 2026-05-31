@@ -22,6 +22,7 @@ import {
   HighlightColorSchema,
   ReplyAuthorSchema,
 } from "../../shared/types.js";
+import { migrateUp } from "./migrations/index.js";
 import { logLegacyMigration, MIGRATE_TO_V1_DOC_HASH } from "./migration-log.js";
 
 /** On-disk envelope version. Bump when making breaking changes to the file shape. */
@@ -291,7 +292,24 @@ export function parseAnnotationDoc(raw: unknown): ParseAnnotationDocResult {
     }
   }
 
-  const result = AnnotationDocSchemaV1.safeParse(candidate);
+  // Run the versioned migration framework forward to the current schema
+  // version. Today `SCHEMA_VERSION` is 1, so any well-formed file is already
+  // at-or-below current and `migrateUp` returns the input unchanged — the
+  // wiring is dormant but live. When `SCHEMA_VERSION` is bumped to 2, the
+  // registered v1 → v2 migration begins running here with no further changes.
+  // A migration that throws (e.g. a record that fails the v_n input contract)
+  // is treated as corruption rather than crashing the load path.
+  const fromVersion =
+    typeof schemaVersion === "number" && Number.isInteger(schemaVersion) ? schemaVersion : 1;
+  let migrated: unknown;
+  try {
+    migrated = migrateUp(candidate, fromVersion, SCHEMA_VERSION);
+  } catch (err) {
+    console.error("[parseAnnotationDoc] migration failed:", err);
+    return { ok: false, error: "corrupt" };
+  }
+
+  const result = AnnotationDocSchemaV1.safeParse(migrated);
   if (!result.success) {
     console.error("[parseAnnotationDoc] schema validation failed:", result.error.issues);
     return { ok: false, error: "corrupt" };

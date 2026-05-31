@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Annotation schema v1→v2 migration framework (#320)** — the durable annotation envelope now has a versioned migration runner modeled on `src/server/integrations/migrations.ts`: an ordered `MigrationFn[]` chain plus `migrateUp(input, fromVersion, toVersion)` in `src/server/annotations/migrations/`, wired into `parseAnnotationDoc`'s load path. The framework ships with a dormant, proof-of-shape v1→v2 migration (identity over the payload, re-stamps `schemaVersion`); `SCHEMA_VERSION` stays `1`, so `migrateUp` is a no-op on every read today and v1 files load byte-identically. When the first real v2 lands, bumping `SCHEMA_VERSION` to `2` activates the chain with no further wiring. Migration failures are treated as corruption (quarantined) rather than crashing the load path; the upgraded shape persists on the next durable write (migrate-on-read, mirroring the integrations store). No on-disk shape change. No `src/server/mcp/` changes.
+
 ### Changed
 
 - **macOS notarization re-enabled in the release pipeline (#428)** — the App Store Connect API key trio (`APPLE_API_ISSUER` / `APPLE_API_KEY` / `APPLE_API_KEY_PATH`) was commented out during the v0.12.0-era Apple notary-service outage; it is now re-enabled in `tauri-release.yml`. The path stays a graceful no-op while the signing secrets are unset (build ships unsigned exactly as before), and activates the moment `APPLE_CERTIFICATE` and the API-key secrets are populated. A new **"Verify macOS signature + notarization"** CI gate mirrors the existing Windows signature check: it fails the release job if a produced `.app` is unsigned or missing a stapled notarization ticket (via `codesign --verify --deep --strict` + `xcrun stapler validate`, an offline deterministic check), and skips with a `::notice::` while unsigned-by-design. Added `docs/428-macos-notarization-runbook.md` covering enrollment confirmation, Developer ID cert + `.p8` API-key generation, the exact GitHub Secrets/Variables to populate, the notary-health check, and the throwaway-RC-tag smoke test. No application code changed.
