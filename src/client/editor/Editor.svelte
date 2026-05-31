@@ -4,6 +4,7 @@ import { Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Highlight from "@tiptap/extension-highlight";
+import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import Table from "@tiptap/extension-table";
@@ -140,6 +141,15 @@ $effect(() => {
         openOnClick: false,
         HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
       }),
+      // Block-level image node (issue #153). Renders `![alt](url)` markdown
+      // (round-tripped through mdast-ydoc) and embedded .docx images (mammoth
+      // converts them to base64 data URIs). allowBase64 is required so those
+      // data-URI sources parse and render rather than being stripped. The
+      // schema name ("image") + attrs (src/alt/title) match the `image`
+      // Y.XmlElement that the server converters produce, so it binds via
+      // y-prosemirror with no schema mismatch. As a block leaf node it
+      // contributes 0 flat-text chars, preserving annotation offset alignment.
+      Image.configure({ allowBase64: true }),
       Placeholder.configure({
         placeholder: "Start typing…",
       }),
