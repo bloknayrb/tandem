@@ -22,8 +22,8 @@ import {
   HighlightColorSchema,
   ReplyAuthorSchema,
 } from "../../shared/types.js";
-import { migrateUp } from "./migrations/index.js";
 import { logLegacyMigration, MIGRATE_TO_V1_DOC_HASH } from "./migration-log.js";
+import { migrateUp } from "./migrations/index.js";
 
 /** On-disk envelope version. Bump when making breaking changes to the file shape. */
 export const SCHEMA_VERSION = 1 as const;
