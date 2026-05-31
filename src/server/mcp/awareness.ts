@@ -4,7 +4,6 @@ import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
   Y_MAP_ACTIVITY,
-  Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
   Y_MAP_MODE,
   Y_MAP_SELECTION,
@@ -14,12 +13,11 @@ import { withMcp } from "../../shared/origins.js";
 import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
 import { TandemModeSchema } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
-import { docHash } from "../annotations/doc-hash.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
-import { collectAnnotations, refreshRange } from "./annotations.js";
 import { extractText, getCurrentDoc } from "./document.js";
+import { getDocumentStore } from "./document-store.js";
 import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 import { withTypingPresence } from "./typing-presence.js";
 
@@ -88,31 +86,30 @@ export function registerAwarenessTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_checkInbox", async ({ documentId }) => {
-      const current = getCurrentDoc(documentId);
-      if (!current) return noDocumentError();
-
-      const doc = getOrCreateDocument(current.docName);
-      const annotationsMap = doc.getMap(Y_MAP_ANNOTATIONS);
-      const allAnnotations = collectAnnotations(annotationsMap, docHash(current.filePath));
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
+      const doc = store.ydoc;
+      const allAnnotations = store.listAnnotations();
       const fullText = extractText(doc);
 
       // Refresh only unsurfaced annotations; batch Y.Map writes.
-      // refreshRange returns a tagged RefreshResult (ADR-032); we extract
-      // `.annotation` here because the inbox surfacer doesn't currently
-      // distinguish refresh outcomes. A future enhancement could route
-      // `degraded` / `failed` annotations into a separate notification.
+      // refreshAnnotation returns the refreshed annotation (the underlying
+      // refreshRange yields a tagged RefreshResult per ADR-032); the inbox
+      // surfacer doesn't currently distinguish refresh outcomes. A future
+      // enhancement could route `degraded` / `failed` annotations into a
+      // separate notification.
       const unsurfaced: Annotation[] = [];
-      withMcp(doc, () => {
+      store.transactMcp(() => {
         for (const raw of allAnnotations) {
           const lastSurfacedEditedAt = surfacedIds.get(raw.id);
           // Not yet surfaced
           if (lastSurfacedEditedAt === undefined) {
-            unsurfaced.push(refreshRange(raw, doc, annotationsMap).annotation);
+            unsurfaced.push(store.refreshAnnotation(raw));
             continue;
           }
           // Already surfaced — check if it's been edited since
           if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
-            unsurfaced.push(refreshRange(raw, doc, annotationsMap).annotation);
+            unsurfaced.push(store.refreshAnnotation(raw));
           }
         }
       });
