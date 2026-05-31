@@ -26,6 +26,21 @@ export async function loadDocx(content: Buffer): Promise<string> {
 // -- Annotation export --
 
 /**
+ * Human-readable author label for the exported Markdown review summary (#438).
+ *
+ * The durable `author` enum (`"claude"`) is an internal role discriminator, not
+ * a display label — emitting it verbatim leaks "(claude)" into a report a
+ * GPT/Gemini user generated. The server has no access to the browser's Models
+ * registry, so it can't name the specific model; it maps to a neutral
+ * "Assistant" instead. Imported Word comments surface their real reviewer.
+ */
+function exportAuthorLabel(ann: Annotation): string {
+  if (ann.author === "user") return "You";
+  if (ann.author === "import") return ann.importSource?.author?.trim() || "Imported";
+  return "Assistant";
+}
+
+/**
  * Generate a Markdown summary of all annotations, grouped by type.
  * Includes a text snippet from the document for context.
  */
@@ -73,7 +88,7 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
       const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
       const truncated = snippet.length > 80 ? snippet.slice(0, 77) + "..." : snippet;
 
-      lines.push(`- **"${truncated}"** (${ann.author})`);
+      lines.push(`- **"${truncated}"** (${exportAuthorLabel(ann)})`);
 
       if (ann.suggestedText !== undefined) {
         lines.push(`  - Replace with: "${ann.suggestedText}"`);

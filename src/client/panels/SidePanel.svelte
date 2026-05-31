@@ -7,6 +7,8 @@ import type { Annotation, AnnotationReply } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
+import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { warningStateColors } from "../utils/colors";
 import AnnotationCard from "./AnnotationCard.svelte";
 import {
@@ -189,6 +191,8 @@ const filteredData = $derived.by(() => {
   return { filtered, pending, reviewPending, resolved, allPending, reviewAllPending };
 });
 
+const agentLabel = createAgentLabel(createTandemSettings());
+
 const hasFilters = $derived(
   filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all",
 );
@@ -209,7 +213,7 @@ const filterLabel = $derived.by(() => {
   if (filterAuthor !== "all") {
     const labels: Record<FilterAuthor, string> = {
       all: "Anyone",
-      claude: "Claude",
+      claude: agentLabel.family,
       user: "You",
       import: "Imported",
     };

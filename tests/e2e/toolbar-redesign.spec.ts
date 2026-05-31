@@ -164,7 +164,10 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
   await expect(toolbar.locator("[data-testid='decorations-menu']")).toBeVisible();
   // Annotate mode swaps the pills for the note popover.
   await openAnnotatePopup(page);
-  await expect(toolbar.getByRole("button", { name: "Send to Claude (Ctrl+Enter)" })).toBeVisible();
+  // #438: the comment-submit label names the active model ("Send to Claude",
+  // "Send to GPT", or "Send to Assistant" when none is configured) — match the
+  // agent-agnostic shape rather than a specific brand.
+  await expect(toolbar.getByRole("button", { name: /^Send to .+ \(Ctrl\+Enter\)$/ })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Note to self (Alt+Enter)" })).toBeVisible();
 });
 

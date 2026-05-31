@@ -2,6 +2,8 @@
 import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
+import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
 import { getCardLabel, getHighlightBorder } from "./annotation-card-helpers";
@@ -67,6 +69,8 @@ let {
   onToggleSelect,
   density = "full",
 }: Props = $props();
+
+const agentLabel = createAgentLabel(createTandemSettings());
 
 // Shared edit-mode state owned by the dispatcher; variants are presentational
 // and never own state. The edit form replaces the variant body when isEditing.
@@ -191,8 +195,8 @@ function handleKeyDown(e: KeyboardEvent) {
       class="tandem-claude-typing"
       role="status"
       aria-live="polite"
-      aria-label="Claude is working on this annotation"
-      title="Claude is working on this annotation"
+      aria-label="{agentLabel.family} is working on this annotation"
+      title="{agentLabel.family} is working on this annotation"
     >
       <span class="tandem-claude-typing-dot"></span>
       <span class="tandem-claude-typing-dot"></span>
