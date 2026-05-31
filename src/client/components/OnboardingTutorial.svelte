@@ -20,7 +20,7 @@ const BASE_STEPS = [
   {
     id: "review",
     title: "Review an annotation",
-    text: "Open the side panel and accept or dismiss one of the highlighted annotations. Try Review Mode (Ctrl+Shift+R) for keyboard shortcuts.",
+    text: "Open the side panel and accept or dismiss one of the highlighted annotations — or turn on the margin view to see them beside the text. Try Review Mode (Ctrl+Shift+R) for keyboard shortcuts.",
   },
   {
     id: "question",
@@ -30,7 +30,7 @@ const BASE_STEPS = [
   {
     id: "edit",
     title: "Make an edit",
-    text: "Click in the document and type something. All changes sync in real-time.",
+    text: "Click in the document and type something. All changes sync in real-time. Open a tab or scratchpad with Ctrl+N, and jump anywhere with the command palette (Ctrl+Shift+P).",
   },
   {
     id: "cowork",
@@ -40,7 +40,7 @@ const BASE_STEPS = [
   {
     id: "complete",
     title: "You're ready!",
-    text: "You've learned the basics. Press ? anytime to see keyboard shortcuts.",
+    text: "You've learned the basics. Press ? anytime for keyboard shortcuts, or Ctrl+Shift+, to customize them.",
   },
 ] as const;
 
