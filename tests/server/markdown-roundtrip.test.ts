@@ -222,12 +222,13 @@ describe("markdown round-trip", () => {
     expect(output).toContain("## 标题");
   });
 
-  it("image preserves alt text (inline images degrade to text)", () => {
-    // remark parses inline images inside a paragraph, so they degrade to alt text
-    // Block-level images are handled via the image Y.XmlElement
+  it("standalone image round-trips as an image (issue #153)", () => {
+    // A standalone `![alt](url)` parses as `paragraph > image`; we promote it to
+    // a block `image` Y.XmlElement so it renders (and survives the round-trip)
+    // rather than degrading to alt text.
     const input = '![Alt text](https://example.com/image.png "Title")';
     const output = normalize(roundTrip(input));
-    expect(output).toContain("Alt text");
+    expect(output).toContain("![Alt text](https://example.com/image.png");
   });
 
   it("list in blockquote", () => {
