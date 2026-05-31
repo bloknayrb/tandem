@@ -1,8 +1,14 @@
 import { HIGHLIGHT_COLOR_VARS, normalizeHighlightColor } from "../../shared/constants";
 import type { Annotation } from "../../shared/types";
 
-export function getAuthorLabel(author: Annotation["author"]): string {
-  if (author === "claude") return "Claude";
+/**
+ * Author label for an annotation. The agent ("claude") branch renders the
+ * user's configured model name (#438): pass `agentLabel` (the family label,
+ * e.g. "Claude"/"GPT"). Falls back to a neutral "Assistant" when none is given.
+ * `import` and `user` are author roles, not the agent, and are unaffected.
+ */
+export function getAuthorLabel(author: Annotation["author"], agentLabel?: string): string {
+  if (author === "claude") return agentLabel ?? "Assistant";
   if (author === "import") return "Imported";
   return "You";
 }

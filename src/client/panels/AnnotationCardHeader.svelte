@@ -1,6 +1,8 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 import type { Annotation } from "../../shared/types";
+import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { getAuthorLabel, getDisplayType } from "./annotation-card-helpers";
 
 interface Props {
@@ -28,8 +30,9 @@ let {
   extraPill,
 }: Props = $props();
 
+const agentLabel = createAgentLabel(createTandemSettings());
 const displayType = $derived(getDisplayType(annotation));
-const authorLabel = $derived(getAuthorLabel(annotation.author));
+const authorLabel = $derived(getAuthorLabel(annotation.author, agentLabel.family));
 // 6px authorship dot before the author label. Only user/claude carry an
 // author color (the two --tandem-author-* tokens); imports show the byline
 // instead, so the dot is omitted for them in the markup below.

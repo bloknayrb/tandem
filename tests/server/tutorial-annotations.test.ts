@@ -22,23 +22,20 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { extractText } from "../../src/server/mcp/document-model.js";
-import { injectTutorialAnnotations } from "../../src/server/mcp/tutorial-annotations.js";
+import {
+  injectTutorialAnnotations,
+  TUTORIAL_ANNOTATIONS,
+} from "../../src/server/mcp/tutorial-annotations.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../helpers/ydoc-factory.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.join(__dirname, "..", "fixtures", "welcome-snapshot.md");
 
-// Mirror of TUTORIAL_ANNOTATIONS targetText values for explicit per-target
-// assertions. Kept in sync with `src/server/mcp/tutorial-annotations.ts`.
-// If this list drifts from the production module, the count assertion below
-// will catch it.
-const EXPECTED_TARGETS = [
-  "highlight text and your AI sees it",
-  "edit this document at the same time",
-  "simplify onboarding",
-  "accept or dismiss",
-] as const;
+// Derived from the production definitions so a `targetText` VALUE edit (not
+// just an add/remove) is caught — a hand-mirrored list would silently validate
+// stale strings.
+const EXPECTED_TARGETS = TUTORIAL_ANNOTATIONS.map((d) => d.targetText);
 
 describe("tutorial-annotations anchor drift", () => {
   it("injects every defined annotation against the welcome.md snapshot", () => {
@@ -49,10 +46,9 @@ describe("tutorial-annotations anchor drift", () => {
 
       const injected = Array.from(getAnnotationsMap(doc).values()) as Annotation[];
 
-      // Assertion 1: count match — `injected.length === TUTORIAL_ANNOTATIONS.length`.
-      // We use EXPECTED_TARGETS.length as a proxy; if the production module
-      // gains/loses an annotation without updating this list, the test fails.
-      expect(injected.length).toBe(EXPECTED_TARGETS.length);
+      // Assertion 1: every defined annotation injects (count pinned to the
+      // production list directly).
+      expect(injected.length).toBe(TUTORIAL_ANNOTATIONS.length);
 
       const fullText = extractText(doc);
 
@@ -79,6 +75,52 @@ describe("tutorial-annotations anchor drift", () => {
       }
     } finally {
       doc.destroy();
+    }
+  });
+
+  it("live sample/welcome.md stays anchor-equivalent to the snapshot fixture", () => {
+    // The snapshot fixture is what the assertions above pin to (for worktree
+    // isolation). This guard closes the gap that lets the LIVE welcome.md drift
+    // away from the snapshot — and thus break real injection — without any test
+    // failure. We compare the FLAT-TEXT projection (extractText: heading prefixes
+    // + `\n` joins), the coordinate system `injectTutorialAnnotations` actually
+    // resolves against — NOT raw markdown bytes (the parser collapses trailing
+    // newline / CRLF / list-marker cosmetics, so a byte diff would be both too
+    // strict and, for offset-shifting changes, beside the point).
+    const LIVE_PATH = path.join(__dirname, "..", "..", "sample", "welcome.md");
+    const liveDoc = makeMarkdownDoc(readFileSync(LIVE_PATH, "utf8"));
+    const snapDoc = makeMarkdownDoc(readFileSync(FIXTURE_PATH, "utf8"));
+    try {
+      const liveFlat = extractText(liveDoc);
+      // Freshness nudge: the snapshot the assertions above pin to should still
+      // match the live file in flat-text space.
+      expect(
+        liveFlat,
+        "welcome-snapshot.md is stale — regenerate it from sample/welcome.md " +
+          "(tutorial anchors validate against the snapshot; live drift breaks injection silently).",
+      ).toBe(extractText(snapDoc));
+
+      // Load-bearing guard: run the REAL injection against the LIVE doc and
+      // assert every annotation actually anchors. Comparing the flat-text
+      // projection alone can miss block-structure divergence (heading-prefix
+      // clamps, block splits) that still breaks anchoredRange — injecting and
+      // slicing the produced ranges catches it, because the offsets come from
+      // production's indexOf, not from the test.
+      injectTutorialAnnotations(liveDoc);
+      const injected = Array.from(getAnnotationsMap(liveDoc).values()) as Annotation[];
+      expect(injected.length).toBe(TUTORIAL_ANNOTATIONS.length);
+      for (const target of EXPECTED_TARGETS) {
+        expect(
+          liveFlat.indexOf(target),
+          `target "${target}" must be unique in live welcome.md (drift hazard)`,
+        ).toBe(liveFlat.lastIndexOf(target));
+        const ann = injected.find((a) => a.textSnapshot === target);
+        expect(ann, `no injected annotation for "${target}" in live welcome.md`).toBeDefined();
+        if (ann) expect(liveFlat.slice(ann.range.from, ann.range.to)).toBe(target);
+      }
+    } finally {
+      liveDoc.destroy();
+      snapDoc.destroy();
     }
   });
 });

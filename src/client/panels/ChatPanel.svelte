@@ -8,10 +8,14 @@ import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
+import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { renderMarkdown } from "./chat-markdown";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
+
+const agentLabel = createAgentLabel(createTandemSettings());
 
 interface Props {
   ctrlYdoc: Y.Doc | null;
@@ -224,7 +228,7 @@ function toggleAnchorExpand(msgId: string) {
               ? 'var(--tandem-accent)'
               : 'var(--tandem-fg-muted)'}; text-transform: uppercase;"
           >
-            {msg.author}
+            {msg.author === "claude" ? agentLabel.family : "You"}
           </span>
           {#if msg.documentId}
             <span

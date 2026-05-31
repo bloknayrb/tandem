@@ -27,34 +27,17 @@ import {
   generateNotificationId,
   generateReplyId,
 } from "../../shared/utils.js";
-import { docHash } from "../annotations/doc-hash.js";
-import { acceptPending, dismissPending } from "../annotations/lifecycle.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { nextRev } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { pushNotification } from "../notifications.js";
-import { anchoredRange, refreshAllRanges } from "../positions.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
+import { anchoredRange } from "../positions.js";
 import { extractText, getCurrentDoc } from "./document.js";
+import { getDocumentStore } from "./document-store.js";
 import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 import { sanitizeAnnotationIdForPresence, withTypingPresence } from "./typing-presence.js";
-
-/** Get the Y.Doc and annotations Y.Map for a document, or null if no doc is open */
-function getDocAndAnnotations(
-  documentId?: string,
-): { ydoc: Y.Doc; map: Y.Map<unknown>; filePath: string; docHash: string } | null {
-  const doc = getCurrentDoc(documentId);
-  if (!doc) return null;
-  const ydoc = getOrCreateDocument(doc.docName);
-  return {
-    ydoc,
-    map: ydoc.getMap(Y_MAP_ANNOTATIONS),
-    filePath: doc.filePath,
-    docHash: docHash(doc.filePath),
-  };
-}
 
 /** Build an `onLossy` callback that relays to the migration-log for the given doc. */
 function makeOnLossy(hash: string | undefined): (event: SanitizationEvent) => void {
@@ -384,19 +367,19 @@ export function registerAnnotationTools(server: McpServer): void {
               "DEPRECATED",
               "directedAt is no longer supported — comments now always reach the connected AI client. Drop the field from your call.",
             );
-          const da = getDocAndAnnotations(documentId);
-          if (!da) return noDocumentError();
+          const store = getDocumentStore(documentId);
+          if (!store) return noDocumentError();
           const from = toFlatOffset(rawFrom);
           const to = toFlatOffset(rawTo);
-          const result = anchoredRange(da.ydoc, from, to, textSnapshot, {
+          const result = anchoredRange(store.ydoc, from, to, textSnapshot, {
             rejectHeadingOverlap: true,
           });
           if (!result.ok) {
             notifyRangeFailure(result, "tandem_comment", documentId);
             return rangeFailureToError(result);
           }
-          const snap = captureSnapshot(da.ydoc, result.range.from, result.range.to);
-          const id = createAnnotation(da.map, da.ydoc, "comment", result, text, {
+          const snap = captureSnapshot(store.ydoc, result.range.from, result.range.to);
+          const id = store.createAnnotation("comment", result, text, {
             textSnapshot: snap,
             ...(suggestedText !== undefined ? { suggestedText } : {}),
           });
@@ -459,12 +442,10 @@ export function registerAnnotationTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_getAnnotations", async ({ author, type, status, documentId }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
 
-      let results = refreshAllRanges(collectAnnotations(da.map, da.docHash), da.ydoc, da.map).map(
-        (r) => r.annotation,
-      );
+      let results = store.listAnnotationsRefreshed();
       if (author) results = results.filter((a) => a.author === author);
       if (type) results = results.filter((a) => a.type === type);
       if (status) results = results.filter((a) => a.status === status);
@@ -473,7 +454,6 @@ export function registerAnnotationTools(server: McpServer): void {
       const notesExcluded = results.filter((a) => a.type === "note").length;
       results = results.filter((a) => a.type !== "note");
 
-      const repliesMap = getRepliesMap(da.ydoc);
       // ADR-027: only comments support replies. Even if rogue rows exist in the
       // replies Y.Map for highlight/note parents (write-path is now also
       // guarded), strip them on read so the asymmetry is impossible to observe.
@@ -481,7 +461,7 @@ export function registerAnnotationTools(server: McpServer): void {
       // check in `addReplyToAnnotation`.
       const annotationsWithReplies = results.map((ann) => ({
         ...ann,
-        replies: ann.type === "comment" ? collectRepliesForAnnotation(repliesMap, ann.id) : [],
+        replies: ann.type === "comment" ? store.listReplies(ann.id) : [],
       }));
 
       return mcpSuccess({
@@ -504,17 +484,14 @@ export function registerAnnotationTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_resolveAnnotation", async ({ id, action, documentId }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
 
       // Route through the AnnotationLifecycle module (ADR-035 part 2/N).
       // The lifecycle owns sanitize → status-check → rev-bump → tagged
       // result; the handler becomes a thin adapter translating
       // LifecycleResult arms to MCP error envelopes.
-      const result =
-        action === "accept"
-          ? acceptPending(id, da.ydoc, da.map)
-          : dismissPending(id, da.ydoc, da.map);
+      const result = action === "accept" ? store.acceptAnnotation(id) : store.dismissAnnotation(id);
 
       switch (result.kind) {
         case "ok":
@@ -541,9 +518,9 @@ export function registerAnnotationTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
-      const result = removeAnnotationById(da.ydoc, da.map, da.filePath, id);
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
+      const result = store.removeAnnotation(id);
       if (!result.ok) return mcpError("NOT_FOUND", result.error);
       return mcpSuccess({ removed: true, id });
     }),
@@ -565,59 +542,52 @@ export function registerAnnotationTools(server: McpServer): void {
     withErrorBoundary(
       "tandem_editAnnotation",
       async ({ id, content, newText, reason, documentId }) => {
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
+        const store = getDocumentStore(documentId);
+        if (!store) return noDocumentError();
 
-        const raw = da.map.get(id) as Annotation | undefined;
-        if (!raw) return mcpError("NOT_FOUND", `Annotation ${id} not found`);
-
-        // Sanitize legacy shapes before editing
-        const ann = sanitizeAnnotation(raw, makeOnLossy(da.docHash));
-
-        // ADR-027: notes are user-private. Claude must not read or modify them
-        // via MCP. The note→comment promotion path runs from the browser, not
-        // through this tool.
-        if (ann.type === "note") {
-          return mcpError(
-            "INVALID_ARGUMENT",
-            "Cannot edit a note via MCP — notes are user-private (ADR-027).",
-          );
-        }
-
-        if (ann.status !== "pending") {
-          return mcpError("ANNOTATION_RESOLVED", `Cannot edit a ${ann.status} annotation`);
-        }
-
-        if (content === undefined && newText === undefined && reason === undefined) {
-          return mcpError(
-            "INVALID_ARGUMENT",
-            "No editable fields provided. Use content, newText, or reason.",
-          );
-        }
-
-        if (newText !== undefined && ann.type !== "comment") {
-          return mcpError(
-            "INVALID_ARGUMENT",
-            `Cannot set replacement text on a ${ann.type} annotation. Only comments support suggestedText.`,
-          );
-        }
-
-        const updated = {
-          ...ann,
-          ...(content !== undefined ? { content } : {}),
-          ...(reason !== undefined && content === undefined ? { content: reason } : {}),
+        // `reason` is a legacy alias for `content`; an explicit `content` wins.
+        // When all three are undefined the resolved patch is empty, which the
+        // store reports as `empty-patch` (matching the pre-seam field check).
+        const resolvedContent = content !== undefined ? content : reason;
+        const result = store.editAnnotation(id, {
+          ...(resolvedContent !== undefined ? { content: resolvedContent } : {}),
           ...(newText !== undefined ? { suggestedText: newText } : {}),
-          editedAt: Date.now(),
-          rev: nextRev(ann),
-        } as Annotation;
-
-        withMcp(da.ydoc, () => da.map.set(id, updated));
-        return mcpSuccess({
-          id,
-          content: updated.content,
-          suggestedText: updated.suggestedText,
-          editedAt: updated.editedAt,
         });
+
+        switch (result.kind) {
+          case "not-found":
+            return mcpError("NOT_FOUND", `Annotation ${id} not found`);
+          case "invalid-note":
+            // ADR-027: notes are user-private. Claude must not read or modify
+            // them via MCP. The note→comment promotion path runs from the
+            // browser, not through this tool.
+            return mcpError(
+              "INVALID_ARGUMENT",
+              "Cannot edit a note via MCP — notes are user-private (ADR-027).",
+            );
+          case "not-pending":
+            return mcpError(
+              "ANNOTATION_RESOLVED",
+              `Cannot edit a ${result.currentStatus} annotation`,
+            );
+          case "empty-patch":
+            return mcpError(
+              "INVALID_ARGUMENT",
+              "No editable fields provided. Use content, newText, or reason.",
+            );
+          case "invalid-suggestion-target":
+            return mcpError(
+              "INVALID_ARGUMENT",
+              `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
+            );
+          case "ok":
+            return mcpSuccess({
+              id,
+              content: result.annotation.content,
+              suggestedText: result.annotation.suggestedText,
+              editedAt: result.annotation.editedAt,
+            });
+        }
       },
     ),
   );
@@ -654,19 +624,13 @@ export function registerAnnotationTools(server: McpServer): void {
     withErrorBoundary(
       "tandem_exportAnnotations",
       async ({ format, documentId, writeToDisk, outputPath }) => {
-        const da = getDocAndAnnotations(documentId);
-        if (!da) return noDocumentError();
+        const store = getDocumentStore(documentId);
+        if (!store) return noDocumentError();
 
-        const annotations = refreshAllRanges(
-          collectAnnotations(da.map, da.docHash),
-          da.ydoc,
-          da.map,
-        ).map((r) => r.annotation);
+        const annotations = store.listAnnotationsRefreshed();
         // Notes are user-private (ADR-027) — exclude from exports.
         const exportable = annotations.filter((a) => a.type !== "note");
-        const { ydoc, filePath } = da;
-
-        const repliesMap = getRepliesMap(ydoc);
+        const { ydoc, filePath } = store;
 
         // Build the enriched JSON list up-front. It is derived from the already
         // note-filtered `exportable` and is the ONLY annotation collection
@@ -676,7 +640,7 @@ export function registerAnnotationTools(server: McpServer): void {
         const enriched = exportable.map((ann) => ({
           ...ann,
           // ADR-027: only comments surface replies (see tandem_getAnnotations).
-          replies: ann.type === "comment" ? collectRepliesForAnnotation(repliesMap, ann.id) : [],
+          replies: ann.type === "comment" ? store.listReplies(ann.id) : [],
           textSnippet: fullText.slice(
             Math.max(0, ann.range.from),
             Math.min(fullText.length, ann.range.to),
@@ -783,8 +747,8 @@ export function registerAnnotationTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_annotationReply", async ({ annotationId, text, documentId }) => {
-      const da = getDocAndAnnotations(documentId);
-      if (!da) return noDocumentError();
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
 
       // #651 presence: surface the typing indicator on the specific card being
       // replied to. ADR-027: `addReplyToAnnotation` already rejects non-comment
@@ -804,14 +768,7 @@ export function registerAnnotationTools(server: McpServer): void {
           ...(safeId ? { annotationId: safeId } : {}),
         },
         async () => {
-          const result = addReplyToAnnotation(
-            da.ydoc,
-            da.map,
-            annotationId,
-            text,
-            "claude",
-            withMcp,
-          );
+          const result = store.addReply(annotationId, text, "claude");
           if (!result.ok) {
             const code =
               result.code === "NOT_FOUND"
