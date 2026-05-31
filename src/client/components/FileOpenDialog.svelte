@@ -35,6 +35,10 @@ let recentFiles = $state<string[]>(recentFilePaths(loadRecentFiles()));
 let sessions = $state<SessionMetadata[]>([]);
 let sessionsExpanded = $state(false);
 let sessionsLoading = $state(false);
+// Tracks whether a load has succeeded at least once, so collapse/expand (or
+// clearing to an empty list) doesn't re-fetch. Distinct from `sessions.length`,
+// which is 0 both before the first load AND when there are genuinely none.
+let sessionsLoaded = $state(false);
 let sessionsError = $state<string | null>(null);
 
 async function loadSessions() {
@@ -43,6 +47,7 @@ async function loadSessions() {
   const result = await fetchSessions();
   if (result.ok) {
     sessions = result.data;
+    sessionsLoaded = true;
   } else {
     sessionsError = result.error;
   }
@@ -51,12 +56,13 @@ async function loadSessions() {
 
 function toggleSessions() {
   sessionsExpanded = !sessionsExpanded;
-  if (sessionsExpanded && sessions.length === 0 && !sessionsLoading) {
+  if (sessionsExpanded && !sessionsLoaded && !sessionsLoading) {
     void loadSessions();
   }
 }
 
 async function deleteSession(filePath: string) {
+  sessionsError = null;
   const result = await deleteSessionByPath(filePath);
   if (result.ok) {
     sessions = sessions.filter((s) => s.filePath !== filePath);
@@ -66,6 +72,7 @@ async function deleteSession(filePath: string) {
 }
 
 async function clearSessions() {
+  sessionsError = null;
   const result = await clearAllSessions();
   if (result.ok) {
     sessions = [];
