@@ -59,6 +59,15 @@ function blockToYxml(
     }
 
     case "paragraph": {
+      // A standalone markdown image (`![alt](url)`) parses as `paragraph > image`
+      // (image is phrasing content). Promote any top-level image children to
+      // block-level `image` Y.XmlElements (issue #153) so they render via
+      // Tiptap's block Image node. Inline text runs around an image stay as
+      // their own paragraphs. Block images live as top-level fragment children
+      // with empty getElementText(), preserving flat-offset alignment.
+      if (node.children.some((c) => c.type === "image")) {
+        return splitParagraphImages(node.children, deferred);
+      }
       const el = new Y.XmlElement("paragraph");
       const text = new Y.XmlText();
       el.insert(0, [text]);
@@ -152,11 +161,7 @@ function blockToYxml(
     }
 
     case "image": {
-      const el = new Y.XmlElement("image");
-      el.setAttribute("src", node.url);
-      if (node.alt) el.setAttribute("alt", node.alt);
-      if (node.title) el.setAttribute("title", node.title);
-      return [el];
+      return [imageToYxml(node)];
     }
 
     case "html": {
@@ -180,6 +185,64 @@ function blockToYxml(
       return [];
     }
   }
+}
+
+/** Build a block-level `image` Y.XmlElement from an MDAST image node. */
+function imageToYxml(node: Extract<PhrasingContent, { type: "image" }>): Y.XmlElement {
+  const el = new Y.XmlElement("image");
+  el.setAttribute("src", node.url);
+  if (node.alt) el.setAttribute("alt", node.alt);
+  if (node.title) el.setAttribute("title", node.title);
+  return el;
+}
+
+/**
+ * Split a paragraph's phrasing children into block-level `image` elements and
+ * paragraphs for the surrounding inline content. Used when a markdown paragraph
+ * contains one or more images (issue #153). Each top-level image becomes its own
+ * block; runs of non-image phrasing between/around images become paragraphs.
+ * Whitespace-only inline runs adjacent to an image are dropped so a lone image
+ * doesn't leave an empty paragraph behind; boundary whitespace on real runs is
+ * trimmed to avoid serializer escape noise.
+ */
+function splitParagraphImages(
+  children: PhrasingContent[],
+  deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }>,
+): Y.XmlElement[] {
+  const result: Y.XmlElement[] = [];
+  let inlineRun: PhrasingContent[] = [];
+
+  const flushInline = () => {
+    if (inlineRun.length === 0) return;
+    const run = inlineRun;
+    inlineRun = [];
+    // Trim whitespace at the run boundaries (where it abutted an image) so the
+    // serializer doesn't emit `&#x20;` escape noise around the split.
+    const first = run[0];
+    if (first?.type === "text") first.value = first.value.replace(/^\s+/, "");
+    const last = run[run.length - 1];
+    if (last?.type === "text") last.value = last.value.replace(/\s+$/, "");
+    const hasContent = run.some((n) => n.type !== "text" || n.value.length > 0);
+    if (hasContent) {
+      const el = new Y.XmlElement("paragraph");
+      const text = new Y.XmlText();
+      el.insert(0, [text]);
+      deferred.push({ xmlText: text, nodes: run });
+      result.push(el);
+    }
+  };
+
+  for (const child of children) {
+    if (child.type === "image") {
+      flushInline();
+      result.push(imageToYxml(child));
+    } else {
+      inlineRun.push(child);
+    }
+  }
+  flushInline();
+
+  return result;
 }
 
 /** All mark names that can appear on inline text */
@@ -385,12 +448,18 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
     }
 
     case "image": {
-      return {
+      // MDAST `image` is phrasing content, not a valid direct root child.
+      // Wrap it in a paragraph so remark-stringify emits proper block
+      // separation (a bare root-level image serializes with no surrounding
+      // newlines, mangling the document on save). Mirrors how remark-parse
+      // produces `paragraph > image` for a standalone `![alt](url)` (#153).
+      const image = {
         type: "image",
         url: (el.getAttribute("src") as string) || "",
         alt: (el.getAttribute("alt") as string) || undefined,
         title: (el.getAttribute("title") as string) || null,
-      } as any;
+      };
+      return { type: "paragraph", children: [image] } as any;
     }
 
     // Unknown node types — try to extract text content as a paragraph
