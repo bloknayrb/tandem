@@ -17,7 +17,7 @@ interface TutorialAnnotationDef {
   suggestedText?: string;
 }
 
-const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
+export const TUTORIAL_ANNOTATIONS: TutorialAnnotationDef[] = [
   {
     id: `${TUTORIAL_ANNOTATION_PREFIX}highlight-1`,
     type: "highlight",
