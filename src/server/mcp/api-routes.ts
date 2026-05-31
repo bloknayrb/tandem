@@ -13,6 +13,9 @@ import {
   API_ROTATE_TOKEN,
   API_SAVE,
   API_SCRATCHPAD,
+  API_SESSIONS,
+  API_SESSIONS_CLEAR,
+  API_SESSIONS_DELETE,
   API_SETUP,
   API_UPLOAD,
 } from "../../shared/api-paths.js";
@@ -30,6 +33,7 @@ import { handleRemoveAnnotation } from "./routes/remove-annotation.js";
 import { makeRotateTokenHandler } from "./routes/rotate-token.js";
 import { handleSave } from "./routes/save.js";
 import { handleScratchpad } from "./routes/scratchpad.js";
+import { handleClearSessions, handleDeleteSession, handleListSessions } from "./routes/sessions.js";
 import { makeSetupHandler } from "./routes/setup.js";
 import { handleUpload } from "./routes/upload.js";
 
@@ -168,6 +172,16 @@ export function registerApiRoutes(
 
   app.options(API_REMOVE_ANNOTATION, mw);
   app.post(API_REMOVE_ANNOTATION, mw, largeBody, handleRemoveAnnotation);
+
+  // Persisted-session management UI (#103): list (read-only), delete one, clear all.
+  // The mutating routes gate on origin + loopback inside their handlers.
+  app.get(API_SESSIONS, mw, handleListSessions);
+
+  app.options(API_SESSIONS_DELETE, mw);
+  app.post(API_SESSIONS_DELETE, mw, largeBody, handleDeleteSession);
+
+  app.options(API_SESSIONS_CLEAR, mw);
+  app.post(API_SESSIONS_CLEAR, mw, largeBody, handleClearSessions);
 
   // Token rotation: CLI calls this to activate the 60-second grace window and swap the
   // in-memory current token to the NEW token that was already written to disk.
