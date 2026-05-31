@@ -2,8 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { FlatOffset } from "../../shared/positions/types.js";
 import { toFlatOffset } from "../../shared/positions/types.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
-import { extractText, getCurrentDoc } from "./document.js";
+import { getDocumentStore } from "./document-store.js";
 import {
   escapeRegex,
   getErrorMessage,
@@ -12,12 +11,6 @@ import {
   noDocumentError,
   withErrorBoundary,
 } from "./response.js";
-
-/** Get full text from the current document's Y.Doc */
-function getFullText(docName: string): string {
-  const doc = getOrCreateDocument(docName);
-  return extractText(doc);
-}
 
 export interface SearchMatch {
   from: FlatOffset;
@@ -114,10 +107,10 @@ export function registerNavigationTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_search", async ({ query, regex, documentId }) => {
-      const current = getCurrentDoc(documentId);
-      if (!current) return noDocumentError();
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
 
-      const fullText = getFullText(current.docName);
+      const fullText = store.getText();
       const result = searchText(fullText, query, regex);
       if (result.error) return mcpError("FORMAT_ERROR", result.error);
       return mcpSuccess({ matches: result.matches, count: result.matches.length });
@@ -136,10 +129,10 @@ export function registerNavigationTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_resolveRange", async ({ pattern, occurrence = 1, documentId }) => {
-      const current = getCurrentDoc(documentId);
-      if (!current) return noDocumentError();
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
 
-      const fullText = getFullText(current.docName);
+      const fullText = store.getText();
       const result = findOccurrence(fullText, pattern, occurrence);
       if ("error" in result) return mcpError("INVALID_RANGE", result.error);
       return mcpSuccess(result);
@@ -164,12 +157,12 @@ export function registerNavigationTools(server: McpServer): void {
     withErrorBoundary(
       "tandem_getContext",
       async ({ from: rawFrom, to: rawTo, windowSize = 500, documentId }) => {
-        const current = getCurrentDoc(documentId);
-        if (!current) return noDocumentError();
+        const store = getDocumentStore(documentId);
+        if (!store) return noDocumentError();
 
         const from = toFlatOffset(rawFrom);
         const to = toFlatOffset(rawTo);
-        const fullText = getFullText(current.docName);
+        const fullText = store.getText();
         return mcpSuccess(extractContext(fullText, from, to, windowSize));
       },
     ),
