@@ -347,6 +347,20 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  * data (most notably the Models registry's plaintext API keys; see
  * `SettingsModelsTab.svelte`).
  *
+ * **Field-preservation contract for migration authors (#941).** Every step
+ * MUST spread the prior object (`{ ...parsed, ... }`) and only set/delete the
+ * fields it owns — never rebuild `parsed` from scratch. A later-added field
+ * (e.g. `marginView`, #649) needs NO migration step of its own: it rides
+ * through every spread untouched and is read off `parsed` by
+ * `normalizeKnownFields` with a default for the absent case. Rebuilding the
+ * object instead of spreading is the only way a user-set field silently
+ * resets across a version bump; the regression suite in
+ * `tests/client/use-tandem-settings-migration.test.ts` asserts the full set
+ * survives a v2→current bump so that mistake fails loudly. (The user-visible
+ * "settings reset on update" report in #941 was the Tauri WebView clearing
+ * localStorage on app update — the blob is gone, not mis-migrated — which is
+ * outside this layer's reach.)
+ *
  * v1→v2: `layout`/`panelHidden` → `leftPanelVisible`/`rightPanelVisible`.
  * v2→v3: introduce `models: []`. No legacy shape to migrate from.
  * v3→v4: left rail is locked to outline-only. Non-outline tabs in
