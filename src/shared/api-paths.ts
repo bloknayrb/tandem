@@ -35,6 +35,11 @@ export const API_REMOVE_ANNOTATION = "/api/remove-annotation";
 // --- Chat -------------------------------------------------------------------
 export const API_CHAT = "/api/chat";
 
+// --- Sessions (persisted-session management UI, #103) -----------------------
+export const API_SESSIONS = "/api/sessions";
+export const API_SESSIONS_DELETE = "/api/sessions/delete";
+export const API_SESSIONS_CLEAR = "/api/sessions/clear";
+
 // --- Setup / auth -----------------------------------------------------------
 export const API_SETUP = "/api/setup";
 export const API_ROTATE_TOKEN = "/api/rotate-token";

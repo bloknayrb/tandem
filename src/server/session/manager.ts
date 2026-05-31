@@ -5,7 +5,7 @@ import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.j
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import type { SessionData } from "../../shared/types.js";
-import { ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
+import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
 import { parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
 import { atomicWrite } from "../file-io/index.js";
@@ -207,6 +207,71 @@ export async function listSessionFilePaths(): Promise<
     console.error("[Tandem] Failed to read session directory:", err);
     return [];
   }
+}
+
+/** Metadata for a single persisted document session, surfaced in the Sessions UI. */
+export interface SessionMetadata {
+  filePath: string;
+  /** Last-accessed timestamp (ms since epoch) from the session record. */
+  lastAccessed: number;
+  /** Count of live (non-tombstoned) annotations in the durable envelope, 0 if none. */
+  annotationCount: number;
+}
+
+/**
+ * Count live annotations for a document path by reading its durable annotation
+ * envelope (`<docHash>.json`). Tombstones and replies don't count. Returns 0 if
+ * the envelope is missing, corrupt, or a future schema version — the count is a
+ * best-effort UI hint, never load-bearing.
+ */
+async function annotationCountForPath(filePath: string): Promise<number> {
+  const hash = docHash(filePath);
+  const envelopePath = path.join(getAnnotationsDir(), `${hash}.json`);
+  let raw: string;
+  try {
+    raw = await fs.readFile(envelopePath, "utf-8");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`[Tandem] annotationCountForPath: failed to read ${envelopePath}:`, err);
+    }
+    return 0;
+  }
+  const parsed = parseAnnotationDoc(raw);
+  if (!parsed.ok) return 0;
+  return parsed.doc.annotations.length;
+}
+
+/**
+ * List persisted document sessions with display metadata for the Sessions UI:
+ * file path, last-accessed time, and live annotation count. Sorted most
+ * recently accessed first (inherits ordering from `listSessionFilePaths`).
+ */
+export async function listSessionsMetadata(): Promise<SessionMetadata[]> {
+  const sessions = await listSessionFilePaths();
+  return Promise.all(
+    sessions.map(async ({ filePath, lastAccessed }) => ({
+      filePath,
+      lastAccessed,
+      annotationCount: await annotationCountForPath(filePath),
+    })),
+  );
+}
+
+/**
+ * Delete every persisted document session (the "Clear all" action). The
+ * CTRL_ROOM chat session and upload:// sessions are preserved — only the
+ * document sessions surfaced in the UI are removed. Returns the count deleted.
+ * No-op in read-only mode.
+ */
+export async function clearAllSessions(): Promise<number> {
+  if (isStoreReadOnly()) return 0;
+  const sessions = await listSessionFilePaths();
+  let deleted = 0;
+  for (const { filePath } of sessions) {
+    await deleteSession(filePath);
+    deleted++;
+  }
+  return deleted;
 }
 
 /**

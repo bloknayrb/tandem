@@ -13,6 +13,12 @@ import {
   saveRecentFiles,
 } from "../utils/recentFiles.js";
 import { openServerPath } from "../utils/server-paths.js";
+import {
+  clearAllSessions,
+  deleteSessionByPath,
+  fetchSessions,
+  type SessionMetadata,
+} from "../utils/sessions.js";
 
 interface Props {
   onClose: () => void;
@@ -24,6 +30,61 @@ let error = $state<string | null>(null);
 let loading = $state(false);
 let fileInputEl: HTMLInputElement | undefined = $state();
 let recentFiles = $state<string[]>(recentFilePaths(loadRecentFiles()));
+
+// --- Saved sessions (#103) ---
+let sessions = $state<SessionMetadata[]>([]);
+let sessionsExpanded = $state(false);
+let sessionsLoading = $state(false);
+let sessionsError = $state<string | null>(null);
+
+async function loadSessions() {
+  sessionsLoading = true;
+  sessionsError = null;
+  const result = await fetchSessions();
+  if (result.ok) {
+    sessions = result.data;
+  } else {
+    sessionsError = result.error;
+  }
+  sessionsLoading = false;
+}
+
+function toggleSessions() {
+  sessionsExpanded = !sessionsExpanded;
+  if (sessionsExpanded && sessions.length === 0 && !sessionsLoading) {
+    void loadSessions();
+  }
+}
+
+async function deleteSession(filePath: string) {
+  const result = await deleteSessionByPath(filePath);
+  if (result.ok) {
+    sessions = sessions.filter((s) => s.filePath !== filePath);
+  } else {
+    sessionsError = result.error;
+  }
+}
+
+async function clearSessions() {
+  const result = await clearAllSessions();
+  if (result.ok) {
+    sessions = [];
+  } else {
+    sessionsError = result.error;
+  }
+}
+
+function formatRelativeTime(ms: number): string {
+  if (!ms) return "unknown";
+  const diff = Date.now() - ms;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 const extensionList = Array.from(SUPPORTED_EXTENSIONS).sort();
 const acceptAttr = extensionList.join(",");
@@ -223,6 +284,105 @@ function handleBrowse() {
         </div>
       </div>
     {/if}
+
+    <!-- Saved sessions (#103): list persisted sessions with reopen / delete / clear-all -->
+    <div data-testid="sessions-section" style="margin-top: 16px;">
+      <button
+        type="button"
+        data-testid="sessions-toggle"
+        onclick={toggleSessions}
+        aria-expanded={sessionsExpanded}
+        style="width: 100%; background: none; border: none; padding: 0; cursor: pointer; display: flex; justify-content: space-between; align-items: center; color: var(--tandem-fg-subtle);"
+      >
+        <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">
+          Saved sessions
+        </span>
+        <span style="font-size: 11px;">{sessionsExpanded ? "▾" : "▸"}</span>
+      </button>
+
+      {#if sessionsExpanded}
+        {#if sessionsLoading}
+          <p
+            data-testid="sessions-loading"
+            style="margin: 8px 0 0; font-size: 12px; color: var(--tandem-fg-subtle);"
+          >
+            Loading…
+          </p>
+        {:else if sessions.length === 0}
+          <p
+            data-testid="sessions-empty"
+            style="margin: 8px 0 0; font-size: 12px; color: var(--tandem-fg-subtle);"
+          >
+            No saved sessions.
+          </p>
+        {:else}
+          <div style="display: flex; justify-content: flex-end; margin: 6px 0;">
+            <button
+              data-testid="sessions-clear-all"
+              onclick={clearSessions}
+              type="button"
+              style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;"
+            >
+              Clear all
+            </button>
+          </div>
+          <div
+            class="tandem-scroll-fade-y"
+            use:scrollFade={"y"}
+            style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;"
+          >
+            {#each sessions as session (session.filePath)}
+              {@const parts = session.filePath.split(/[/\\]/)}
+              {@const filename = parts.at(-1) ?? session.filePath}
+              {@const dir = parts.slice(0, -1).join("/") || "/"}
+              <div
+                data-testid="session-row"
+                style="display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: var(--tandem-r-2);"
+              >
+                <button
+                  type="button"
+                  data-testid="session-reopen"
+                  onclick={() => openByPath(session.filePath)}
+                  title={session.filePath}
+                  style="flex: 1; min-width: 0; background: none; border: none; padding: 0; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 1px;"
+                >
+                  <span style="font-size: 13px; color: var(--tandem-fg);">{filename}</span>
+                  <span
+                    style="font-size: 11px; color: var(--tandem-fg-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                  >
+                    {dir}
+                  </span>
+                  <span style="font-size: 11px; color: var(--tandem-fg-subtle);">
+                    {formatRelativeTime(session.lastAccessed)} · {session.annotationCount} annotation{session.annotationCount ===
+                    1
+                      ? ""
+                      : "s"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="session-delete"
+                  onclick={() => deleteSession(session.filePath)}
+                  aria-label={`Delete session for ${filename}`}
+                  style="background: none; border: none; color: var(--tandem-fg-subtle); font-size: 14px; cursor: pointer; padding: 4px; line-height: 1;"
+                >
+                  ×
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if sessionsError}
+          <div
+            data-testid="sessions-error"
+            style="margin-top: 8px; padding: 8px 10px; font-size: 12px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-error-border);"
+          >
+            {sessionsError}
+          </div>
+        {/if}
+      {/if}
+    </div>
 
     {#if error}
       <div
