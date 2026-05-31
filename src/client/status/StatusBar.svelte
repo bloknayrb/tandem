@@ -2,6 +2,8 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
 import { USER_NAME_MAX_LEN } from "../../shared/constants";
+import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { createUserName } from "../hooks/useUserName.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
@@ -58,6 +60,8 @@ function claudeWorkingLabel(tool: string): string {
 const RECONNECTED_FLASH_MS = 2_000;
 
 const userNameState = createUserName();
+// #438: the status pill is the one surface that shows the specific model name.
+const agentLabel = createAgentLabel(createTandemSettings());
 let nameInput = $state(userNameState.userName);
 let inputEl: HTMLInputElement | undefined = $state();
 
@@ -238,7 +242,7 @@ function cycleWordMode() {
       style="width: 7px; height: 7px; border-radius: 50%; background: var(--tandem-author-claude); opacity: {claudeActive ? 1 : 0.4}; display: inline-block; transition: opacity 0.3s ease; animation: {claudeActive ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
     ></span>
     <span style="transition: color 0.3s ease; color: {claudeActive ? 'var(--tandem-fg)' : 'var(--tandem-fg-subtle)'};">
-      {claudeStatus ? `Claude · ${claudeStatus}` : "Claude · idle"}
+      {claudeStatus ? `${agentLabel.specific} · ${claudeStatus}` : `${agentLabel.specific} · idle`}
     </span>
     {#if claudeWorkingTool}
       <!--
@@ -255,7 +259,7 @@ function cycleWordMode() {
         <span class="claude-working-dot"></span>
         <span class="claude-working-dot"></span>
         <span class="claude-working-dot"></span>
-        <span style="margin-left: 4px;">Claude is {claudeWorkingLabel(claudeWorkingTool)}…</span>
+        <span style="margin-left: 4px;">{agentLabel.specific} is {claudeWorkingLabel(claudeWorkingTool)}…</span>
       </span>
     {/if}
   </div>

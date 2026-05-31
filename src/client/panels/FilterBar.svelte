@@ -1,4 +1,6 @@
 <script lang="ts">
+import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import FilterSelect from "./FilterSelect.svelte";
 
 export type FilterType = "highlight" | "comment" | "note" | "all" | "with-replacement";
@@ -30,6 +32,8 @@ let {
   onSetFilterStatus,
   onClearFilters,
 }: Props = $props();
+
+const agentLabel = createAgentLabel(createTandemSettings());
 </script>
 
 {#if open}
@@ -57,7 +61,7 @@ let {
       onChange={(v) => onSetFilterAuthor(v as FilterAuthor)}
       options={[
         { value: "all", label: "Anyone" },
-        { value: "claude", label: "Claude" },
+        { value: "claude", label: agentLabel.family },
         { value: "user", label: "You" },
         { value: "import", label: "Imported" },
       ]}

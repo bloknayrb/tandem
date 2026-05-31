@@ -1,4 +1,7 @@
 <script lang="ts">
+import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
+
 interface Props {
   selectedCount: number;
   onPromote: () => void;
@@ -6,6 +9,8 @@ interface Props {
 }
 
 let { selectedCount, onPromote, onClear }: Props = $props();
+
+const agentLabel = createAgentLabel(createTandemSettings());
 </script>
 
 {#if selectedCount > 0}
@@ -33,7 +38,7 @@ let { selectedCount, onPromote, onClear }: Props = $props();
       onclick={onPromote}
       style="padding: 3px 12px; border: 1px solid var(--tandem-accent); background: var(--tandem-accent); color: var(--tandem-accent-fg); border-radius: var(--tandem-r-pill); cursor: pointer; font-size: var(--tandem-text-xs); font-weight: 500;"
     >
-      Send {selectedCount} to Claude
+      Send {selectedCount} to {agentLabel.family}
     </button>
   </div>
 {/if}

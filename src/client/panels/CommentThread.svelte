@@ -1,11 +1,15 @@
 <script lang="ts">
 import type { AnnotationReply } from "../../shared/types";
+import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 
 interface Props {
   replies: AnnotationReply[];
 }
 
 let { replies }: Props = $props();
+
+const agentLabel = createAgentLabel(createTandemSettings());
 
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp);
@@ -32,7 +36,7 @@ function formatTime(timestamp: number): string {
           >
             {#if reply.author === "claude"}
               <span class="ct-author-dot ct-author-dot--claude" aria-hidden="true"></span>
-              Claude
+              {agentLabel.family}
             {:else}
               <span class="ct-author-dot ct-author-dot--user" aria-hidden="true"></span>
               You

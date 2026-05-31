@@ -11,7 +11,9 @@ import {
 } from "../../../shared/constants";
 import { sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
+import { loadSettings } from "../../hooks/useTandemSettings";
 import { annotationToPmRange } from "../../positions";
+import { resolveAgentLabel } from "../../utils/agentLabel";
 
 export const annotationPluginKey = new PluginKey("tandemAnnotations");
 
@@ -56,6 +58,19 @@ function parseStoredVisibility(): DecorationVisibility {
 }
 
 /**
+ * Agent family label ("Claude"/"GPT"/…) for the agent-comment aria-label (#438).
+ * Reuses `loadSettings()` (the canonical localStorage reader — runs the same
+ * migration/clamp, returns DEFAULTS on failure) rather than re-parsing the blob,
+ * keeping the plugin decoupled from the Svelte *store* while staying the single
+ * source of truth for settings parsing. Picked up on the next decoration rebuild
+ * after a model change; staleness on a screen-reader-only label is acceptable
+ * given users pick one model and keep it.
+ */
+function readAgentFamilyLabel(): string {
+  return resolveAgentLabel(loadSettings(), "family");
+}
+
+/**
  * Map a RAW annotation type to its rendered decoration bucket, mirroring
  * `sanitizeAnnotation`'s type normalization (highlight→highlight, note/flag→note,
  * everything else — comment/suggestion/question/unknown — →comment). Used by the
@@ -78,6 +93,7 @@ function buildDecorations(
   annotationsMap: Y.Map<unknown>,
   ydoc: Y.Doc | null,
   visible: DecorationVisibility,
+  agentLabel: string,
 ): DecorationSet {
   const decorations: Decoration[] = [];
   const maxPos = doc.content.size;
@@ -144,7 +160,7 @@ function buildDecorations(
             "data-annotation-id": ann.id,
             "data-annotation-type": ann.type,
             "data-annotation-author": ann.author,
-            "aria-label": "Claude comment annotation",
+            "aria-label": `${agentLabel} comment annotation`,
           };
         } else {
           // User/import comment → dashed blue underline
@@ -208,6 +224,10 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
     // decoupled from the Svelte store.
     let visible = parseStoredVisibility();
 
+    // #438: agent family label for the agent-comment aria-label, read the same
+    // decoupled way. Refreshed on each rebuild (init / toggle / recovery).
+    let agentFamily = readAgentFamilyLabel();
+
     /**
      * Does the map hold at least one pending annotation of a currently-visible
      * type? Drives both the cheap short-circuit and the docChanged recovery
@@ -242,7 +262,7 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
         state: {
           init(_, state) {
             return hasVisibleAnnotations
-              ? buildDecorations(state.doc, annotationsMap, ydoc, visible)
+              ? buildDecorations(state.doc, annotationsMap, ydoc, visible, agentFamily)
               : DecorationSet.empty;
           },
           apply(tr, decorationSet, _oldState, newState) {
@@ -257,8 +277,10 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
               recoveryAttempted = false;
             }
             if (meta) {
+              // Refresh the agent label on rebuild so a model change is reflected.
+              agentFamily = readAgentFamilyLabel();
               return hasVisibleAnnotations
-                ? buildDecorations(newState.doc, annotationsMap, ydoc, visible)
+                ? buildDecorations(newState.doc, annotationsMap, ydoc, visible, agentFamily)
                 : DecorationSet.empty;
             }
             if (!hasVisibleAnnotations) return DecorationSet.empty;
@@ -272,7 +294,13 @@ export const AnnotationExtension = Extension.create<{ ydoc: Y.Doc | null }>({
                 decorationSet === DecorationSet.empty &&
                 hasVisibleAnnotations
               ) {
-                const rebuilt = buildDecorations(newState.doc, annotationsMap, ydoc, visible);
+                const rebuilt = buildDecorations(
+                  newState.doc,
+                  annotationsMap,
+                  ydoc,
+                  visible,
+                  agentFamily,
+                );
                 if (rebuilt !== DecorationSet.empty) recoveryAttempted = true;
                 return rebuilt;
               }
