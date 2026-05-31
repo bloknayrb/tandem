@@ -254,6 +254,15 @@ review-only-dismiss
 save-indicator
 selection-toolbar-toggle
 send-to-claude-btn-{*}
+session-delete
+session-reopen
+session-row
+sessions-clear-all
+sessions-empty
+sessions-error
+sessions-loading
+sessions-section
+sessions-toggle
 settings-content
 settings-display-name
 settings-mcp-status

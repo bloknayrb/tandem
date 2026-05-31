@@ -11,6 +11,8 @@ import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
+import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
+import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
 import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
@@ -73,6 +75,8 @@ let {
   formattingBarVisible = true,
   onShowFormattingBar,
 }: Props = $props();
+
+const agentLabel = createAgentLabel(createTandemSettings());
 
 let hasSelection = $state(false);
 let selectionPosition = $state<{ left: number; top: number } | null>(null);
@@ -574,7 +578,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
             type="button"
             data-testid="popup-note-submit"
             aria-label="Note to self (Alt+Enter)"
-            title="Note to self — private, not sent to Claude (Alt+Enter)"
+            title="Note to self — private, not sent to {agentLabel.family} (Alt+Enter)"
             disabled={!annotationTextTrimmed}
             onclick={submitAsNote}
             style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
@@ -585,13 +589,13 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           <button
             type="button"
             data-testid="popup-comment-submit"
-            aria-label="Send to Claude (Ctrl+Enter)"
-            title="Send to Claude — outbound comment (Ctrl/Cmd+Enter)"
+            aria-label="Send to {agentLabel.family} (Ctrl+Enter)"
+            title="Send to {agentLabel.family} — outbound comment (Ctrl/Cmd+Enter)"
             disabled={!annotationTextTrimmed}
             onclick={submitAsComment}
             style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
           >
-            Send to Claude
+            Send to {agentLabel.family}
             <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-author-user);">⌘⏎</kbd>
           </button>
         </div>
