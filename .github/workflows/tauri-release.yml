@@ -211,15 +211,20 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Apple notarization intentionally DISABLED for v0.12.0 — Apple's notary
-          # service has been hanging multi-hour during this release (5+ separate
-          # notarytool submissions stalled with no response across several builds).
-          # macOS ships signed-but-not-notarized; first launch triggers Gatekeeper
-          # warning which user can bypass via right-click → Open. Re-enable by
-          # un-commenting these three lines once Apple's notary recovers:
-          # APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
-          # APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-          # APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+          # Apple notarization (issue #428). Re-enabled after the v0.12.0-era
+          # notary-service outage that originally forced these three lines to be
+          # commented out. When the notary trio is unset they expand to empty
+          # strings and tauri-action skips notarization (and skips signing too
+          # when APPLE_CERTIFICATE is also empty) — the same graceful no-op the
+          # build had while disabled. Populate the App Store Connect API key
+          # secrets (APPLE_API_ISSUER_ID, APPLE_API_KEY_ID, APPLE_API_KEY_BASE64)
+          # plus APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_TEAM_ID
+          # and the APPLE_SIGNING_IDENTITY variable to activate. The "Verify
+          # macOS signature + notarization" step below then asserts the produced
+          # .app is signed and has a stapled notarization ticket.
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         with:
           tagName: v__VERSION__
           releaseName: "Tandem v__VERSION__"
@@ -233,6 +238,62 @@ jobs:
         if: always() && matrix.platform == 'macos-latest'
         shell: bash
         run: rm -f "$RUNNER_TEMP/private_keys/"*.p8 || true
+
+      # Mirror of "Verify Windows signatures" for macOS: tauri-action does not
+      # reliably fail the job when notarization is skipped or fails, so assert
+      # the produced .app is both code-signed and carries a STAPLED notarization
+      # ticket. The stapled ticket is the load-bearing fix for the Gatekeeper
+      # "damaged"/"unidentified developer" first-launch error (#428) — and
+      # `xcrun stapler validate` checks it fully offline, with none of the
+      # network/policy flakiness `spctl --assess` exhibits on CI runners.
+      #
+      # When APPLE_CERTIFICATE is unset (pre-cert state) the build ships
+      # unsigned BY DESIGN, so skip the gate with a ::notice:: to keep current
+      # releases green; the check auto-enforces the moment signing secrets land.
+      - name: Verify macOS signature + notarization
+        if: always() && matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::notice::APPLE_CERTIFICATE unset — macOS bundle ships unsigned/un-notarized by design (see #428). Skipping verification until signing secrets are populated."
+            exit 0
+          fi
+          shopt -s nullglob
+          apps=(src-tauri/target/*/release/bundle/macos/*.app src-tauri/target/release/bundle/macos/*.app)
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "::error::Verify macOS: no .app bundle found under src-tauri/target/**/release/bundle/macos/"
+            exit 1
+          fi
+          errors=0
+          for app in "${apps[@]}"; do
+            echo "--- verifying $app"
+            # --deep --strict also validates the nested node-sidecar binary.
+            if ! codesign --verify --deep --strict --verbose=2 "$app"; then
+              echo "::error::$app: codesign --verify failed"
+              errors=1
+              continue
+            fi
+            if ! xcrun stapler validate "$app"; then
+              echo "::error::$app: notarization ticket not stapled — tauri-action notarization was skipped or failed"
+              errors=1
+              continue
+            fi
+            echo "ok: $app code-signed + notarization-stapled"
+          done
+          # .dmg stapling is best-effort (tauri does not always staple the disk
+          # image itself); warn but do not fail — the stapled .app inside is the
+          # artifact Gatekeeper evaluates on first launch.
+          for dmg in src-tauri/target/*/release/bundle/dmg/*.dmg src-tauri/target/release/bundle/dmg/*.dmg; do
+            [ -e "$dmg" ] || continue
+            if xcrun stapler validate "$dmg" >/dev/null 2>&1; then
+              echo "ok: $dmg stapled"
+            else
+              echo "::warning::$dmg: not stapled (acceptable — the embedded .app is stapled)"
+            fi
+          done
+          if [ "$errors" -ne 0 ]; then exit 1; fi
 
       # tauri-action (observed 2026-05, no upstream issue found) does not
       # always surface signCommand non-zero exits as job failure. Verify
