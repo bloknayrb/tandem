@@ -9,6 +9,7 @@
 import type { Root } from "mdast";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { loadMarkdown, saveMarkdown } from "../../src/server/file-io/markdown.js";
 import { mdastToYDoc } from "../../src/server/file-io/mdast-ydoc.js";
 import {
   collectXmlTexts,
@@ -386,5 +387,101 @@ describe("table row flat-text offsets", () => {
     const collected = collectXmlTexts(row);
     expect(collected.map((entry) => entry.offsetFromStart)).toEqual([0, 2]);
     expect(collected.map((entry) => entry.xmlText.toString())).toEqual(["A", "B"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inline/embedded images (issue #153) — must NOT inflate flat-text offsets,
+// so existing annotation ranges don't drift across an embedded image.
+// ---------------------------------------------------------------------------
+
+describe("image embeds — flat-offset alignment (issue #153)", () => {
+  it("a standalone markdown image becomes a block image node with empty text", () => {
+    doc = makeMarkdownDoc("![a cat](https://example.com/cat.png)");
+    const frag = getFragment(doc);
+    expect(frag.length).toBe(1);
+    const img = frag.get(0) as Y.XmlElement;
+    expect(img.nodeName).toBe("image");
+    expect(img.getAttribute("src")).toBe("https://example.com/cat.png");
+    expect(img.getAttribute("alt")).toBe("a cat");
+    // A block image contributes zero flat-text characters.
+    expect(getElementText(img)).toBe("");
+    expect(getElementTextLength(img)).toBe(0);
+  });
+
+  it("base64 data-URI image (mammoth .docx style) round-trips its src", () => {
+    const dataUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ";
+    doc = makeMarkdownDoc(`![embedded](${dataUri})`);
+    const img = getFragment(doc).get(0) as Y.XmlElement;
+    expect(img.nodeName).toBe("image");
+    expect(img.getAttribute("src")).toBe(dataUri);
+    expect(getElementTextLength(img)).toBe(0);
+  });
+
+  it("extractText keeps offsets aligned across an embedded image", () => {
+    doc = makeMarkdownDoc(
+      "Para one with annotated word here.\n\n![cat](https://x/cat.png)\n\nFinal paragraph text.",
+    );
+    const flat = extractText(doc);
+    // The image block contributes an empty line between the two paragraphs:
+    // "<para1>\n<empty image>\n<para3>".
+    expect(flat).toBe("Para one with annotated word here.\n\nFinal paragraph text.");
+
+    // An annotation BEFORE the image still resolves...
+    const wordFrom = flat.indexOf("word");
+    const wordResult = validateRange(
+      doc,
+      toFlatOffset(wordFrom),
+      toFlatOffset(wordFrom + "word".length),
+      { textSnapshot: "word" },
+    );
+    expect(wordResult.ok).toBe(true);
+    if (wordResult.ok) {
+      expect(flat.slice(wordResult.range.from, wordResult.range.to)).toBe("word");
+    }
+
+    // ...and an annotation AFTER the image resolves without drift.
+    const finalFrom = flat.indexOf("Final");
+    const finalResult = validateRange(
+      doc,
+      toFlatOffset(finalFrom),
+      toFlatOffset(finalFrom + "Final".length),
+      { textSnapshot: "Final" },
+    );
+    expect(finalResult.ok).toBe(true);
+    if (finalResult.ok) {
+      expect(flat.slice(finalResult.range.from, finalResult.range.to)).toBe("Final");
+    }
+  });
+
+  it("findXmlTextAtOffset on the image-block boundary returns null", () => {
+    doc = makeMarkdownDoc("![cat](https://x/cat.png)");
+    const img = getFragment(doc).get(0) as Y.XmlElement;
+    // No XmlText child — any offset query is null (the block is an atom).
+    expect(findXmlTextAtOffset(img, 0)).toBeNull();
+  });
+
+  it("markdown images round-trip through save (standalone)", () => {
+    const md = "Intro.\n\n![a cat](https://x/cat.png)\n\nOutro.";
+    doc = new Y.Doc();
+    loadMarkdown(doc, md);
+    expect(saveMarkdown(doc).trim()).toBe(md);
+  });
+
+  it("an image embedded among inline text splits into block image + paragraphs", () => {
+    doc = makeMarkdownDoc("Text with ![inline](u.png) image inline.");
+    const frag = getFragment(doc);
+    const names = [];
+    for (let i = 0; i < frag.length; i++) {
+      names.push((frag.get(i) as Y.XmlElement).nodeName);
+    }
+    expect(names).toContain("image");
+    // Surrounding text is preserved as paragraph content (no data loss).
+    const flat = extractText(doc);
+    expect(flat).toContain("Text with");
+    expect(flat).toContain("image inline.");
+    // The image block itself contributes no characters.
+    const img = frag.get(names.indexOf("image")) as Y.XmlElement;
+    expect(getElementTextLength(img)).toBe(0);
   });
 });

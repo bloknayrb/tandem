@@ -57,6 +57,19 @@
 .tandem-editor ol {
   padding-left: 1.5em;
 }
+/* Inline/embedded images (issue #153): markdown `![alt](url)` + .docx images.
+   Constrain to the content width so large embedded images don't overflow. */
+.tandem-editor img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em 0;
+  border-radius: var(--tandem-r-2);
+}
+.tandem-editor img.ProseMirror-selectednode {
+  outline: 2px solid var(--tandem-accent-border);
+  outline-offset: 2px;
+}
 .tandem-editor table {
   border-collapse: collapse;
   width: 100%;
