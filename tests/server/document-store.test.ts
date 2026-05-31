@@ -15,14 +15,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { acceptPending, dismissPending } from "../../src/server/annotations/lifecycle.js";
 import {
-  addReplyToAnnotation,
   collectAnnotations,
   collectRepliesForAnnotation,
   createAnnotation,
   removeAnnotationById,
 } from "../../src/server/mcp/annotations.js";
 import { getDocumentStore, YDocStore } from "../../src/server/mcp/document-store.js";
-import { anchoredRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import { toFlatOffset } from "../../src/shared/positions/types.js";
@@ -216,7 +214,6 @@ describe("YDocStore.removeAnnotation parity", () => {
 describe("YDocStore replies parity", () => {
   it("addReply writes the same record as addReplyToAnnotation (claude author)", () => {
     const ydoc = setupDoc("rep-1", "Hello world");
-    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const store = new YDocStore(ydoc, FILE_PATH);
     const id = store.createAnnotation("comment", rangeOf(0, 5, ydoc), "x");
 
