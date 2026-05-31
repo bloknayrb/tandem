@@ -61,9 +61,12 @@ function buildComments(flat: string): DocxComment[] {
   });
 }
 
+// Import-phase selector: freshly-injected entries are author:"import" and carry
+// no `promotedFrom`. Only called before the promote step (the after-state is read
+// from the map directly), so author alone is the correct, sufficient filter.
 function getImports(doc: Y.Doc): Annotation[] {
   return (Array.from(getAnnotationsMap(doc).values()) as Annotation[]).filter(
-    (a) => a.author === "import" || a.promotedFrom === "note",
+    (a) => a.author === "import",
   );
 }
 
