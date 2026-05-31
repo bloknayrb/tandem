@@ -7,19 +7,15 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
-import type { Annotation } from "../../shared/types.js";
-import { docHash } from "../annotations/doc-hash.js";
-import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import {
   type AcceptedSuggestion,
   applyTrackedChanges,
   atomicWriteBuffer,
 } from "../file-io/index.js";
 import { relPosToFlatOffset } from "../positions.js";
-import { sanitizeAnnotation } from "./annotations.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
+import { YDocStore } from "./document-store.js";
 import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 
 // ---------------------------------------------------------------------------
@@ -80,16 +76,15 @@ export async function applyChangesCore(
     }
   }
 
-  // 3. Collect accepted suggestions
-  const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  // 3. Collect accepted suggestions.
+  // `listAnnotations()` sanitizes legacy shapes through the same migration-log
+  // relay (keyed on docHash(filePath)) the inline loop used, and skips
+  // malformed rows that could never carry a valid suggestion range.
+  const store = new YDocStore(ydoc, filePath);
   const suggestions: AcceptedSuggestion[] = [];
   let pendingCount = 0;
 
-  const applyDocHash = docHash(filePath);
-  for (const [, raw] of map) {
-    const ann = sanitizeAnnotation(raw as Annotation, (event) =>
-      relaySanitizationEvent(applyDocHash, event),
-    );
+  for (const ann of store.listAnnotations()) {
     if (ann.suggestedText === undefined) continue;
     if (ann.status === "pending") {
       pendingCount++;

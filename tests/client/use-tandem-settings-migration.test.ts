@@ -611,4 +611,143 @@ describe("loadSettings — migration chain", () => {
     expect(s.fontByExtension).toEqual({ md: "serif" });
     expect(s._readOnly).toBeUndefined();
   });
+
+  // #941 regression — "settings reset on update."
+  //
+  // marginView (#649) is a later-added field. The reported symptom was that it
+  // (and other prefs) reset to defaults after an app version update. The
+  // migration chain itself is provably field-preserving: every step is a
+  // `{ ...parsed, ... }` spread (never a rebuild), and `normalizeKnownFields`
+  // reads each field off `parsed`. So a within-range bump (e.g. v12→v13) must
+  // carry every user-set field through unchanged.
+  //
+  // These tests pin that contract so a future migration author who rebuilds the
+  // object instead of spreading it (the only way marginView could silently drop
+  // across a bump) trips an explicit failure. The real-world reset the issue
+  // describes is the Tauri WebView clearing localStorage on app update — the
+  // blob is GONE, not migrated, so `loadSettings` finds nothing and returns
+  // DEFAULTS. That is invisible to vitest and not fixable in this layer; see the
+  // PR description.
+
+  it("#941: a v12 blob with marginView=true survives the bump to current", () => {
+    writeRaw({ schemaVersion: 12, marginView: true });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.marginView).toBe(true);
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it("#941: every user-set field survives a full v2→current migration", () => {
+    // A maximally-customized older blob from the v2 era. After the full chain,
+    // EVERY field the user could set at v2 must equal what they chose, not a
+    // default. Anything dropped here means a migration step rebuilt the object
+    // without spreading prior fields.
+    //
+    // The per-type decoration flags (showComments/showHighlights/showNotes) and
+    // decorationsMuted did NOT exist at v2 — they were derived at v8→v9 from the
+    // single `showAnnotationDecorations` flag — so they're asserted separately
+    // in the v8→v9 cases above, not here.
+    const userBlob = {
+      schemaVersion: 2,
+      leftPanelVisible: true, // non-default (default false)
+      rightPanelVisible: false, // non-default (default true)
+      primaryTab: "chat" as const, // non-default (default annotations)
+      panelOrder: "annotations-editor-chat" as const,
+      editorMeasure: "narrow" as const,
+      selectionDwellMs: 1500,
+      showAuthorship: false,
+      reduceMotion: true,
+      textSize: "l" as const,
+      theme: "dark" as const,
+      accentHue: 42,
+      editorFont: "serif" as const,
+      fontByExtension: { md: "mono" },
+      density: "spacious" as const,
+      defaultMode: "solo" as const,
+      highContrast: true,
+      annotationPatterns: true,
+      selectionToolbar: false,
+      formattingBarVisible: false,
+      soloRailHidden: false,
+      degradedBannerDelayMs: 60000,
+      sidecarRetryStrategy: "manual" as const,
+      holdAnnotationsWhileOffline: false,
+      marginView: true, // #649 — the canonical "resets on update" field
+    };
+    writeRaw(userBlob);
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s._readOnly).toBeUndefined();
+    // Every user-set field is preserved verbatim across the bump.
+    expect(s.leftPanelVisible).toBe(true);
+    expect(s.rightPanelVisible).toBe(false);
+    expect(s.primaryTab).toBe("chat");
+    expect(s.panelOrder).toBe("annotations-editor-chat");
+    expect(s.editorMeasure).toBe("narrow");
+    expect(s.selectionDwellMs).toBe(1500);
+    expect(s.showAuthorship).toBe(false);
+    expect(s.reduceMotion).toBe(true);
+    expect(s.textSize).toBe("l");
+    expect(s.theme).toBe("dark");
+    expect(s.accentHue).toBe(42);
+    expect(s.editorFont).toBe("serif");
+    expect(s.fontByExtension).toEqual({ md: "mono" });
+    expect(s.density).toBe("spacious");
+    expect(s.defaultMode).toBe("solo");
+    expect(s.highContrast).toBe(true);
+    expect(s.annotationPatterns).toBe(true);
+    expect(s.selectionToolbar).toBe(false);
+    expect(s.formattingBarVisible).toBe(false);
+    expect(s.soloRailHidden).toBe(false);
+    expect(s.degradedBannerDelayMs).toBe(60000);
+    expect(s.sidecarRetryStrategy).toBe("manual");
+    expect(s.holdAnnotationsWhileOffline).toBe(false);
+    expect(s.marginView).toBe(true);
+  });
+
+  it("#941: per-type decoration flags + marginView survive a full v9→current migration", () => {
+    // v9 is the first version carrying the per-type decoration flags. A v9 blob
+    // with explicit all-off per-type prefs AND marginView=true must keep both
+    // through the chain — the v8→v9 derive step must NOT re-run (its `=== 8`
+    // gate is exclusive) and clobber the explicit per-type values.
+    writeRaw({
+      schemaVersion: 9,
+      marginView: true,
+      showComments: false,
+      showHighlights: false,
+      showNotes: false,
+      decorationsMuted: true,
+    });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s._readOnly).toBeUndefined();
+    expect(s.marginView).toBe(true);
+    expect(s.showComments).toBe(false);
+    expect(s.showHighlights).toBe(false);
+    expect(s.showNotes).toBe(false);
+    expect(s.decorationsMuted).toBe(true);
+  });
+
+  it("#941: marginView=true is preserved across EVERY in-range schemaVersion bump", () => {
+    // Parametrize over every version the chain can start from. marginView must
+    // survive regardless of which migration steps run, so a future step added
+    // mid-chain that rebuilds the object is caught at whatever version it lands.
+    for (let v = 2; v < CURRENT_SCHEMA_VERSION; v++) {
+      store.clear();
+      writeRaw({ schemaVersion: v, marginView: true });
+      const s = loadSettings();
+      expect(s.schemaVersion, `start v${v}`).toBe(CURRENT_SCHEMA_VERSION);
+      expect(s.marginView, `marginView dropped starting at v${v}`).toBe(true);
+    }
+  });
+
+  it("#941: forward-compat (v99) preserves marginView=true (read-only path)", () => {
+    // The other documented suspect: the read-only forward-compat branch. A
+    // newer-than-current blob must still surface marginView through
+    // `normalizeKnownFields` (it is a known field), not drop it.
+    writeRaw({ schemaVersion: 99, marginView: true });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.marginView).toBe(true);
+  });
 });
