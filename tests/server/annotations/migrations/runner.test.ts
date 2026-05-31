@@ -90,6 +90,19 @@ describe("migrateV1ToV2 (pairwise)", () => {
     expect(() => migrateV1ToV2(null)).toThrow();
     expect(() => migrateV1ToV2("nope")).toThrow();
   });
+
+  // Regression tripwire for the frozen-input contract. The migration's input
+  // version must be pinned to the literal `1`, NOT the live `SCHEMA_VERSION`.
+  // If a future PR bumps `SCHEMA_VERSION` to 2 and someone reverts this
+  // migration to validate against `AnnotationDocSchemaV1` (which tracks the
+  // live constant), these two assertions flip and fail: the live schema would
+  // start accepting `schemaVersion: 2` and rejecting the genuine v1 input the
+  // migration is supposed to consume — silently quarantining all annotations
+  // as corrupt on the first post-upgrade load.
+  it("pins its input contract to schemaVersion === 1, independent of SCHEMA_VERSION", () => {
+    expect(() => migrateV1ToV2(v1Doc)).not.toThrow();
+    expect(() => migrateV1ToV2({ ...v1Doc, schemaVersion: 2 })).toThrow();
+  });
 });
 
 describe("migrateUp (composition)", () => {
