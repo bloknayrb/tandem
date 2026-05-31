@@ -101,7 +101,7 @@ export async function deleteSession(filePath: string): Promise<void> {
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
-      console.error(`[Tandem] deleteSession: failed to delete ${sessionPath}:`, err);
+      console.error("[Tandem] deleteSession: failed to delete", sessionPath, err);
     }
   }
 }
@@ -232,7 +232,7 @@ async function annotationCountForPath(filePath: string): Promise<number> {
     raw = await fs.readFile(envelopePath, "utf-8");
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error(`[Tandem] annotationCountForPath: failed to read ${envelopePath}:`, err);
+      console.error("[Tandem] annotationCountForPath: failed to read", envelopePath, err);
     }
     return 0;
   }
