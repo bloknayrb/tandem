@@ -70,8 +70,10 @@ describe("AR5 promote transform — sendNoteToClaude", () => {
   });
 
   it("strips color and suggestedText when collapsing to the comment variant", () => {
-    // A note shouldn't carry these, but the transform strips defensively — the
-    // comment variant of the discriminated union rejects `color`.
+    // End-state invariant: a promoted comment never carries `color`/`suggestedText`
+    // (the comment variant of the discriminated union rejects `color`). Note
+    // `sanitizeAnnotation` already drops them on read, so this pins the combined
+    // sanitize+transform guarantee, not `promotedAnnotation`'s strip in isolation.
     const { doc, map } = makeDocWithAnnotations({
       n1: makeImportNote({ id: "n1", color: "yellow", suggestedText: "nope" }),
     });

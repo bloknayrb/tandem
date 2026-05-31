@@ -102,9 +102,12 @@ describe("AR5 import → promote → Claude-visible (integration)", () => {
       expect(ann.author).toBe("import");
       expect(ann.type).toBe("note");
       expect(ann.audience).toBe("private");
-      // Anti-tautology: range slices back to the anchor (offsets were correct).
+      // Stored-range integrity: inject preserved the offsets we passed in
+      // (the flat round-trip; it does not by itself prove anchorability).
       expect(flat.slice(ann.range.from, ann.range.to)).toBe(anchor);
-      // CRDT anchoring survived (fullyAnchored) and agrees with the flat fallback.
+      // The load-bearing anti-clamp guard: the CRDT relRange survived
+      // (fullyAnchored) and round-trips to the same flat offsets — this is what
+      // fails if an anchor lands unanchorable (e.g. clamped into a heading prefix).
       expect(ann.relRange, `relRange for "${anchor}"`).toBeDefined();
       if (ann.relRange) {
         expect(relPosToFlatOffset(doc, ann.relRange.fromRel)).toBe(ann.range.from);

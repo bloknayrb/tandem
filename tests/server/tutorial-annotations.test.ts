@@ -92,24 +92,31 @@ describe("tutorial-annotations anchor drift", () => {
     const snapDoc = makeMarkdownDoc(readFileSync(FIXTURE_PATH, "utf8"));
     try {
       const liveFlat = extractText(liveDoc);
-      const snapFlat = extractText(snapDoc);
+      // Freshness nudge: the snapshot the assertions above pin to should still
+      // match the live file in flat-text space.
       expect(
         liveFlat,
         "welcome-snapshot.md is stale — regenerate it from sample/welcome.md " +
           "(tutorial anchors validate against the snapshot; live drift breaks injection silently).",
-      ).toBe(snapFlat);
+      ).toBe(extractText(snapDoc));
 
-      // The load-bearing invariant, asserted against the LIVE file directly:
-      // every tutorial target still resolves, exactly once.
+      // Load-bearing guard: run the REAL injection against the LIVE doc and
+      // assert every annotation actually anchors. Comparing the flat-text
+      // projection alone can miss block-structure divergence (heading-prefix
+      // clamps, block splits) that still breaks anchoredRange — injecting and
+      // slicing the produced ranges catches it, because the offsets come from
+      // production's indexOf, not from the test.
+      injectTutorialAnnotations(liveDoc);
+      const injected = Array.from(getAnnotationsMap(liveDoc).values()) as Annotation[];
+      expect(injected.length).toBe(TUTORIAL_ANNOTATIONS.length);
       for (const target of EXPECTED_TARGETS) {
         expect(
           liveFlat.indexOf(target),
-          `target "${target}" missing from live welcome.md`,
-        ).toBeGreaterThanOrEqual(0);
-        expect(
-          liveFlat.indexOf(target),
-          `target "${target}" not unique in live welcome.md (drift hazard)`,
+          `target "${target}" must be unique in live welcome.md (drift hazard)`,
         ).toBe(liveFlat.lastIndexOf(target));
+        const ann = injected.find((a) => a.textSnapshot === target);
+        expect(ann, `no injected annotation for "${target}" in live welcome.md`).toBeDefined();
+        if (ann) expect(liveFlat.slice(ann.range.from, ann.range.to)).toBe(target);
       }
     } finally {
       liveDoc.destroy();

@@ -125,9 +125,10 @@ describe("AR5 channel privacy — what must NOT emit", () => {
   });
 
   it("does not emit when a note→comment update fails to flip author to user", () => {
-    // Regression guard: if the promote ever stopped flipping author:"import"→"user",
-    // the channel gate's `author === "user"` requirement means it would silently
-    // STOP surfacing. Prove that an author-not-flipped update emits nothing.
+    // Gate-predicate guard: an update landing as author:"import" (i.e. the
+    // promote failed to flip to "user") must emit nothing, since the channel
+    // gate requires `author === "user"`. This pins WHY the flip matters; that
+    // the real helper performs the flip is covered by the promote-emits test above.
     const map = getAnnotationsMap(doc);
     withInternal(doc, () => map.set("imp1", importNote("imp1")));
     const { events, cleanup } = collectEvents();
