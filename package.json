@@ -52,7 +52,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "biome format --write .",
-    "doctor": "node scripts/doctor.mjs",
+    "doctor": "tsx scripts/doctor.mjs",
     "dev:tauri": "node scripts/download-node-sidecar.mjs && cargo tauri dev",
     "build:tauri": "cargo tauri build",
     "check:tokens": "tsx scripts/check-semantic-tokens.ts",
