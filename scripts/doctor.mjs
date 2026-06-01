@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 
 /**
  * Tandem Doctor — standalone shim for `npm run doctor`.
