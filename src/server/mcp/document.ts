@@ -217,7 +217,7 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc): void {
     // resolveAuthorshipRange rejects them anyway.
     if (from >= to) continue;
 
-    const anchored = anchoredRange(doc, from, to);
+    const anchored = anchoredRange(doc, toFlatOffset(from), toFlatOffset(to));
     if (!anchored.ok) continue;
 
     // Key on the fragment element index (not a running stamped-block counter)

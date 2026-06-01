@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { extractText } from "../../src/server/mcp/document-model.js";
 import { stampClaudeAuthorshipWholeDoc } from "../../src/server/mcp/document.js";
+import { extractText } from "../../src/server/mcp/document-model.js";
 import { Y_MAP_AUTHORSHIP } from "../../src/shared/constants.js";
 import type { AuthorshipRange } from "../../src/shared/types.js";
 import { makeMarkdownDoc } from "../helpers/ydoc-factory.js";
