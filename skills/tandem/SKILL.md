@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 2
+version: 3
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
   document editing, or iterating on text collaboratively. Provides workflow
@@ -36,6 +36,16 @@ Standard workflow:
 6. `tandem_checkInbox` — check for user messages and actions
 7. Repeat steps 3-6 for each section
 8. `tandem_save` — persist edits to disk when done
+
+## Authoring a New Document
+
+When you write a document wholesale (create the file on disk yourself, then open it in Tandem), pass `authoredBy: "claude"` to `tandem_open`:
+
+```
+tandem_open({ filePath: "/abs/path/draft.md", authoredBy: "claude" })
+```
+
+This attributes the document's text to Claude so the editor shows authorship correctly — otherwise a wholesale-written document looks unattributed, because authorship is normally stamped only by `tandem_edit`. The flag is idempotent (safe to re-pass on re-open) and only ever stamps Claude authorship — it never forges user attribution. Authorship is not durably persisted across server restarts, so if you re-open a document you created in an earlier session and want it re-attributed, pass `authoredBy: "claude"` again.
 
 ## Annotation Guide
 
