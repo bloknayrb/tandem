@@ -18,6 +18,7 @@ import * as Y from "yjs";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
 import { AnnotationExtension } from "./extensions/annotation";
+import { AnnotationPingExtension } from "./extensions/annotationPing";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
@@ -167,6 +168,10 @@ $effect(() => {
         },
       }),
       AnnotationExtension.configure({ ydoc }),
+      // A4 (#798) gutter ping on annotation arrival — owns its own ephemeral
+      // node-decoration set, independent of AnnotationExtension's perf-tuned
+      // inline-decoration plugin (see annotationPing.ts).
+      AnnotationPingExtension.configure({ ydoc }),
       // Registered AFTER AnnotationExtension so its chevron widgets render
       // above annotation decorations and its node-hide decorations win the
       // display: none vs annotation-class composition. Decoration ordering

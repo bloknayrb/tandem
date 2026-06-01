@@ -208,6 +208,42 @@
   }
 }
 
+/* A4 (#798) — gutter ping when an annotation arrives at a paragraph. Ephemeral:
+ * the `.tandem-annotation-ping` node decoration is added on arrival and removed
+ * ~700ms later by the annotationPing plugin, so this is a one-shot intro. The
+ * gutter rail sits just inside `.tandem-claude-focus::before` (which is at -24px,
+ * 3px, accent, and pulses infinitely) — offset to -20px / 2px so the two read
+ * distinctly when Claude comments on its own focused paragraph. The host block
+ * already has `position: relative` (the p/h1..h6 rule below). */
+.tandem-annotation-ping {
+  position: relative;
+}
+.tandem-annotation-ping::before {
+  content: "";
+  position: absolute;
+  left: -20px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: var(--tandem-r-1);
+  background: var(--tandem-accent);
+  animation: tandem-annotation-ping 700ms var(--tandem-ease-out);
+}
+@keyframes tandem-annotation-ping {
+  0% {
+    opacity: 0;
+    transform: scaleY(0.4);
+  }
+  30% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleY(1);
+  }
+}
+
 /* Position context for authorship gutter ::before pseudo-elements.
  * `.tandem-editor` IS the `.ProseMirror` element (Tiptap stacks both classes on
  * one node), so a `.tandem-editor .ProseMirror p` descendant selector matches
@@ -320,6 +356,13 @@
   .ProseMirror [data-annotation-id].tandem-annotation-active {
     animation: none;
   }
+  /* A4 ping: defense-in-depth (the plugin already skips pinging under reduced
+   * motion, so no `.tandem-annotation-ping` node is added — but if one ever is,
+   * hide the gutter bar rather than freeze it mid-flash). */
+  .tandem-annotation-ping::before {
+    animation: none;
+    opacity: 0;
+  }
 }
 body.tandem-reduce-motion .tandem-claude-focus::before,
 body.tandem-reduce-motion .tandem-claude-cursor {
@@ -331,6 +374,10 @@ body.tandem-reduce-motion .ProseMirror [data-tandem-author] {
 body.tandem-reduce-motion .tandem-find-active,
 body.tandem-reduce-motion .ProseMirror [data-annotation-id].tandem-annotation-active {
   animation: none;
+}
+body.tandem-reduce-motion .tandem-annotation-ping::before {
+  animation: none;
+  opacity: 0;
 }
 
 /* -------------------------------------------------------------------------
