@@ -119,7 +119,9 @@ test("docx reviewer comments import as private notes, then batch-promote to Clau
   await expect(bar).toBeVisible();
   await expect(page.locator("[data-testid='batch-promote-count']")).toContainText("2 selected");
   const confirm = page.locator("[data-testid='batch-promote-confirm']");
-  await expect(confirm).toContainText("Send 2 to Claude");
+  // Agent-agnostic label (#438): the button reads "Send N to {agentLabel.family}"
+  // (e.g. "Assistant" fallback), not a hardcoded "Claude".
+  await expect(confirm).toContainText("Send 2 to");
 
   // --- Promote.
   await confirm.click();
