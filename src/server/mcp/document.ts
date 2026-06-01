@@ -25,6 +25,8 @@ import { convertToMarkdown } from "./convert.js";
 import {
   extractText,
   getElementText,
+  getElementTextLength,
+  getHeadingPrefixLength,
   getOrCreateXmlText,
   mergeXmlTextDelta,
   TEXTBLOCK_NODES,
@@ -172,6 +174,76 @@ export function getSection(
   return { found: true, text: lines.join("\n") };
 }
 
+/**
+ * Stamp Claude authorship across an entire freshly-loaded document.
+ *
+ * Used by `tandem_open`'s `authoredBy: "claude"` affordance (issue #937): when
+ * Claude writes a document wholesale to disk and then opens it, none of the text
+ * is attributed to Claude because authorship is otherwise only stamped by
+ * `tandem_edit`. This stamps one Claude `AuthorshipRange` per top-level element,
+ * each spanning that element's POST-PREFIX text (heading prefixes like `# ` are
+ * excluded so the CRDT anchor resolves — `flatOffsetToRelPos(doc, 0)` returns
+ * null inside a heading prefix, which would otherwise degrade the whole doc to
+ * flat-only).
+ *
+ * Idempotent via deterministic IDs (`claude-block-{index}`): re-open,
+ * session-restore, and force-reload re-`set` the same keys instead of appending
+ * duplicates. Never bulk-clears the authorship map, so any browser-added
+ * `author:"user"` ranges are preserved (a user can reclaim a block by editing
+ * it). Offsets mirror `extractText`'s top-level walk: top-level elements joined
+ * by FLAT_SEPARATOR (1 char), each element offset by its heading prefix.
+ */
+export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc): void {
+  const fragment = doc.getXmlFragment("default");
+  const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
+  const timestamp = Date.now();
+  const entries: Array<{ key: string; entry: AuthorshipRange }> = [];
+
+  let flatCursor = 0;
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (!(node instanceof Y.XmlElement)) continue;
+
+    const prefixLen = getHeadingPrefixLength(node);
+    const textLen = getElementTextLength(node);
+    const from = flatCursor + prefixLen;
+    const to = from + textLen;
+
+    // Advance the cursor past this element (prefix + text) plus the
+    // FLAT_SEPARATOR that joins top-level elements.
+    flatCursor = to + 1;
+
+    // Skip zero-width spans (empty paragraphs, bare headings) —
+    // resolveAuthorshipRange rejects them anyway.
+    if (from >= to) continue;
+
+    const anchored = anchoredRange(doc, toFlatOffset(from), toFlatOffset(to));
+    if (!anchored.ok) continue;
+
+    // Key on the fragment element index (not a running stamped-block counter)
+    // so IDs stay stable across re-opens even when some blocks are skipped.
+    const key = `claude-block-${i}`;
+    entries.push({
+      key,
+      entry: {
+        id: key,
+        author: "claude",
+        range: anchored.range,
+        relRange: anchored.fullyAnchored ? anchored.relRange : undefined,
+        timestamp,
+      },
+    });
+  }
+
+  if (entries.length === 0) return;
+
+  withMcp(doc, () => {
+    for (const { key, entry } of entries) {
+      authorshipMap.set(key, entry);
+    }
+  });
+}
+
 export function registerDocumentTools(server: McpServer): void {
   const openDocs = getOpenDocs();
 
@@ -184,10 +256,28 @@ export function registerDocumentTools(server: McpServer): void {
         .boolean()
         .optional()
         .describe("Force reload from disk even if already open. Clears annotations and session."),
+      authoredBy: z
+        .literal("claude")
+        .optional()
+        .describe(
+          "Pass 'claude' when you authored this document wholesale (wrote the file, then opened it) to attribute its text to Claude. Stamps Claude authorship across the loaded content. Idempotent — safe to re-pass on re-open.",
+        ),
     },
-    withErrorBoundary("tandem_open", async ({ filePath, force }) => {
+    withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }) => {
       try {
         const result = await openFileByPath(filePath, { force });
+
+        // Issue #937: attribute Claude-authored documents at creation. Stamp
+        // AFTER openFileByPath resolves — content is guaranteed populated, and
+        // the durable-sync/channel observers attach later in wireAnnotationStore,
+        // so there is no race. Upload/scratchpad paths bypass openFileByPath and
+        // are naturally excluded.
+        if (authoredBy === "claude") {
+          const loaded = requireDocument(result.documentId);
+          if (loaded) {
+            stampClaudeAuthorshipWholeDoc(loaded.doc);
+          }
+        }
         return mcpSuccess({
           ...result,
           message: result.forceReloaded
