@@ -240,9 +240,9 @@ function handlePointerUp(e: PointerEvent) {
     target.id !== draggedId &&
     reorder &&
     tabs.some((t) => t.id === draggedId) &&
-    // A closing tab lingers ~200ms during its s3 `out:` collapse with its
-    // `data-testid="tab-*"`/`role="tab"` intact, so it can still be picked as a
-    // drop target — guard against reordering onto an id no longer in `tabs`.
+    // A closing tab lingers ~200ms during its s3 `out:` collapse with its tab
+    // testid and role intact, so it can still be picked as a drop target — guard
+    // against reordering onto an id no longer in `tabs`.
     tabs.some((t) => t.id === target.id)
   ) {
     reorder(draggedId, target.id, target.side);
