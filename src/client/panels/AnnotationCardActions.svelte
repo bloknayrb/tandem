@@ -157,7 +157,11 @@ onDestroy(clearUndoTimer);
     border: 1px solid var(--tandem-border-strong);
     border-radius: var(--tandem-r-pill);
     cursor: pointer;
-    transition: background 120ms ease, color 120ms ease;
+    transition: background 120ms ease, color 120ms ease, transform 120ms var(--tandem-ease-out);
+  }
+  /* A1 (Phase 4 / #798) — quick press-in on commit. */
+  .aca-btn:active {
+    transform: scale(0.96);
   }
   .aca-standalone {
     margin-top: 4px;
@@ -195,9 +199,15 @@ onDestroy(clearUndoTimer);
     .aca-btn {
       transition: none;
     }
+    .aca-btn:active {
+      transform: none;
+    }
   }
   :global(body.tandem-reduce-motion) .aca-btn {
     transition: none;
+  }
+  :global(body.tandem-reduce-motion) .aca-btn:active {
+    transform: none;
   }
 
   .aca-undo-row {
