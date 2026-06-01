@@ -6,6 +6,7 @@
  *   tandem            Start the Tandem server and open the editor
  *   tandem setup      Register Tandem MCP tools with your AI client (Claude Code / Claude Desktop by default)
  *   tandem setup --force  Register even if no AI install is auto-detected
+ *   tandem doctor     Diagnose setup issues (add --json for machine-readable output)
  *   tandem --help     Show this help
  *   tandem --version  Show version
  */
@@ -49,6 +50,9 @@ Usage:
   tandem setup                      Register MCP tools with your AI client (Claude Code / Claude Desktop by default)
   tandem setup --force              Register to default paths regardless of detection
   tandem setup --with-channel-shim  Also register the stdio channel shim (legacy opt-in)
+  tandem doctor                     Diagnose setup issues (Node version, .mcp.json,
+                                    ports, server health, annotation store)
+  tandem doctor --json              Same checks, emit a single JSON report on stdout
   tandem rotate-token               Rotate the auth token with a 60-second grace window
   tandem mcp-stdio                  Run as a stdio MCP server proxying to local HTTP
                                     (used by the plugin's Cowork bridge; requires
@@ -87,6 +91,14 @@ try {
   } else if (args[0] === "channel") {
     const { runChannelCli } = await import("./channel.js");
     await runChannelCli();
+  } else if (args[0] === "doctor") {
+    // The doctor logic is bundled into dist/cli (imported, not spawned):
+    // scripts/ is NOT shipped in the npm package, so a spawn would have
+    // nothing to run in a global install. See src/cli/doctor.ts for the
+    // full rationale. --json emits a single JSON report on stdout.
+    const { runDoctorCli } = await import("./doctor.js");
+    const exitCode = await runDoctorCli({ json: args.includes("--json") });
+    process.exit(exitCode);
   } else if (args[0] === "rotate-token") {
     const { rotateToken } = await import("./rotate-token.js");
     await rotateToken();
