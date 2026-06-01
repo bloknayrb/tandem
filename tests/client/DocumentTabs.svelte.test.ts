@@ -53,6 +53,19 @@ beforeEach(() => {
   (Element.prototype as any).setPointerCapture = vi.fn();
   // biome-ignore lint/suspicious/noExplicitAny: test stub
   (Element.prototype as any).releasePointerCapture = vi.fn();
+  // happy-dom doesn't implement the Web Animations API. Closing/removing a tab
+  // fires TabItem's `out:tabExit` outro, which Svelte runs via `element.animate`
+  // (case C removes a tab mid-drag). Stub a minimal Animation so the css-only
+  // outro doesn't throw — Svelte's css path only assigns `onfinish`/`effect` and
+  // calls `cancel()`; it never needs the animation to actually progress here.
+  // biome-ignore lint/suspicious/noExplicitAny: test stub
+  (Element.prototype as any).animate = () => ({
+    cancel() {},
+    currentTime: 0,
+    playState: "finished",
+    effect: null,
+    onfinish: null,
+  });
 });
 
 afterEach(async () => {

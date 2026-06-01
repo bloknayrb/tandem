@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barIn, barOut, cardEnter, cardExit } from "../../src/client/panels/cardMotion";
+import { barIn, barOut, cardEnter, cardExit, tabExit } from "../../src/client/panels/cardMotion";
 
 // A4/A1/A10 rail card transitions (Phase 4 / #798). These exercise the pure
 // decision logic (enabled gate, reduced-motion gate, exit-direction read-and-
@@ -136,5 +136,40 @@ describe("barOut", () => {
     expect(outMid).toBeGreaterThan(0.5);
     // ...but ease-out leads ease-standard, so they are genuinely two curves (M2).
     expect(inMid).toBeGreaterThan(outMid);
+  });
+});
+
+// s3 tab-close transition. Pure-config coverage; the horizontal collapse itself
+// is exercised functionally by the existing Ctrl+W tab-close E2E specs (which run
+// with motion on by Playwright default).
+describe("tabExit", () => {
+  it("collapses immediately under reduce-motion (motion.md: no slide)", () => {
+    expect(tabExit(el(), { reduceMotion: true })).toEqual({ duration: 0 });
+  });
+
+  it("returns a real inline-axis collapse with motion allowed", () => {
+    const cfg = tabExit(el(), { reduceMotion: false });
+    expect(cfg.duration).toBe(200);
+    expect(typeof cfg.easing).toBe("function");
+    const present = cfg.css!(1, 0);
+    const gone = cfg.css!(0, 1);
+    expect(present).toContain("opacity:1");
+    expect(gone).toContain("opacity:0");
+    // collapses width (not height) so adjacent tabs reflow on the inline axis,
+    // with min-width:0 to defeat the tab's content min-width and clip (not scroll).
+    expect(present).toContain("width:");
+    expect(present).toContain("min-width:0");
+    expect(present).toContain("overflow:clip");
+    // inert while leaving: a click on the collapsing tab would switch to a dead
+    // id (already gone from tabsState) and wipe the editor; it also drops the
+    // node from elementFromPoint, hardening the drag drop-target path.
+    expect(present).toContain("pointer-events:none");
+  });
+
+  it("uses the ease-out curve", () => {
+    const { easing } = tabExit(el(), {});
+    expect(easing!(0)).toBe(0);
+    expect(easing!(1)).toBe(1);
+    expect(easing!(0.5)).toBeGreaterThan(0.5); // front-loaded
   });
 });
