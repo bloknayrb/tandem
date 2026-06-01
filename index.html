@@ -303,6 +303,32 @@
         min-width: 256px;
         padding: var(--tandem-space-1);
         z-index: var(--tandem-z-popover, 1100);
+        /* A20a (#798) — the menu lifts in from the cursor anchor. The container
+           is created once and display-gated (none↔block in extension.ts), so a
+           CSS `animation` fires once on open (none→block) and does NOT replay on
+           the per-keystroke re-render (block→block, identical className → no
+           restart). The per-row cascade (A20b) is intentionally out of scope —
+           rows are torn down/rebuilt each keystroke and would flicker. */
+        transform-origin: top left;
+        animation: tandem-slash-menu-in 240ms var(--tandem-ease-out);
+      }
+      @keyframes tandem-slash-menu-in {
+        from {
+          opacity: 0;
+          transform: translateY(-4px) scale(0.98);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .tandem-slash-menu {
+          animation: none;
+        }
+      }
+      body.tandem-reduce-motion .tandem-slash-menu {
+        animation: none;
       }
       .tandem-slash-menu__item {
         display: flex;
