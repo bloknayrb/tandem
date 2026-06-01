@@ -270,19 +270,36 @@ $effect(() => {
   const aid = activeAnnotationId;
   if (!aid) return;
   const sb = scrollBehavior;
+  // Under reduced motion the flash keyframe resolves to `animation: none`, so
+  // its `animationend` never fires — adding the class would be visually inert and
+  // strand the listener. Skip the flash entirely (still scroll into view). Checked
+  // in JS because a CSS `@media` can't gate this imperative class toggle.
+  const motionOff =
+    reduceMotion ||
+    (typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches);
 
   const timer = setTimeout(() => {
     const card = document.querySelector(`[data-testid="annotation-card-${aid}"]`);
-    if (card) {
-      card.scrollIntoView({ behavior: sb, block: "nearest" });
-      card.classList.add("tandem-annotation-flash");
-      const onEnd = () => card.classList.remove("tandem-annotation-flash");
-      card.addEventListener("animationend", onEnd, { once: true });
-    } else {
+    if (!card) {
       console.warn(
         `[tandem] SidePanel: active annotation ${aid} not found after 50ms delay; scroll-to-card skipped`,
       );
+      return;
     }
+    card.scrollIntoView({ behavior: sb, block: "nearest" });
+    if (motionOff) return;
+    card.classList.add("tandem-annotation-flash");
+    // The card root now also carries the cardMotion in/out transitions. Svelte 5
+    // drives those via the Web Animations API, which emits no `animationend`, so
+    // in practice only our flash keyframe reaches this listener — but match on the
+    // keyframe name (substring: Svelte scopes it `svelte-<hash>-tandem-annotation-flash`)
+    // and remove manually, so it stays correct even if that mechanism changes.
+    const onEnd = (e: Event) => {
+      if (!(e as AnimationEvent).animationName.includes("tandem-annotation-flash")) return;
+      card.classList.remove("tandem-annotation-flash");
+      card.removeEventListener("animationend", onEnd);
+    };
+    card.addEventListener("animationend", onEnd);
   }, 50);
 
   return () => clearTimeout(timer);
@@ -292,6 +309,23 @@ const handleEdit = (id: string, newContent: string) => editAnnotation(ydoc, id, 
 const handleSendToClaude = (id: string) => sendNoteToClaude(ydoc, id);
 const handleRemove = (id: string) => removeAnnotation(id, documentId);
 const handleReply = (id: string, text: string) => replyToAnnotation(id, text, documentId);
+
+// A1/A10 (Phase 4 / #798). Exit-direction ledger: a card resolved via Accept
+// settles upward, via Reject slides right; a card that merely leaves the list
+// (filtered out, removed) has no entry → neutral fade. The stamp is set
+// synchronously *before* the status flip that triggers the outro, and
+// `cardExit` reads-and-clears it, so the value is always fresh and the Map
+// never accumulates stale entries. Plain Map (not $state): it's an imperative
+// side channel for the transition, never rendered.
+const exitModes = new Map<string, "accept" | "dismiss">();
+function handleAcceptAnimated(id: string) {
+  exitModes.set(id, "accept");
+  review.handleAccept(id);
+}
+function handleDismissAnimated(id: string) {
+  exitModes.set(id, "dismiss");
+  review.handleDismiss(id);
+}
 
 function handleBulk(status: "accepted" | "dismissed") {
   for (const ann of filteredData.reviewPending) review.resolveAnnotation(ann.id, status);
@@ -482,8 +516,11 @@ function handleRailBackgroundClick(e: MouseEvent) {
           replies={repliesMap.get(ann.id) ?? []}
           isReviewTarget={isTarget}
           claudeTyping={claudeWorkingAnnotationId === ann.id}
-          onAccept={ann.author !== "user" ? review.handleAccept : undefined}
-          onDismiss={ann.author !== "user" ? review.handleDismiss : undefined}
+          lifecycleMotion={true}
+          {reduceMotion}
+          {exitModes}
+          onAccept={ann.author !== "user" ? handleAcceptAnimated : undefined}
+          onDismiss={ann.author !== "user" ? handleDismissAnimated : undefined}
           onRemove={ann.author === "user" ? handleRemove : undefined}
           onSendToClaude={ann.type === "note" ? handleSendToClaude : undefined}
           onEdit={handleEdit}

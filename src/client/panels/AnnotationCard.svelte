@@ -9,6 +9,7 @@ import AnnotationEditForm from "./AnnotationEditForm.svelte";
 import { getCardLabel, getHighlightBorder } from "./annotation-card-helpers";
 import CommentCard from "./CommentCard.svelte";
 import type { Density } from "./cardDensity";
+import { cardEnter, cardExit } from "./cardMotion";
 import HighlightCard from "./HighlightCard.svelte";
 import ImportedCard from "./ImportedCard.svelte";
 import NoteCard from "./NoteCard.svelte";
@@ -49,6 +50,20 @@ interface Props {
    * unaffected.
    */
   density?: Density;
+  /**
+   * A4/A1/A10 (Phase 4 / #798). When true, the card root animates in on arrival
+   * and out on resolve/removal via `cardMotion`. Only the pending side-panel
+   * list opts in; the resolved list and margin view leave it `false` so those
+   * cards never animate (the transition factories return `{ duration: 0 }`).
+   */
+  lifecycleMotion?: boolean;
+  /** App reduce-motion setting, forwarded to the lifecycle transitions. */
+  reduceMotion?: boolean;
+  /**
+   * Exit-direction ledger owned by SidePanel: accept → settle up, dismiss →
+   * slide right, absent → neutral fade. Read+cleared inside `cardExit`.
+   */
+  exitModes?: Map<string, "accept" | "dismiss">;
 }
 
 let {
@@ -68,6 +83,9 @@ let {
   selected = false,
   onToggleSelect,
   density = "full",
+  lifecycleMotion = false,
+  reduceMotion = false,
+  exitModes,
 }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
@@ -170,6 +188,8 @@ function handleKeyDown(e: KeyboardEvent) {
   class:is-review-target={isReviewTarget}
   class:is-density-clamped={resolvedDensity === "clamped"}
   class:is-density-stub={resolvedDensity === "stub"}
+  in:cardEnter={{ enabled: lifecycleMotion, reduceMotion }}
+  out:cardExit={{ enabled: lifecycleMotion, reduceMotion, id: annotation.id, modes: exitModes }}
   onclick={onClick}
   data-testid="annotation-card-{annotation.id}"
   data-annotation-type={annotation.type}
