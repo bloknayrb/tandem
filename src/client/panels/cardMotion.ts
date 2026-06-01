@@ -1,17 +1,16 @@
 import type { TransitionConfig } from "svelte/transition";
 
 /**
- * Annotation-rail card motion (Phase 4 / #798 — A4 arrival + A1/A10 exit).
- *
- * Custom Svelte transitions for the pending annotation list. Both measure the
- * card's real border-box height at transition start, so siblings reflow
- * continuously as the card grows in / collapses out — no `animate:flip` and no
- * magic `max-height` that would clip a tall card. They live on the card root
- * (not a wrapper) so the `role="list"` → `role="listitem"` ownership stays intact.
+ * Rail + chrome motion (Phase 4 / #798). Custom Svelte transitions for the
+ * annotation list (`cardEnter`/`cardExit` — A4/A1/A10), the rail toolbars
+ * (`barIn`/`barOut` — A24/A25), and the tab strip (`tabExit` — s3). Each measures
+ * the element's real border-box size on the relevant axis at transition start, so
+ * siblings reflow continuously as it grows in / collapses out — no `animate:flip`
+ * and no magic `max-height`/`max-width` that would clip a tall/wide element.
  *
  * The easing matches the `--tandem-ease-out` token exactly
- * (`cubic-bezier(0.2, 0.8, 0.2, 1)`) via the solver below, so JS-driven card
- * motion reads identically to the CSS-driven motion in the rest of the re-skin.
+ * (`cubic-bezier(0.2, 0.8, 0.2, 1)`) via the solver below, so JS-driven motion
+ * reads identically to the CSS-driven motion in the rest of the re-skin.
  */
 
 type ExitMode = "accept" | "dismiss";
@@ -192,5 +191,32 @@ export function barOut(
     // t: 1→0 (collapsing), u = 1−t.
     css: (t, u) =>
       `opacity:${t}; transform:translateY(${-8 * u}px); height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box;`,
+  };
+}
+
+const TAB_EXIT_MS = 200;
+
+/**
+ * s3 — a closing tab collapses on the INLINE axis (width w→0) + fades, so the
+ * adjacent tabs glide left to fill (`out:` directive on the TabItem root). The
+ * `min-width:0` defeats the tab's content min-width (the name span's 80px floor),
+ * which otherwise wins over an explicit `width` and would stop the collapse short;
+ * `overflow:clip` clips the name without becoming a focus-stealing scroll box.
+ * `pointer-events:none` makes the leaving node inert for its ~200ms in the DOM:
+ * the id is already gone from `tabsState` (that removal is what fired this outro),
+ * so a click on the collapsing tab would `setActiveTabId` a dead id → null active
+ * tab → wiped editor; it also drops the node out of `elementFromPoint`, hardening
+ * the drag-reorder drop-target path. Reduced motion → instant removal (motion.md:
+ * "collapse immediately, no slide").
+ */
+export function tabExit(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const w = node.offsetWidth;
+  return {
+    duration: TAB_EXIT_MS,
+    easing: easeOut,
+    // t: 1→0 (collapsing).
+    css: (t) =>
+      `opacity:${t}; width:${t * w}px; min-width:0; overflow:clip; box-sizing:border-box; pointer-events:none;`,
   };
 }

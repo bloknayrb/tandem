@@ -230,15 +230,22 @@ function handlePointerMove(e: PointerEvent) {
 function handlePointerUp(e: PointerEvent) {
   if (pointerId === null || e.pointerId !== pointerId) return;
   const wasDragging = dragging;
+  // Capture into a const so the narrowing holds inside the `.some` closure below
+  // (a `$state` `let` isn't narrowed across a nested function boundary).
+  const target = dropTarget;
   if (
     wasDragging &&
     draggedId &&
-    dropTarget &&
-    dropTarget.id !== draggedId &&
+    target &&
+    target.id !== draggedId &&
     reorder &&
-    tabs.some((t) => t.id === draggedId)
+    tabs.some((t) => t.id === draggedId) &&
+    // A closing tab lingers ~200ms during its s3 `out:` collapse with its
+    // `data-testid="tab-*"`/`role="tab"` intact, so it can still be picked as a
+    // drop target — guard against reordering onto an id no longer in `tabs`.
+    tabs.some((t) => t.id === target.id)
   ) {
-    reorder(draggedId, dropTarget.id, dropTarget.side);
+    reorder(draggedId, target.id, target.side);
   }
   if (wasDragging) {
     // A finished drag may emit a trailing synthetic click that would fire the
@@ -348,6 +355,7 @@ $effect(() => {
         onpointerdown={handleTabPointerDown}
         dropIndicator={dropTarget?.id === tab.id ? dropTarget.side : null}
         onkeydown={handleKeyDown}
+        {reduceMotion}
       />
     {/each}
   </div>

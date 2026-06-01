@@ -1,5 +1,6 @@
 <script lang="ts">
 import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
+import { tabExit } from "../panels/cardMotion.js";
 import type { OpenTab } from "../types.js";
 
 interface Props {
@@ -10,10 +11,20 @@ interface Props {
   onpointerdown: (e: PointerEvent, id: string) => void;
   dropIndicator: "left" | "right" | null;
   onkeydown: (e: KeyboardEvent, id: string) => void;
+  /** App reduce-motion setting; threaded from DocumentTabs (s3, #798). */
+  reduceMotion?: boolean;
 }
 
-const { tab, isActive, onswitch, onclose, onpointerdown, dropIndicator, onkeydown }: Props =
-  $props();
+const {
+  tab,
+  isActive,
+  onswitch,
+  onclose,
+  onpointerdown,
+  dropIndicator,
+  onkeydown,
+  reduceMotion = false,
+}: Props = $props();
 
 // ---- useTabDirty logic inlined (hooks can't be imported into Svelte) ----
 let dirty = $state(false);
@@ -119,6 +130,7 @@ function handleMouseLeaveClose() {
   aria-selected={isActive}
   aria-label={tab.fileName}
   style={tabStyle}
+  out:tabExit={{ reduceMotion }}
   onclick={() => onswitch(tab.id)}
   onpointerdown={(e) => onpointerdown(e, tab.id)}
   onkeydown={(e) => onkeydown(e, tab.id)}
