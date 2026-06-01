@@ -145,6 +145,22 @@
   background: var(--tandem-warning-bg);
   outline: 1px solid var(--tandem-warning);
   border-radius: 2px;
+  /* A18 (#798) — the active match "hops" between hits: a one-shot pulse on the
+   * span PM (re)creates with this class each `findNext`/`findPrev`. An
+   * `animation` (not a `transition`) is used deliberately — buildDecoSet
+   * recreates the whole DecorationSet on activeIndex change, so there's no
+   * stable old→new computed delta for a transition to ride; an animation fires
+   * on element-with-class creation. 100% lands on the resting bg (no `forwards`
+   * needed — the static rule above equals the final frame). */
+  animation: tandem-find-hop 160ms var(--tandem-ease-out);
+}
+@keyframes tandem-find-hop {
+  0% {
+    background: var(--tandem-warning);
+  }
+  100% {
+    background: var(--tandem-warning-bg);
+  }
 }
 
 /* Annotation decorations */
@@ -168,6 +184,28 @@
 }
 .tandem-note:hover {
   border-bottom-style: solid;
+}
+
+/* A6a (#798) — card↔text: clicking a rail card pulses the anchored text. The
+ * `.tandem-annotation-active` class is toggled directly via classList by the
+ * $effect in Editor.svelte (not a PM decoration), so `classList.add` starts
+ * this animation. The resting 16% accent tint persists after the pulse (the
+ * 100% frame equals it, so the span stays highlighted while its card is
+ * active); the 36% opening frame is the "pulse". Fires on becoming-active, not
+ * on re-clicking the already-active card (the effect is idempotent on equal
+ * ids) — a "this is the spot" cue, not a click ack. */
+.ProseMirror [data-annotation-id].tandem-annotation-active {
+  background: color-mix(in srgb, var(--tandem-accent) 16%, transparent);
+  border-radius: var(--tandem-r-1);
+  animation: tandem-anchor-pulse 1200ms var(--tandem-ease-out);
+}
+@keyframes tandem-anchor-pulse {
+  0% {
+    background: color-mix(in srgb, var(--tandem-accent) 36%, transparent);
+  }
+  100% {
+    background: color-mix(in srgb, var(--tandem-accent) 16%, transparent);
+  }
 }
 
 /* Position context for authorship gutter ::before pseudo-elements.
@@ -276,6 +314,12 @@
   .ProseMirror [data-tandem-author] {
     transition: none;
   }
+  /* #798 motion (A18 find hop, A6a anchor pulse): kill the motion only — the
+   * resting active-match bg/outline and the active-annotation tint stay. */
+  .tandem-find-active,
+  .ProseMirror [data-annotation-id].tandem-annotation-active {
+    animation: none;
+  }
 }
 body.tandem-reduce-motion .tandem-claude-focus::before,
 body.tandem-reduce-motion .tandem-claude-cursor {
@@ -283,6 +327,10 @@ body.tandem-reduce-motion .tandem-claude-cursor {
 }
 body.tandem-reduce-motion .ProseMirror [data-tandem-author] {
   transition: none;
+}
+body.tandem-reduce-motion .tandem-find-active,
+body.tandem-reduce-motion .ProseMirror [data-annotation-id].tandem-annotation-active {
+  animation: none;
 }
 
 /* -------------------------------------------------------------------------
