@@ -109,7 +109,7 @@ export function cardEnter(
     easing: easeOut,
     // t: 0→1 (present), u = 1−t.
     css: (t, u) =>
-      `opacity:${t}; transform:translateY(${-6 * u}px); height:${t * h}px; margin-bottom:${t * mb}px; overflow:hidden; box-sizing:border-box;`,
+      `opacity:${t}; transform:translateY(${-6 * u}px); height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box;`,
   };
 }
 
@@ -138,6 +138,6 @@ export function cardExit(
     easing: easeOut,
     // t: 1→0 (collapsing), u = 1−t.
     css: (t, u) =>
-      `opacity:${t}; height:${t * h}px; margin-bottom:${t * mb}px; transform:${transform(u)}; overflow:hidden; box-sizing:border-box;`,
+      `opacity:${t}; height:${t * h}px; margin-bottom:${t * mb}px; transform:${transform(u)}; overflow:clip; box-sizing:border-box;`,
   };
 }

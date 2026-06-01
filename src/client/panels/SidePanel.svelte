@@ -270,31 +270,36 @@ $effect(() => {
   const aid = activeAnnotationId;
   if (!aid) return;
   const sb = scrollBehavior;
+  // Under reduced motion the flash keyframe resolves to `animation: none`, so
+  // its `animationend` never fires — adding the class would be visually inert and
+  // strand the listener. Skip the flash entirely (still scroll into view). Checked
+  // in JS because a CSS `@media` can't gate this imperative class toggle.
+  const motionOff =
+    reduceMotion ||
+    (typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches);
 
   const timer = setTimeout(() => {
     const card = document.querySelector(`[data-testid="annotation-card-${aid}"]`);
-    if (card) {
-      card.scrollIntoView({ behavior: sb, block: "nearest" });
-      card.classList.add("tandem-annotation-flash");
-      // Filter on animationName: the card root now also carries the cardMotion
-      // in/out transitions (Svelte generates a keyframed `animation` for those),
-      // so an unfiltered listener could strip the flash class on the wrong
-      // animation's `animationend`. Only react to our own flash keyframe.
-      // `.includes` not `===`: Svelte scopes the keyframe name
-      // (`svelte-<hash>-tandem-annotation-flash`), so match the substring. This
-      // still excludes Svelte's internal transition keyframes (`__svelte_*`)
-      // that the cardMotion in/out animations emit on this same node.
-      const onEnd = (e: Event) => {
-        if (!(e as AnimationEvent).animationName.includes("tandem-annotation-flash")) return;
-        card.classList.remove("tandem-annotation-flash");
-        card.removeEventListener("animationend", onEnd);
-      };
-      card.addEventListener("animationend", onEnd);
-    } else {
+    if (!card) {
       console.warn(
         `[tandem] SidePanel: active annotation ${aid} not found after 50ms delay; scroll-to-card skipped`,
       );
+      return;
     }
+    card.scrollIntoView({ behavior: sb, block: "nearest" });
+    if (motionOff) return;
+    card.classList.add("tandem-annotation-flash");
+    // The card root now also carries the cardMotion in/out transitions. Svelte 5
+    // drives those via the Web Animations API, which emits no `animationend`, so
+    // in practice only our flash keyframe reaches this listener — but match on the
+    // keyframe name (substring: Svelte scopes it `svelte-<hash>-tandem-annotation-flash`)
+    // and remove manually, so it stays correct even if that mechanism changes.
+    const onEnd = (e: Event) => {
+      if (!(e as AnimationEvent).animationName.includes("tandem-annotation-flash")) return;
+      card.classList.remove("tandem-annotation-flash");
+      card.removeEventListener("animationend", onEnd);
+    };
+    card.addEventListener("animationend", onEnd);
   }, 50);
 
   return () => clearTimeout(timer);

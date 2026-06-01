@@ -30,7 +30,7 @@ describe("cardEnter", () => {
     expect(present).toContain("opacity:1");
     expect(absent).toContain("opacity:0");
     // collapse is clipped + border-box so the height math is exact.
-    expect(present).toContain("overflow:hidden");
+    expect(present).toContain("overflow:clip");
     expect(present).toContain("box-sizing:border-box");
   });
 
