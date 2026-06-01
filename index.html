@@ -238,6 +238,18 @@
           0 1px 1px rgba(0, 0, 0, 0.04),
           0 6px 14px -6px rgba(0, 0, 0, 0.10),
           0 22px 38px -22px rgba(0, 0, 0, 0.16);
+        /* Motion easing tokens (Phase 4 / #798 — see
+           docs/design-system-impl/motion.md). Theme-independent timing
+           functions, defined once in :root. --tandem-ease-out is the primary
+           entrance/exit curve (fast into position, soft settle);
+           --tandem-ease-standard is reserved for longer layout transitions
+           (e.g. the A16 highlight wash). Per-scene @keyframes live in each
+           surface's own re-skin, not here. Reduced motion is already honored
+           app-wide via the prefers-reduced-motion media query + the
+           body.tandem-reduce-motion class (wired in App.svelte from the
+           reduceMotion setting). */
+        --tandem-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+        --tandem-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
       }
 
       /* Shared white-mode floating-pill recipe. Applied to every floating
