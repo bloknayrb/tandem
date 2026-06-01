@@ -247,13 +247,7 @@ reply-cancel-btn-{*}
 reply-import-byline-{*}
 reply-input-{*}
 reply-send-btn-{*}
-reply-thread-expand-{*}
-reply-thread-overlay
-reply-thread-overlay-cancel
-reply-thread-overlay-close
-reply-thread-overlay-input
-reply-thread-overlay-reply
-reply-thread-overlay-send
+reply-toggle-{*}
 reply-{*}
 report-bug-link
 review-only-banner

@@ -462,7 +462,7 @@ function handleBackdropClick(e: MouseEvent) {
   }
   /* NOTE: this transform makes .palette-modal a containing block — any future
      position:fixed descendant would anchor here, not the viewport (the #840
-     ReplyThreadOverlay portal trap). Portal such children to <body>. */
+     portal-trap lesson). Portal such children to <body>. */
   .palette-modal {
     transform-origin: top center;
     animation: tandem-palette-modal-in 260ms var(--tandem-ease-out);

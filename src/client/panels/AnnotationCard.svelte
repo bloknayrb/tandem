@@ -1,5 +1,4 @@
 <script lang="ts">
-import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
@@ -14,7 +13,6 @@ import HighlightCard from "./HighlightCard.svelte";
 import ImportedCard from "./ImportedCard.svelte";
 import NoteCard from "./NoteCard.svelte";
 import ReplyThread from "./ReplyThread.svelte";
-import ReplyThreadOverlay from "./ReplyThreadOverlay.svelte";
 import SuggestionCard from "./SuggestionCard.svelte";
 
 interface Props {
@@ -108,11 +106,10 @@ const isPending = $derived(annotation.status === "pending");
 const hasSuggestedText = $derived(annotation.suggestedText !== undefined);
 const canEdit = $derived(onEdit !== undefined);
 const cardLabel = $derived(getCardLabel(annotation));
-// Privacy: getVisibleReplies returns [] for non-comment annotations,
-// so note/highlight cards never surface the expand affordance.
+// Privacy: getVisibleReplies returns [] for non-comment annotations, so
+// note/highlight cards never surface the reply disclosure (A13 #798 — the
+// toggle, count, and replies block all gate on this inside ReplyThread).
 const visibleReplies = $derived(getVisibleReplies(annotation, replies));
-const canExpandThread = $derived(visibleReplies.length >= 1);
-let isThreadOverlayOpen = $state(false);
 
 // `stub` wins over everything: the ~28px stub track can't hold an edit form any
 // more than it can hold a full card, so a card that is mid-edit when the
@@ -126,25 +123,11 @@ const resolvedDensity = $derived<Density>(
   density === "stub" ? "stub" : isEditing ? "full" : density,
 );
 
-// Close the reply-thread overlay if the card collapses to a stub — the pip has
-// no affordance to manage an open overlay. Last-value guard so the effect can't
-// re-enter under reactive churn (`feedback_svelte_effect_depth_guard`).
-// Seed with the mount-time density via `untrack` (an intentional non-reactive
-// read — the effect below owns subsequent transitions; subscribing here would
-// be the very re-entrancy the guard prevents).
-let prevDensity: Density = untrack(() => resolvedDensity);
-$effect(() => {
-  if (resolvedDensity === prevDensity) return;
-  prevDensity = resolvedDensity;
-  if (resolvedDensity === "stub") isThreadOverlayOpen = false;
-});
-
 // #999: react to the native context menu's Reply…/Edit… request. Plain-`let`
-// last-value guards PER KIND (mirrors the prevDensity guard above) so the effect
-// no-ops on mount (openRequest is null / nonce unchanged) and fires exactly once
-// per genuine bump — never re-entering the isEditing→resolvedDensity→prevDensity
-// effect chain. `replyOpenNonce` is forwarded to ReplyThread, which opens its
-// composer on a bump (its own untrack-seeded guard ignores the mount value).
+// last-value guards PER KIND so the effect no-ops on mount (openRequest is null /
+// nonce unchanged) and fires exactly once per genuine bump. `replyOpenNonce` is
+// forwarded to ReplyThread, which opens its composer on a bump (its own
+// untrack-seeded guard ignores the mount value).
 let lastEditNonce = -1;
 let lastReplyNonce = -1;
 let replyOpenNonce = $state(0);
@@ -161,7 +144,6 @@ $effect(() => {
     replyOpenNonce = req.nonce;
   }
 });
-
 // Per-type body tint replaces the old 3px left-edge border (Conflict #8
 // "lift color" interpretation, sub-PR 1.5 — full-taxonomy tints so every type
 // stays differentiated, not just the two the bundle tints). getHighlightBorder
@@ -331,42 +313,19 @@ function handleKeyDown(e: KeyboardEvent) {
     {onRemove}
     {onSendToClaude}
   />
+  <!-- A13 (#798): the inline disclosure in ReplyThread is now the reply reader;
+       it replaced the former "Expand thread" → portaled ReplyThreadOverlay
+       (Bryan decision 2026-06-01 — overlay retired). -->
   <ReplyThread
     {annotation}
     replies={visibleReplies}
     {isPending}
     {isEditing}
     {onReply}
+    {reduceMotion}
     openNonce={replyOpenNonce}
   />
-  {#if canExpandThread}
-    <button
-      type="button"
-      data-testid="reply-thread-expand-{annotation.id}"
-      onclick={(e) => {
-        e.stopPropagation();
-        isThreadOverlayOpen = true;
-      }}
-      class="tandem-expand-thread"
-    >
-      Expand thread
-    </button>
-  {/if}
 </div>
-<!-- Conditional mount: only instantiate the overlay when there's something
-     to show OR it's currently open. The `|| isThreadOverlayOpen` clause
-     keeps the overlay mounted across the open→close transition even if
-     visibleReplies drops to zero (last reply deleted) so the close
-     animation / focus restoration completes cleanly. -->
-{#if canExpandThread || isThreadOverlayOpen}
-  <ReplyThreadOverlay
-    open={isThreadOverlayOpen}
-    {annotation}
-    replies={visibleReplies}
-    {onReply}
-    onClose={() => (isThreadOverlayOpen = false)}
-  />
-{/if}
 
 <style>
   /* Static chrome lives here (not inline) so :hover can raise the shadow —
@@ -398,24 +357,6 @@ function handleKeyDown(e: KeyboardEvent) {
       0 0 0 1.5px var(--tandem-accent-border),
       0 0 10px -2px color-mix(in srgb, var(--tandem-accent) 30%, transparent),
       var(--tandem-shadow-2);
-  }
-  /* Expand-thread button — quiet ghost pill that doesn't compete with the
-     annotation's own action row. */
-  .tandem-expand-thread {
-    margin-top: var(--tandem-space-1);
-    padding: var(--tandem-space-1) var(--tandem-space-2);
-    font-size: var(--tandem-text-xs);
-    border: none;
-    background: none;
-    color: var(--tandem-fg-subtle);
-    cursor: pointer;
-    border-radius: var(--tandem-r-pill);
-  }
-  .tandem-expand-thread:hover,
-  .tandem-expand-thread:focus-visible {
-    color: var(--tandem-fg);
-    background: var(--tandem-surface-sunk);
-    outline: none;
   }
   /* #651 Claude typing-presence indicator: three pulsing dots in the
      card's top-right corner, colored with the Claude authorship token so
@@ -489,8 +430,7 @@ function handleKeyDown(e: KeyboardEvent) {
   .is-density-clamped :global(.aca-row),
   .is-density-clamped :global(.aca-undo-row),
   .is-density-clamped :global(.aca-standalone),
-  .is-density-clamped :global(.art-root),
-  .is-density-clamped .tandem-expand-thread {
+  .is-density-clamped :global(.art-root) {
     display: none;
   }
 
@@ -514,8 +454,7 @@ function handleKeyDown(e: KeyboardEvent) {
   .is-density-stub :global(.aca-undo-row),
   .is-density-stub :global(.aca-standalone),
   .is-density-stub :global(.art-root),
-  .is-density-stub :global(.ach-type),
-  .is-density-stub .tandem-expand-thread {
+  .is-density-stub :global(.ach-type) {
     display: none;
   }
   .is-density-stub :global(.ach-row) {

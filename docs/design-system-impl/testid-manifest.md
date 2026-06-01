@@ -105,10 +105,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - Edit form: `edit-btn-{*}`, `edit-{newtext,reason,text}-{*}`,
   `edit-{save,cancel}-btn-{*}`
 - Replies + threads: `reply-{btn,input,send-btn,cancel-btn}-{*}`,
-  `reply-thread-expand-{*}`, `reply-thread-overlay`,
-  `reply-thread-overlay-{close,input,send,cancel,reply}`,
-  `comment-thread`, `reply-{*}`, `reply-import-byline-{*}` (Word reviewer
-  byline on imported note replies, #1000)
+  `reply-toggle-{*}` (A13 disclosure), `comment-thread`, `reply-{*}`,
+  `reply-import-byline-{*}` (Word reviewer byline on imported note replies, #1000).
+  (`reply-thread-expand-{*}` + `reply-thread-overlay*` retired with the
+  portaled overlay — A13 #798, Bryan decision 2026-06-01.)
 - Suggestion + import variants: `suggestion-diff-{*}`,
   `annotation-import-byline-{*}`, `annotation-select-checkbox-{*}`
 - Margin column: `margin-column-{*}`, `margin-bubble-{*}`,
