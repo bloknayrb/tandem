@@ -77,11 +77,16 @@ function cubicBezier(x1: number, y1: number, x2: number, y2: number): (t: number
 
 /** Exact `--tandem-ease-out`. */
 const easeOut = cubicBezier(0.2, 0.8, 0.2, 1);
+/** Exact `--tandem-ease-standard` — the snappier exit curve for chrome bars. */
+const easeStandard = cubicBezier(0.4, 0, 0.2, 1);
 
 const ENTER_MS = 260;
 const EXIT_MS = 260;
 
-function motionOff(reduceMotion?: boolean): boolean {
+/** A24 batch / A25 bulk toolbar enter; exit ms is per-bar (200 batch / 180 bulk). */
+const BAR_ENTER_MS = 280;
+
+export function motionOff(reduceMotion?: boolean): boolean {
   if (reduceMotion) return true;
   // JS transitions escape the CSS `@media (prefers-reduced-motion)` / the
   // `body.tandem-reduce-motion` class, so check the OS preference here too.
@@ -139,5 +144,53 @@ export function cardExit(
     // t: 1→0 (collapsing), u = 1−t.
     css: (t, u) =>
       `opacity:${t}; height:${t * h}px; margin-bottom:${t * mb}px; transform:${transform(u)}; overflow:clip; box-sizing:border-box;`,
+  };
+}
+
+interface BarInParams {
+  /** App `reduceMotion` setting; OR-ed with the OS `prefers-reduced-motion`. */
+  reduceMotion?: boolean;
+}
+interface BarOutParams extends BarInParams {
+  /** Exit duration: 200ms for the batch-promote bar, 180ms (snappier) for bulk. */
+  exitMs?: number;
+}
+
+/**
+ * A24 / A25 — chrome toolbar (batch-promote bar, bulk-actions bar) enters as it
+ * mounts: slides down into place from `-8px` + fades + grows its height so the
+ * annotation list below reflows continuously instead of snapping (the height
+ * measure mirrors `cardEnter`; BulkActions is not sticky, so the snap would
+ * otherwise be visible). Used as a Svelte `in:` directive on the bar's `{#if}`
+ * root, so it runs exactly once on appearance and never re-fires on the bar's
+ * other re-renders (count/label changes) — the persistent-identity form of the
+ * canon's "class-toggled transition, never a re-firing animation".
+ */
+export function barIn(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const { h, mb } = geometry(node);
+  return {
+    duration: BAR_ENTER_MS,
+    easing: easeOut,
+    // t: 0→1 (present), u = 1−t.
+    css: (t, u) =>
+      `opacity:${t}; transform:translateY(${-8 * u}px); height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box;`,
+  };
+}
+
+/** A24 / A25 — the bar slides up + fades + collapses height on the snappier
+ * `--tandem-ease-standard` curve when its data clears (`out:` directive). */
+export function barOut(
+  node: HTMLElement,
+  { reduceMotion, exitMs = 200 }: BarOutParams,
+): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const { h, mb } = geometry(node);
+  return {
+    duration: exitMs,
+    easing: easeStandard,
+    // t: 1→0 (collapsing), u = 1−t.
+    css: (t, u) =>
+      `opacity:${t}; transform:translateY(${-8 * u}px); height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box;`,
   };
 }
