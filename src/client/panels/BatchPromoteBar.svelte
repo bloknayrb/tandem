@@ -1,14 +1,17 @@
 <script lang="ts">
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
+import { barIn, barOut } from "./cardMotion";
 
 interface Props {
   selectedCount: number;
   onPromote: () => void;
   onClear: () => void;
+  /** App reduce-motion setting; threaded from SidePanel (A24, #798). */
+  reduceMotion?: boolean;
 }
 
-let { selectedCount, onPromote, onClear }: Props = $props();
+let { selectedCount, onPromote, onClear, reduceMotion = false }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
 </script>
@@ -18,6 +21,8 @@ const agentLabel = createAgentLabel(createTandemSettings());
     data-testid="batch-promote-bar"
     role="region"
     aria-label="Batch promote imported notes"
+    in:barIn={{ reduceMotion }}
+    out:barOut={{ reduceMotion, exitMs: 200 }}
     style="position: sticky; top: 0; z-index: var(--tandem-z-base); display: flex; align-items: center; gap: var(--tandem-space-2); padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-surface); border-bottom: 1px solid var(--tandem-border); box-shadow: var(--tandem-shadow-1);"
   >
     <span

@@ -1,9 +1,12 @@
 <script lang="ts">
+import { fade } from "svelte/transition";
 import {
   isTauriRuntime,
   readCoworkOnboardingSkipped,
   shouldShowCoworkOnboarding,
 } from "../cowork/cowork-helpers";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
+import { motionOff } from "../panels/cardMotion";
 import type { CoworkStatus } from "../types";
 import CoworkOnboardingStep from "./CoworkOnboardingStep.svelte";
 
@@ -15,6 +18,12 @@ interface Props {
 }
 
 let { currentStep, onNext, onDismiss, coworkStatus }: Props = $props();
+
+// A22 (#798): panel cross-fade duration. `$derived` (not `const`) so it tracks a
+// live in-app reduce-motion toggle; `motionOff` OR-s that with the OS preference.
+// (The dot-pop respects reduce-motion via its CSS dual-guard in the style block.)
+const tandemSettings = createTandemSettings();
+const fadeMs = $derived(motionOff(tandemSettings.settings.reduceMotion) ? 0 : 220);
 
 const BASE_STEPS = [
   {
@@ -60,26 +69,41 @@ const isCoworkStep = $derived(step?.id === "cowork");
     data-testid="onboarding-tutorial"
     style="position: fixed; bottom: 48px; left: 24px; z-index: var(--tandem-z-overlay); max-width: 340px; background: var(--tandem-surface); border-left: 4px solid var(--tandem-accent); border-radius: var(--tandem-r-4); box-shadow: var(--tandem-shadow-2); padding: var(--tandem-space-4) var(--tandem-space-5); font-family: inherit;"
   >
+    <!-- A22 (#798): progress dots. This row MUST stay OUTSIDE the {#key step.id}
+         body block below — the next-dot pop relies on these being persistent
+         keyed elements whose class toggles (a fresh `none → animation` on the
+         newly-current dot fires once). If the dots get remounted on each step,
+         every dot would pop on every advance. Do not move into the key block. -->
     {#if !isComplete}
       <div style="display: flex; gap: var(--tandem-space-1); margin-bottom: var(--tandem-space-3);">
         {#each Array.from({ length: totalActionable }, (_, i) => i) as i (i)}
           <div
+            class="tut-dot"
+            class:is-current={i === currentStep}
             style="width: var(--tandem-space-2); height: var(--tandem-space-2); border-radius: var(--tandem-r-circle); background: {i <= currentStep ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; transition: background 0.2s;"
           ></div>
         {/each}
       </div>
     {/if}
 
-    {#if isCoworkStep && coworkStatus !== null}
-      <CoworkOnboardingStep status={coworkStatus} onAdvance={onNext} />
-    {:else}
-      <div style="font-size: var(--tandem-text-sm); font-weight: 600; color: var(--tandem-fg); margin-bottom: var(--tandem-space-1);">
-        {step.title}
+    <!-- A22 (#798): panel cross-fade — new step content fades in on advance.
+         `in:` only (no `out:`): the new step mounts at full layout height with only
+         its opacity animating, so there's no fade-out-then-in height collapse on the
+         fixed card. Keyed on step.id so each step is a fresh node. -->
+    {#key step.id}
+      <div in:fade={{ duration: fadeMs }}>
+        {#if isCoworkStep && coworkStatus !== null}
+          <CoworkOnboardingStep status={coworkStatus} onAdvance={onNext} />
+        {:else}
+          <div style="font-size: var(--tandem-text-sm); font-weight: 600; color: var(--tandem-fg); margin-bottom: var(--tandem-space-1);">
+            {step.title}
+          </div>
+          <div style="font-size: var(--tandem-text-base); line-height: 1.5; color: var(--tandem-fg-muted); margin-bottom: {isComplete ? 0 : 14}px;">
+            {step.text}
+          </div>
+        {/if}
       </div>
-      <div style="font-size: var(--tandem-text-base); line-height: 1.5; color: var(--tandem-fg-muted); margin-bottom: {isComplete ? 0 : 14}px;">
-        {step.text}
-      </div>
-    {/if}
+    {/key}
 
     {#if !isComplete && !isCoworkStep}
       <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -106,3 +130,34 @@ const isCoworkStep = $derived(step?.id === "cowork");
     {/if}
   </div>
 {/if}
+
+<style>
+  /* A22 (#798): the newly-reached progress dot pops once. A dot fires this only
+     when it freshly gains `.is-current` (none → animation), so the monotonic
+     stepper pops exactly the just-reached dot — not every dot on every advance. */
+  .tut-dot.is-current {
+    animation: tutorial-dot-pop 200ms var(--tandem-ease-out);
+  }
+
+  @keyframes tutorial-dot-pop {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.08);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  /* No app-wide reduced-motion catch-all exists — guard both surfaces explicitly. */
+  @media (prefers-reduced-motion: reduce) {
+    .tut-dot.is-current {
+      animation: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .tut-dot.is-current {
+    animation: none;
+  }
+</style>

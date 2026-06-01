@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cardEnter, cardExit } from "../../src/client/panels/cardMotion";
+import { barIn, barOut, cardEnter, cardExit } from "../../src/client/panels/cardMotion";
 
 // A4/A1/A10 rail card transitions (Phase 4 / #798). These exercise the pure
 // decision logic (enabled gate, reduced-motion gate, exit-direction read-and-
@@ -81,5 +81,60 @@ describe("cardExit", () => {
     const cfg = cardExit(el(), { enabled: true, reduceMotion: true, id: "a4", modes });
     expect(cfg).toEqual({ duration: 0 });
     expect(modes.has("a4")).toBe(false);
+  });
+});
+
+// A24/A25 chrome-bar transitions (batch-promote bar, bulk-actions bar). Same
+// pure-logic coverage as the card transitions; the visual slide is the human
+// spot-check (Svelte runs these on WAAPI, not CSS keyframes, so no animationstart).
+describe("barIn", () => {
+  it("is a no-op under the reduce-motion setting", () => {
+    expect(barIn(el(), { reduceMotion: true })).toEqual({ duration: 0 });
+  });
+
+  it("returns a real transition with motion allowed", () => {
+    const cfg = barIn(el(), { reduceMotion: false });
+    expect(cfg.duration).toBe(280);
+    expect(typeof cfg.easing).toBe("function");
+    const present = cfg.css!(1, 0);
+    const absent = cfg.css!(0, 1);
+    expect(present).toContain("opacity:1");
+    expect(absent).toContain("opacity:0");
+    // height collapses with the bar so siblings reflow (no snap, M1 fix).
+    expect(present).toContain("overflow:clip");
+    expect(present).toContain("box-sizing:border-box");
+    // slides down into place from above.
+    expect(absent).toContain("translateY(-8px)");
+    expect(present).toContain("translateY(0px)");
+  });
+
+  it("uses the ease-out curve, pinned at both endpoints", () => {
+    const { easing } = barIn(el(), {});
+    expect(easing!(0)).toBe(0);
+    expect(easing!(1)).toBe(1);
+    expect(easing!(0.5)).toBeGreaterThan(0.5); // front-loaded
+  });
+});
+
+describe("barOut", () => {
+  it("is a no-op under the reduce-motion setting", () => {
+    expect(barOut(el(), { reduceMotion: true })).toEqual({ duration: 0 });
+  });
+
+  it("defaults to a 200ms exit (batch bar)", () => {
+    expect(barOut(el(), {}).duration).toBe(200);
+  });
+
+  it("honours the exitMs param (180ms snappier bulk exit)", () => {
+    expect(barOut(el(), { exitMs: 180 }).duration).toBe(180);
+  });
+
+  it("exits on the ease-standard curve — front-loaded but distinct from ease-out", () => {
+    const outMid = barOut(el(), {}).easing!(0.5);
+    const inMid = barIn(el(), {}).easing!(0.5);
+    // Both curves are front-loaded (past halfway at the midpoint)...
+    expect(outMid).toBeGreaterThan(0.5);
+    // ...but ease-out leads ease-standard, so they are genuinely two curves (M2).
+    expect(inMid).toBeGreaterThan(outMid);
   });
 });

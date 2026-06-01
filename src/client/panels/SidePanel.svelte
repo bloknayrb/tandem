@@ -469,6 +469,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
     selectedCount={selectedImportIds.size}
     onPromote={handleBatchPromote}
     onClear={handleClearSelection}
+    {reduceMotion}
   />
 
   <!-- Bulk actions -->
@@ -482,6 +483,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
     onCancel={() => (bulkConfirm = null)}
     onRequestAccept={() => (bulkConfirm = "accept")}
     onRequestDismiss={() => (bulkConfirm = "dismiss")}
+    {reduceMotion}
   />
 
   <!-- Annotation list -->

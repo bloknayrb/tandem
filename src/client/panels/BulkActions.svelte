@@ -1,4 +1,6 @@
 <script lang="ts">
+import { barIn, barOut } from "./cardMotion";
+
 interface Props {
   bulkConfirm: "accept" | "dismiss" | null;
   pendingCount: number;
@@ -10,6 +12,8 @@ interface Props {
   onRequestDismiss: () => void;
   /** Bind to get a reference to the confirm button for programmatic focus. */
   confirmRef?: HTMLButtonElement | null;
+  /** App reduce-motion setting; threaded from SidePanel (A25, #798). */
+  reduceMotion?: boolean;
 }
 
 let {
@@ -22,6 +26,7 @@ let {
   onRequestAccept,
   onRequestDismiss,
   confirmRef = $bindable(null),
+  reduceMotion = false,
 }: Props = $props();
 
 const isAccept = $derived(bulkConfirm === "accept");
@@ -37,6 +42,8 @@ const smallBtnBase =
 
 {#if pendingCount > 1}
   <div
+    in:barIn={{ reduceMotion }}
+    out:barOut={{ reduceMotion, exitMs: 180 }}
     style="padding: 6px var(--tandem-space-4); border-bottom: 1px solid var(--tandem-border); display: flex; gap: 4px; align-items: center;"
   >
     {#if bulkConfirm}
