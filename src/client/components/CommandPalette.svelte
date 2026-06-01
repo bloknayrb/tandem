@@ -267,6 +267,7 @@ function handleBackdropClick(e: MouseEvent) {
        button and Solo/Tandem toggle poke through the dimming backdrop. -->
   <div
     role="presentation"
+    class="palette-scrim"
     style="
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.4);
@@ -284,6 +285,7 @@ function handleBackdropClick(e: MouseEvent) {
       tabindex="-1"
       aria-modal="true"
       aria-label="Command palette"
+      class="palette-modal"
       style="
         width: 640px; max-width: 92vw;
         background: var(--tandem-surface);
@@ -446,5 +448,55 @@ function handleBackdropClick(e: MouseEvent) {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
     color: var(--tandem-fg-muted);
+  }
+
+  /* A11 (#798) — palette entrance. The scrim and modal mount once under
+     {#if open}, so a CSS animation fires once per open and never replays while
+     filtering (only the results <ul> re-renders per keystroke). The `animation`
+     MUST live here in <style>, not in an inline style= — Svelte rewrites the
+     hashed @keyframes name only in the compiled <style> block. The `to` frames
+     land on the resting defaults (opacity:1; transform:none) with default
+     fill-mode, so nothing freezes off-state after the run. */
+  .palette-scrim {
+    animation: tandem-palette-scrim-in 200ms var(--tandem-ease-out);
+  }
+  /* NOTE: this transform makes .palette-modal a containing block — any future
+     position:fixed descendant would anchor here, not the viewport (the #840
+     ReplyThreadOverlay portal trap). Portal such children to <body>. */
+  .palette-modal {
+    transform-origin: top center;
+    animation: tandem-palette-modal-in 260ms var(--tandem-ease-out);
+  }
+
+  @keyframes tandem-palette-scrim-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes tandem-palette-modal-in {
+    from {
+      opacity: 0;
+      transform: translateY(-8px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* No app-wide reduced-motion catch-all exists — guard both mechanisms, and
+     keep these AFTER the base rules (equal specificity → source order wins). */
+  @media (prefers-reduced-motion: reduce) {
+    .palette-scrim,
+    .palette-modal {
+      animation: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .palette-scrim,
+  :global(body.tandem-reduce-motion) .palette-modal {
+    animation: none;
   }
 </style>
