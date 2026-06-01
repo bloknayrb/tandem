@@ -41,7 +41,7 @@ const ALL_VISIBLE: DecorationVisibility = { comment: true, highlight: true, note
  * runs in App.svelte's top-level script, strictly before the editor (and thus
  * this plugin) is constructed. See `useTandemSettings.svelte.ts`.
  */
-function parseStoredVisibility(): DecorationVisibility {
+export function parseStoredVisibility(): DecorationVisibility {
   try {
     const stored = localStorage.getItem(DECORATION_VISIBILITY_KEY);
     if (!stored) return { ...ALL_VISIBLE };
