@@ -21,8 +21,11 @@ import { clearHighlight, toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
+  SELECTION_POPUP_HEIGHT_RESERVE,
   type SelectionToolbarPlacement,
 } from "./selection-toolbar";
+// A26 morph (#798): shared timing tokens + reduced-motion token-zeroing.
+import "../../panels/morphTiming.css";
 
 interface Props {
   editor: TiptapEditor | null;
@@ -80,14 +83,41 @@ let {
 const agentLabel = createAgentLabel(createTandemSettings());
 
 let hasSelection = $state(false);
-let selectionPosition = $state<{ left: number; top: number } | null>(null);
+let selectionPosition = $state<{
+  left: number;
+  top: number;
+  bottom: number;
+  placement: SelectionToolbarPlacement;
+} | null>(null);
 let toolbarEl = $state<HTMLDivElement | null>(null);
 let annotationText = $state("");
 let capturedRange = $state<{ from: number; to: number } | null>(null);
 let textareaEl = $state<HTMLTextAreaElement | null>(null);
 let annotateMode = $state(false);
 
-let toolbarHeight = $state(0);
+// A26 morph (#798). The popup's two content blocks are ALWAYS mounted (so the
+// unfurl has a "from" value and so focus/draft handlers never race a swap-mount);
+// the inactive one is collapsed via `grid-template-rows: 0fr` and made `inert`.
+// The unfurl animates grid rows 0fr→1fr (to the natural content height, with a
+// correct ease-out settle, tracking textarea growth for free — no measurement,
+// no max-height cap, no clip-on-typing). CSS transitions never fire on an
+// element's initial computed value, so the popup mounts in format state with no
+// animation — no `.ready` gate needed. See the scoped style block and morphTiming.css.
+
+// Render anchor: `below` is top-anchored (grows down); `above` is bottom-anchored
+// (grows up) so the popup never repositions or grows over the selection as its
+// height animates. Placement is decided with a constant height-reserve (see
+// updateSelectionAffordance) so it can't flip mid-morph.
+const popupPositionStyle = $derived.by(() => {
+  const p = selectionPosition;
+  if (!p) return "";
+  const vertical =
+    p.placement === "above"
+      ? `bottom: ${p.bottom}px; top: auto;`
+      : `top: ${p.top}px; bottom: auto;`;
+  return `left: ${p.left}px; ${vertical}`;
+});
+
 let toolbarWidth = $state(0);
 let viewportHeight = $state(window.innerHeight);
 let viewportWidth = $state(window.innerWidth);
@@ -130,7 +160,12 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     const nextPosition = computeSelectionToolbarPosition({
       start,
       end,
-      toolbarHeight,
+      // A26 morph (#798): decide placement with a CONSTANT height-reserve, not
+      // the live (animating) `toolbarHeight`. Keeps above/below stable across
+      // the morph and lets the height-independent edge-anchor grow the popup
+      // without any reposition — so the ResizeObserver recompute below is a
+      // no-op during the morph and no freeze flag is needed.
+      toolbarHeight: SELECTION_POPUP_HEIGHT_RESERVE,
       toolbarWidth,
       viewportHeight,
       viewportWidth,
@@ -141,11 +176,18 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     if (
       selectionPosition &&
       selectionPosition.left === nextPosition.left &&
-      selectionPosition.top === nextPosition.top
+      selectionPosition.top === nextPosition.top &&
+      selectionPosition.bottom === nextPosition.bottom &&
+      selectionPosition.placement === nextPosition.placement
     ) {
       return;
     }
-    selectionPosition = { left: nextPosition.left, top: nextPosition.top };
+    selectionPosition = {
+      left: nextPosition.left,
+      top: nextPosition.top,
+      bottom: nextPosition.bottom,
+      placement: nextPosition.placement,
+    };
   } catch {
     // `coordsAtPos` throws when the PM view hasn't finished its measurement
     // pass yet — common on a slow CI runner where the selectionUpdate event
@@ -239,7 +281,9 @@ $effect(() => {
     // Skip position jitter while textarea is focused
     if (document.activeElement === textareaEl) return;
     const rect = el.getBoundingClientRect();
-    toolbarHeight = rect.height;
+    // Only width feeds positioning now (left-edge clamp). Height is decoupled
+    // from placement (A26 morph uses SELECTION_POPUP_HEIGHT_RESERVE), so the
+    // animating morph height never perturbs the popup's anchor.
     toolbarWidth = rect.width;
     updateSelectionAffordance(ed);
   };
@@ -486,10 +530,18 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     bind:this={toolbarEl}
     role="toolbar"
     aria-label="Selection tools"
-    class="tandem-floating-pill"
-    style={`position: fixed; left: ${selectionPosition.left}px; top: ${selectionPosition.top}px; transform: translateX(-50%); display: flex; flex-direction: column; border-radius: var(--tandem-r-3); z-index: var(--tandem-z-modal); -webkit-app-region: no-drag;`}
+    class="tandem-floating-pill selection-popup"
+    class:is-annotate={annotateMode}
+    style={popupPositionStyle}
   >
-    {#if !annotateMode}
+    <!-- A26 morph (#798): BOTH blocks are always mounted; the inactive one is
+         collapsed via `grid-template-rows: 0fr` (see scoped styles below) and `inert`
+         (so its clipped controls are neither focusable nor AT-readable, and a
+         clipped textarea can't capture focus and preserve a stale draft — the
+         L257 clear-guard stays valid). Clicking Annotate unfurls the annotate
+         block while the format block collapses, in place. -->
+    <div class="morph-block morph-format" class:is-active={!annotateMode} inert={annotateMode}>
+      <div class="morph-block-inner">
       <!-- Format pill: full mark/block control set (no Undo/Redo — those stay
            on the bar + Ctrl+Z/Y) + the mirrored Decorations control. Every
            FormattingToolbar button already binds onMouseDown+withPreventDefault
@@ -608,7 +660,10 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           style="height: 24px; padding: 0 12px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer;"
         >Annotate</button>
       </div>
-    {:else}
+      </div>
+    </div>
+    <div class="morph-block" class:is-active={annotateMode} inert={!annotateMode}>
+      <div class="morph-block-inner">
       <!-- Annotate popover. Keybindings: Alt+Enter = Note to self (private),
            Ctrl/Cmd+Enter = Send to Claude (outbound), plain Enter = newline. -->
       <div style="display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; min-width: 260px; max-width: 360px;">
@@ -649,6 +704,68 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           </button>
         </div>
       </div>
-    {/if}
+      </div>
+    </div>
   </div>
 {/if}
+
+<style>
+  /* A26 morph (#798): the selection popup morphs in place between its format
+     state and its annotate (note-popover) state. Structural/animation CSS lives
+     here (class-toggled on persistent DOM identity); per the family decision
+     (option B) width is NOT morphed — it's constant at the natural format width,
+     so only border-radius (P1) and the block unfurl (P2) animate. The width
+     unroll belongs to M2's fresh-mount entrance. Timing tokens + the dual
+     reduced-motion guard come from morphTiming.css (imported above). */
+  .selection-popup {
+    position: fixed;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    z-index: var(--tandem-z-modal);
+    /* Fixed chrome over the Tauri WebView — never part of the drag region. */
+    -webkit-app-region: no-drag;
+    border-radius: var(--tandem-r-3);
+    /* P1. Only fires on the is-annotate class toggle, never on mount (a CSS
+       transition never animates an element's initial computed value). */
+    transition: border-radius var(--morph-p1) var(--tandem-ease-out);
+  }
+  .selection-popup.is-annotate {
+    border-radius: var(--tandem-r-4);
+  }
+
+  /* P2. Each block animates its grid row 0fr→1fr — to the NATURAL content
+     height, with a correct ease-out settle, tracking the textarea's
+     field-sizing growth for free (no max-height cap, no measurement, no
+     clip-on-type). `overflow: clip` (not `hidden`) so the inactive block never
+     becomes a scroll container — focusing the textarea via rAF while it unfurls
+     must not trigger focus-autoscroll (lesson #765). clip does not cut the
+     shell's shadow (only clip-path would). Degrades to an instant swap on any
+     WebView that doesn't interpolate grid-template-rows. */
+  .morph-block {
+    display: grid;
+    grid-template-rows: 0fr;
+    overflow: clip;
+    transition: grid-template-rows var(--morph-p2) var(--tandem-ease-out);
+  }
+  .morph-block.is-active {
+    grid-template-rows: 1fr;
+  }
+  .morph-block-inner {
+    min-height: 0;
+    overflow: clip;
+  }
+  /* The format block hosts absolutely-positioned dropdowns (the heading + list
+     menus in FormattingToolbar, the Decorations menu) that open BELOW their
+     button, beyond the block's box. While the format block is shown
+     (is-active = format state) it must NOT clip them, or the menu items are cut
+     off and the editor underneath intercepts their clicks. Safe to drop the clip
+     only here because `annotateMode → false` always co-occurs with popup
+     dismiss/unmount — there is no annotate→format *expand* transition — so the
+     format block is never mid-animation while its overflow is visible. The
+     annotate block keeps `clip` (clean unfurl; it hosts no escaping dropdowns). */
+  .morph-format.is-active,
+  .morph-format.is-active > .morph-block-inner {
+    overflow: visible;
+  }
+</style>

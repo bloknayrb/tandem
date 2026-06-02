@@ -92,7 +92,8 @@ test("#768 Bug 1: highlight applies without lingering browser selection overlay"
   // The highlight swatch is part of the (default, non-annotate-mode) selection
   // popup; it appears as soon as the selection is non-empty and the popup
   // has been positioned. Use the swatch itself as the visibility proxy —
-  // `popup-annotation-input` only mounts inside annotate-mode.
+  // post-A26 (#798) `popup-annotation-input` is always mounted but collapsed
+  // (grid-row 0fr) + `inert` in format state, so it's not visible until Annotate.
   const yellowSwatch = page.locator("[data-testid='popup-highlight-yellow']");
   await expect(yellowSwatch).toBeVisible({ timeout: 5_000 });
   await yellowSwatch.click();

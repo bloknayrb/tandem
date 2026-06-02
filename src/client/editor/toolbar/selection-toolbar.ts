@@ -9,6 +9,16 @@ export const SELECTION_TOOLBAR_SELECTION_GAP = 10;
 // frame and the toolbar visibly shimmers.
 export const SELECTION_TOOLBAR_FLIP_HYSTERESIS = 4;
 
+// Conservative height used by the A26 morph (#798) to DECIDE placement, so the
+// above/below choice is stable across the format↔annotate morph (the popup's
+// real height animates ~73→~85px). Passing this constant — rather than the live
+// animating `toolbarHeight` — means a placement re-decision can't flip mid-morph
+// and the height-independent edge-anchor (`bottom` for above) always clears
+// MIN_TOP as the popup grows to its real height. A safe over-estimate of the
+// real popup height (~85px) — the morph grows each block to its natural height
+// (grid-row 0fr→1fr), so there is no fixed max-height cap for this to match.
+export const SELECTION_POPUP_HEIGHT_RESERVE = 200;
+
 export type SelectionToolbarPlacement = "above" | "below";
 
 export interface SelectionToolbarBounds {
@@ -40,6 +50,15 @@ export interface SelectionToolbarPositionArgs {
 export interface SelectionToolbarPosition {
   left: number;
   top: number;
+  /**
+   * Height-independent anchor for `above` placement: the CSS `bottom` distance
+   * (from viewport bottom) that pins the popup's bottom edge a gap above the
+   * selection's top. Used by the A26 morph (#798) so an above-placed popup
+   * grows UPWARD as its height animates — no per-frame JS reposition, no
+   * grow-over-selection, no snap. Always computed; the caller consumes it only
+   * when `placement === "above"` (a `below` popup is top-anchored via `top`).
+   */
+  bottom: number;
   placement: SelectionToolbarPlacement;
 }
 
@@ -100,9 +119,15 @@ export function computeSelectionToolbarPosition({
     placement = "below";
   }
 
+  // Height-independent above-anchor: pin the popup's bottom edge a selection-gap
+  // above the selection's top. Independent of `toolbarHeight`, so the popup can
+  // grow upward during the morph without any reposition.
+  const bottom = viewportHeight - (selectionTop - SELECTION_TOOLBAR_SELECTION_GAP);
+
   return {
     left: Math.min(Math.max(rawLeft, minLeft), maxLeft),
     top: Math.min(Math.max(rawTop, SELECTION_TOOLBAR_MIN_TOP), maxTop),
+    bottom,
     placement,
   };
 }
