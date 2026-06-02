@@ -13,6 +13,7 @@ import type { Annotation, AnnotationType, HighlightColor } from "../../../shared
 import { generateAnnotationId } from "../../../shared/utils";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
+import { ENTER_POPUP_MS, popupEnter } from "../../panels/cardMotion";
 import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
@@ -60,6 +61,8 @@ interface Props {
   // command palette / Appearance settings.
   formattingBarVisible?: boolean;
   onShowFormattingBar?: () => void;
+  /** App `reduceMotion` setting, threaded to the A28 popup entrance transition. */
+  reduceMotion?: boolean;
 }
 
 let {
@@ -77,6 +80,7 @@ let {
   onOpenSettings,
   formattingBarVisible = true,
   onShowFormattingBar,
+  reduceMotion = false,
 }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
@@ -93,6 +97,42 @@ let annotationText = $state("");
 let capturedRange = $state<{ from: number; to: number } | null>(null);
 let textareaEl = $state<HTMLTextAreaElement | null>(null);
 let annotateMode = $state(false);
+
+// A28 dwell + entrance (#798).
+// `dwellSatisfied` gates `showPopup`: the popup appears only after the selection
+// has been held steady for DWELL_MS (a NEW client-side intent gate — NOT
+// `selectionDwellMs`, which gates the server channel selection event). `entering`
+// freezes the width-feedback positioning (see updateToolbarMetrics) for the
+// duration of the entrance so the left-clamp can't jitter as the popup's width
+// unrolls. Both are plain timers; `beginEntrance()` sets `entering` in the SAME
+// synchronous write that flips `dwellSatisfied`/the requestCommentFocus bypass,
+// so it is already true when the mount-triggered ResizeObserver effect runs.
+const DWELL_MS = 360;
+let dwellSatisfied = $state(false);
+let entering = $state(false);
+let dwellTimer: ReturnType<typeof setTimeout> | undefined;
+let enteringTimer: ReturnType<typeof setTimeout> | undefined;
+// Selection endpoints the dwell timer is currently armed for. Plain `let` (read
+// from a Tiptap listener, not a reactive scope).
+let lastDwellFrom = -1;
+let lastDwellTo = -1;
+
+function beginEntrance() {
+  entering = true;
+  clearTimeout(enteringTimer);
+  enteringTimer = setTimeout(() => {
+    entering = false;
+  }, ENTER_POPUP_MS);
+}
+
+function clearDwell() {
+  clearTimeout(dwellTimer);
+  clearTimeout(enteringTimer);
+  dwellSatisfied = false;
+  entering = false;
+  lastDwellFrom = -1;
+  lastDwellTo = -1;
+}
 
 // A26 morph (#798). The popup's two content blocks are ALWAYS mounted (so the
 // unfurl has a "from" value and so focus/draft handlers never race a swap-mount);
@@ -125,7 +165,11 @@ const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
 
 const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 const showPopup = $derived(
-  selectionToolbar && !suppressSelectionToolbar && canAnnotate && selectionPosition !== null,
+  selectionToolbar &&
+    !suppressSelectionToolbar &&
+    canAnnotate &&
+    selectionPosition !== null &&
+    dwellSatisfied,
 );
 const annotationTextTrimmed = $derived(annotationText.trim());
 
@@ -150,7 +194,24 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     selectionPosition = null;
     lastPlacement = undefined;
     affordanceRetryCount = 0;
+    clearDwell();
     return;
+  }
+
+  // A28 dwell: (re)arm the appearance timer when the selection endpoints change,
+  // but only while not yet satisfied — so a drag-extend AFTER the popup is shown
+  // keeps it shown (and just repositions) instead of hiding it. Pinned before the
+  // `try` so it's decoupled from the coordsAtPos throw/retry path and the
+  // dedup early-return below. Once it fires, `beginEntrance()` + `dwellSatisfied`
+  // are set in one batched write (so `entering` wins the mount RO race).
+  if (!dwellSatisfied && (from !== lastDwellFrom || to !== lastDwellTo)) {
+    lastDwellFrom = from;
+    lastDwellTo = to;
+    clearTimeout(dwellTimer);
+    dwellTimer = setTimeout(() => {
+      beginEntrance();
+      dwellSatisfied = true;
+    }, DWELL_MS);
   }
 
   try {
@@ -225,6 +286,10 @@ $effect(() => {
     // torn-down editor.
     cancelAnimationFrame(pendingAffordanceFrame);
     pendingAffordanceFrame = 0;
+    // A28: cancel pending dwell/entrance timers so they can't write $state into
+    // an unmounted component (or clear `entering` into a later popup's entrance).
+    clearTimeout(dwellTimer);
+    clearTimeout(enteringTimer);
     cleanup();
   };
 });
@@ -275,10 +340,22 @@ $effect(() => {
   const ed = editor;
   const el = toolbarEl;
   if (!ed || !el || !selectionPosition) return;
+  // A28: read `entering` so this effect re-runs when the entrance settles
+  // (true→false). That re-run re-invokes the synchronous measure below, replacing
+  // the width held during the unroll with the real measured width — the
+  // guaranteed settle the ResizeObserver alone can't promise (its final fire can
+  // race the entering-clear timer).
+  const frozen = entering;
 
   const updateToolbarMetrics = () => {
     // Skip position jitter while textarea is focused
     if (document.activeElement === textareaEl) return;
+    // While the popup's width is unrolling (entrance), the ResizeObserver fires
+    // every frame; writing the mid-animation width into `toolbarWidth` would
+    // jitter the left-clamp as the popup grows. Hold the pre-entrance width until
+    // the entrance settles (the centered translateX(-50%) keeps the popup
+    // visually centered meanwhile).
+    if (entering) return;
     const rect = el.getBoundingClientRect();
     // Only width feeds positioning now (left-edge clamp). Height is decoupled
     // from placement (A26 morph uses SELECTION_POPUP_HEIGHT_RESERVE), so the
@@ -287,7 +364,9 @@ $effect(() => {
     updateSelectionAffordance(ed);
   };
 
-  updateToolbarMetrics();
+  // Skip the initial synchronous measure while frozen (it would no-op anyway);
+  // the post-settle re-run does the real measure.
+  if (!frozen) updateToolbarMetrics();
   const observer = new ResizeObserver(updateToolbarMetrics);
   observer.observe(el);
   return () => observer.disconnect();
@@ -316,6 +395,14 @@ $effect(() => {
   if (from === to) return; // No selection → no-op
   untrack(() => captureSelectionRange());
   annotateMode = true;
+  // A28: explicit "give me a comment box now" intent bypasses the dwell — show
+  // the popup immediately. `selectionPosition` is already non-null here (the live
+  // selection ran updateSelectionAffordance), so flipping `dwellSatisfied`
+  // mounts the popup at once; `beginEntrance()` arms the width-freeze in the same
+  // batched write so it wins the mount ResizeObserver race. Bare writes — no
+  // `untrack` needed (untrack guards reads, not writes).
+  dwellSatisfied = true;
+  beginEntrance();
   requestAnimationFrame(() => textareaEl?.focus());
 });
 
@@ -457,6 +544,7 @@ function dismissPopup() {
   capturedRange = null;
   annotationText = "";
   annotateMode = false;
+  clearDwell();
   editor?.chain().focus().run();
 }
 
@@ -512,6 +600,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     class="tandem-floating-pill selection-popup"
     class:is-annotate={annotateMode}
     style={popupPositionStyle}
+    in:popupEnter={{ reduceMotion }}
   >
     <!-- A26 morph (#798): BOTH blocks are always mounted; the inactive one is
          collapsed via `grid-template-rows: 0fr` (see scoped styles below) and `inert`

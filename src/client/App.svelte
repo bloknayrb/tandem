@@ -1258,6 +1258,7 @@ const tutorial = createTutorial(
       onOpenSettings={toggleSettings}
       formattingBarVisible={settingsState.settings.formattingBarVisible}
       onShowFormattingBar={() => settingsState.updateSettings({ formattingBarVisible: true })}
+      reduceMotion={settingsState.settings.reduceMotion}
     />
 
     {#if settingsState.settings.formattingBarVisible}

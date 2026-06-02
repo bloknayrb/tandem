@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { barIn, barOut, cardEnter, cardExit, tabExit } from "../../src/client/panels/cardMotion";
+import {
+  barIn,
+  barOut,
+  cardEnter,
+  cardExit,
+  popupEnter,
+  tabExit,
+} from "../../src/client/panels/cardMotion";
 
 // A4/A1/A10 rail card transitions (Phase 4 / #798). These exercise the pure
 // decision logic (enabled gate, reduced-motion gate, exit-direction read-and-
@@ -168,6 +175,44 @@ describe("tabExit", () => {
 
   it("uses the ease-out curve", () => {
     const { easing } = tabExit(el(), {});
+    expect(easing!(0)).toBe(0);
+    expect(easing!(1)).toBe(1);
+    expect(easing!(0.5)).toBeGreaterThan(0.5); // front-loaded
+  });
+});
+
+// A28 selection-popup entrance. Pure-config coverage; the width-unroll itself is
+// the human spot-check. The load-bearing assertion is that the entrance css
+// RE-INCLUDES translateX(-50%): the popup is centered by that transform in its
+// scoped style, and a transition `transform` REPLACES it — drop it and the popup
+// jumps right by half its width during the entrance.
+describe("popupEnter", () => {
+  it("is a no-op under the reduce-motion setting", () => {
+    expect(popupEnter(el(), { reduceMotion: true })).toEqual({ duration: 0 });
+  });
+
+  it("unrolls width + fades + lifts, preserving the centering transform", () => {
+    const cfg = popupEnter(el(), { reduceMotion: false });
+    expect(cfg.duration).toBe(360);
+    expect(typeof cfg.easing).toBe("function");
+    const present = cfg.css!(1, 0);
+    const absent = cfg.css!(0, 1);
+    expect(present).toContain("opacity:1");
+    expect(absent).toContain("opacity:0");
+    // width animates (the unroll deferred from M1) + clipped so content doesn't
+    // spill while the box is narrower than natural.
+    expect(present).toContain("width:");
+    expect(present).toContain("overflow:clip");
+    // CRITICAL: the centering transform survives the transition's transform.
+    expect(present).toContain("translateX(-50%)");
+    expect(absent).toContain("translateX(-50%)");
+    // lifts 6px from below at the start, rests at 0 when present.
+    expect(absent).toContain("translateY(-6px)");
+    expect(present).toContain("translateY(0px)");
+  });
+
+  it("uses the ease-out curve, pinned at both endpoints", () => {
+    const { easing } = popupEnter(el(), {});
     expect(easing!(0)).toBe(0);
     expect(easing!(1)).toBe(1);
     expect(easing!(0.5)).toBeGreaterThan(0.5); // front-loaded
