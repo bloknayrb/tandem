@@ -639,6 +639,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     aria-label="Selection tools"
     class="tandem-floating-pill selection-popup"
     class:is-annotate={annotateMode}
+    class:is-below={selectionPosition.placement === "below"}
     style={popupPositionStyle}
     in:popupEnter={{ reduceMotion }}
   >
@@ -770,7 +771,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       </div>
       </div>
     </div>
-    <div class="morph-block" class:is-active={annotateMode} inert={!annotateMode}>
+    <div class="morph-block morph-annotate" class:is-active={annotateMode} inert={!annotateMode}>
       <div class="morph-block-inner">
       <!-- Annotate popover. Keybindings: Alt+Enter = Note to self (private),
            Ctrl/Cmd+Enter = Send to Claude (outbound), plain Enter = newline. -->
@@ -875,5 +876,21 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
   .morph-format.is-active,
   .morph-format.is-active > .morph-block-inner {
     overflow: visible;
+  }
+
+  /* Unfurl direction must follow the anchor. A "below" popup is top-anchored
+     (`top` set, `bottom: auto`), so the composer must grow DOWNWARD from a fixed
+     top edge — which means the annotate block has to be the TOP flex child.
+     Without this swap the format block (source-first) collapses ABOVE the
+     annotate block, dragging the composer's top edge upward as it grows, so it
+     reads as unfurling up regardless of placement (#798 M1 spot-check). An
+     "above" popup is bottom-anchored and keeps source order (annotate is the
+     bottom child, grows upward from the fixed bottom). `order` is purely visual —
+     DOM/tab/AT order is unchanged. */
+  .selection-popup.is-below .morph-annotate {
+    order: 0;
+  }
+  .selection-popup.is-below .morph-format {
+    order: 1;
   }
 </style>
