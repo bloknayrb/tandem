@@ -1261,6 +1261,7 @@ const tutorial = createTutorial(
         settingsState.updateSettings({
           formattingBarVisible: !settingsState.settings.formattingBarVisible,
         })}
+      reduceMotion={settingsState.settings.reduceMotion}
     />
 
     {#if settingsState.settings.formattingBarVisible}
