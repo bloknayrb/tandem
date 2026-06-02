@@ -1680,6 +1680,7 @@ const tutorial = createTutorial(
         onEdit={marginHandlers.onEdit}
         onReply={marginHandlers.onReply}
         onSendToClaude={marginHandlers.onSendToClaude}
+        reduceMotion={settingsState.settings.reduceMotion}
       />
     {/snippet}
     <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
