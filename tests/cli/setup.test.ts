@@ -18,6 +18,7 @@ import {
   installSkill,
   validateChannelShimPrereq,
 } from "../../src/cli/setup.js";
+import { shouldRegisterChannelShim } from "../../src/server/integrations/apply.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 
 describe("buildMcpEntries", () => {
@@ -129,6 +130,41 @@ describe("validateChannelShimPrereq", () => {
   });
 });
 
+describe("shouldRegisterChannelShim", () => {
+  let tmpDir: string;
+  let realChannel: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "tandem-should-shim-"));
+    realChannel = join(tmpDir, "index.js");
+    writeFileSync(realChannel, "");
+  });
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("defaults ON for Claude Code when the channel artifact exists (#985)", () => {
+    expect(shouldRegisterChannelShim("claude-code", realChannel)).toBe(true);
+  });
+
+  it("defaults OFF for Claude Code when the artifact is missing (graceful degradation)", () => {
+    expect(shouldRegisterChannelShim("claude-code", join(tmpDir, "missing.js"))).toBe(false);
+  });
+
+  it("is always OFF for claude-desktop, even when the artifact exists", () => {
+    expect(shouldRegisterChannelShim("claude-desktop", realChannel)).toBe(false);
+  });
+
+  it("honors an explicit override either way (bypasses the existence check)", () => {
+    expect(shouldRegisterChannelShim("claude-code", join(tmpDir, "missing.js"), true)).toBe(true);
+    expect(shouldRegisterChannelShim("claude-code", realChannel, false)).toBe(false);
+  });
+
+  it("override does not resurrect the channel for claude-desktop", () => {
+    expect(shouldRegisterChannelShim("claude-desktop", realChannel, true)).toBe(false);
+  });
+});
+
 describe("applyConfig", () => {
   let tmpDir: string;
 
@@ -223,6 +259,18 @@ describe("applyConfig", () => {
     await applyConfig(configPath, applyOpsForCli(entries, { withChannelShim: true }));
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
     expect(written.mcpServers["tandem-channel"]).toBeDefined();
+  });
+
+  it("never removes a key it is also creating — 'create wins' invariant (#985)", async () => {
+    // The wizard builds ApplyOps directly from a user-confirmed diff and can
+    // list the same key in both create and remove. applyConfig must keep the
+    // created entry rather than deleting the channel shim it just registered.
+    const configPath = join(tmpDir, ".claude.json");
+    const entries = buildMcpEntries("/fake/channel/index.js", { withChannelShim: true });
+    await applyConfig(configPath, { create: entries, remove: ["tandem-channel"] });
+    const written = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(written.mcpServers["tandem-channel"]).toBeDefined();
+    expect(written.mcpServers["tandem-channel"].args).toEqual(["/fake/channel/index.js"]);
   });
 
   it("overwrites malformed JSON with fresh config", async () => {

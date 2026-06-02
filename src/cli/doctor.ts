@@ -211,11 +211,15 @@ function checkMcpJson(r: Recorder): void {
 
 function checkUserMcpConfig(r: Recorder): void {
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  const claudeCodePath = join(home, ".claude", "mcp_settings.json");
+  // Claude Code reads global MCP servers from ~/.claude.json (under
+  // `mcpServers`), which is exactly where `tandem setup` writes them. The
+  // legacy ~/.claude/mcp_settings.json is not the file Claude Code consults,
+  // so checking it produced false warnings even on a correct install (#985).
+  const claudeCodePath = join(home, ".claude.json");
 
   if (!existsSync(claudeCodePath)) {
     r.warn(
-      "~/.claude/mcp_settings.json not found",
+      "~/.claude.json not found",
       "Run: tandem setup  (or ignore if using project-local .mcp.json)",
     );
     return;
@@ -225,23 +229,23 @@ function checkUserMcpConfig(r: Recorder): void {
   try {
     config = JSON.parse(readFileSync(claudeCodePath, "utf-8"));
   } catch (err) {
-    r.warn(
-      `~/.claude/mcp_settings.json is malformed JSON: ${errMsg(err)}`,
-      "Run: tandem setup to rewrite it",
-    );
+    r.warn(`~/.claude.json is malformed JSON: ${errMsg(err)}`, "Run: tandem setup to rewrite it");
     return;
   }
 
   const servers = config?.mcpServers ?? {};
   if (!servers.tandem) {
-    r.warn("tandem not registered in ~/.claude/mcp_settings.json", "Run: tandem setup");
+    r.warn("tandem not registered in ~/.claude.json", "Run: tandem setup");
   } else {
-    r.pass("tandem registered in ~/.claude/mcp_settings.json");
+    r.pass("tandem registered in ~/.claude.json");
   }
   if (!servers["tandem-channel"]) {
-    r.warn("tandem-channel not registered in ~/.claude/mcp_settings.json", "Run: tandem setup");
+    r.warn(
+      "tandem-channel not registered in ~/.claude.json — Claude Code will poll instead of receiving real-time push",
+      "Run: tandem setup",
+    );
   } else {
-    r.pass("tandem-channel registered in ~/.claude/mcp_settings.json");
+    r.pass("tandem-channel registered in ~/.claude.json");
   }
 }
 

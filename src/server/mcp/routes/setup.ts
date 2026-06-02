@@ -6,6 +6,7 @@ import {
   type DetectedTarget,
   detectTargets,
   installSkill,
+  shouldRegisterChannelShim,
 } from "../../integrations/apply.js";
 import type { Handler } from "./_shared.js";
 import { isValidChannelPath, isValidNodeBinary } from "./_shared.js";
@@ -59,18 +60,21 @@ export async function runSetupHandler(
   const errors: string[] = [];
 
   for (const target of targets) {
+    // Default-on for Claude Code (the channel shim is its push transport,
+    // #985). `channelPath` is the Tauri-resolved bundled artifact and has
+    // already passed shape validation above; `shouldRegisterChannelShim`
+    // adds the existence check and the claude-desktop exclusion. A valid-
+    // shape-but-missing file degrades to "tandem HTTP entry only" rather
+    // than registering a broken MCP server.
+    const withChannelShim = shouldRegisterChannelShim(target.kind, channelPath);
     const entries = buildMcpEntries(channelPath, {
+      withChannelShim,
       nodeBinary,
       token,
       targetKind: target.kind,
     });
     try {
-      // The /api/setup route preserves the pre-3c-ii-b "remove stale
-      // channel shim unless asked for" semantics. The wizard's
-      // /api/integrations/apply uses an explicit confirmation diff.
-      // /api/setup itself dies in 3c-ii-c — once it's gone, this
-      // call site goes with it.
-      await applyConfig(target.configPath, applyOpsForCli(entries, { withChannelShim: false }));
+      await applyConfig(target.configPath, applyOpsForCli(entries, { withChannelShim }));
       configured.push(target.label);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
