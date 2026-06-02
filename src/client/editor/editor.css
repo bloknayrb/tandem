@@ -284,17 +284,24 @@
   top: 0;
   bottom: 0;
   width: 3px;
-  background: var(--tandem-accent);
+  /* A5 (#798): Claude-presence coral, matching the cursor + the focused-paragraph
+     border (was --tandem-accent blue, the lone non-coral cue in the set). */
+  background: var(--tandem-author-claude);
   border-radius: 2px;
   animation: tandem-gutter-pulse 2s ease-in-out infinite;
 }
+/* A5 (#798): the rail *breathes* — opacity swell + a soft coral bloom at the peak.
+   The box-shadow is keyframe-only (never a resting value on the rule) so the
+   reduced-motion `animation:none` guards below fully neutralize the glow. */
 @keyframes tandem-gutter-pulse {
   0%,
   100% {
     opacity: 0.4;
+    box-shadow: 0 0 0 0 transparent;
   }
   50% {
     opacity: 1;
+    box-shadow: 0 0 5px 0 color-mix(in srgb, var(--tandem-author-claude) 55%, transparent);
   }
 }
 
@@ -305,7 +312,10 @@
   border-left: 2px solid var(--tandem-author-claude);
   margin-left: -1px;
   z-index: 10;
-  animation: tandem-claude-blink 1.2s step-end infinite;
+  /* A5 (#798): canon caret = 900ms ease-in-out breathe (was 1.2s step-end hard
+     blink). The keyframe animates border-left-color (the caret bar), NOT the
+     span's opacity, so the child "AI" label stays fully legible. */
+  animation: tandem-claude-blink 900ms ease-in-out infinite;
 }
 .tandem-claude-cursor-idle {
   opacity: 0.3;
@@ -328,10 +338,10 @@
 @keyframes tandem-claude-blink {
   0%,
   100% {
-    opacity: 1;
+    border-left-color: var(--tandem-author-claude);
   }
   50% {
-    opacity: 0;
+    border-left-color: transparent;
   }
 }
 

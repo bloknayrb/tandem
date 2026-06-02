@@ -560,6 +560,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState(Mutex::new(None)))
         .manage(PendingOpens(Mutex::new(Vec::new())))
+        // App-level menu-event handler — registered exactly once here (NOT per
+        // show_context_menu call, which would stack handlers). Forwards
+        // `ctx:`-prefixed popup ids to the webview; the tray's own scoped
+        // handler owns MENU_* ids. See forward_context_menu_event (#923).
+        .on_menu_event(forward_context_menu_event)
         .setup(move |app| {
             // tauri-plugin-log installs a global `tracing` subscriber. The
             // optional `devtools` feature installs its own, and two global
@@ -831,6 +836,7 @@ pub fn run() {
             cowork_retry_admin_elevation,
             restart_sidecar,
             show_in_file_manager,
+            show_context_menu,
             install_update,
             keychain::keychain_get,
             keychain::keychain_set,
@@ -936,6 +942,156 @@ fn show_in_file_manager(path: String) -> Result<(), String> {
     match std::process::Command::new(program).args(&args).spawn() {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Failed to reveal {path} in file manager: {e}")),
+    }
+}
+
+// ---- Native editor context menu (issue #923) ------------------------------
+//
+// Security contract (enum-in / id-out): the request from JS carries only a kind
+// enum + booleans — never an href or path. We build the menu from a FIXED id
+// set and emit one of those ids back; the sensitive link href stays in the
+// webview's module-local state and is re-validated there. The app-level
+// `on_menu_event` (registered once in the builder) forwards `ctx:`-prefixed ids
+// to the webview — see `EVENT_CONTEXT_MENU_ACTION`.
+
+const EVENT_CONTEXT_MENU_ACTION: &str = "context-menu-action";
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum ContextMenuKind {
+    EditorText,
+    TableCell,
+    Link,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextMenuRequest {
+    kind: ContextMenuKind,
+    #[allow(dead_code)] // reserved: native Cut/Copy self-disable on macOS
+    has_selection: bool,
+    is_editable: bool,
+    #[allow(dead_code)] // overLink is implied by kind == Link
+    over_link: bool,
+    can_merge_cells: bool,
+    can_split_cell: bool,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct ContextMenuActionPayload {
+    id: String,
+}
+
+/// One item in a context menu. Predefined variants map to OS-native
+/// `PredefinedMenuItem`s (Cut/Copy/Paste/Select All operate on the focused
+/// webview); `Custom` items carry a `ctx:` id routed back to the editor.
+#[derive(Debug, PartialEq, Eq)]
+enum CtxItem {
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+    Separator,
+    /// (id, label, enabled)
+    Custom(&'static str, &'static str, bool),
+}
+
+/// Pure builder — returns the item spec for a request. Unit-tested like
+/// `reveal_command_args`; building the real `Menu` (which needs a manager) is a
+/// thin mapping over this in `build_context_menu`.
+fn build_context_menu_spec(req: &ContextMenuRequest) -> Vec<CtxItem> {
+    let ed = req.is_editable;
+    match req.kind {
+        ContextMenuKind::Link => vec![
+            CtxItem::Custom("ctx:link:open", "Open Link", true),
+            CtxItem::Custom("ctx:link:copy", "Copy Link", true),
+            CtxItem::Custom("ctx:link:remove", "Remove Link", ed),
+            CtxItem::Separator,
+            CtxItem::Cut,
+            CtxItem::Copy,
+            CtxItem::Paste,
+        ],
+        ContextMenuKind::TableCell => vec![
+            CtxItem::Cut,
+            CtxItem::Copy,
+            CtxItem::Paste,
+            CtxItem::Separator,
+            CtxItem::Custom("ctx:table:insertRowAbove", "Insert Row Above", ed),
+            CtxItem::Custom("ctx:table:insertRowBelow", "Insert Row Below", ed),
+            CtxItem::Custom("ctx:table:insertColLeft", "Insert Column Left", ed),
+            CtxItem::Custom("ctx:table:insertColRight", "Insert Column Right", ed),
+            CtxItem::Separator,
+            CtxItem::Custom("ctx:table:deleteRow", "Delete Row", ed),
+            CtxItem::Custom("ctx:table:deleteCol", "Delete Column", ed),
+            CtxItem::Separator,
+            CtxItem::Custom("ctx:table:mergeCells", "Merge Cells", ed && req.can_merge_cells),
+            CtxItem::Custom("ctx:table:splitCell", "Split Cell", ed && req.can_split_cell),
+            CtxItem::Separator,
+            CtxItem::Custom("ctx:table:deleteTable", "Delete Table", ed),
+        ],
+        ContextMenuKind::EditorText => vec![
+            CtxItem::Custom("ctx:undo", "Undo", ed),
+            CtxItem::Custom("ctx:redo", "Redo", ed),
+            CtxItem::Separator,
+            CtxItem::Cut,
+            CtxItem::Copy,
+            CtxItem::Paste,
+            CtxItem::Custom("ctx:pastePlain", "Paste as Plain Text", ed),
+            CtxItem::Separator,
+            CtxItem::SelectAll,
+        ],
+    }
+}
+
+fn build_context_menu(
+    window: &tauri::WebviewWindow,
+    req: &ContextMenuRequest,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    use tauri::menu::IsMenuItem;
+    let spec = build_context_menu_spec(req);
+    let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::with_capacity(spec.len());
+    for item in &spec {
+        let boxed: Box<dyn IsMenuItem<tauri::Wry>> = match *item {
+            CtxItem::Cut => Box::new(PredefinedMenuItem::cut(window, None)?),
+            CtxItem::Copy => Box::new(PredefinedMenuItem::copy(window, None)?),
+            CtxItem::Paste => Box::new(PredefinedMenuItem::paste(window, None)?),
+            CtxItem::SelectAll => Box::new(PredefinedMenuItem::select_all(window, None)?),
+            CtxItem::Separator => Box::new(PredefinedMenuItem::separator(window)?),
+            CtxItem::Custom(id, label, enabled) => {
+                Box::new(MenuItem::with_id(window, id, label, enabled, None::<&str>)?)
+            }
+        };
+        items.push(boxed);
+    }
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|b| b.as_ref()).collect();
+    Menu::with_items(window, &refs)
+}
+
+#[tauri::command]
+fn show_context_menu(window: tauri::WebviewWindow, req: ContextMenuRequest) -> Result<(), String> {
+    let menu = build_context_menu(&window, &req).map_err(|e| e.to_string())?;
+    // Cursor-position overload; popup is modal so the local `menu` outlives the
+    // user's click and can drop afterwards (no retention needed).
+    window.popup_menu(&menu).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// App-level menu-event handler (registered ONCE in the builder). Forwards
+/// `ctx:`-prefixed ids to the main webview; tray ids (`MENU_*`) are handled by
+/// the tray's own scoped handler and ignored here. Window-scoped emit so a
+/// future second window can't receive another window's action.
+fn forward_context_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
+    let id = event.id().as_ref();
+    if !id.starts_with("ctx:") {
+        return;
+    }
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        if let Err(e) = window.emit(
+            EVENT_CONTEXT_MENU_ACTION,
+            ContextMenuActionPayload { id: id.to_string() },
+        ) {
+            log::warn!("Failed to emit context-menu action {id}: {e}");
+        }
     }
 }
 
@@ -2555,6 +2711,128 @@ mod reveal_command_tests {
         let nasty = "/Users/me/$(rm -rf ~) file.md";
         let (_program, args) = reveal_command_args(nasty, "macos");
         assert_eq!(args, vec!["-R".to_string(), nasty.to_string()]);
+    }
+}
+
+/// Unit tests for the pure context-menu spec builder (#923). The real `Menu`
+/// needs a Tauri manager and can't be built in a unit test, so we assert the
+/// item spec instead — the part that decides which ids/labels/enabled-states
+/// each context produces.
+#[cfg(test)]
+mod context_menu_tests {
+    use super::*;
+
+    fn req(kind: ContextMenuKind, is_editable: bool) -> ContextMenuRequest {
+        ContextMenuRequest {
+            kind,
+            has_selection: false,
+            is_editable,
+            over_link: false,
+            can_merge_cells: false,
+            can_split_cell: false,
+        }
+    }
+
+    fn custom_ids(spec: &[CtxItem]) -> Vec<&'static str> {
+        spec.iter()
+            .filter_map(|i| match i {
+                CtxItem::Custom(id, _, _) => Some(*id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn enabled_of(spec: &[CtxItem], id: &str) -> Option<bool> {
+        spec.iter().find_map(|i| match i {
+            CtxItem::Custom(item_id, _, enabled) if *item_id == id => Some(*enabled),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn link_menu_has_open_copy_remove_then_clipboard() {
+        let spec = build_context_menu_spec(&req(ContextMenuKind::Link, true));
+        assert_eq!(
+            custom_ids(&spec),
+            vec!["ctx:link:open", "ctx:link:copy", "ctx:link:remove"]
+        );
+        // Native clipboard items follow.
+        assert!(spec.contains(&CtxItem::Cut));
+        assert!(spec.contains(&CtxItem::Paste));
+    }
+
+    #[test]
+    fn table_menu_lists_all_structural_ops() {
+        let spec = build_context_menu_spec(&req(ContextMenuKind::TableCell, true));
+        for id in [
+            "ctx:table:insertRowAbove",
+            "ctx:table:insertRowBelow",
+            "ctx:table:insertColLeft",
+            "ctx:table:insertColRight",
+            "ctx:table:deleteRow",
+            "ctx:table:deleteCol",
+            "ctx:table:mergeCells",
+            "ctx:table:splitCell",
+            "ctx:table:deleteTable",
+        ] {
+            assert!(custom_ids(&spec).contains(&id), "table menu missing {id}");
+        }
+        // Cells get clipboard too (right-click in a cell is still editable text).
+        assert!(spec.contains(&CtxItem::Cut));
+    }
+
+    #[test]
+    fn merge_and_split_gated_on_can_flags() {
+        let mut r = req(ContextMenuKind::TableCell, true);
+        r.can_merge_cells = true; // split stays false
+        let spec = build_context_menu_spec(&r);
+        assert_eq!(enabled_of(&spec, "ctx:table:mergeCells"), Some(true));
+        assert_eq!(enabled_of(&spec, "ctx:table:splitCell"), Some(false));
+    }
+
+    #[test]
+    fn editor_text_menu_has_undo_clipboard_paste_plain_select_all() {
+        let spec = build_context_menu_spec(&req(ContextMenuKind::EditorText, true));
+        assert_eq!(
+            custom_ids(&spec),
+            vec!["ctx:undo", "ctx:redo", "ctx:pastePlain"]
+        );
+        assert!(spec.contains(&CtxItem::SelectAll));
+        assert!(spec.contains(&CtxItem::Paste));
+    }
+
+    #[test]
+    fn read_only_disables_mutating_items_but_keeps_navigation() {
+        // Read-only doc: table mutations + paste-plain + undo are disabled;
+        // Open/Copy Link stay enabled (they don't mutate the document).
+        let table = build_context_menu_spec(&req(ContextMenuKind::TableCell, false));
+        assert_eq!(enabled_of(&table, "ctx:table:deleteRow"), Some(false));
+        assert_eq!(enabled_of(&table, "ctx:table:deleteTable"), Some(false));
+
+        let text = build_context_menu_spec(&req(ContextMenuKind::EditorText, false));
+        assert_eq!(enabled_of(&text, "ctx:pastePlain"), Some(false));
+        assert_eq!(enabled_of(&text, "ctx:undo"), Some(false));
+
+        let link = build_context_menu_spec(&req(ContextMenuKind::Link, false));
+        assert_eq!(enabled_of(&link, "ctx:link:open"), Some(true));
+        assert_eq!(enabled_of(&link, "ctx:link:copy"), Some(true));
+        assert_eq!(enabled_of(&link, "ctx:link:remove"), Some(false));
+    }
+
+    #[test]
+    fn kind_deserializes_from_camel_case() {
+        // The JS side sends camelCase kind strings; serde must accept them.
+        let r: ContextMenuRequest = serde_json::from_value(serde_json::json!({
+            "kind": "tableCell",
+            "hasSelection": true,
+            "isEditable": true,
+            "overLink": false,
+            "canMergeCells": true,
+            "canSplitCell": false,
+        }))
+        .expect("camelCase request should deserialize");
+        assert!(matches!(r.kind, ContextMenuKind::TableCell));
+        assert!(r.can_merge_cells);
     }
 }
 

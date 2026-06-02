@@ -20,7 +20,9 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          # libxdo-dev: required by the tauri `linux-libxdo` feature (#923) so
+          # native Cut/Copy/Paste/Select All context-menu items link on Linux.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev
 
       - uses: Swatinem/rust-cache@v2
         with:
