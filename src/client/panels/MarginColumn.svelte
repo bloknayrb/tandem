@@ -201,7 +201,6 @@ function recordHeight(id: string, h: number): void {
         startY: rawTop,
         endX: columnX,
         endY,
-        side,
       })}
       <path
         data-annotation-id={ann.id}
