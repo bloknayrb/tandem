@@ -226,6 +226,7 @@ peek-strip-{*}
 popup-annotate-btn
 popup-annotation-input
 popup-comment-submit
+popup-highlight-none
 popup-highlight-{*}
 popup-note-submit
 popup-show-formatbar-btn

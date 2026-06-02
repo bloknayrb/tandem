@@ -1257,7 +1257,10 @@ const tutorial = createTutorial(
       onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
       onOpenSettings={toggleSettings}
       formattingBarVisible={settingsState.settings.formattingBarVisible}
-      onShowFormattingBar={() => settingsState.updateSettings({ formattingBarVisible: true })}
+      onToggleFormattingBar={() =>
+        settingsState.updateSettings({
+          formattingBarVisible: !settingsState.settings.formattingBarVisible,
+        })}
     />
 
     {#if settingsState.settings.formattingBarVisible}

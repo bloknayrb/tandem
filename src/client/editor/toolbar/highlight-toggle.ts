@@ -97,3 +97,46 @@ export function toggleHighlight(
   });
   return "recolored";
 }
+
+/**
+ * Clear ALL user highlights on an exact range, regardless of color — the A8
+ * "none" eraser swatch (one click, not a long-press / repeat-color toggle).
+ *
+ * Uses the same five-guard match as {@link toggleHighlight} *minus* the color
+ * check, so it shares the preservation contract: accepted / dismissed
+ * (status ≠ pending) and user-edited (content ≠ "") highlights are left
+ * untouched. There is NO add-on-miss path — a miss returns "noop", never
+ * inserts.
+ *
+ * Two matches can share a range (e.g. a stale duplicate), so this collects all
+ * matching keys first and deletes them inside one `withBrowser` transaction —
+ * mutating the Y.Map mid-iteration is undefined. `withBrowser` is the correct
+ * origin tag (Critical Rule #2 / ADR-031): a browser-initiated user edit.
+ */
+export function clearHighlight(
+  ydoc: Y.Doc,
+  range: { from: number; to: number },
+): "removed" | "noop" {
+  const map = ydoc.getMap<Annotation>(Y_MAP_ANNOTATIONS);
+
+  const keys: string[] = [];
+  for (const [key, ann] of map.entries()) {
+    if (
+      ann.type === "highlight" &&
+      ann.range.from === range.from &&
+      ann.range.to === range.to &&
+      ann.author === "user" &&
+      ann.status === "pending" &&
+      ann.content === ""
+    ) {
+      keys.push(key);
+    }
+  }
+
+  if (keys.length === 0) return "noop";
+
+  withBrowser(ydoc, () => {
+    for (const k of keys) map.delete(k);
+  });
+  return "removed";
+}

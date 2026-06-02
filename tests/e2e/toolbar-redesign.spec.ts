@@ -175,23 +175,27 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
 // test (collapse → re-select) races the popup's coordsAtPos retry path on a slow
 // CI runner (see Toolbar.svelte's MAX_AFFORDANCE_RETRIES note). Every reliable
 // test in this file opens the popup with exactly one selection episode.
-test("selection popup omits the restore button while the formatting bar is shown", async ({
-  page,
-}) => {
+test("selection popup swap hides the formatting bar while it is shown (A8)", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   const editor = page.locator(".tiptap");
   await expect(editor.locator("p").first()).toContainText("first paragraph", {
     timeout: 10_000,
   });
-  await expect(page.locator("[data-testid='formatting-bar']")).toBeVisible({ timeout: 10_000 });
+  const bar = page.locator("[data-testid='formatting-bar']");
+  await expect(bar).toBeVisible({ timeout: 10_000 });
 
   await editor.click();
   await editor.locator("p").first().selectText();
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
-  // Restoring the bar would be a redundant no-op while it's already shown.
-  await expect(toolbar.locator("[data-testid='popup-show-formatbar-btn']")).toHaveCount(0);
+  // A8: the swap is PERSISTENT (no longer absent while the bar is shown). While
+  // the bar is visible it offers "Hide", and clicking it hides the bar.
+  const swap = toolbar.locator("[data-testid='popup-show-formatbar-btn']");
+  await expect(swap).toBeVisible();
+  await expect(swap).toHaveAttribute("aria-label", "Hide formatting bar");
+  await swap.click();
+  await expect(bar).toBeHidden({ timeout: 3_000 });
 });
 
 test("hidden formatting bar can be restored from the selection popup", async ({ page }) => {
@@ -216,6 +220,8 @@ test("hidden formatting bar can be restored from the selection popup", async ({ 
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
   const restore = toolbar.locator("[data-testid='popup-show-formatbar-btn']");
   await expect(restore).toBeVisible({ timeout: 3_000 });
+  // While the bar is hidden the same persistent swap offers "Show".
+  await expect(restore).toHaveAttribute("aria-label", "Show formatting bar");
 
   // Clicking it brings the persistent bar back.
   await restore.click();

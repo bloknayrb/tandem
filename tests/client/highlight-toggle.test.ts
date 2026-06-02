@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toggleHighlight } from "../../src/client/editor/toolbar/highlight-toggle";
+import { clearHighlight, toggleHighlight } from "../../src/client/editor/toolbar/highlight-toggle";
 import { getAnnotationsMap, makeAnnotation, makeEmptyDoc } from "../helpers/ydoc-factory";
 
 const RANGE = { from: 0, to: 10 };
@@ -147,5 +147,102 @@ describe("toggleHighlight", () => {
     const result = toggleHighlight(doc, RANGE, "yellow");
     expect(result).toBe("added");
     expect(getAnnotationsMap(doc).size).toBe(2);
+  });
+});
+
+describe("clearHighlight (A8 none/eraser swatch)", () => {
+  function seedHighlight(
+    doc: ReturnType<typeof makeEmptyDoc>,
+    id: string,
+    over: Partial<Parameters<typeof makeAnnotation>[0]> = {},
+  ) {
+    const ann = makeAnnotation({
+      id,
+      author: "user",
+      type: "highlight",
+      range: RANGE as ReturnType<typeof makeAnnotation>["range"],
+      color: "yellow",
+      content: "",
+      status: "pending",
+      ...over,
+    });
+    getAnnotationsMap(doc).set(id, ann);
+  }
+
+  it("removes a matching pending empty user highlight, returns 'removed'", () => {
+    const doc = makeEmptyDoc();
+    seedHighlight(doc, "ann_yellow");
+    const result = clearHighlight(doc, RANGE);
+    expect(result).toBe("removed");
+    expect(getAnnotationsMap(doc).size).toBe(0);
+  });
+
+  it("clears regardless of color (eraser ignores color)", () => {
+    const doc = makeEmptyDoc();
+    seedHighlight(doc, "ann_blue", { color: "blue" });
+    const result = clearHighlight(doc, RANGE);
+    expect(result).toBe("removed");
+    expect(getAnnotationsMap(doc).size).toBe(0);
+  });
+
+  it("no match — returns 'noop', never inserts (no add-on-miss path)", () => {
+    const doc = makeEmptyDoc();
+    const result = clearHighlight(doc, RANGE);
+    expect(result).toBe("noop");
+    expect(getAnnotationsMap(doc).size).toBe(0);
+  });
+
+  it("removes every match on the same range in one call (duplicate guard)", () => {
+    const doc = makeEmptyDoc();
+    seedHighlight(doc, "ann_a", { color: "yellow" });
+    seedHighlight(doc, "ann_b", { color: "green" });
+    expect(getAnnotationsMap(doc).size).toBe(2);
+    const result = clearHighlight(doc, RANGE);
+    expect(result).toBe("removed");
+    expect(getAnnotationsMap(doc).size).toBe(0);
+  });
+
+  it("status guard: accepted highlight is preserved, returns 'noop'", () => {
+    const doc = makeEmptyDoc();
+    seedHighlight(doc, "ann_accepted", { status: "accepted" });
+    const result = clearHighlight(doc, RANGE);
+    expect(result).toBe("noop");
+    expect(getAnnotationsMap(doc).size).toBe(1);
+  });
+
+  it("content guard: user-edited highlight is preserved, returns 'noop'", () => {
+    const doc = makeEmptyDoc();
+    seedHighlight(doc, "ann_edited", { content: "a note" });
+    const result = clearHighlight(doc, RANGE);
+    expect(result).toBe("noop");
+    expect(getAnnotationsMap(doc).size).toBe(1);
+  });
+
+  it("author guard: a Claude comment at the same range is never touched", () => {
+    const doc = makeEmptyDoc();
+    getAnnotationsMap(doc).set(
+      "ann_claude",
+      makeAnnotation({
+        id: "ann_claude",
+        author: "claude",
+        type: "comment",
+        range: RANGE as ReturnType<typeof makeAnnotation>["range"],
+        content: "Claude comment",
+        status: "pending",
+      }),
+    );
+    const result = clearHighlight(doc, RANGE);
+    expect(result).toBe("noop");
+    expect(getAnnotationsMap(doc).size).toBe(1);
+  });
+
+  it("range guard: a highlight on a different range is kept, returns 'noop'", () => {
+    const doc = makeEmptyDoc();
+    seedHighlight(doc, "ann_other", {
+      range: OTHER_RANGE as ReturnType<typeof makeAnnotation>["range"],
+    });
+    const result = clearHighlight(doc, RANGE);
+    expect(result).toBe("noop");
+    expect(getAnnotationsMap(doc).size).toBe(1);
   });
 });

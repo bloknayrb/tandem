@@ -17,7 +17,7 @@ import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
 import FormattingToolbar from "./FormattingToolbar.svelte";
-import { toggleHighlight } from "./highlight-toggle";
+import { clearHighlight, toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
@@ -51,12 +51,13 @@ interface Props {
     decorationsMuted?: boolean;
   }) => void;
   onOpenSettings?: () => void;
-  // 1.11: whether the persistent formatting bar is currently shown. When it's
-  // hidden, the popup surfaces a "show formatting bar" affordance (the symmetric
-  // restore for the bar's own hide button) so the bar is reachable without the
-  // command palette / Appearance settings.
+  // 1.11 / A8: whether the persistent formatting bar is currently shown. The
+  // popup always surfaces a swap control that toggles it (hide when shown, show
+  // when hidden) — so the bar is reachable without the command palette /
+  // Appearance settings, and hideable straight from the popup. (A8 spec: the
+  // swap lives in the format row; the bar mirrors the format row.)
   formattingBarVisible?: boolean;
-  onShowFormattingBar?: () => void;
+  onToggleFormattingBar?: () => void;
 }
 
 let {
@@ -73,7 +74,7 @@ let {
   onUpdateDecorations,
   onOpenSettings,
   formattingBarVisible = true,
-  onShowFormattingBar,
+  onToggleFormattingBar,
 }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
@@ -396,6 +397,26 @@ function handleHighlight(color: HighlightColor) {
   editor.chain().setTextSelection(to).run();
 }
 
+// A8 "none"/eraser swatch — clear any user highlight on the selection, any
+// color. Mirrors handleHighlight's coordinate handling exactly: capturedRange
+// holds *PM* positions, but stored highlights use *flat* offsets, so we must
+// convert via pmPosToFlatOffset before matching (a raw capturedRange would
+// silently no-op). Same collapse-after so the cleared range is visible.
+function handleClearHighlight() {
+  if (!editor || !ydoc) return;
+
+  const range = capturedRange ?? editor.state.selection;
+  const { from, to } = range;
+  if (from === to) return;
+
+  const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
+  const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
+
+  clearHighlight(ydoc, { from: flatFrom, to: flatTo });
+  capturedRange = null;
+  editor.chain().setTextSelection(to).run();
+}
+
 // Keyboard activation (Enter / Space on a focused button) fires `click` with
 // `detail === 0`. The mouse path uses `mousedown` so the editor selection
 // survives. Pair `onmousedown` (mouse, preventDefault) with
@@ -498,27 +519,31 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
             />
           </div>
         {/if}
-        {#if !formattingBarVisible && onShowFormattingBar}
-          <!-- Symmetric restore for the formatting bar's own hide button
-               (chevron-up). Only rendered while the bar is hidden. onmousedown
-               preventDefault keeps the editor selection alive so restoring the
-               bar doesn't dismiss the popup mid-interaction; onclick (filtered
-               to keyboard activation) covers Enter/Space. -->
+        {#if onToggleFormattingBar}
+          <!-- A8 swap: persistent hide/show-bar toggle at the far right of the
+               format row. Chevron-up = hide (bar shown), chevron-down = show
+               (bar hidden) — mirrors the bar's own hide button, opposite
+               direction. Always present (unlike the old show-only affordance),
+               so the bar is both hideable and reachable from the popup. testid
+               kept for the E2E contract though it now toggles both ways.
+               onmousedown preventDefault keeps the editor selection alive so
+               toggling doesn't dismiss the popup mid-interaction; onclick
+               (filtered to keyboard activation) covers Enter/Space. -->
           <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
           <button
             type="button"
             data-testid="popup-show-formatbar-btn"
-            aria-label="Show formatting bar"
-            title="Show formatting bar"
+            aria-label={formattingBarVisible ? "Hide formatting bar" : "Show formatting bar"}
+            title={formattingBarVisible ? "Hide formatting bar" : "Show formatting bar"}
             onmousedown={(e) => {
               e.preventDefault();
-              onShowFormattingBar?.();
+              onToggleFormattingBar?.();
             }}
-            onclick={onKeyActivate(() => onShowFormattingBar?.())}
+            onclick={onKeyActivate(() => onToggleFormattingBar?.())}
             style="height: 26px; min-width: 26px; padding: 0 6px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;"
           >
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="m6 9 6 6 6-6" />
+              <path d={formattingBarVisible ? "m18 15-6-6-6 6" : "m6 9 6 6 6-6"} />
             </svg>
           </button>
         {/if}
@@ -527,6 +552,30 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       <!-- Annotate pill: highlight swatches + Annotate. -->
       <div style="display: flex; align-items: center; gap: 1px; padding: 2px 4px 4px;">
         <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
+          <!-- A8: the strip leads with a "none" swatch so clearing a highlight
+               is one click (any color), not a same-color re-click. preventDefault
+               keeps the selection alive; clearHighlight resolves PM→flat inside
+               handleClearHighlight (capturedRange holds PM positions). -->
+          <button
+            type="button"
+            data-testid="popup-highlight-none"
+            aria-label="No highlight"
+            title="No highlight"
+            onmousedown={(e) => {
+              e.preventDefault();
+              handleClearHighlight();
+              editor?.chain().focus().run();
+            }}
+            onclick={onKeyActivate(() => {
+              handleClearHighlight();
+              editor?.chain().focus().run();
+            })}
+            style="width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface); cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center;"
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <line x1="3.5" y1="12.5" x2="12.5" y2="3.5" stroke="var(--tandem-fg-muted)" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+          </button>
           {#each MINI_HIGHLIGHT_COLORS as color}
             <button
               type="button"
