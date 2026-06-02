@@ -13,6 +13,8 @@ import {
 import { openServerPath } from "../utils/server-paths.js";
 import NewTabMenu from "./NewTabMenu.svelte";
 import TabItem from "./TabItem.svelte";
+// A29 morph (#798): shared timing tokens + reduced-motion token-zeroing.
+import "../panels/morphTiming.css";
 
 interface Props {
   tabs: OpenTab[];
@@ -309,6 +311,23 @@ $effect(() => {
   return () => window.removeEventListener("pointerdown", handlePointerDown, true);
 });
 
+// A29 (#798) — return focus to the + trigger when the dialog body unmounts on close,
+// but ONLY when focus would otherwise be lost (Escape / item-select leave focus on the
+// now-removed body → activeElement falls back to <body>). On click-outside the user's
+// click already moved focus elsewhere → leave it there. `wasOpen` is a plain (non-reactive)
+// latch so this only fires on a true→false transition, never on initial mount.
+let wasOpen = false;
+$effect(() => {
+  if (showRecent) {
+    wasOpen = true;
+    return;
+  }
+  if (!wasOpen) return;
+  wasOpen = false;
+  const active = document.activeElement;
+  if (!active || active === document.body) openBtnEl?.focus({ preventScroll: true });
+});
+
 // Ctrl+T (App-level shortcut) toggles the new-tab menu via this counter prop.
 // Only `openMenuTrigger` is a tracked dependency; the mount value 0 is skipped.
 // `toggleNewTabMenu` reads + writes `showRecent`; running it under `untrack`
@@ -360,50 +379,61 @@ $effect(() => {
     {/each}
   </div>
 
-  <!-- The "+" button lives OUTSIDE role="tablist" — a tablist is only allowed to contain
-       role="tab" children (axe `aria-required-children`). Keeping it adjacent to the
-       scroll container preserves the visual placement at the end of the tab strip.
-       28×28 floating-pill recipe matches the v7 .c7-tab-add design. -->
-  <button
-    bind:this={openBtnEl}
-    onclick={toggleNewTabMenu}
-    data-testid="open-file-btn"
-    class="tandem-floating-pill tab-add-pill"
-    title="Open file"
-    aria-label="Open file"
-  >
-    +
-  </button>
-
-  {#if showRecent}
-    <NewTabMenu
-      {recentFiles}
-      {closedTabTop}
-      anchorEl={openBtnEl}
-      onOpen={async (filePath) => {
-        showRecent = false;
-        const result = await openServerPath(filePath);
-        if (result.ok) {
-          saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
-        } else {
-          console.warn("[tandem] failed to open recent file:", result.error);
-        }
-      }}
-      onNewScratchpad={() => {
-        showRecent = false;
-        void createScratchpad();
-      }}
-      onBrowse={() => {
-        showRecent = false;
-        onRequestOpenDialog?.();
-      }}
-      onReopenClosed={() => {
-        showRecent = false;
-        onReopenClosed?.();
-      }}
-      onClose={() => (showRecent = false)}
-    />
-  {/if}
+  <!-- A29 (#798): the "+" is the closed state of a persistent single-shell morph. Clicking
+       it morphs the pill in place into the new-tab menu (un-portaled — no <body> portal).
+       The shell lives OUTSIDE role="tablist" (a tablist may only contain role="tab"
+       children — axe `aria-required-children`) AND outside the .tab-scroll-mask scroller,
+       so its growth is never clipped by the horizontal tab overflow. The 28×28 .nt-wrap
+       placeholder holds the in-flow slot stable while the absolute .nt-morph grows
+       down-and-left from the + slot. -->
+  <div class="nt-wrap">
+    <div class="nt-morph" class:open={showRecent}>
+      <button
+        bind:this={openBtnEl}
+        onclick={toggleNewTabMenu}
+        data-testid="open-file-btn"
+        class="tandem-floating-pill tab-add-pill"
+        title="Open file"
+        aria-label="Open file"
+        aria-haspopup="dialog"
+        aria-expanded={showRecent}
+      >
+        +
+      </button>
+      <div class="nt-grid">
+        <div class="nt-cell">
+          {#if showRecent}
+            <NewTabMenu
+              {recentFiles}
+              {closedTabTop}
+              onOpen={async (filePath) => {
+                showRecent = false;
+                const result = await openServerPath(filePath);
+                if (result.ok) {
+                  saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
+                } else {
+                  console.warn("[tandem] failed to open recent file:", result.error);
+                }
+              }}
+              onNewScratchpad={() => {
+                showRecent = false;
+                void createScratchpad();
+              }}
+              onBrowse={() => {
+                showRecent = false;
+                onRequestOpenDialog?.();
+              }}
+              onReopenClosed={() => {
+                showRecent = false;
+                onReopenClosed?.();
+              }}
+              onClose={() => (showRecent = false)}
+            />
+          {/if}
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <style>
@@ -462,23 +492,96 @@ $effect(() => {
     );
   }
 
-  /* 28×28 floating-pill `+` add-tab button. Inherits the white/dark/warm
-     background + border + shadow from `.tandem-floating-pill`; this rule
-     only sets the size/shape/hover. */
+  /* A29 single-shell morph (#798). The 28×28 .nt-wrap holds the in-flow slot stable
+     (so tabs never shift) while the absolute .nt-morph grows down-and-left from the +
+     slot into the 460px menu. Timing tokens (--morph-p1/p2/cascade) + the reduced-motion
+     token-zeroing come from morphTiming.css (imported in the script). */
+  .nt-wrap {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    margin-left: var(--tandem-space-2);
+  }
+  .nt-morph {
+    position: absolute;
+    top: 0;
+    right: 0; /* anchor at the + slot — grow left + down */
+    width: 28px;
+    min-height: 28px; /* closed floor for the pill; height is auto and follows the grid */
+    border-radius: var(--tandem-r-circle);
+    /* closed: overflow visible so the pill's own floating-pill drop-shadow + focus rings
+       paint. The clip needed for the body reveal is applied only while .open (below). */
+    overflow: visible;
+    /* CLOSE: width + radius wait for the height collapse (delay P2) */
+    transition:
+      width var(--morph-p1) var(--tandem-ease-out) var(--morph-p2),
+      border-radius var(--morph-p1) var(--tandem-ease-out) var(--morph-p2);
+  }
+  .nt-morph.open {
+    width: 460px; /* production menu width */
+    border-radius: var(--tandem-r-4);
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    box-shadow: var(--tandem-shadow-2);
+    /* clip the revealing body; clip-margin (not hidden) keeps it from being a scroll
+       container (lesson #765) and lets descendant focus rings paint past the edge */
+    overflow: clip;
+    overflow-clip-margin: var(--tandem-space-2);
+    /* OPEN: width + radius lead (no delay) */
+    transition:
+      width var(--morph-p1) var(--tandem-ease-out),
+      border-radius var(--morph-p1) var(--tandem-ease-out);
+  }
+  .nt-grid {
+    display: grid;
+    grid-template-rows: 0fr; /* closed: body track collapsed */
+    overflow: clip;
+    /* CLOSE: height collapses first (no delay) */
+    transition: grid-template-rows var(--morph-p1) var(--tandem-ease-out);
+  }
+  .nt-morph.open .nt-grid {
+    grid-template-rows: 1fr; /* open: body track at natural height */
+    /* OPEN: height unfurls AFTER the width lead (delay P1) */
+    transition: grid-template-rows var(--morph-p2) var(--tandem-ease-out) var(--morph-p1);
+  }
+  .nt-cell {
+    min-height: 0; /* allow the 0fr track to clip to zero */
+    overflow: clip;
+  }
+
+  /* 28×28 floating-pill `+` add-tab button — the closed state of the morph. Inherits the
+     white/dark/warm background + border + shadow from `.tandem-floating-pill`; absolute so
+     it adds no layout height (the shell height is driven by the grid). Fades out as the
+     shell opens; fades back in only after the width has collapsed on close (delay P2). */
   .tab-add-pill {
+    position: absolute;
+    top: 0;
+    right: 0;
     display: inline-grid;
     place-items: center;
     width: 28px;
     height: 28px;
-    margin-left: var(--tandem-space-2);
     border-radius: var(--tandem-r-circle);
     color: var(--tandem-fg-subtle);
     font-size: 16px;
     line-height: 1;
     cursor: pointer;
-    flex-shrink: 0;
     padding: 0;
-    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    transition:
+      color 0.15s,
+      border-color 0.15s,
+      background 0.15s,
+      opacity var(--morph-cascade) var(--tandem-ease-out) var(--morph-p2);
+  }
+  .nt-morph.open .tab-add-pill {
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      color 0.15s,
+      border-color 0.15s,
+      background 0.15s,
+      opacity var(--morph-cascade) var(--tandem-ease-out); /* fade out fast on open */
   }
   .tab-add-pill:hover {
     color: var(--tandem-accent);
