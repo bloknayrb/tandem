@@ -11,12 +11,12 @@ import Table from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
-import { Fragment, Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
+import { installContextMenu } from "./context-menu/install";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AnnotationPingExtension } from "./extensions/annotationPing";
 import { AuthorshipExtension } from "./extensions/authorship";
@@ -27,6 +27,7 @@ import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
 import { markdownToSlice } from "./utils/markdown-paste";
+import { buildPlainTextSlice } from "./utils/plain-paste";
 import { isSafeExternalHref } from "./utils/url-safety";
 import "./editor.css";
 
@@ -208,18 +209,11 @@ $effect(() => {
           const slice = markdownToSlice(text, view.state.schema);
           if (slice) return slice;
         }
-        // Fall back to ProseMirror's built-in plain-text behavior: split on
-        // blank-line groups into paragraphs, carrying the context's active
-        // marks. Mirrors the `else` branch of prosemirror-view's
-        // `parseFromClipboard` so non-markdown paste is unchanged.
-        const schema = view.state.schema;
-        const marks = $context.marks();
-        const nodes = text
-          .split(/(?:\r\n?|\n)+/)
-          .map((block) =>
-            schema.nodes.paragraph.create(null, block ? schema.text(block, marks) : undefined),
-          );
-        return Slice.maxOpen(Fragment.fromArray(nodes));
+        // Fall back to plain-text behavior: split on blank-line groups into
+        // paragraphs, carrying the context's active marks. Shared with the
+        // context menu's "Paste as Plain Text" (issue #923) so the two never
+        // diverge.
+        return buildPlainTextSlice(text, view.state.schema, $context.marks());
       },
     },
     editable: untrack(() => !readOnly),
@@ -229,8 +223,18 @@ $effect(() => {
   editor = next;
   untrack(() => onEditorReady?.(next));
 
+  // Native (Tauri) context menu — issue #923. Bound to THIS editor instance
+  // (never the reactive `editor` $state) and torn down before destroy so a
+  // doc-switch can't leak the global Tauri listener. No-op in browser mode.
+  const teardownContextMenu = installContextMenu(next, {
+    openHref: (href) => {
+      void openHref(href);
+    },
+  });
+
   return () => {
     untrack(() => onEditorReady?.(null));
+    teardownContextMenu();
     next.destroy();
     if (editor === next) editor = null;
   };
@@ -280,6 +284,31 @@ $effect(() => {
   }
 });
 
+// Open a link href the same way for both the click intercept and the context
+// menu's "Open Link" item (issue #923): safe external schemes go to the system
+// browser, relative paths open as Tandem tabs, unrecognised schemes are
+// dropped. The allowlist (`isSafeExternalHref`) is the single trust gate — both
+// callers funnel through here so neither can drift. No-ops on empty/fragment.
+async function openHref(href: string) {
+  if (!href || href.startsWith("#")) return;
+
+  if (isSafeExternalHref(href)) {
+    window.open(href, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  // Treat anything else with a recognised file extension as a relative path.
+  if (currentFilePath) {
+    const resolvedPath = resolveRelativeLink(href, currentFilePath);
+    if (resolvedPath) {
+      const result = await openServerPath(resolvedPath);
+      if (!result.ok) {
+        console.warn(`[tandem] Could not open linked file "${resolvedPath}": ${result.error}`);
+      }
+    }
+  }
+}
+
 async function handleEditorClick(e: MouseEvent) {
   // --- Anchor intercept (closes #479) --------------------------------------
   // We want to own every anchor click except in-page fragments: relative links
@@ -298,22 +327,7 @@ async function handleEditorClick(e: MouseEvent) {
     // Take ownership of this click — even if no branch below handles it,
     // we don't want the browser navigating to a javascript:/data:/etc URL.
     e.preventDefault();
-
-    if (isSafeExternalHref(href)) {
-      window.open(href, "_blank", "noopener,noreferrer");
-      return;
-    }
-
-    // Treat anything else with a recognised file extension as a relative path.
-    if (currentFilePath) {
-      const resolvedPath = resolveRelativeLink(href, currentFilePath);
-      if (resolvedPath) {
-        const result = await openServerPath(resolvedPath);
-        if (!result.ok) {
-          console.warn(`[tandem] Could not open linked file "${resolvedPath}": ${result.error}`);
-        }
-      }
-    }
+    await openHref(href);
     return;
   }
 
