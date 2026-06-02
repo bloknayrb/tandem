@@ -180,7 +180,7 @@ function cycleWordMode() {
   <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
     <span
       class="status-dot"
-      style="width: 7px; height: 7px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {isReconnecting ? 'tandem-reconnect-pulse 1.2s ease-in-out infinite' : 'none'};"
+      style="width: 7px; height: 7px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {connected && showReconnectedFlash ? 'tandem-conn-bloom 500ms var(--tandem-ease-out)' : isReconnecting ? 'tandem-conn-pulse 900ms ease-in-out infinite' : 'none'};"
     ></span>
     <span>{connLabel}</span>
     {#if editor}
@@ -266,9 +266,24 @@ function cycleWordMode() {
 </div>
 
 <style>
+  /* Keyframes must live in :global — the connection/claude dots reference them
+     from an inline `style` `animation`, which Svelte does NOT name-rewrite, so a
+     scoped @keyframes would be hashed and silently never match. */
   :global {
     @keyframes tandem-status-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-    @keyframes tandem-reconnect-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    /* A9 (#798): connection state machine. Color comes from the dot's `dotColor`
+       (amber while reconnecting → green once connected); these animate only
+       opacity/scale so they stay IN-BOUNDS — the .tandem-status-pill clips
+       overflow, so a radiating box-shadow ring/bloom would be cut off. */
+    @keyframes tandem-conn-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.82); }
+    }
+    @keyframes tandem-conn-bloom {
+      0% { transform: scale(1); opacity: 1; }
+      35% { transform: scale(1.6); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
   }
 
   /* Faint until hover/focus-within. */
@@ -279,6 +294,23 @@ function cycleWordMode() {
   .tandem-status-pill:hover,
   .tandem-status-pill:focus-within {
     opacity: 1;
+  }
+
+  /* A9 (#798): reduced-motion guard for the connection + claude-presence dots
+     (previously unguarded). `!important` is required to beat the inline `style`
+     `animation`; the `body.tandem-reduce-motion` form MUST be `:global(...)`
+     because the class lives on <body> (App.svelte) — a scoped rule would be
+     hashed and the in-app toggle would silently fail. The dots stay visible
+     (animation:none freezes them at the opaque keyframe); only motion is removed. */
+  @media (prefers-reduced-motion: reduce) {
+    .status-dot,
+    .claude-dot {
+      animation: none !important;
+    }
+  }
+  :global(body.tandem-reduce-motion) .status-dot,
+  :global(body.tandem-reduce-motion) .claude-dot {
+    animation: none !important;
   }
 
   @media (forced-colors: active) {
