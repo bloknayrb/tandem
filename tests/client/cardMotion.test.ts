@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { barIn, barOut, cardEnter, cardExit, tabExit } from "../../src/client/panels/cardMotion";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  barIn,
+  barOut,
+  cardEnter,
+  cardExit,
+  cardFlyToMargin,
+  registerFlySource,
+  tabExit,
+} from "../../src/client/panels/cardMotion";
 
 // A4/A1/A10 rail card transitions (Phase 4 / #798). These exercise the pure
 // decision logic (enabled gate, reduced-motion gate, exit-direction read-and-
@@ -171,5 +179,71 @@ describe("tabExit", () => {
     expect(easing!(0)).toBe(0);
     expect(easing!(1)).toBe(1);
     expect(easing!(0.5)).toBeGreaterThan(0.5); // front-loaded
+  });
+});
+
+// A27 fly-to-margin. The Map-presence gate is the load-bearing guarantee that
+// ONLY the just-submitted card flies (every other mount has no source → no-op),
+// so most of the coverage is that gate + the delete-on-read / TTL hygiene that
+// keeps the module-level ledger from stranding a source. Fake timers so the
+// 1000ms TTL backstop can't dangle across tests.
+describe("cardFlyToMargin / registerFlySource", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // A node whose resolved slot (destination) is a known rect, so the FLIP delta
+  // is deterministic (happy-dom's getBoundingClientRect returns zeros otherwise).
+  function nodeAt(left: number, top: number): HTMLElement {
+    const node = el();
+    node.getBoundingClientRect = () =>
+      ({ left, top, right: left, bottom: top, width: 0, height: 0, x: left, y: top }) as DOMRect;
+    return node;
+  }
+
+  function rect(left: number, top: number): DOMRect {
+    return { left, top, right: left, bottom: top, width: 0, height: 0, x: left, y: top } as DOMRect;
+  }
+
+  it("is a no-op when the id has no registered source (every non-submit mount)", () => {
+    // Initial load, tab switch, scroll/filter re-render all land here.
+    expect(cardFlyToMargin(nodeAt(0, 0), { id: "never-registered" })).toEqual({ duration: 0 });
+  });
+
+  it("flies from the registered popover footprint to the slot (identity at settle)", () => {
+    // Popover at (500, 120); card slot at (900, 300) → delta (-400, -180).
+    registerFlySource("a1", rect(500, 120));
+    const cfg = cardFlyToMargin(nodeAt(900, 300), { id: "a1" });
+    expect(cfg.duration).toBe(480);
+    expect(typeof cfg.easing).toBe("function");
+    // u=1 (start): sits over the popover footprint via the full delta.
+    expect(cfg.css!(0, 1)).toContain("translate(-400px, -180px)");
+    // t=1 (settled): rests at identity in its slot.
+    expect(cfg.css!(1, 0)).toContain("translate(0px, 0px)");
+    // fades in (floored so it stays visible while flying).
+    expect(cfg.css!(0, 1)).toContain("opacity:0.2");
+    expect(cfg.css!(1, 0)).toContain("opacity:1");
+  });
+
+  it("consumes the source on read so a second mount can't re-fly the same id", () => {
+    registerFlySource("a2", rect(0, 0));
+    expect(cardFlyToMargin(nodeAt(10, 10), { id: "a2" }).duration).toBe(480);
+    // The source is deleted on read — a re-render mount no-ops.
+    expect(cardFlyToMargin(nodeAt(10, 10), { id: "a2" })).toEqual({ duration: 0 });
+  });
+
+  it("no-ops under reduce-motion but STILL consumes the source (can't strand)", () => {
+    registerFlySource("a3", rect(0, 0));
+    expect(cardFlyToMargin(nodeAt(10, 10), { id: "a3", reduceMotion: true })).toEqual({
+      duration: 0,
+    });
+    // Source was consumed before the gate, so a later non-reduced mount won't fly a stale card.
+    expect(cardFlyToMargin(nodeAt(10, 10), { id: "a3" })).toEqual({ duration: 0 });
+  });
+
+  it("GCs an unconsumed source after the TTL (card never mounted → graceful no-fly)", () => {
+    registerFlySource("a4", rect(0, 0));
+    vi.advanceTimersByTime(1000);
+    // The backstop fired; a (very late) mount finds no source and snaps instead of flying.
+    expect(cardFlyToMargin(nodeAt(10, 10), { id: "a4" })).toEqual({ duration: 0 });
   });
 });

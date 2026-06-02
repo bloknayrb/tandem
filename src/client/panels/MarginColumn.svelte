@@ -5,6 +5,7 @@ import { getVisibleReplies } from "../annotations/replies";
 import type { MarginMode } from "../layout/editor-stage.svelte";
 import AnnotationCard from "./AnnotationCard.svelte";
 import { cardDensity } from "./cardDensity";
+import { cardFlyToMargin } from "./cardMotion";
 import { prunePlaceableHeights, resolveCollisions } from "./marginCollision";
 import { bezierLeaderPath, leaderColorForAuthor } from "./marginLeaderGeometry";
 
@@ -39,6 +40,8 @@ interface Props {
   onEdit?: (id: string, content: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
   onSendToClaude?: (id: string) => void;
+  /** App `reduceMotion` setting, threaded to the A27 fly-to-margin transition. */
+  reduceMotion?: boolean;
 }
 
 let {
@@ -61,6 +64,7 @@ let {
   onEdit,
   onReply,
   onSendToClaude,
+  reduceMotion,
 }: Props = $props();
 
 // Vertical inset from the bubble's top edge to its padded content row.
@@ -250,11 +254,19 @@ function recordHeight(id: string, h: number): void {
          already shares a single ResizeObserver internally.
          Docs: https://svelte.dev/docs/svelte/bind#Function-bindings
          and https://svelte.dev/docs/svelte/bind#dimensions -->
+    <!-- A27 (#798): the just-submitted card flies from the closing selection
+         popover's footprint into this slot. `in:cardFlyToMargin` is LOCAL (no
+         `|global`) and gated by flySource Map-presence — every other mount
+         (initial load, tab switch, scroll/filter re-render) has no source and
+         no-ops, so only the just-submitted card animates. Coexists with the
+         `bind:clientHeight` below: the fly is transform-only, which never
+         perturbs the measured layout height the collision sweep reads. -->
     <div
       data-testid="margin-bubble-{ann.id}"
       data-margin-bubble-reply-count={visibleReplies.length}
       class="margin-bubble"
       style="position: absolute; top: {top}px; {side}: 0; width: {width}px; pointer-events: auto;"
+      in:cardFlyToMargin={{ id: ann.id, reduceMotion }}
       bind:clientHeight={
         () => heights.get(ann.id) ?? 0,
         (h: number) => recordHeight(ann.id, h)
