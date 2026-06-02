@@ -11,6 +11,7 @@
 
 import type { Editor } from "@tiptap/core";
 import { buildPlainTextSlice } from "../utils/plain-paste";
+import { sanitizeHrefForPaste } from "../utils/url-safety";
 import type { ContextMenuActionId } from "./types";
 
 // Locally-typed chain for the commands we call, mirroring the slash-menu
@@ -117,7 +118,11 @@ export async function dispatchContextAction(
     }
     case "ctx:link:copy": {
       const href = deps.getLinkHref();
-      if (href) await deps.writeClipboardText(href); // raw href; clipboard is inert
+      if (!href) return;
+      // Reject javascript:, file://, data:, and any other dangerous scheme before
+      // writing to clipboard — a copied URI can be pasted into a browser bar.
+      const safe = sanitizeHrefForPaste(href);
+      if (safe) await deps.writeClipboardText(safe);
       return;
     }
     case "ctx:link:remove":

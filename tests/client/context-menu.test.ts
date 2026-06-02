@@ -191,9 +191,29 @@ describe("dispatchContextAction", () => {
     expect(deps.openHref).not.toHaveBeenCalled();
   });
 
-  it("link:copy writes the raw href to the clipboard", async () => {
+  it("link:copy writes the validated href to the clipboard", async () => {
     const { deps } = await run("ctx:link:copy");
     expect(deps.writeClipboardText).toHaveBeenCalledWith("https://example.com/page");
+  });
+
+  it("link:copy silently drops dangerous schemes (javascript:, file://)", async () => {
+    for (const dangerous of ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,x"]) {
+      const { deps } = await run("ctx:link:copy", {
+        getLinkHref: vi.fn(() => dangerous),
+      });
+      expect(deps.writeClipboardText).not.toHaveBeenCalled();
+    }
+  });
+
+  it("link:copy allows relative paths and fragments", async () => {
+    for (const safe of ["./other.md", "#section", "../dir/file.md"]) {
+      const writeClipboardText = vi.fn(async () => {});
+      await run("ctx:link:copy", {
+        getLinkHref: vi.fn(() => safe),
+        writeClipboardText,
+      });
+      expect(writeClipboardText).toHaveBeenCalledWith(safe);
+    }
   });
 
   it("link:remove extends to the mark range before unsetting", async () => {
