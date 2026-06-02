@@ -649,6 +649,12 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
   };
   // Explicit removals — silent if the key was already absent.
   for (const key of ops.remove) {
+    // "create wins": never remove a key we're also creating this run. The
+    // wizard builds `ApplyOps` directly from a user-confirmed diff and can
+    // legitimately list the same key in both `create` and `remove`; without
+    // this guard the channel shim we just registered would be deleted again.
+    // Structural invariant for every flow — see #985.
+    if (key in ops.create) continue;
     if (merged[key]) {
       console.error(`  Note: removed mcpServers.${key} from ${configPath}`);
     }
@@ -822,6 +828,36 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
   return existsSync(channelPath);
 }
 
+/**
+ * Single source of truth for "should this target get the stdio channel shim?".
+ *
+ * The channel shim is Claude Code's real-time push transport (the plugin
+ * monitor it was meant to replace cannot activate via any path Tandem can
+ * use — see Spike B / #985). So the default for the Claude Code target is
+ * ON, gated only by the build artifact actually existing.
+ *
+ * - `claude-desktop` → always false (Cowork stdio path; the node-process
+ *   shim does not apply there).
+ * - `override` (the explicit `--with-channel-shim` / wizard opt-out) wins
+ *   when provided.
+ * - Otherwise: default-on for Claude Code, but only if `channelPath` exists.
+ *   That `existsSync` guard does double duty — it degrades gracefully when
+ *   `tandem` runs from source without a build, AND it stops the CLI/wizard
+ *   from writing a wrong `CHANNEL_DIST` on a desktop bundle (where it
+ *   resolves outside the resource dir): there the helper returns false and
+ *   the `/api/setup` startup path, which carries the correct Tauri-resolved
+ *   channel path, registers the shim instead.
+ */
+export function shouldRegisterChannelShim(
+  targetKind: TargetKind,
+  channelPath: string,
+  override?: boolean,
+): boolean {
+  if (targetKind === "claude-desktop") return false;
+  if (override !== undefined) return override;
+  return validateChannelShimPrereq(channelPath);
+}
+
 /** Re-exported for `tandem setup` orchestration in `src/cli/setup.ts`. */
 export { CHANNEL_DIST, PACKAGE_ROOT };
 
@@ -844,16 +880,17 @@ export async function applyConfigWithToken(
   let updated = 0;
   const errors: string[] = [];
   for (const t of targets) {
+    // Resolve per-target: a token rotation should preserve/heal the channel
+    // shim registration (default-on for Claude Code) rather than silently
+    // strip it. `opts.withChannelShim` still wins as an explicit override.
+    const withChannelShim = shouldRegisterChannelShim(t.kind, CHANNEL_DIST, opts.withChannelShim);
     const entries = buildMcpEntries(CHANNEL_DIST, {
-      withChannelShim: opts.withChannelShim,
+      withChannelShim,
       token: token ?? undefined,
       targetKind: t.kind,
     });
     try {
-      await applyConfig(
-        t.configPath,
-        applyOpsForCli(entries, { withChannelShim: !!opts.withChannelShim }),
-      );
+      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
       updated++;
     } catch (err) {
       errors.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);

@@ -9,6 +9,7 @@ import {
   detectTargets,
   installSkill,
   PACKAGE_ROOT,
+  shouldRegisterChannelShim,
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
 
@@ -76,15 +77,18 @@ export async function runSetup(
 
   let failures = 0;
   for (const t of targets) {
+    // Default-on for Claude Code (channel shim is its push transport, #985);
+    // `--with-channel-shim` is now an explicit override. The helper's
+    // existence check degrades to "tandem HTTP entry only" when the build
+    // artifact is absent (an explicit `--with-channel-shim` with a missing
+    // file already hard-errored above).
+    const withChannelShim = shouldRegisterChannelShim(t.kind, CHANNEL_DIST, opts.withChannelShim);
     const entries = buildMcpEntries(CHANNEL_DIST, {
-      withChannelShim: opts.withChannelShim,
+      withChannelShim,
       targetKind: t.kind,
     });
     try {
-      await applyConfig(
-        t.configPath,
-        applyOpsForCli(entries, { withChannelShim: !!opts.withChannelShim }),
-      );
+      await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
     } catch (err) {
       failures++;
@@ -117,21 +121,30 @@ export async function runSetup(
     );
   }
 
-  // Plugin install instructions (shown on all successful setups)
+  // Real-time push status (shown on all successful setups). Push is delivered
+  // by the channel shim, registered by default above; the plugin monitor it
+  // was meant to replace cannot activate via any path Claude Code exposes
+  // today (Spike B / #985), so it's framed as forward-looking, not the path.
   if (failures < targets.length) {
+    const channelRegistered = validateChannelShimPrereq(CHANNEL_DIST);
     const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
     const devInstructions = existsSync(pluginManifest)
-      ? `  Or for development, load directly from this package:\n\n` +
+      ? `  For development, you can also load the package directly:\n\n` +
         `    claude --plugin-dir ${PACKAGE_ROOT}\n\n`
-      : `  (Development plugin dir not found at ${pluginManifest}; skipping local-plugin instructions.)\n\n`;
+      : "";
 
     console.error(
-      "\n\x1b[1mReal-time push notifications (recommended):\x1b[0m\n" +
-        "  Install the Tandem plugin for instant events (one-time):\n\n" +
+      "\n\x1b[1mReal-time push notifications:\x1b[0m\n" +
+        (channelRegistered
+          ? "  \x1b[32mEnabled\x1b[0m — the channel shim is registered; Claude Code receives events in real time.\n" +
+            "  Relaunch any Claude Code session you started manually so it picks up the new server.\n\n"
+          : "  \x1b[33mUnavailable\x1b[0m — dist/channel/index.js not found; Claude Code will poll via tandem_checkInbox.\n" +
+            "  Run 'npm run build' and re-run setup to enable push.\n\n") +
+        "  A Tandem plugin is also published (skill + MCP; the real-time monitor it carries is\n" +
+        "  forward-looking, pending Claude Code support):\n\n" +
         "    claude plugin marketplace add bloknayrb/tandem\n" +
         "    claude plugin install tandem@tandem-editor\n\n" +
-        devInstructions +
-        "  Without the plugin, Claude still works but relies on tandem_checkInbox polling.\n",
+        devInstructions,
     );
   }
 }

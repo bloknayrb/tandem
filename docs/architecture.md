@@ -292,7 +292,7 @@ The channel replaces polling for user actions. Instead of Claude calling `tandem
 
 ### Activation
 
-The channel shim is configured by `tandem setup`, but Claude Code must be started with the `--dangerously-load-development-channels` flag to activate real-time push:
+The channel shim is registered **by default** for the Claude Code target by every setup path (`tandem setup`, the in-app wizard, and the desktop tray/startup `/api/setup` run) — #985. Claude Code must additionally be started with the `--dangerously-load-development-channels` flag to activate real-time push (the desktop auto-launcher passes it automatically; hand-started "bring-your-own" sessions need it explicitly):
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
@@ -349,7 +349,9 @@ When Claude Code asks for tool approval, it sends `notifications/claude/channel/
 
 ## Plugin Monitor
 
-The plugin monitor (`src/monitor/index.ts`) is the recommended modern alternative to the channel shim for receiving real-time events from Tandem. It is installed as a Claude Code plugin rather than spawned as a stdio subprocess.
+> **Forward-looking, not the live path (Spike B / #985).** The plugin monitor is the *intended* future replacement for the channel shim, but Claude Code does not activate `experimental.monitors[].command` via any path Tandem can use today (`--plugin-dir`, path-source install, or github-marketplace install — see `docs/spikes/plugin-monitor-viability-spike.md`). Until Claude Code surfaces a working activation path, **the channel shim is the actual v1.0 Claude Code push transport**, and `tandem setup` registers it by default for the Claude Code target. The design below describes the monitor's role once activation lands.
+
+The plugin monitor (`src/monitor/index.ts`) is the planned modern alternative to the channel shim for receiving real-time events from Tandem. It is installed as a Claude Code plugin rather than spawned as a stdio subprocess.
 
 ### Role
 
