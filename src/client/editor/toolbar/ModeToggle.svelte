@@ -18,6 +18,11 @@ const { tandemMode, onModeChange }: Props = $props();
   role="group"
   aria-label="AI collaboration mode"
 >
+  <!-- A8 (#798): the sliding thumb carries the active background; it slides
+       between the two equal-width segments on a mode flip. Decorative + behind
+       the buttons, so it can't intercept clicks. Class is set at render, so it
+       sits correctly on mount with no slide; only a mode change animates it. -->
+  <span class="thumb" class:tandem={tandemMode === "tandem"} aria-hidden="true"></span>
   <button
     data-testid="mode-solo-btn"
     class={tandemMode === "solo" ? "on" : ""}
@@ -37,6 +42,7 @@ const { tandemMode, onModeChange }: Props = $props();
 <style>
   .mode-toggle {
     display: inline-flex;
+    position: relative;
     /* Bundle's `.a8 .seg` recipe: 2px track padding + a 1px border so the
        segmented control reads as a chip rather than a recessed plate. The
        surface-sunk track is preserved from the prior version because the
@@ -49,7 +55,31 @@ const { tandemMode, onModeChange }: Props = $props();
     font-weight: 600;
     gap: 0;
   }
+  /* A8 (#798): the sliding active pill. Half the track's inner width, anchored
+     left; a mode flip slides it by its own width (translateX 100%) to land
+     exactly on the right segment — the `width: calc(50% - 2px)` accounts for
+     the 2px left track padding so the arithmetic is exact. */
+  .thumb {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 2px;
+    width: calc(50% - 2px);
+    background: var(--tandem-surface);
+    border-radius: var(--tandem-r-pill);
+    box-shadow: var(--tandem-shadow-1);
+    pointer-events: none;
+    z-index: 0;
+    transition: transform 220ms var(--tandem-ease-out);
+  }
+  .thumb.tandem {
+    transform: translateX(100%);
+  }
   .mode-toggle button {
+    /* Equal-width segments so the half-width thumb lands cleanly on either; the
+       two labels ("Solo"/"Tandem") differ in length, so flex-equalize them. */
+    flex: 1 1 0;
+    text-align: center;
     padding: 5px 14px;
     border-radius: var(--tandem-r-pill);
     color: var(--tandem-fg-muted);
@@ -58,18 +88,27 @@ const { tandemMode, onModeChange }: Props = $props();
     cursor: pointer;
     font: inherit;
     line-height: 1;
-    /* The active pill currently swaps `background` directly. The bundle's A8
-       motion vocabulary uses a sliding `.thumb` element — deferred to motion
-       (#798) so the rest of the family stays cohesive when it lands. */
+    /* Sit above the thumb; the thumb (not the button) now carries the active fill. */
+    position: relative;
+    z-index: 1;
     transition: color 140ms ease;
   }
   .mode-toggle button:hover:not(.on) {
     color: var(--tandem-fg);
   }
   .mode-toggle button.on {
-    background: var(--tandem-surface);
     color: var(--tandem-fg);
-    box-shadow: var(--tandem-shadow-1);
+  }
+  /* Reduced motion: the thumb still positions correctly (transform is keyed to
+     the mode class) — only the slide is removed. Dual guard: OS pref AND the
+     in-app `body.tandem-reduce-motion` (class on <body>, so :global(...)). */
+  @media (prefers-reduced-motion: reduce) {
+    .thumb {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .thumb {
+    transition: none;
   }
   @media (forced-colors: active) {
     .mode-toggle button[aria-pressed="true"] {

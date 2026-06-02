@@ -77,6 +77,32 @@ $effect(() => {
   };
 });
 
+// ---- A2 save-confirmation flash (#798) ----
+// On a dirty→clean transition (a save), briefly mount a check mark. Mount-gating
+// the check span ({#if justSaved}) re-fires its CSS animation on every save. The
+// clear runs UNCONDITIONALLY on every non-save edge — including an edit, AND the
+// coalesced case where a dirty→clean edge is batched away — so a stale check can
+// never strand (the A9 stranding class). A coalesced save's flash is skipped
+// (invisible) rather than stranding a stuck check (a visible bug).
+const SAVE_CONFIRM_MS = 600;
+let justSaved = $state(false);
+// Mirrors `dirty`'s initial value; plain let (effect-internal edge bookkeeping,
+// must not be reactive). Initialized literally to avoid reading the rune here.
+let prevDirty = false;
+
+$effect(() => {
+  const was = prevDirty;
+  prevDirty = dirty;
+  if (!dirty && was) {
+    justSaved = true;
+    const t = setTimeout(() => {
+      justSaved = false;
+    }, SAVE_CONFIRM_MS);
+    return () => clearTimeout(t);
+  }
+  justSaved = false;
+});
+
 // Derived styles. v7 floating chrome (Wave 4b minimal): drop the rectangular
 // tab + accent-underline pattern in favor of a soft pill. Active tab gets a
 // surface fill + subtle border; inactive tabs stay transparent. Drop-indicator
@@ -135,13 +161,18 @@ function handleMouseLeaveClose() {
   onpointerdown={(e) => onpointerdown(e, tab.id)}
   onkeydown={(e) => onkeydown(e, tab.id)}
 >
-  <!-- Stable slot: always in layout, hidden when clean to prevent tab-width shift -->
+  <!-- Stable fixed-width slot: always in layout so dot/check/empty never shift the
+       tab. dirty → ● (warning); just-saved → ✓ (success, A2 morph); else empty. -->
   <span
     data-testid={`unsaved-indicator-${tab.id}`}
-    style={`color: var(--tandem-warning); font-size: 10px; visibility: ${dirty ? "visible" : "hidden"};`}
+    class="save-indicator"
     aria-hidden={!dirty}
   >
-    ●
+    {#if dirty}
+      <span class="dot" aria-hidden="true">●</span>
+    {:else if justSaved}
+      <span class="saved-check" aria-hidden="true">✓</span>
+    {/if}
   </span>
 
   <span
@@ -179,6 +210,57 @@ function handleMouseLeaveClose() {
 </div>
 
 <style>
+  /* A2 (#798): fixed-width slot keeps the tab from shifting as the indicator
+     swaps between the unsaved dot, the save-confirm check, and empty. */
+  .save-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    flex-shrink: 0;
+    font-size: 10px;
+    line-height: 1;
+  }
+  .save-indicator .dot {
+    color: var(--tandem-warning);
+  }
+  .save-indicator .saved-check {
+    color: var(--tandem-success);
+    font-size: 11px;
+    /* Class-referenced keyframe — Svelte rewrites both names under scoping, so
+       no :global needed here (unlike an inline-style animation reference). */
+    animation: tab-save-confirm 600ms var(--tandem-ease-out);
+  }
+  @keyframes tab-save-confirm {
+    0% {
+      opacity: 0;
+      transform: scale(0.4);
+    }
+    30% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    70% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+  }
+  /* Dual reduced-motion guard: OS-level media query AND the in-app body class
+     (the body class MUST be :global — a scoped body selector gets hashed and
+     silently fails, the A9 bite). */
+  @media (prefers-reduced-motion: reduce) {
+    .save-indicator .saved-check {
+      animation: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .save-indicator .saved-check {
+    animation: none;
+  }
+
   .tab-ro-badge {
     font-family: var(--tandem-font-mono);
     font-size: 9.5px;
