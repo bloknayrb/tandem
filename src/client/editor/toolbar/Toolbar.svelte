@@ -196,6 +196,15 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     lastPlacement = undefined;
     affordanceRetryCount = 0;
     clearDwell();
+    // Reset to format-first for the NEXT selection. annotateMode otherwise only
+    // resets in dismissPopup (Escape / submit), so after clicking Annotate a
+    // brand-new selection stayed stuck in the composer instead of showing the
+    // format/annotate popup (pre-existing; also on master). The editor selection
+    // collapses (this `!next` path) before every new click/drag selection, but
+    // an in-place drag-EXTEND never collapses — so it's preserved. Guard on
+    // textarea focus so we never pull the user out of a composer they're typing
+    // in (draft text is intentionally left intact for click-away recovery).
+    if (document.activeElement !== textareaEl) annotateMode = false;
     return;
   }
 
