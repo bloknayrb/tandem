@@ -2,9 +2,10 @@
  * Cubic-bezier leader geometry for margin-view annotation connectors.
  *
  * Endpoints + control-point placement match `MarginFrame.svelte` from the C4
- * design bundle: horizontal tangents at both endpoints, control points offset
- * 10px / 8px inward from the endpoint columns. Smooth "lays into" curve even
- * at large vertical deltas (collision-pushed bubbles).
+ * design bundle: horizontal tangents at both endpoints, both control points set
+ * a proportional `SETTLE_K` (0.62) of the horizontal span inward — a symmetric
+ * "settle" lay-in that stays smooth even at large vertical deltas
+ * (collision-pushed bubbles).
  *
  * Endpoints are GEOMETRIC column-X, not glyph-X. The leader runs from the
  * text-track edge to the margin-column edge; the anchor dot sits at the
@@ -16,8 +17,6 @@
 
 import type { Annotation } from "../../shared/types.js";
 
-export type LeaderSide = "left" | "right";
-
 export interface LeaderEndpoints {
   /** SVG-local X at the text-edge endpoint (= dot center X). */
   readonly startX: number;
@@ -27,26 +26,34 @@ export interface LeaderEndpoints {
   readonly endX: number;
   /** SVG-local Y at the bubble-edge endpoint (= bubble title row baseline). */
   readonly endY: number;
-  /** Which side the bubble column sits on — flips control-point sign. */
-  readonly side: LeaderSide;
 }
 
+/** Horizontal-tangent tension for the "settle" leader (bundle MarginFrame.svelte:30). */
+const SETTLE_K = 0.62;
+
 /**
- * Build the SVG path `d` attribute for one bezier leader. Mirrors the bundle's
- * `M ax,ay C cx1,ay cx2,by bx,by` shape (MarginFrame.svelte:151-156).
+ * Build the SVG path `d` attribute for one bezier "settle" leader. Mirrors the
+ * bundle's `settlePath` (MarginFrame.svelte:43-49): both control points sit a
+ * proportional `SETTLE_K` of the horizontal span inward, sharing the endpoint Y,
+ * so the curve leaves the anchor and meets the card both horizontally with one
+ * gentle symmetric bend between — the "settle" lay-in that replaced the old
+ * fixed 10/8px asymmetric offsets (C4 canon decision 1, #798).
  *
- * Control points sit 10px inward from startX and 8px inward from endX along
- * the X axis, sharing the endpoint Y. "Inward" flips with side: for a
- * right-side bubble the leader runs left→right, so cx1 = startX + 10 and
- * cx2 = endX − 8. For a left-side bubble it's mirrored.
+ * Side-agnostic: `dx = endX − startX` is naturally signed (right-side bubble →
+ * dx > 0, left-side → dx < 0), so the control points mirror without a `side`
+ * flag. Because `SETTLE_K > 0.5` the control points cross in X — this is the
+ * intended settle shape, and X(t) stays strictly monotonic (no kink). Degrades
+ * to a clean horizontal line when the card is level with its anchor (all Y
+ * equal) and to a vertical line when the columns share an X (dx = 0).
  *
- * Coordinate values are rounded to 1 decimal (`toFixed(1)`) — matching the
- * bundle, and stable across float-arithmetic jitter for snapshot tests.
+ * Coordinate values are rounded to 1 decimal (`toFixed(1)`) — stable across
+ * float-arithmetic jitter for snapshot tests. Comma-separated, matching the
+ * production format (NOT the bundle's space separators).
  */
 export function bezierLeaderPath(e: LeaderEndpoints): string {
-  const inward = e.side === "right" ? 1 : -1;
-  const cx1 = e.startX + 10 * inward;
-  const cx2 = e.endX - 8 * inward;
+  const dx = e.endX - e.startX;
+  const cx1 = e.startX + dx * SETTLE_K;
+  const cx2 = e.endX - dx * SETTLE_K;
   return (
     `M ${e.startX.toFixed(1)},${e.startY.toFixed(1)} ` +
     `C ${cx1.toFixed(1)},${e.startY.toFixed(1)} ` +

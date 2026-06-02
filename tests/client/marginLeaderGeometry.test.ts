@@ -31,34 +31,35 @@ describe("leaderColorForAuthor", () => {
 });
 
 describe("bezierLeaderPath", () => {
-  // Geometry: leader runs from the editor's text edge (startX, startY) to
-  // the bubble column's near edge (endX, endY). Control points sit 10px / 8px
-  // INWARD from each endpoint along the X axis. "Inward" flips with side.
+  // Geometry: leader runs from the editor's text edge (startX, startY) to the
+  // bubble column's near edge (endX, endY). Both control points sit SETTLE_K
+  // (0.62) of the horizontal span dx = endX − startX inward, sharing the
+  // endpoint Y — the symmetric "settle" lay-in (C4 #798). Side-agnostic: dx's
+  // sign mirrors the curve, so the two cases below are exact horizontal mirrors.
   const baseRight: LeaderEndpoints = {
     startX: 0,
     startY: 100,
     endX: 24,
     endY: 130,
-    side: "right",
   };
   const baseLeft: LeaderEndpoints = {
     startX: 24,
     startY: 100,
     endX: 0,
     endY: 130,
-    side: "left",
   };
 
-  it("right-side control points are +10 inward from startX and −8 inward from endX", () => {
+  it("right-side control points sit 0.62·dx inward from each endpoint (dx > 0)", () => {
     const d = bezierLeaderPath(baseRight);
-    // M 0,100 C 10,100 16,130 24,130 — cp1.x = startX + 10, cp2.x = endX − 8
-    expect(d).toBe("M 0.0,100.0 C 10.0,100.0 16.0,130.0 24.0,130.0");
+    // dx=24; cp1.x = 0 + 24·0.62 = 14.88→14.9, cp2.x = 24 − 14.88 = 9.12→9.1.
+    // cp1 > cp2 (control points cross — the intended k>0.5 settle shape).
+    expect(d).toBe("M 0.0,100.0 C 14.9,100.0 9.1,130.0 24.0,130.0");
   });
 
-  it("left-side control points mirror the sign (cp1.x < startX, cp2.x > endX)", () => {
+  it("left-side is the exact horizontal mirror (dx < 0)", () => {
     const d = bezierLeaderPath(baseLeft);
-    // M 24,100 C 14,100 8,130 0,130 — cp1.x = startX − 10, cp2.x = endX + 8
-    expect(d).toBe("M 24.0,100.0 C 14.0,100.0 8.0,130.0 0.0,130.0");
+    // dx=−24; cp1.x = 24 + (−24)·0.62 = 9.12→9.1, cp2.x = 0 − (−24)·0.62 = 14.88→14.9.
+    expect(d).toBe("M 24.0,100.0 C 9.1,100.0 14.9,130.0 0.0,130.0");
   });
 
   it.each([
@@ -81,7 +82,6 @@ describe("bezierLeaderPath", () => {
       startY: 100.0001,
       endX: 24.0001,
       endY: 130.0001,
-      side: "right",
     });
     const clean = bezierLeaderPath(baseRight);
     expect(jittery).toBe(clean);
