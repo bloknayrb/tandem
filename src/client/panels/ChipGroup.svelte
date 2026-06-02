@@ -76,7 +76,19 @@ function measure() {
   if (!bar) return;
   const el = bar.querySelector<HTMLElement>('[aria-checked="true"]');
   if (!el) return; // transiently null between renders — guard the .offsetLeft throw
-  thumb = { left: el.offsetLeft, width: el.offsetWidth, ready: true };
+  const left = el.offsetLeft;
+  const width = el.offsetWidth;
+  if (thumb.ready) {
+    // Transition already enabled — slide to the new position.
+    thumb = { left, width, ready: true };
+  } else {
+    // First measure: snap to position (no transition), then enable in the next
+    // frame so the thumb never slides in from {0,0}.
+    thumb = { left, width, ready: false };
+    requestAnimationFrame(() => {
+      thumb = { left, width, ready: true };
+    });
+  }
 }
 
 // (1) Value-keyed measure. SYNCHRONOUS effect: capture the `value` dep at the
