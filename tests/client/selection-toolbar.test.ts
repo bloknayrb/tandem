@@ -123,6 +123,28 @@ describe("selection toolbar position", () => {
     expect(position.top).toBe(352);
   });
 
+  it("returns a height-independent `bottom` anchor for above placement (#798 A26 morph)", () => {
+    // The A26 morph grows an above-placed popup UPWARD by rendering CSS `bottom`
+    // (pinned a gap above the selection's top) instead of a height-dependent
+    // `top`. `bottom` must NOT vary with toolbarHeight — that's what lets the
+    // popup animate its height without repositioning.
+    const base = {
+      start: { left: 80, top: 200, bottom: 220, right: 150 },
+      end: { left: 80, top: 200, bottom: 220, right: 150 },
+      toolbarWidth: 160,
+      viewportHeight: 600,
+      viewportWidth: 800,
+    } as const;
+    const shortPopup = computeSelectionToolbarPosition({ ...base, toolbarHeight: 80 });
+    const tallPopup = computeSelectionToolbarPosition({ ...base, toolbarHeight: 200 });
+
+    // bottom = viewportHeight - (selectionTop - SELECTION_GAP) = 600 - (200 - 10) = 410.
+    expect(shortPopup.placement).toBe("above");
+    expect(shortPopup.bottom).toBe(410);
+    // Identical regardless of popup height — the load-bearing invariant.
+    expect(tallPopup.bottom).toBe(shortPopup.bottom);
+  });
+
   it("clamps the toolbar to the viewport left edge", () => {
     const position = computeSelectionToolbarPosition({
       start: { left: -40, top: 180, bottom: 200, right: 20 },
