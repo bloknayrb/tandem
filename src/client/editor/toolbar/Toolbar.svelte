@@ -11,6 +11,7 @@ import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
+import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
 import { ENTER_POPUP_MS, popupEnter, registerFlySource } from "../../panels/cardMotion";
@@ -134,6 +135,14 @@ function clearDwell() {
   lastDwellFrom = -1;
   lastDwellTo = -1;
 }
+
+// Platform-correct modifier glyphs for the submit-button hints. The handlers in
+// handleTextareaKeyDown are fixed (Alt+Enter = note, Ctrl/Cmd+Enter = send), so
+// these aren't remappable-shortcut ids — we just need the right modifier per OS:
+// Mac uses the symbol glyphs, Windows/Linux the spelled-out modifier + the ⏎ key.
+const isMac = isMacPlatform();
+const noteHintKbd = isMac ? "⌥⏎" : "Alt+⏎";
+const sendHintKbd = isMac ? "⌘⏎" : "Ctrl+⏎";
 
 // A26 morph (#798). The popup's two content blocks are ALWAYS mounted (so the
 // unfurl has a "from" value and so focus/draft handlers never race a swap-mount);
@@ -797,7 +806,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
             style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
           >
             Note to self
-            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-fg-subtle);">⌥⏎</kbd>
+            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-fg-subtle);">{noteHintKbd}</kbd>
           </button>
           <button
             type="button"
@@ -809,7 +818,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
             style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
           >
             Send to {agentLabel.family}
-            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-author-user);">⌘⏎</kbd>
+            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-author-user);">{sendHintKbd}</kbd>
           </button>
         </div>
       </div>
