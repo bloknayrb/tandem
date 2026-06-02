@@ -519,7 +519,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
          clipped textarea can't capture focus and preserve a stale draft — the
          L257 clear-guard stays valid). Clicking Annotate unfurls the annotate
          block while the format block collapses, in place. -->
-    <div class="morph-block" class:is-active={!annotateMode} inert={annotateMode}>
+    <div class="morph-block morph-format" class:is-active={!annotateMode} inert={annotateMode}>
       <div class="morph-block-inner">
       <!-- Format pill: full mark/block control set (no Undo/Redo — those stay
            on the bar + Ctrl+Z/Y) + the mirrored Decorations control. Every
@@ -705,5 +705,18 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
   .morph-block-inner {
     min-height: 0;
     overflow: clip;
+  }
+  /* The format block hosts absolutely-positioned dropdowns (the heading + list
+     menus in FormattingToolbar, the Decorations menu) that open BELOW their
+     button, beyond the block's box. While the format block is shown
+     (is-active = format state) it must NOT clip them, or the menu items are cut
+     off and the editor underneath intercepts their clicks. Safe to drop the clip
+     only here because `annotateMode → false` always co-occurs with popup
+     dismiss/unmount — there is no annotate→format *expand* transition — so the
+     format block is never mid-animation while its overflow is visible. The
+     annotate block keeps `clip` (clean unfurl; it hosts no escaping dropdowns). */
+  .morph-format.is-active,
+  .morph-format.is-active > .morph-block-inner {
+    overflow: visible;
   }
 </style>
