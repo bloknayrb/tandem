@@ -89,23 +89,37 @@ function blockToYxml(
     }
 
     case "list": {
-      const nodeName = node.ordered ? "orderedList" : "bulletList";
+      // GFM task list (#982): a list whose every item carries a checkbox
+      // (`checked` is a boolean, not null) maps to taskList > taskItem, mirroring
+      // Tiptap's TaskList schema, with a `checked` boolean attribute — so it
+      // renders as interactive checkboxes and round-trips to `- [ ] `/`- [x] `.
+      // A mixed list (only some items are tasks) falls to the regular list path,
+      // dropping the stray checkbox state (known limitation — Tiptap's TaskList
+      // is all-or-nothing too). `!= null` (not `!==`/truthiness) is deliberate:
+      // normal items parse to `checked: null`, an unchecked task to `false`.
+      const isTaskList =
+        node.children.length > 0 && node.children.every((item) => item.checked != null);
+      const nodeName = isTaskList ? "taskList" : node.ordered ? "orderedList" : "bulletList";
       const el = new Y.XmlElement(nodeName);
-      if (node.ordered && node.start != null && node.start !== 1) {
+      if (!isTaskList && node.ordered && node.start != null && node.start !== 1) {
         el.setAttribute("start", node.start as any);
       }
       let listIndex = 0;
       for (const item of node.children) {
-        const listItem = new Y.XmlElement("listItem");
+        const itemEl = new Y.XmlElement(isTaskList ? "taskItem" : "listItem");
+        if (isTaskList) {
+          // Boolean attr — round-trips through y-prosemirror like heading `level`.
+          itemEl.setAttribute("checked", !!item.checked as any);
+        }
         let itemIndex = 0;
         for (const child of item.children) {
           const childEls = blockToYxml(child, deferred);
           for (const c of childEls) {
-            listItem.insert(itemIndex, [c]);
+            itemEl.insert(itemIndex, [c]);
             itemIndex++;
           }
         }
-        el.insert(listIndex, [listItem]);
+        el.insert(listIndex, [itemEl]);
         listIndex++;
       }
       return [el];
@@ -393,6 +407,39 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
         ordered,
         spread: false,
         ...(ordered && start !== 1 ? { start } : {}),
+        children: listItems,
+      } as any;
+    }
+
+    case "taskList": {
+      // GFM task list (#982): each taskItem carries a `checked` boolean. Read it
+      // defensively — both the editor (y-prosemirror) and the mdast importer
+      // write a real boolean, but coerce in case a legacy/hand-built Y.Doc stored
+      // a string. Emitting `checked` on each listItem makes remark-stringify +
+      // remark-gfm serialize `- [ ] ` / `- [x] `.
+      const listItems: any[] = [];
+      for (let i = 0; i < el.length; i++) {
+        const child = el.get(i);
+        if (child instanceof Y.XmlElement && child.nodeName === "taskItem") {
+          // getAttribute is typed string|undefined, but y-prosemirror / the mdast
+          // importer store a real boolean (like heading `level`) — widen to compare.
+          const rawChecked = child.getAttribute("checked") as unknown;
+          const checked = rawChecked === true || rawChecked === "true";
+          const itemChildren: any[] = [];
+          for (let j = 0; j < child.length; j++) {
+            const grandchild = child.get(j);
+            if (grandchild instanceof Y.XmlElement) {
+              const m = yxmlToMdast(grandchild);
+              if (m) itemChildren.push(m);
+            }
+          }
+          listItems.push({ type: "listItem", spread: false, checked, children: itemChildren });
+        }
+      }
+      return {
+        type: "list",
+        ordered: false,
+        spread: false,
         children: listItems,
       } as any;
     }

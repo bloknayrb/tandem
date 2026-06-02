@@ -11,6 +11,8 @@ import Table from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
+import TaskItem from "@tiptap/extension-task-item";
+import TaskList from "@tiptap/extension-task-list";
 import StarterKit from "@tiptap/starter-kit";
 import { untrack } from "svelte";
 import * as Y from "yjs";
@@ -159,6 +161,14 @@ $effect(() => {
       TableRow,
       TableCell,
       TableHeader,
+      // GFM task lists (#982). Renders `- [ ] ` / `- [x] ` markdown (round-tripped
+      // through mdast-ydoc's taskList/taskItem mapping) as interactive checkboxes,
+      // and the `[ ] ` input rule converts on type. taskList > taskItem > paragraph
+      // mirrors bulletList > listItem > paragraph, so the node-name-agnostic flat
+      // text extraction keeps annotation offsets aligned with zero coordinate
+      // changes. The `checked` boolean attr round-trips through y-prosemirror.
+      TaskList,
+      TaskItem.configure({ nested: true }),
       MarkdownHtmlExtension,
       Collaboration.configure({ document: ydoc }),
       CollaborationCursor.configure({

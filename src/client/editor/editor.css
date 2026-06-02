@@ -57,6 +57,39 @@
 .tandem-editor ol {
   padding-left: 1.5em;
 }
+/* GFM task lists (#982): Tiptap renders taskList as
+   ul[data-type=taskList] > li > (label > input[checkbox]) + div(content).
+   Drop the bullet, lay the checkbox beside its content. */
+.tandem-editor ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.25em;
+}
+.tandem-editor ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--tandem-space-2);
+}
+.tandem-editor ul[data-type="taskList"] li > label {
+  flex: 0 0 auto;
+  margin-top: 0.2em;
+  user-select: none;
+}
+.tandem-editor ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tandem-editor ul[data-type="taskList"] li > div > p {
+  margin: 0;
+}
+.tandem-editor ul[data-type="taskList"] input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--tandem-accent);
+}
+/* Dim the text of a completed item so checked/unchecked read at a glance. */
+.tandem-editor ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: var(--tandem-fg-muted);
+  text-decoration: line-through;
+}
 /* Inline/embedded images (issue #153): markdown `![alt](url)` + .docx images.
    Constrain to the content width so large embedded images don't overflow. */
 .tandem-editor img {

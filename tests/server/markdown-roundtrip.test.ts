@@ -127,6 +127,49 @@ describe("markdown round-trip", () => {
     expect(output).toContain("Inner two");
   });
 
+  it("task list: unchecked + checked round-trip (#982)", () => {
+    const input = "- [ ] todo\n- [x] done";
+    const output = normalize(roundTrip(input));
+    expect(output).toContain("- [ ] todo");
+    expect(output).toContain("- [x] done");
+  });
+
+  it("plain bullet list stays a bullet list — no spurious checkboxes (#982)", () => {
+    const input = "- one\n- two";
+    const output = normalize(roundTrip(input));
+    expect(output).toContain("- one");
+    expect(output).toContain("- two");
+    expect(output).not.toContain("[ ]");
+    expect(output).not.toContain("[x]");
+  });
+
+  it("task-list checkbox markers contribute no flat-text chars; offsets survive (#982)", () => {
+    // The `[ ]`/`[x]` is a structural node attribute, not document text — so an
+    // annotation anchored after the list must not be shifted by the markers.
+    const input = ["- [ ] alpha", "- [x] beta", "", "ANCHORTARGET"].join("\n");
+    const doc = new Y.Doc();
+    loadMarkdown(doc, input);
+    const flat = extractText(doc);
+    expect(flat).toContain("alpha");
+    expect(flat).toContain("beta");
+    expect(flat).not.toContain("[ ]");
+    expect(flat).not.toContain("[x]");
+    // Anchor lives strictly after the list content in flat space.
+    expect(flat.indexOf("ANCHORTARGET")).toBeGreaterThan(flat.indexOf("beta"));
+    doc.destroy();
+  });
+
+  it("mixed task/plain list demotes to a plain list — known limitation (#982)", () => {
+    // GFM permits mixing; Tiptap's TaskList is all-or-nothing. A partial list
+    // falls back to plain bullets, dropping the stray checkbox rather than
+    // producing an invalid taskList.
+    const input = "- [ ] task item\n- plain item";
+    const output = normalize(roundTrip(input));
+    expect(output).toContain("task item");
+    expect(output).toContain("plain item");
+    expect(output).not.toContain("[ ]");
+  });
+
   it("code block with language", () => {
     const input = "```javascript\nconst x = 1;\nconsole.log(x);\n```";
     const output = normalize(roundTrip(input));
