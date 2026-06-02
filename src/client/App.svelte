@@ -133,6 +133,23 @@ function closeTabAndRecord(tabId: string) {
   yjsSync.handleTabClose(tabId);
 }
 
+// Tab context-menu bulk closes (#923 Phase 2). Snapshot the target ids from
+// the current display order BEFORE closing — closeTabAndRecord mutates the tab
+// list, so iterating live tabs would skip entries. Each close routes through
+// closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
+function closeOtherTabs(keepId: string) {
+  const targets = tabOrder.orderedTabs.filter((t) => t.id !== keepId).map((t) => t.id);
+  for (const id of targets) closeTabAndRecord(id);
+}
+
+function closeTabsToRight(fromId: string) {
+  const ordered = tabOrder.orderedTabs;
+  const idx = ordered.findIndex((t) => t.id === fromId);
+  if (idx < 0) return;
+  const targets = ordered.slice(idx + 1).map((t) => t.id);
+  for (const id of targets) closeTabAndRecord(id);
+}
+
 async function reopenClosedTab() {
   const rec = closedTabStack.pop();
   if (!rec) return;
@@ -1537,6 +1554,8 @@ const tutorial = createTutorial(
     activeTabId={yjsSync.activeTabId}
     onTabSwitch={yjsSync.setActiveTabId}
     onTabClose={closeTabAndRecord}
+    onCloseOthers={closeOtherTabs}
+    onCloseToRight={closeTabsToRight}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     onRequestOpenDialog={() => void requestOpenFile()}
