@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
 import type { ActivityItem } from "../hooks/useNotifications.svelte";
+import "../panels/morphTiming.css";
 import { resolveActivityAction } from "./activityActions.js";
 import { relativeTime, SEVERITY_GLYPHS } from "./activityCenter.js";
 
@@ -20,7 +21,10 @@ let { items, open, onToggle, onDismiss, onClear, onAction }: Props = $props();
 
 const total = $derived(items.length);
 // Highest-severity-wins: error outranks warning outranks info, else idle.
-const pillClass = $derived.by(() => {
+// Drives the shell tint + LED state (was `pillClass` pre-A23 single-shell morph).
+// MUST stay `$derived.by` — a plain const would freeze at mount and the LED
+// would never re-color as severities change.
+const shellSeverity = $derived.by(() => {
   if (items.some((i) => i.severity === "error")) return "has-error";
   if (items.some((i) => i.severity === "warning")) return "has-warning";
   if (items.some((i) => i.severity === "info")) return "has-info";
@@ -28,70 +32,126 @@ const pillClass = $derived.by(() => {
 });
 
 // Relative-time clock: tick every 30s so row labels age without a fresh event.
-// `onDestroy` keeps the single cleanup story (the store owns its own timers).
 let now = $state(Date.now());
 const clock = setInterval(() => {
   now = Date.now();
 }, 30_000);
-onDestroy(() => clearInterval(clock));
+
+// Cascade-on-open window (A23). `.tray-inner` is conditionally rendered, so the
+// rows mount fresh on every open and the rowSlideUp @keyframes fire on mount —
+// no listEl bind / reflow trick needed (that's why this is ONE effect, not the
+// bundle's two). We just flag `.tray-list.cascade` for ~1800ms so the staggered
+// reveal runs exactly once per open. A notification arriving after the window
+// simply appears (the bundle's per-row `.entering` solo-arrival path is deferred).
+let cascading = $state(false);
+let prevOpen = false; // plain latch — NOT $state (read+write in the effect would self-trigger)
+let cascadeTimer: ReturnType<typeof setTimeout> | undefined;
+$effect(() => {
+  if (open && !prevOpen) {
+    cascading = true; // written, never read here → creates no dependency, no loop
+    if (cascadeTimer) clearTimeout(cascadeTimer);
+    cascadeTimer = setTimeout(() => {
+      cascading = false;
+    }, 1800); // last row lands ~1510ms; window covers it
+  } else if (!open && prevOpen) {
+    cascading = false;
+    if (cascadeTimer) {
+      clearTimeout(cascadeTimer);
+      cascadeTimer = undefined;
+    }
+  }
+  prevOpen = open;
+});
+
+onDestroy(() => {
+  clearInterval(clock);
+  if (cascadeTimer) clearTimeout(cascadeTimer);
+});
 </script>
 
 <div class="activity-anchor">
-  {#if open}
-    <div class="activity-tray" id="activity-tray" role="region" aria-label="Activity" data-testid="activity-tray">
-      <div class="tray-head">
-        <span class="label">Activity</span>
-        <span class="num">{total === 0 ? "No events" : `${total} event${total === 1 ? "" : "s"}`}</span>
-        <span class="spacer"></span>
-        {#if total > 0}
-          <button type="button" data-testid="activity-clear-all" onclick={onClear}>Clear all</button>
-        {/if}
-      </div>
-      {#if total === 0}
-        <div class="tray-empty" data-testid="activity-empty">
-          Nothing to report.
-          <div class="sub">Saves, errors, and integration events appear here.</div>
-        </div>
-      {:else}
-        <div class="tray-list">
-          {#each items as item (item.id)}
-            {@const action = resolveActivityAction(item)}
-            <div class="toast-row {item.severity}" data-testid={`activity-row-${item.id}`}>
-              <span class="glyph">
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.7"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  {#each SEVERITY_GLYPHS[item.severity] as d (d)}
-                    <path {d} />
-                  {/each}
-                </svg>
-              </span>
-              <div class="body">
-                <div class="msg-row">
-                  <span class="msg">{item.message}</span>
-                  {#if item.count > 1}
-                    <span class="badge">×{item.count}</span>
-                  {/if}
-                  <span class="ts">{relativeTime(item.timestamp, now)}</span>
-                </div>
-                {#if action}
+  <div class="activity-shell {shellSeverity}" class:open>
+    <div class="tray-wrap">
+      {#if open}
+        <div class="tray-inner" id="activity-tray" role="region" aria-label="Activity" data-testid="activity-tray">
+          <div class="tray-head">
+            <span class="label">Activity</span>
+            <span class="num">{total === 0 ? "No events" : `${total} event${total === 1 ? "" : "s"}`}</span>
+            <span class="spacer"></span>
+            {#if total > 0}
+              <button type="button" data-testid="activity-clear-all" onclick={onClear}>Clear all</button>
+            {/if}
+          </div>
+          {#if total === 0}
+            <div class="tray-empty" data-testid="activity-empty">
+              Nothing to report.
+              <div class="sub">Saves, errors, and integration events appear here.</div>
+            </div>
+          {:else}
+            <div class="tray-list" class:cascade={cascading}>
+              {#each items as item (item.id)}
+                {@const action = resolveActivityAction(item)}
+                <div class="toast-row {item.severity}" data-testid={`activity-row-${item.id}`}>
+                  <span class="glyph">
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.7"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      {#each SEVERITY_GLYPHS[item.severity] as d (d)}
+                        <path {d} />
+                      {/each}
+                    </svg>
+                  </span>
+                  <div class="body">
+                    <div class="msg-row">
+                      <span class="msg">{item.message}</span>
+                      {#if item.count > 1}
+                        <span class="badge">×{item.count}</span>
+                      {/if}
+                      <span class="ts">{relativeTime(item.timestamp, now)}</span>
+                    </div>
+                    {#if action}
+                      <button
+                        type="button"
+                        class="action"
+                        data-testid={`activity-action-${item.id}`}
+                        onclick={() => onAction(item)}
+                      >
+                        <svg
+                          width="11"
+                          height="11"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M21 12a9 9 0 1 1-3-7" />
+                          <path d="M21 4v5h-5" />
+                        </svg>
+                        {action.label}
+                      </button>
+                    {/if}
+                  </div>
                   <button
                     type="button"
-                    class="action"
-                    data-testid={`activity-action-${item.id}`}
-                    onclick={() => onAction(item)}
+                    class="dismiss"
+                    data-testid={`activity-dismiss-${item.id}`}
+                    onclick={() => onDismiss(item.id)}
+                    aria-label="Dismiss activity item"
                   >
                     <svg
-                      width="11"
-                      height="11"
+                      width="12"
+                      height="12"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -100,134 +160,178 @@ onDestroy(() => clearInterval(clock));
                       stroke-linejoin="round"
                       aria-hidden="true"
                     >
-                      <path d="M21 12a9 9 0 1 1-3-7" />
-                      <path d="M21 4v5h-5" />
+                      <path d="M6 6l12 12" />
+                      <path d="M6 18L18 6" />
                     </svg>
-                    {action.label}
                   </button>
-                {/if}
-              </div>
-              <button
-                type="button"
-                class="dismiss"
-                data-testid={`activity-dismiss-${item.id}`}
-                onclick={() => onDismiss(item.id)}
-                aria-label="Dismiss activity item"
-              >
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M6 6l12 12" />
-                  <path d="M6 18L18 6" />
-                </svg>
-              </button>
+                </div>
+              {/each}
             </div>
-          {/each}
+          {/if}
         </div>
       {/if}
     </div>
-  {/if}
-  <button
-    type="button"
-    class="activity-pill {pillClass}"
-    class:open
-    data-testid="activity-pill"
-    onclick={onToggle}
-    aria-expanded={open}
-    aria-controls={open ? "activity-tray" : undefined}
-  >
-    <span class="led"></span>
-    {#if total === 0}
-      <span>No activity</span>
-    {:else}
-      <span>Activity</span>
-      <span class="count">{total}</span>
-    {/if}
-    <span class="chev">
-      <svg
-        width="10"
-        height="10"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M6 9l6 6 6-6" />
-      </svg>
-    </span>
-  </button>
+
+    <!--
+      The pill row is the shell's always-visible bottom handle AND the toggle.
+      No focus-return effect (unlike the M3 new-tab morph): this is a non-modal
+      `role="region"`, toggled by this persistent button which is the close
+      control and therefore already holds focus at close time. Adding focus
+      management here would be dead code or would fight the natural focus.
+    -->
+    <button
+      type="button"
+      class="pill-row"
+      data-testid="activity-pill"
+      onclick={onToggle}
+      aria-expanded={open}
+      aria-controls={open ? "activity-tray" : undefined}
+    >
+      <span class="led"></span>
+      {#if total === 0}
+        <span>No activity</span>
+      {:else}
+        <span>Activity</span>
+        <span class="count">{total}</span>
+      {/if}
+      <span class="spacer"></span>
+      <span class="chev">
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </span>
+    </button>
+  </div>
 </div>
 
 <style>
+  /* ════════════════════════════════════════════════════════
+     ACTIVITY TRAY — single-shell morph (A23, #798 Phase 4)
+     `.activity-shell` is the ONE element. `.tray-wrap` (the morphing body)
+     sits ABOVE `.pill-row` (always-visible bottom handle / toggle). The shell
+     is bottom-pinned absolute, so growing it taller makes the tray unfurl
+     UPWARD while the pill stays put. Two-phase open: width+radius lead (P1),
+     then max-height unfurls (P2, delayed P1). Close reverses the phase order.
+     Timing tokens + reduced-motion (transitions) come from morphTiming.css.
+     ════════════════════════════════════════════════════════ */
   .activity-anchor {
     position: fixed;
     bottom: var(--tandem-space-3);
     right: var(--tandem-space-4);
     z-index: var(--tandem-z-toast);
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--tandem-space-2);
     pointer-events: none;
   }
-  .activity-anchor > * {
+
+  .activity-shell {
     pointer-events: auto;
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    /* Fixed pixel width closed so width transitions smoothly to 340. */
+    width: 144px;
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-pill);
+    box-shadow: var(--c7-pill-shadow);
+    backdrop-filter: saturate(140%) blur(8px);
+    -webkit-backdrop-filter: saturate(140%) blur(8px);
+    display: flex;
+    flex-direction: column;
+    /* clip (not hidden) so it's not a scroll container (lesson #765) and the
+       clip-margin lets descendant focus rings paint past the edge. 8px = 2× the
+       4px max ring extent (2px outline + 2px offset); controls are further inset
+       by internal padding. */
+    overflow: clip;
+    overflow-clip-margin: var(--tandem-space-2);
+    transform-origin: bottom right;
+    /* OPEN: width + radius lead; box-shadow trails by P1. */
+    transition:
+      width var(--morph-p1) var(--tandem-ease-out),
+      border-radius var(--morph-p1) var(--tandem-ease-out),
+      box-shadow var(--morph-p2) var(--tandem-ease-out) var(--morph-p1),
+      border-color 280ms ease;
+  }
+  .activity-shell.open {
+    width: 340px;
+    border-radius: var(--tandem-r-5);
+    box-shadow: var(--c7-pill-shadow), 0 12px 32px -10px rgba(0, 0, 0, 0.18);
+    border-color: var(--tandem-border-strong);
+  }
+  /* CLOSE: max-height collapses first (.tray-wrap), THEN width + radius (delay P2). */
+  .activity-shell:not(.open) {
+    transition:
+      width var(--morph-p1) var(--tandem-ease-out) var(--morph-p2),
+      border-radius var(--morph-p1) var(--tandem-ease-out) var(--morph-p2),
+      box-shadow 440ms ease-in,
+      border-color 280ms ease var(--morph-p2);
   }
 
-  /* Collapsed pill — mirrors the StatusBar pill recipe. */
-  .activity-pill {
+  /* ── Pill row — always-on bottom edge of the shell + the toggle. ── */
+  .pill-row {
     height: 26px;
     padding: 0 12px;
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    border-radius: var(--tandem-r-pill);
-    background: var(--tandem-surface);
-    border: 1px solid var(--tandem-border);
-    box-shadow: var(--c7-pill-shadow);
-    backdrop-filter: saturate(140%) blur(8px);
-    -webkit-backdrop-filter: saturate(140%) blur(8px);
+    background: transparent;
+    border: none;
+    border-top: 1px solid transparent;
     font-family: var(--tandem-font-sans);
     font-size: var(--tandem-text-xs);
     color: var(--tandem-fg);
     cursor: pointer;
-    transition: background 100ms ease, border-color 200ms ease;
+    transition: background 100ms ease, border-color 200ms ease 200ms;
+    white-space: nowrap;
   }
-  .activity-pill:hover {
-    background: var(--tandem-surface-muted);
+  .activity-shell.open .pill-row {
+    border-top-color: var(--tandem-border);
   }
-  .activity-pill.idle {
+  .pill-row:hover {
+    background: var(--tandem-surface-sunk);
+  }
+  .activity-shell.idle .pill-row {
     color: var(--tandem-fg-subtle);
     font-family: var(--tandem-font-mono);
   }
-  .activity-pill .led {
+  .pill-row .led {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: var(--tandem-fg-faint);
     transition: background 200ms ease;
+    flex-shrink: 0;
   }
-  .activity-pill.has-info .led {
+  .activity-shell.has-info .pill-row .led {
     background: var(--tandem-info);
   }
-  .activity-pill.has-warning .led {
+  .activity-shell.has-warning .pill-row .led {
     background: var(--tandem-warning);
+    animation: ledpulse 1.6s ease-in-out infinite;
   }
-  .activity-pill.has-error .led {
+  .activity-shell.has-error .pill-row .led {
     background: var(--tandem-error);
+    animation: ledpulse 1.4s ease-in-out infinite;
   }
-  .activity-pill .count {
+  @keyframes ledpulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.4;
+    }
+  }
+  .pill-row .count {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
     font-weight: 600;
@@ -237,38 +341,49 @@ onDestroy(() => clearInterval(clock));
     color: var(--tandem-fg-muted);
     border: 1px solid var(--tandem-border);
   }
-  .activity-pill.has-error .count {
+  .activity-shell.has-error .pill-row .count {
     background: var(--tandem-error-bg);
     color: var(--tandem-error-fg-strong);
     border-color: var(--tandem-error-border);
   }
-  .activity-pill.has-warning .count {
+  .activity-shell.has-warning .pill-row .count {
     background: var(--tandem-warning-bg);
     color: var(--tandem-warning-fg-strong);
     border-color: var(--tandem-warning-border);
   }
-  .activity-pill .chev {
+  .pill-row .spacer {
+    flex: 1;
+    min-width: 8px;
+  }
+  .pill-row .chev {
     width: 14px;
     height: 14px;
     color: var(--tandem-fg-faint);
-    transition: transform 150ms ease;
+    transition: transform 220ms var(--tandem-ease-out);
     display: inline-grid;
     place-items: center;
+    margin-left: 2px;
   }
-  .activity-pill.open .chev {
+  .activity-shell.open .pill-row .chev {
     transform: rotate(180deg);
   }
 
-  /* Expanded tray. */
-  .activity-tray {
-    width: 340px;
-    background: var(--tandem-surface);
-    border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-5);
-    box-shadow: var(--c7-pill-shadow), 0 10px 30px -8px rgba(0, 0, 0, 0.18);
-    overflow: hidden;
-    transform-origin: bottom right;
+  /* ── Tray body — grows above the pill row. max-height drives Phase 2. ── */
+  .tray-wrap {
+    max-height: 0;
+    overflow: clip;
+    overflow-clip-margin: var(--tandem-space-2);
+    transition: max-height var(--morph-p2) cubic-bezier(0.4, 0, 0.6, 1);
   }
+  .activity-shell.open .tray-wrap {
+    max-height: 400px;
+    transition: max-height var(--morph-p2) var(--tandem-ease-out) var(--morph-p1);
+  }
+  .tray-inner {
+    display: flex;
+    flex-direction: column;
+  }
+
   .tray-head {
     display: flex;
     align-items: center;
@@ -307,7 +422,7 @@ onDestroy(() => clearInterval(clock));
   }
 
   .tray-list {
-    max-height: 320px;
+    max-height: 288px;
     overflow-y: auto;
     -webkit-mask-image: linear-gradient(
       to bottom,
@@ -327,6 +442,48 @@ onDestroy(() => clearInterval(clock));
   }
   .tray-list::-webkit-scrollbar {
     display: none;
+  }
+
+  /* Cascade-on-open: rows rise from the bottom into their stacked positions.
+     Topmost (newest) lands first, each next ~110ms later. `--slide-y` is read
+     inside the @keyframes (we animate `transform`, not the property itself), so
+     no @property registration is needed. */
+  .tray-list.cascade .toast-row {
+    animation: rowSlideUp 420ms var(--tandem-ease-out) both;
+  }
+  .tray-list.cascade .toast-row:nth-child(1) {
+    --slide-y: 240px;
+    animation-delay: 540ms;
+  }
+  .tray-list.cascade .toast-row:nth-child(2) {
+    --slide-y: 160px;
+    animation-delay: 650ms;
+  }
+  .tray-list.cascade .toast-row:nth-child(3) {
+    --slide-y: 84px;
+    animation-delay: 760ms;
+  }
+  .tray-list.cascade .toast-row:nth-child(4) {
+    --slide-y: 16px;
+    animation-delay: 870ms;
+  }
+  .tray-list.cascade .toast-row:nth-child(5) {
+    --slide-y: 8px;
+    animation-delay: 980ms;
+  }
+  .tray-list.cascade .toast-row:nth-child(n + 6) {
+    --slide-y: 6px;
+    animation-delay: 1090ms;
+  }
+  @keyframes rowSlideUp {
+    from {
+      opacity: 0;
+      transform: translateY(var(--slide-y, 24px));
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .tray-empty {
@@ -469,5 +626,23 @@ onDestroy(() => clearInterval(clock));
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
     opacity: 1;
+  }
+
+  /* Reduced motion — token-zeroing (morphTiming.css) covers the transitions, but
+     NOT these @keyframes animations. Dual guard (OS pref + in-app body class).
+     `!important` is required: the LED's `animation` lives on the 4-class severity
+     selector `.activity-shell.has-error .pill-row .led`, which outranks any guard
+     selector on specificity — so we must force it (matches the bundle's
+     d1-toasts.css reduce-motion rule). Without it the LED keeps pulsing under
+     reduced-motion (WCAG 2.2.2). */
+  @media (prefers-reduced-motion: reduce) {
+    .pill-row .led,
+    .tray-list.cascade .toast-row {
+      animation: none !important;
+    }
+  }
+  :global(body.tandem-reduce-motion) .pill-row .led,
+  :global(body.tandem-reduce-motion) .tray-list.cascade .toast-row {
+    animation: none !important;
   }
 </style>
