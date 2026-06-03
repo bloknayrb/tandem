@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP } from "../../src/server/annotations/schema.js";
 import {
   calculateCommentRanges,
   type DocxComment,
   extractDocxComments,
   importAnnotationId,
+  importReplyId,
   injectCommentsAsAnnotations,
   parseCommentMetadata,
+  parseCommentThreading,
 } from "../../src/server/file-io/docx-comments.js";
 import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import type { AnnotationReply } from "../../src/shared/types.js";
 
 // ---------------------------------------------------------------------------
 // parseCommentMetadata
@@ -589,5 +593,241 @@ describe("importAnnotationId", () => {
     const a = importAnnotationId("1", 0, 5, "body");
     const b = importAnnotationId("10", 5, 0, "body");
     expect(a).not.toBe(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Word threaded comments (#1000)
+// ---------------------------------------------------------------------------
+
+const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml";
+const W15_NS = "http://schemas.microsoft.com/office/word/2012/wordml";
+
+describe("parseCommentMetadata — threading paraId", () => {
+  it("extracts the last paragraph's w14:paraId (lowercased)", () => {
+    const xml = `<?xml version="1.0"?>
+      <w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">
+        <w:comment w:id="7" w:author="Alice">
+          <w:p w14:paraId="0AAA0001"><w:r><w:t>first para</w:t></w:r></w:p>
+          <w:p w14:paraId="0BBB0002"><w:r><w:t>last para</w:t></w:r></w:p>
+        </w:comment>
+      </w:comments>`;
+    const meta = parseCommentMetadata(xml).get("7")!;
+    expect(meta.bodyText).toBe("first paralast para");
+    // The LAST paragraph's paraId is the thread join key, lowercased.
+    expect(meta.lastParaId).toBe("0bbb0002");
+  });
+
+  it("leaves lastParaId undefined when no paraId present", () => {
+    const xml = `<?xml version="1.0"?>
+      <w:comments xmlns:w="${W_NS}">
+        <w:comment w:id="8" w:author="Bob"><w:p><w:r><w:t>x</w:t></w:r></w:p></w:comment>
+      </w:comments>`;
+    expect(parseCommentMetadata(xml).get("8")!.lastParaId).toBeUndefined();
+  });
+});
+
+describe("parseCommentThreading", () => {
+  it("maps child paraId → parent paraId (lowercased), replies only", () => {
+    const xml = `<?xml version="1.0"?>
+      <w15:commentsEx xmlns:w15="${W15_NS}">
+        <w15:commentEx w15:paraId="0AAA0001" w15:done="0"/>
+        <w15:commentEx w15:paraId="0AAA0002" w15:paraIdParent="0AAA0001" w15:done="0"/>
+      </w15:commentsEx>`;
+    const map = parseCommentThreading(xml);
+    // Root (no parent) is omitted; only the reply link is recorded.
+    expect(map.size).toBe(1);
+    expect(map.get("0aaa0002")).toBe("0aaa0001");
+  });
+});
+
+/** Build a docx zip buffer with the given parts. */
+async function buildZip(parts: Record<string, string>): Promise<Buffer> {
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
+  for (const [path, content] of Object.entries(parts)) zip.file(path, content);
+  return zip.generateAsync({ type: "nodebuffer" });
+}
+
+const ROOT_DOC_XML = `<?xml version="1.0"?>
+  <w:document xmlns:w="${W_NS}"><w:body><w:p>
+    <w:r><w:t>Hello </w:t></w:r>
+    <w:commentRangeStart w:id="1"/><w:r><w:t>World</w:t></w:r><w:commentRangeEnd w:id="1"/>
+  </w:p></w:body></w:document>`;
+
+describe("extractDocxComments — Word threads (#1000)", () => {
+  it("folds replies into the root comment, ordered by date", async () => {
+    // Comment 1 = root; 2 and 3 reply to it. Reply 3 is dated BEFORE reply 2 to
+    // prove chronological ordering (not document order). Replies have NO range
+    // markers in document.xml — they must still survive (inherit root anchor).
+    const buffer = await buildZip({
+      "word/document.xml": ROOT_DOC_XML,
+      "word/comments.xml": `<?xml version="1.0"?>
+        <w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">
+          <w:comment w:id="1" w:author="Alice" w:date="2026-01-01T00:00:00Z"><w:p w14:paraId="0AAA0001"><w:r><w:t>Root</w:t></w:r></w:p></w:comment>
+          <w:comment w:id="2" w:author="Bob" w:date="2026-01-03T00:00:00Z"><w:p w14:paraId="0AAA0002"><w:r><w:t>Later reply</w:t></w:r></w:p></w:comment>
+          <w:comment w:id="3" w:author="Carol" w:date="2026-01-02T00:00:00Z"><w:p w14:paraId="0AAA0003"><w:r><w:t>Earlier reply</w:t></w:r></w:p></w:comment>
+        </w:comments>`,
+      "word/commentsExtended.xml": `<?xml version="1.0"?>
+        <w15:commentsEx xmlns:w15="${W15_NS}">
+          <w15:commentEx w15:paraId="0AAA0001" w15:done="0"/>
+          <w15:commentEx w15:paraId="0AAA0002" w15:paraIdParent="0AAA0001" w15:done="0"/>
+          <w15:commentEx w15:paraId="0AAA0003" w15:paraIdParent="0AAA0001" w15:done="0"/>
+        </w15:commentsEx>`,
+    });
+
+    const result = await extractDocxComments(buffer);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ commentId: "1", bodyText: "Root", from: 6, to: 11 });
+    expect(result[0].replies).toHaveLength(2);
+    expect(result[0].replies!.map((r) => r.bodyText)).toEqual(["Earlier reply", "Later reply"]);
+    expect(result[0].replies!.map((r) => r.authorName)).toEqual(["Carol", "Bob"]);
+  });
+
+  it("treats a reply with an unresolved parent paraId as a root", async () => {
+    const buffer = await buildZip({
+      "word/document.xml": `<?xml version="1.0"?>
+        <w:document xmlns:w="${W_NS}"><w:body><w:p>
+          <w:commentRangeStart w:id="1"/><w:r><w:t>Hello</w:t></w:r><w:commentRangeEnd w:id="1"/>
+          <w:r><w:t> </w:t></w:r>
+          <w:commentRangeStart w:id="2"/><w:r><w:t>World</w:t></w:r><w:commentRangeEnd w:id="2"/>
+        </w:p></w:body></w:document>`,
+      "word/comments.xml": `<?xml version="1.0"?>
+        <w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">
+          <w:comment w:id="1" w:author="A"><w:p w14:paraId="0AAA0001"><w:r><w:t>One</w:t></w:r></w:p></w:comment>
+          <w:comment w:id="2" w:author="B"><w:p w14:paraId="0AAA0002"><w:r><w:t>Two</w:t></w:r></w:p></w:comment>
+        </w:comments>`,
+      "word/commentsExtended.xml": `<?xml version="1.0"?>
+        <w15:commentsEx xmlns:w15="${W15_NS}">
+          <w15:commentEx w15:paraId="0AAA0002" w15:paraIdParent="DEADBEEF" w15:done="0"/>
+        </w15:commentsEx>`,
+    });
+
+    const result = await extractDocxComments(buffer);
+    // Both are roots (comment 2's parent paraId resolves to nothing).
+    expect(result.map((c) => c.commentId).sort()).toEqual(["1", "2"]);
+    expect(result.every((c) => c.replies === undefined)).toBe(true);
+  });
+
+  it("terminates on a parent cycle without hanging (both become roots)", async () => {
+    const buffer = await buildZip({
+      "word/document.xml": `<?xml version="1.0"?>
+        <w:document xmlns:w="${W_NS}"><w:body><w:p>
+          <w:commentRangeStart w:id="1"/><w:r><w:t>Hello</w:t></w:r><w:commentRangeEnd w:id="1"/>
+          <w:r><w:t> </w:t></w:r>
+          <w:commentRangeStart w:id="2"/><w:r><w:t>World</w:t></w:r><w:commentRangeEnd w:id="2"/>
+        </w:p></w:body></w:document>`,
+      "word/comments.xml": `<?xml version="1.0"?>
+        <w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">
+          <w:comment w:id="1" w:author="A"><w:p w14:paraId="0AAA0001"><w:r><w:t>One</w:t></w:r></w:p></w:comment>
+          <w:comment w:id="2" w:author="B"><w:p w14:paraId="0AAA0002"><w:r><w:t>Two</w:t></w:r></w:p></w:comment>
+        </w:comments>`,
+      // Mutual parent links: 1↔2.
+      "word/commentsExtended.xml": `<?xml version="1.0"?>
+        <w15:commentsEx xmlns:w15="${W15_NS}">
+          <w15:commentEx w15:paraId="0AAA0001" w15:paraIdParent="0AAA0002" w15:done="0"/>
+          <w15:commentEx w15:paraId="0AAA0002" w15:paraIdParent="0AAA0001" w15:done="0"/>
+        </w15:commentsEx>`,
+    });
+
+    const result = await extractDocxComments(buffer);
+    expect(result.map((c) => c.commentId).sort()).toEqual(["1", "2"]);
+  });
+
+  it("no commentsExtended.xml ⇒ every comment is a flat root (regression)", async () => {
+    const buffer = await buildZip({
+      "word/document.xml": ROOT_DOC_XML,
+      "word/comments.xml": `<?xml version="1.0"?>
+        <w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">
+          <w:comment w:id="1" w:author="Alice"><w:p w14:paraId="0AAA0001"><w:r><w:t>Root</w:t></w:r></w:p></w:comment>
+        </w:comments>`,
+    });
+    const result = await extractDocxComments(buffer);
+    expect(result).toHaveLength(1);
+    expect(result[0].replies).toBeUndefined();
+  });
+});
+
+describe("injectCommentsAsAnnotations — threaded replies (#1000)", () => {
+  let doc: Y.Doc;
+  beforeEach(() => {
+    doc = new Y.Doc();
+    htmlToYDoc(doc, "<p>Hello World</p>");
+  });
+
+  const rootWithReplies: DocxComment = {
+    commentId: "1",
+    authorName: "Alice",
+    bodyText: "Root note",
+    from: 0,
+    to: 5,
+    date: "2026-01-01T00:00:00Z",
+    replies: [
+      { commentId: "2", authorName: "Bob", bodyText: "Bob's reply", date: "2026-01-02T00:00:00Z" },
+      { commentId: "3", authorName: "Carol", bodyText: "Carol's reply" },
+    ],
+  };
+
+  it("injects replies as private import replies attached to the root note", () => {
+    injectCommentsAsAnnotations(doc, [rootWithReplies], "review.docx");
+
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+    expect(annMap.size).toBe(1);
+    const noteId = Array.from(annMap.keys())[0];
+
+    const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    expect(repliesMap.size).toBe(2);
+    const replies = Array.from(repliesMap.values()) as AnnotationReply[];
+    for (const r of replies) {
+      expect(r.annotationId).toBe(noteId);
+      expect(r.author).toBe("import");
+      expect(r.private).toBe(true);
+      expect(r.id).toMatch(/^import-reply-[0-9a-f]{12}$/);
+    }
+    const bob = replies.find((r) => r.text === "Bob's reply")!;
+    expect(bob.importAuthor).toBe("Bob");
+    expect(bob.timestamp).toBe(new Date("2026-01-02T00:00:00Z").getTime());
+  });
+
+  it("is idempotent across re-imports (no duplicate replies)", () => {
+    injectCommentsAsAnnotations(doc, [rootWithReplies], "review.docx");
+    injectCommentsAsAnnotations(doc, [rootWithReplies], "review.docx");
+    expect(doc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(2);
+    expect(doc.getMap(Y_MAP_ANNOTATIONS).size).toBe(1);
+  });
+
+  it("recreates replies with identical ids after the parent note is deleted", () => {
+    injectCommentsAsAnnotations(doc, [rootWithReplies], "review.docx");
+    const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const idsBefore = Array.from(repliesMap.keys()).sort();
+
+    // Simulate a cascade delete that orphans/removes the replies.
+    doc.transact(() => repliesMap.clear());
+    expect(repliesMap.size).toBe(0);
+
+    injectCommentsAsAnnotations(doc, [rootWithReplies], "review.docx");
+    expect(Array.from(repliesMap.keys()).sort()).toEqual(idsBefore);
+  });
+
+  it("bounds oversized imported reply bodies and author names", () => {
+    const huge: DocxComment = {
+      commentId: "1",
+      authorName: "x".repeat(500),
+      bodyText: "root",
+      from: 0,
+      to: 5,
+      replies: [{ commentId: "2", authorName: "y".repeat(500), bodyText: "z".repeat(20_000) }],
+    };
+    injectCommentsAsAnnotations(doc, [huge]);
+    const reply = Array.from(doc.getMap(Y_MAP_ANNOTATION_REPLIES).values())[0] as AnnotationReply;
+    expect(reply.text.length).toBe(IMPORT_REPLY_BODY_CAP);
+    expect(reply.importAuthor!.length).toBe(IMPORT_AUTHOR_MAX);
+  });
+
+  it("deterministic importReplyId differs across root/reply/body", () => {
+    expect(importReplyId("1", "2", "body")).toBe(importReplyId("1", "2", "body"));
+    expect(importReplyId("1", "2", "body")).not.toBe(importReplyId("1", "3", "body"));
+    expect(importReplyId("1", "2", "a")).not.toBe(importReplyId("1", "2", "b"));
   });
 });

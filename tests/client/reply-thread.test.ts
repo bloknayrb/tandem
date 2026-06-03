@@ -47,14 +47,13 @@ describe("ReplyThread", () => {
     expect(container.textContent).toContain("reply");
   });
 
-  // ADR-027: notes are user-private. Even a count badge on a note that has
-  // replies in the underlying Y.Map leaks information to Claude. The single
-  // fan-out point (getVisibleReplies inside ReplyThread) must drop them.
-  it("renders zero replies and zero count badge for a note annotation", () => {
+  // #1000: notes carry PRIVATE reply threads, displayed to the owning user.
+  // (Claude never sees them — that boundary is enforced server-side, not here.)
+  it("renders the reply thread and count badge for a note annotation", () => {
     const replies = [
-      makeReply({ id: "r1", text: "leak 1" }),
-      makeReply({ id: "r2", text: "leak 2" }),
-      makeReply({ id: "r3", text: "leak 3" }),
+      makeReply({ id: "r1", text: "private 1" }),
+      makeReply({ id: "r2", text: "private 2" }),
+      makeReply({ id: "r3", text: "private 3" }),
     ];
 
     const { container } = render(ReplyThread, {
@@ -66,15 +65,27 @@ describe("ReplyThread", () => {
       },
     });
 
-    // CommentThread renders nothing for empty replies.
-    expect(container.querySelector("[data-testid='comment-thread']")).toBeNull();
-    expect(container.textContent).not.toContain("leak");
-    // Read-only count badge (non-pending + no onReply) must not surface a count.
-    expect(container.textContent ?? "").not.toMatch(/\b3 replies\b/);
-    expect(container.textContent ?? "").not.toMatch(/\b3 reply\b/);
+    expect(container.querySelector("[data-testid='comment-thread']")).toBeTruthy();
+    expect(container.textContent).toContain("private 1");
+    // Read-only count badge (non-pending + no onReply).
+    expect(container.textContent ?? "").toMatch(/\b3\s+replies\b/);
   });
 
-  it("count badge in reply button reads zero for note annotation", () => {
+  it("highlights still render zero replies", () => {
+    const replies = [makeReply({ id: "r1", text: "nope" })];
+    const { container } = render(ReplyThread, {
+      props: {
+        annotation: makeAnnotation({ type: "highlight" }),
+        replies,
+        isPending: false,
+        isEditing: false,
+      },
+    });
+    expect(container.querySelector("[data-testid='comment-thread']")).toBeNull();
+    expect(container.textContent).not.toContain("nope");
+  });
+
+  it("count badge in reply button reflects the note's reply count", () => {
     const replies = [makeReply(), makeReply({ id: "r2" })];
     const onReply = async () => true;
 
@@ -88,9 +99,7 @@ describe("ReplyThread", () => {
       },
     });
 
-    // For a note with onReply (e.g. hypothetical surface), the button label
-    // omits the parenthesized count because visibleReplies is empty.
     const button = container.querySelector("[data-testid='reply-btn-annotation-1']");
-    expect(button?.textContent?.trim()).toBe("Reply");
+    expect(button?.textContent?.trim()).toBe("Reply (2)");
   });
 });

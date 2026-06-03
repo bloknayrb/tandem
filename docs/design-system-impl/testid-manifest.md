@@ -106,7 +106,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - Replies + threads: `reply-{btn,input,send-btn,cancel-btn}-{*}`,
   `reply-thread-expand-{*}`, `reply-thread-overlay`,
   `reply-thread-overlay-{close,input,send,cancel,reply}`,
-  `comment-thread`, `reply-{*}`
+  `comment-thread`, `reply-{*}`, `reply-import-byline-{*}` (Word reviewer
+  byline on imported note replies, #1000)
 - Suggestion + import variants: `suggestion-diff-{*}`,
   `annotation-import-byline-{*}`, `annotation-select-checkbox-{*}`
 - Margin column: `margin-column-{*}`, `margin-bubble-{*}`,
