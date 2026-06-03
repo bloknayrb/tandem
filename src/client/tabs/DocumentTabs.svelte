@@ -91,7 +91,7 @@ let ctxTabPath: string | null = null;
 async function handleTabContextMenu(e: MouseEvent) {
   if (!isTauriRuntime()) return; // browser → native menu
   const el = (e.target as Element | null)?.closest('[data-testid^="tab-"][role="tab"]');
-  const id = el?.getAttribute("data-testid")?.slice("tab-".length) ?? null;
+  const id = tabIdFromElement(el);
   if (!id) return;
   const tab = tabs.find((t) => t.id === id);
   if (!tab) return;
@@ -312,6 +312,10 @@ function tabElementAtPoint(clientX: number, clientY: number): HTMLElement | null
   return (el as HTMLElement) ?? null;
 }
 
+function tabIdFromElement(el: Element | null | undefined): string | null {
+  return el?.getAttribute("data-testid")?.slice("tab-".length) ?? null;
+}
+
 function handlePointerMove(e: PointerEvent) {
   if (pointerId === null || e.pointerId !== pointerId || !draggedId) return;
   if (!dragging) {
@@ -322,7 +326,7 @@ function handlePointerMove(e: PointerEvent) {
   }
   e.preventDefault();
   const overEl = tabElementAtPoint(e.clientX, e.clientY);
-  const overId = overEl?.getAttribute("data-testid")?.slice("tab-".length) ?? null;
+  const overId = tabIdFromElement(overEl);
   if (!overEl || !overId || overId === draggedId) {
     dropTarget = null;
     return;
