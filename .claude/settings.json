@@ -49,6 +49,15 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/nudge-simplify-before-commit.sh\""
           }
         ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-plan-without-agent-review.sh\""
+          }
+        ]
       }
     ],
     "PostToolUse": [

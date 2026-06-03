@@ -200,6 +200,9 @@ Wired in `.claude/settings.json`. PreToolUse hooks exit 2 to block; PostToolUse 
 - `block-no-verify.sh` -- Blocks `--no-verify` flag (Husky bypass); fail-closed on parse error
 - `nudge-simplify-before-commit.sh` -- Warns on `git commit` when source edits have happened since last `/simplify` (one-shot per edit batch)
 
+**PreToolUse — `ExitPlanMode` matcher:**
+- `block-plan-without-agent-review.sh` (+ `.mjs` body) -- Blocks plan-approval requests unless the session transcript shows an `Agent`/`Task` tool call after the most recent `Write`/`Edit` to a plan file under user-level `~/.claude/plans/` (project-level `<repo>/.claude/plans/` is intentionally excluded). Bypass: prepend `Agent feedback incorporated` to the plan body. Fail-closed on missing/oversize (>50 MB) transcripts and on plan paths that don't `realpath` under `~/.claude/plans/`.
+
 **PostToolUse — unmatched (every tool):**
 - `track-workflow-events.sh` -- Records markers used by nudge hooks: `last-plan-write`, `last-source-edit`, `last-agent-call`, `last-simplify`, and `last-commit` (detected from successful `git commit` invocations in `Bash` tool calls). Also clears the `stop-nudged` marker on successful commit so the stop reminder can re-fire after the next edit cycle. Fast-paths uninteresting tools to skip the node spawn.
 
