@@ -91,19 +91,30 @@ test("A13 + #1000: note cards surface reply-toggle (private from Claude, shown t
   const noteId = await annNode.getAttribute("data-annotation-id");
   expect(noteId, "selection popup must yield an annotation id").toBeTruthy();
 
-  // Post a reply against the note — server returns INVALID_ARGUMENT (notes
-  // don't support replies); callTool returns the error object without throwing
-  // since mcpError encodes errors in the JSON body, not isError. The client
-  // must still suppress display via getVisibleReplies.
-  await mcp.callTool("tandem_annotationReply", {
-    annotationId: noteId as string,
-    text: "this reply must never surface",
-  });
-
+  // Switch to annotations tab and find the note card.
   await switchToAnnotationsTab(page);
+  const noteCard = page.locator(`[data-testid='annotation-card-${noteId}']`);
+  await expect(noteCard).toBeVisible({ timeout: 5_000 });
 
-  // The reply-toggle must never render for a note (ADR-027).
-  await expect(page.locator(`[data-testid='reply-toggle-${noteId}']`)).not.toBeVisible();
-  // And the reply text must not appear anywhere in the side panel.
-  await expect(page.locator("[data-testid='comment-thread']")).not.toBeVisible();
+  // Post a reply via the browser UI — note replies are user-authored and private
+  // from Claude (#1000 / ADR-027). tandem_annotationReply (MCP) rejects
+  // Claude-authored note replies server-side, so the browser reply button is the
+  // correct data path here.
+  const replyBtn = page.locator(`[data-testid='reply-btn-${noteId}']`);
+  await expect(replyBtn).toBeVisible({ timeout: 3_000 });
+  await replyBtn.click();
+
+  await page.locator(`[data-testid='reply-input-${noteId}']`).fill("private reply text");
+  await page.locator(`[data-testid='reply-send-btn-${noteId}']`).click();
+
+  // Post-#1000: notes show a disclosure toggle (private = private from Claude, not from
+  // the owning user). Clicking the toggle reveals the private reply thread.
+  const toggle = page.locator(`[data-testid='reply-toggle-${noteId}']`);
+  await expect(toggle).toBeVisible({ timeout: 5_000 });
+  await expect(toggle).toContainText("1 reply");
+  await toggle.click();
+  const thread = page.locator("[data-testid='comment-thread']");
+  await expect(thread).toContainText("private reply text");
+  // Reply button shows "Reply" without count (count lives on the toggle, not the button).
+  await expect(replyBtn).toContainText("Reply");
 });
