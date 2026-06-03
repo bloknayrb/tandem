@@ -14,6 +14,7 @@ describe("selection toolbar position", () => {
     const position = computeSelectionToolbarPosition({
       start: { left: 80, top: 62, bottom: 82, right: 150 },
       end: { left: 80, top: 62, bottom: 82, right: 150 },
+      anchorX: 80,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 600,
@@ -21,7 +22,8 @@ describe("selection toolbar position", () => {
     });
 
     expect(position.top).toBe(92);
-    expect(position.left).toBe(115);
+    // Left-anchored at the cursor X (#798): fits, so left === anchorX.
+    expect(position.left).toBe(80);
   });
 
   it("pins to viewport bottom when neither above nor below fits (#680 fold-straddle)", () => {
@@ -33,6 +35,7 @@ describe("selection toolbar position", () => {
     const position = computeSelectionToolbarPosition({
       start: { left: 80, top: 62, bottom: 162, right: 150 },
       end: { left: 80, top: 62, bottom: 162, right: 150 },
+      anchorX: 80,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 180,
@@ -56,6 +59,7 @@ describe("selection toolbar position", () => {
     const argsBoundary = {
       start: { left: 80, top: 100, bottom: 120, right: 150 },
       end: { left: 80, top: 100, bottom: 120, right: 150 },
+      anchorX: 80,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 600,
@@ -71,6 +75,7 @@ describe("selection toolbar position", () => {
     const stickyAbove = computeSelectionToolbarPosition({
       start: { left: 80, top: 95, bottom: 115, right: 150 },
       end: { left: 80, top: 95, bottom: 115, right: 150 },
+      anchorX: 80,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 600,
@@ -86,6 +91,7 @@ describe("selection toolbar position", () => {
     const flipDown = computeSelectionToolbarPosition({
       start: { left: 80, top: 91, bottom: 111, right: 150 },
       end: { left: 80, top: 91, bottom: 111, right: 150 },
+      anchorX: 80,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 600,
@@ -101,6 +107,7 @@ describe("selection toolbar position", () => {
     const position = computeSelectionToolbarPosition({
       start: { left: 80, top: 200, bottom: 220, right: 150 },
       end: { left: 80, top: 200, bottom: 220, right: 150 },
+      anchorX: 80,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 600,
@@ -114,6 +121,7 @@ describe("selection toolbar position", () => {
     const position = computeSelectionToolbarPosition({
       start: { left: 80, top: 500, bottom: 520, right: 150 },
       end: { left: 80, top: 500, bottom: 520, right: 150 },
+      anchorX: 80,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 400,
@@ -131,6 +139,7 @@ describe("selection toolbar position", () => {
     const base = {
       start: { left: 80, top: 200, bottom: 220, right: 150 },
       end: { left: 80, top: 200, bottom: 220, right: 150 },
+      anchorX: 80,
       toolbarWidth: 160,
       viewportHeight: 600,
       viewportWidth: 800,
@@ -145,30 +154,53 @@ describe("selection toolbar position", () => {
     expect(tallPopup.bottom).toBe(shortPopup.bottom);
   });
 
+  it("left-anchors the popup at the cursor X so the pills unroll rightward (#798)", () => {
+    // Cursor-origin unroll: the popup's LEFT edge sits at `anchorX` (the user's
+    // cursor), NOT the selection midpoint. A wide selection whose midpoint is far
+    // from the cursor must still anchor at the cursor.
+    const position = computeSelectionToolbarPosition({
+      start: { left: 80, top: 300, bottom: 320, right: 600 },
+      end: { left: 80, top: 300, bottom: 320, right: 600 },
+      anchorX: 420,
+      toolbarHeight: 40,
+      toolbarWidth: 160,
+      viewportHeight: 600,
+      viewportWidth: 800,
+    });
+
+    // Fits (420 + 160 = 580 < 800 - 8), so left === anchorX — not the midpoint 340.
+    expect(position.left).toBe(420);
+  });
+
   it("clamps the toolbar to the viewport left edge", () => {
+    // Cursor off the left edge → left edge pinned at EDGE_GAP=8.
     const position = computeSelectionToolbarPosition({
       start: { left: -40, top: 180, bottom: 200, right: 20 },
       end: { left: -20, top: 180, bottom: 200, right: 20 },
+      anchorX: -40,
       toolbarHeight: 40,
       toolbarWidth: 200,
       viewportHeight: 500,
       viewportWidth: 800,
     });
 
-    expect(position.left).toBe(108);
+    expect(position.left).toBe(8);
   });
 
   it("clamps the toolbar to the viewport right edge", () => {
+    // Cursor near the right edge → popup pushed left so its full width stays on
+    // screen: maxLeft = viewportWidth - EDGE_GAP - toolbarWidth = 300 - 8 - 200 = 92.
     const position = computeSelectionToolbarPosition({
       start: { left: 290, top: 180, bottom: 200, right: 340 },
       end: { left: 300, top: 180, bottom: 200, right: 340 },
+      anchorX: 290,
       toolbarHeight: 40,
       toolbarWidth: 200,
       viewportHeight: 500,
       viewportWidth: 300,
     });
 
-    expect(position.left).toBe(192);
+    expect(position.left).toBe(92);
   });
 });
 

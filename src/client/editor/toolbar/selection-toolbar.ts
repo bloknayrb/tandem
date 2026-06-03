@@ -33,6 +33,14 @@ export interface SelectionToolbarBounds {
 export interface SelectionToolbarPositionArgs {
   start: SelectionToolbarBounds;
   end: SelectionToolbarBounds;
+  /**
+   * Horizontal origin the popup unrolls away from — the user's cursor at popup
+   * time (mouse pointer X for a pointer selection, caret X for a keyboard
+   * selection; see Toolbar.svelte's latch). The popup's LEFT edge is pinned here
+   * (left-anchored, not centered), so the format pills unroll rightward from the
+   * cursor. Clamped so the toolbar's full measured width stays on-screen.
+   */
+  anchorX: number;
   toolbarHeight: number;
   toolbarWidth: number;
   viewportHeight: number;
@@ -67,16 +75,20 @@ export interface SelectionToolbarPosition {
 export function computeSelectionToolbarPosition({
   start,
   end,
+  anchorX,
   toolbarHeight,
   toolbarWidth,
   viewportHeight,
   viewportWidth,
   previousPlacement,
 }: SelectionToolbarPositionArgs): SelectionToolbarPosition {
-  const rawLeft = (start.left + end.right) / 2;
-  const halfWidth = toolbarWidth / 2;
-  const minLeft = SELECTION_TOOLBAR_EDGE_GAP + halfWidth;
-  const maxLeft = Math.max(minLeft, viewportWidth - SELECTION_TOOLBAR_EDGE_GAP - halfWidth);
+  // Left-anchored at the cursor: the popup's left edge sits at `anchorX` and the
+  // pills unroll rightward from there (#798 cursor-origin unroll). Clamp keeps the
+  // full measured width on-screen — minLeft is just the edge gap; maxLeft pushes
+  // the whole popup left if the cursor is near the right edge.
+  const rawLeft = anchorX;
+  const minLeft = SELECTION_TOOLBAR_EDGE_GAP;
+  const maxLeft = Math.max(minLeft, viewportWidth - SELECTION_TOOLBAR_EDGE_GAP - toolbarWidth);
 
   // Default placement is above the selection — but if the natural above-top
   // would intrude on the chrome reserved by SELECTION_TOOLBAR_MIN_TOP, flip

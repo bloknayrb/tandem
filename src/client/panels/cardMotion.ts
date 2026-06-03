@@ -227,25 +227,29 @@ export const ENTER_POPUP_MS = 360;
 
 /**
  * A28 — the selection popup's entrance (#798). A fresh `{#if}` mount, so a real
- * Svelte `in:` transition (unlike A26's class-toggle morph): the popup unrolls
- * its measured natural WIDTH (the width-unroll deferred from M1) + fades + lifts
- * 6px, on `--tandem-ease-out`. `overflow:clip` hides the content while the box is
- * narrower than natural (animate width, never clip-path — clip-path would cut the
- * pill's shadow). The caller freezes width-feedback positioning during the run
- * (an `entering` flag gating the ResizeObserver) so the left-clamp can't jitter
- * as the width grows. **The popup is centered via `transform: translateX(-50%)`
- * in its scoped style; a transition `transform` REPLACES that, so we MUST
- * re-include `translateX(-50%)` here or the popup jumps right by half its width
- * during the entrance.** Reduced motion → instant (no width-unroll, no lift).
+ * Svelte `in:` transition (unlike A26's class-toggle morph). CURSOR-ORIGIN UNROLL
+ * (Bryan, 2026-06-03): the popup is left-anchored at the cursor and its
+ * cursor-side corner is pinned by the scoped style — `left` always, plus `top`
+ * (below placement) or `bottom` (above placement). Animating WIDTH and HEIGHT
+ * from 0 therefore unrolls the box away from that corner: rightward in both
+ * cases, and downward (below, top pinned) or upward (above, bottom pinned). No
+ * `transform` here — the popup is no longer centered, so there's nothing to
+ * preserve, and a transform would un-pin the corner. `overflow:clip` reveals the
+ * pills as the box grows (animate width/height, never clip-path — clip-path would
+ * cut the pill's shadow). The caller freezes width-feedback positioning during
+ * the run (an `entering` flag gating the ResizeObserver) so the left-anchor clamp
+ * can't jitter as the width grows. Reduced motion → instant.
  */
 export function popupEnter(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
   if (motionOff(reduceMotion)) return { duration: 0 };
   const w = node.offsetWidth;
+  const h = node.offsetHeight;
   return {
     duration: ENTER_POPUP_MS,
     easing: easeOut,
-    // t: 0→1 (present), u = 1−t. translateX(-50%) preserves the centering.
-    css: (t, u) =>
-      `opacity:${t}; width:${t * w}px; transform:translateX(-50%) translateY(${-6 * u}px); overflow:clip; box-sizing:border-box;`,
+    // t: 0→1 (present). Corner is pinned by the scoped style's left + top/bottom;
+    // growing width+height from 0 unrolls away from it. No transform.
+    css: (t) =>
+      `opacity:${t}; width:${t * w}px; height:${t * h}px; overflow:clip; box-sizing:border-box;`,
   };
 }

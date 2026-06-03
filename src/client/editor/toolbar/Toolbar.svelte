@@ -109,7 +109,7 @@ let annotateMode = $state(false);
 // unrolls. Both are plain timers; `beginEntrance()` sets `entering` in the SAME
 // synchronous write that flips `dwellSatisfied`/the requestCommentFocus bypass,
 // so it is already true when the mount-triggered ResizeObserver effect runs.
-const DWELL_MS = 360;
+const DWELL_MS = 100;
 let dwellSatisfied = $state(false);
 let entering = $state(false);
 let dwellTimer: ReturnType<typeof setTimeout> | undefined;
@@ -119,7 +119,24 @@ let enteringTimer: ReturnType<typeof setTimeout> | undefined;
 let lastDwellFrom = -1;
 let lastDwellTo = -1;
 
+// Cursor-origin unroll (#798, Bryan 2026-06-03). The popup unrolls away from the
+// user's cursor at popup time. We LATCH the horizontal origin when the entrance
+// begins (dwell fires) so it stays put as the popup grows / the selection extends:
+//   • pointer selection → the last editor pointerup X (mouse is at the selection
+//     end after a drag); `pointerUpSinceDwellArm` distinguishes this from a stale
+//     pointerup left over from an earlier, unrelated click.
+//   • keyboard selection → the caret (selection head) X, captured each successful
+//     coordsAtPos pass below.
+// All in viewport/client coords (same space as coordsAtPos + clientX). `null`
+// before the latch — the popup is hidden then, so its `left` doesn't matter.
+let pointerUpSinceDwellArm = false;
+let pointerAnchorX = 0;
+let caretAnchorX = 0;
+let latchedAnchorX: number | null = null;
+
 function beginEntrance() {
+  // Latch the cursor origin for the whole entrance (and until the next selection).
+  latchedAnchorX = pointerUpSinceDwellArm ? pointerAnchorX : caretAnchorX;
   // Reduced motion: `popupEnter` already returns a zero-duration transition, so
   // there's no width-unroll to protect. Skip the freeze entirely — arming it
   // would leave the metrics effect on a stale `toolbarWidth` for ENTER_POPUP_MS
@@ -139,6 +156,8 @@ function clearDwell() {
   entering = false;
   lastDwellFrom = -1;
   lastDwellTo = -1;
+  latchedAnchorX = null;
+  pointerUpSinceDwellArm = false;
 }
 
 // Platform-correct modifier glyphs for the submit-button hints. The handlers in
@@ -231,6 +250,11 @@ function updateSelectionAffordance(ed: TiptapEditor) {
   if (!dwellSatisfied && (from !== lastDwellFrom || to !== lastDwellTo)) {
     lastDwellFrom = from;
     lastDwellTo = to;
+    // Reset the pointer-origin signal for this (re)arm: a drag fires selectionUpdate
+    // (here) repeatedly, then pointerup at the gesture's end flips this true before
+    // the timer fires. A keyboard selection never sets it, so beginEntrance falls
+    // back to the caret X.
+    pointerUpSinceDwellArm = false;
     clearTimeout(dwellTimer);
     dwellTimer = setTimeout(() => {
       beginEntrance();
@@ -241,9 +265,17 @@ function updateSelectionAffordance(ed: TiptapEditor) {
   try {
     const start = ed.view.coordsAtPos(from);
     const end = ed.view.coordsAtPos(to);
+    // Keyboard-selection origin: the caret (selection head) X. Captured every pass
+    // so it's current when beginEntrance latches it (pointer selections override
+    // this with the pointerup X). `head` is the moving end of a shift+arrow range.
+    caretAnchorX = ed.view.coordsAtPos(ed.state.selection.head).left;
     const nextPosition = computeSelectionToolbarPosition({
       start,
       end,
+      // Cursor-origin unroll (#798): left-anchor at the latched cursor X once the
+      // entrance has begun; before that the popup is hidden, so the live caret X is
+      // a harmless placeholder.
+      anchorX: latchedAnchorX ?? caretAnchorX,
       // A26 morph (#798): decide placement with a CONSTANT height-reserve, not
       // the live (animating) `toolbarHeight`. Keeps above/below stable across
       // the morph and lets the height-independent edge-anchor grow the popup
@@ -303,9 +335,23 @@ $effect(() => {
     updateSelectionAffordance(ed);
   }
 
+  // Cursor-origin unroll (#798): record the pointer X at the end of a pointer
+  // gesture. selectionUpdate (which arms the dwell) fires DURING the drag and
+  // resets `pointerUpSinceDwellArm`; this pointerup fires at the gesture's end,
+  // flipping it true and capturing where the mouse came to rest — the origin the
+  // popup unrolls away from. Keyboard selections never reach here, so the latch
+  // falls back to the caret X.
+  const editorDom = ed.view.dom;
+  function onPointerUp(e: PointerEvent) {
+    pointerUpSinceDwellArm = true;
+    pointerAnchorX = e.clientX;
+  }
+  editorDom.addEventListener("pointerup", onPointerUp);
+
   const cleanup = attachSelectionToolbarListener(ed, onSelectionUpdate);
   onSelectionUpdate();
   return () => {
+    editorDom.removeEventListener("pointerup", onPointerUp);
     // Cancel before delegating so a pending retry can't fire against a
     // torn-down editor.
     cancelAnimationFrame(pendingAffordanceFrame);
@@ -376,9 +422,9 @@ $effect(() => {
     if (document.activeElement === textareaEl) return;
     // While the popup's width is unrolling (entrance), the ResizeObserver fires
     // every frame; writing the mid-animation width into `toolbarWidth` would
-    // jitter the left-clamp as the popup grows. Hold the pre-entrance width until
-    // the entrance settles (the centered translateX(-50%) keeps the popup
-    // visually centered meanwhile).
+    // jitter the left-anchor clamp (maxLeft depends on width) as the popup grows.
+    // Hold the pre-entrance width until the entrance settles — the left edge stays
+    // pinned at the cursor X meanwhile, so there's nothing to correct mid-unroll.
     if (entering) return;
     const rect = el.getBoundingClientRect();
     // Only width feeds positioning now (left-edge clamp). Height is decoupled
@@ -855,7 +901,9 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
      morphTiming.css (imported above). */
   .selection-popup {
     position: fixed;
-    transform: translateX(-50%);
+    /* Cursor-origin unroll (#798): left-anchored at the cursor X (no centering
+       transform). `left` + `top`/`bottom` from popupPositionStyle pin the
+       cursor-side corner; popupEnter grows width/height from there. */
     display: flex;
     flex-direction: column;
     z-index: var(--tandem-z-modal);
