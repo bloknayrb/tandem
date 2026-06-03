@@ -1,6 +1,8 @@
 <script lang="ts">
 import { onDestroy, untrack } from "svelte";
 import { createScratchpad } from "../actions/builtin.svelte.js";
+import { isTauriRuntime } from "../cowork/cowork-helpers.js";
+import { loadInvoke } from "../cowork/cowork-invoke.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
 import type { OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
@@ -13,12 +15,22 @@ import {
 import { openServerPath } from "../utils/server-paths.js";
 import NewTabMenu from "./NewTabMenu.svelte";
 import TabItem from "./TabItem.svelte";
+import {
+  buildTabMenuContext,
+  hasRealPath,
+  isTabContextMenuActionId,
+  type TabContextMenuActionId,
+} from "./tab-context-menu.js";
 
 interface Props {
   tabs: OpenTab[];
   activeTabId: string | null;
   onTabSwitch: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
+  /** Close every tab except the given one (tab context menu, #923 Phase 2). */
+  onCloseOthers?: (tabId: string) => void;
+  /** Close every tab to the right of the given one in display order. */
+  onCloseToRight?: (tabId: string) => void;
   reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
   reduceMotion?: boolean;
   onRequestOpenDialog?: () => void;
@@ -35,6 +47,8 @@ const {
   activeTabId,
   onTabSwitch,
   onTabClose,
+  onCloseOthers,
+  onCloseToRight,
   reorder,
   reduceMotion = false,
   onRequestOpenDialog,
@@ -64,6 +78,73 @@ function guardedClose(tabId: string) {
   if (closingIds.has(tabId)) return;
   closingIds.add(tabId);
   onTabClose(tabId);
+}
+
+// ---- Native tab context menu (#923 Phase 2) -----------------------------
+// Tauri-only: in the browser we let the native WebView menu through. The tab
+// id + path are captured at right-click time (plain let — gesture bookkeeping,
+// never reactive) and consumed when the action event arrives. The action id
+// rides the same `context-menu-action` event as the editor menu; each surface
+// validates against its own closed id set and drops the other's ids.
+let ctxTabId: string | null = null;
+let ctxTabPath: string | null = null;
+
+async function handleTabContextMenu(e: MouseEvent) {
+  if (!isTauriRuntime()) return; // browser → native menu
+  const el = (e.target as Element | null)?.closest('[data-testid^="tab-"][role="tab"]');
+  const id = tabIdFromElement(el);
+  if (!id) return;
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab) return;
+
+  ctxTabId = id;
+  ctxTabPath = tab.filePath;
+  e.preventDefault();
+
+  try {
+    const invoke = await loadInvoke();
+    await invoke("show_tab_context_menu", { req: buildTabMenuContext(tabs, id) });
+  } catch {
+    // Tauri unavailable / command error — native menu already suppressed.
+  }
+}
+
+async function runTabAction(id: TabContextMenuActionId) {
+  const tabId = ctxTabId;
+  const path = ctxTabPath;
+  if (!tabId) return;
+  switch (id) {
+    case "ctx:tab:close":
+      guardedClose(tabId);
+      return;
+    case "ctx:tab:closeOthers":
+      onCloseOthers?.(tabId);
+      return;
+    case "ctx:tab:closeRight":
+      onCloseToRight?.(tabId);
+      return;
+    case "ctx:tab:copyPath":
+      // Re-check the path is real here too — don't trust the menu's enabled
+      // state alone (defense-in-depth vs a forged action event).
+      if (path && hasRealPath(path)) {
+        try {
+          await navigator.clipboard.writeText(path);
+        } catch {
+          /* clipboard denied — best-effort */
+        }
+      }
+      return;
+    case "ctx:tab:reveal":
+      if (path && hasRealPath(path)) {
+        try {
+          const invoke = await loadInvoke();
+          await invoke("show_in_file_manager", { path });
+        } catch {
+          /* reveal failed — best-effort */
+        }
+      }
+      return;
+  }
 }
 
 let scrollEl: HTMLDivElement | undefined = $state();
@@ -152,6 +233,34 @@ $effect(() => {
   };
 });
 
+// contextmenu listener attached imperatively on scrollEl (not an inline
+// handler) so the a11y analyzer doesn't demand a tabindex on the role="tablist"
+// element — a tablist must not itself be focusable. Delegation: handleTabContextMenu
+// resolves the clicked tab via closest([role="tab"]). (#923 Phase 2)
+$effect(() => {
+  const el = scrollEl;
+  if (!el) return;
+  el.addEventListener("contextmenu", handleTabContextMenu);
+  return () => el.removeEventListener("contextmenu", handleTabContextMenu);
+});
+
+// Single Tauri listener for the whole strip. Store the listen() PROMISE and
+// await it in teardown so a fast unmount can't leak the global listener.
+$effect(() => {
+  if (!isTauriRuntime()) return;
+  const unlistenP = import("@tauri-apps/api/event").then(({ listen }) =>
+    listen<{ id?: string }>("context-menu-action", (event) => {
+      const id = event.payload?.id;
+      if (!isTabContextMenuActionId(id)) return; // editor ids handled elsewhere
+      void runTabAction(id);
+    }),
+  );
+  unlistenP.catch(() => {});
+  return () => {
+    unlistenP.then((un) => un()).catch(() => {});
+  };
+});
+
 // Re-check overflow when tabs change
 $effect(() => {
   // Track tabs.length
@@ -206,6 +315,10 @@ function tabElementAtPoint(clientX: number, clientY: number): HTMLElement | null
   return (el as HTMLElement) ?? null;
 }
 
+function tabIdFromElement(el: Element | null | undefined): string | null {
+  return el?.getAttribute("data-testid")?.slice("tab-".length) ?? null;
+}
+
 function handlePointerMove(e: PointerEvent) {
   if (pointerId === null || e.pointerId !== pointerId || !draggedId) return;
   if (!dragging) {
@@ -216,7 +329,7 @@ function handlePointerMove(e: PointerEvent) {
   }
   e.preventDefault();
   const overEl = tabElementAtPoint(e.clientX, e.clientY);
-  const overId = overEl?.getAttribute("data-testid")?.slice("tab-".length) ?? null;
+  const overId = tabIdFromElement(overEl);
   if (!overEl || !overId || overId === draggedId) {
     dropTarget = null;
     return;

@@ -94,6 +94,7 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { tabIdsToCloseOthers, tabIdsToCloseRight } from "./tabs/tab-context-menu.js";
 import { openFileForRuntime } from "./utils/browse-file";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
@@ -131,6 +132,19 @@ function closeTabAndRecord(tabId: string) {
     closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
   }
   yjsSync.handleTabClose(tabId);
+}
+
+// Tab context-menu bulk closes (#923 Phase 2). The id lists are computed by
+// pure helpers (which guard against a stale right-clicked id closing every
+// tab) and snapshotted before the loop — closeTabAndRecord mutates the tab
+// list, so iterating live tabs would skip entries. Each close routes through
+// closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
+function closeOtherTabs(keepId: string) {
+  for (const id of tabIdsToCloseOthers(tabOrder.orderedTabs, keepId)) closeTabAndRecord(id);
+}
+
+function closeTabsToRight(fromId: string) {
+  for (const id of tabIdsToCloseRight(tabOrder.orderedTabs, fromId)) closeTabAndRecord(id);
 }
 
 async function reopenClosedTab() {
@@ -1537,6 +1551,8 @@ const tutorial = createTutorial(
     activeTabId={yjsSync.activeTabId}
     onTabSwitch={yjsSync.setActiveTabId}
     onTabClose={closeTabAndRecord}
+    onCloseOthers={closeOtherTabs}
+    onCloseToRight={closeTabsToRight}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     onRequestOpenDialog={() => void requestOpenFile()}

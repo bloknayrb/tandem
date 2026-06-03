@@ -837,6 +837,7 @@ pub fn run() {
             restart_sidecar,
             show_in_file_manager,
             show_context_menu,
+            show_tab_context_menu,
             install_update,
             keychain::keychain_get,
             keychain::keychain_set,
@@ -1043,14 +1044,13 @@ fn build_context_menu_spec(req: &ContextMenuRequest) -> Vec<CtxItem> {
     }
 }
 
-fn build_context_menu(
+fn build_menu_from_spec(
     window: &tauri::WebviewWindow,
-    req: &ContextMenuRequest,
+    spec: &[CtxItem],
 ) -> tauri::Result<Menu<tauri::Wry>> {
     use tauri::menu::IsMenuItem;
-    let spec = build_context_menu_spec(req);
     let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::with_capacity(spec.len());
-    for item in &spec {
+    for item in spec {
         let boxed: Box<dyn IsMenuItem<tauri::Wry>> = match *item {
             CtxItem::Cut => Box::new(PredefinedMenuItem::cut(window, None)?),
             CtxItem::Copy => Box::new(PredefinedMenuItem::copy(window, None)?),
@@ -1067,11 +1067,74 @@ fn build_context_menu(
     Menu::with_items(window, &refs)
 }
 
+fn build_context_menu(
+    window: &tauri::WebviewWindow,
+    req: &ContextMenuRequest,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    build_menu_from_spec(window, &build_context_menu_spec(req))
+}
+
 #[tauri::command]
 fn show_context_menu(window: tauri::WebviewWindow, req: ContextMenuRequest) -> Result<(), String> {
     let menu = build_context_menu(&window, &req).map_err(|e| e.to_string())?;
     // Cursor-position overload; popup is modal so the local `menu` outlives the
     // user's click and can drop afterwards (no retention needed).
+    window.popup_menu(&menu).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ---- Tab-strip context menu (issue #923, Phase 2) -------------------------
+//
+// Reuses the Phase 1 plumbing: the same fixed-id / boolean-only request shape,
+// the same `build_menu_from_spec` mapping, and the same app-level
+// `forward_context_menu_event` (any `ctx:`-prefixed id is emitted back). Tab
+// actions are all app-level (close tabs, copy path, reveal), so every item is a
+// custom `ctx:tab:*` id routed to the webview — no PredefinedMenuItems.
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TabContextMenuRequest {
+    /// More than one tab is open → "Close Others" is meaningful.
+    can_close_others: bool,
+    /// At least one tab sits to the right of the clicked tab.
+    can_close_right: bool,
+    /// The tab maps to a real on-disk file (not a scratchpad / upload) →
+    /// Copy Path + Reveal are meaningful.
+    has_path: bool,
+}
+
+/// OS-appropriate label for the reveal-in-file-manager item. Mirrors the
+/// per-OS verb users expect (Finder / Explorer / generic).
+fn reveal_in_file_manager_label(target_os: &str) -> &'static str {
+    match target_os {
+        "macos" => "Reveal in Finder",
+        "windows" => "Show in File Explorer",
+        _ => "Show in File Manager",
+    }
+}
+
+fn build_tab_context_menu_spec(req: &TabContextMenuRequest, target_os: &str) -> Vec<CtxItem> {
+    vec![
+        CtxItem::Custom("ctx:tab:close", "Close", true),
+        CtxItem::Custom("ctx:tab:closeOthers", "Close Others", req.can_close_others),
+        CtxItem::Custom("ctx:tab:closeRight", "Close to the Right", req.can_close_right),
+        CtxItem::Separator,
+        CtxItem::Custom("ctx:tab:copyPath", "Copy Path", req.has_path),
+        CtxItem::Custom(
+            "ctx:tab:reveal",
+            reveal_in_file_manager_label(target_os),
+            req.has_path,
+        ),
+    ]
+}
+
+#[tauri::command]
+fn show_tab_context_menu(
+    window: tauri::WebviewWindow,
+    req: TabContextMenuRequest,
+) -> Result<(), String> {
+    let spec = build_tab_context_menu_spec(&req, std::env::consts::OS);
+    let menu = build_menu_from_spec(&window, &spec).map_err(|e| e.to_string())?;
     window.popup_menu(&menu).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -2848,6 +2911,96 @@ mod context_menu_tests {
         .expect("camelCase request should deserialize");
         assert!(matches!(r.kind, ContextMenuKind::TableCell));
         assert!(r.can_merge_cells);
+    }
+}
+
+/// Unit tests for the Phase 2 tab-strip context-menu spec builder (#923).
+#[cfg(test)]
+mod tab_context_menu_tests {
+    use super::*;
+
+    fn req(can_close_others: bool, can_close_right: bool, has_path: bool) -> TabContextMenuRequest {
+        TabContextMenuRequest {
+            can_close_others,
+            can_close_right,
+            has_path,
+        }
+    }
+
+    fn enabled_of(spec: &[CtxItem], id: &str) -> Option<bool> {
+        spec.iter().find_map(|i| match i {
+            CtxItem::Custom(item_id, _, enabled) if *item_id == id => Some(*enabled),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn lists_all_actions_in_order() {
+        let spec = build_tab_context_menu_spec(&req(true, true, true), "linux");
+        let ids: Vec<&str> = spec
+            .iter()
+            .filter_map(|i| match i {
+                CtxItem::Custom(id, _, _) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "ctx:tab:close",
+                "ctx:tab:closeOthers",
+                "ctx:tab:closeRight",
+                "ctx:tab:copyPath",
+                "ctx:tab:reveal",
+            ]
+        );
+    }
+
+    #[test]
+    fn close_is_always_enabled() {
+        // Even a lone scratchpad tab can be closed.
+        let spec = build_tab_context_menu_spec(&req(false, false, false), "linux");
+        assert_eq!(enabled_of(&spec, "ctx:tab:close"), Some(true));
+    }
+
+    #[test]
+    fn close_others_and_right_gate_on_their_flags() {
+        let spec = build_tab_context_menu_spec(&req(false, false, true), "linux");
+        assert_eq!(enabled_of(&spec, "ctx:tab:closeOthers"), Some(false));
+        assert_eq!(enabled_of(&spec, "ctx:tab:closeRight"), Some(false));
+
+        let spec = build_tab_context_menu_spec(&req(true, true, true), "linux");
+        assert_eq!(enabled_of(&spec, "ctx:tab:closeOthers"), Some(true));
+        assert_eq!(enabled_of(&spec, "ctx:tab:closeRight"), Some(true));
+    }
+
+    #[test]
+    fn path_actions_gate_on_has_path() {
+        // Scratchpad / upload tab → no real path → Copy Path + Reveal disabled.
+        let spec = build_tab_context_menu_spec(&req(true, true, false), "macos");
+        assert_eq!(enabled_of(&spec, "ctx:tab:copyPath"), Some(false));
+        assert_eq!(enabled_of(&spec, "ctx:tab:reveal"), Some(false));
+    }
+
+    #[test]
+    fn reveal_label_is_os_specific() {
+        assert_eq!(reveal_in_file_manager_label("macos"), "Reveal in Finder");
+        assert_eq!(reveal_in_file_manager_label("windows"), "Show in File Explorer");
+        assert_eq!(reveal_in_file_manager_label("linux"), "Show in File Manager");
+        assert_eq!(reveal_in_file_manager_label("freebsd"), "Show in File Manager");
+    }
+
+    #[test]
+    fn request_deserializes_from_camel_case() {
+        let r: TabContextMenuRequest = serde_json::from_value(serde_json::json!({
+            "canCloseOthers": true,
+            "canCloseRight": false,
+            "hasPath": true,
+        }))
+        .expect("camelCase tab request should deserialize");
+        assert!(r.can_close_others);
+        assert!(!r.can_close_right);
+        assert!(r.has_path);
     }
 }
 
