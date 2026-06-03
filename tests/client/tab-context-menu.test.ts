@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTabMenuContext,
+  hasRealPath,
   isTabContextMenuActionId,
   TAB_CONTEXT_MENU_ACTION_IDS,
+  tabIdsToCloseOthers,
+  tabIdsToCloseRight,
 } from "../../src/client/tabs/tab-context-menu";
 
 describe("isTabContextMenuActionId", () => {
@@ -59,5 +62,58 @@ describe("buildTabMenuContext", () => {
     // canCloseOthers still reflects the open-count; right/path are false.
     expect(ctx.canCloseRight).toBe(false);
     expect(ctx.hasPath).toBe(false);
+  });
+});
+
+describe("hasRealPath", () => {
+  it("is true for on-disk files, false for scratchpad/upload", () => {
+    expect(hasRealPath("/home/me/notes.md")).toBe(true);
+    expect(hasRealPath("C:\\Users\\me\\notes.md")).toBe(true);
+    expect(hasRealPath("upload://report.docx")).toBe(false);
+    expect(
+      hasRealPath("upload://scratchpad/550e8400-e29b-41d4-a716-446655440000/Scratchpad.md"),
+    ).toBe(false);
+  });
+});
+
+describe("tabIdsToCloseOthers", () => {
+  const tabs = [
+    { id: "a", filePath: "/x/a.md" },
+    { id: "b", filePath: "/x/b.md" },
+    { id: "c", filePath: "/x/c.md" },
+  ];
+
+  it("returns every id except the kept one", () => {
+    expect(tabIdsToCloseOthers(tabs, "b")).toEqual(["a", "c"]);
+  });
+
+  it("returns empty when only the kept tab is open", () => {
+    expect(tabIdsToCloseOthers([tabs[0]], "a")).toEqual([]);
+  });
+
+  it("returns empty (never closes everything) when keepId is stale/missing", () => {
+    // The footgun guard: a vanished right-clicked tab must NOT close all tabs.
+    expect(tabIdsToCloseOthers(tabs, "gone")).toEqual([]);
+  });
+});
+
+describe("tabIdsToCloseRight", () => {
+  const tabs = [
+    { id: "a", filePath: "/x/a.md" },
+    { id: "b", filePath: "/x/b.md" },
+    { id: "c", filePath: "/x/c.md" },
+  ];
+
+  it("returns ids after the given tab in display order", () => {
+    expect(tabIdsToCloseRight(tabs, "a")).toEqual(["b", "c"]);
+    expect(tabIdsToCloseRight(tabs, "b")).toEqual(["c"]);
+  });
+
+  it("returns empty for the last tab", () => {
+    expect(tabIdsToCloseRight(tabs, "c")).toEqual([]);
+  });
+
+  it("returns empty (never closes all) for a stale/missing id — no slice(0)", () => {
+    expect(tabIdsToCloseRight(tabs, "gone")).toEqual([]);
   });
 });

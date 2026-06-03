@@ -94,6 +94,7 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
+import { tabIdsToCloseOthers, tabIdsToCloseRight } from "./tabs/tab-context-menu.js";
 import { openFileForRuntime } from "./utils/browse-file";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
@@ -133,21 +134,17 @@ function closeTabAndRecord(tabId: string) {
   yjsSync.handleTabClose(tabId);
 }
 
-// Tab context-menu bulk closes (#923 Phase 2). Snapshot the target ids from
-// the current display order BEFORE closing — closeTabAndRecord mutates the tab
+// Tab context-menu bulk closes (#923 Phase 2). The id lists are computed by
+// pure helpers (which guard against a stale right-clicked id closing every
+// tab) and snapshotted before the loop — closeTabAndRecord mutates the tab
 // list, so iterating live tabs would skip entries. Each close routes through
 // closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
 function closeOtherTabs(keepId: string) {
-  const targets = tabOrder.orderedTabs.filter((t) => t.id !== keepId).map((t) => t.id);
-  for (const id of targets) closeTabAndRecord(id);
+  for (const id of tabIdsToCloseOthers(tabOrder.orderedTabs, keepId)) closeTabAndRecord(id);
 }
 
 function closeTabsToRight(fromId: string) {
-  const ordered = tabOrder.orderedTabs;
-  const idx = ordered.findIndex((t) => t.id === fromId);
-  if (idx < 0) return;
-  const targets = ordered.slice(idx + 1).map((t) => t.id);
-  for (const id of targets) closeTabAndRecord(id);
+  for (const id of tabIdsToCloseRight(tabOrder.orderedTabs, fromId)) closeTabAndRecord(id);
 }
 
 async function reopenClosedTab() {
