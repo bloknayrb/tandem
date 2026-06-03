@@ -632,7 +632,7 @@ $effect(() => {
       border-radius var(--morph-p1) var(--tandem-ease-out) var(--morph-p2);
   }
   .nt-morph.open {
-    width: 460px; /* production menu width */
+    width: min(460px, calc(100vw - 16px)); /* clamp at viewport edge (8px each side) */
     border-radius: var(--tandem-r-4);
     background: var(--tandem-surface);
     border: 1px solid var(--tandem-border);
