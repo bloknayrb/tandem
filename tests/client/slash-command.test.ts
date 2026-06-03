@@ -108,8 +108,9 @@ describe("slash command plugin state", () => {
     editor.chain().focus().insertContent("/h").run();
     const state = slashCommandPluginKey.getState(editor.state);
     expect(state?.active?.query).toBe("h");
-    // h1, h2, h3, horizontal-rule (matched via "horizontal")
-    expect(filterSlashCommands("h")).toHaveLength(4);
+    // h1, h2, h3, horizontal-rule (via "horizontal"), task-list (via
+    // "checkbox"/"checklist") — substring match on label + keywords.
+    expect(filterSlashCommands("h")).toHaveLength(5);
     expect(state?.active?.selectedIndex).toBeLessThan(filterSlashCommands("h").length);
   });
 });

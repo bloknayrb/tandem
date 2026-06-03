@@ -23,6 +23,7 @@ import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
 import { HeadingCollapseExtension } from "./extensions/heading-collapse";
+import { ListItemCheckbox } from "./extensions/list-item-checkbox";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
@@ -138,7 +139,12 @@ $effect(() => {
   const next = new TiptapEditor({
     element: editorRoot,
     extensions: [
-      StarterKit.configure({ history: false }), // Yjs handles undo/redo
+      // `listItem: false` disables StarterKit's stock ListItem so our
+      // ListItemCheckbox (same node name "listItem", + a `checked` tri-state
+      // attribute for GFM task lists, #982) owns the schema. history:false —
+      // Yjs handles undo/redo.
+      StarterKit.configure({ history: false, listItem: false }),
+      ListItemCheckbox,
       Highlight.configure({ multicolor: true }),
       Link.configure({
         openOnClick: false,
