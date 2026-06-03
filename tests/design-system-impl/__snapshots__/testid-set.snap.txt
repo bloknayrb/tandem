@@ -224,8 +224,11 @@ palette-item-{*}
 panel-edge-collapse-{*}
 peek-strip-{*}
 popup-annotate-btn
+popup-annotate-row
 popup-annotation-input
 popup-comment-submit
+popup-format-row
+popup-highlight-none
 popup-highlight-{*}
 popup-note-submit
 popup-show-formatbar-btn

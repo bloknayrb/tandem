@@ -280,7 +280,7 @@ export function isValidChord(x: unknown): x is ShortcutChord {
   );
 }
 
-function isMacPlatform(): boolean {
+export function isMacPlatform(): boolean {
   try {
     if (typeof navigator === "undefined") return false;
     const plat =

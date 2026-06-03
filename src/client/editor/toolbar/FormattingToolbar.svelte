@@ -20,6 +20,10 @@ const { editor, disabled = false, variant = "bar" }: Props = $props();
 
 // $derived (not a plain const) so it tracks if `variant` ever becomes dynamic.
 const showHistory = $derived(variant === "bar");
+// A8: the horizontal-rule control stays on the persistent bar but is dropped
+// from the selection popup — inserting an <hr> while text is selected makes
+// little sense (sanctioned override of Conflict #5 for the popup, 2026-06-03).
+const showRule = $derived(variant === "bar");
 
 type HeadingLevel = 1 | 2 | 3;
 const HEADING_LEVELS: HeadingLevel[] = [1, 2, 3];
@@ -279,121 +283,7 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
       style="font-family: monospace;"
     />
 
-    <!-- Heading dropdown -->
-    <div
-      use:clickOutside={() => (showHeadingMenu = false)}
-      style="position: relative;"
-      onkeydown={(e) => {
-        if (e.key === "Escape") showHeadingMenu = false;
-      }}
-      role="presentation"
-    >
-      <ToolbarButton
-        label={headingLabel}
-        disabled={isDisabled}
-        active={activeHeading !== null}
-        ariaHasPopup="menu"
-        ariaExpanded={showHeadingMenu}
-        onMouseDown={(e: MouseEvent) => {
-          e.preventDefault();
-          showHeadingMenu = !showHeadingMenu;
-        }}
-        onClick={onKeyActivate((e: MouseEvent) => {
-          e.preventDefault();
-          showHeadingMenu = !showHeadingMenu;
-        })}
-      />
-      {#if showHeadingMenu}
-        <div
-          role="menu"
-          aria-label="Heading level"
-            style="position: absolute; top: 100%; left: 0; margin-top: 4px;
-            background: var(--tandem-surface); border: 1px solid var(--tandem-border);
-            border-radius: var(--tandem-r-3); padding: 4px; display: flex; flex-direction: column;
-            gap: 2px; z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-1);"
-        >
-          {#each HEADING_LEVELS as level (level)}
-            {@const headingHandler = handleHeadingToggle(level)}
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={activeHeading === level}
-              onmousedown={headingHandler}
-              onclick={onKeyActivate(headingHandler)}
-                style="padding: 4px 12px; font-size: 13px; border: none;
-                border-radius: var(--tandem-r-2);
-                background: {activeHeading === level ? 'var(--tandem-accent-bg)' : 'transparent'};
-                color: {activeHeading === level ? 'var(--tandem-accent)' : 'var(--tandem-fg)'};
-                cursor: pointer; text-align: left;
-                font-weight: {HEADING_FONT_WEIGHTS[level]}; white-space: nowrap;"
-            >
-              Heading {level}
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
-
-    <ToolbarButton
-      ariaLabel="Bullet list"
-      shortcut="Ctrl+Shift+8"
-      disabled={isDisabled}
-      active={isActiveBulletList}
-      onMouseDown={handleBulletList}
-      onClick={onKeyActivate(handleBulletList)}
-    >
-      {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="2" cy="4" r="1.5" fill="currentColor" />
-          <circle cx="2" cy="8" r="1.5" fill="currentColor" />
-          <circle cx="2" cy="12" r="1.5" fill="currentColor" />
-          <rect x="5" y="3" width="9" height="2" rx="1" fill="currentColor" />
-          <rect x="5" y="7" width="9" height="2" rx="1" fill="currentColor" />
-          <rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor" />
-        </svg>
-      {/snippet}
-    </ToolbarButton>
-    <ToolbarButton
-      ariaLabel="Ordered list"
-      shortcut="Ctrl+Shift+7"
-      disabled={isDisabled}
-      active={isActiveOrderedList}
-      onMouseDown={handleOrderedList}
-      onClick={onKeyActivate(handleOrderedList)}
-    >
-      {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <rect x="5" y="3" width="9" height="2" rx="1" fill="currentColor" />
-          <rect x="5" y="7" width="9" height="2" rx="1" fill="currentColor" />
-          <rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor" />
-          <text x="0" y="5.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">1.</text>
-          <text x="0" y="9.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">2.</text>
-          <text x="0" y="13.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">3.</text>
-        </svg>
-      {/snippet}
-    </ToolbarButton>
-    <ToolbarButton
-      ariaLabel="Blockquote"
-      shortcut="Ctrl+Shift+B"
-      disabled={isDisabled}
-      active={isActiveBlockquote}
-      onMouseDown={handleBlockquote}
-      onClick={onKeyActivate(handleBlockquote)}
-    >
-      {#snippet children()}
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <rect x="0" y="2" width="3" height="12" rx="1.5" fill="currentColor" />
-          <rect x="5" y="4" width="9" height="2" rx="1" fill="currentColor" opacity="0.7" />
-          <rect x="5" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7" />
-          <rect x="5" y="12" width="8" height="2" rx="1" fill="currentColor" opacity="0.7" />
-        </svg>
-      {/snippet}
-    </ToolbarButton>
-
-    <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
-
+    <!-- Link (A8: stays in the inline-marks group, right after Code). -->
     <div
       use:clickOutside={dismissLinkInput}
       style="position: relative;"
@@ -463,13 +353,138 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
         </div>
       {/if}
     </div>
+
+    <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
+
+    <!-- Heading dropdown (A8: leads the block group). -->
+    <div
+      use:clickOutside={() => (showHeadingMenu = false)}
+      style="position: relative;"
+      onkeydown={(e) => {
+        if (e.key === "Escape") showHeadingMenu = false;
+      }}
+      role="presentation"
+    >
+      <ToolbarButton
+        ariaLabel={activeHeading ? `Heading ${activeHeading}` : "Heading"}
+        disabled={isDisabled}
+        active={activeHeading !== null}
+        ariaHasPopup="menu"
+        ariaExpanded={showHeadingMenu}
+        style="gap: 2px; padding-right: 4px;"
+        onMouseDown={(e: MouseEvent) => {
+          e.preventDefault();
+          showHeadingMenu = !showHeadingMenu;
+        }}
+        onClick={onKeyActivate((e: MouseEvent) => {
+          e.preventDefault();
+          showHeadingMenu = !showHeadingMenu;
+        })}
+      >
+        {#snippet children()}
+          <!-- A8: serif "H" (level readout preserved — "H1/2/3" when active) +
+               faint caret, matching the bundle's H▾ heading affordance. -->
+          <span style="font-family: var(--tandem-font-serif); font-weight: 600; font-size: 13.5px; line-height: 1;"
+            >{headingLabel}</span
+          >
+          <span aria-hidden="true" style="color: var(--tandem-fg-faint); font-size: 10px; line-height: 1;">▾</span>
+        {/snippet}
+      </ToolbarButton>
+      {#if showHeadingMenu}
+        <div
+          role="menu"
+          aria-label="Heading level"
+            style="position: absolute; top: 100%; left: 0; margin-top: 4px;
+            background: var(--tandem-surface); border: 1px solid var(--tandem-border);
+            border-radius: var(--tandem-r-3); padding: 4px; display: flex; flex-direction: column;
+            gap: 2px; z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-1);"
+        >
+          {#each HEADING_LEVELS as level (level)}
+            {@const headingHandler = handleHeadingToggle(level)}
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={activeHeading === level}
+              onmousedown={headingHandler}
+              onclick={onKeyActivate(headingHandler)}
+                style="padding: 4px 12px; font-size: 13px; border: none;
+                border-radius: var(--tandem-r-2);
+                background: {activeHeading === level ? 'var(--tandem-accent-bg)' : 'transparent'};
+                color: {activeHeading === level ? 'var(--tandem-accent)' : 'var(--tandem-fg)'};
+                cursor: pointer; text-align: left;
+                font-weight: {HEADING_FONT_WEIGHTS[level]}; white-space: nowrap;"
+            >
+              Heading {level}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
     <ToolbarButton
-      label="—"
-      ariaLabel="Horizontal rule"
+      ariaLabel="Bullet list"
+      shortcut="Ctrl+Shift+8"
       disabled={isDisabled}
-      onMouseDown={handleHorizontalRule}
-      onClick={onKeyActivate(handleHorizontalRule)}
-    />
+      active={isActiveBulletList}
+      onMouseDown={handleBulletList}
+      onClick={onKeyActivate(handleBulletList)}
+    >
+      {#snippet children()}
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="2" cy="4" r="1.5" fill="currentColor" />
+          <circle cx="2" cy="8" r="1.5" fill="currentColor" />
+          <circle cx="2" cy="12" r="1.5" fill="currentColor" />
+          <rect x="5" y="3" width="9" height="2" rx="1" fill="currentColor" />
+          <rect x="5" y="7" width="9" height="2" rx="1" fill="currentColor" />
+          <rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor" />
+        </svg>
+      {/snippet}
+    </ToolbarButton>
+    <ToolbarButton
+      ariaLabel="Ordered list"
+      shortcut="Ctrl+Shift+7"
+      disabled={isDisabled}
+      active={isActiveOrderedList}
+      onMouseDown={handleOrderedList}
+      onClick={onKeyActivate(handleOrderedList)}
+    >
+      {#snippet children()}
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <rect x="5" y="3" width="9" height="2" rx="1" fill="currentColor" />
+          <rect x="5" y="7" width="9" height="2" rx="1" fill="currentColor" />
+          <rect x="5" y="11" width="9" height="2" rx="1" fill="currentColor" />
+          <text x="0" y="5.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">1.</text>
+          <text x="0" y="9.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">2.</text>
+          <text x="0" y="13.5" font-size="4.5" fill="currentColor" font-family="monospace" font-weight="bold">3.</text>
+        </svg>
+      {/snippet}
+    </ToolbarButton>
+    <ToolbarButton
+      ariaLabel="Blockquote"
+      shortcut="Ctrl+Shift+B"
+      disabled={isDisabled}
+      active={isActiveBlockquote}
+      onMouseDown={handleBlockquote}
+      onClick={onKeyActivate(handleBlockquote)}
+    >
+      {#snippet children()}
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <rect x="0" y="2" width="3" height="12" rx="1.5" fill="currentColor" />
+          <rect x="5" y="4" width="9" height="2" rx="1" fill="currentColor" opacity="0.7" />
+          <rect x="5" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7" />
+          <rect x="5" y="12" width="8" height="2" rx="1" fill="currentColor" opacity="0.7" />
+        </svg>
+      {/snippet}
+    </ToolbarButton>
+    {#if showRule}
+      <ToolbarButton
+        label="—"
+        ariaLabel="Horizontal rule"
+        disabled={isDisabled}
+        onMouseDown={handleHorizontalRule}
+        onClick={onKeyActivate(handleHorizontalRule)}
+      />
+    {/if}
     <ToolbarButton
       ariaLabel="Code block"
       disabled={isDisabled}

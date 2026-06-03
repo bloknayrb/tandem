@@ -11,13 +11,15 @@ import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
 import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
+import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
+import { ENTER_POPUP_MS, motionOff, popupEnter } from "../../panels/cardMotion";
 import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
 import FormattingToolbar from "./FormattingToolbar.svelte";
-import { toggleHighlight } from "./highlight-toggle";
+import { clearHighlight, toggleHighlight } from "./highlight-toggle";
 import {
   attachSelectionToolbarListener,
   computeSelectionToolbarPosition,
@@ -54,12 +56,15 @@ interface Props {
     decorationsMuted?: boolean;
   }) => void;
   onOpenSettings?: () => void;
-  // 1.11: whether the persistent formatting bar is currently shown. When it's
-  // hidden, the popup surfaces a "show formatting bar" affordance (the symmetric
-  // restore for the bar's own hide button) so the bar is reachable without the
-  // command palette / Appearance settings.
+  // 1.11 / A8: whether the persistent formatting bar is currently shown. The
+  // popup always surfaces a swap control that toggles it (hide when shown, show
+  // when hidden) — so the bar is reachable without the command palette /
+  // Appearance settings, and hideable straight from the popup. (A8 spec: the
+  // swap lives in the format row; the bar mirrors the format row.)
   formattingBarVisible?: boolean;
-  onShowFormattingBar?: () => void;
+  onToggleFormattingBar?: () => void;
+  /** App `reduceMotion` setting, threaded to the A28 popup entrance transition. */
+  reduceMotion?: boolean;
 }
 
 let {
@@ -76,7 +81,8 @@ let {
   onUpdateDecorations,
   onOpenSettings,
   formattingBarVisible = true,
-  onShowFormattingBar,
+  onToggleFormattingBar,
+  reduceMotion = false,
 }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
@@ -93,6 +99,55 @@ let annotationText = $state("");
 let capturedRange = $state<{ from: number; to: number } | null>(null);
 let textareaEl = $state<HTMLTextAreaElement | null>(null);
 let annotateMode = $state(false);
+
+// A28 dwell + entrance (#798).
+// `dwellSatisfied` gates `showPopup`: the popup appears only after the selection
+// has been held steady for DWELL_MS (a NEW client-side intent gate — NOT
+// `selectionDwellMs`, which gates the server channel selection event). `entering`
+// freezes the width-feedback positioning (see updateToolbarMetrics) for the
+// duration of the entrance so the left-clamp can't jitter as the popup's width
+// unrolls. Both are plain timers; `beginEntrance()` sets `entering` in the SAME
+// synchronous write that flips `dwellSatisfied`/the requestCommentFocus bypass,
+// so it is already true when the mount-triggered ResizeObserver effect runs.
+const DWELL_MS = 360;
+let dwellSatisfied = $state(false);
+let entering = $state(false);
+let dwellTimer: ReturnType<typeof setTimeout> | undefined;
+let enteringTimer: ReturnType<typeof setTimeout> | undefined;
+// Selection endpoints the dwell timer is currently armed for. Plain `let` (read
+// from a Tiptap listener, not a reactive scope).
+let lastDwellFrom = -1;
+let lastDwellTo = -1;
+
+function beginEntrance() {
+  // Reduced motion: `popupEnter` already returns a zero-duration transition, so
+  // there's no width-unroll to protect. Skip the freeze entirely — arming it
+  // would leave the metrics effect on a stale `toolbarWidth` for ENTER_POPUP_MS
+  // (a delayed left-clamp snap near the viewport edge) with no animation to hide.
+  if (motionOff(reduceMotion)) return;
+  entering = true;
+  clearTimeout(enteringTimer);
+  enteringTimer = setTimeout(() => {
+    entering = false;
+  }, ENTER_POPUP_MS);
+}
+
+function clearDwell() {
+  clearTimeout(dwellTimer);
+  clearTimeout(enteringTimer);
+  dwellSatisfied = false;
+  entering = false;
+  lastDwellFrom = -1;
+  lastDwellTo = -1;
+}
+
+// Platform-correct modifier glyphs for the submit-button hints. The handlers in
+// handleTextareaKeyDown are fixed (Alt+Enter = note, Ctrl/Cmd+Enter = send), so
+// these aren't remappable-shortcut ids — we just need the right modifier per OS:
+// Mac uses the symbol glyphs, Windows/Linux the spelled-out modifier + the ⏎ key.
+const isMac = isMacPlatform();
+const noteHintKbd = isMac ? "⌥⏎" : "Alt+⏎";
+const sendHintKbd = isMac ? "⌘⏎" : "Ctrl+⏎";
 
 // A26 morph (#798). The popup's two content blocks are ALWAYS mounted (so the
 // unfurl has a "from" value and so focus/draft handlers never race a swap-mount);
@@ -125,7 +180,11 @@ const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
 
 const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 const showPopup = $derived(
-  selectionToolbar && !suppressSelectionToolbar && canAnnotate && selectionPosition !== null,
+  selectionToolbar &&
+    !suppressSelectionToolbar &&
+    canAnnotate &&
+    selectionPosition !== null &&
+    dwellSatisfied,
 );
 const annotationTextTrimmed = $derived(annotationText.trim());
 
@@ -150,7 +209,33 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     selectionPosition = null;
     lastPlacement = undefined;
     affordanceRetryCount = 0;
+    clearDwell();
+    // Reset to format-first for the NEXT selection. annotateMode otherwise only
+    // resets in dismissPopup (Escape / submit), so after clicking Annotate a
+    // brand-new selection stayed stuck in the composer instead of showing the
+    // format/annotate popup (pre-existing; also on master). The editor selection
+    // collapses (this `!next` path) before every new click/drag selection, but
+    // an in-place drag-EXTEND never collapses — so it's preserved. Guard on
+    // textarea focus so we never pull the user out of a composer they're typing
+    // in (draft text is intentionally left intact for click-away recovery).
+    if (document.activeElement !== textareaEl) annotateMode = false;
     return;
+  }
+
+  // A28 dwell: (re)arm the appearance timer when the selection endpoints change,
+  // but only while not yet satisfied — so a drag-extend AFTER the popup is shown
+  // keeps it shown (and just repositions) instead of hiding it. Pinned before the
+  // `try` so it's decoupled from the coordsAtPos throw/retry path and the
+  // dedup early-return below. Once it fires, `beginEntrance()` + `dwellSatisfied`
+  // are set in one batched write (so `entering` wins the mount RO race).
+  if (!dwellSatisfied && (from !== lastDwellFrom || to !== lastDwellTo)) {
+    lastDwellFrom = from;
+    lastDwellTo = to;
+    clearTimeout(dwellTimer);
+    dwellTimer = setTimeout(() => {
+      beginEntrance();
+      dwellSatisfied = true;
+    }, DWELL_MS);
   }
 
   try {
@@ -225,6 +310,10 @@ $effect(() => {
     // torn-down editor.
     cancelAnimationFrame(pendingAffordanceFrame);
     pendingAffordanceFrame = 0;
+    // A28: cancel pending dwell/entrance timers so they can't write $state into
+    // an unmounted component (or clear `entering` into a later popup's entrance).
+    clearTimeout(dwellTimer);
+    clearTimeout(enteringTimer);
     cleanup();
   };
 });
@@ -275,10 +364,22 @@ $effect(() => {
   const ed = editor;
   const el = toolbarEl;
   if (!ed || !el || !selectionPosition) return;
+  // A28: read `entering` so this effect re-runs when the entrance settles
+  // (true→false). That re-run re-invokes the synchronous measure below, replacing
+  // the width held during the unroll with the real measured width — the
+  // guaranteed settle the ResizeObserver alone can't promise (its final fire can
+  // race the entering-clear timer).
+  const frozen = entering;
 
   const updateToolbarMetrics = () => {
     // Skip position jitter while textarea is focused
     if (document.activeElement === textareaEl) return;
+    // While the popup's width is unrolling (entrance), the ResizeObserver fires
+    // every frame; writing the mid-animation width into `toolbarWidth` would
+    // jitter the left-clamp as the popup grows. Hold the pre-entrance width until
+    // the entrance settles (the centered translateX(-50%) keeps the popup
+    // visually centered meanwhile).
+    if (entering) return;
     const rect = el.getBoundingClientRect();
     // Only width feeds positioning now (left-edge clamp). Height is decoupled
     // from placement (A26 morph uses SELECTION_POPUP_HEIGHT_RESERVE), so the
@@ -287,7 +388,9 @@ $effect(() => {
     updateSelectionAffordance(ed);
   };
 
-  updateToolbarMetrics();
+  // Skip the initial synchronous measure while frozen (it would no-op anyway);
+  // the post-settle re-run does the real measure.
+  if (!frozen) updateToolbarMetrics();
   const observer = new ResizeObserver(updateToolbarMetrics);
   observer.observe(el);
   return () => observer.disconnect();
@@ -316,6 +419,14 @@ $effect(() => {
   if (from === to) return; // No selection → no-op
   untrack(() => captureSelectionRange());
   annotateMode = true;
+  // A28: explicit "give me a comment box now" intent bypasses the dwell — show
+  // the popup immediately. `selectionPosition` is already non-null here (the live
+  // selection ran updateSelectionAffordance), so flipping `dwellSatisfied`
+  // mounts the popup at once; `beginEntrance()` arms the width-freeze in the same
+  // batched write so it wins the mount ResizeObserver race. Bare writes — no
+  // `untrack` needed (untrack guards reads, not writes).
+  dwellSatisfied = true;
+  beginEntrance();
   requestAnimationFrame(() => textareaEl?.focus());
 });
 
@@ -372,7 +483,7 @@ function createAnnotation(
   type: AnnotationType,
   content: string,
   extras?: { color?: HighlightColor },
-) {
+): void {
   if (!editor || !ydoc) return;
   // Structural empty-content guard (defense-in-depth): the textarea handlers
   // already guard, but keep the invariant at the write seam so no future caller
@@ -440,6 +551,26 @@ function handleHighlight(color: HighlightColor) {
   editor.chain().setTextSelection(to).run();
 }
 
+// A8 "none"/eraser swatch — clear any user highlight on the selection, any
+// color. Mirrors handleHighlight's coordinate handling exactly: capturedRange
+// holds *PM* positions, but stored highlights use *flat* offsets, so we must
+// convert via pmPosToFlatOffset before matching (a raw capturedRange would
+// silently no-op). Same collapse-after so the cleared range is visible.
+function handleClearHighlight() {
+  if (!editor || !ydoc) return;
+
+  const range = capturedRange ?? editor.state.selection;
+  const { from, to } = range;
+  if (from === to) return;
+
+  const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
+  const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
+
+  clearHighlight(ydoc, { from: flatFrom, to: flatTo });
+  capturedRange = null;
+  editor.chain().setTextSelection(to).run();
+}
+
 // Keyboard activation (Enter / Space on a focused button) fires `click` with
 // `detail === 0`. The mouse path uses `mousedown` so the editor selection
 // survives. Pair `onmousedown` (mouse, preventDefault) with
@@ -457,6 +588,7 @@ function dismissPopup() {
   capturedRange = null;
   annotationText = "";
   annotateMode = false;
+  clearDwell();
   editor?.chain().focus().run();
 }
 
@@ -497,13 +629,16 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
 </script>
 
 {#if showPopup && selectionPosition}
-  <!-- Selection popup uses the shared .tandem-floating-pill recipe so its
-       shadow + warm/white/dark variants match the formatting bar and
-       titlebar pills. 1.11: always the full stacked surface — a format pill
-       (FormattingToolbar variant="popup" + the mirrored Decorations control,
-       plus a "show formatting bar" button when the bar is hidden) over an
-       annotate pill (highlight swatches + Annotate). The format pill mirrors the
-       formatting bar so every control stays reachable when the bar is hidden.
+  <!-- Selection popup (A8 two-pill, #798). FORMAT state: the outer shell is
+       chrome-less and hosts a column of TWO .tandem-floating-pill capsules — a
+       format-controls capsule (FormattingToolbar variant="popup" + the mirrored
+       Decorations control + a hide/show-bar swap) over an annotate capsule
+       (highlight swatches + Annotate) — separated by a 5px gap the editor shows
+       through. ANNOTATE state: the shell itself becomes the note-popover card
+       (re-acquiring the .tandem-floating-pill chrome, P1-tweened) around the
+       composer. The format capsules mirror the formatting bar so every control
+       stays reachable when the bar is hidden; shadow + warm/white/dark variants
+       match the bar + titlebar pills via the shared recipe.
        -webkit-app-region: no-drag — it's fixed chrome over the Tauri WebView. -->
   <div
     bind:this={toolbarEl}
@@ -511,7 +646,9 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     aria-label="Selection tools"
     class="tandem-floating-pill selection-popup"
     class:is-annotate={annotateMode}
+    class:is-below={selectionPosition.placement === "below"}
     style={popupPositionStyle}
+    in:popupEnter={{ reduceMotion }}
   >
     <!-- A26 morph (#798): BOTH blocks are always mounted; the inactive one is
          collapsed via `grid-template-rows: 0fr` (see scoped styles below) and `inert`
@@ -525,95 +662,141 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
            on the bar + Ctrl+Z/Y) + the mirrored Decorations control. Every
            FormattingToolbar button already binds onMouseDown+withPreventDefault
            so clicking one cannot blur the editor / collapse the selection. -->
-      <div style="display: flex; align-items: center; gap: 1px; padding: 4px 4px 2px;">
-        <FormattingToolbar {editor} variant="popup" />
-        {#if onUpdateDecorations}
-          <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
-          <!-- preventDefault on mousedown keeps the editor selection alive while
-               interacting with the (onclick-based) Decorations control, so a
-               toggle can't dismiss the popup before a follow-up Annotate.
-               click still fires — preventDefault on mousedown only blocks the
-               focus shift, not the click. -->
-          <div
-            style="display: inline-flex; align-items: center;"
-            onmousedown={(e) => e.preventDefault()}
-            role="presentation"
-          >
-            <DecorationsMenu
-              {showAuthorship}
-              {showComments}
-              {showHighlights}
-              {showNotes}
-              {decorationsMuted}
-              onUpdate={onUpdateDecorations}
-              {onOpenSettings}
-            />
-          </div>
-        {/if}
-        {#if !formattingBarVisible && onShowFormattingBar}
-          <!-- Symmetric restore for the formatting bar's own hide button
-               (chevron-up). Only rendered while the bar is hidden. onmousedown
-               preventDefault keeps the editor selection alive so restoring the
-               bar doesn't dismiss the popup mid-interaction; onclick (filtered
-               to keyboard activation) covers Enter/Space. -->
-          <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
-          <button
-            type="button"
-            data-testid="popup-show-formatbar-btn"
-            aria-label="Show formatting bar"
-            title="Show formatting bar"
-            onmousedown={(e) => {
-              e.preventDefault();
-              onShowFormattingBar?.();
-            }}
-            onclick={onKeyActivate(() => onShowFormattingBar?.())}
-            style="height: 26px; min-width: 26px; padding: 0 6px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          </button>
-        {/if}
-      </div>
-      <div style="height: 1px; background: var(--tandem-border); margin: 0 6px;"></div>
-      <!-- Annotate pill: highlight swatches + Annotate. -->
-      <div style="display: flex; align-items: center; gap: 1px; padding: 2px 4px 4px;">
-        <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
-          {#each MINI_HIGHLIGHT_COLORS as color}
+      <!-- A8 two-pill (#798): the format state is a transparent column of TWO
+           independently-chromed .tandem-floating-pill capsules with a 5px gap the
+           editor shows through (matching the bundle's .popup-card). The outer
+           shell sheds its chrome in format state and re-acquires it as the note
+           card in .is-annotate (P1 tween — see scoped styles). onmousedown
+           preventDefault on the column keeps the editor selection alive across
+           every non-button chrome region (the gap, capsule padding) so a stray
+           click can't blur → collapse the selection → drop capturedRange. -->
+      <div class="popup-format-col" onmousedown={(e) => e.preventDefault()} role="presentation">
+        <!-- Capsule 1: full mark/block control set (no Undo/Redo — those stay on
+             the bar + Ctrl+Z/Y) + the mirrored Decorations control + bar-swap. -->
+        <div class="pill-row tandem-floating-pill" data-testid="popup-format-row">
+          <FormattingToolbar {editor} variant="popup" />
+          {#if onUpdateDecorations}
+            <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
+            <!-- preventDefault on mousedown keeps the editor selection alive while
+                 interacting with the (onclick-based) Decorations control, so a
+                 toggle can't dismiss the popup before a follow-up Annotate.
+                 click still fires — preventDefault on mousedown only blocks the
+                 focus shift, not the click. -->
+            <div
+              style="display: inline-flex; align-items: center;"
+              onmousedown={(e) => e.preventDefault()}
+              role="presentation"
+            >
+              <DecorationsMenu
+                {showAuthorship}
+                {showComments}
+                {showHighlights}
+                {showNotes}
+                {decorationsMuted}
+                onUpdate={onUpdateDecorations}
+                {onOpenSettings}
+              />
+            </div>
+          {/if}
+          {#if onToggleFormattingBar}
+            <!-- A8 swap: persistent hide/show-bar toggle at the far right of the
+                 format row. Chevron-up = hide (bar shown), chevron-down = show
+                 (bar hidden) — mirrors the bar's own hide button, opposite
+                 direction. Always present (unlike the old show-only affordance),
+                 so the bar is both hideable and reachable from the popup. testid
+                 kept for the E2E contract though it now toggles both ways.
+                 onmousedown preventDefault keeps the editor selection alive so
+                 toggling doesn't dismiss the popup mid-interaction; onclick
+                 (filtered to keyboard activation) covers Enter/Space. -->
+            <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px; flex-shrink: 0;"></div>
             <button
               type="button"
-              data-testid={`popup-highlight-${color}`}
-              aria-label={`Highlight ${color}`}
-              title={`Highlight ${color}`}
+              data-testid="popup-show-formatbar-btn"
+              aria-label={formattingBarVisible ? "Hide formatting bar" : "Show formatting bar"}
+              title={formattingBarVisible ? "Hide formatting bar" : "Show formatting bar"}
               onmousedown={(e) => {
                 e.preventDefault();
-                handleHighlight(color);
+                onToggleFormattingBar?.();
+              }}
+              onclick={onKeyActivate(() => onToggleFormattingBar?.())}
+              style="height: 26px; min-width: 26px; padding: 0 6px; border: 1px solid transparent; background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-pill); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d={formattingBarVisible ? "m18 15-6-6-6 6" : "m6 9 6 6 6-6"} />
+              </svg>
+            </button>
+          {/if}
+        </div>
+        <!-- Capsule 2: highlight swatches + Annotate. -->
+        <div class="pill-row tandem-floating-pill" data-testid="popup-annotate-row">
+          <div style="display: inline-flex; gap: 3px; padding: 0 4px;" aria-label="Highlight colors">
+            <!-- A8: the strip leads with a "none" swatch so clearing a highlight
+                 is one click (any color), not a same-color re-click. preventDefault
+                 keeps the selection alive; clearHighlight resolves PM→flat inside
+                 handleClearHighlight (capturedRange holds PM positions). -->
+            <button
+              type="button"
+              data-testid="popup-highlight-none"
+              aria-label="No highlight"
+              title="No highlight"
+              onmousedown={(e) => {
+                e.preventDefault();
+                handleClearHighlight();
                 editor?.chain().focus().run();
               }}
               onclick={onKeyActivate(() => {
-                handleHighlight(color);
+                handleClearHighlight();
                 editor?.chain().focus().run();
               })}
-              style={`width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLOR_VARS[color]}; cursor: pointer; padding: 0;`}
-            ></button>
-          {/each}
+              style="width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface); cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center;"
+            >
+              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                <line x1="3.5" y1="12.5" x2="12.5" y2="3.5" stroke="var(--tandem-fg-muted)" stroke-width="1.5" stroke-linecap="round" />
+              </svg>
+            </button>
+            {#each MINI_HIGHLIGHT_COLORS as color}
+              <button
+                type="button"
+                data-testid={`popup-highlight-${color}`}
+                aria-label={`Highlight ${color}`}
+                title={`Highlight ${color}`}
+                onmousedown={(e) => {
+                  e.preventDefault();
+                  handleHighlight(color);
+                  editor?.chain().focus().run();
+                }}
+                onclick={onKeyActivate(() => {
+                  handleHighlight(color);
+                  editor?.chain().focus().run();
+                })}
+                style={`width: 16px; height: 16px; border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: ${HIGHLIGHT_COLOR_VARS[color]}; cursor: pointer; padding: 0;`}
+              ></button>
+            {/each}
+          </div>
+          <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
+          <button
+            type="button"
+            data-testid="popup-annotate-btn"
+            aria-label="Annotate"
+            onmousedown={(e) => {
+              e.preventDefault();
+              openAnnotateMode();
+            }}
+            onclick={onKeyActivate(() => openAnnotateMode())}
+            style="height: 24px; padding: 0 12px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;"
+          >
+            <!-- A8: leading pencil icon on the Annotate affordance. -->
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+            </svg>
+            Annotate
+          </button>
         </div>
-        <div style="width: 1px; height: 18px; background: var(--tandem-border); margin: 0 3px;"></div>
-        <button
-          type="button"
-          data-testid="popup-annotate-btn"
-          aria-label="Annotate"
-          onmousedown={(e) => {
-            e.preventDefault();
-            openAnnotateMode();
-          }}
-          onclick={onKeyActivate(() => openAnnotateMode())}
-          style="height: 24px; padding: 0 12px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-pill); font-size: 12px; font-weight: 600; cursor: pointer;"
-        >Annotate</button>
       </div>
       </div>
     </div>
-    <div class="morph-block" class:is-active={annotateMode} inert={!annotateMode}>
+    <div class="morph-block morph-annotate" class:is-active={annotateMode} inert={!annotateMode}>
       <div class="morph-block-inner">
       <!-- Annotate popover. Keybindings: Alt+Enter = Note to self (private),
            Ctrl/Cmd+Enter = Send to Claude (outbound), plain Enter = newline. -->
@@ -639,7 +822,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
             style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
           >
             Note to self
-            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-fg-subtle);">⌥⏎</kbd>
+            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-fg-subtle);">{noteHintKbd}</kbd>
           </button>
           <button
             type="button"
@@ -651,7 +834,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
             style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
           >
             Send to {agentLabel.family}
-            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-author-user);">⌘⏎</kbd>
+            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-author-user);">{sendHintKbd}</kbd>
           </button>
         </div>
       </div>
@@ -662,12 +845,14 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
 
 <style>
   /* A26 morph (#798): the selection popup morphs in place between its format
-     state and its annotate (note-popover) state. Structural/animation CSS lives
-     here (class-toggled on persistent DOM identity); per the family decision
-     (option B) width is NOT morphed — it's constant at the natural format width,
-     so only border-radius (P1) and the block unfurl (P2) animate. The width
-     unroll belongs to M2's fresh-mount entrance. Timing tokens + the dual
-     reduced-motion guard come from morphTiming.css (imported above). */
+     state (two chrome-less capsules) and its annotate (note-popover) state (a
+     single chromed card). Structural/animation CSS lives here (class-toggled on
+     persistent DOM identity); per the family decision (option B) width is NOT
+     morphed — it's constant at the natural format width, so P1 animates the shell
+     chrome (border-radius + the bg/border/shadow/backdrop fade-in as it becomes
+     the card) and P2 animates the block unfurl. The width unroll belongs to M2's
+     fresh-mount entrance. Timing tokens + the dual reduced-motion guard come from
+     morphTiming.css (imported above). */
   .selection-popup {
     position: fixed;
     transform: translateX(-50%);
@@ -677,12 +862,59 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     /* Fixed chrome over the Tauri WebView — never part of the drag region. */
     -webkit-app-region: no-drag;
     border-radius: var(--tandem-r-3);
-    /* P1. Only fires on the is-annotate class toggle, never on mount (a CSS
-       transition never animates an element's initial computed value). */
-    transition: border-radius var(--morph-p1) var(--tandem-ease-out);
+    /* A8 two-pill: the shell is CHROME-LESS in the format state — the two
+       .pill-row capsules carry their own border/shadow and the editor shows
+       through the 5px gap. These scoped rules override the global
+       .tandem-floating-pill recipe (higher specificity). `border` stays
+       `1px solid transparent` (not none) so border-color can interpolate during
+       P1; `backdrop-filter` is zeroed so it doesn't blur the inter-capsule gap.
+       The shell re-acquires the full card chrome in .is-annotate (= the note
+       popover), and P1 tweens all of it. P1 fires only on the .is-annotate
+       toggle, never on mount (a transition never animates an initial value), and
+       there is no annotate→format reverse, so the chrome tweens transparent→card
+       exactly once. */
+    background: transparent;
+    border: 1px solid transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    transition:
+      border-radius var(--morph-p1) var(--tandem-ease-out),
+      background-color var(--morph-p1) var(--tandem-ease-out),
+      border-color var(--morph-p1) var(--tandem-ease-out),
+      box-shadow var(--morph-p1) var(--tandem-ease-out),
+      backdrop-filter var(--morph-p1) var(--tandem-ease-out);
   }
   .selection-popup.is-annotate {
     border-radius: var(--tandem-r-4);
+    background: var(--tandem-surface);
+    border-color: var(--tandem-border);
+    box-shadow: var(--c7-pill-shadow);
+    backdrop-filter: saturate(140%) blur(8px);
+    -webkit-backdrop-filter: saturate(140%) blur(8px);
+  }
+
+  /* A8 two-pill: format-state column of two capsules. The gap lives HERE (inside
+     morph-format), never on .selection-popup — a shell-level flex gap would
+     render a phantom 5px against the 0fr-collapsed annotate block. Capsules are
+     width:max-content so the narrower annotate row doesn't stretch to the format
+     row's width (column children stretch by default). Each capsule pulls its
+     chrome from the global .tandem-floating-pill class; here we add only layout.
+     Capsules keep the default `overflow: visible` and create NO stacking context
+     (no z-index/transform/isolation) so capsule-1's heading/Decorations
+     dropdowns escape clipping AND paint over capsule 2. */
+  .popup-format-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+  }
+  .popup-format-col .pill-row {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    padding: 4px 6px;
+    width: max-content;
   }
 
   /* P2. Each block animates its grid row 0fr→1fr — to the NATURAL content
@@ -718,5 +950,21 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
   .morph-format.is-active,
   .morph-format.is-active > .morph-block-inner {
     overflow: visible;
+  }
+
+  /* Unfurl direction must follow the anchor. A "below" popup is top-anchored
+     (`top` set, `bottom: auto`), so the composer must grow DOWNWARD from a fixed
+     top edge — which means the annotate block has to be the TOP flex child.
+     Without this swap the format block (source-first) collapses ABOVE the
+     annotate block, dragging the composer's top edge upward as it grows, so it
+     reads as unfurling up regardless of placement (#798 M1 spot-check). An
+     "above" popup is bottom-anchored and keeps source order (annotate is the
+     bottom child, grows upward from the fixed bottom). `order` is purely visual —
+     DOM/tab/AT order is unchanged. */
+  .selection-popup.is-below .morph-annotate {
+    order: 0;
+  }
+  .selection-popup.is-below .morph-format {
+    order: 1;
   }
 </style>

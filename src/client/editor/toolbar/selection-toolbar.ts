@@ -10,13 +10,15 @@ export const SELECTION_TOOLBAR_SELECTION_GAP = 10;
 export const SELECTION_TOOLBAR_FLIP_HYSTERESIS = 4;
 
 // Conservative height used by the A26 morph (#798) to DECIDE placement, so the
-// above/below choice is stable across the format↔annotate morph (the popup's
-// real height animates ~73→~85px). Passing this constant — rather than the live
-// animating `toolbarHeight` — means a placement re-decision can't flip mid-morph
-// and the height-independent edge-anchor (`bottom` for above) always clears
-// MIN_TOP as the popup grows to its real height. A safe over-estimate of the
-// real popup height (~85px) — the morph grows each block to its natural height
-// (grid-row 0fr→1fr), so there is no fixed max-height cap for this to match.
+// above/below choice is stable across the format↔annotate morph. Since the A8
+// two-pill restructure the format state is two stacked capsules + a 5px gap
+// (~95–105px); the annotate composer (textarea max-height 120px + buttons)
+// remains the taller, binding case. Only `rect.width` feeds positioning — height
+// reaches the placement math ONLY as this constant — so a taller format state
+// can't move the anchor. Passing this constant rather than the live animating
+// `toolbarHeight` means a placement re-decision can't flip mid-morph and the
+// height-independent edge-anchor (`bottom` for above) always clears MIN_TOP as
+// the popup grows. A deliberate over-estimate that clears every state.
 export const SELECTION_POPUP_HEIGHT_RESERVE = 200;
 
 export type SelectionToolbarPlacement = "above" | "below";
