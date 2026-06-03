@@ -247,7 +247,7 @@ Append **structured** markdown to the end of the document. Unlike `tandem_edit` 
 
 **Returns:**
 ```json
-{ "appended": true, "blockCount": 3, "textLength": 142 }
+{ "appended": true, "blockCount": 3 }
 ```
 
 **Errors:** `FORMAT_ERROR` (read-only, or non-markdown document), `FILE_TOO_LARGE` (content over the 1 MB inline cap), `NO_DOCUMENT`

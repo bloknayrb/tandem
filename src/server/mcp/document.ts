@@ -620,13 +620,18 @@ export function registerDocumentTools(server: McpServer): void {
         const fragAfter = fragment.length;
 
         // Stamp only the freshly-appended top-level blocks as Claude authorship,
-        // mirroring tandem_edit's automatic stamp of inserted text.
-        stampClaudeAuthorshipWholeDoc(r.doc, fragBefore);
+        // mirroring tandem_edit's automatic stamp of inserted text. Skip the
+        // whole-fragment walk when nothing was appended (e.g. whitespace-only).
+        if (fragAfter > fragBefore) {
+          stampClaudeAuthorshipWholeDoc(r.doc, fragBefore);
+        }
 
         return mcpSuccess({
           appended: true,
+          // Fragment-element delta, not an mdast-paragraph count: splitParagraphImages
+          // can emit multiple elements from one paragraph, so this may exceed the
+          // number of source markdown paragraphs.
           blockCount: fragAfter - fragBefore,
-          textLength: extractText(r.doc).length,
         });
       });
     }),
