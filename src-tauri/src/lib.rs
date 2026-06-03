@@ -1445,11 +1445,26 @@ async fn run_setup(handle: &tauri::AppHandle, client: &reqwest::Client) -> Resul
 /// Channel JS and other resources live in resource_dir.
 fn resolve_setup_paths(handle: &tauri::AppHandle) -> Result<(String, String), String> {
     if cfg!(debug_assertions) {
-        // Dev mode: use bare "node" (PATH-dependent) and repo-relative channel path
-        let channel_path = std::env::current_dir()
-            .map_err(|e| format!("Failed to get cwd: {e}"))?
-            .join("dist/channel/index.js");
-        Ok(("node".to_string(), channel_path.to_string_lossy().into_owned()))
+        // Dev mode: use bare "node" (PATH-dependent). Resolve the channel JS from
+        // resource_dir first — `cargo tauri dev` materializes bundled resources
+        // there (target/debug/dist/channel) and runs with cwd = src-tauri/, so the
+        // old current_dir-only path (src-tauri/dist/channel/index.js) never existed
+        // and the #985 channel-shim existence gate silently skipped registration.
+        // Fall back to a repo-relative path for non-Tauri dev layouts (cwd = repo
+        // root, e.g. dev:standalone). strip_win_prefix handles the `\\?\` prefix
+        // resource_dir can carry on Windows (Node can't resolve it).
+        let resource_channel = handle
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|d| d.join("dist/channel/index.js"));
+        let channel_path = match resource_channel {
+            Some(p) if p.exists() => p,
+            _ => std::env::current_dir()
+                .map_err(|e| format!("Failed to get cwd: {e}"))?
+                .join("dist/channel/index.js"),
+        };
+        Ok(("node".to_string(), strip_win_prefix(&channel_path)))
     } else {
         // Release mode: channel JS is a resource
         let resource_dir = handle
