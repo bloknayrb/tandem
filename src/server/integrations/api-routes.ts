@@ -76,6 +76,7 @@ import {
   installSkill,
   PathRejectedError,
   type RemovableEntry,
+  shouldRegisterChannelShim,
 } from "./apply.js";
 import { hasExistingTandemEntry, type readExistingTandemEntries } from "./existing-config.js";
 import { type Keychain, KeychainUnavailableError } from "./keychain.js";
@@ -590,10 +591,18 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           }
         }
 
+        // Default-on for Claude Code (#985). On a desktop bundle CHANNEL_DIST
+        // resolves outside the resource dir and won't exist, so the helper
+        // returns false and the wizard cleanly defers to the /api/setup
+        // startup path (which carries the correct Tauri-resolved channel
+        // path) — no broken entry is written. The `create`-wins guard in
+        // applyConfig keeps a user-confirmed removal from deleting the entry
+        // we just created.
+        const withChannelShim = shouldRegisterChannelShim(entry.kind, CHANNEL_DIST);
         const create = buildMcpEntries(CHANNEL_DIST, {
           token,
           targetKind: entry.kind,
-          // Channel shim is opt-in only via removals; never auto-included.
+          withChannelShim,
         });
         const ops: ApplyOps = {
           create,
