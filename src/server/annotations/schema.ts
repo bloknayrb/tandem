@@ -29,6 +29,19 @@ import { migrateUp } from "./migrations/index.js";
 export const SCHEMA_VERSION = 1 as const;
 
 /**
+ * Reply size bounds (#1000 security review R2). `REPLY_TEXT_MAX` is a generous
+ * durable-schema sanity ceiling — deliberately large so it can NEVER drop a
+ * legitimate existing user/claude reply on load (`normalizeReply` discards rows
+ * that fail `safeParse`). The tight, product-sensible truncation of untrusted
+ * imported Word reply bodies happens at the injection door
+ * (`IMPORT_REPLY_BODY_CAP`), well under this ceiling. `IMPORT_AUTHOR_MAX` only
+ * ever bounds our own injection-written field, so it is safe to validate tightly.
+ */
+export const REPLY_TEXT_MAX = 100_000;
+export const IMPORT_REPLY_BODY_CAP = 4_000;
+export const IMPORT_AUTHOR_MAX = 128;
+
+/**
  * Compute the next revision for a user-intent write. Returns `1` for a brand
  * new record (no `prev`), otherwise `prev.rev + 1`. Pre-T6 records that lack
  * `rev` are treated as `rev: 0` so the first write after migration lands at
@@ -126,10 +139,17 @@ export const AnnotationReplyRecordSchemaV1 = z
     id: z.string().min(1),
     annotationId: z.string().min(1),
     author: ReplyAuthorSchema,
-    text: z.string(),
+    // Bounded to defend against pathological/oversized .docx reply bodies that
+    // bypass the SNAPSHOT_CAP path (#1000 security review R2).
+    text: z.string().max(REPLY_TEXT_MAX),
     timestamp: z.number(),
     editedAt: z.number().optional(),
     rev: z.number().int().nonnegative(),
+    // #1000: user-private (note-authored or imported Word) reply — never sent
+    // to Claude. Optional; absent ⇒ surfaces normally on comment parents.
+    private: z.boolean().optional(),
+    // #1000: original Word reviewer name for `author: "import"` replies.
+    importAuthor: z.string().max(IMPORT_AUTHOR_MAX).optional(),
   })
   .passthrough();
 

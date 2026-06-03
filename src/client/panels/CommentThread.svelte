@@ -27,16 +27,23 @@ function formatTime(timestamp: number): string {
 {#if replies.length > 0}
   <div class="ct-root" data-testid="comment-thread">
     {#each replies as reply (reply.id)}
+      {@const kind =
+        reply.author === "claude" ? "claude" : reply.author === "import" ? "import" : "user"}
       <div class="ct-reply" data-testid="reply-{reply.id}">
         <div class="ct-reply-head">
           <span
             class="ct-author"
-            class:is-claude={reply.author === "claude"}
-            class:is-user={reply.author !== "claude"}
+            class:is-claude={kind === "claude"}
+            class:is-import={kind === "import"}
+            class:is-user={kind === "user"}
           >
-            {#if reply.author === "claude"}
+            {#if kind === "claude"}
               <span class="ct-author-dot ct-author-dot--claude" aria-hidden="true"></span>
               {agentLabel.family}
+            {:else if kind === "import"}
+              <span data-testid="reply-import-byline-{reply.id}">
+                {reply.importAuthor ?? "Imported"}
+              </span>
             {:else}
               <span class="ct-author-dot ct-author-dot--user" aria-hidden="true"></span>
               You
@@ -88,6 +95,11 @@ function formatTime(timestamp: number): string {
   }
   .ct-author.is-user {
     color: var(--tandem-author-user);
+  }
+  /* Imports carry no authorship color/dot — matches AnnotationCardHeader and the
+     ImportedCard byline (neutral subtle foreground). #1000. */
+  .ct-author.is-import {
+    color: var(--tandem-fg-subtle);
   }
   .ct-author-dot {
     width: 4px;

@@ -14,10 +14,11 @@ interface Props {
 
 let { annotation, replies, isPending, isEditing, onReply }: Props = $props();
 
-// ADR-027 single fan-out point: even if a caller passes raw replies,
-// note/highlight annotations render zero replies + zero count badge.
-// Claude must not be able to infer that a note has replies — even from
-// a count number.
+// Single client-display fan-out point. Notes show their (private) reply
+// threads to the owning user (#1000); highlights never show replies. This is
+// NOT the Claude privacy boundary — that is enforced server-side (the channel
+// observer + `channelVisibleReplies` on the MCP read paths), so a note's
+// private replies never reach Claude regardless of what is displayed here.
 const visibleReplies = $derived(getVisibleReplies(annotation, replies));
 const annotationId = $derived(annotation.id);
 

@@ -239,6 +239,7 @@ replace-btn
 replace-input
 reply-btn-{*}
 reply-cancel-btn-{*}
+reply-import-byline-{*}
 reply-input-{*}
 reply-send-btn-{*}
 reply-thread-expand-{*}
