@@ -17,6 +17,7 @@ import NewTabMenu from "./NewTabMenu.svelte";
 import TabItem from "./TabItem.svelte";
 import {
   buildTabMenuContext,
+  hasRealPath,
   isTabContextMenuActionId,
   type TabContextMenuActionId,
 } from "./tab-context-menu.js";
@@ -123,7 +124,9 @@ async function runTabAction(id: TabContextMenuActionId) {
       onCloseToRight?.(tabId);
       return;
     case "ctx:tab:copyPath":
-      if (path) {
+      // Re-check the path is real here too — don't trust the menu's enabled
+      // state alone (defense-in-depth vs a forged action event).
+      if (path && hasRealPath(path)) {
         try {
           await navigator.clipboard.writeText(path);
         } catch {
@@ -132,7 +135,7 @@ async function runTabAction(id: TabContextMenuActionId) {
       }
       return;
     case "ctx:tab:reveal":
-      if (path) {
+      if (path && hasRealPath(path)) {
         try {
           const invoke = await loadInvoke();
           await invoke("show_in_file_manager", { path });
