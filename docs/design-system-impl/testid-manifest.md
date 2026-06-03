@@ -76,6 +76,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Selection popup (audience-first, ADR-027)
 - `popup-{annotate-btn,annotation-input,note-submit,comment-submit,highlight-{*},show-formatbar-btn}`
+- `popup-{format-row,annotate-row}` (A8 two-pill — the two `.pill-row` capsule containers)
 
 ### Find/Replace
 - `find-replace-bar`, `find-{input,prev-btn,next-btn,close-btn,match-count}`

@@ -1,0 +1,51 @@
+/*
+ * morphTiming.css — shared timing recipe for the A23/A26/A29 single-shell
+ * morphs (#798, Phase 4 motion). NOT a structural class: growth direction,
+ * transform-origin, and anchor-pinning are per-surface (a shared `.morph-shell`
+ * would make A23 grow the wrong way and A29 ignore its origin). What is shared,
+ * and all that lives here:
+ *
+ *   1. The canon durations as inheritable custom properties, so timing/easing
+ *      can't drift across the five morph PRs.
+ *   2. The close-reversal delay convention (documented below) — each surface
+ *      writes its own `transition-delay` referencing these tokens.
+ *   3. ONE reduced-motion guard that zeroes the *tokens* (not re-declared
+ *      transitions). Because the tokens inherit, setting them to 0 on :root /
+ *      body reaches every scoped `transition: … var(--morph-*)` declaration —
+ *      sidestepping the scoped-`body.…`-selector hashing bite that silently
+ *      broke the A5/A9/A13 reduced-motion guards (a `:global(body.x) .scoped`
+ *      selector gets hashed; *setting an inherited property on body* does not).
+ *
+ * Canon (motion.md §"Surface-entrance principles"): P1 width+radius 340ms;
+ * P2 height/max-height 440–540ms delayed by +P1; row cascade 200–420ms. Easing
+ * --tandem-ease-out to grow.
+ *
+ * Close-reversal convention (the 4-cell matrix; each surface applies the cells
+ * it uses via a single `.is-open`/state class — no separate "closing" class):
+ *   open  → height waits for width/radius:  delay P1 on height, 0 on width/radius
+ *   close → width/radius waits for height:  delay P2 on width/radius, 0 on height
+ * Flipping ONLY the height delay collapses both axes simultaneously on close —
+ * both axes must carry the asymmetric delay.
+ */
+
+:root {
+  --morph-p1: 340ms; /* width + border-radius (stage 1) */
+  --morph-p2: 480ms; /* height / max-height (stage 2) */
+  --morph-cascade: 200ms; /* opened-body row reveal */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --morph-p1: 0ms;
+    --morph-p2: 0ms;
+    --morph-cascade: 0ms;
+  }
+}
+
+/* In-app reduced-motion toggle (class on <body>). Token-zeroing — NOT a
+   re-declared transition — so it reaches scoped consumers via inheritance. */
+body.tandem-reduce-motion {
+  --morph-p1: 0ms;
+  --morph-p2: 0ms;
+  --morph-cascade: 0ms;
+}
