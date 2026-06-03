@@ -5,141 +5,96 @@ import {
 } from "../../src/client/editor/toolbar/selection-toolbar";
 
 describe("selection toolbar position", () => {
-  it("flips below the selection when above would intrude on the chrome (#680)", () => {
-    // Selection top is 62 — natural above-top is 62 - 10 - 40 = 12, which is
-    // BELOW MIN_TOP=48. Pre-#680 this clamped to 48 (on top of TitleBar +
-    // FormattingBar = 76px of chrome) and the BubbleMenu intercepted clicks
-    // on `toolbar-highlight-btn`. With flip-below, the toolbar moves to
-    // selection.bottom + gap = 82 + 10 = 92, clear of the chrome.
+  // Cursor-anchored model (#798, Bryan 2026-06-03): the popup appears AT the
+  // cursor point (anchorX/anchorY) and unrolls away from it — a 6px gap BELOW the
+  // cursor by default, flipping ABOVE only when below would run off the viewport
+  // bottom. Constants: MIN_TOP=48, EDGE_GAP=8, SELECTION_GAP=6, FLIP_HYSTERESIS=4.
+
+  it("places the popup just below the cursor by default", () => {
+    // Cursor mid-viewport → below fits, so the popup's top sits a gap under the
+    // cursor and it unrolls downward. belowTop = anchorY + 6 = 206.
     const position = computeSelectionToolbarPosition({
-      start: { left: 80, top: 62, bottom: 82, right: 150 },
-      end: { left: 80, top: 62, bottom: 82, right: 150 },
       anchorX: 80,
+      anchorY: 200,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 600,
       viewportWidth: 800,
     });
 
-    expect(position.top).toBe(92);
-    // Left-anchored at the cursor X (#798): fits, so left === anchorX.
+    expect(position.placement).toBe("below");
+    expect(position.top).toBe(206);
+    // Left edge pinned at the cursor X (fits, so no clamp).
     expect(position.left).toBe(80);
   });
 
-  it("pins to viewport bottom when neither above nor below fits (#680 fold-straddle)", () => {
-    // Tight viewport — neither above (12) nor below (172+40=212 vs viewport
-    // 180) fits. Pre-fold-straddle this clamped to MIN_TOP=48 (on the chrome),
-    // which is exactly the pointer-intercept failure mode #678 caught. Pin to
-    // the viewport bottom instead — the toolbar is visible, the user can
-    // dismiss it, and fixed-bar clicks above are never intercepted.
+  it("flips above the cursor when below would run off the viewport bottom", () => {
+    // Cursor near the bottom: belowBottom = 560 + 6 + 40 = 606 > fitLimit
+    // (600 - 8 - 4 = 588), so flip above. above-anchor pins the popup's BOTTOM a
+    // gap above the cursor: bottom = 600 - (560 - 6) = 46.
     const position = computeSelectionToolbarPosition({
-      start: { left: 80, top: 62, bottom: 162, right: 150 },
-      end: { left: 80, top: 62, bottom: 162, right: 150 },
       anchorX: 80,
+      anchorY: 560,
       toolbarHeight: 40,
+      toolbarWidth: 160,
+      viewportHeight: 600,
+      viewportWidth: 800,
+    });
+
+    expect(position.placement).toBe("above");
+    expect(position.bottom).toBe(46);
+  });
+
+  it("pins to the viewport bottom when neither below nor above fits", () => {
+    // Tall popup, tiny viewport: below overflows (306 > 168) and above can't clear
+    // MIN_TOP (aboveTop = 100 - 6 - 200 = -106 < 48). Pin to the bottom rather than
+    // overlapping the chrome. maxTop = max(48, 180 - 200 - 8) = 48.
+    const position = computeSelectionToolbarPosition({
+      anchorX: 80,
+      anchorY: 100,
+      toolbarHeight: 200,
       toolbarWidth: 160,
       viewportHeight: 180,
       viewportWidth: 800,
     });
 
-    // maxTop = max(MIN_TOP=48, viewportHeight - toolbarHeight - EDGE_GAP)
-    //        = max(48, 180 - 40 - 8) = 132.
-    expect(position.top).toBe(132);
+    expect(position.top).toBe(48);
     expect(position.placement).toBe("below");
   });
 
-  it("applies flip hysteresis at the above/below boundary", () => {
-    // Selection.top sits where aboveTop = 50: just above MIN_TOP=48 (so a naïve
-    // implementation would call this "above"), but BELOW the +4 entry threshold.
-    // With no prior placement, the toolbar flips below. Then, with placement
-    // already below, the same bounds still resolve to below.
-    //
-    // Numbers: selection.top = 100, aboveTop = 100 - 10 - 40 = 50.
-    // Without hysteresis: 50 >= 48 → above. With +4 entry: 50 >= 52 → below.
-    const argsBoundary = {
-      start: { left: 80, top: 100, bottom: 120, right: 150 },
-      end: { left: 80, top: 100, bottom: 120, right: 150 },
+  it("applies flip hysteresis at the below/above boundary", () => {
+    // anchorY = 546 → belowBottom = 546 + 6 + 40 = 592. Entry into below needs
+    // belowBottom <= fitLimit - H = 592 - 4 = 588; 592 > 588, so a FRESH compute
+    // (no prior placement) flips above (aboveTop = 546 - 6 - 40 = 500 >= 48).
+    const args = {
       anchorX: 80,
+      anchorY: 546,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 600,
       viewportWidth: 800,
     } as const;
-    const first = computeSelectionToolbarPosition(argsBoundary);
-    expect(first.placement).toBe("below");
+    const fresh = computeSelectionToolbarPosition(args);
+    expect(fresh.placement).toBe("above");
 
-    // Once placed above, exit only when aboveTop drops 4 below MIN_TOP.
-    // selection.top = 95 → aboveTop = 45. Without hysteresis: 45 < 48 → flip
-    // below. With sticky-above (-4 exit): 45 >= 44 → still above. This is the
-    // load-bearing assertion preventing per-frame flicker on slow drags.
-    const stickyAbove = computeSelectionToolbarPosition({
-      start: { left: 80, top: 95, bottom: 115, right: 150 },
-      end: { left: 80, top: 95, bottom: 115, right: 150 },
-      anchorX: 80,
-      toolbarHeight: 40,
-      toolbarWidth: 160,
-      viewportHeight: 600,
-      viewportWidth: 800,
-      previousPlacement: "above",
-    });
-    expect(stickyAbove.placement).toBe("above");
-    // aboveTop = 95 - 10 - 40 = 45, clamped up to MIN_TOP=48.
-    expect(stickyAbove.top).toBe(48);
-
-    // From above, only crossing the -4 exit threshold flips below.
-    // selection.top = 91 → aboveTop = 41 → 41 < 44 → flip.
-    const flipDown = computeSelectionToolbarPosition({
-      start: { left: 80, top: 91, bottom: 111, right: 150 },
-      end: { left: 80, top: 91, bottom: 111, right: 150 },
-      anchorX: 80,
-      toolbarHeight: 40,
-      toolbarWidth: 160,
-      viewportHeight: 600,
-      viewportWidth: 800,
-      previousPlacement: "above",
-    });
-    expect(flipDown.placement).toBe("below");
-  });
-
-  it("places the toolbar above when there's room", () => {
-    // Selection top is 200 — natural above-top is 200 - 10 - 40 = 150, well
-    // clear of MIN_TOP=48. No flip needed.
-    const position = computeSelectionToolbarPosition({
-      start: { left: 80, top: 200, bottom: 220, right: 150 },
-      end: { left: 80, top: 200, bottom: 220, right: 150 },
-      anchorX: 80,
-      toolbarHeight: 40,
-      toolbarWidth: 160,
-      viewportHeight: 600,
-      viewportWidth: 800,
-    });
-
-    expect(position.top).toBe(150);
-  });
-
-  it("clamps the toolbar to the viewport bottom when the selection is near the end", () => {
-    const position = computeSelectionToolbarPosition({
-      start: { left: 80, top: 500, bottom: 520, right: 150 },
-      end: { left: 80, top: 500, bottom: 520, right: 150 },
-      anchorX: 80,
-      toolbarHeight: 40,
-      toolbarWidth: 160,
-      viewportHeight: 400,
-      viewportWidth: 800,
-    });
-
-    expect(position.top).toBe(352);
+    // Once placed below, the exit threshold is sticky: belowBottom <= fitLimit + H
+    // = 592 + 4 = 596; 592 <= 596, so it STAYS below. This is the load-bearing
+    // assertion preventing per-frame flicker when a keyboard extend nudges the
+    // anchor across the boundary.
+    const stickyBelow = computeSelectionToolbarPosition({ ...args, previousPlacement: "below" });
+    expect(stickyBelow.placement).toBe("below");
+    // belowTop = 546 + 6 = 552.
+    expect(stickyBelow.top).toBe(552);
   });
 
   it("returns a height-independent `bottom` anchor for above placement (#798 A26 morph)", () => {
     // The A26 morph grows an above-placed popup UPWARD by rendering CSS `bottom`
-    // (pinned a gap above the selection's top) instead of a height-dependent
-    // `top`. `bottom` must NOT vary with toolbarHeight — that's what lets the
-    // popup animate its height without repositioning.
+    // (pinned a gap above the cursor) instead of a height-dependent `top`. `bottom`
+    // must NOT vary with toolbarHeight — that's what lets the popup animate its
+    // height without repositioning.
     const base = {
-      start: { left: 80, top: 200, bottom: 220, right: 150 },
-      end: { left: 80, top: 200, bottom: 220, right: 150 },
       anchorX: 80,
+      anchorY: 560,
       toolbarWidth: 160,
       viewportHeight: 600,
       viewportWidth: 800,
@@ -147,37 +102,34 @@ describe("selection toolbar position", () => {
     const shortPopup = computeSelectionToolbarPosition({ ...base, toolbarHeight: 80 });
     const tallPopup = computeSelectionToolbarPosition({ ...base, toolbarHeight: 200 });
 
-    // bottom = viewportHeight - (selectionTop - SELECTION_GAP) = 600 - (200 - 10) = 410.
+    // bottom = viewportHeight - (anchorY - SELECTION_GAP) = 600 - (560 - 6) = 46.
     expect(shortPopup.placement).toBe("above");
-    expect(shortPopup.bottom).toBe(410);
+    expect(shortPopup.bottom).toBe(46);
     // Identical regardless of popup height — the load-bearing invariant.
     expect(tallPopup.bottom).toBe(shortPopup.bottom);
   });
 
   it("left-anchors the popup at the cursor X so the pills unroll rightward (#798)", () => {
     // Cursor-origin unroll: the popup's LEFT edge sits at `anchorX` (the user's
-    // cursor), NOT the selection midpoint. A wide selection whose midpoint is far
-    // from the cursor must still anchor at the cursor.
+    // cursor), not centered. A cursor well to the right of the viewport's middle
+    // still anchors at the cursor (it fits: 420 + 160 = 580 < 800 - 8).
     const position = computeSelectionToolbarPosition({
-      start: { left: 80, top: 300, bottom: 320, right: 600 },
-      end: { left: 80, top: 300, bottom: 320, right: 600 },
       anchorX: 420,
+      anchorY: 300,
       toolbarHeight: 40,
       toolbarWidth: 160,
       viewportHeight: 600,
       viewportWidth: 800,
     });
 
-    // Fits (420 + 160 = 580 < 800 - 8), so left === anchorX — not the midpoint 340.
     expect(position.left).toBe(420);
   });
 
   it("clamps the toolbar to the viewport left edge", () => {
     // Cursor off the left edge → left edge pinned at EDGE_GAP=8.
     const position = computeSelectionToolbarPosition({
-      start: { left: -40, top: 180, bottom: 200, right: 20 },
-      end: { left: -20, top: 180, bottom: 200, right: 20 },
       anchorX: -40,
+      anchorY: 180,
       toolbarHeight: 40,
       toolbarWidth: 200,
       viewportHeight: 500,
@@ -191,9 +143,8 @@ describe("selection toolbar position", () => {
     // Cursor near the right edge → popup pushed left so its full width stays on
     // screen: maxLeft = viewportWidth - EDGE_GAP - toolbarWidth = 300 - 8 - 200 = 92.
     const position = computeSelectionToolbarPosition({
-      start: { left: 290, top: 180, bottom: 200, right: 340 },
-      end: { left: 300, top: 180, bottom: 200, right: 340 },
       anchorX: 290,
+      anchorY: 180,
       toolbarHeight: 40,
       toolbarWidth: 200,
       viewportHeight: 500,

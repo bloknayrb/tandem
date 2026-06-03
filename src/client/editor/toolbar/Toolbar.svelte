@@ -122,21 +122,32 @@ let lastDwellTo = -1;
 // Cursor-origin unroll (#798, Bryan 2026-06-03). The popup unrolls away from the
 // user's cursor at popup time. We LATCH the horizontal origin when the entrance
 // begins (dwell fires) so it stays put as the popup grows / the selection extends:
-//   • pointer selection → the last editor pointerup X (mouse is at the selection
-//     end after a drag); `pointerUpSinceDwellArm` distinguishes this from a stale
-//     pointerup left over from an earlier, unrelated click.
+//   • pointer selection → the pointerup X (mouse is at the selection end after a
+//     drag); `pointerUpSinceDwellArm` is set by the pointerup that ARMS the dwell,
+//     so it can only ever be a finished pointer gesture, never a stale click.
 //   • keyboard selection → the caret (selection head) X, captured each successful
 //     coordsAtPos pass below.
 // All in viewport/client coords (same space as coordsAtPos + clientX). `null`
 // before the latch — the popup is hidden then, so its `left` doesn't matter.
 let pointerUpSinceDwellArm = false;
 let pointerAnchorX = 0;
+let pointerAnchorY = 0;
 let caretAnchorX = 0;
+let caretAnchorY = 0;
 let latchedAnchorX: number | null = null;
+let latchedAnchorY: number | null = null;
+// "Wait until the selection gesture finishes" (Bryan 2026-06-03). True between
+// pointerdown and pointerup of a pointer selection. While set, the dwell does NOT
+// arm — the popup must wait for the user to release the mouse, not merely pause
+// mid-drag — so the pointerup handler is what arms it for the completed selection.
+// Keyboard selections never set this, so they still arm on dwell-settle below.
+let pointerSelecting = false;
 
 function beginEntrance() {
-  // Latch the cursor origin for the whole entrance (and until the next selection).
+  // Latch the cursor origin (X+Y) for the whole entrance (and until the next
+  // selection) so the popup appears where the cursor was when the animation began.
   latchedAnchorX = pointerUpSinceDwellArm ? pointerAnchorX : caretAnchorX;
+  latchedAnchorY = pointerUpSinceDwellArm ? pointerAnchorY : caretAnchorY;
   // Reduced motion: `popupEnter` already returns a zero-duration transition, so
   // there's no width-unroll to protect. Skip the freeze entirely — arming it
   // would leave the metrics effect on a stale `toolbarWidth` for ENTER_POPUP_MS
@@ -157,7 +168,23 @@ function clearDwell() {
   lastDwellFrom = -1;
   lastDwellTo = -1;
   latchedAnchorX = null;
+  latchedAnchorY = null;
   pointerUpSinceDwellArm = false;
+}
+
+// Arm the A28 appearance dwell. DWELL_MS later (with no re-arm in between) the
+// popup unrolls. `byPointer` records the cursor-origin source so beginEntrance
+// latches the right X (pointerup X vs caret X). The single arming path for both
+// the keyboard route (selectionUpdate settle) and the pointer route (pointerup).
+function armDwell(from: number, to: number, byPointer: boolean) {
+  lastDwellFrom = from;
+  lastDwellTo = to;
+  pointerUpSinceDwellArm = byPointer;
+  clearTimeout(dwellTimer);
+  dwellTimer = setTimeout(() => {
+    beginEntrance();
+    dwellSatisfied = true;
+  }, DWELL_MS);
 }
 
 // Platform-correct modifier glyphs for the submit-button hints. The handlers in
@@ -241,41 +268,35 @@ function updateSelectionAffordance(ed: TiptapEditor) {
     return;
   }
 
-  // A28 dwell: (re)arm the appearance timer when the selection endpoints change,
-  // but only while not yet satisfied — so a drag-extend AFTER the popup is shown
-  // keeps it shown (and just repositions) instead of hiding it. Pinned before the
-  // `try` so it's decoupled from the coordsAtPos throw/retry path and the
-  // dedup early-return below. Once it fires, `beginEntrance()` + `dwellSatisfied`
-  // are set in one batched write (so `entering` wins the mount RO race).
-  if (!dwellSatisfied && (from !== lastDwellFrom || to !== lastDwellTo)) {
-    lastDwellFrom = from;
-    lastDwellTo = to;
-    // Reset the pointer-origin signal for this (re)arm: a drag fires selectionUpdate
-    // (here) repeatedly, then pointerup at the gesture's end flips this true before
-    // the timer fires. A keyboard selection never sets it, so beginEntrance falls
-    // back to the caret X.
-    pointerUpSinceDwellArm = false;
-    clearTimeout(dwellTimer);
-    dwellTimer = setTimeout(() => {
-      beginEntrance();
-      dwellSatisfied = true;
-    }, DWELL_MS);
+  // A28 dwell — KEYBOARD path. Arm the appearance timer when the selection
+  // endpoints settle, but ONLY when the user isn't mid pointer-drag: while
+  // `pointerSelecting`, the popup must wait for the gesture to FINISH — the
+  // pointerup handler arms it then — so a slow or paused drag never pops the
+  // toolbar before the user lets go. Keyboard selections (shift+arrows) have no
+  // release event, so the dwell-on-settle IS their "finished" signal. Guarded on
+  // `!dwellSatisfied` so a drag-extend after the popup is shown just repositions
+  // it (keeps it shown). Pinned before the `try` so it's decoupled from the
+  // coordsAtPos throw/retry path and the dedup early-return below.
+  if (!dwellSatisfied && !pointerSelecting && (from !== lastDwellFrom || to !== lastDwellTo)) {
+    armDwell(from, to, false);
   }
 
   try {
-    const start = ed.view.coordsAtPos(from);
-    const end = ed.view.coordsAtPos(to);
-    // Keyboard-selection origin: the caret (selection head) X. Captured every pass
-    // so it's current when beginEntrance latches it (pointer selections override
-    // this with the pointerup X). `head` is the moving end of a shift+arrow range.
-    caretAnchorX = ed.view.coordsAtPos(ed.state.selection.head).left;
+    // Keyboard-selection origin: the caret (selection head) X and bottom. Captured
+    // every pass so it's current when beginEntrance latches it (pointer selections
+    // override this with the pointerup X/Y). `head` is the moving end of a
+    // shift+arrow range. The coordsAtPos call also detects an un-measured view
+    // (throws → retry below). `from`/`to` aren't needed for positioning anymore —
+    // the popup is anchored at the cursor point, not the selection box.
+    const headCoords = ed.view.coordsAtPos(ed.state.selection.head);
+    caretAnchorX = headCoords.left;
+    caretAnchorY = headCoords.bottom;
     const nextPosition = computeSelectionToolbarPosition({
-      start,
-      end,
-      // Cursor-origin unroll (#798): left-anchor at the latched cursor X once the
-      // entrance has begun; before that the popup is hidden, so the live caret X is
-      // a harmless placeholder.
+      // Cursor-origin unroll (#798): anchor at the latched cursor point once the
+      // entrance has begun; before that the popup is hidden, so the live caret
+      // coords are a harmless placeholder.
       anchorX: latchedAnchorX ?? caretAnchorX,
+      anchorY: latchedAnchorY ?? caretAnchorY,
       // A26 morph (#798): decide placement with a CONSTANT height-reserve, not
       // the live (animating) `toolbarHeight`. Keeps above/below stable across
       // the morph and lets the height-independent edge-anchor grow the popup
@@ -335,23 +356,44 @@ $effect(() => {
     updateSelectionAffordance(ed);
   }
 
-  // Cursor-origin unroll (#798): record the pointer X at the end of a pointer
-  // gesture. selectionUpdate (which arms the dwell) fires DURING the drag and
-  // resets `pointerUpSinceDwellArm`; this pointerup fires at the gesture's end,
-  // flipping it true and capturing where the mouse came to rest — the origin the
-  // popup unrolls away from. Keyboard selections never reach here, so the latch
-  // falls back to the caret X.
+  // "Wait until the selection gesture finishes" + cursor-origin unroll (#798,
+  // Bryan 2026-06-03). A primary-button pointerdown in the editor opens a pointer
+  // selection (`pointerSelecting`); while it's open, updateSelectionAffordance
+  // skips arming the dwell, so the popup never appears mid-drag. pointerup ends the
+  // gesture: it captures where the mouse came to rest (the X the popup unrolls away
+  // from) and arms the dwell for the COMPLETED selection. The release/cancel
+  // listeners live on the document so a drag that ends outside the editor still
+  // finishes (and never leaves `pointerSelecting` stuck → keyboard popups gated).
+  // Keyboard selections never touch any of this, so they arm via the caret path.
   const editorDom = ed.view.dom;
-  function onPointerUp(e: PointerEvent) {
-    pointerUpSinceDwellArm = true;
-    pointerAnchorX = e.clientX;
+  const ownerDoc = editorDom.ownerDocument;
+  function onPointerDown(e: PointerEvent) {
+    if (e.button !== 0 || !e.isPrimary) return;
+    pointerSelecting = true;
   }
-  editorDom.addEventListener("pointerup", onPointerUp);
+  function onPointerUp(e: PointerEvent) {
+    if (!pointerSelecting) return;
+    pointerSelecting = false;
+    pointerAnchorX = e.clientX;
+    pointerAnchorY = e.clientY;
+    const { from, to } = ed.state.selection;
+    // Real selection → arm now (popup appears DWELL_MS after release). A collapsed
+    // selection (plain click) already ran the !next/clearDwell path; don't arm.
+    if (from !== to && !dwellSatisfied) armDwell(from, to, true);
+  }
+  function onPointerCancel() {
+    pointerSelecting = false;
+  }
+  editorDom.addEventListener("pointerdown", onPointerDown);
+  ownerDoc.addEventListener("pointerup", onPointerUp);
+  ownerDoc.addEventListener("pointercancel", onPointerCancel);
 
   const cleanup = attachSelectionToolbarListener(ed, onSelectionUpdate);
   onSelectionUpdate();
   return () => {
-    editorDom.removeEventListener("pointerup", onPointerUp);
+    editorDom.removeEventListener("pointerdown", onPointerDown);
+    ownerDoc.removeEventListener("pointerup", onPointerUp);
+    ownerDoc.removeEventListener("pointercancel", onPointerCancel);
     // Cancel before delegating so a pending retry can't fire against a
     // torn-down editor.
     cancelAnimationFrame(pendingAffordanceFrame);
@@ -425,7 +467,20 @@ $effect(() => {
     // jitter the left-anchor clamp (maxLeft depends on width) as the popup grows.
     // Hold the pre-entrance width until the entrance settles — the left edge stays
     // pinned at the cursor X meanwhile, so there's nothing to correct mid-unroll.
-    if (entering) return;
+    if (entering) {
+      // Exception: the FIRST popup of the session has `toolbarWidth === 0`, so the
+      // right-edge clamp (`maxLeft` depends on width) is a no-op and a popup whose
+      // cursor anchor is near the right edge unrolls off-screen, only snapping on
+      // once the entrance settles (ENTER_POPUP_MS later). Seed the clamp once with the natural
+      // content width — `scrollWidth` reports the un-clipped width even mid-entrance
+      // (the transition animates a growing `width` under `overflow:clip`). Later
+      // appearances retain the last measured width, so this runs at most once.
+      if (toolbarWidth === 0) {
+        toolbarWidth = el.scrollWidth;
+        updateSelectionAffordance(ed);
+      }
+      return;
+    }
     const rect = el.getBoundingClientRect();
     // Only width feeds positioning now (left-edge clamp). Height is decoupled
     // from placement (A26 morph uses SELECTION_POPUP_HEIGHT_RESERVE), so the

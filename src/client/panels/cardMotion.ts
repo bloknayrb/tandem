@@ -223,7 +223,7 @@ export function tabExit(node: HTMLElement, { reduceMotion }: BarInParams): Trans
 
 /** A28 popup-entrance duration. Exported so Toolbar's width-freeze window
  *  (`entering`) matches the transition exactly — no two-literals drift. */
-export const ENTER_POPUP_MS = 360;
+export const ENTER_POPUP_MS = 440;
 
 /**
  * A28 — the selection popup's entrance (#798). A fresh `{#if}` mount, so a real
