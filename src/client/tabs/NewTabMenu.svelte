@@ -1,8 +1,5 @@
 <script lang="ts">
-import { clickOutside } from "../actions/clickOutside.svelte.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
-import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
-import { portal } from "../utils/portal.js";
 import type { RecentFileEntry } from "../utils/recentFiles.js";
 import { highlightSegments, matchesQuery, toLauncherRow } from "./newTabLauncher.js";
 
@@ -10,7 +7,6 @@ interface Props {
   recentFiles: RecentFileEntry[];
   /** Reactive head of the closed-tab stack — null hides "Reopen last closed". */
   closedTabTop: ClosedTabRecord | null;
-  anchorEl: HTMLElement | null;
   onOpen: (path: string) => void;
   onBrowse: () => void;
   onNewScratchpad: () => void;
@@ -21,7 +17,6 @@ interface Props {
 let {
   recentFiles,
   closedTabTop,
-  anchorEl,
   onOpen,
   onBrowse,
   onNewScratchpad,
@@ -82,43 +77,14 @@ function handleKeyDown(e: KeyboardEvent) {
   // Enter on a focused menuitem is handled natively by the <button>.
 }
 
-function handleOutsideClick(e: MouseEvent) {
-  // clickOutside already filtered clicks inside the menu. Also ignore the
-  // anchor button (its own onclick re-opens the menu) and Tauri drag-region
-  // clicks (title-bar drag is not a dismiss).
-  const target = e.target as (Node & Element) | null;
-  if (!target) return;
-  if (anchorEl?.contains(target)) return;
-  if (isInActiveDragRegion(target)) return;
-  onClose();
-}
-
-function positionMenu() {
-  if (!menuEl) return;
-  if (!anchorEl) {
-    menuEl.style.top = "8px";
-    menuEl.style.left = "8px";
-    menuEl.style.right = "auto";
-    return;
-  }
-  const rect = anchorEl.getBoundingClientRect();
-  const menuWidth = menuEl.offsetWidth;
-  const viewportWidth = window.innerWidth;
-  if (rect.left + menuWidth > viewportWidth - 8) {
-    menuEl.style.right = "8px";
-    menuEl.style.left = "auto";
-  } else {
-    menuEl.style.left = `${rect.left}px`;
-    menuEl.style.right = "auto";
-  }
-  menuEl.style.top = `${rect.bottom + 4}px`;
-}
-
 $effect(() => {
+  // A29 (#798): the menu is un-portaled — it lives inside the persistent morph shell
+  // in DocumentTabs, which owns positioning (anchored at the + slot) and outside-click
+  // dismissal. This component only auto-focuses the search input once mounted. The shell
+  // is `overflow:clip` (not a scroll container), so the focus won't trigger an autoscroll;
+  // `preventScroll` is belt-and-suspenders for the mid-morph clipped state.
   if (!menuEl) return;
-  positionMenu();
-  // Auto-focus the search input on open (matches the bundle + command palette).
-  searchInputEl?.focus();
+  searchInputEl?.focus({ preventScroll: true });
 });
 </script>
 
@@ -142,8 +108,6 @@ $effect(() => {
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  use:portal
-  use:clickOutside={handleOutsideClick}
   bind:this={menuEl}
   role="dialog"
   aria-label="New tab"
@@ -266,17 +230,13 @@ $effect(() => {
 </div>
 
 <style>
+  /* A29 (#798): un-portaled — the menu fills the persistent morph shell in DocumentTabs,
+     which paints surface/border/radius/shadow and owns clipping (overflow:clip + a
+     clip-margin so focus rings paint). The menu itself must NOT set background/border/
+     radius/shadow/z-index or its own overflow clip (which would re-clip focus rings). */
   .new-tab-menu {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: min(460px, calc(100vw - 16px));
-    background: var(--tandem-surface);
-    border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-4);
-    box-shadow: var(--tandem-shadow-2);
-    z-index: var(--tandem-z-dropdown);
-    overflow: hidden;
+    position: static;
+    width: 460px;
     display: flex;
     flex-direction: column;
   }
