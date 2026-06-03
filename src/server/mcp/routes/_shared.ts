@@ -23,13 +23,29 @@ export function isValidNodeBinary(nodeBinary: string): boolean {
   return VALID_NODE_BASENAME_RE.test(crossBasename(nodeBinary));
 }
 
-/** Validate that a channelPath points to a JS file without traversal or UNC paths. */
+/**
+ * Validate that a channelPath points at the bundled channel shim entry.
+ *
+ * `/api/setup` registers the body-supplied `channelPath` as an executable
+ * MCP command (`node <channelPath>`). Restricting the shape to the known
+ * `dist/channel/index.js` artifact (in addition to no-traversal / no-UNC) is
+ * defense-in-depth: it stops a *remote, token-bearing* caller on a LAN bind —
+ * who cannot plant files on the host — from coercing `node <arbitrary.js>`,
+ * and it catches accidental mis-pointing. It is NOT a boundary against a
+ * same-user local writer, who can already plant a `…/dist/channel/index.js`
+ * payload and has code execution regardless (Tandem's same-user threat model).
+ * The `existsSync` check is applied separately at the call site so this stays
+ * a pure string validator. See the #985 security review.
+ */
 export function isValidChannelPath(channelPath: string): boolean {
   if (!channelPath) return false;
-  if (!crossBasename(channelPath).endsWith(".js")) return false;
   if (channelPath.includes("..")) return false;
   if (hasUncPrefix(channelPath)) return false;
-  return true;
+  // Normalize Windows separators; require the canonical bundled artifact path.
+  // Accept the bare relative form (dev mode resolves it against cwd) and any
+  // absolute path ending in the artifact suffix.
+  const normalized = channelPath.replace(/\\/g, "/");
+  return normalized === "dist/channel/index.js" || normalized.endsWith("/dist/channel/index.js");
 }
 
 /** Map error code to HTTP status. Exported for testing. */

@@ -1,4 +1,4 @@
-import type { Root } from "mdast";
+import type { PhrasingContent, Root, RootContent } from "mdast";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
@@ -63,88 +63,131 @@ export function saveMarkdown(doc: Y.Doc): string {
 }
 
 /**
+ * Ref-def identifiers for the tree currently being serialized. Module-level so
+ * the frozen `mdStringifier` below can be built once (not rebuilt per call — the
+ * serializer is invoked per raw-construct node on document load, #981); set
+ * synchronously before each `mdStringifier.stringify(...)` call. Safe because
+ * stringify is synchronous, single-threaded, and never re-entrant.
+ */
+let activeRefDefs = new Set<string>();
+
+/**
+ * The project's configured markdown stringifier, frozen once (mirrors the
+ * `mdParser` pattern). The custom `text` handler reads `activeRefDefs` at call
+ * time, so the same frozen processor serves every tree.
+ */
+const mdStringifier = unified()
+  .use(remarkGfm)
+  .use(remarkStringify, {
+    ...stringifyOptions,
+    handlers: {
+      // Call state.safe() first (mirroring the default text handler) so
+      // block-context escapes (line-leading `# `, `- `, `> `, fence runs,
+      // table pipes, setext underlines) remain intact, then selectively
+      // un-escape intra-text noise that the default `unsafe` table over-flags.
+      //
+      // GFM extensions (autolink-literal `@`/`.`/`:`, strikethrough `~~`,
+      // table `|`) register no `text` handler and contribute `unsafe` entries
+      // that flow through safe(). Of those, `~` and (conditionally) `@` are
+      // un-escaped below — `~` because GFM strikethrough requires `~~`, and
+      // `@` only when the following text cannot re-form an email autolink.
+      text(node, _parent, state, info) {
+        let s = state.safe(node.value, info);
+
+        // Will the next sibling's serialized output start with `[`? If yes,
+        // a `\[label]` at the end of our text node must stay escaped — the
+        // un-escaped `[label][...]` would be parsed as a full reference link.
+        const nextStartsBracket = typeof info.after === "string" && info.after.startsWith("[");
+
+        // 1. `\[label]`: un-escape only when `label` does NOT match any
+        //    `definition` identifier in this tree (otherwise the un-escaped
+        //    form would re-parse as a collapsed/full reference link).
+        //    `label` is normalized per CommonMark before comparison.
+        //    Negative lookahead also rejects an immediately following `[`
+        //    inside this text node.
+        //    The label character class excludes `\` to keep matching linear
+        //    on adversarial input like `\[\[\[\[\[…`.
+        s = s.replace(/\\\[([^\\\]\n`]+)\](?!\s*[:([])/g, (match, label, offset) => {
+          const atEnd = offset + match.length === s.length;
+          if (atEnd && nextStartsBracket) return match;
+          return activeRefDefs.has(normalizeLabel(label)) ? match : `[${label}]`;
+        });
+
+        // 2. `\_` strictly between word chars: intra-word underscores never
+        //    open emphasis in CommonMark/GFM. Punctuation-flanked `_` (e.g.
+        //    `(\_foo\_)`) stays escaped — those flanks CAN form emphasis.
+        s = s.replace(/(?<=\w)\\_(?=\w)/g, "_");
+
+        // 3. `` \` `` standalone, not adjacent to another backtick. Real code
+        //    spans round-trip through the `inlineCode` handler, never `text`.
+        s = s.replace(/(?<![`\\])\\`(?!`)/g, "`");
+
+        // 4. `\~` not followed by another `~`. GFM strikethrough needs `~~`
+        //    so a lone `~` is unambiguous prose (e.g. `~4500 tokens`).
+        s = s.replace(/\\~(?!~)/g, "~");
+
+        // 5. `\@` only where the following text is NOT host-shaped. remark-gfm
+        //    escapes `@` whenever a word-ish local-part char precedes it
+        //    (`user\@host.tld`, `user\@host`), so the local side is implicit
+        //    and the decision turns on what FOLLOWS `@` (see HOST_AFTER_AT).
+        //    Where a host shape follows, keep the escape — that is the
+        //    position a GFM email autolink-literal occupies, so un-escaping
+        //    there would re-emit prose that *appears* to invite the autolink,
+        //    mirroring the chain's conservative posture for `\[`/`\_`.
+        //    (CommonMark un-escapes `\@`→`@` at parse time and the autolink
+        //    forms from the bare `@` regardless, so the escape is cosmetic at
+        //    parser level; the point is to strip escape noise only where it is
+        //    unambiguously safe.)
+        s = s.replace(/\\@/g, (match, offset) =>
+          HOST_AFTER_AT.test(s.slice(offset + match.length)) ? match : "@",
+        );
+
+        return s;
+      },
+    },
+  })
+  .freeze();
+
+/**
  * Serialize an mdast Root tree to markdown using the project's configured
  * serializer. Exposed for tests and any future code path that has an mdast
- * tree but no Y.Doc.
+ * tree but no Y.Doc. Reuses the frozen `mdStringifier`; the per-tree ref-def
+ * set is published to `activeRefDefs` before stringify (already lowercase +
+ * whitespace-collapsed by mdast/from-markdown; labels pulled from text nodes
+ * are re-normalized before comparison in the handler).
  */
 export function serializeMdast(tree: Root): string {
-  // Collect ref-def identifiers (already lowercase + whitespace-collapsed by
-  // mdast/from-markdown). We re-normalize the labels we pull from text nodes
-  // below before comparison.
-  const refDefs = new Set<string>();
+  activeRefDefs = new Set<string>();
   visit(tree, "definition", (node) => {
-    refDefs.add(node.identifier);
+    activeRefDefs.add(node.identifier);
   });
+  return mdStringifier.stringify(tree);
+}
 
-  return unified()
-    .use(remarkGfm)
-    .use(remarkStringify, {
-      ...stringifyOptions,
-      handlers: {
-        // Call state.safe() first (mirroring the default text handler) so
-        // block-context escapes (line-leading `# `, `- `, `> `, fence runs,
-        // table pipes, setext underlines) remain intact, then selectively
-        // un-escape intra-text noise that the default `unsafe` table over-flags.
-        //
-        // GFM extensions (autolink-literal `@`/`.`/`:`, strikethrough `~~`,
-        // table `|`) register no `text` handler and contribute `unsafe` entries
-        // that flow through safe(). Of those, `~` and (conditionally) `@` are
-        // un-escaped below — `~` because GFM strikethrough requires `~~`, and
-        // `@` only when the following text cannot re-form an email autolink.
-        text(node, _parent, state, info) {
-          let s = state.safe(node.value, info);
+/**
+ * Serialize a single block-level MDAST node to its verbatim markdown source.
+ * Used by the raw-construct passthrough path (#981): constructs Tandem has no
+ * first-class editor node for (footnote/reference definitions, etc.) are stored
+ * as their literal markdown text and re-emitted as an mdast `html` node, which
+ * `remark-stringify` writes verbatim (bypassing the custom `text` escaper). The
+ * block node is wrapped in a `root` directly. `trimEnd()` strips the trailing
+ * newline the serializer appends so no stray `\n` enters the paragraph's
+ * Y.XmlText (which would desync flat offsets).
+ */
+export function serializeMdastBlock(node: RootContent): string {
+  return serializeMdast({ type: "root", children: [node] }).trimEnd();
+}
 
-          // Will the next sibling's serialized output start with `[`? If yes,
-          // a `\[label]` at the end of our text node must stay escaped — the
-          // un-escaped `[label][...]` would be parsed as a full reference link.
-          const nextStartsBracket = typeof info.after === "string" && info.after.startsWith("[");
-
-          // 1. `\[label]`: un-escape only when `label` does NOT match any
-          //    `definition` identifier in this tree (otherwise the un-escaped
-          //    form would re-parse as a collapsed/full reference link).
-          //    `label` is normalized per CommonMark before comparison.
-          //    Negative lookahead also rejects an immediately following `[`
-          //    inside this text node.
-          //    The label character class excludes `\` to keep matching linear
-          //    on adversarial input like `\[\[\[\[\[…`.
-          s = s.replace(/\\\[([^\\\]\n`]+)\](?!\s*[:([])/g, (match, label, offset) => {
-            const atEnd = offset + match.length === s.length;
-            if (atEnd && nextStartsBracket) return match;
-            return refDefs.has(normalizeLabel(label)) ? match : `[${label}]`;
-          });
-
-          // 2. `\_` strictly between word chars: intra-word underscores never
-          //    open emphasis in CommonMark/GFM. Punctuation-flanked `_` (e.g.
-          //    `(\_foo\_)`) stays escaped — those flanks CAN form emphasis.
-          s = s.replace(/(?<=\w)\\_(?=\w)/g, "_");
-
-          // 3. `` \` `` standalone, not adjacent to another backtick. Real code
-          //    spans round-trip through the `inlineCode` handler, never `text`.
-          s = s.replace(/(?<![`\\])\\`(?!`)/g, "`");
-
-          // 4. `\~` not followed by another `~`. GFM strikethrough needs `~~`
-          //    so a lone `~` is unambiguous prose (e.g. `~4500 tokens`).
-          s = s.replace(/\\~(?!~)/g, "~");
-
-          // 5. `\@` only where the following text is NOT host-shaped. remark-gfm
-          //    escapes `@` whenever a word-ish local-part char precedes it
-          //    (`user\@host.tld`, `user\@host`), so the local side is implicit
-          //    and the decision turns on what FOLLOWS `@` (see HOST_AFTER_AT).
-          //    Where a host shape follows, keep the escape — that is the
-          //    position a GFM email autolink-literal occupies, so un-escaping
-          //    there would re-emit prose that *appears* to invite the autolink,
-          //    mirroring the chain's conservative posture for `\[`/`\_`.
-          //    (CommonMark un-escapes `\@`→`@` at parse time and the autolink
-          //    forms from the bare `@` regardless, so the escape is cosmetic at
-          //    parser level; the point is to strip escape noise only where it is
-          //    unambiguously safe.)
-          s = s.replace(/\\@/g, (match, offset) =>
-            HOST_AFTER_AT.test(s.slice(offset + match.length)) ? match : "@",
-          );
-
-          return s;
-        },
-      },
-    })
-    .stringify(tree);
+/**
+ * Serialize a single inline/phrasing MDAST node (footnoteReference,
+ * linkReference, imageReference, inline image, etc.) to its markdown source.
+ * Phrasing nodes are not valid root children, so they are wrapped in a
+ * `paragraph`. The result is the gfm-canonical form for the node's
+ * `referenceType` (full `[t][ref]`, collapsed `[ref][]`, shortcut `[ref]`).
+ */
+export function serializeMdastInline(node: PhrasingContent): string {
+  return serializeMdast({
+    type: "root",
+    children: [{ type: "paragraph", children: [node] }],
+  }).trim();
 }

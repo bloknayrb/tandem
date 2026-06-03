@@ -17,6 +17,7 @@ annotation-snippet-{*}
 annotations-tab
 app-info-footer
 appearance-formatting-bar
+appearance-show-raw-markdown
 apply-changes-btn
 archive-btn-{*}
 batch-promote-bar

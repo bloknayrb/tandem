@@ -24,6 +24,7 @@ import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
 import { HeadingCollapseExtension } from "./extensions/heading-collapse";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
+import { RawMarkdownMark } from "./extensions/raw-markdown";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
 import { markdownToSlice } from "./utils/markdown-paste";
@@ -160,6 +161,10 @@ $effect(() => {
       TableCell,
       TableHeader,
       MarkdownHtmlExtension,
+      // Inline mark for verbatim markdown source (footnote/reference refs,
+      // inline image/html). Name must match the server `rawMarkdown` delta key
+      // so it round-trips through y-prosemirror. See raw-markdown.ts / #981.
+      RawMarkdownMark,
       Collaboration.configure({ document: ydoc }),
       CollaborationCursor.configure({
         provider,

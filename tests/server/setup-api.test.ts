@@ -98,6 +98,14 @@ describe("isValidChannelPath", () => {
   it("accepts bare relative .js path (dev mode)", () => {
     expect(isValidChannelPath("dist/channel/index.js")).toBe(true);
   });
+
+  it("rejects a valid .js that is not the bundled channel artifact (#985 provenance)", () => {
+    // /api/setup turns this path into an executable `node <path>` MCP command,
+    // so an arbitrary .js — even with a clean basename — must not be accepted.
+    expect(isValidChannelPath("/tmp/evil.js")).toBe(false);
+    expect(isValidChannelPath("/app/dist/channel/other.js")).toBe(false);
+    expect(isValidChannelPath("/app/dist/server/index.js")).toBe(false);
+  });
 });
 
 describe("runSetupHandler", () => {
@@ -161,7 +169,7 @@ describe("runSetupHandler", () => {
     const emptyHome = mkdtempSync(join(tmpdir(), "tandem-empty-home-"));
     try {
       const result = await runSetupHandler(
-        { nodeBinary: "node", channelPath: "/fake/channel.js" },
+        { nodeBinary: "node", channelPath: "/fake/dist/channel/index.js" },
         emptyHome,
       );
       expect(result.status).toBe(200);
@@ -174,7 +182,7 @@ describe("runSetupHandler", () => {
 
   it("installs the Claude Code skill", async () => {
     const result = await runSetupHandler(
-      { nodeBinary: "node", channelPath: "/fake/channel.js" },
+      { nodeBinary: "node", channelPath: "/fake/dist/channel/index.js" },
       tmpDir,
     );
     expect(result.status).toBe(200);
@@ -191,7 +199,7 @@ describe("runSetupHandler", () => {
     const configPath = join(tmpDir, ".claude.json");
     mkdirSync(configPath, { recursive: true });
     const result = await runSetupHandler(
-      { nodeBinary: "node", channelPath: "/fake/channel.js" },
+      { nodeBinary: "node", channelPath: "/fake/dist/channel/index.js" },
       tmpDir,
     );
     const data = result.body.data!;
@@ -231,7 +239,11 @@ describe("runSetupHandler", () => {
     },
   );
 
-  it("does not write tandem-channel entry (channel shim is Claude Code-only)", async () => {
+  it("skips the channel entry when the channel build artifact does not exist (graceful degradation)", async () => {
+    // Non-existent channelPath (valid shape, but no file on disk): rather than
+    // registering an MCP server pointing at a missing file, setup writes only
+    // the tandem HTTP entry. On a desktop bundle the startup /api/setup run,
+    // which carries the real resolved path, registers the channel instead.
     const result = await runSetupHandler(
       {
         nodeBinary: "/app/MacOS/node-sidecar",
@@ -241,7 +253,32 @@ describe("runSetupHandler", () => {
     );
     expect(result.status).toBe(200);
     const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
+    expect(config.mcpServers.tandem).toBeDefined();
     expect(config.mcpServers["tandem-channel"]).toBeUndefined();
+  });
+
+  it("registers tandem-channel by default for Claude Code when the artifact exists (#985)", async () => {
+    // The channel shim is Claude Code's real-time push transport; the plugin
+    // monitor it was meant to replace cannot activate (Spike B). So when the
+    // bundled channel exists, setup must register it by default — this is the
+    // core fix for push being silently dead on default installs.
+    const realChannel = join(tmpDir, "dist", "channel", "index.js");
+    mkdirSync(dirname(realChannel), { recursive: true });
+    writeFileSync(realChannel, "// channel shim");
+
+    const result = await runSetupHandler({ nodeBinary: "node", channelPath: realChannel }, tmpDir);
+    expect(result.status).toBe(200);
+    expect(result.body.data.configured).toContain("Claude Code");
+
+    const config = JSON.parse(readFileSync(join(tmpDir, ".claude.json"), "utf-8"));
+    const channel = config.mcpServers["tandem-channel"];
+    expect(channel).toBeDefined();
+    expect(channel.command).toBe("node");
+    expect(channel.args).toEqual([realChannel]);
+    // Guard: the registered key must equal the launcher flag's server name
+    // (`--dangerously-load-development-channels server:tandem-channel`), or the
+    // flag references a server nobody registered — the original #985 bug.
+    expect(Object.keys(config.mcpServers)).toContain("tandem-channel");
   });
 
   it("removes pre-existing stale tandem-channel entry from .claude.json", async () => {

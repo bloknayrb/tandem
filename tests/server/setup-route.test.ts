@@ -24,7 +24,7 @@ describe("runSetupHandler — HTTP status reflects outcome", () => {
     // Create ~/.claude so Claude Code target is detected and skill install has a target.
     mkdirSync(join(home, ".claude"), { recursive: true });
     const result = await runSetupHandler(
-      { nodeBinary: process.execPath, channelPath: join(home, "channel.js") },
+      { nodeBinary: process.execPath, channelPath: join(home, "dist", "channel", "index.js") },
       home,
     );
     const data = result.body.data!;
@@ -52,7 +52,7 @@ describe("runSetupHandler — HTTP status reflects outcome", () => {
       chmodSync(claudeDir, 0o500); // read+execute, no write
 
       const result = await runSetupHandler(
-        { nodeBinary: process.execPath, channelPath: join(home, "channel.js") },
+        { nodeBinary: process.execPath, channelPath: join(home, "dist", "channel", "index.js") },
         home,
       );
       const data = result.body.data!;
@@ -74,7 +74,7 @@ describe("runSetupHandler — HTTP status reflects outcome", () => {
       chmodSync(claudeDir, 0o500);
 
       const result = await runSetupHandler(
-        { nodeBinary: process.execPath, channelPath: join(home, "channel.js") },
+        { nodeBinary: process.execPath, channelPath: join(home, "dist", "channel", "index.js") },
         home,
       );
       const data = result.body.data!;
