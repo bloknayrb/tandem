@@ -107,14 +107,13 @@ test("A13 + #1000: note cards surface reply-toggle (private from Claude, shown t
   await page.locator(`[data-testid='reply-input-${noteId}']`).fill("private reply text");
   await page.locator(`[data-testid='reply-send-btn-${noteId}']`).click();
 
-  // Post-#1000: notes show a disclosure toggle (private = private from Claude, not from
-  // the owning user). Clicking the toggle reveals the private reply thread.
-  const toggle = page.locator(`[data-testid='reply-toggle-${noteId}']`);
-  await expect(toggle).toBeVisible({ timeout: 5_000 });
-  await expect(toggle).toContainText("1 reply");
-  await toggle.click();
+  // Notes show thread directly (no disclosure toggle — private from Claude, not the user).
+  // The ADR-027 boundary is enforced server-side (channel observer), not here.
   const thread = page.locator("[data-testid='comment-thread']");
+  await expect(thread).toBeVisible({ timeout: 5_000 });
   await expect(thread).toContainText("private reply text");
-  // Reply button shows "Reply" without count (count lives on the toggle, not the button).
-  await expect(replyBtn).toContainText("Reply");
+  // Toggle must NOT be present for notes (they use always-visible display).
+  await expect(page.locator(`[data-testid='reply-toggle-${noteId}']`)).not.toBeVisible();
+  // Pending note with replies: button embeds the count "Reply (N)".
+  await expect(replyBtn).toContainText("Reply (1)");
 });

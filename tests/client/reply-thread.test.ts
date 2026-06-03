@@ -84,10 +84,11 @@ describe("ReplyThread — A13 disclosure", () => {
     expect(toggle?.textContent).toContain("2 replies");
   });
 
-  // #1000: notes carry PRIVATE reply threads, displayed to the owning user.
-  // (Claude never sees them — that boundary is enforced server-side, not here.)
-  // A13: note replies sit behind the disclosure toggle (collapse-by-default).
-  it("note annotation shows disclosure toggle for its private replies", () => {
+  // #1000: notes carry PRIVATE reply threads shown directly to the owning user
+  // (no collapse toggle — the toggle is for comments only). Notes render
+  // CommentThread immediately; a read-only count badge appears for non-pending
+  // notes. Claude never sees these threads — ADR-027 is enforced server-side.
+  it("note annotation shows thread directly with a read-only count badge", () => {
     const replies = [
       makeReply({ id: "r1", text: "private 1" }),
       makeReply({ id: "r2", text: "private 2" }),
@@ -103,12 +104,13 @@ describe("ReplyThread — A13 disclosure", () => {
       },
     });
 
-    // Post-#1000: notes show private threads to the owning user via the A13 toggle.
-    const toggle = container.querySelector("[data-testid='reply-toggle-annotation-1']");
-    expect(toggle).toBeTruthy();
-    expect(toggle?.textContent).toContain("3 replies");
-    // Collapsed by default — thread not mounted until toggled.
-    expect(container.querySelector("[data-testid='comment-thread']")).toBeNull();
+    // Thread is always-visible for notes (no toggle needed).
+    expect(container.querySelector("[data-testid='comment-thread']")).toBeTruthy();
+    expect(container.textContent).toContain("private 1");
+    // Toggle must be absent (notes bypass the A13 disclosure).
+    expect(container.querySelector("[data-testid='reply-toggle-annotation-1']")).toBeNull();
+    // Read-only count badge (non-pending + no onReply).
+    expect(container.textContent ?? "").toMatch(/\b3\s+replies\b/);
   });
 
   it("highlights still render zero replies", () => {
@@ -125,7 +127,7 @@ describe("ReplyThread — A13 disclosure", () => {
     expect(container.textContent).not.toContain("nope");
   });
 
-  it("a note with a reply input shows toggle and button reads 'Reply'", () => {
+  it("pending note shows thread directly and button embeds the count", () => {
     const replies = [makeReply(), makeReply({ id: "r2" })];
     const onReply = async () => true;
 
@@ -139,9 +141,12 @@ describe("ReplyThread — A13 disclosure", () => {
       },
     });
 
-    // Post-#1000: notes get a disclosure toggle; count lives there, not on the button.
-    expect(container.querySelector("[data-testid='reply-toggle-annotation-1']")).toBeTruthy();
+    // Thread directly visible (notes bypass the A13 disclosure toggle).
+    expect(container.querySelector("[data-testid='comment-thread']")).toBeTruthy();
+    // Toggle absent for notes.
+    expect(container.querySelector("[data-testid='reply-toggle-annotation-1']")).toBeNull();
+    // Compose button embeds the count for pending notes with existing replies.
     const button = container.querySelector("[data-testid='reply-btn-annotation-1']");
-    expect(button?.textContent?.trim()).toBe("Reply");
+    expect(button?.textContent?.trim()).toBe("Reply (2)");
   });
 });
