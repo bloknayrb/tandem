@@ -480,6 +480,19 @@ function chooseHelp() {
      fill) so the icon itself feels interactive without a chip ring. */
   .brand-btn {
     position: relative;
+    /* Lift above decorum's injected titlebar overlay. tauri-plugin-decorum's
+       titlebar.js appends a fixed `[data-tauri-decorum-tb]` strip (top:0,
+       height:32px, z-index:100) whose child is a full-width
+       `data-tauri-drag-region`. The brand button's `-10px` top margin pulls it
+       up to y≈8, so its top ~24px sits UNDER that strip and clicks there land on
+       the drag region (the OS treats them as a window-drag) instead of the
+       button — only its bottom strip below y=32 stays clickable. Decorum's own
+       window controls live at the top-RIGHT, so lifting this top-LEFT button to
+       the titlebar layer (99999 > 100, still < the 100000 above-titlebar modal
+       layer) clears the drag strip without covering them. Ancestors create no
+       stacking context, so this competes directly with the decorum overlay at
+       the root level. */
+    z-index: var(--tandem-z-titlebar);
     display: inline-grid;
     place-items: center;
     width: 40px;
