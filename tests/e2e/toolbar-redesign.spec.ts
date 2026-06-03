@@ -175,7 +175,7 @@ test("floating selection toolbar exposes first-pass formatting actions", async (
 // test (collapse → re-select) races the popup's coordsAtPos retry path on a slow
 // CI runner (see Toolbar.svelte's MAX_AFFORDANCE_RETRIES note). Every reliable
 // test in this file opens the popup with exactly one selection episode.
-test("selection popup omits the restore button while the formatting bar is shown", async ({
+test("selection popup bar-toggle reads as Hide while the formatting bar is shown", async ({
   page,
 }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
@@ -190,8 +190,13 @@ test("selection popup omits the restore button while the formatting bar is shown
   await editor.locator("p").first().selectText();
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
-  // Restoring the bar would be a redundant no-op while it's already shown.
-  await expect(toolbar.locator("[data-testid='popup-show-formatbar-btn']")).toHaveCount(0);
+  // A8 (#798): the bar-toggle is always present and toggles both ways (the
+  // both-ways replacement for the old show-only affordance — Toolbar.svelte
+  // comment at the testid). While the bar is already shown it must read as
+  // "Hide" — a redundant *show* affordance would be the bug.
+  const barToggle = toolbar.locator("[data-testid='popup-show-formatbar-btn']");
+  await expect(barToggle).toBeVisible();
+  await expect(barToggle).toHaveAttribute("aria-label", "Hide formatting bar");
 });
 
 test("hidden formatting bar can be restored from the selection popup", async ({ page }) => {
@@ -482,9 +487,11 @@ test("formatting from the popup survives the click, then Annotate produces a cor
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
 
   // Apply Heading 2 via the popup's format pill (open the H dropdown, pick H2).
-  // The heading items are role="menuitemradio" (single-select level picker with
-  // aria-checked) since the #ecf9252 a11y pass — not plain menuitem.
-  await toolbar.getByRole("button", { name: "H", exact: true }).click();
+  // A8 (#798): the trigger shows a serif "H" glyph but carries aria-label
+  // "Heading" (the readout glyph is a poor screen-reader name), so match the
+  // accessible name, not the glyph. The heading items are role="menuitemradio"
+  // (single-select level picker with aria-checked) since the #ecf9252 a11y pass.
+  await toolbar.getByRole("button", { name: "Heading", exact: true }).click();
   await toolbar.getByRole("menuitemradio", { name: "Heading 2" }).click();
   // The heading applied to the selected paragraph, and the popup did NOT
   // dismiss (selection survived the format click). Scope to the selected text —

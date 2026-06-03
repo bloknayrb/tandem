@@ -392,3 +392,24 @@ for (const row of FONT_FORMAT_ROWS) {
     in the selection popup, and Ctrl+Z / Ctrl+Y still undo and redo.
   </div>
 </div>
+
+<!-- Raw markdown passthrough (#981) -->
+<div>
+  <label
+    data-testid="appearance-show-raw-markdown"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+  >
+    <input
+      type="checkbox"
+      checked={settings.showRawMarkdown}
+      onchange={(e) => onUpdate({ showRawMarkdown: (e.target as HTMLInputElement).checked })}
+      style="accent-color: var(--tandem-accent);"
+    />
+    <span>Show raw markdown</span>
+  </label>
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+    Footnotes, reference-style links, and inline HTML that Tandem keeps as raw source.
+    When hidden they stay in the file and always save — only the on-screen markers are
+    hidden.
+  </div>
+</div>

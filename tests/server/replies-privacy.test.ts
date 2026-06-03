@@ -3,12 +3,16 @@
  *
  * The observer in `src/server/events/observers/replies.ts` must only push
  * `annotation:reply` channel events when the parent annotation is a
- * `comment`. Replies on `note` (user-private) or `highlight` (user-only UI
- * markup) must be silent — otherwise replying on either type would leak the
- * parent's `textSnapshot` plus the reply text to Claude via SSE.
+ * `comment`. Since #1000, notes CAN carry replies (user-authored + imported
+ * Word threads), so the note case is now load-bearing privacy: replies on
+ * `note` (user-private) or `highlight` (user-only UI markup) must stay silent —
+ * otherwise replying on either would leak the parent's `textSnapshot` plus the
+ * reply text to Claude via SSE.
  *
- * Plus a smoke test for the client-side `getVisibleReplies` helper that
- * mirrors the same filter.
+ * Plus a smoke test for the client-side `getVisibleReplies` helper. Note that
+ * `getVisibleReplies` is a CLIENT-DISPLAY filter (notes show their private
+ * threads to the user who owns them); the Claude-facing privacy boundary is the
+ * observer here plus `channelVisibleReplies` on the read path.
  */
 
 import { describe, expect, it } from "vitest";
@@ -112,7 +116,7 @@ describe("replies observer — ADR-027 privacy guard", () => {
   });
 });
 
-describe("getVisibleReplies — client mirror of the privacy guard", () => {
+describe("getVisibleReplies — client display filter", () => {
   const baseReply: AnnotationReply = {
     id: "rpl_1",
     annotationId: "ann_1",
@@ -134,8 +138,19 @@ describe("getVisibleReplies — client mirror of the privacy guard", () => {
     expect(getVisibleReplies(baseAnn, [baseReply])).toEqual([baseReply]);
   });
 
-  it("returns [] for notes", () => {
-    expect(getVisibleReplies({ ...baseAnn, type: "note" }, [baseReply])).toEqual([]);
+  it("returns replies for notes (private threads display to the owning user, #1000)", () => {
+    expect(getVisibleReplies({ ...baseAnn, type: "note" }, [baseReply])).toEqual([baseReply]);
+  });
+
+  it("displays imported Word reply threads on a note", () => {
+    const importReply: AnnotationReply = {
+      ...baseReply,
+      id: "rpl_import",
+      author: "import",
+      private: true,
+      importAuthor: "Jane Reviewer",
+    };
+    expect(getVisibleReplies({ ...baseAnn, type: "note" }, [importReply])).toEqual([importReply]);
   });
 
   it("returns [] for highlights", () => {

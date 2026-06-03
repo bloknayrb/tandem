@@ -76,6 +76,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Selection popup (audience-first, ADR-027)
 - `popup-{annotate-btn,annotation-input,note-submit,comment-submit,highlight-{*},show-formatbar-btn}`
+- `popup-{format-row,annotate-row}` (A8 two-pill — the two `.pill-row` capsule containers)
 
 ### Find/Replace
 - `find-replace-bar`, `find-{input,prev-btn,next-btn,close-btn,match-count}`
@@ -106,7 +107,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - Replies + threads: `reply-{btn,input,send-btn,cancel-btn}-{*}`,
   `reply-thread-expand-{*}`, `reply-thread-overlay`,
   `reply-thread-overlay-{close,input,send,cancel,reply}`,
-  `comment-thread`, `reply-{*}`
+  `comment-thread`, `reply-{*}`, `reply-import-byline-{*}` (Word reviewer
+  byline on imported note replies, #1000)
 - Suggestion + import variants: `suggestion-diff-{*}`,
   `annotation-import-byline-{*}`, `annotation-select-checkbox-{*}`
 - Margin column: `margin-column-{*}`, `margin-bubble-{*}`,

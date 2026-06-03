@@ -61,6 +61,20 @@ describe("loadSettings — migration chain", () => {
     expect(s.models).toEqual([]);
   });
 
+  // #981: showRawMarkdown is a pure read in `normalizeKnownFields` (no version
+  // bump). The allowlist entry is the thing most likely to be forgotten, so pin
+  // its presence + default + explicit-false survival.
+  it("showRawMarkdown defaults to true when absent and survives an explicit false", () => {
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION });
+    expect(loadSettings().showRawMarkdown).toBe(true);
+
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, showRawMarkdown: false });
+    expect(loadSettings().showRawMarkdown).toBe(false);
+
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, showRawMarkdown: true });
+    expect(loadSettings().showRawMarkdown).toBe(true);
+  });
+
   it("v1 blob (panelHidden=true) migrates fully with both panels hidden", () => {
     writeRaw({ schemaVersion: 1, panelHidden: true });
     const s = loadSettings();
