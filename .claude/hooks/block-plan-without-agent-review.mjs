@@ -9,8 +9,12 @@ import path from "node:path";
 import readline from "node:readline";
 
 const BYPASS_TOKEN = "Agent feedback incorporated";
-const PLANS_DIR = path.join(os.homedir(), ".claude", "plans");
+const PLANS_DIR = (() => {
+  const raw = path.join(os.homedir(), ".claude", "plans");
+  try { return fs.realpathSync(raw); } catch { return raw; }
+})();
 const TRANSCRIPT_BYTE_CAP = 50 * 1024 * 1024;
+const PLAN_HEAD_BYTE_CAP = 4096;
 const REVIEWER_TOOL_NAMES = new Set(["Agent", "Task"]);
 
 function block(reason) {
@@ -97,7 +101,15 @@ try {
   const resolved = fs.realpathSync(planPath);
   const rel = path.relative(PLANS_DIR, resolved);
   if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
-    const head = fs.readFileSync(resolved, "utf8").slice(0, 4096);
+    const fd = fs.openSync(resolved, "r");
+    let head;
+    try {
+      const buf = Buffer.alloc(PLAN_HEAD_BYTE_CAP);
+      const n = fs.readSync(fd, buf, 0, PLAN_HEAD_BYTE_CAP, 0);
+      head = buf.subarray(0, n).toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
     if (head.replace(/^\s+/, "").startsWith(BYPASS_TOKEN)) process.exit(0);
   }
 } catch {
