@@ -70,7 +70,9 @@ test("A13: reply toggle collapses thread by default; click reveals replies", asy
   await expect(thread).not.toBeVisible();
 });
 
-test("A13 ADR-027: note cards never surface a reply toggle", async ({ page }) => {
+test("A13 + #1000: note cards surface reply-toggle (private from Claude, shown to user)", async ({
+  page,
+}) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   const editor = page.locator(".tiptap");
