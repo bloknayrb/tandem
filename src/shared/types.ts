@@ -20,8 +20,8 @@ export const HighlightColorSchema = z.enum(["yellow", "green", "blue", "pink"]);
 export const SeveritySchema = z.enum(["info", "warning", "error", "success"]);
 export const TandemModeSchema = z.enum(["solo", "tandem"]);
 export const AuthorSchema = z.enum(["user", "claude", "import"]);
-/** Subset of {@link AuthorSchema} allowed on replies — `import` is annotations-only. */
-export const ReplyAuthorSchema = z.enum(["user", "claude"]);
+/** Reply authors. `import` carries Word-comment reply threads (#1000); such replies are user-private. */
+export const ReplyAuthorSchema = z.enum(["user", "claude", "import"]);
 export const AnnotationActionSchema = z.enum(["accept", "dismiss"]);
 export const ExportFormatSchema = z.enum(["markdown", "json"]);
 export const DocumentFormatSchema = z.enum(["md", "txt", "html", "docx"]);
@@ -68,6 +68,21 @@ export interface AnnotationReply {
   text: string;
   timestamp: number;
   editedAt?: number;
+  /**
+   * ADR-027/#1000: when true, this reply is user-private and must NEVER reach
+   * Claude — not via the channel, `tandem_getAnnotations`, or
+   * `tandem_exportAnnotations`. Set at creation for replies authored on a note
+   * and for imported Word replies. Privacy is a durable property of the reply,
+   * not of the parent's current type, so a later note→comment promotion cannot
+   * back-publish it. Claude-facing reads strip it via `channelVisibleReplies`.
+   */
+  private?: boolean;
+  /**
+   * For `author: "import"` replies: the original Word reviewer name, shown as a
+   * byline in the client. Mirrors `Annotation.importSource.author`. Stored at
+   * rest in the durable JSON; never serialized to any Claude-facing surface.
+   */
+  importAuthor?: string;
   /**
    * Durable-annotation last-writer-wins counter. Server-internal field
    * mirrored from the on-disk envelope schema (see

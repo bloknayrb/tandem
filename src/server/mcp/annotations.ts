@@ -77,7 +77,33 @@ export function removeAnnotationById(
   return { ok: true, id: annotationId };
 }
 
-/** Collect all replies for a given annotation from the replies Y.Map. */
+/**
+ * Replies safe to surface to Claude for `annotation`. The SINGLE place that
+ * enforces both ADR-027 reply-privacy gates, so no Claude-facing caller can
+ * forget one (#1000 security review R1):
+ *   1. only `comment` parents expose replies at all, and
+ *   2. `private` replies (note-authored or imported Word threads) are stripped
+ *      even after a note→comment promotion.
+ * `loadReplies` is a thunk so the replies Y.Map is only walked for comments.
+ * Every Claude egress (`tandem_getAnnotations`, `tandem_exportAnnotations`)
+ * MUST route through this — never call `collectRepliesForAnnotation` /
+ * `store.listReplies` directly for Claude-facing output.
+ */
+export function channelVisibleReplies(
+  annotation: Annotation,
+  loadReplies: (annotationId: string) => AnnotationReply[],
+): AnnotationReply[] {
+  if (annotation.type !== "comment") return [];
+  return loadReplies(annotation.id).filter((r) => r.private !== true);
+}
+
+/**
+ * Collect all replies for a given annotation from the replies Y.Map.
+ *
+ * Returns EVERY reply for the id regardless of parent type or `private` flag —
+ * this is the raw store accessor. Any output bound for Claude MUST go through
+ * `channelVisibleReplies` instead; see ADR-027 and #1000.
+ */
 export function collectRepliesForAnnotation(
   repliesMap: Y.Map<unknown>,
   annotationId: string,
@@ -115,16 +141,16 @@ export function addReplyToAnnotation(
   if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
 
   const ann = sanitizeAnnotation(raw, makeOnLossy(undefined));
-  // ADR-027: notes are user-private and highlights are user-only UI markup.
-  // Only comment threads support replies — reject early with INVALID_ARGUMENT.
-  // Mirrors the read-path filter in `tandem_getAnnotations` and the channel
-  // observer in `src/server/events/observers/replies.ts`. Without this guard
-  // the write path silently accepts replies that the read path then strips,
-  // producing orphaned reply rows in the underlying Y.Map.
-  if (ann.type !== "comment") {
+  // Highlights are user-only UI markup with no body to thread — reject.
+  // Notes and comments both accept replies (#1000). Note replies are
+  // user-private: stamped `private` below and stripped from every Claude-facing
+  // read by `channelVisibleReplies`. The channel observer
+  // (`src/server/events/observers/replies.ts`) independently gates on
+  // `parentAnn.type === "comment"`, so note replies never emit an SSE event.
+  if (ann.type === "highlight") {
     return {
       ok: false,
-      error: `Cannot reply to a ${ann.type} annotation; only comments support replies`,
+      error: `Cannot reply to a highlight annotation; only notes and comments support replies`,
       code: "INVALID_ARGUMENT",
     };
   }
@@ -144,6 +170,10 @@ export function addReplyToAnnotation(
     text,
     timestamp: Date.now(),
     rev: nextRev(),
+    // A reply inherits its parent's privacy at creation. Note replies are
+    // user-private forever (even if the note is later promoted to a comment);
+    // comment replies omit the flag and surface to Claude normally (#1000).
+    ...(ann.type === "comment" ? {} : { private: true }),
   };
 
   const repliesMap = getRepliesMap(ydoc);
@@ -454,14 +484,13 @@ export function registerAnnotationTools(server: McpServer): void {
       const notesExcluded = results.filter((a) => a.type === "note").length;
       results = results.filter((a) => a.type !== "note");
 
-      // ADR-027: only comments support replies. Even if rogue rows exist in the
-      // replies Y.Map for highlight/note parents (write-path is now also
-      // guarded), strip them on read so the asymmetry is impossible to observe.
-      // Mirrors `src/server/events/observers/replies.ts` and the write-path
-      // check in `addReplyToAnnotation`.
+      // ADR-027 + #1000: only comment parents expose replies, and `private`
+      // replies (note-authored or imported Word threads) are stripped even
+      // after a note→comment promotion. `channelVisibleReplies` enforces both
+      // gates so this read site can't drift from the export path / observer.
       const annotationsWithReplies = results.map((ann) => ({
         ...ann,
-        replies: ann.type === "comment" ? store.listReplies(ann.id) : [],
+        replies: channelVisibleReplies(ann, (id) => store.listReplies(id)),
       }));
 
       return mcpSuccess({
@@ -639,8 +668,9 @@ export function registerAnnotationTools(server: McpServer): void {
         const fullText = extractText(ydoc);
         const enriched = exportable.map((ann) => ({
           ...ann,
-          // ADR-027: only comments surface replies (see tandem_getAnnotations).
-          replies: ann.type === "comment" ? store.listReplies(ann.id) : [],
+          // ADR-027 + #1000: comment-only + `private`-stripped (see
+          // tandem_getAnnotations / channelVisibleReplies).
+          replies: channelVisibleReplies(ann, (id) => store.listReplies(id)),
           textSnippet: fullText.slice(
             Math.max(0, ann.range.from),
             Math.min(fullText.length, ann.range.to),

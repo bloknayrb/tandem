@@ -281,6 +281,11 @@ export class YDocStore implements DocumentStore {
     return addReplyToAnnotation(this.ydoc, this.map, annotationId, text, author, withMcp);
   }
 
+  /**
+   * Raw accessor: returns ALL replies for the id regardless of parent type or
+   * `private` flag. Any output bound for Claude MUST route through
+   * `channelVisibleReplies` instead (ADR-027, #1000).
+   */
   listReplies(annotationId: string): AnnotationReply[] {
     const repliesMap = this.ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
     return collectRepliesForAnnotation(repliesMap, annotationId);
