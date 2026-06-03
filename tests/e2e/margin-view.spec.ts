@@ -399,14 +399,16 @@ test("PR2: comment with a reply shows reply count in the bubble", async ({ page 
   await expect(bubble).toHaveAttribute("data-margin-bubble-reply-count", "1", { timeout: 5_000 });
 });
 
-test("PR2: note bubble never exposes replies (ADR-027)", async ({ page }) => {
-  // ADR-027: notes are user-private; the client's `getVisibleReplies()` filter
-  // returns `[]` for any annotation whose type !== "comment". The bubble still
-  // RENDERS (in the left column for notes) but its reply-count attribute must
-  // stay at "0" even after a reply is added to the underlying annotation. We
-  // create a real note via the UI popup path (no `tandem_note` MCP tool
-  // exists — notes are user-only) and exercise the scroll-invariant
-  // positioning layer (lesson #71) by scrolling once between assertions.
+test("PR2: Claude cannot make a note bubble expose replies (ADR-027)", async ({ page }) => {
+  // ADR-027: Claude never interacts with notes. Since #1000 USERS can reply to
+  // their own notes (private threads that display but never reach Claude), but
+  // `tandem_annotationReply` is Claude's surface (always `author: "claude"`) and
+  // the server rejects Claude replies on non-comment parents. So a Claude reply
+  // attempt against a note is a no-op: the bubble's reply-count attribute must
+  // stay at "0" because no reply row is ever written. We create a real note via
+  // the UI popup path (no `tandem_note` MCP tool exists — notes are user-only)
+  // and exercise the scroll-invariant positioning layer (lesson #71) by
+  // scrolling once between assertions.
 
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
@@ -453,25 +455,21 @@ test("PR2: note bubble never exposes replies (ADR-027)", async ({ page }) => {
       el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
     });
 
-  // Post a reply against the note's id. The server happily accepts replies
-  // for any pending annotation (see `addReplyToAnnotation` — no type guard);
-  // the ADR-027 enforcement is client-side in `getVisibleReplies()`. The
-  // load-bearing assertion: the bubble's reply-count attribute MUST remain
-  // "0" even though a reply row now exists in the Y.Map. Use expect.poll —
-  // a thrown rAF / coordsAtPos NaN must surface as test failure, not silent
+  // Attempt to post a reply against the note's id via the Claude/MCP surface.
+  // The server rejects it (`addReplyToAnnotation` — Claude may reply only to
+  // comments, ADR-027), so no reply row is written. The load-bearing assertion:
+  // the bubble's reply-count attribute MUST remain "0". Use expect.poll — a
+  // thrown rAF / coordsAtPos NaN must surface as test failure, not a silent
   // pass via setTimeout.
   await mcp.callTool("tandem_annotationReply", {
     annotationId: noteId as string,
     text: "this reply must never surface",
   });
 
-  // Confirm the reply IS visible to comments — sanity check that the call
-  // path is wired by inspecting the underlying replies count via a fresh
-  // poll, then confirm the note bubble's filtered count is still 0.
   await expect
     .poll(async () => await bubble.getAttribute("data-margin-bubble-reply-count"), {
       timeout: 5_000,
-      message: "note bubble must keep reply-count='0' after reply (ADR-027)",
+      message: "note bubble must keep reply-count='0' (Claude cannot reply to notes, ADR-027)",
     })
     .toBe("0");
   await expect(bubble).toBeVisible();

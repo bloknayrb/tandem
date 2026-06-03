@@ -141,16 +141,26 @@ export function addReplyToAnnotation(
   if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
 
   const ann = sanitizeAnnotation(raw, makeOnLossy(undefined));
-  // Highlights are user-only UI markup with no body to thread — reject.
-  // Notes and comments both accept replies (#1000). Note replies are
-  // user-private: stamped `private` below and stripped from every Claude-facing
-  // read by `channelVisibleReplies`. The channel observer
-  // (`src/server/events/observers/replies.ts`) independently gates on
+  // Highlights are user-only UI markup with no body to thread — reject for any
+  // author. Notes and comments accept replies (#1000): note replies are
+  // user-private, stamped `private` below and stripped from every Claude-facing
+  // read by `channelVisibleReplies`; the channel observer independently gates on
   // `parentAnn.type === "comment"`, so note replies never emit an SSE event.
   if (ann.type === "highlight") {
     return {
       ok: false,
       error: `Cannot reply to a highlight annotation; only notes and comments support replies`,
+      code: "INVALID_ARGUMENT",
+    };
+  }
+  // ADR-027: Claude never interacts with notes. The note-reply relaxation
+  // (#1000) is for the USER path only (`tandem_annotationReply` always passes
+  // `author: "claude"`); Claude may reply only to comments. Without this the
+  // MCP tool would let Claude write into a private note thread.
+  if (author === "claude" && ann.type !== "comment") {
+    return {
+      ok: false,
+      error: `Claude can only reply to comments, not ${ann.type} annotations`,
       code: "INVALID_ARGUMENT",
     };
   }

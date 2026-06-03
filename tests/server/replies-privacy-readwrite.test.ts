@@ -73,6 +73,20 @@ describe("ADR-027 + #1000 reply privacy (write path)", () => {
     ).toEqual([]);
   });
 
+  it("(b2) rejects a CLAUDE reply on a note parent (ADR-027: Claude never touches notes)", () => {
+    const ydoc = setupDoc("rw-note-claude", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "private note");
+
+    // The MCP tool path passes author "claude"; user replies (author "user")
+    // are accepted by case (b) above.
+    const result = addReplyToAnnotation(ydoc, map, annId, "claude probe", "claude");
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("INVALID_ARGUMENT");
+    expect(ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).size).toBe(0);
+  });
+
   it("(c) rejects reply on a highlight parent with INVALID_ARGUMENT", () => {
     const ydoc = setupDoc("rw-highlight", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
