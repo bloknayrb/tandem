@@ -114,6 +114,94 @@ describe("slash command plugin state", () => {
   });
 });
 
+describe("slash command open gating (#998)", () => {
+  let editor: Editor;
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    ({ editor, container } = makeEditor());
+  });
+
+  afterEach(() => {
+    editor.destroy();
+    container.remove();
+  });
+
+  const active = () => slashCommandPluginKey.getState(editor.state)?.active ?? null;
+
+  it("opens when '/' is typed (control)", () => {
+    editor.chain().focus().insertContent("/").run();
+    expect(active()).not.toBeNull();
+  });
+
+  it("does NOT re-open when the caret merely lands after an existing '/token'", () => {
+    // Type "/h" -> menu opens. Doc is "<p>/h</p>": caret after "/h" is pos 3.
+    editor.chain().focus().insertContent("/h").run();
+    expect(active()).not.toBeNull();
+
+    // Move the caret before the "/" -> menu closes (no trailing match).
+    editor.commands.setTextSelection(1);
+    expect(active()).toBeNull();
+
+    // Click/arrow back to immediately after the "/h" (selection-only tr).
+    // Pre-fix this re-derived a match and re-opened; the gate must keep it shut.
+    editor.commands.setTextSelection(3);
+    expect(active()).toBeNull();
+  });
+
+  it("does NOT open from a paste that contains a slash token", () => {
+    editor.chain().focus().run();
+    const pos = editor.state.selection.from;
+    // "/h" matches real commands, so absent the gate resolveActiveSlashCommand
+    // would return active -- this asserts the paste meta blocks the open.
+    const tr = editor.state.tr.insertText("/h", pos);
+    tr.setMeta("uiEvent", "paste");
+    tr.setMeta("paste", true);
+    editor.view.dispatch(tr);
+    expect(active()).toBeNull();
+  });
+
+  it("does NOT open from a drop that contains a slash token", () => {
+    editor.chain().focus().run();
+    const pos = editor.state.selection.from;
+    const tr = editor.state.tr.insertText("/h", pos);
+    tr.setMeta("uiEvent", "drop");
+    editor.view.dispatch(tr);
+    expect(active()).toBeNull();
+  });
+
+  it("does NOT open from a remote (y-sync) insertion", () => {
+    editor.chain().focus().run();
+    const pos = editor.state.selection.from;
+    const tr = editor.state.tr.insertText("/h", pos);
+    tr.setMeta("y-sync$", true);
+    editor.view.dispatch(tr);
+    expect(active()).toBeNull();
+  });
+
+  it("opens when '/' is typed over a non-empty selection", () => {
+    editor.chain().focus().insertContent("world").run();
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    expect(active()).toBeNull();
+    editor.chain().insertContent("/").run();
+    expect(active()).not.toBeNull();
+    expect(active()?.query).toBe("");
+  });
+
+  it("does NOT re-open when backspacing the query after Escape-dismiss", () => {
+    // Type "/h1" (opens; matches heading-1), Escape (dismiss), then backspace
+    // the "1". The delete changes the token to "/h" (a different dismissedKey,
+    // still matching commands), so only the typed-insertion gate -- not
+    // dismissedKey -- keeps the menu closed.
+    editor.chain().focus().insertContent("/h1").run();
+    expect(active()).not.toBeNull();
+    editor.view.dispatch(editor.state.tr.setMeta(slashCommandPluginKey, { type: "close" }));
+    expect(active()).toBeNull();
+    editor.commands.deleteRange({ from: 3, to: 4 }); // delete "1" -> token "/h"
+    expect(active()).toBeNull();
+  });
+});
+
 describe("slash command plugin keyboard handling", () => {
   let editor: Editor;
   let container: HTMLDivElement;
