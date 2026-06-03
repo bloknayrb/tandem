@@ -152,6 +152,10 @@ export interface TandemSettings {
   showComments: boolean;
   showHighlights: boolean;
   showNotes: boolean;
+  // #981: show/hide raw markdown passthrough (footnote/reference refs + defs,
+  // inline HTML) in the editor. Display-only — the source is always preserved in
+  // the Y.Doc and round-trips to disk regardless of this toggle. Default on.
+  showRawMarkdown: boolean;
   // 1.13: transient master "mute all decorations" overlay (clean reading view).
   // Suppresses all decoration rendering without clobbering the per-type prefs,
   // so restoring returns exactly the prior set. Editing a per-type row auto-unmutes.
@@ -228,6 +232,7 @@ const DEFAULTS: TandemSettings = {
   showComments: true,
   showHighlights: true,
   showNotes: true,
+  showRawMarkdown: true,
   decorationsMuted: false,
   models: [],
   defaultModelId: null,
@@ -512,6 +517,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     showComments: parsed.showComments === false ? false : DEFAULTS.showComments,
     showHighlights: parsed.showHighlights === false ? false : DEFAULTS.showHighlights,
     showNotes: parsed.showNotes === false ? false : DEFAULTS.showNotes,
+    showRawMarkdown: parsed.showRawMarkdown === false ? false : DEFAULTS.showRawMarkdown,
     decorationsMuted: parsed.decorationsMuted === true,
     models: parseModels(parsed.models),
     defaultModelId:
