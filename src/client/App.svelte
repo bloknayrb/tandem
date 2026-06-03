@@ -1897,6 +1897,7 @@ const tutorial = createTutorial(
         {mode}
         {activeAnnotationId}
         repliesById={marginReplies.byId}
+        reduceMotion={settingsState.settings.reduceMotion}
         onClick={(ann) => {
           activeAnnotationId = ann.id;
           review.scrollToAnnotation(ann);
