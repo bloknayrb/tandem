@@ -1613,6 +1613,7 @@ const tutorial = createTutorial(
 {#snippet editorColumn()}
   <div
     class="editor-scroll tandem-scroll-fade-y"
+    class:hide-raw-md={!settingsState.settings.showRawMarkdown}
     use:scrollFade={"y"}
     role="region"
     aria-label="Document editor"

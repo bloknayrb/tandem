@@ -57,6 +57,29 @@
 .tandem-editor ol {
   padding-left: 1.5em;
 }
+
+/* Raw markdown passthrough (#981): footnote/reference refs + defs and inline
+   HTML that Tandem has no first-class node for. Rendered as `.tandem-raw-md`
+   spans (inline) and `[data-markdown-raw]` paragraphs (block). Dimmed by
+   default to read as metadata; fully hidden when the Appearance "Show raw
+   markdown" toggle is off (`.hide-raw-md` on the .editor-scroll wrapper). The
+   source always remains in the Y.Doc, so hiding never affects the saved file. */
+.tandem-editor .tandem-raw-md {
+  color: var(--tandem-fg-subtle);
+  font-family: var(--tandem-font-mono);
+  font-size: 0.92em;
+}
+.tandem-editor [data-markdown-raw] {
+  color: var(--tandem-fg-subtle);
+  font-family: var(--tandem-font-mono);
+  font-size: 0.92em;
+}
+.hide-raw-md .tandem-editor .tandem-raw-md {
+  display: none;
+}
+.hide-raw-md .tandem-editor [data-markdown-raw] {
+  display: none;
+}
 /* Inline/embedded images (issue #153): markdown `![alt](url)` + .docx images.
    Constrain to the content width so large embedded images don't overflow. */
 .tandem-editor img {

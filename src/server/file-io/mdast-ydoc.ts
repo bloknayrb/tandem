@@ -1,7 +1,23 @@
 import type { AlignType, PhrasingContent, Root, RootContent, Table } from "mdast";
 import * as Y from "yjs";
+import { serializeMdastBlock, serializeMdastInline } from "./markdown.js";
 
 const MARKDOWN_HTML_ATTR = "markdownHtml";
+/**
+ * Marks a `paragraph` whose Y.XmlText holds the verbatim markdown source of a
+ * construct Tandem has no first-class editor node for (footnote/reference
+ * definitions, unknown blocks). Re-emitted as an mdast `html` node on save so
+ * it round-trips byte-exact, and surfaced to the editor as `data-markdown-raw`
+ * for the show/hide toggle. Sibling to MARKDOWN_HTML_ATTR. See #981 / ADR-042.
+ */
+const MARKDOWN_RAW_ATTR = "markdownRaw";
+/**
+ * Delta-attribute key for an inline run holding verbatim markdown source
+ * (footnoteReference, linkReference, imageReference, inline image, inline html).
+ * MUST byte-match the Tiptap `rawMarkdown` Mark name. Listed in ALL_MARKS so
+ * `buildAttrs` emits it; read back in `deltaToPhrasingContent`.
+ */
+const RAW_MARKDOWN_MARK = "rawMarkdown";
 
 /**
  * Convert an MDAST tree into Y.Doc XmlFragment elements.
@@ -173,7 +189,15 @@ function blockToYxml(
       return [el];
     }
 
-    // definitions, etc. — wrap as paragraphs to avoid data loss
+    // Footnote/reference definitions and any other structured block Tandem has
+    // no first-class node for: store the verbatim markdown source in a
+    // `paragraph[markdownRaw]` and re-emit as an mdast `html` node on save so
+    // nothing is silently dropped (the historical bug — these carry no `.value`
+    // so the old default returned []). See #981 / ADR-042.
+    case "footnoteDefinition":
+    case "definition":
+      return [rawBlockParagraph(serializeMdastBlock(node), deferred)];
+
     default: {
       if ("value" in node && typeof node.value === "string") {
         const el = new Y.XmlElement("paragraph");
@@ -182,9 +206,28 @@ function blockToYxml(
         deferred.push({ xmlText: text, plainText: node.value });
         return [el];
       }
-      return [];
+      // Unknown structured block: preserve verbatim rather than drop it.
+      const serialized = serializeMdastBlock(node);
+      return serialized.length > 0 ? [rawBlockParagraph(serialized, deferred)] : [];
     }
   }
+}
+
+/**
+ * Build a `paragraph[markdownRaw]` carrying verbatim markdown source as text.
+ * Mirrors the `markdownHtml` block pattern: text is deferred to pass 2 so the
+ * Y.XmlText is attached before population (CLAUDE.md two-pass rule).
+ */
+function rawBlockParagraph(
+  source: string,
+  deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }>,
+): Y.XmlElement {
+  const el = new Y.XmlElement("paragraph");
+  el.setAttribute(MARKDOWN_RAW_ATTR, true as any);
+  const text = new Y.XmlText();
+  el.insert(0, [text]);
+  deferred.push({ xmlText: text, plainText: source });
+  return el;
 }
 
 /** Build a block-level `image` Y.XmlElement from an MDAST image node. */
@@ -246,7 +289,7 @@ function splitParagraphImages(
 }
 
 /** All mark names that can appear on inline text */
-const ALL_MARKS = ["bold", "italic", "strike", "code", "link"] as const;
+const ALL_MARKS = ["bold", "italic", "strike", "code", "link", RAW_MARKDOWN_MARK] as const;
 
 /**
  * Build Yjs insert attributes from the current mark stack.
@@ -259,6 +302,18 @@ function buildAttrs(marks: Record<string, object>): Record<string, object | null
     attrs[name] = name in marks ? marks[name] : null;
   }
   return attrs;
+}
+
+/**
+ * Insert verbatim markdown source as a `rawMarkdown`-marked text run.
+ * MUST use insert-with-attributes (never `insertEmbed`, never a fresh
+ * Y.XmlText): the source stays as real text so every character counts 1-for-1
+ * in `getElementText()`, keeping flat annotation offsets aligned. An embed
+ * would collapse the run to flat-length 1 and desync every later anchor (#981).
+ */
+function insertRaw(xmlText: Y.XmlText, source: string, marks: Record<string, object>): void {
+  if (source.length === 0) return;
+  xmlText.insert(xmlText.length, source, buildAttrs({ ...marks, [RAW_MARKDOWN_MARK]: {} }));
 }
 
 /**
@@ -309,17 +364,43 @@ function processInline(
       }
 
       case "image": {
-        // Inline images: insert alt text (best-effort)
-        xmlText.insert(xmlText.length, node.alt || node.url, buildAttrs(marks));
+        // Truly-inline images (standalone images are promoted to block-level
+        // `image` nodes before reaching here, see the paragraph case). Preserve
+        // the full `![alt](url "title")` source as a raw run so the URL/title
+        // survive the round-trip instead of degrading to alt-text only (#981).
+        insertRaw(xmlText, serializeMdastInline(node) || node.alt || node.url, marks);
         break;
       }
 
-      // html inline, footnoteReference, etc. — insert raw value if available
-      default:
-        if ("value" in node && typeof node.value === "string") {
-          xmlText.insert(xmlText.length, node.value, buildAttrs(marks));
+      // footnoteReference / linkReference / imageReference carry no `.value`;
+      // serialize each to its verbatim markdown source and store as a raw run so
+      // the construct round-trips (the historical silent drop). See #981.
+      case "footnoteReference":
+      case "linkReference":
+      case "imageReference":
+        insertRaw(xmlText, serializeMdastInline(node), marks);
+        break;
+
+      // Inline (phrasing) HTML. mdast emits one `html` node per tag, so paired
+      // tags like <span>…</span> arrive as separate nodes around real prose;
+      // mark each tag's value as raw — the prose between stays normal text.
+      case "html":
+        insertRaw(xmlText, node.value, marks);
+        break;
+
+      default: {
+        // Unreachable for the static PhrasingContent union (all variants are
+        // cased above) — kept as a runtime net for any plugin-added node type.
+        // `node` is `never` here, so widen through `unknown` before inspecting.
+        const widened = node as unknown as PhrasingContent & { value?: string };
+        const src = serializeMdastInline(widened);
+        if (src.length > 0) {
+          insertRaw(xmlText, src, marks);
+        } else if (typeof widened.value === "string") {
+          xmlText.insert(xmlText.length, widened.value, buildAttrs(marks));
         }
         break;
+      }
     }
   }
 }
@@ -351,7 +432,10 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
     }
 
     case "paragraph":
-      if (el.getAttribute(MARKDOWN_HTML_ATTR)) {
+      // Both markdownRaw (footnote/reference defs, unknown blocks) and
+      // markdownHtml (raw HTML blocks) re-emit as an mdast `html` node — its
+      // value serializes verbatim, reproducing the original source exactly.
+      if (el.getAttribute(MARKDOWN_RAW_ATTR) || el.getAttribute(MARKDOWN_HTML_ATTR)) {
         return { type: "html", value: getElementPlainText(el) } as any;
       }
       return { type: "paragraph", children: deltaToPhrasingContent(el) };
@@ -522,13 +606,30 @@ function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
           marks.set(stripHashSuffix(key), value);
         }
 
+        // A `rawMarkdown` run is verbatim markdown source (footnote/reference
+        // refs, inline image, inline html). Emit as an inline `html` node — it
+        // serializes byte-exact, bypassing the `text` escaper (PhrasingContent
+        // includes Html, so the cast is structural only). It then flows through
+        // the SAME link/strike/italic/bold wrapping below as ordinary text, so:
+        //   (a) an outer mark on the run is preserved (e.g. bold around a
+        //       footnote ref), and
+        //   (b) crucially, a raw inline IMAGE stays wrapped inside its mark
+        //       rather than becoming a bare paragraph-child image — which the
+        //       #153 `splitParagraphImages` promotion would otherwise turn into
+        //       a block image on reload, collapsing the inline run's flat length
+        //       and desyncing every later annotation offset.
+        // Two adjacent UNMARKED raw runs (e.g. `[^1][^2]`) stay separate: `html`
+        // has no wrapper, so `coalescePhrasing`'s `sameWrapper` never merges them.
+        //
         // `code` is a leaf-level mark: the segment is either an inlineCode leaf
         // or a plain-text leaf. link/strike/italic/bold then each wrap whatever
         // `node` is — inlineCode is valid PhrasingContent inside all of them, so
         // a code span keeps its mark even when combined with bold/italic/etc.
-        let node: PhrasingContent = marks.has("code")
-          ? { type: "inlineCode", value: text }
-          : { type: "text", value: text };
+        let node: PhrasingContent = marks.has(RAW_MARKDOWN_MARK)
+          ? ({ type: "html", value: text } as any)
+          : marks.has("code")
+            ? { type: "inlineCode", value: text }
+            : { type: "text", value: text };
 
         // Wrap from innermost to outermost: link, then strike, italic, bold.
         if (marks.has("link")) {
