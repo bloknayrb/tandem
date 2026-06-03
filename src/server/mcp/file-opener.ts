@@ -242,7 +242,7 @@ export async function openFileFromContent(
  * Each call mints a new UUID so closing a scratchpad tab and opening another
  * always yields a fresh empty document. Content is gone when the tab is closed.
  */
-export async function openScratchpad(): Promise<OpenFileResult> {
+export async function openScratchpad(content?: string): Promise<OpenFileResult> {
   const uuid = randomUUID();
   const syntheticPath = `${SCRATCHPAD_PREFIX}${uuid}/Scratchpad.md`;
   const fileName = "Scratchpad.md";
@@ -251,11 +251,14 @@ export async function openScratchpad(): Promise<OpenFileResult> {
   const id = docIdFromPath(syntheticPath);
 
   const doc = getOrCreateDocument(id);
-  // Empty content — the markdown adapter clears the fragment; Tiptap creates
-  // a default paragraph on first mount. Sync apply inside a single transact
-  // preserves the populate path's atomicity invariant (#609).
+  // Optional initial markdown content (#979). Empty (the default) clears the
+  // fragment; Tiptap creates a default paragraph on first mount. Structured
+  // content is parsed into real blocks via the same markdown adapter. Sync
+  // apply inside a single transact preserves the populate path's atomicity
+  // invariant (#609). Seeded content is not authorship-stamped — scratchpads are
+  // ephemeral (no durable store), so the decorative overlay carries no value.
   const adapter = getAdapter(format);
-  const prepared = await adapter.parse("");
+  const prepared = await adapter.parse(content ?? "");
   withInternal(doc, () => adapter.apply(doc, prepared));
 
   addDoc(id, { id, filePath: syntheticPath, format, readOnly, source: "upload" });

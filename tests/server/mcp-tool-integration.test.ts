@@ -29,7 +29,7 @@ import {
   resetForTesting as resetNotifications,
 } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { Y_MAP_ANNOTATIONS, Y_MAP_AUTHORSHIP } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
@@ -667,5 +667,189 @@ describe("MCP tool integration — error handling", () => {
     const parsed = parseResult(result);
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("NO_DOCUMENT");
+  });
+});
+
+// #979 — append structured content + seed empty docs.
+describe("MCP tool integration — tandem_appendContent (#979)", () => {
+  it("seeds an empty document with real block structure", async () => {
+    const ydoc = setupDoc("append-empty", "");
+    expect(ydoc.getXmlFragment("default").length).toBe(0);
+
+    const result = await client.callTool({
+      name: "tandem_appendContent",
+      arguments: { content: "# Title\n\n- a\n- b\n\nClosing para" },
+    });
+    const parsed = parseResult(result);
+    expect(parsed.error).toBe(false);
+    // heading + bulletList + paragraph = 3 top-level blocks
+    expect(parsed.data.appended).toBe(true);
+    expect(parsed.data.blockCount).toBeGreaterThanOrEqual(3);
+
+    const outline = parseResult(
+      await client.callTool({ name: "tandem_getOutline", arguments: {} }),
+    );
+    expect(outline.data.outline.some((h: { text: string }) => h.text === "Title")).toBe(true);
+
+    const text = parseResult(
+      await client.callTool({ name: "tandem_getTextContent", arguments: {} }),
+    ).data.text;
+    expect(text).toContain("# Title");
+    expect(text).toContain("a");
+    expect(text).toContain("b");
+    expect(text).toContain("Closing para");
+  });
+
+  it("appends without disturbing an annotation on the pre-existing last block", async () => {
+    const ydoc = setupDoc("append-preserve", "Hello world\n\nSecond block");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // "Second block" occupies flat offsets [13, 25] (see extractText layout).
+    expect(extractText(ydoc).slice(13, 25)).toBe("Second block");
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(13, 25, ydoc), "on last block");
+
+    await client.callTool({
+      name: "tandem_appendContent",
+      arguments: { content: "## Appended\n\nNew tail." },
+    });
+
+    // Annotation survives and its range still resolves to the same text.
+    const ann = map.get(annId) as { range: { from: number; to: number } } | undefined;
+    expect(ann).toBeDefined();
+    if (ann) {
+      expect(extractText(ydoc).slice(ann.range.from, ann.range.to)).toBe("Second block");
+    }
+  });
+
+  it("stamps only the appended blocks as Claude authorship, preserving earlier authorship", async () => {
+    const ydoc = setupDoc("append-authorship", "Existing para");
+    const authMap = ydoc.getMap(Y_MAP_AUTHORSHIP);
+    // Pre-existing user authorship on block 0 must NOT be overwritten/re-stamped.
+    authMap.set("user-pre", {
+      id: "user-pre",
+      author: "user",
+      range: rangeOf(0, 13, ydoc).range,
+      timestamp: Date.now(),
+    });
+
+    await client.callTool({
+      name: "tandem_appendContent",
+      arguments: { content: "# New" },
+    });
+
+    // The user entry is untouched.
+    expect((authMap.get("user-pre") as { author: string }).author).toBe("user");
+
+    // Exactly one new Claude entry, anchored over the APPENDED text ("New"),
+    // NOT over the pre-existing "Existing para" (the flatCursor-priming bug).
+    const claudeEntries = [...authMap.values()].filter(
+      (e): e is { author: string; range: { from: number; to: number } } =>
+        (e as { author?: string }).author === "claude",
+    );
+    expect(claudeEntries).toHaveLength(1);
+    const full = extractText(ydoc);
+    expect(full.slice(claudeEntries[0].range.from, claudeEntries[0].range.to)).toBe("New");
+  });
+
+  it("treats whitespace-only content as a no-op", async () => {
+    const ydoc = setupDoc("append-blank", "Keep me");
+    const before = extractText(ydoc);
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_appendContent", arguments: { content: "   \n\n  " } }),
+    );
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.blockCount).toBe(0);
+    expect(extractText(ydoc)).toBe(before);
+  });
+
+  it("appends a code block as a real block", async () => {
+    setupDoc("append-code", "");
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_appendContent",
+        arguments: { content: "```js\nconst x = 1;\n```" },
+      }),
+    );
+    expect(parsed.error).toBe(false);
+    expect(parsed.data.blockCount).toBeGreaterThanOrEqual(1);
+    const text = parseResult(
+      await client.callTool({ name: "tandem_getTextContent", arguments: {} }),
+    ).data.text;
+    expect(text).toContain("const x = 1;");
+  });
+
+  it("rejects read-only documents", async () => {
+    const ydoc = getOrCreateDocument("append-ro");
+    populateYDoc(ydoc, "read only");
+    addDoc("append-ro", {
+      id: "append-ro",
+      filePath: "/tmp/append-ro.docx",
+      format: "docx",
+      readOnly: true,
+      source: "file",
+    });
+    setActiveDocId("append-ro");
+
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_appendContent", arguments: { content: "# nope" } }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FORMAT_ERROR");
+  });
+
+  it("rejects non-markdown documents", async () => {
+    const ydoc = getOrCreateDocument("append-txt");
+    populateYDoc(ydoc, "plain text");
+    addDoc("append-txt", {
+      id: "append-txt",
+      filePath: "/tmp/append-txt.txt",
+      format: "txt",
+      readOnly: false,
+      source: "file",
+    });
+    setActiveDocId("append-txt");
+
+    const parsed = parseResult(
+      await client.callTool({ name: "tandem_appendContent", arguments: { content: "# nope" } }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("FORMAT_ERROR");
+  });
+});
+
+describe("MCP tool integration — tandem_scratchpad content seeding (#979)", () => {
+  it("seeds a new scratchpad with structured content", async () => {
+    const created = parseResult(
+      await client.callTool({
+        name: "tandem_scratchpad",
+        arguments: { content: "# H\n\n- a\n- b" },
+      }),
+    );
+    expect(created.error).toBe(false);
+    expect(created.data.documentId).toBeTruthy();
+
+    // openScratchpad sets the new doc active, so getOutline targets it.
+    const outline = parseResult(
+      await client.callTool({ name: "tandem_getOutline", arguments: {} }),
+    );
+    expect(outline.data.outline.some((h: { text: string }) => h.text === "H")).toBe(true);
+
+    // Scratchpad content is deliberately NOT authorship-stamped (ephemeral).
+    const ydoc = getOrCreateDocument(created.data.documentId);
+    expect(ydoc.getMap(Y_MAP_AUTHORSHIP).size).toBe(0);
+  });
+});
+
+describe("MCP tool integration — tandem_edit empty-doc guidance (#979)", () => {
+  it("returns EMPTY_DOCUMENT pointing at the seeding path", async () => {
+    setupDoc("edit-empty", "");
+    const parsed = parseResult(
+      await client.callTool({
+        name: "tandem_edit",
+        arguments: { from: 0, to: 0, newText: "x" },
+      }),
+    );
+    expect(parsed.error).toBe(true);
+    expect(parsed.code).toBe("EMPTY_DOCUMENT");
+    expect(parsed.message).toContain("tandem_appendContent");
   });
 });

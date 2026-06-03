@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem exposes 29 tools via MCP HTTP (26 active, 3 deprecated stubs that return structured errors). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 30 tools via MCP HTTP (27 active, 3 deprecated stubs that return structured errors). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -25,8 +25,10 @@ All tools return responses in a standard envelope:
 | `NO_DOCUMENT` | Tool called before `tandem_open`, or specified `documentId` not found. |
 | `FILE_NOT_FOUND` | File doesn't exist or is a UNC path. |
 | `FILE_LOCKED` | File is open in another program (e.g., Word). Close it first. |
-| `FORMAT_ERROR` | Unsupported format, file too large (>50MB), or invalid regex. |
+| `FORMAT_ERROR` | Unsupported format, read-only / non-markdown document, file too large (>50MB), or invalid regex. |
+| `FILE_TOO_LARGE` | Inline content exceeds the tool's size cap (e.g. `tandem_appendContent`). |
 | `INVALID_RANGE` | Offset out of bounds, text not found, or range overlaps heading markup. |
+| `EMPTY_DOCUMENT` | `tandem_edit` called on an empty document — seed content with `tandem_appendContent` / `tandem_scratchpad({ content })` first. |
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, e.g., `EACCES`). |
@@ -103,11 +105,11 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 
 ### tandem_scratchpad
 
-Create and open a new empty Scratchpad tab. Scratchpads are ephemeral — content is lost when the tab is closed. Useful for drafting, brainstorming, or working on throwaway content without touching the filesystem.
+Create and open a new Scratchpad tab, optionally seeded with markdown content. Scratchpads are ephemeral — content is lost when the tab is closed. Useful for drafting, brainstorming, or working on throwaway content without touching the filesystem.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| *(none)* | — | — | — |
+| `content` | string | no | Optional initial markdown. Block structure (headings, lists, blank-line-separated paragraphs) is parsed into real blocks. |
 
 **Returns:**
 ```json
@@ -118,9 +120,15 @@ Create and open a new empty Scratchpad tab. Scratchpads are ephemeral — conten
 }
 ```
 
+**Example:**
+```
+tandem_scratchpad({ content: "# Test plan\n\n- Step one\n- Step two" })
+```
+
 **Notes:**
 - Each call creates a new scratchpad with a unique ID.
 - Scratchpads use `upload://` synthetic paths — they are not saved to disk.
+- Seeded content parses real block structure; to add more later, use `tandem_appendContent`.
 - Also available via `Ctrl+N` in the editor or the `+` button in the tab bar.
 
 ---
@@ -224,6 +232,39 @@ tandem_edit({ from: 180, to: 193, newText: "$13.1 million" })
 - Cross-element edits (spanning multiple paragraphs) are supported but merge into one paragraph.
 - Edits appear instantly in the editor.
 - Read-only documents (.docx) reject edits -- use annotations instead.
+- On an **empty** document `tandem_edit` returns `EMPTY_DOCUMENT` -- seed content with `tandem_appendContent` or `tandem_scratchpad({ content })` first.
+
+---
+
+### tandem_appendContent
+
+Append **structured** markdown to the end of the document. Unlike `tandem_edit` (single-paragraph, literal newlines), this parses headings, lists, and blank-line-separated paragraphs into real blocks. Non-destructive -- existing content and annotations are untouched. Also seeds an empty document.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `content` | string | yes | Markdown to append. Block structure (headings, lists, blank-line-separated paragraphs) is parsed into real blocks. |
+| `documentId` | string | no | Target document ID (defaults to active document) |
+
+**Returns:**
+```json
+{ "appended": true, "blockCount": 3, "textLength": 142 }
+```
+
+**Errors:** `FORMAT_ERROR` (read-only, or non-markdown document), `FILE_TOO_LARGE` (content over the 1 MB inline cap), `NO_DOCUMENT`
+
+**Example:**
+```
+// Seed an empty scratchpad, then add a section:
+tandem_scratchpad()
+tandem_appendContent({ content: "# Notes\n\n- First point\n- Second point\n\nA closing paragraph." })
+```
+
+**Notes:**
+- Content is **appended at the end** — it never deletes or overwrites existing content. To replace text, use `tandem_edit`; to reload a file wholesale, use `tandem_open({ force: true })`.
+- Appending shifts no existing offsets, so existing annotations and authorship ranges stay valid.
+- Appended text is attributed to Claude (authorship overlay), matching `tandem_edit`.
+- Markdown documents only in v1. Read-only (.docx) and non-`md` documents are rejected with `FORMAT_ERROR`.
+- For arbitrary mid-document insertion (not just append), use `tandem_edit` per block, or open the file after writing it.
 
 ---
 

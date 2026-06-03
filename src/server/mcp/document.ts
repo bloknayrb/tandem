@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Root } from "mdast";
 import * as Y from "yjs";
 import { z } from "zod";
 import {
@@ -16,6 +17,8 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { mdParser } from "../file-io/markdown.js";
+import { appendMdast } from "../file-io/mdast-ydoc.js";
 // Position system
 import { anchoredRange, resolveToElement, validateRange } from "../positions.js";
 import { saveSession } from "../session/manager.js";
@@ -192,8 +195,15 @@ export function getSection(
  * `author:"user"` ranges are preserved (a user can reclaim a block by editing
  * it). Offsets mirror `extractText`'s top-level walk: top-level elements joined
  * by FLAT_SEPARATOR (1 char), each element offset by its heading prefix.
+ *
+ * `startIndex` (default 0) restricts stamping to top-level blocks at or after
+ * that fragment index — used by `tandem_appendContent` to stamp only the
+ * freshly-appended blocks while leaving earlier (possibly user-authored) blocks
+ * untouched. The `flatCursor` still advances across the skipped earlier blocks
+ * so the stamped ranges keep their ABSOLUTE flat offsets (anchoring against the
+ * top of the doc would silently mis-attribute existing text).
  */
-export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc): void {
+export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc, startIndex = 0): void {
   const fragment = doc.getXmlFragment("default");
   const authorshipMap = doc.getMap(Y_MAP_AUTHORSHIP);
   const timestamp = Date.now();
@@ -210,8 +220,13 @@ export function stampClaudeAuthorshipWholeDoc(doc: Y.Doc): void {
     const to = from + textLen;
 
     // Advance the cursor past this element (prefix + text) plus the
-    // FLAT_SEPARATOR that joins top-level elements.
+    // FLAT_SEPARATOR that joins top-level elements. Runs for EVERY block,
+    // including those before startIndex, so offsets stay absolute.
     flatCursor = to + 1;
+
+    // Append-stamping: skip blocks before startIndex (already stamped /
+    // user-authored). The cursor advance above already ran for them.
+    if (i < startIndex) continue;
 
     // Skip zero-width spans (empty paragraphs, bare headings) —
     // resolveAuthorshipRange rejects them anyway.
@@ -317,10 +332,17 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_scratchpad",
-    "Create and open a new empty Scratchpad tab. Scratchpads are ephemeral — content is lost when the tab is closed. Useful for drafting, brainstorming, or working on throwaway content without touching the filesystem.",
-    {},
-    withErrorBoundary("tandem_scratchpad", async () => {
-      const result = await openScratchpad();
+    "Create and open a new Scratchpad tab, optionally seeded with markdown content. Scratchpads are ephemeral — content is lost when the tab is closed. Useful for drafting, brainstorming, or working on throwaway content without touching the filesystem.",
+    {
+      content: z
+        .string()
+        .optional()
+        .describe(
+          "Optional initial markdown content. Block structure — headings, lists, blank-line-separated paragraphs — is parsed into real blocks.",
+        ),
+    },
+    withErrorBoundary("tandem_scratchpad", async ({ content }) => {
+      const result = await openScratchpad(content);
       return mcpSuccess({
         documentId: result.documentId,
         fileName: result.fileName,
@@ -410,6 +432,16 @@ export function registerDocumentTools(server: McpServer): void {
             return mcpError(
               "FORMAT_ERROR",
               "Document is read-only (.docx). Use annotations instead.",
+            );
+          }
+
+          // An empty document has no addressable range — resolveToElement returns
+          // null on a zero-length fragment, which would otherwise surface as a
+          // confusing generic INVALID_RANGE. Point the agent at the seeding path.
+          if (r.doc.getXmlFragment("default").length === 0) {
+            return mcpError(
+              "EMPTY_DOCUMENT",
+              "Document is empty — no text range to edit. Seed content with tandem_appendContent({ content }) or tandem_scratchpad({ content }).",
             );
           }
 
@@ -539,6 +571,65 @@ export function registerDocumentTools(server: McpServer): void {
         });
       },
     ),
+  );
+
+  // 1 MB inline cap — mdParser.parse is synchronous and blocks the event loop;
+  // the 50 MB file cap is far too loose for an inline MCP argument.
+  const MAX_APPEND_CONTENT_BYTES = 1_000_000;
+
+  server.tool(
+    "tandem_appendContent",
+    "Append structured markdown to the END of the document. Unlike tandem_edit (single-paragraph, literal newlines), this parses headings, lists, and blank-line-separated paragraphs into real blocks. Non-destructive — existing content and annotations are untouched. Also seeds an empty document. Markdown documents only.",
+    {
+      content: z
+        .string()
+        .describe(
+          "Markdown to append to the end of the document. Block structure — headings, lists, blank-line-separated paragraphs — is parsed into real blocks.",
+        ),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Target document ID (defaults to active document)"),
+    },
+    withErrorBoundary("tandem_appendContent", async ({ content, documentId }) => {
+      return withTypingPresence({ tool: "tandem_appendContent", documentId }, async () => {
+        const r = requireDocument(documentId);
+        if (!r) return noDocumentError();
+
+        const docState = getCurrentDoc(documentId);
+        if (docState?.readOnly) {
+          return mcpError("FORMAT_ERROR", "Document is read-only (.docx) — cannot append content.");
+        }
+        if (docState && docState.format !== "md") {
+          return mcpError("FORMAT_ERROR", "tandem_appendContent supports markdown documents only.");
+        }
+        if (Buffer.byteLength(content, "utf-8") > MAX_APPEND_CONTENT_BYTES) {
+          return mcpError(
+            "FILE_TOO_LARGE",
+            `Content exceeds the ${MAX_APPEND_CONTENT_BYTES}-byte append limit.`,
+          );
+        }
+
+        // Parse outside the transaction to shrink the in-transact failure surface
+        // (mirrors the adapter parse/apply split). Cast: mdParser.parse is typed Node.
+        const tree = mdParser.parse(content) as Root;
+
+        const fragment = r.doc.getXmlFragment("default");
+        const fragBefore = fragment.length;
+        withMcp(r.doc, () => appendMdast(r.doc, tree));
+        const fragAfter = fragment.length;
+
+        // Stamp only the freshly-appended top-level blocks as Claude authorship,
+        // mirroring tandem_edit's automatic stamp of inserted text.
+        stampClaudeAuthorshipWholeDoc(r.doc, fragBefore);
+
+        return mcpSuccess({
+          appended: true,
+          blockCount: fragAfter - fragBefore,
+          textLength: extractText(r.doc).length,
+        });
+      });
+    }),
   );
 
   server.tool(
