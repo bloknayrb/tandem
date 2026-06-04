@@ -149,18 +149,6 @@ describe("buildOffsetMap", () => {
     expect(map.totalLength).toBe(12);
   });
 
-  it("collects comment paragraph IDs", () => {
-    const xml = wrapBody(`
-      <w:p w14:paraId="PARA1">
-        <w:commentRangeStart w:id="42"/>
-        <w:r><w:t>Hello</w:t></w:r>
-        <w:commentRangeEnd w:id="42"/>
-      </w:p>
-    `);
-    const map = buildOffsetMap(xml, new Set());
-    expect(map.commentParagraphIds.get("42")).toBe("PARA1");
-  });
-
   it("matches Y.Doc flat text for table cells followed by a paragraph", () => {
     const xml = wrapBody(`
       <w:tbl>
@@ -542,8 +530,30 @@ describe("applyTrackedChanges", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveWordComments", () => {
-  it("creates commentsExtended.xml with correct paraId", async () => {
+  const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml";
+
+  /** Build a minimal word/comments.xml. Each comment lists its paragraph paraIds in order. */
+  function commentsXml(comments: Array<{ id: string; paraIds: string[] }>): string {
+    const body = comments
+      .map(
+        (c) =>
+          `<w:comment w:id="${c.id}" w:author="A" w:date="2026-01-01T00:00:00Z">` +
+          c.paraIds.map((p) => `<w:p w14:paraId="${p}"><w:r><w:t>body</w:t></w:r></w:p>`).join("") +
+          `</w:comment>`,
+      )
+      .join("");
+    return `<?xml version="1.0"?><w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">${body}</w:comments>`;
+  }
+
+  function countCommentEx(xml: string): number {
+    return (xml.match(/<w15:commentEx\b/g) || []).length;
+  }
+
+  it("marks a comment done using its OWN last-paragraph paraId, not the document anchor (#1007)", async () => {
     const zip = new JSZip();
+    // The comment body has two paragraphs; CT_CommentEx must reference the LAST.
+    zip.file("word/comments.xml", commentsXml([{ id: "42", paraIds: ["AAAA1111", "BBBB2222"] }]));
     zip.file("word/document.xml", "<stub/>");
     zip.file(
       "[Content_Types].xml",
@@ -554,57 +564,143 @@ describe("resolveWordComments", () => {
       `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
     );
 
-    const commentParaIds = new Map([["42", "ABCD1234"]]);
     const suggestions = [{ id: "s1", from: 0, to: 5, newText: "New", importCommentId: "42" }];
-
-    const resolved = await resolveWordComments(zip, commentParaIds, suggestions);
+    const resolved = await resolveWordComments(zip, suggestions);
     expect(resolved).toBe(1);
 
     const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
-    expect(extXml).toContain('w15:paraId="ABCD1234"');
+    expect(extXml).toContain('w15:paraId="BBBB2222"'); // the comment's last paragraph
+    expect(extXml).not.toContain("AAAA1111"); // NOT the first/anchor paragraph
     expect(extXml).toContain('w15:done="1"');
 
-    // Should also add content type and relationship
-    const ctXml = await zip.file("[Content_Types].xml")!.async("text");
-    expect(ctXml).toContain("commentsExtended");
-
-    const relsXml = await zip.file("word/_rels/document.xml.rels")!.async("text");
-    expect(relsXml).toContain("commentsExtended");
+    // Still wires up the content type + relationship for the new part.
+    expect(await zip.file("[Content_Types].xml")!.async("text")).toContain("commentsExtended");
+    expect(await zip.file("word/_rels/document.xml.rels")!.async("text")).toContain(
+      "commentsExtended",
+    );
   });
 
-  it("appends to existing commentsExtended.xml", async () => {
+  it("uses the last TOP-LEVEL paragraph paraId even when the comment body contains an embedded table", async () => {
+    // A comment whose body is: <w:p TOPLEVEL1/> <w:tbl><w:tr><w:tc><w:p NESTED/></w:tc></w:tr></w:tbl> <w:p TOPLEVEL2/>
+    // CT_CommentEx @paraId must be TOPLEVEL2, not NESTED (the deepest/last in doc order).
     const zip = new JSZip();
+    const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml";
+    const xml =
+      `<?xml version="1.0"?><w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">` +
+      `<w:comment w:id="55" w:author="A" w:date="2026-01-01T00:00:00Z">` +
+      `<w:p w14:paraId="TOPLEVEL1"><w:r><w:t>intro</w:t></w:r></w:p>` +
+      `<w:tbl><w:tr><w:tc><w:p w14:paraId="NESTED00"><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+      `<w:p w14:paraId="TOPLEVEL2"><w:r><w:t>conclusion</w:t></w:r></w:p>` +
+      `</w:comment>` +
+      `</w:comments>`;
+    zip.file("word/comments.xml", xml);
+    zip.file("word/document.xml", "<stub/>");
     zip.file(
-      "word/commentsExtended.xml",
-      `<?xml version="1.0"?><w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:commentEx w15:paraId="EXIST" w15:done="0"/></w15:commentsEx>`,
+      "[Content_Types].xml",
+      `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>`,
+    );
+    zip.file(
+      "word/_rels/document.xml.rels",
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
     );
 
-    const commentParaIds = new Map([["99", "NEWPARA"]]);
-    const suggestions = [{ id: "s1", from: 0, to: 5, newText: "X", importCommentId: "99" }];
-
-    const resolved = await resolveWordComments(zip, commentParaIds, suggestions);
+    const suggestions = [{ id: "s1", from: 0, to: 3, newText: "X", importCommentId: "55" }];
+    const resolved = await resolveWordComments(zip, suggestions);
     expect(resolved).toBe(1);
 
     const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
-    expect(extXml).toContain('w15:paraId="EXIST"');
-    expect(extXml).toContain('w15:paraId="NEWPARA"');
+    expect(extXml).toContain('w15:paraId="TOPLEVEL2"'); // last TOP-LEVEL paragraph
+    expect(extXml).not.toContain("NESTED00"); // NOT the paragraph nested inside the table
+    expect(extXml).not.toContain("TOPLEVEL1"); // NOT the first paragraph
+    expect(extXml).toContain('w15:done="1"');
+  });
+
+  it("updates an existing commentEx entry in place rather than duplicating it (#1007)", async () => {
+    const zip = new JSZip();
+    zip.file("word/comments.xml", commentsXml([{ id: "7", paraIds: ["0BBB0002"] }]));
+    // Word already tracks this comment with done="0".
+    zip.file(
+      "word/commentsExtended.xml",
+      `<?xml version="1.0"?><w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:commentEx w15:paraId="0BBB0002" w15:done="0"/></w15:commentsEx>`,
+    );
+
+    const suggestions = [{ id: "s1", from: 0, to: 5, newText: "X", importCommentId: "7" }];
+    const resolved = await resolveWordComments(zip, suggestions);
+    expect(resolved).toBe(1);
+
+    const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
+    expect(countCommentEx(extXml)).toBe(1); // updated in place, not duplicated
+    expect(extXml).toContain('w15:paraId="0BBB0002"');
+    expect(extXml).toContain('w15:done="1"');
+    expect(extXml).not.toContain('w15:done="0"');
+  });
+
+  it("adds done to an existing entry that had no done attribute", async () => {
+    const zip = new JSZip();
+    zip.file("word/comments.xml", commentsXml([{ id: "7", paraIds: ["0BBB0002"] }]));
+    zip.file(
+      "word/commentsExtended.xml",
+      `<?xml version="1.0"?><w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:commentEx w15:paraId="0BBB0002"/></w15:commentsEx>`,
+    );
+
+    const suggestions = [{ id: "s1", from: 0, to: 5, newText: "X", importCommentId: "7" }];
+    expect(await resolveWordComments(zip, suggestions)).toBe(1);
+
+    const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
+    expect(countCommentEx(extXml)).toBe(1);
+    expect(extXml).toContain('w15:done="1"');
+  });
+
+  it("matches an existing entry case-insensitively (preserving its original case)", async () => {
+    const zip = new JSZip();
+    // comments.xml uses lowercase; the existing commentEx uses uppercase.
+    zip.file("word/comments.xml", commentsXml([{ id: "7", paraIds: ["abcd1234"] }]));
+    zip.file(
+      "word/commentsExtended.xml",
+      `<?xml version="1.0"?><w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:commentEx w15:paraId="ABCD1234" w15:done="0"/></w15:commentsEx>`,
+    );
+
+    const suggestions = [{ id: "s1", from: 0, to: 5, newText: "X", importCommentId: "7" }];
+    expect(await resolveWordComments(zip, suggestions)).toBe(1);
+
+    const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
+    expect(countCommentEx(extXml)).toBe(1); // updated in place, not duplicated
+    expect(extXml).toContain('w15:paraId="ABCD1234"'); // existing case preserved
+    expect(extXml).toContain('w15:done="1"');
+    expect(extXml).not.toContain('w15:done="0"');
+  });
+
+  it("appends a new entry alongside an unrelated existing one", async () => {
+    const zip = new JSZip();
+    zip.file("word/comments.xml", commentsXml([{ id: "99", paraIds: ["NEWPARA0"] }]));
+    zip.file(
+      "word/commentsExtended.xml",
+      `<?xml version="1.0"?><w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:commentEx w15:paraId="OTHER000" w15:done="0"/></w15:commentsEx>`,
+    );
+
+    const suggestions = [{ id: "s1", from: 0, to: 5, newText: "X", importCommentId: "99" }];
+    const resolved = await resolveWordComments(zip, suggestions);
+    expect(resolved).toBe(1);
+
+    const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
+    expect(extXml).toContain('w15:paraId="OTHER000"'); // untouched
+    expect(extXml).toContain('w15:paraId="NEWPARA0"'); // newly resolved
+    expect(countCommentEx(extXml)).toBe(2);
   });
 
   it("returns 0 when no suggestions have importCommentId", async () => {
     const zip = new JSZip();
-    const commentParaIds = new Map<string, string>();
     const suggestions = [{ id: "s1", from: 0, to: 5, newText: "X" }];
-
-    const resolved = await resolveWordComments(zip, commentParaIds, suggestions);
+    const resolved = await resolveWordComments(zip, suggestions);
     expect(resolved).toBe(0);
   });
 
-  it("skips comments without paraId mapping", async () => {
+  it("skips a comment with no paragraph id in comments.xml", async () => {
     const zip = new JSZip();
-    const commentParaIds = new Map<string, string>(); // empty — no paraId mapping
+    // No word/comments.xml at all → nothing to resolve against.
     const suggestions = [{ id: "s1", from: 0, to: 5, newText: "X", importCommentId: "42" }];
-
-    const resolved = await resolveWordComments(zip, commentParaIds, suggestions);
+    const resolved = await resolveWordComments(zip, suggestions);
     expect(resolved).toBe(0);
   });
 });
