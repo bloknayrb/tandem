@@ -106,6 +106,7 @@ editor-font-{*}-btn
 editor-measure-{*}
 editor-root
 editor-stage
+empty-state-connect-ai
 empty-state-open-file
 empty-state-open-settings
 empty-state-retry
@@ -328,6 +329,7 @@ throw-on-render-ok
 title-bar
 titlebar-brand-menu
 titlebar-brand-menu-popover
+titlebar-connect-ai
 titlebar-default-model
 titlebar-update-available-dot
 toast-container

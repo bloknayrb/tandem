@@ -9,10 +9,12 @@ import { DISCONNECT_DEBOUNCE_MS } from "../../src/shared/constants.js";
 function makeProps(overrides: Record<string, unknown> = {}) {
   return {
     connected: true,
-    claudeActive: false,
+    aiChip: null,
     onOpenFile: vi.fn(),
     onRetry: vi.fn(),
     onOpenSettings: vi.fn(),
+    onConnectAi: vi.fn(),
+    onRestartClaude: vi.fn(),
     ...overrides,
   };
 }
@@ -35,18 +37,26 @@ describe("EmptyState", () => {
   describe("state A — no document open", () => {
     it.each([
       {
-        why: "connected + claudeActive → state A, no Claude/MCP secondary line",
-        claudeActive: true,
-        expectSecondary: false,
+        why: "aiChip null (ready/booting/solo) → state A + product-positioning line, no CTA",
+        aiChip: null,
+        expectSecondary: true,
+        expectCta: false,
       },
       {
-        why: "connected + !claudeActive → state A + Claude/MCP secondary line",
-        claudeActive: false,
-        expectSecondary: true,
+        why: "aiChip 'connect' → Connect AI CTA, no positioning line",
+        aiChip: "connect",
+        expectSecondary: false,
+        expectCta: true,
       },
-    ])("$why", ({ claudeActive, expectSecondary }) => {
+      {
+        why: "aiChip 'restart' → Restart CTA, no positioning line",
+        aiChip: "restart",
+        expectSecondary: false,
+        expectCta: true,
+      },
+    ])("$why", ({ aiChip, expectSecondary, expectCta }) => {
       const { container } = render(EmptyState, {
-        props: makeProps({ connected: true, claudeActive }),
+        props: makeProps({ connected: true, aiChip }),
       });
 
       // State A is the default (connected, not yet disconnected).
@@ -54,10 +64,11 @@ describe("EmptyState", () => {
       expect(byTestId(container, "empty-state-retry")).toBeNull();
       expect(container.textContent).toContain("Nothing open yet");
 
-      // The preserved product-positioning line only when Claude is idle.
+      // The product-positioning line shows only when there's no AI CTA to make.
       const hasSecondary =
         container.textContent?.includes("Tandem works alongside Claude") ?? false;
       expect(hasSecondary).toBe(expectSecondary);
+      expect(byTestId(container, "empty-state-connect-ai") !== null).toBe(expectCta);
     });
 
     it("Open file… fires onOpenFile", async () => {
@@ -69,6 +80,26 @@ describe("EmptyState", () => {
 
       expect(props.onOpenFile).toHaveBeenCalledOnce();
       expect(props.onRetry).not.toHaveBeenCalled();
+    });
+
+    it("Connect AI CTA fires onConnectAi", async () => {
+      const props = makeProps({ connected: true, aiChip: "connect" });
+      const { container } = render(EmptyState, { props });
+
+      byTestId(container, "empty-state-connect-ai")?.click();
+      await tick();
+
+      expect(props.onConnectAi).toHaveBeenCalledOnce();
+    });
+
+    it("Restart CTA fires onRestartClaude", async () => {
+      const props = makeProps({ connected: true, aiChip: "restart" });
+      const { container } = render(EmptyState, { props });
+
+      byTestId(container, "empty-state-connect-ai")?.click();
+      await tick();
+
+      expect(props.onRestartClaude).toHaveBeenCalledOnce();
     });
   });
 
