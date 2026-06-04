@@ -690,7 +690,7 @@ describe("integrations API routes", () => {
     });
 
     describe("apply: with stubbed detectTargets (real applyConfig)", () => {
-      it("removes tandem-channel from the target config when listed in removals", async () => {
+      it("removes tandem-channel from the target config when the shim is not being (re)created", async () => {
         const tmpClaudeJson = path.join(tmpDir, ".claude.json");
         fs.writeFileSync(
           tmpClaudeJson,
@@ -715,11 +715,16 @@ describe("integrations API routes", () => {
         });
         // Inject a detector that returns the tmpdir path so applyConfig
         // writes there (and assertPathSafe accepts the tmpdir prefix).
+        // Force shouldRegisterChannelShim to false so this asserts the removal
+        // path deterministically — without the override the result depends on
+        // whether dist/channel/index.js happens to be built (existsSync), and
+        // the create-wins guard would keep the shim (covered by the next test).
         const app = makeApp({
           ...deps,
           detectTargets: () => [
             { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
           ],
+          shouldRegisterChannelShim: () => false,
         });
         const nonce = await freshNonce(app);
         const res = await request(
@@ -741,6 +746,59 @@ describe("integrations API routes", () => {
         expect(after.mcpServers.tandem).toBeDefined();
         // The nonce rotated because a write occurred.
         expect(body.nextNonce).not.toBe(nonce);
+      });
+
+      it("create-wins: keeps tandem-channel even when listed in removals if the shim is being registered (#985)", async () => {
+        const tmpClaudeJson = path.join(tmpDir, ".claude.json");
+        fs.writeFileSync(
+          tmpClaudeJson,
+          JSON.stringify({
+            mcpServers: {
+              "tandem-channel": { command: "node", args: ["/path/to/shim.js"] },
+            },
+          }),
+        );
+        await deps.store.write({
+          schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+          integrations: [
+            {
+              kind: "claude-code",
+              id: "cc-1",
+              label: "Claude Code",
+              configPath: tmpClaudeJson,
+              transport: "http",
+              url: "http://127.0.0.1:3479",
+            },
+          ],
+        });
+        // Force the shim to be registered this run. The create-wins guard in
+        // applyConfig must keep tandem-channel even though it's listed in
+        // removals — a removal can never delete an entry we're also creating.
+        const app = makeApp({
+          ...deps,
+          detectTargets: () => [
+            { label: "Claude Code", configPath: tmpClaudeJson, kind: "claude-code" },
+          ],
+          shouldRegisterChannelShim: () => true,
+        });
+        const nonce = await freshNonce(app);
+        const res = await request(
+          app,
+          "POST",
+          API_INTEGRATIONS_APPLY,
+          {
+            ids: ["cc-1"],
+            confirmationNonce: nonce,
+            removals: { "cc-1": ["tandem-channel"] },
+          },
+          TAURI_ORIGIN,
+        );
+        expect(res.status).toBe(200);
+        const body = res.body as { results: Array<{ status: string }> };
+        expect(body.results[0]?.status).toBe("applied");
+        const after = JSON.parse(fs.readFileSync(tmpClaudeJson, "utf-8"));
+        expect(after.mcpServers["tandem-channel"]).toBeDefined();
+        expect(after.mcpServers.tandem).toBeDefined();
       });
 
       it("nonce rotates after an applied result (not just any 200 response)", async () => {
