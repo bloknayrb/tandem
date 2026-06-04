@@ -421,8 +421,27 @@ function toggleNewTabMenu() {
   if (opening) {
     recentFiles = loadRecentFilesCached();
     previouslyFocused = document.activeElement as HTMLElement | null;
+  } else {
+    closeMenu();
+    return;
   }
   showRecent = opening;
+}
+
+// Single close path. Synchronously blur the focused element IF it's inside the
+// morph BEFORE flipping showRecent. The body defers its unmount ~820ms and goes
+// `inert` while collapsing, but inert's blur is frame-deferred by the browser:
+// a Ctrl+W fired in the SAME tick as the close (the CI E2E does exactly this
+// after Escape) still lands on the focused search INPUT, where
+// shouldIgnoreShortcut swallows it and the tab never closes. A synchronous
+// .blur() is the only handle that beats that race; element-removal (the #977
+// baseline) blurred synchronously, the deferred-unmount morph does not. The
+// contains() guard no-ops the click-outside path (focus already moved out) so
+// this doesn't fight closedByPointerOutside.
+function closeMenu() {
+  const active = document.activeElement as HTMLElement | null;
+  if (active && morphEl?.contains(active)) active.blur();
+  showRecent = false;
 }
 
 // Body mount lifecycle (A29 box-collapse close). Open → mount immediately. Close →
@@ -495,7 +514,7 @@ $effect(() => {
     if ((target as Element).closest?.(".new-tab-menu")) return;
     if (isInActiveDragRegion(target as Element)) return;
     closedByPointerOutside = true;
-    showRecent = false;
+    closeMenu();
   }
 
   window.addEventListener("pointerdown", handlePointerDown, true);
@@ -510,9 +529,9 @@ $effect(() => {
 // reduced-motion the body is already gone). `previouslyFocused` is a value captured at
 // open time, so it's immune to that timing. We deliberately do NOT focus the + here:
 // focusing the + after a keyboard close gives it a :focus-visible ring that parks on the
-// pill (and was clipped into a stray arc mid-morph). `.nt-cell` is `inert` while closing,
-// so the focused search input is blurred regardless; if there's no valid element to
-// restore to, focus simply falls to <body> rather than onto the +.
+// pill (and was clipped into a stray arc mid-morph). `closeMenu()` already blurred the
+// in-morph search input synchronously (and `.nt-cell` is `inert` while collapsing), so if
+// there's no valid element to restore to, focus simply falls to <body> rather than the +.
 let wasShowing = false;
 $effect(() => {
   if (showRecent) {
@@ -617,7 +636,7 @@ $effect(() => {
               {recentFiles}
               {closedTabTop}
               onOpen={async (filePath) => {
-                showRecent = false;
+                closeMenu();
                 const result = await openServerPath(filePath);
                 if (result.ok) {
                   saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
@@ -626,18 +645,18 @@ $effect(() => {
                 }
               }}
               onNewScratchpad={() => {
-                showRecent = false;
+                closeMenu();
                 void createScratchpad();
               }}
               onBrowse={() => {
-                showRecent = false;
+                closeMenu();
                 onRequestOpenDialog?.();
               }}
               onReopenClosed={() => {
-                showRecent = false;
+                closeMenu();
                 onReopenClosed?.();
               }}
-              onClose={() => (showRecent = false)}
+              onClose={closeMenu}
             />
           {/if}
         </div>
