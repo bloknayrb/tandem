@@ -64,6 +64,12 @@ interface Props {
    * slide right, absent → neutral fade. Read+cleared inside `cardExit`.
    */
   exitModes?: Map<string, "accept" | "dismiss">;
+  /**
+   * #999: external open-request from the native context menu's Reply…/Edit…
+   * items. The panel passes it ONLY to the targeted card; when `nonce` bumps,
+   * open the in-card editor (`kind:"edit"`) or reply composer (`kind:"reply"`).
+   */
+  openRequest?: { kind: "edit" | "reply"; nonce: number } | null;
 }
 
 let {
@@ -86,6 +92,7 @@ let {
   lifecycleMotion = false,
   reduceMotion = false,
   exitModes,
+  openRequest = null,
 }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
@@ -130,6 +137,29 @@ $effect(() => {
   if (resolvedDensity === prevDensity) return;
   prevDensity = resolvedDensity;
   if (resolvedDensity === "stub") isThreadOverlayOpen = false;
+});
+
+// #999: react to the native context menu's Reply…/Edit… request. Plain-`let`
+// last-value guards PER KIND (mirrors the prevDensity guard above) so the effect
+// no-ops on mount (openRequest is null / nonce unchanged) and fires exactly once
+// per genuine bump — never re-entering the isEditing→resolvedDensity→prevDensity
+// effect chain. `replyOpenNonce` is forwarded to ReplyThread, which opens its
+// composer on a bump (its own untrack-seeded guard ignores the mount value).
+let lastEditNonce = -1;
+let lastReplyNonce = -1;
+let replyOpenNonce = $state(0);
+$effect(() => {
+  const req = openRequest;
+  if (!req) return;
+  if (req.kind === "edit") {
+    if (req.nonce === lastEditNonce) return;
+    lastEditNonce = req.nonce;
+    if (onEdit) enterEditMode();
+  } else {
+    if (req.nonce === lastReplyNonce) return;
+    lastReplyNonce = req.nonce;
+    replyOpenNonce = req.nonce;
+  }
 });
 
 // Per-type body tint replaces the old 3px left-edge border (Conflict #8
@@ -192,6 +222,7 @@ function handleKeyDown(e: KeyboardEvent) {
   out:cardExit={{ enabled: lifecycleMotion, reduceMotion, id: annotation.id, modes: exitModes }}
   onclick={onClick}
   data-testid="annotation-card-{annotation.id}"
+  data-annotation-id={annotation.id}
   data-annotation-type={annotation.type}
   data-density={resolvedDensity}
   data-claude-typing={claudeTyping ? "true" : undefined}
@@ -306,6 +337,7 @@ function handleKeyDown(e: KeyboardEvent) {
     {isPending}
     {isEditing}
     {onReply}
+    openNonce={replyOpenNonce}
   />
   {#if canExpandThread}
     <button

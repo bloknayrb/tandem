@@ -838,6 +838,7 @@ pub fn run() {
             show_in_file_manager,
             show_context_menu,
             show_tab_context_menu,
+            show_annotation_context_menu,
             install_update,
             keychain::keychain_get,
             keychain::keychain_set,
@@ -1134,6 +1135,90 @@ fn show_tab_context_menu(
     req: TabContextMenuRequest,
 ) -> Result<(), String> {
     let spec = build_tab_context_menu_spec(&req, std::env::consts::OS);
+    let menu = build_menu_from_spec(&window, &spec).map_err(|e| e.to_string())?;
+    window.popup_menu(&menu).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ---- Annotation-card context menu (issue #999, #923 Phase 3) ----------------
+//
+// Same plumbing as Phase 1/2: booleans-only request, fixed `ctx:annotation:*` ids routed
+// back through the shared `forward_context_menu_event`, all custom items (no
+// PredefinedMenuItems — "Copy text" is a custom webview clipboard write of the annotation
+// body, not the native Copy of a selection). The sensitive annotation id never crosses
+// IPC; only these booleans go in. Items are grouped and EMPTY GROUPS COLLAPSE their
+// separators, so the menu never shows a leading/trailing/doubled divider.
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnnotationContextMenuRequest {
+    can_accept: bool,
+    can_dismiss: bool,
+    can_reply: bool,
+    can_edit: bool,
+    can_send_to_claude: bool,
+    can_copy: bool,
+    can_remove: bool,
+    /// Remove item label: note → "Archive", else → "Remove".
+    is_note: bool,
+}
+
+fn build_annotation_context_menu_spec(req: &AnnotationContextMenuRequest) -> Vec<CtxItem> {
+    // Four logical groups; an item is present only when its gate is true. Empty groups
+    // are dropped and the surviving groups are joined with a single separator each.
+    let review: Vec<CtxItem> = [
+        (req.can_accept, "ctx:annotation:accept", "Accept"),
+        (req.can_dismiss, "ctx:annotation:dismiss", "Dismiss"),
+    ]
+    .into_iter()
+    .filter_map(|(on, id, label)| on.then_some(CtxItem::Custom(id, label, true)))
+    .collect();
+
+    let compose: Vec<CtxItem> = [
+        (req.can_reply, "ctx:annotation:reply", "Reply…"),
+        (req.can_edit, "ctx:annotation:edit", "Edit…"),
+        (
+            req.can_send_to_claude,
+            "ctx:annotation:sendToClaude",
+            "Send to Claude",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(on, id, label)| on.then_some(CtxItem::Custom(id, label, true)))
+    .collect();
+
+    let clipboard: Vec<CtxItem> = if req.can_copy {
+        vec![CtxItem::Custom("ctx:annotation:copy", "Copy text", true)]
+    } else {
+        vec![]
+    };
+
+    let destructive: Vec<CtxItem> = if req.can_remove {
+        let label = if req.is_note { "Archive" } else { "Remove" };
+        vec![CtxItem::Custom("ctx:annotation:remove", label, true)]
+    } else {
+        vec![]
+    };
+
+    let mut out: Vec<CtxItem> = Vec::new();
+    for group in [review, compose, clipboard, destructive] {
+        if group.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(CtxItem::Separator);
+        }
+        out.extend(group);
+    }
+    out
+}
+
+#[tauri::command]
+fn show_annotation_context_menu(
+    window: tauri::WebviewWindow,
+    req: AnnotationContextMenuRequest,
+) -> Result<(), String> {
+    let spec = build_annotation_context_menu_spec(&req);
     let menu = build_menu_from_spec(&window, &spec).map_err(|e| e.to_string())?;
     window.popup_menu(&menu).map_err(|e| e.to_string())?;
     Ok(())
@@ -3001,6 +3086,203 @@ mod tab_context_menu_tests {
         assert!(r.can_close_others);
         assert!(!r.can_close_right);
         assert!(r.has_path);
+    }
+}
+
+/// Unit tests for the Phase 3 annotation-card context-menu spec builder (#999).
+#[cfg(test)]
+mod annotation_context_menu_tests {
+    use super::*;
+
+    /// All-off baseline; flip the fields a test cares about.
+    fn none() -> AnnotationContextMenuRequest {
+        AnnotationContextMenuRequest {
+            can_accept: false,
+            can_dismiss: false,
+            can_reply: false,
+            can_edit: false,
+            can_send_to_claude: false,
+            can_copy: false,
+            can_remove: false,
+            is_note: false,
+        }
+    }
+
+    fn ids(spec: &[CtxItem]) -> Vec<&str> {
+        spec.iter()
+            .filter_map(|i| match i {
+                CtxItem::Custom(id, _, _) => Some(*id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn label_of<'a>(spec: &'a [CtxItem], id: &str) -> Option<&'a str> {
+        spec.iter().find_map(|i| match i {
+            CtxItem::Custom(item_id, label, _) if *item_id == id => Some(*label),
+            _ => None,
+        })
+    }
+
+    /// Separators never lead, trail, or double up — the empty-group collapse contract.
+    fn separators_well_formed(spec: &[CtxItem]) -> bool {
+        if spec.is_empty() {
+            return true;
+        }
+        if matches!(spec.first(), Some(CtxItem::Separator))
+            || matches!(spec.last(), Some(CtxItem::Separator))
+        {
+            return false;
+        }
+        !spec
+            .windows(2)
+            .any(|w| matches!(w[0], CtxItem::Separator) && matches!(w[1], CtxItem::Separator))
+    }
+
+    #[test]
+    fn user_note_shows_compose_copy_archive() {
+        // author=user, type=note, pending → Reply…/Edit…/Send to Claude · Copy · Archive.
+        let mut r = none();
+        r.can_reply = true;
+        r.can_edit = true;
+        r.can_send_to_claude = true;
+        r.can_copy = true;
+        r.can_remove = true;
+        r.is_note = true;
+        let spec = build_annotation_context_menu_spec(&r);
+        assert_eq!(
+            ids(&spec),
+            vec![
+                "ctx:annotation:reply",
+                "ctx:annotation:edit",
+                "ctx:annotation:sendToClaude",
+                "ctx:annotation:copy",
+                "ctx:annotation:remove",
+            ]
+        );
+        assert_eq!(label_of(&spec, "ctx:annotation:remove"), Some("Archive"));
+        assert!(separators_well_formed(&spec));
+        // Exactly two separators (compose|clipboard, clipboard|destructive).
+        assert_eq!(
+            spec.iter()
+                .filter(|i| matches!(i, CtxItem::Separator))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn claude_comment_shows_review_reply_copy() {
+        // author=claude, type=comment, pending → Accept/Dismiss · Reply… · Copy.
+        let mut r = none();
+        r.can_accept = true;
+        r.can_dismiss = true;
+        r.can_reply = true;
+        r.can_copy = true;
+        let spec = build_annotation_context_menu_spec(&r);
+        assert_eq!(
+            ids(&spec),
+            vec![
+                "ctx:annotation:accept",
+                "ctx:annotation:dismiss",
+                "ctx:annotation:reply",
+                "ctx:annotation:copy",
+            ]
+        );
+        // No Edit (author != user), no Remove/Send.
+        assert!(label_of(&spec, "ctx:annotation:edit").is_none());
+        assert!(separators_well_formed(&spec));
+    }
+
+    #[test]
+    fn user_highlight_remove_label_and_no_reply() {
+        // author=user, type=highlight, pending → Edit… · Copy · Remove (not Archive); no Reply.
+        let mut r = none();
+        r.can_edit = true;
+        r.can_copy = true;
+        r.can_remove = true;
+        r.is_note = false;
+        let spec = build_annotation_context_menu_spec(&r);
+        assert_eq!(
+            ids(&spec),
+            vec![
+                "ctx:annotation:edit",
+                "ctx:annotation:copy",
+                "ctx:annotation:remove",
+            ]
+        );
+        assert_eq!(label_of(&spec, "ctx:annotation:remove"), Some("Remove"));
+        assert!(label_of(&spec, "ctx:annotation:reply").is_none());
+        assert!(separators_well_formed(&spec));
+    }
+
+    #[test]
+    fn resolved_annotation_shows_only_copy_no_separators() {
+        // Every gate off except copy → a single item, no leading/trailing separator.
+        let mut r = none();
+        r.can_copy = true;
+        let spec = build_annotation_context_menu_spec(&r);
+        assert_eq!(ids(&spec), vec!["ctx:annotation:copy"]);
+        assert!(separators_well_formed(&spec));
+        assert_eq!(
+            spec.iter()
+                .filter(|i| matches!(i, CtxItem::Separator))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn all_off_is_empty() {
+        let spec = build_annotation_context_menu_spec(&none());
+        assert!(spec.is_empty());
+        assert!(separators_well_formed(&spec));
+    }
+
+    #[test]
+    fn review_and_destructive_only_collapses_middle_groups() {
+        // Accept/Dismiss + Remove, nothing in compose/clipboard → exactly one separator
+        // between the two surviving groups (middle empty groups don't emit dividers).
+        let mut r = none();
+        r.can_accept = true;
+        r.can_dismiss = true;
+        r.can_remove = true;
+        let spec = build_annotation_context_menu_spec(&r);
+        assert_eq!(
+            ids(&spec),
+            vec![
+                "ctx:annotation:accept",
+                "ctx:annotation:dismiss",
+                "ctx:annotation:remove",
+            ]
+        );
+        assert!(separators_well_formed(&spec));
+        assert_eq!(
+            spec.iter()
+                .filter(|i| matches!(i, CtxItem::Separator))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn request_deserializes_from_camel_case() {
+        let r: AnnotationContextMenuRequest = serde_json::from_value(serde_json::json!({
+            "canAccept": false,
+            "canDismiss": false,
+            "canReply": true,
+            "canEdit": true,
+            "canSendToClaude": true,
+            "canCopy": true,
+            "canRemove": true,
+            "isNote": true,
+        }))
+        .expect("camelCase annotation request should deserialize");
+        assert!(r.can_reply);
+        assert!(r.can_edit);
+        assert!(r.can_send_to_claude);
+        assert!(r.is_note);
+        assert!(!r.can_accept);
     }
 }
 

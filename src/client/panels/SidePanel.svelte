@@ -7,6 +7,7 @@ import type { Annotation, AnnotationReply } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
+import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { warningStateColors } from "../utils/colors";
@@ -18,6 +19,19 @@ import {
   replyToAnnotation,
   sendNoteToClaude,
 } from "./annotation-actions";
+import {
+  canAccept,
+  canDismiss,
+  canEdit,
+  canRemove,
+  canReply,
+  canSendToClaude,
+} from "./annotation-context-menu";
+import {
+  openAnnotationContextMenu,
+  runAnnotationAction,
+  subscribeAnnotationActions,
+} from "./annotation-context-menu-host";
 import BatchPromoteBar from "./BatchPromoteBar.svelte";
 import BulkActions from "./BulkActions.svelte";
 import type { FilterAuthor, FilterStatus, FilterType } from "./FilterBar.svelte";
@@ -327,6 +341,74 @@ function handleDismissAnimated(id: string) {
   review.handleDismiss(id);
 }
 
+// ---- Native annotation context menu (#999 / #923 Phase 3) ----------------
+// Tauri-only; in the browser the native WebView menu is left alone. A single
+// delegated `contextmenu` listener on the list container resolves the card via
+// `closest('[data-annotation-id]')`. The annotation id stays webview-side (the
+// gesture singleton captures a `run` closure); only booleans cross IPC. The
+// shared listener (refcounted across SidePanel + MarginColumn) routes the
+// emitted action id back into `run`, which RE-READS the live annotation and
+// re-validates the predicate before acting — the right-click snapshot is never
+// trusted (the modal popup can be held open across a status change).
+let listEl: HTMLDivElement | undefined = $state();
+
+// Reactive open-request forwarded to the targeted card's `openRequest` prop so
+// Reply…/Edit… open the in-card composer/editor. Whole-object replacement (not
+// in-place mutation) so the per-card ternary re-evaluates; `nonceSeq` is a plain
+// monotonic counter (read only at write time).
+let cardOpenRequest = $state<{ id: string; kind: "edit" | "reply"; nonce: number } | null>(null);
+let nonceSeq = 0;
+
+function liveAnnotation(id: string): Annotation | undefined {
+  return annotations.find((a) => a.id === id);
+}
+
+// Route an emitted action through the shared re-validating dispatcher. Captures the id
+// (string only) + this panel's handlers; reply/edit open the in-card composer/editor via
+// the reactive `cardOpenRequest` nonce.
+function dispatchAnnotationAction(
+  id: string,
+): (action: Parameters<typeof runAnnotationAction>[0]) => void {
+  return (action) => {
+    const ann = liveAnnotation(id);
+    if (!ann) return; // deleted while the menu was open → no-op
+    runAnnotationAction(action, ann, {
+      accept: handleAcceptAnimated,
+      dismiss: handleDismissAnimated,
+      sendToClaude: handleSendToClaude,
+      remove: handleRemove,
+      openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
+      openReply: (i) => (cardOpenRequest = { id: i, kind: "reply", nonce: ++nonceSeq }),
+    });
+  };
+}
+
+async function handleAnnotationContextMenu(e: MouseEvent) {
+  if (!isTauriRuntime()) return; // browser → native menu
+  const el = (e.target as Element | null)?.closest("[data-annotation-id]");
+  const id = el?.getAttribute("data-annotation-id");
+  if (!id) return; // right-click on rail chrome / empty space → native menu
+  const ann = liveAnnotation(id);
+  if (!ann) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  await openAnnotationContextMenu(ann, dispatchAnnotationAction(id));
+}
+
+// Delegated contextmenu listener on the list container (attached imperatively so
+// the a11y analyzer doesn't demand a tabindex on role="list").
+$effect(() => {
+  const el = listEl;
+  if (!el) return;
+  el.addEventListener("contextmenu", handleAnnotationContextMenu);
+  return () => el.removeEventListener("contextmenu", handleAnnotationContextMenu);
+});
+
+// Subscribe to the shared (refcounted) annotation action listener for this
+// panel's whole lifetime (SidePanel is always mounted — CSS display toggle).
+$effect(() => subscribeAnnotationActions());
+
 function handleBulk(status: "accepted" | "dismissed") {
   for (const ann of filteredData.reviewPending) review.resolveAnnotation(ann.id, status);
   bulkConfirm = null;
@@ -506,6 +588,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
+    bind:this={listEl}
     style="padding: var(--tandem-space-3); flex: 1;"
     role="list"
     aria-label="Annotations"
@@ -521,12 +604,13 @@ function handleRailBackgroundClick(e: MouseEvent) {
           lifecycleMotion={true}
           {reduceMotion}
           {exitModes}
-          onAccept={ann.author !== "user" ? handleAcceptAnimated : undefined}
-          onDismiss={ann.author !== "user" ? handleDismissAnimated : undefined}
-          onRemove={ann.author === "user" ? handleRemove : undefined}
-          onSendToClaude={ann.type === "note" ? handleSendToClaude : undefined}
-          onEdit={handleEdit}
-          onReply={handleReply}
+          onAccept={canAccept(ann) ? handleAcceptAnimated : undefined}
+          onDismiss={canDismiss(ann) ? handleDismissAnimated : undefined}
+          onRemove={canRemove(ann) ? handleRemove : undefined}
+          onSendToClaude={canSendToClaude(ann) ? handleSendToClaude : undefined}
+          onEdit={canEdit(ann) ? handleEdit : undefined}
+          onReply={canReply(ann) ? handleReply : undefined}
+          openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
           onClick={() => review.scrollToAnnotation(ann)}
           selected={selectedImportIds.has(ann.id)}
           onToggleSelect={ann.author === "import" && ann.type === "note"

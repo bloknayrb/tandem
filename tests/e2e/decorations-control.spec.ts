@@ -47,7 +47,10 @@ test("mute hides all decorations, restore brings them back", async ({ page }) =>
   const editor = page.locator(".tandem-editor");
   await expect(editor).toContainText(TITLE_TEXT, { timeout: 10_000 });
 
-  const decoration = page.locator("[data-annotation-id]");
+  // Scope to the EDITOR decoration — since #999 the rail/margin AnnotationCard
+  // roots also carry `data-annotation-id`, and mute only suppresses the editor
+  // decorations (the rail card stays), so an unscoped count would never reach 0.
+  const decoration = editor.locator("[data-annotation-id]");
   await expect(decoration.first()).toBeVisible({ timeout: 15_000 });
 
   // Eye half mutes → decoration is suppressed.
