@@ -47,6 +47,22 @@ describe("addRecentFile", () => {
       { path: "/b.md", openedAt: 222 },
     ]);
   });
+
+  it("registers a promoted scratchpad path, then dedups the effect re-add (#1019)", () => {
+    // Save As (runTauriSaveAs) registers the server-resolved promoted path the
+    // instant the write is confirmed. Shortly after, the recents-sync effect in
+    // App.svelte re-adds the same path once the openDocuments broadcast updates
+    // the open tab's filePath. Both call sites must converge on a SINGLE entry —
+    // registering the identical resolved string is what prevents a duplicate.
+    const promoted = "/home/user/notes/Scratchpad.md";
+    const afterSaveAs = addRecentFile([entry("/a.md", 111)], promoted, 9999);
+    expect(recentFilePaths(afterSaveAs)).toEqual([promoted, "/a.md"]);
+
+    const afterEffectReAdd = addRecentFile(afterSaveAs, promoted);
+    expect(recentFilePaths(afterEffectReAdd)).toEqual([promoted, "/a.md"]);
+    // The re-add reuses the existing entry (keeps openedAt), so no churn.
+    expect(afterEffectReAdd[0]).toEqual({ path: promoted, openedAt: 9999 });
+  });
 });
 
 describe("recentFilePaths", () => {
