@@ -37,6 +37,41 @@ function activeKey(active: ActiveSlashCommand): string {
   return `${active.from}:${active.to}:${active.query}`;
 }
 
+/**
+ * True when `tr` represents the user *typing* text that ends at the caret --
+ * i.e. an insertion (not a caret move, paste/drop, or remote sync) whose
+ * inserted run terminates exactly at the resulting selection head.
+ *
+ * Used to gate slash-menu *opening* (#998): a bare caret move/click that merely
+ * lands after a pre-existing "/" must NOT re-open the menu -- only typing the
+ * "/" (or query chars while already open) may. Mirrors the local-vs-remote
+ * discrimination in `authorship.ts` (`y-sync$` meta marks remote/MCP syncs).
+ */
+function isTypedInsertionAtCaret(tr: Transaction): boolean {
+  // Selection-only transactions (click, arrow keys) never open the menu.
+  if (!tr.docChanged) return false;
+  // Remote collaborative / MCP-driven syncs are not local typing.
+  if (tr.getMeta("y-sync$")) return false;
+  // Clipboard paste / drag-drop are explicit UI events, not typing.
+  const uiEvent = tr.getMeta("uiEvent");
+  if (uiEvent === "paste" || uiEvent === "drop" || tr.getMeta("paste")) return false;
+
+  const caret = tr.selection.from;
+  let typedAtCaret = false;
+  // Iterate the mapping's own maps (NOT tr.steps -- different index spaces): the
+  // map-index `i` is what tr.mapping.slice() is keyed on. Map each inserted-run
+  // end forward through the remaining maps with LEFT bias (-1) so a later
+  // same-position step (input rule / IME finalize) can't push it past the caret.
+  tr.mapping.maps.forEach((map, i) => {
+    map.forEach((_oldStart, _oldEnd, newStart, newEnd) => {
+      if (newEnd <= newStart) return; // nothing inserted by this map
+      const finalEnd = tr.mapping.slice(i + 1).map(newEnd, -1);
+      if (finalEnd === caret) typedAtCaret = true;
+    });
+  });
+  return typedAtCaret;
+}
+
 function resolveActiveSlashCommand(
   state: EditorState,
   selectedIndex = 0,
@@ -233,8 +268,11 @@ export const SlashCommandExtension = Extension.create<SlashCommandOptions>({
       new Plugin<SlashCommandPluginState>({
         key: slashCommandPluginKey,
         state: {
-          init: (_, state) => ({
-            active: resolveActiveSlashCommand(state),
+          // Never active at construction: "just typed" can't be true at init,
+          // and a doc that loads with the caret after a "/token" must not
+          // auto-open the menu (#998).
+          init: () => ({
+            active: null,
             dismissedKey: null,
           }),
           apply(tr, value, _oldState, newState) {
@@ -245,6 +283,16 @@ export const SlashCommandExtension = Extension.create<SlashCommandOptions>({
               newState,
               value.active?.selectedIndex ?? 0,
             );
+
+            // Gate the inactive -> active transition: only a typed insertion
+            // ending at the caret may *open* the menu. A caret move/click, a
+            // paste, or a remote sync that merely lands after an existing "/"
+            // is plain text. Once already open we keep re-deriving (below) so
+            // the query tracks and the menu closes when the caret leaves. (#998)
+            if (nextActive && !value.active && !isTypedInsertionAtCaret(tr)) {
+              return { active: null, dismissedKey: value.dismissedKey };
+            }
+
             if (nextActive && activeKey(nextActive) === value.dismissedKey) {
               return { active: null, dismissedKey: value.dismissedKey };
             }
