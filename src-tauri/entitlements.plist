@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    macOS hardened-runtime entitlements (#983).
+
+    The bundled `node-sidecar` (Node/V8) is signed with the hardened runtime
+    enabled. During V8 initialization, `v8::internal::ThreadIsolation::Initialize`
+    calls `pthread_jit_write_protect_np`, which the kernel rejects with SIGTRAP
+    unless the JIT entitlement is present — so on Apple Silicon the signed,
+    notarized .app crashed the sidecar immediately and never bound :3479.
+
+    `allow-jit` permits the W^X JIT mapping V8 needs. Node.js 18+ uses MAP_JIT
+    (write-XOR-execute model) correctly, so `allow-jit` alone is the minimal
+    sufficient entitlement; `allow-unsigned-executable-memory` (which allows
+    arbitrary unsigned executable memory pages) is intentionally omitted because
+    it is broader than necessary and widens the attack surface without benefit.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>

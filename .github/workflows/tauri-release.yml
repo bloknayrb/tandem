@@ -282,7 +282,28 @@ jobs:
               errors=1
               continue
             fi
-            echo "ok: $app code-signed + notarization-stapled"
+            # #983: the original crash was the nested node-sidecar (an externalBin)
+            # signed under hardened runtime WITHOUT com.apple.security.cs.allow-jit,
+            # so V8 init SIGTRAPped on Apple Silicon. codesign does NOT inherit the
+            # app's entitlements to nested binaries automatically, so assert the
+            # sidecar itself carries the JIT entitlement — if a future toolchain
+            # change stops applying bundle.macOS.entitlements to externalBins, this
+            # fails loudly here instead of shipping another silent SIGTRAP.
+            sidecar="$app/Contents/MacOS/node-sidecar"
+            if [ ! -e "$sidecar" ]; then
+              echo "::error::$app: node-sidecar not found at $sidecar"
+              errors=1
+              continue
+            fi
+            # Pipe through `strings` to handle both XML and binary plist output:
+            # on newer macOS codesign may output a binary plist, which raw grep
+            # can mishandle. `strings` extracts the key names from either format.
+            if ! codesign -d --entitlements - "$sidecar" 2>&1 | strings | grep -q "com.apple.security.cs.allow-jit"; then
+              echo "::error::$app: node-sidecar is missing com.apple.security.cs.allow-jit — it will SIGTRAP in V8 init on Apple Silicon (#983). If bundle.macOS.entitlements is not reaching the externalBin, re-sign the sidecar with the entitlements before notarization."
+              errors=1
+              continue
+            fi
+            echo "ok: $app code-signed + notarization-stapled + sidecar allow-jit"
           done
           # .dmg stapling is best-effort (tauri does not always staple the disk
           # image itself); warn but do not fail — the stapled .app inside is the
