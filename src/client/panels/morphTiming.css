@@ -34,6 +34,22 @@
   --morph-cascade: 200ms; /* opened-body row reveal */
 }
 
+/*
+ * A29 (new-tab +→menu morph, DocumentTabs.svelte) — two-phase, with one deliberate
+ * deviation from the default phasing model above. OPEN: PHASE 1 horizontal (width +
+ * box-shadow, --morph-p1, delay 0) unrolls the + into a clean capsule; PHASE 2 vertical
+ * (height + border-radius, --morph-p2, delayed by --morph-p1) grows the capsule into the
+ * card. Close reverses it (height+radius first, then width+shadow). DEVIATION: the canon
+ * pairs border-radius with WIDTH (stage 1); A29 pairs it with HEIGHT (stage 2) and holds
+ * a literal 14px capsule radius during phase 1 — pairing radius with width squared the
+ * corners mid-unroll into a flat lozenge, and a 50%/9999px radius either makes an ellipse
+ * on the wide box or back-loads the square-off into a late pop. A29 uses BOTH --morph-p1
+ * and --morph-p2 (DocumentTabs' morphCollapseMs() reads + sums both to size the deferred
+ * unmount). Kept as literal tokens, not calc, because morphCollapseMs() reads them via
+ * getComputedStyle, which returns the specified string for unregistered custom props — a
+ * calc() would parse to NaN. Other morphs (A23/A26) keep the default model above.
+ */
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --morph-p1: 0ms;
