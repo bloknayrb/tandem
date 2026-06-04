@@ -72,7 +72,7 @@ export interface SettingsTab {
 
 <script lang="ts">
 import { onMount, untrack } from "svelte";
-import { TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
+import { BYO_MODELS_ENABLED, TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
 import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import { openServerPath } from "../utils/server-paths";
@@ -158,7 +158,10 @@ export const DEFAULT_SETTINGS_TABS: SettingsTab[] = [
     icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4v6m0 4h.01",
     component: SettingsAboutTab,
   },
-];
+  // The Models (BYO API key) tab is gated off until the outbound LLM client
+  // exists — see BYO_MODELS_ENABLED (#1018/#1022). Filtered out rather than
+  // omitted from the literal so the entry stays co-located with its siblings.
+].filter((tab) => tab.id !== SETTINGS_TAB_IDS.models || BYO_MODELS_ENABLED);
 
 interface Props {
   open: boolean;
