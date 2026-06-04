@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import { BYO_MODELS_ENABLED } from "../shared/constants";
 import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
 import type { Annotation, CapturedAnchor, TandemNotification } from "../shared/types";
@@ -300,8 +301,14 @@ const shouldShowWizard = $derived(manuallyReopened || isAutoOpenFirstRun);
 // Manual reopen is excluded — that path re-runs the MCP-client wizard
 // only; Settings → Models is the post-first-run surface.
 let modelPickerHandled = $state(false);
+// Gated off behind BYO_MODELS_ENABLED (#1018/#1022): with the in-app model
+// path hidden, first-run leads straight to the Claude Code wizard (the
+// `{:else if shouldShowWizard}` branch) instead of the model picker.
 const shouldShowModelPicker = $derived(
-  isAutoOpenFirstRun && settingsState.settings.models.length === 0 && !modelPickerHandled,
+  BYO_MODELS_ENABLED &&
+    isAutoOpenFirstRun &&
+    settingsState.settings.models.length === 0 &&
+    !modelPickerHandled,
 );
 
 function closeIntegrationWizard(): void {
@@ -1221,7 +1228,7 @@ const tutorial = createTutorial(
     onOpenSettings={toggleSettings}
     onOpenSettingsModal={openSettingsModalWithAck}
     updateAvailable={updateAvailable.showDot}
-    defaultModelLabel={defaultModelLabel}
+    defaultModelLabel={BYO_MODELS_ENABLED ? defaultModelLabel : null}
     onOpenModelsSettings={openModelsSettings}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}

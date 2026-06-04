@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { CURRENT_SCHEMA_VERSION } from "../../src/client/hooks/useTandemSettings";
-import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
+import { BYO_MODELS_ENABLED, TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import { cleanupAllOpenDocuments, McpTestClient, nextFrames } from "./helpers";
 
 /**
@@ -91,6 +91,14 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
+  // The entire BYO-models UI (Settings → Models tab, first-run picker,
+  // titlebar default-model chip) is gated off behind BYO_MODELS_ENABLED until
+  // the outbound LLM client exists (#1018/#1022). With the flag off this UI
+  // never renders, so the whole suite is skipped — reversibly: it re-enables
+  // the moment the flag flips. The data-model contract (keychain ref vs
+  // plaintext, migrations) stays covered by tests/server/models/api-routes.test.ts.
+  test.skip(!BYO_MODELS_ENABLED, "Models UI gated off until BYO_MODELS_ENABLED (#1018/#1022)");
+
   // CI's `check` job runs on a stock ubuntu-latest with no libsecret /
   // dbus, so the real OS-keychain backend throws `KeychainUnavailableError`
   // on every secret store. The E2E layer cares about the data-model

@@ -116,7 +116,7 @@ const connLabel = $derived(
   showReconnectedFlash
     ? "Reconnected"
     : connectionStatus === "connected"
-      ? "Connected"
+      ? "Synced"
       : connectionStatus === "connecting"
         ? (() => {
             const parts = ["Reconnecting…"];

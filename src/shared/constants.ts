@@ -4,6 +4,19 @@ export const DEFAULT_MCP_PORT = 3479;
 export const TANDEM_REPO_URL = "https://github.com/bloknayrb/tandem";
 export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 
+/**
+ * Feature flag for the in-app "bring your own API key" Models registry UI
+ * (#1018/#1022). The registry stores provider keys in the OS keychain, but no
+ * server-side LLM client consumes them yet (see `src/server/models/api-routes.ts`
+ * — "a future LLM client"). Until that lands, offering the picker is a dead end:
+ * users configure a key, AI still doesn't work, and they conclude the app is
+ * broken. So the entire BYO-models surface (first-run picker, Settings → Models
+ * tab, titlebar default-model chip) is gated OFF behind this flag. AI today is
+ * the external Claude Code integration (MCP). Flip to `true` — or wire to an
+ * env/build define — once the outbound LLM client exists.
+ */
+export const BYO_MODELS_ENABLED = false;
+
 /** File extensions the server accepts for opening. */
 export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
 
