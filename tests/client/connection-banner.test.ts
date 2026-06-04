@@ -30,7 +30,7 @@ describe("createConnectionBanner", () => {
 
     const banner = container.querySelector("[data-testid='connection-banner']");
     expect(banner).toBeTruthy();
-    expect(banner?.textContent).toContain("Connection to the Tandem server has been lost");
+    expect(banner?.textContent).toContain("We've lost the connection to the Tandem server");
 
     (banner?.querySelector("button") as HTMLButtonElement).click();
     await tick();

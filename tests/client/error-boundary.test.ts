@@ -65,7 +65,7 @@ describe("ErrorBoundary", () => {
 
     expect(container.querySelector(RECOVER_SELECTOR)).toBeNull();
     expect(container.querySelector(RELOAD_SELECTOR)).toBeTruthy();
-    expect(container.textContent).toContain("Recovery attempts exhausted");
+    expect(container.textContent).toContain("weren't able to recover");
   });
 
   it("resets the attempts counter after a successful recovery", async () => {
@@ -97,7 +97,7 @@ describe("ErrorBoundary", () => {
     }
     // Cap should be reachable again — proves the budget started fresh from 0.
     expect(container.querySelector(RECOVER_SELECTOR)).toBeNull();
-    expect(container.textContent).toContain("Recovery attempts exhausted");
+    expect(container.textContent).toContain("weren't able to recover");
   });
 
   it("Reload button calls window.location.reload()", async () => {
