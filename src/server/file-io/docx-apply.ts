@@ -46,8 +46,6 @@ export interface OffsetMap {
   body: Element;
   /** The full parsed document (parent of body). */
   doc: ReturnType<typeof parseDocument>;
-  /** Maps Word comment IDs to w14:paraId values. */
-  commentParagraphIds: Map<string, string>;
 }
 
 export interface SuggestionInput {
@@ -98,7 +96,6 @@ export interface ApplyOutput {
  */
 export function buildOffsetMap(xml: string, targetOffsets: Set<number>): OffsetMap {
   const entries = new Map<number, OffsetEntry>();
-  const commentParagraphIds = new Map<string, string>();
 
   // Collect text hits so we can resolve offsets after the walk
   const hits: TextHit[] = [];
@@ -106,11 +103,6 @@ export function buildOffsetMap(xml: string, targetOffsets: Set<number>): OffsetM
   const { totalLength, flatText } = walkDocumentBody(xml, {
     onText(hit) {
       hits.push(hit);
-    },
-    onCommentStart(hit) {
-      if (hit.paragraphId) {
-        commentParagraphIds.set(hit.commentId, hit.paragraphId);
-      }
     },
   });
 
@@ -193,7 +185,6 @@ export function buildOffsetMap(xml: string, targetOffsets: Set<number>): OffsetM
     totalLength,
     body: walkerBody,
     doc: walkerDoc,
-    commentParagraphIds,
   };
 }
 
@@ -685,11 +676,7 @@ export async function applyTrackedChanges(
   zip.file("word/document.xml", serialized);
 
   // Resolve Word comments for successfully applied suggestions only
-  const commentsResolved = await resolveWordComments(
-    zip,
-    offsetMap.commentParagraphIds,
-    appliedSuggestions,
-  );
+  const commentsResolved = await resolveWordComments(zip, appliedSuggestions);
 
   const buffer = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
 
@@ -709,24 +696,53 @@ export async function applyTrackedChanges(
 const W15_NS = "http://schemas.microsoft.com/office/word/2012/wordml";
 
 /**
+ * Read each Word comment's OWN last-paragraph `w14:paraId` from
+ * `word/comments.xml`, keyed by comment id. This is the value OOXML
+ * `CT_CommentEx/@paraId` references (§2.5.39) — the comment body's last
+ * paragraph, NOT the document paragraph the comment is anchored to. Original
+ * case is preserved so the written id matches both the comment's `<w:p>` and
+ * any `commentEx` entry Word already wrote. See #1007.
+ */
+async function readCommentLastParaIds(zip: JSZip): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const xml = await zip.file("word/comments.xml")?.async("text");
+  if (!xml) return map;
+  const doc = parseDocument(xml, { xmlMode: true });
+  for (const comment of findAllByName("w:comment", doc.children)) {
+    const id = getAttr(comment, "w:id");
+    if (!id) continue;
+    const paragraphs = findAllByName("w:p", comment.children);
+    if (paragraphs.length === 0) continue;
+    const lastParaId = getAttr(paragraphs[paragraphs.length - 1], "w14:paraId");
+    if (lastParaId) map.set(id, lastParaId);
+  }
+  return map;
+}
+
+/**
  * Mark Word comments as "done" in commentsExtended.xml.
  *
  * For each applied suggestion that has an `importCommentId`, looks up the
- * comment's paragraph ID and writes a `<w15:commentEx w15:paraId="..." w15:done="1"/>`
- * entry.
+ * comment's own last-paragraph `w14:paraId` (from `word/comments.xml`) and
+ * marks the matching `<w15:commentEx>` entry `w15:done="1"` — updating an
+ * existing entry in place, or creating one (and the part + relationship +
+ * content-type) when `commentsExtended.xml` is absent.
  */
 export async function resolveWordComments(
   zip: JSZip,
-  commentParagraphIds: Map<string, string>,
   appliedSuggestions: AcceptedSuggestion[],
 ): Promise<number> {
+  const commentLastParaIds = await readCommentLastParaIds(zip);
+
   // Collect comment IDs to resolve
   const toResolve: Array<{ commentId: string; paraId: string }> = [];
   for (const s of appliedSuggestions) {
     if (!s.importCommentId) continue;
-    const paraId = commentParagraphIds.get(s.importCommentId);
+    const paraId = commentLastParaIds.get(s.importCommentId);
     if (!paraId) {
-      console.warn(`[docx-apply] No paraId for comment ${s.importCommentId}; skipping resolution`);
+      console.warn(
+        `[docx-apply] No comment-paragraph id for comment ${s.importCommentId}; skipping resolution`,
+      );
       continue;
     }
     toResolve.push({ commentId: s.importCommentId, paraId });
@@ -751,22 +767,29 @@ export async function resolveWordComments(
       | Element
       | undefined;
     if (root) {
-      // Collect existing paraIds to avoid duplicate entries
-      const existingParaIds = new Set<string>();
+      // Index existing commentEx entries by lowercased paraId. paraIds are hex
+      // (ST_LongHexNumber); compare case-insensitively, but keep/write the
+      // original case. A comment Word already tracks here must be UPDATED to
+      // done="1" in place, not duplicated.
+      const existing = new Map<string, Element>();
       for (const child of root.children) {
         if (isElement(child) && child.name === "w15:commentEx") {
           const pid = getAttr(child, "w15:paraId");
-          if (pid) existingParaIds.add(pid);
+          if (pid) existing.set(pid.toLowerCase(), child);
         }
       }
 
       for (const { paraId } of unique) {
-        if (existingParaIds.has(paraId)) continue;
-        const entry = new Element("w15:commentEx", {
-          "w15:paraId": paraId,
-          "w15:done": "1",
-        });
-        insertChild(root, root.children.length, entry);
+        const found = existing.get(paraId.toLowerCase());
+        if (found) {
+          found.attribs["w15:done"] = "1";
+        } else {
+          const entry = new Element("w15:commentEx", {
+            "w15:paraId": paraId,
+            "w15:done": "1",
+          });
+          insertChild(root, root.children.length, entry);
+        }
       }
       zip.file("word/commentsExtended.xml", render(doc, { xmlMode: true }));
     }
