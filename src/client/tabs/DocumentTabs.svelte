@@ -64,6 +64,17 @@ const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth"
 let showRecent = $state(false);
 let recentFiles = $state<RecentFileEntry[]>([]);
 let openBtnEl: HTMLButtonElement | null = $state(null);
+// A29 (#798): the menu body stays mounted through the close collapse so its height
+// animates 1fr→0fr together with the shell (a box-collapse, not a height-snap the
+// instant it unmounts), then unmounts once the collapse ends. `bodyMounted` also
+// keeps the `.filled` card surface (bg/border/shadow/clip) alive through that
+// window — geometry (.open) drops at t=0 to drive the collapse, but the fill
+// persists so a *filled* card visibly shrinks into the pill instead of an empty
+// box. `morphEl` reads the live --morph-p1 + --morph-p2 (the two-phase close total:
+// height collapse then width collapse, token-zeroed under reduced-motion) so the
+// unmount delay tracks the real collapse duration.
+let bodyMounted = $state(false);
+let morphEl: HTMLDivElement | null = $state(null);
 
 // Plain let — not reactive UI; just internal close-dedup guard
 let closingIds = new Set<string>();
@@ -401,12 +412,97 @@ const singleTab = $derived(tabs.length <= 1);
 
 // Single source of truth for opening/closing the new-tab menu. Shared by the
 // `+` button (direct call) and the Ctrl+T trigger effect (wrapped in untrack).
-// Recent files are (re)loaded only on the open transition.
+// Recent files are (re)loaded only on the open transition. On open we also capture
+// the element that had focus (the editor, when opened via Ctrl+T) so focus can be
+// RESTORED there on close — returning to the trigger pattern but to the origin, not
+// the +, so the + never parks a :focus-visible ring after the morph settles.
 function toggleNewTabMenu() {
   const opening = !showRecent;
-  if (opening) recentFiles = loadRecentFilesCached();
+  if (opening) {
+    recentFiles = loadRecentFilesCached();
+    previouslyFocused = document.activeElement as HTMLElement | null;
+  } else {
+    closeMenu();
+    return;
+  }
   showRecent = opening;
 }
+
+// Single close path. Synchronously blur the focused element IF it's inside the
+// morph BEFORE flipping showRecent. The body defers its unmount ~820ms and goes
+// `inert` while collapsing, but inert's blur is frame-deferred by the browser:
+// a Ctrl+W fired in the SAME tick as the close (the CI E2E does exactly this
+// after Escape) still lands on the focused search INPUT, where
+// shouldIgnoreShortcut swallows it and the tab never closes. A synchronous
+// .blur() is the only handle that beats that race; element-removal (the #977
+// baseline) blurred synchronously, the deferred-unmount morph does not. The
+// contains() guard no-ops the click-outside path (focus already moved out) so
+// this doesn't fight closedByPointerOutside.
+function closeMenu() {
+  const active = document.activeElement as HTMLElement | null;
+  if (active && morphEl?.contains(active)) active.blur();
+  showRecent = false;
+}
+
+// Body mount lifecycle (A29 box-collapse close). Open → mount immediately. Close →
+// keep the body mounted while the shell collapses, then unmount when it finishes so
+// the height can animate down instead of snapping the instant the content leaves.
+let closeUnmountTimer: ReturnType<typeof setTimeout> | null = null;
+function readMs(name: string): number {
+  if (!morphEl) return Number.NaN;
+  const raw = getComputedStyle(morphEl).getPropertyValue(name).trim();
+  return raw.endsWith("ms")
+    ? parseFloat(raw)
+    : raw.endsWith("s")
+      ? parseFloat(raw) * 1000
+      : parseFloat(raw);
+}
+function morphCollapseMs(): number {
+  if (!morphEl) return 0;
+  // Two-phase close total = height collapse (--morph-p2) THEN width collapse
+  // (--morph-p1, delayed by p2). The body + .filled fill must stay mounted until the
+  // WHOLE collapse ends — else the horizontal capsule-shrink plays on an empty box.
+  // So sum both phases. Both are literal tokens (not calc) → getComputedStyle returns
+  // parseable values; both "0ms" under reduced-motion → 0 → instant unmount. A
+  // malformed *either* token NaN-poisons the sum → guard → 0 (height-snap); low risk
+  // (sibling literals, zeroed identically) but the surface now spans both tokens.
+  const ms = readMs("--morph-p1") + readMs("--morph-p2");
+  // +40ms buffer past transition-end; 0 under reduced-motion (tokens zeroed) → unmount now.
+  return Number.isFinite(ms) && ms > 0 ? ms + 40 : 0;
+}
+$effect(() => {
+  if (showRecent) {
+    if (closeUnmountTimer) {
+      clearTimeout(closeUnmountTimer);
+      closeUnmountTimer = null;
+    }
+    bodyMounted = true;
+    return;
+  }
+  if (!untrack(() => bodyMounted)) return;
+  if (closeUnmountTimer) clearTimeout(closeUnmountTimer);
+  const delay = morphCollapseMs();
+  if (delay <= 0) {
+    bodyMounted = false;
+    return;
+  }
+  closeUnmountTimer = setTimeout(() => {
+    bodyMounted = false;
+    closeUnmountTimer = null;
+  }, delay);
+});
+onDestroy(() => {
+  if (closeUnmountTimer) clearTimeout(closeUnmountTimer);
+});
+
+// A29 (#798) — close-reason flag. Set ONLY by the click-outside path so focus-return
+// can tell "user clicked away" (leave focus where the click landed) from every other
+// close (Esc / item-select / Ctrl+T → restore focus to the pre-open element). Plain
+// non-reactive let (gesture bookkeeping, same family as `closingIds`).
+let closedByPointerOutside = false;
+// Element focused immediately before the menu opened (captured in toggleNewTabMenu) —
+// focus is restored here on close. Plain non-reactive let.
+let previouslyFocused: HTMLElement | null = null;
 
 $effect(() => {
   if (!showRecent) return;
@@ -417,28 +513,44 @@ $effect(() => {
     if (openBtnEl?.contains(target)) return;
     if ((target as Element).closest?.(".new-tab-menu")) return;
     if (isInActiveDragRegion(target as Element)) return;
-    showRecent = false;
+    closedByPointerOutside = true;
+    closeMenu();
   }
 
   window.addEventListener("pointerdown", handlePointerDown, true);
   return () => window.removeEventListener("pointerdown", handlePointerDown, true);
 });
 
-// A29 (#798) — return focus to the + trigger when the dialog body unmounts on close,
-// but ONLY when focus would otherwise be lost (Escape / item-select leave focus on the
-// now-removed body → activeElement falls back to <body>). On click-outside the user's
-// click already moved focus elsewhere → leave it there. `wasOpen` is a plain (non-reactive)
-// latch so this only fires on a true→false transition, never on initial mount.
-let wasOpen = false;
+// A29 (#798) — on close, RESTORE focus to the element that was focused before the menu
+// opened (the editor, when opened via Ctrl+T), EXCEPT when the user closed by clicking
+// outside (then leave focus where the click landed). Keyed on `showRecent` true→false (a
+// plain `let` latch), NOT on the body unmount: the unmount is deferred ~p1+p2 (~820ms)
+// past close, and reading document.activeElement at the flip is fragile (under
+// reduced-motion the body is already gone). `previouslyFocused` is a value captured at
+// open time, so it's immune to that timing. We deliberately do NOT focus the + here:
+// focusing the + after a keyboard close gives it a :focus-visible ring that parks on the
+// pill (and was clipped into a stray arc mid-morph). `closeMenu()` already blurred the
+// in-morph search input synchronously (and `.nt-cell` is `inert` while collapsing), so if
+// there's no valid element to restore to, focus simply falls to <body> rather than the +.
+let wasShowing = false;
 $effect(() => {
   if (showRecent) {
-    wasOpen = true;
+    wasShowing = true;
     return;
   }
-  if (!wasOpen) return;
-  wasOpen = false;
-  const active = document.activeElement;
-  if (!active || active === document.body) openBtnEl?.focus({ preventScroll: true });
+  if (!wasShowing) return;
+  wasShowing = false;
+  const prev = previouslyFocused;
+  previouslyFocused = null;
+  if (closedByPointerOutside) {
+    closedByPointerOutside = false;
+    return;
+  }
+  // Restore only to a still-connected element that isn't the + or inside the morph
+  // (both would re-introduce the parked ring / focus a vanishing node). Otherwise no-op.
+  if (prev && prev.isConnected && prev !== openBtnEl && !morphEl?.contains(prev)) {
+    prev.focus({ preventScroll: true });
+  }
 });
 
 // Ctrl+T (App-level shortcut) toggles the new-tab menu via this counter prop.
@@ -500,7 +612,7 @@ $effect(() => {
        placeholder holds the in-flow slot stable while the absolute .nt-morph grows
        down-and-left from the + slot. -->
   <div class="nt-wrap">
-    <div class="nt-morph" class:open={showRecent}>
+    <div class="nt-morph" class:open={showRecent} class:filled={showRecent || bodyMounted} bind:this={morphEl}>
       <button
         bind:this={openBtnEl}
         onclick={toggleNewTabMenu}
@@ -514,13 +626,17 @@ $effect(() => {
         +
       </button>
       <div class="nt-grid">
-        <div class="nt-cell">
-          {#if showRecent}
+        <!-- inert whenever not open: the body stays mounted (clipped) through the
+             ~820ms close collapse, so block its items from pointer AND keyboard (Tab)
+             reach while closing. Open (showRecent) clears inert before the search
+             autofocus runs. -->
+        <div class="nt-cell" inert={!showRecent}>
+          {#if bodyMounted}
             <NewTabMenu
               {recentFiles}
               {closedTabTop}
               onOpen={async (filePath) => {
-                showRecent = false;
+                closeMenu();
                 const result = await openServerPath(filePath);
                 if (result.ok) {
                   saveRecentFiles(addRecentFile(loadRecentFilesCached(), filePath));
@@ -529,18 +645,18 @@ $effect(() => {
                 }
               }}
               onNewScratchpad={() => {
-                showRecent = false;
+                closeMenu();
                 void createScratchpad();
               }}
               onBrowse={() => {
-                showRecent = false;
+                closeMenu();
                 onRequestOpenDialog?.();
               }}
               onReopenClosed={() => {
-                showRecent = false;
+                closeMenu();
                 onReopenClosed?.();
               }}
-              onClose={() => (showRecent = false)}
+              onClose={closeMenu}
             />
           {/if}
         </div>
@@ -622,51 +738,89 @@ $effect(() => {
     right: 0; /* anchor at the + slot — grow left + down */
     width: 28px;
     min-height: 28px; /* closed floor for the pill; height is auto and follows the grid */
-    border-radius: var(--tandem-r-circle);
+    /* 14px = half the 28px pill height → a clean capsule (semicircle ends) at ANY width
+       during the phase-1 horizontal unroll (= a circle at 28×28), AND the value that makes
+       the phase-2 corner square-off MONOTONIC: rendered radius = min(specified 14→8,
+       height/2 ≥14) follows 14→8 with no rise-then-fall kink. Do NOT "fix" to a token:
+       r-circle (50%) → ellipse on a wide box (the lozenge); r-pill (9999px) → corners stay
+       ~height/2 through phase 2 then snap to 8 only at the very end (a late pop). */
+    border-radius: 14px;
     /* closed: overflow visible so the pill's own floating-pill drop-shadow + focus rings
-       paint. The clip needed for the body reveal is applied only while .open (below). */
+       paint. The clip needed for the body reveal is applied only while .filled (below). */
     overflow: visible;
-    /* CLOSE: width + radius wait for the height collapse (delay P2) */
+    /* CLOSE-direction timings (used when .open is removed). Reverse of open: PHASE 1 —
+       height collapses (card→capsule), radius rounds back (p2, delay 0). PHASE 2 — width
+       shrinks (capsule→circle) + box-shadow fades (p1, delay p2). Total = p1 + p2, which
+       morphCollapseMs() MUST match (it returns p1 + p2 + buffer). */
     transition:
       width var(--morph-p1) var(--tandem-ease-out) var(--morph-p2),
-      border-radius var(--morph-p1) var(--tandem-ease-out) var(--morph-p2);
+      border-radius var(--morph-p2) var(--tandem-ease-out),
+      box-shadow var(--morph-p1) var(--tandem-ease-out) var(--morph-p2);
   }
+  /* FILL — the card surface (bg + border + clip). Driven by
+     `class:filled={showRecent || bodyMounted}`, so it applies with .open on open AND
+     persists through the close collapse (bodyMounted stays true until the collapse ends)
+     → a *filled* card visibly shrinks back into the pill instead of an empty box. The
+     shadow is intentionally NOT here — it lives on .open so it can crossfade with the
+     pill's shadow during the morph rather than snapping on/off with the fill. */
+  .nt-morph.filled {
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    /* clip the revealing body to the rounded card. `overflow: clip` (not `hidden`)
+       is what keeps this from becoming a scroll container (lesson #765); the clip
+       edge must stay at the border box (no clip-margin) so the menu's full-width,
+       square-cornered header/footer bars are clipped to the card's border-radius
+       instead of overpainting the rounded corners (clip-margin == radius read as
+       square corners). Nothing focusable sits at the shell edge, so there's no
+       focus-ring to bleed past it. */
+    overflow: clip;
+    overflow-clip-margin: 0;
+  }
+  /* GEOMETRY + card shadow — the expanded state. OPEN-direction timings live here (the
+     target state owns the transition when .open is added): PHASE 1 horizontal — width
+     (p1, delay 0) + box-shadow fade-in (p1, delay 0) as the + pill fades out; PHASE 2
+     vertical — border-radius squares 14px→r-4 (p2, delay p1) as the height grows. shadow-2
+     is an even card shadow (vs the downward-biased pill shadow, lopsided on a big card);
+     it crossfades none↔shadow-2 and the base .nt-morph has no shadow, so closed-at-rest
+     there's no double shadow under the +. */
   .nt-morph.open {
     width: min(460px, calc(100vw - 16px)); /* clamp at viewport edge (8px each side) */
     border-radius: var(--tandem-r-4);
-    background: var(--tandem-surface);
-    border: 1px solid var(--tandem-border);
     box-shadow: var(--tandem-shadow-2);
-    /* clip the revealing body; clip-margin (not hidden) keeps it from being a scroll
-       container (lesson #765) and lets descendant focus rings paint past the edge */
-    overflow: clip;
-    overflow-clip-margin: var(--tandem-space-2);
-    /* OPEN: width + radius lead (no delay) */
     transition:
       width var(--morph-p1) var(--tandem-ease-out),
-      border-radius var(--morph-p1) var(--tandem-ease-out);
+      border-radius var(--morph-p2) var(--tandem-ease-out) var(--morph-p1),
+      box-shadow var(--morph-p1) var(--tandem-ease-out);
   }
   .nt-grid {
     display: grid;
     grid-template-rows: 0fr; /* closed: body track collapsed */
     overflow: clip;
-    /* CLOSE: height collapses first (no delay) */
-    transition: grid-template-rows var(--morph-p1) var(--tandem-ease-out);
+    /* CLOSE: height collapses FIRST (phase 1 of close) — delay 0, over p2. */
+    transition: grid-template-rows var(--morph-p2) var(--tandem-ease-out);
   }
   .nt-morph.open .nt-grid {
     grid-template-rows: 1fr; /* open: body track at natural height */
-    /* OPEN: height unfurls AFTER the width lead (delay P1) */
+    /* OPEN: height is PHASE 2 — delayed by p1 so it starts after the horizontal unroll. */
     transition: grid-template-rows var(--morph-p2) var(--tandem-ease-out) var(--morph-p1);
   }
   .nt-cell {
     min-height: 0; /* allow the 0fr track to clip to zero */
     overflow: clip;
   }
+  /* While closing, the body stays mounted (so height animates down) but the shell is
+     collapsing — keep it non-interactive so a stray click can't hit a vanishing item. */
+  .nt-morph:not(.open) .nt-cell {
+    pointer-events: none;
+  }
 
   /* 28×28 floating-pill `+` add-tab button — the closed state of the morph. Inherits the
      white/dark/warm background + border + shadow from `.tandem-floating-pill`; absolute so
-     it adds no layout height (the shell height is driven by the grid). Fades out as the
-     shell opens; fades back in only after the width has collapsed on close (delay P2). */
+     it adds no layout height (the shell height is driven by the grid). Fades out fast as
+     the shell opens (phase 1); on close fades back in to COMPLETE exactly at the full
+     two-phase collapse-end — delay (p1 + p2 − cascade) then a cascade-long fade ends at
+     p1 + p2, so the + is opaque the instant the width collapse finishes and the filled
+     card drops. No dead window where neither is visible. */
   .tab-add-pill {
     position: absolute;
     top: 0;
@@ -685,7 +839,8 @@ $effect(() => {
       color 0.15s,
       border-color 0.15s,
       background 0.15s,
-      opacity var(--morph-cascade) var(--tandem-ease-out) var(--morph-p2);
+      opacity var(--morph-cascade) var(--tandem-ease-out)
+        calc(var(--morph-p2) - var(--morph-cascade));
   }
   .nt-morph.open .tab-add-pill {
     opacity: 0;
@@ -697,10 +852,19 @@ $effect(() => {
       opacity var(--morph-cascade) var(--tandem-ease-out); /* fade out fast on open */
   }
   .tab-add-pill:hover {
-    color: var(--tandem-accent);
+    color: var(--tandem-accent); /* glyph tint — harmless, never clipped into an arc */
+  }
+  /* Accent edge styling (focus ring + hover border) ONLY while the morph is the bare
+     pill (:not(.filled)). During the open/close morph the shell is `overflow: clip`,
+     which slices the +'s circular outline/border down to whatever arc falls inside the
+     shrinking capsule — a stray accent arc (seen on keyboard close, where focus-return
+     gives the + a :focus-visible ring). Suppressing these while .filled keeps the morph
+     clean; the ring reappears intact once the shell settles back to the pill (overflow
+     visible). The hover *color* (the glyph) is harmless and stays unscoped above. */
+  .nt-morph:not(.filled) .tab-add-pill:hover {
     border-color: var(--tandem-accent-border);
   }
-  .tab-add-pill:focus-visible {
+  .nt-morph:not(.filled) .tab-add-pill:focus-visible {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 1px;
   }

@@ -239,6 +239,47 @@ $effect(() => {
     width: 460px;
     display: flex;
     flex-direction: column;
+    /* A29 interior cascade (#798): rows rise+fade in during the VERTICAL phase (phase 2),
+       top→bottom / L→R ("lead with the nearest part"). Base = --morph-p1 so the cascade
+       starts exactly when the height begins growing (after the horizontal unroll). Derived
+       from the morph tokens so reduced-motion (which zeroes --morph-p1/p2/cascade) zeroes
+       the whole cascade to an instant final state. */
+    --nt-cascade-base: var(--morph-p1); /* start when the vertical phase begins */
+    --nt-stagger: calc(var(--morph-cascade) * 0.3); /* ≈60ms per canon */
+  }
+
+  /* The four reveal rows. The component only mounts on open (DocumentTabs gates the
+     body on `bodyMounted`), so this entrance plays once on open and never on close —
+     close stays snappy (the rows are clipped away by the collapsing grid, not animated).
+     `both` holds each row at opacity:0 through its delay (no flash-then-cascade).
+     Do NOT :global()-wrap the keyframes — name + reference are scoped together. */
+  @keyframes ntl-rise {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .ntl-search,
+  .ntl-left,
+  .ntl-right,
+  .ntl-footer {
+    animation: ntl-rise var(--morph-cascade) var(--tandem-ease-out) both;
+  }
+  .ntl-search {
+    animation-delay: var(--nt-cascade-base);
+  }
+  .ntl-left {
+    animation-delay: calc(var(--nt-cascade-base) + var(--nt-stagger));
+  }
+  .ntl-right {
+    animation-delay: calc(var(--nt-cascade-base) + 2 * var(--nt-stagger));
+  }
+  .ntl-footer {
+    animation-delay: calc(var(--nt-cascade-base) + 3 * var(--nt-stagger));
   }
 
   /* Search bar */
