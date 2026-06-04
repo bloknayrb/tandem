@@ -82,15 +82,29 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       return new Promise<void>((resolve) => srv.close(() => resolve()));
     });
 
+    // Bind an OS-assigned ephemeral port (listen(0)), capture it, then release it.
+    // Hardcoded high ports (e.g. 49170-49172) collide with the Windows reserved
+    // ephemeral range (Hyper-V/WSL/Docker), throwing EACCES deterministically on
+    // such hosts. Port 0 always picks a guaranteed-bindable port. See #1014.
+    async function findFreePort(): Promise<number> {
+      const probe = net.createServer();
+      await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+      const port = (probe.address() as net.AddressInfo).port;
+      await new Promise<void>((resolve) => probe.close(() => resolve()));
+      return port;
+    }
+
     it("resolves immediately when port is free", async () => {
+      const port = await findFreePort();
       const start = Date.now();
-      await waitForPort(49170);
+      await waitForPort(port);
       expect(Date.now() - start).toBeLessThan(500);
     });
 
     it("resolves when occupied port is released mid-poll", async () => {
       holdServer = net.createServer();
-      await new Promise<void>((resolve) => holdServer!.listen(49171, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => holdServer!.listen(0, "127.0.0.1", resolve));
+      const port = (holdServer.address() as net.AddressInfo).port;
 
       // Release the port after 300ms
       setTimeout(() => {
@@ -99,7 +113,7 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
       }, 300);
 
       const start = Date.now();
-      await waitForPort(49171, 5000);
+      await waitForPort(port, 5000);
       const elapsed = Date.now() - start;
       expect(elapsed).toBeGreaterThanOrEqual(200);
       expect(elapsed).toBeLessThan(3000);
@@ -107,11 +121,12 @@ LISTEN 0      128    127.0.0.1:3478       0.0.0.0:*     users:(("node",pid=12345
 
     it("throws when port stays occupied past timeout", async () => {
       holdServer = net.createServer();
-      await new Promise<void>((resolve) => holdServer!.listen(49172, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => holdServer!.listen(0, "127.0.0.1", resolve));
+      const port = (holdServer.address() as net.AddressInfo).port;
 
       const start = Date.now();
-      await expect(waitForPort(49172, 500)).rejects.toThrow(
-        "Port 49172 still not available after 500ms",
+      await expect(waitForPort(port, 500)).rejects.toThrow(
+        `Port ${port} still not available after 500ms`,
       );
       expect(Date.now() - start).toBeGreaterThanOrEqual(400);
     });

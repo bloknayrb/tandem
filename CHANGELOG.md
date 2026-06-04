@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **New-tab morph — clear two-phase motion (A29, follow-up to #977)** — the `+`→menu morph now expands **horizontally into a clean capsule first, then vertically into the card**, instead of co-timing both axes. The radius is held at a literal capsule value (`14px`, half the pill height) through the horizontal unroll and squares to the card radius only as the height grows, so the shape never flashes a flat lozenge; the interior rows cascade in during the vertical phase. Close reverses it. The card fill persists through the whole collapse (a *filled* card shrinks back into the `+`, with no empty-box gap), and the card/pill shadows crossfade so there's no shadow pop at the handoff. On close, focus is **restored to the element that was focused before the menu opened** (typically the editor) rather than parked on the `+`, so no stray focus ring lingers on the pill; the closing body is `inert` so focus is never stranded in the clipped panel, and on close the in-menu search field is **blurred synchronously** so a keyboard shortcut fired in the same tick (e.g. Escape then `Ctrl+W`) is no longer swallowed by the still-focused input. Fully reduced-motion-correct (all timing derives from the shared morph tokens).
 
+### Fixed
+
+- **`tests/server/platform.test.ts` no longer binds hardcoded ports in the Windows reserved range (#1014)** — the three `waitForPort` tests bound fixed ports `49170`/`49171`/`49172`, which fall inside the IANA dynamic/ephemeral range that Windows reserves in chunks (Hyper-V/WSL/Docker). On such hosts those binds throw `EACCES` deterministically, failing the husky pre-push gate and forcing a blanket `HUSKY=0` bypass. The tests now bind an OS-assigned port (`listen(0)`) and use the resolved port, eliminating the reserved-range collision. Test-only; no production impact.
+
 ## [0.13.6] - 2026-06-04
 
 ### Added
