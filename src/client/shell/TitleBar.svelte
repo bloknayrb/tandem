@@ -342,6 +342,7 @@ function chooseHelp() {
         type="button"
         class="model-chip ai-chip ai-chip-connect"
         data-testid="titlebar-connect-ai"
+        data-ai-chip="connect"
         aria-label="AI isn't set up. Connect Claude Code."
         title="AI isn't set up — click to connect Claude Code"
         onclick={onConnectAi}
@@ -354,6 +355,7 @@ function chooseHelp() {
         type="button"
         class="model-chip ai-chip ai-chip-restart"
         data-testid="titlebar-connect-ai"
+        data-ai-chip="restart"
         aria-label="Claude Code has stopped. Restart it."
         title="Claude Code stopped — click to restart"
         onclick={onRestartClaude}

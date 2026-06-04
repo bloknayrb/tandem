@@ -122,6 +122,12 @@ function sendMessage() {
   chatMap.set(msg.id, msg);
   inputText = "";
   onCapturedAnchorChange(null);
+
+  // #1018: the message persists in the chat Y.Map and is read whenever an
+  // agent next connects/polls — but if no AI is connected right now, App
+  // surfaces a "saved, will be seen when AI connects" notice. Read-after-write
+  // only; never gates the send.
+  window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "chat" } }));
 }
 
 function handleKeyDown(e: KeyboardEvent) {

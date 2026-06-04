@@ -332,6 +332,7 @@ titlebar-brand-menu-popover
 titlebar-connect-ai
 titlebar-default-model
 titlebar-update-available-dot
+toast-action-{*}
 toast-container
 toast-count-{*}
 toast-dismiss-{*}

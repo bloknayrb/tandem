@@ -111,14 +111,24 @@ $effect(() => {
     {#if connected && aiChip === "connect"}
       <p class="empty-sub empty-sub-secondary">No AI is connected yet.</p>
       <div class="empty-actions">
-        <button class="empty-cta" data-testid="empty-state-connect-ai" onclick={onConnectAi}>
+        <button
+          class="empty-cta"
+          data-testid="empty-state-connect-ai"
+          data-ai-chip="connect"
+          onclick={onConnectAi}
+        >
           Connect AI
         </button>
       </div>
     {:else if connected && aiChip === "restart"}
       <p class="empty-sub empty-sub-secondary">Claude Code has stopped.</p>
       <div class="empty-actions">
-        <button class="empty-cta" data-testid="empty-state-connect-ai" onclick={onRestartClaude}>
+        <button
+          class="empty-cta"
+          data-testid="empty-state-connect-ai"
+          data-ai-chip="restart"
+          onclick={onRestartClaude}
+        >
           Restart Claude Code
         </button>
       </div>

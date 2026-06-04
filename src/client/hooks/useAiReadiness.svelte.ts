@@ -30,8 +30,8 @@
  */
 import { onDestroy } from "svelte";
 import { API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
-import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import type { LauncherStatus } from "../../shared/launcher/contract.js";
+import { API_BASE } from "../utils/fileUpload.js";
 
 export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
 
@@ -53,8 +53,6 @@ export function createAiReadiness(deps: {
   firstRunSettled: () => boolean;
   soloMode: () => boolean;
 }): AiReadiness {
-  const apiBase = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
-
   let status = $state<LauncherStatus | null>(null);
   // Have we ever read status successfully? Distinguishes "still booting" from
   // a genuine `available: false`, so the chip never flashes during cold start.
@@ -68,7 +66,7 @@ export function createAiReadiness(deps: {
     const mine = ++gen;
     let res: Response;
     try {
-      res = await fetch(`${apiBase}${API_LAUNCHER_STATUS}`);
+      res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
     } catch {
       return; // network blip — keep prior status (fail-safe)
     }

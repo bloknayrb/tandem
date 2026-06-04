@@ -701,6 +701,11 @@ function openAnnotateMode() {
 function submitAsComment() {
   if (!annotationTextTrimmed) return;
   createAnnotation("comment", annotationTextTrimmed);
+  // #1018: a comment is outbound (Claude reads it). If no AI is connected, App
+  // shows a "saved, will be seen when AI connects" notice. ONLY comments —
+  // notes/highlights are user-private (ADR-027) and never sent to AI, so a
+  // "no AI connected" notice on those would be misleading. Post-write only.
+  window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "comment" } }));
   dismissPopup();
 }
 
