@@ -106,6 +106,14 @@ export interface IntegrationsRoutesDeps {
    * doesn't require the test process to own a real Claude install.
    */
   detectTargets?: typeof detectTargets;
+  /**
+   * Optional channel-shim decision override. Production leaves this undefined
+   * and calls the real `shouldRegisterChannelShim()`, which probes the disk
+   * (`existsSync(dist/channel/index.js)`). Tests inject a deterministic stub so
+   * apply-path assertions don't depend on whether the channel bundle happens to
+   * be built in the working tree.
+   */
+  shouldRegisterChannelShim?: typeof shouldRegisterChannelShim;
 }
 
 /**
@@ -598,7 +606,10 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
         // path) — no broken entry is written. The `create`-wins guard in
         // applyConfig keeps a user-confirmed removal from deleting the entry
         // we just created.
-        const withChannelShim = shouldRegisterChannelShim(entry.kind, CHANNEL_DIST);
+        const withChannelShim = (deps.shouldRegisterChannelShim ?? shouldRegisterChannelShim)(
+          entry.kind,
+          CHANNEL_DIST,
+        );
         const create = buildMcpEntries(CHANNEL_DIST, {
           token,
           targetKind: entry.kind,
