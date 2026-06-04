@@ -77,6 +77,13 @@ const canHighlight = $derived.by(() => {
   return !editor.state.selection.empty;
 });
 
+// #1024: the bar is a fixed wrapper that creates its own stacking context at
+// --tandem-z-sticky (below the selection popup at --tandem-z-modal). A dropdown
+// opened from the bar is trapped in that context, so it renders BEHIND the
+// selection pill. While the highlight color sub-menu is open, lift the wrapper
+// above the selection popup so the sub-menu paints fully clear of the pill.
+let highlightPickerOpen = $state(false);
+
 function handleHighlight(color: HighlightColor) {
   if (!editor || !ydoc || editor.isDestroyed) return;
   const { state } = editor;
@@ -108,7 +115,7 @@ function handleHighlight(color: HighlightColor) {
      drag-region might otherwise capture them. -->
 <div
   class="tandem-fmtbar-wrap"
-  style="position: fixed; top: var(--tandem-fmtbar-top, 52px); left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; z-index: var(--tandem-z-sticky);"
+  style="position: fixed; top: var(--tandem-fmtbar-top, 52px); left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; z-index: {highlightPickerOpen ? 'var(--tandem-z-toast)' : 'var(--tandem-z-sticky)'};"
 >
   <div
     data-testid="formatting-bar"
@@ -126,6 +133,7 @@ function handleHighlight(color: HighlightColor) {
       <HighlightColorPicker
         disabled={!canHighlight}
         onHighlight={handleHighlight}
+        onOpenChange={(open) => (highlightPickerOpen = open)}
       />
     </div>
     {#if onUpdateDecorations}
