@@ -304,6 +304,39 @@ function restartClaude(): void {
   setTimeout(() => aiReadiness.refresh(), 5_000);
 }
 
+// #1018 loud failures: ChatPanel (chat send) and Toolbar ("Send to Claude"
+// comment) dispatch `tandem:addressed-ai` AFTER persisting. If AI isn't
+// actually connected (`chip` non-null: unconfigured/stopped, not Solo, not
+// booting), surface a notice that AFFIRMS the save and frames absence as
+// deferred delivery — the message/comment persists in the Y.Doc and is read
+// whenever an agent next connects. Never "failed/lost". `chip` is read
+// imperatively at event time (no reactive dependency, no loop). Notes/
+// highlights never dispatch this (ADR-027 — they're private, never sent to AI).
+$effect(() => {
+  const onAddressedAi = (e: Event) => {
+    const via = (e as CustomEvent<{ via?: string }>).detail?.via;
+    const chip = aiReadiness.chip;
+    if (chip === null) return; // ready / booting / Solo — nothing to nudge
+    const noun = via === "comment" ? "Comment" : "Message";
+    notifications.push(
+      {
+        id: `ai-not-ready-${via ?? "chat"}-${Date.now()}`,
+        type: "launcher",
+        severity: "warning",
+        message: `${noun} saved — no AI is connected yet. It'll be seen when AI connects.`,
+        dedupKey: `ai-not-ready-${via ?? "chat"}`,
+        timestamp: Date.now(),
+      },
+      {
+        label: chip === "connect" ? "Connect AI" : "Restart Claude Code",
+        onClick: chip === "connect" ? connectAi : restartClaude,
+      },
+    );
+  };
+  window.addEventListener("tandem:addressed-ai", onAddressedAi);
+  return () => window.removeEventListener("tandem:addressed-ai", onAddressedAi);
+});
+
 const WIZARD_DISMISSED_KEY = "tandem:wizard-dismissed";
 let dismissedForVersion = $state<string | null>(readDismissed());
 let manuallyReopened = $state(false);

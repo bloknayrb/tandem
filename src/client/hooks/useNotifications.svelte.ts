@@ -9,8 +9,20 @@ import {
 } from "../../shared/constants.js";
 import type { TandemNotification } from "../../shared/types.js";
 
+/**
+ * An optional action button on a transient toast (#1018). CLIENT-ONLY and
+ * NEVER serialized: it carries a function, so it must stay off the persisted
+ * `TandemNotification`/`ActivityItem` (which round-trip through JSON for SSE +
+ * localStorage) and off the `dedupKey` identity. Lives on `Toast` alone.
+ */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast extends TandemNotification {
   count: number;
+  action?: ToastAction;
 }
 
 /**
@@ -42,7 +54,7 @@ export interface NotificationsState {
    * message to the user) and also lands in the tray — vs ambient SSE info, which
    * is quiet (tray only). See the entry-point gating note below.
    */
-  push: (notification: TandemNotification) => void;
+  push: (notification: TandemNotification, action?: ToastAction) => void;
 }
 
 interface CreateOpts {
@@ -147,13 +159,14 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
     );
   };
 
-  const pushTransient = (notification: TandemNotification) => {
+  const pushTransient = (notification: TandemNotification, action?: ToastAction) => {
     if (notification.dedupKey) {
       const idx = toasts.findIndex((t) => t.dedupKey === notification.dedupKey);
       if (idx !== -1) {
         const existing = toasts[idx];
         clearPopTimer(existing.id);
-        const updated: Toast = { ...notification, count: existing.count + 1 };
+        // action is NOT part of dedup identity; the latest push's action wins.
+        const updated: Toast = { ...notification, count: existing.count + 1, action };
         const next = [...toasts];
         next[idx] = updated;
         toasts = next;
@@ -161,7 +174,7 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
         return;
       }
     }
-    const newToast: Toast = { ...notification, count: 1 };
+    const newToast: Toast = { ...notification, count: 1, action };
     const next = [...toasts, newToast];
     while (next.length > MAX_VISIBLE_TOASTS) {
       const evicted = next.shift()!;
@@ -231,11 +244,13 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
     scheduleSave();
   };
 
-  /** Shared fan-out. `popInfo` decides whether an info item also pops. */
-  const ingest = (notification: TandemNotification, popInfo: boolean) => {
+  /** Shared fan-out. `popInfo` decides whether an info item also pops.
+   *  `action` (client-push only) rides on the transient toast, never the
+   *  persisted activity item (it's a non-serializable function). */
+  const ingest = (notification: TandemNotification, popInfo: boolean, action?: ToastAction) => {
     coalesceActivity(notification);
     const shouldPop = notification.severity !== "info" || popInfo;
-    if (shouldPop) pushTransient(notification);
+    if (shouldPop) pushTransient(notification, action);
   };
 
   // ---- public API ----
@@ -264,8 +279,10 @@ export function createNotifications(opts: CreateOpts = {}): NotificationsState {
     if (item.severity === "info") scheduleInfoExpiry(item.id, item.timestamp);
   }
 
-  // Client-originated: info pops (it's a message to the user).
-  const push = (notification: TandemNotification) => ingest(notification, true);
+  // Client-originated: info pops (it's a message to the user). An optional
+  // action button is client-only (off the wire / off the persisted tray).
+  const push = (notification: TandemNotification, action?: ToastAction) =>
+    ingest(notification, true, action);
 
   // ---- SSE: ambient, info stays quiet ----
   const url = `http://127.0.0.1:${DEFAULT_MCP_PORT}${API_NOTIFY_STREAM}`;

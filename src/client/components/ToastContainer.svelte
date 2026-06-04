@@ -40,6 +40,19 @@ let { toasts, onDismiss }: Props = $props();
           {#if toast.count > 1}
             <span class="badge" data-testid={`toast-count-${toast.id}`}>×{toast.count}</span>
           {/if}
+          {#if toast.action}
+            <button
+              type="button"
+              class="action"
+              data-testid={`toast-action-${toast.id}`}
+              onclick={() => {
+                toast.action?.onClick();
+                onDismiss(toast.id);
+              }}
+            >
+              {toast.action.label}
+            </button>
+          {/if}
         </div>
         <button
           type="button"
@@ -144,6 +157,25 @@ let { toasts, onDismiss }: Props = $props();
   }
   .toast-card .msg {
     min-width: 0;
+  }
+  /* Inline action button (#1018) — e.g. "Connect AI" on a no-AI-connected
+     toast. Compact, accent-tinted, doesn't compete with the message. */
+  .toast-card .action {
+    flex: 0 0 auto;
+    font-family: var(--tandem-font-sans);
+    font-size: var(--tandem-text-2xs);
+    font-weight: 600;
+    white-space: nowrap;
+    padding: 2px 8px;
+    border-radius: var(--tandem-r-pill);
+    border: 1px solid var(--tandem-accent-border);
+    background: var(--tandem-accent-bg);
+    color: var(--tandem-accent);
+    cursor: pointer;
+  }
+  .toast-card .action:hover {
+    background: var(--tandem-accent);
+    color: var(--tandem-bg);
   }
   .toast-card .badge {
     font-family: var(--tandem-font-mono);
