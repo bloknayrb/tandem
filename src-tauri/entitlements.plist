@@ -11,13 +11,13 @@
     unless the JIT entitlement is present — so on Apple Silicon the signed,
     notarized .app crashed the sidecar immediately and never bound :3479.
 
-    `allow-jit` permits the W^X JIT mapping V8 needs; `allow-unsigned-executable-memory`
-    is the companion entitlement Node/V8 commonly requires under hardened runtime.
-    This is the minimal set verified to make the sidecar survive V8 init.
+    `allow-jit` permits the W^X JIT mapping V8 needs. Node.js 18+ uses MAP_JIT
+    (write-XOR-execute model) correctly, so `allow-jit` alone is the minimal
+    sufficient entitlement; `allow-unsigned-executable-memory` (which allows
+    arbitrary unsigned executable memory pages) is intentionally omitted because
+    it is broader than necessary and widens the attack surface without benefit.
   -->
   <key>com.apple.security.cs.allow-jit</key>
-  <true/>
-  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
 </dict>
 </plist>

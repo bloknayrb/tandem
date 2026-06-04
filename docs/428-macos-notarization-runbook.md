@@ -182,7 +182,7 @@ xcrun stapler validate /Volumes/Tandem*/Tandem.app
 # V8 init on Apple Silicon. `bundle.macOS.entitlements` should reach the
 # externalBin via tauri-action signing; confirm it actually did (the CI verify
 # step asserts this too). Should print com.apple.security.cs.allow-jit.
-codesign -d --entitlements - /Volumes/Tandem*/Tandem.app/Contents/MacOS/node-sidecar 2>&1 | grep allow-jit
+codesign -d --entitlements - /Volumes/Tandem*/Tandem.app/Contents/MacOS/node-sidecar 2>&1 | strings | grep allow-jit
 # If MISSING: re-sign the sidecar with src-tauri/entitlements.plist BEFORE
 # notarization (codesign does not inherit app entitlements to nested binaries):
 #   codesign --force --sign "$IDENTITY" --options runtime \

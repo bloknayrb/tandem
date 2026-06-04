@@ -295,7 +295,10 @@ jobs:
               errors=1
               continue
             fi
-            if ! codesign -d --entitlements - "$sidecar" 2>&1 | grep -q "com.apple.security.cs.allow-jit"; then
+            # Pipe through `strings` to handle both XML and binary plist output:
+            # on newer macOS codesign may output a binary plist, which raw grep
+            # can mishandle. `strings` extracts the key names from either format.
+            if ! codesign -d --entitlements - "$sidecar" 2>&1 | strings | grep -q "com.apple.security.cs.allow-jit"; then
               echo "::error::$app: node-sidecar is missing com.apple.security.cs.allow-jit — it will SIGTRAP in V8 init on Apple Silicon (#983). If bundle.macOS.entitlements is not reaching the externalBin, re-sign the sidecar with the entitlements before notarization."
               errors=1
               continue
