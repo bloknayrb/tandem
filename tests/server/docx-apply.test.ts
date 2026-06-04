@@ -689,6 +689,63 @@ describe("resolveWordComments", () => {
     expect(countCommentEx(extXml)).toBe(2);
   });
 
+  it("resolves multiple distinct comments in one call, each to its own last paraId (#1012)", async () => {
+    const zip = new JSZip();
+    zip.file(
+      "word/comments.xml",
+      commentsXml([
+        { id: "10", paraIds: ["AAAA0001", "AAAA0002"] },
+        { id: "20", paraIds: ["BBBB0001"] },
+      ]),
+    );
+    zip.file("word/document.xml", "<stub/>");
+    zip.file(
+      "[Content_Types].xml",
+      `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>`,
+    );
+    zip.file(
+      "word/_rels/document.xml.rels",
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
+    );
+
+    const suggestions = [
+      { id: "s1", from: 0, to: 5, newText: "X", importCommentId: "10" },
+      { id: "s2", from: 6, to: 9, newText: "Y", importCommentId: "20" },
+    ];
+    expect(await resolveWordComments(zip, suggestions)).toBe(2);
+
+    const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
+    expect(countCommentEx(extXml)).toBe(2);
+    expect(extXml).toContain('w15:paraId="AAAA0002"'); // comment 10's LAST paragraph
+    expect(extXml).not.toContain("AAAA0001"); // NOT its first paragraph
+    expect(extXml).toContain('w15:paraId="BBBB0001"'); // comment 20's only paragraph
+  });
+
+  it("dedups by commentId when two suggestions carry the same importCommentId (#1012)", async () => {
+    const zip = new JSZip();
+    zip.file("word/comments.xml", commentsXml([{ id: "30", paraIds: ["CCCC0001"] }]));
+    zip.file("word/document.xml", "<stub/>");
+    zip.file(
+      "[Content_Types].xml",
+      `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>`,
+    );
+    zip.file(
+      "word/_rels/document.xml.rels",
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
+    );
+
+    const suggestions = [
+      { id: "s1", from: 0, to: 5, newText: "X", importCommentId: "30" },
+      { id: "s2", from: 6, to: 9, newText: "Y", importCommentId: "30" },
+    ];
+    // Both suggestions resolve the same comment → a single commentEx entry.
+    expect(await resolveWordComments(zip, suggestions)).toBe(1);
+
+    const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
+    expect(countCommentEx(extXml)).toBe(1);
+    expect(extXml).toContain('w15:paraId="CCCC0001"');
+  });
+
   it("returns 0 when no suggestions have importCommentId", async () => {
     const zip = new JSZip();
     const suggestions = [{ id: "s1", from: 0, to: 5, newText: "X" }];
