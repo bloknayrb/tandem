@@ -108,6 +108,26 @@ test("Escape dismisses the launcher", async ({ page }) => {
   await expect(page.locator(MENU)).toHaveCount(0);
 });
 
+test("opens to the right instead of spilling off the left edge", async ({ page }) => {
+  // The title-bar tab strip left-justifies against the brand cluster, so with a single
+  // tab the `+` sits near the left edge. The menu (460px) would clip off-screen growing
+  // left, so the morph must flip its anchor and grow RIGHT instead.
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("http://127.0.0.1:5173");
+  await expect(page.locator("[data-testid^='tab-name-']", { hasText: "sample.md" })).toBeVisible();
+
+  await page.locator(OPEN_BTN).click();
+  const menu = page.locator(MENU);
+  await expect(menu).toBeVisible();
+
+  // The shell flipped its anchor to grow rightward...
+  await expect(page.locator(".nt-morph.grow-right")).toBeVisible();
+  // ...and the menu never spills past the left viewport edge.
+  const box = await menu.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
+});
+
 test("Reopen last closed is hidden until a real-file tab is closed", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample2.md") });
