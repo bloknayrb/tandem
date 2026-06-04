@@ -580,6 +580,42 @@ describe("resolveWordComments", () => {
     );
   });
 
+  it("uses the last TOP-LEVEL paragraph paraId even when the comment body contains an embedded table", async () => {
+    // A comment whose body is: <w:p TOPLEVEL1/> <w:tbl><w:tr><w:tc><w:p NESTED/></w:tc></w:tr></w:tbl> <w:p TOPLEVEL2/>
+    // CT_CommentEx @paraId must be TOPLEVEL2, not NESTED (the deepest/last in doc order).
+    const zip = new JSZip();
+    const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml";
+    const xml =
+      `<?xml version="1.0"?><w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">` +
+      `<w:comment w:id="55" w:author="A" w:date="2026-01-01T00:00:00Z">` +
+      `<w:p w14:paraId="TOPLEVEL1"><w:r><w:t>intro</w:t></w:r></w:p>` +
+      `<w:tbl><w:tr><w:tc><w:p w14:paraId="NESTED00"><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
+      `<w:p w14:paraId="TOPLEVEL2"><w:r><w:t>conclusion</w:t></w:r></w:p>` +
+      `</w:comment>` +
+      `</w:comments>`;
+    zip.file("word/comments.xml", xml);
+    zip.file("word/document.xml", "<stub/>");
+    zip.file(
+      "[Content_Types].xml",
+      `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>`,
+    );
+    zip.file(
+      "word/_rels/document.xml.rels",
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
+    );
+
+    const suggestions = [{ id: "s1", from: 0, to: 3, newText: "X", importCommentId: "55" }];
+    const resolved = await resolveWordComments(zip, suggestions);
+    expect(resolved).toBe(1);
+
+    const extXml = await zip.file("word/commentsExtended.xml")!.async("text");
+    expect(extXml).toContain('w15:paraId="TOPLEVEL2"'); // last TOP-LEVEL paragraph
+    expect(extXml).not.toContain("NESTED00"); // NOT the paragraph nested inside the table
+    expect(extXml).not.toContain("TOPLEVEL1"); // NOT the first paragraph
+    expect(extXml).toContain('w15:done="1"');
+  });
+
   it("updates an existing commentEx entry in place rather than duplicating it (#1007)", async () => {
     const zip = new JSZip();
     zip.file("word/comments.xml", commentsXml([{ id: "7", paraIds: ["0BBB0002"] }]));

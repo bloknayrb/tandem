@@ -711,7 +711,11 @@ async function readCommentLastParaIds(zip: JSZip): Promise<Map<string, string>> 
   for (const comment of findAllByName("w:comment", doc.children)) {
     const id = getAttr(comment, "w:id");
     if (!id) continue;
-    const paragraphs = findAllByName("w:p", comment.children);
+    // Shallow filter — only direct children of <w:comment>. `findAllByName` is
+    // recursive and would include <w:p> elements nested inside embedded tables,
+    // yielding the wrong last-paragraph paraId. CT_CommentEx @paraId references
+    // the comment body's last TOP-LEVEL paragraph (OOXML §2.5.39).
+    const paragraphs = comment.children.filter(isElement).filter((c) => c.name === "w:p");
     if (paragraphs.length === 0) continue;
     const lastParaId = getAttr(paragraphs[paragraphs.length - 1], "w14:paraId");
     if (lastParaId) map.set(id, lastParaId);
