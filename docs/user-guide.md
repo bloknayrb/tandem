@@ -21,7 +21,7 @@ On first run, Tandem opens `sample/welcome.md` automatically. Three tutorial ann
 A floating tutorial card appears at the bottom-left of the editor with three steps:
 
 1. **Review an annotation** — Accept or dismiss one of the tutorial annotations from the side panel, or press `Ctrl+Shift+R` to enter Review Mode and use `Y`/`N` keys.
-2. **Ask Claude a question** — Select text, click Comment, toggle "@Claude", and send your question. Or type in the Chat panel.
+2. **Ask Claude a question** — Select text, click Annotate, and send your question to your AI assistant. Or type in the Chat panel.
 3. **Try editing** — Click in the document and type something.
 
 The tutorial dismisses after all three steps and won't appear again (progress is saved to localStorage).
