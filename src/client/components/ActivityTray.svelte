@@ -247,12 +247,14 @@ onDestroy(() => {
     -webkit-backdrop-filter: saturate(140%) blur(8px);
     display: flex;
     flex-direction: column;
-    /* clip (not hidden) so it's not a scroll container (lesson #765) and the
-       clip-margin lets descendant focus rings paint past the edge. 8px = 2× the
-       4px max ring extent (2px outline + 2px offset); controls are further inset
-       by internal padding. */
+    /* clip (not hidden) so it's not a scroll container (lesson #765). The clip
+       edge must stay at the border box (no clip-margin): the full-width, square
+       `.pill-row` hover background and the body content otherwise bleed past the
+       rounded shell — clip-margin == part of the radius reads as corners poking
+       out of the pill / a shaved open-tray corner. No focusable control here
+       carries an edge-hugging outline ring to bleed past it. */
     overflow: clip;
-    overflow-clip-margin: var(--tandem-space-2);
+    overflow-clip-margin: 0;
     transform-origin: bottom right;
     /* OPEN: width + radius lead; box-shadow trails by P1. */
     transition:
