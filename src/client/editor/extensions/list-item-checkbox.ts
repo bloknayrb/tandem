@@ -114,10 +114,18 @@ export const ListItemCheckbox = ListItem.extend({
                 Decoration.widget(
                   pos + 1,
                   (view, getPos) => buildCheckbox(view, getPos, checked, itemType),
-                  // `side: -1` renders the widget as the first child of the
-                  // <li>, before its paragraph; the key includes `checked` so
-                  // the widget is recreated when the state flips.
-                  { side: -1, key: `tandem-checkbox-${checked}` },
+                  // `side: -1` renders the widget as the first child of the <li>,
+                  // before its paragraph. The key includes `pos` (unique per item)
+                  // and `checked` (so the widget recreates when the state flips).
+                  // `stopEvent` prevents bubbling clicks from reaching editor-level
+                  // handlers (annotation/link); `ignoreSelection` keeps the widget
+                  // outside selection boundaries (avoids off-by-one cursor positioning).
+                  {
+                    side: -1,
+                    key: `tandem-checkbox-${pos}:${checked}`,
+                    stopEvent: () => true,
+                    ignoreSelection: true,
+                  },
                 ),
               );
             });
@@ -157,11 +165,13 @@ function buildCheckbox(
     const widgetPos = getPos();
     if (widgetPos == null) return;
     const liPos = widgetPos - 1;
-    const node = view.state.doc.nodeAt(liPos);
-    // Defensive: the widget is created at the listItem's content-start, so
-    // liPos is always a listItem in practice — but guard the node type so a
-    // future placement/mapping change can never inject `checked` onto the
-    // wrong node (mirrors the input rule's own type check).
+    // `nodeAt` only searches direct children of `doc`, so it returns null for
+    // a listItem (which is always nested inside a bulletList/orderedList). Use
+    // `resolve(liPos).nodeAfter` instead — it descends the tree to the position
+    // before the listItem's opening token and returns the node there.
+    const node = view.state.doc.resolve(liPos).nodeAfter;
+    // Guard the node type so a future placement/mapping change can never inject
+    // `checked` onto the wrong node (mirrors the input rule's own type check).
     if (!node || node.type !== itemType) return;
     view.dispatch(
       view.state.tr.setNodeMarkup(liPos, undefined, {

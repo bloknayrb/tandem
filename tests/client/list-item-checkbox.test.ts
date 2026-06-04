@@ -93,6 +93,25 @@ describe("ListItemCheckbox (#982)", () => {
     expect(ed.getHTML()).toContain('data-checked="true"');
   });
 
+  it("clicking the checkbox widget dispatches a transaction that flips the checked attr", () => {
+    // Regression test for the `doc.nodeAt` → `doc.resolve().nodeAfter` fix:
+    // `nodeAt` only searches direct children of doc, so it returned null for a
+    // listItem (always nested inside bulletList), silently skipping the dispatch.
+    const ed = makeEditor();
+    ed.commands.setContent(CHECKBOX_LIST);
+    // The checkbox item is the first list item (checked: false).
+    const box = ed.view.dom.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(box).not.toBeNull();
+    expect(box.checked).toBe(false);
+
+    // Simulate a user checking the box.
+    box.checked = true;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // The ProseMirror model should now reflect checked: true.
+    expect(ed.getHTML()).toContain('data-checked="true"');
+  });
+
   it("the /task-list slash command turns a paragraph into an unchecked checkbox item", () => {
     const ed = makeEditor();
     ed.commands.setContent("<p>buy milk</p>");
