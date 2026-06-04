@@ -796,7 +796,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `editor/toolbar/highlight-toggle.ts` -- Toggle-highlight logic: creates a new highlight or removes an existing one if the range already has that color
 - `actions/clickOutside.svelte.ts` -- Svelte action: fires a handler when a mousedown occurs outside the attached element; used by FormattingToolbar heading dropdown and link input popover
 - `SidePanel` -- Annotation filtering (type/author/status, including "Imported" filter for Word comments), bulk accept/dismiss (with confirmation, respects active filters), keyboard review mode (Tab/Y/N/Z), 10-second undo window on accept/dismiss, inline annotation editing (pencil button on pending annotations)
-- `panels/FilterBar.svelte` -- Filter controls row: type/author/status FilterSelect dropdowns + Clear button (extracted from SidePanel)
+- `panels/FilterBar.svelte` -- Filter controls row: type/author/status chip groups (ChipGroup.svelte, A15) + Clear button (extracted from SidePanel)
 - `panels/BulkActions.svelte` -- Bulk accept/dismiss confirmation UI (extracted from SidePanel)
 - `panels/useAnnotationReview.ts` -- Review-mode state: reviewIndex, keyboard navigation, accept/dismiss, undo timers, bulk action handlers (extracted from SidePanel)
 - `panels/AnnotationCardActions.svelte` -- Action buttons for an annotation card: accept, dismiss, edit (extracted from AnnotationCard)
