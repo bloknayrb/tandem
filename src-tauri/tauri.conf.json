@@ -43,6 +43,9 @@
     "externalBin": [
       "binaries/node-sidecar"
     ],
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    },
     "resources": {
       "../dist/server/": "dist/server/",
       "../dist/channel/": "dist/channel/",

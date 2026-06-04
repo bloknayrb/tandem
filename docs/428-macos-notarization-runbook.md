@@ -177,7 +177,20 @@ spctl --assess --type open --context context:primary-signature -vvv /Volumes/Tan
 
 # Stapled ticket present (offline check)
 xcrun stapler validate /Volumes/Tandem*/Tandem.app
+
+# #983: the nested node-sidecar MUST carry the JIT entitlement or it SIGTRAPs in
+# V8 init on Apple Silicon. `bundle.macOS.entitlements` should reach the
+# externalBin via tauri-action signing; confirm it actually did (the CI verify
+# step asserts this too). Should print com.apple.security.cs.allow-jit.
+codesign -d --entitlements - /Volumes/Tandem*/Tandem.app/Contents/MacOS/node-sidecar 2>&1 | grep allow-jit
+# If MISSING: re-sign the sidecar with src-tauri/entitlements.plist BEFORE
+# notarization (codesign does not inherit app entitlements to nested binaries):
+#   codesign --force --sign "$IDENTITY" --options runtime \
+#     --entitlements src-tauri/entitlements.plist <app>/Contents/MacOS/node-sidecar
 ```
+
+On an Apple Silicon Mac the real acceptance is simply that the app **opens a
+document** (the sidecar bound `:3479`) rather than showing "Setup failed".
 
 Best of all: double-click the DMG, drag to Applications, launch from Finder.
 **No warning dialog = #428 satisfied.** This is the gate that matters for the
