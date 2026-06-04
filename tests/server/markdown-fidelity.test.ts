@@ -7,8 +7,9 @@
  *  2. Content preservation — every construct's essential source survives (no
  *     silent drop), including the constructs Tandem keeps as raw passthrough
  *     (footnotes, reference-style links/defs, inline HTML).
- *  3. Documented gaps — task lists (GFM checkboxes) degrade to plain bullets,
- *     tracked in #982. Pinned here so the gap can never become a SILENT drop.
+ *  3. GFM task lists (#982) — checkbox state round-trips as a per-item `checked`
+ *     attribute on the ordinary listItem; plain bullets and checkboxes coexist
+ *     in one list (mixed lists stay faithful), and ordered task lists work.
  *  4. No stray newline leaks into a `markdownRaw` paragraph's flat text.
  */
 
@@ -103,14 +104,24 @@ describe("markdown fidelity fixture (#981)", () => {
     expect(text).not.toContain("a footnote body\n");
   });
 
-  // #982: GFM task lists are NOT yet a first-class node. They degrade to plain
-  // bullets (the checked state is lost). This is a DOCUMENTED gap, pinned here
-  // so it can never silently change shape. Remove/replace when #982 lands.
-  it("task lists degrade to plain bullets (documented #982 gap, not a silent drop)", () => {
+  // #982: GFM task lists round-trip as a per-item `checked` attribute on the
+  // ordinary listItem (the mdast-native model). Checkbox state survives, plain
+  // bullets stay plain even when mixed with checkboxes in one list, and ordered
+  // task lists work.
+  it("preserves GFM task-list checkbox state (#982)", () => {
     const out = roundTrip(input);
-    expect(out).toContain("- Unchecked task");
-    expect(out).toContain("- Checked task");
-    expect(out).not.toContain("- [ ] Unchecked task");
-    expect(out).not.toContain("- [x] Checked task");
+    expect(out).toContain("- [ ] Unchecked task");
+    expect(out).toContain("- [x] Checked task");
+  });
+
+  it("keeps plain bullets plain in a mixed list, and supports ordered task lists (#982)", () => {
+    const out = roundTrip(input);
+    // A plain bullet sharing a list with checkboxes is NOT rewritten to `- [ ]`.
+    expect(out).toContain("- A plain bullet");
+    expect(out).toContain("- [ ] An unchecked task");
+    expect(out).toContain("- [x] A checked task");
+    // Ordered task list.
+    expect(out).toContain("1. [ ] First step");
+    expect(out).toContain("2. [x] Second step");
   });
 });

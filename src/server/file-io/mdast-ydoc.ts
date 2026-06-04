@@ -137,6 +137,15 @@ function blockToYxml(
       let listIndex = 0;
       for (const item of node.children) {
         const listItem = new Y.XmlElement("listItem");
+        // GFM task list: a list item with non-null `checked` carries the
+        // tri-state as an attribute on the ordinary listItem (#982). `null`
+        // (plain bullet) stores no attribute so the editor's PM-default `null`
+        // reconciles without a phantom transaction. Stored as a real boolean —
+        // the same representation y-prosemirror writes when a user toggles the
+        // checkbox — so it round-trips byte-identically (yjs ContentAny).
+        if (item.checked != null) {
+          listItem.setAttribute("checked", item.checked as any);
+        }
         let itemIndex = 0;
         for (const child of item.children) {
           const childEls = blockToYxml(child, deferred);
@@ -493,7 +502,16 @@ function yxmlToMdast(el: Y.XmlElement): RootContent | null {
               if (m) itemChildren.push(m);
             }
           }
-          listItems.push({ type: "listItem", spread: false, children: itemChildren });
+          // GFM task list (#982): re-emit the per-item `checked` tri-state so
+          // remark-gfm stringifies `- [ ]` / `- [x]`. Absent attribute → plain
+          // bullet (no `checked` field). Read tolerantly (boolean from
+          // y-prosemirror / server writes, or a string from any future writer).
+          const checkedAttr = child.getAttribute("checked") as boolean | string | undefined;
+          const listItemNode: any = { type: "listItem", spread: false, children: itemChildren };
+          if (checkedAttr != null) {
+            listItemNode.checked = checkedAttr === true || checkedAttr === "true";
+          }
+          listItems.push(listItemNode);
         }
       }
       return {

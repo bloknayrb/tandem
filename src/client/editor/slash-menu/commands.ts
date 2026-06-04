@@ -6,6 +6,7 @@ export type SlashCommandId =
   | "heading-3"
   | "bullet-list"
   | "numbered-list"
+  | "task-list"
   | "quote"
   | "code-block"
   | "horizontal-rule";
@@ -41,6 +42,7 @@ type SlashCommandChain = ReturnType<TiptapEditor["chain"]> & {
   toggleHeading: (attributes: { level: 1 | 2 | 3 }) => SlashCommandChain;
   toggleBulletList: () => SlashCommandChain;
   toggleOrderedList: () => SlashCommandChain;
+  updateAttributes: (typeOrName: string, attributes: Record<string, unknown>) => SlashCommandChain;
   toggleBlockquote: () => SlashCommandChain;
   toggleCodeBlock: () => SlashCommandChain;
   setHorizontalRule: () => SlashCommandChain;
@@ -120,6 +122,24 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
       ],
     },
     run: (editor) => chain(editor).toggleOrderedList().run(),
+  },
+  {
+    id: "task-list",
+    label: "Task list",
+    keywords: ["task", "todo", "checkbox", "check", "checklist"],
+    hint: "todo",
+    icon: {
+      kind: "svg",
+      els: [
+        { tag: "path", attrs: { d: "M3 3h10v10H3z" } },
+        { tag: "path", attrs: { d: "M5.5 8l2 2 3.5-4" } },
+      ],
+    },
+    // GFM task list (#982): a bullet list whose first item is an unchecked
+    // checkbox (`checked: false`). Subsequent items become checkboxes by typing
+    // `[ ] ` or stay plain bullets — they coexist in one list.
+    run: (editor) =>
+      chain(editor).toggleBulletList().updateAttributes("listItem", { checked: false }).run(),
   },
   {
     id: "quote",

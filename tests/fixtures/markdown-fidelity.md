@@ -60,5 +60,16 @@ A paragraph sitting between two reference definitions.
 [collapsed]: https://example.com/collapsed
 [shortcut]: https://example.com/shortcut
 
-- [ ] Unchecked task (GFM checkbox — tracked in #982)
+- [ ] Unchecked task
 - [x] Checked task
+
+Plain bullets and checkboxes coexisting in one list:
+
+- A plain bullet
+- [ ] An unchecked task
+- [x] A checked task
+
+An ordered task list:
+
+1. [ ] First step
+2. [x] Second step

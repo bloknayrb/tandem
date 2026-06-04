@@ -58,6 +58,38 @@
   padding-left: 1.5em;
 }
 
+/* GFM task lists (#982): a `listItem` with a non-null `checked` attribute
+ * renders a checkbox widget (`.tandem-list-checkbox`, decoration — see
+ * list-item-checkbox.ts) as its first child, before the paragraph. Lay the
+ * item out as a row and drop the bullet marker; plain list items (no
+ * `data-checked`) are unaffected. Tokens only. */
+.tandem-editor li[data-checked] {
+  list-style: none;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--tandem-space-2);
+}
+.tandem-editor li[data-checked] > .tandem-list-checkbox {
+  flex: 0 0 auto;
+  /* Nudge the box onto the first text line. */
+  margin-top: 0.25em;
+  cursor: pointer;
+  user-select: none;
+}
+.tandem-editor li[data-checked] > .tandem-list-checkbox input {
+  cursor: pointer;
+  accent-color: var(--tandem-accent);
+  margin: 0;
+}
+.tandem-editor li[data-checked] > :not(.tandem-list-checkbox) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tandem-editor li[data-checked="true"] {
+  color: var(--tandem-fg-muted);
+  text-decoration: line-through;
+}
+
 /* Raw markdown passthrough (#981): footnote/reference refs + defs and inline
    HTML that Tandem has no first-class node for. Rendered as `.tandem-raw-md`
    spans (inline) and `[data-markdown-raw]` paragraphs (block). Dimmed by
