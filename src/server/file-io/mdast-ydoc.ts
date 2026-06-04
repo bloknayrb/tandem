@@ -35,9 +35,33 @@ export function mdastToYDoc(doc: Y.Doc, tree: Root): void {
     fragment.delete(0, fragment.length);
   }
 
-  // Two-pass: build structure first, then populate text.
+  insertBlocks(doc, tree, 0);
+}
+
+/**
+ * Append an MDAST tree's blocks to the END of the Y.Doc's XmlFragment without
+ * clearing existing content. Reuses the same two-pass build as `mdastToYDoc`.
+ *
+ * Append is offset-safe: new elements land after every existing top-level
+ * element, so existing flat offsets (and the annotation / authorship ranges
+ * anchored to them) are unchanged. Used by the `tandem_appendContent` MCP tool.
+ * The caller is responsible for the origin-tagged transaction wrapper.
+ */
+export function appendMdast(doc: Y.Doc, tree: Root): void {
+  insertBlocks(doc, tree, doc.getXmlFragment("default").length);
+}
+
+/**
+ * Build the tree's blocks and insert them at `index` in the `default` fragment.
+ * Two-pass: build detached elements (pass 1), attach via `fragment.insert`,
+ * then populate text (pass 2) — Yjs requires Y.XmlText to be attached before
+ * insert for correct ordering. `blockToYxml` is fragment-pure, so `index` (read
+ * by the caller against the live fragment length) stays valid across pass 1.
+ */
+function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
+  const fragment = doc.getXmlFragment("default");
+
   // Pass 1 collects deferred text operations while building the element tree.
-  // Yjs requires Y.XmlText to be attached to a doc for correct insert ordering.
   const deferred: Array<{ xmlText: Y.XmlText; nodes?: PhrasingContent[]; plainText?: string }> = [];
   const allElements: Y.XmlElement[] = [];
   for (const node of tree.children) {
@@ -46,7 +70,7 @@ export function mdastToYDoc(doc: Y.Doc, tree: Root): void {
 
   // Attach all elements to the doc (pass 1 complete)
   if (allElements.length > 0) {
-    fragment.insert(0, allElements);
+    fragment.insert(index, allElements);
   }
 
   // Pass 2: populate text now that elements are attached to the Y.Doc

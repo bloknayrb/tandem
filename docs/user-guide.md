@@ -2,7 +2,7 @@
 
 A complete guide to using Tandem — from first launch to advanced workflows.
 
-> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same 26 tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
+> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same 27 tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
 
 > **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [README → Connecting other MCP clients](../README.md#connecting-other-mcp-clients) for the generic MCP path.
 
@@ -259,7 +259,7 @@ Press `?` to open the in-app shortcuts reference at any time.
 
 ## Working with Claude Code
 
-Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 29 tools (26 active, 3 deprecated stubs) for reading documents, creating annotations, searching text, managing files, and communicating with you.
+Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 30 tools (27 active, 3 deprecated stubs) for reading documents, creating annotations, searching text, managing files, and communicating with you.
 
 ### Connection
 

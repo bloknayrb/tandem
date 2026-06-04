@@ -147,7 +147,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open s
 
 The integration policy is set by [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration):
 
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 26 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 27 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
 > **Integration setup** runs through the integration setup wizard (#477 PR 3). Today's transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — is **deprecated when the wizard ships**. Going forward, every integration (Claude included) is configured via the wizard, never silently.
 
@@ -163,7 +163,7 @@ Client compatibility:
 
 ### MCP tools at a glance
 
-26 active tools across five capability areas. Full reference: [docs/mcp-tools.md](docs/mcp-tools.md).
+27 active tools across five capability areas. Full reference: [docs/mcp-tools.md](docs/mcp-tools.md).
 
 - **Document.** Open, switch, list, close, and convert documents; read text content and outlines; save back to disk.
 - **Annotation.** Create, resolve, remove, and edit annotations; query the annotation list; export a review report.
