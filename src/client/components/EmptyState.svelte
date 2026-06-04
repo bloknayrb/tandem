@@ -1,18 +1,37 @@
 <script lang="ts">
 import { DISCONNECT_DEBOUNCE_MS } from "../../shared/constants";
+import type { AiChip } from "../hooks/useAiReadiness.svelte";
 
 interface Props {
   connected: boolean;
-  claudeActive: boolean;
+  /**
+   * AI-readiness CTA (#1018/#1022). `"connect"` → AI isn't set up;
+   * `"restart"` → configured but stopped; `null` → ready / booting / Solo
+   * (no CTA, falls back to the product-positioning line). Replaces the old
+   * `claudeActive`-gated line, which keyed on a flapping presence signal.
+   */
+  aiChip?: AiChip;
   /** State A primary — opens the file-open dialog. */
   onOpenFile: () => void;
   /** State C primary — retries the sync-server connection. */
   onRetry: () => void;
   /** State C ghost link — opens the settings modal. */
   onOpenSettings: () => void;
+  /** Opens AI setup (Claude Code wizard) — the `"connect"` CTA. */
+  onConnectAi?: () => void;
+  /** Restarts the stopped Claude Code process — the `"restart"` CTA. */
+  onRestartClaude?: () => void;
 }
 
-let { connected, claudeActive, onOpenFile, onRetry, onOpenSettings }: Props = $props();
+let {
+  connected,
+  aiChip = null,
+  onOpenFile,
+  onRetry,
+  onOpenSettings,
+  onConnectAi,
+  onRestartClaude,
+}: Props = $props();
 
 let showDisconnected = $state(false);
 
@@ -89,7 +108,21 @@ $effect(() => {
     <div class="empty-actions">
       <button class="empty-cta" data-testid="empty-state-open-file" onclick={onOpenFile}>Open file…</button>
     </div>
-    {#if connected && !claudeActive}
+    {#if connected && aiChip === "connect"}
+      <p class="empty-sub empty-sub-secondary">No AI is connected yet.</p>
+      <div class="empty-actions">
+        <button class="empty-cta" data-testid="empty-state-connect-ai" onclick={onConnectAi}>
+          Connect AI
+        </button>
+      </div>
+    {:else if connected && aiChip === "restart"}
+      <p class="empty-sub empty-sub-secondary">Claude Code has stopped.</p>
+      <div class="empty-actions">
+        <button class="empty-cta" data-testid="empty-state-connect-ai" onclick={onRestartClaude}>
+          Restart Claude Code
+        </button>
+      </div>
+    {:else if connected}
       <!-- Preserved from production: carries product positioning, not in the bundle. -->
       <p class="empty-sub empty-sub-secondary">
         Tandem works alongside Claude (the default integration) or any MCP-capable AI client.

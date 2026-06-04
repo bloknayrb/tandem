@@ -9,6 +9,7 @@ import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
   createScratchpad,
+  relaunchClaudeCode,
   SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS,
   saveStore,
   shouldAutoOpenScratchpad,
@@ -44,6 +45,7 @@ import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
+import { createAiReadiness } from "./hooks/useAiReadiness.svelte";
 import {
   nextAnnotationId,
   prevAnnotationId,
@@ -275,6 +277,33 @@ let settingsOpen = $state(false);
 let settingsModalOpen = $state(false);
 
 const firstRun = createFirstRunNeeded();
+
+// AI-readiness (#1018/#1022): keys on launcher status, not the doc-sync "Synced"
+// dot. Gate on the monotonic `firstRun.settled` (set true once, never reset) so
+// a `refetch()` during a server blip can't bounce the chip back to "booting".
+const aiReadiness = createAiReadiness({
+  connected: () => yjsSync.connected,
+  firstRunSettled: () => firstRun.settled,
+  soloMode: () => modeState.tandemMode === "solo",
+});
+
+/** Opens the Claude Code integration wizard (the "Connect AI" CTA). Reuses the
+ *  existing manual-reopen event path so dismissal isn't burned (see the
+ *  `tandem:open-integration-wizard` listener below). */
+function connectAi(): void {
+  window.dispatchEvent(new CustomEvent("tandem:open-integration-wizard"));
+}
+
+/** Restarts the stopped Claude Code process (the "Restart Claude Code" CTA),
+ *  then re-polls launcher status so the chip clears once it's back up. Two
+ *  staggered refreshes cover a slow cold start (MCP init / skill refresh) so
+ *  the chip doesn't look stuck waiting for the next 8s background poll. */
+function restartClaude(): void {
+  relaunchClaudeCode();
+  setTimeout(() => aiReadiness.refresh(), 2_000);
+  setTimeout(() => aiReadiness.refresh(), 5_000);
+}
+
 const WIZARD_DISMISSED_KEY = "tandem:wizard-dismissed";
 let dismissedForVersion = $state<string | null>(readDismissed());
 let manuallyReopened = $state(false);
@@ -1230,6 +1259,9 @@ const tutorial = createTutorial(
     updateAvailable={updateAvailable.showDot}
     defaultModelLabel={BYO_MODELS_ENABLED ? defaultModelLabel : null}
     onOpenModelsSettings={openModelsSettings}
+    aiChip={aiReadiness.chip}
+    onConnectAi={connectAi}
+    onRestartClaude={restartClaude}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -1763,10 +1795,12 @@ const tutorial = createTutorial(
           {:else}
             <EmptyState
               connected={yjsSync.connected}
-              claudeActive={yjsSync.claudeActive}
+              aiChip={aiReadiness.chip}
               onOpenFile={() => (fileOpenDialogOpen = true)}
               onRetry={() => yjsSync.reconnect()}
               onOpenSettings={openSettingsModalWithAck}
+              onConnectAi={connectAi}
+              onRestartClaude={restartClaude}
             />
           {/if}
         </div>

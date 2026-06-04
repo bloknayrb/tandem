@@ -503,6 +503,17 @@ async function relaunchHere(d: ActionDeps): Promise<void> {
   }
 }
 
+/**
+ * Restart the supervised Claude Code process (#1018/#1022). Thin re-entry to
+ * the existing `launcher-relaunch-here` palette action so the AI-readiness
+ * "Restart Claude Code" chip and the palette command share one code path
+ * (cwd derivation + confirm + nonce + notify). Used when launcher status is
+ * `available: true, running: false` (configured but crashed/stopped).
+ */
+export function relaunchClaudeCode(): void {
+  guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d));
+}
+
 async function startFreshConversation(d: ActionDeps): Promise<void> {
   if (!(await checkLauncherAvailable(d))) return;
   if (!confirm("Drop Claude's saved conversation and restart fresh. This cannot be undone.")) {
