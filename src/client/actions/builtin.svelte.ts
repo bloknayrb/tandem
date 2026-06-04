@@ -19,6 +19,7 @@ import {
 } from "../../shared/api-paths.js";
 import type { LauncherStatus } from "../../shared/launcher/contract.js";
 import { API_BASE } from "../utils/fileUpload.js";
+import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
 import { type Action, registerAction } from "./registry.svelte.js";
 
 // ---------------------------------------------------------------------------
@@ -285,8 +286,21 @@ async function runTauriSaveAs(
       notify("error", `Save As failed: ${body.message ?? res.statusText}`);
       return;
     }
-    const json = (await res.json().catch(() => null)) as { data?: { fileName?: string } } | null;
+    const json = (await res.json().catch(() => null)) as {
+      data?: { fileName?: string; targetPath?: string };
+    } | null;
     const fileName = json?.data?.fileName ?? normalizedPath;
+    // Register the promoted file in recents so it surfaces in the New Tab
+    // launcher (issue #1019). Use the server's resolved `targetPath` so the
+    // stored string matches the path the openDocuments broadcast records —
+    // otherwise the recents-sync effect in App.svelte would later add a second,
+    // slightly-different entry for the same file. Falling back to the local
+    // normalizedPath keeps registration working if the server omits targetPath.
+    // Registration here is deterministic (it fires the instant the server
+    // confirms the write) rather than relying on the broadcast→reconcile→effect
+    // round-trip, which can miss if the tab is closed before it completes.
+    const promotedPath = json?.data?.targetPath ?? normalizedPath;
+    saveRecentFiles(addRecentFile(loadRecentFiles(), promotedPath));
     notify("info", `Saved to ${fileName}.`);
   } catch (err) {
     notify("error", `Save As request failed: ${err instanceof Error ? err.message : err}`);
