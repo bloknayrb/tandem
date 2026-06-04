@@ -117,6 +117,11 @@ function chooseSettings() {
   {#if menuOpen}
     <div class="menu" role="menu" aria-label="Decorations">
       <div class="menu-head">Decorations</div>
+      <p class="menu-help">
+        Inline editor overlays — author colors, comment, highlight, and note
+        marks. Toggle a type to hide its marks in the document; side-panel cards
+        stay.
+      </p>
 
       <button
         type="button"
@@ -302,6 +307,13 @@ function chooseSettings() {
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-family: var(--tandem-font-mono);
+  }
+  .menu-help {
+    margin: 0;
+    padding: 0 10px 7px;
+    color: var(--tandem-fg-subtle);
+    font-size: var(--tandem-text-2xs);
+    line-height: 1.4;
   }
   .mi {
     display: flex;
