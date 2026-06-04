@@ -14,13 +14,24 @@ const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> =
 interface Props {
   disabled?: boolean;
   onHighlight: (color: HighlightColor) => void;
+  /**
+   * Fired whenever the color sub-menu opens or closes. The host (FormattingBar)
+   * uses this to lift its fixed wrapper's stacking context above the selection
+   * popup while the sub-menu is open — otherwise the open sub-menu, trapped in
+   * the bar's lower stacking context, renders behind the selection pill (#1024).
+   */
+  onOpenChange?: (open: boolean) => void;
 }
 
-const { disabled = false, onHighlight }: Props = $props();
+const { disabled = false, onHighlight, onOpenChange }: Props = $props();
 
 let highlightColor = $state<HighlightColor>("yellow");
 let showColorPicker = $state(false);
 let colorPickerEl = $state<HTMLDivElement | null>(null);
+
+$effect(() => {
+  onOpenChange?.(showColorPicker);
+});
 
 $effect(() => {
   if (!showColorPicker) return;

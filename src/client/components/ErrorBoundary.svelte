@@ -45,11 +45,11 @@ let errorSessionId = $state(0);
   {#snippet failed(error: unknown, reset: () => void)}
     {#key errorSessionId}
       <div role="alert" class="error-boundary">
-        <h2>Something went wrong</h2>
+        <h2>Something didn't go as planned</h2>
         <p class="message">
           {attempts >= MAX_RECOVERY_ATTEMPTS
-            ? "Recovery attempts exhausted. Reload the page to continue."
-            : "The editor encountered an unexpected error."}
+            ? "We weren't able to recover this time — reloading the page should get you going again."
+            : "The editor ran into an unexpected hiccup."}
         </p>
         <pre class="detail">{error instanceof Error ? error.message : String(error)}</pre>
         {#if attempts < MAX_RECOVERY_ATTEMPTS}

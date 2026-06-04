@@ -24,7 +24,7 @@ let { onDismiss, onRetry }: Props = $props();
     </svg>
   </span>
   <span class="tandem-banner__message">
-    Connection to the Tandem server has been lost. Ensure the server is running.
+    We've lost the connection to the Tandem server. Please check that it's still running.
   </span>
   <button
     type="button"
