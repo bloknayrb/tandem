@@ -106,7 +106,10 @@ async function seedNoteViaPopup(
   await openAnnotatePopup(page);
   await page.locator("[data-testid='popup-annotation-input']").fill(text);
   await page.locator("[data-testid='popup-note-submit']").click();
-  const annNode = page.locator("[data-annotation-id]").last();
+  // Read the id from the new note's EDITOR decoration (always visible inline text).
+  // Scoped to `.tiptap` so it can't resolve to a rail/margin card root — since #999
+  // those also carry `data-annotation-id`, and a hidden one would fail toBeVisible.
+  const annNode = page.locator(".tiptap [data-annotation-id]").last();
   await expect(annNode).toBeVisible({ timeout: 10_000 });
   const id = await annNode.getAttribute("data-annotation-id");
   if (!id) throw new Error("note popup did not yield an annotation id");

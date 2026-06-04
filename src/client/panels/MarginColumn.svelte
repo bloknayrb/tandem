@@ -2,8 +2,22 @@
 import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
+import { isTauriRuntime } from "../cowork/cowork-helpers";
 import type { MarginMode } from "../layout/editor-stage.svelte";
 import AnnotationCard from "./AnnotationCard.svelte";
+import {
+  canAccept,
+  canDismiss,
+  canEdit,
+  canRemove,
+  canReply,
+  canSendToClaude,
+} from "./annotation-context-menu";
+import {
+  openAnnotationContextMenu,
+  runAnnotationAction,
+  subscribeAnnotationActions,
+} from "./annotation-context-menu-host";
 import { cardDensity } from "./cardDensity";
 import { prunePlaceableHeights, resolveCollisions } from "./marginCollision";
 import { bezierLeaderPath, leaderColorForAuthor } from "./marginLeaderGeometry";
@@ -169,6 +183,62 @@ function recordHeight(id: string, h: number): void {
   next.set(id, h);
   heights = next;
 }
+
+// ---- Native annotation context menu (#999 / #923 Phase 3) ----------------
+// Same shared host as SidePanel. The listener is bound to the bubble COLUMN
+// container (not a shared ancestor of the pointer-events:none leader SVG, whose
+// paths also carry data-annotation-id) so a right-click only ever resolves a
+// card root. The id stays webview-side; the gesture's `run` re-reads the live
+// annotation and re-validates before calling THIS column's handler props.
+let columnEl: HTMLDivElement | undefined = $state();
+let cardOpenRequest = $state<{ id: string; kind: "edit" | "reply"; nonce: number } | null>(null);
+let nonceSeq = 0;
+
+function liveAnnotation(id: string): Annotation | undefined {
+  return annotations.find((a) => a.id === id);
+}
+
+// Route an emitted action through the shared re-validating dispatcher, bound to THIS
+// column's handler props (so a margin right-click acts on margin handlers even though the
+// listener is shared with the rail). reply/edit open the in-card composer/editor.
+function dispatchAnnotationAction(
+  id: string,
+): (action: Parameters<typeof runAnnotationAction>[0]) => void {
+  return (action) => {
+    const ann = liveAnnotation(id);
+    if (!ann) return; // deleted while the menu was open → no-op
+    runAnnotationAction(action, ann, {
+      accept: onAccept,
+      dismiss: onDismiss,
+      sendToClaude: onSendToClaude,
+      remove: onRemove,
+      openEdit: (i) => (cardOpenRequest = { id: i, kind: "edit", nonce: ++nonceSeq }),
+      openReply: (i) => (cardOpenRequest = { id: i, kind: "reply", nonce: ++nonceSeq }),
+    });
+  };
+}
+
+async function handleAnnotationContextMenu(e: MouseEvent) {
+  if (!isTauriRuntime()) return; // browser → native menu
+  const el = (e.target as Element | null)?.closest("[data-annotation-id]");
+  const id = el?.getAttribute("data-annotation-id");
+  if (!id) return;
+  const ann = liveAnnotation(id);
+  if (!ann) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  await openAnnotationContextMenu(ann, dispatchAnnotationAction(id));
+}
+
+$effect(() => {
+  const el = columnEl;
+  if (!el) return;
+  el.addEventListener("contextmenu", handleAnnotationContextMenu);
+  return () => el.removeEventListener("contextmenu", handleAnnotationContextMenu);
+});
+
+$effect(() => subscribeAnnotationActions());
 </script>
 
 <!-- Leader SVG sits in the gap zone between the editor's text edge and the
@@ -227,6 +297,7 @@ function recordHeight(id: string, h: number): void {
 </svg>
 
 <div
+  bind:this={columnEl}
   data-testid="margin-column-{side}"
   aria-label={side === "left" ? "Note bubbles" : "Comment bubbles"}
   style="position: absolute; top: 0; {side}: {edgeInset}px; width: {width}px; pointer-events: none;"
@@ -265,12 +336,13 @@ function recordHeight(id: string, h: number): void {
         isReviewTarget={ann.id === activeAnnotationId}
         {density}
         onClick={() => onClick(ann)}
-        onAccept={ann.author !== "user" ? onAccept : undefined}
-        onDismiss={ann.author !== "user" ? onDismiss : undefined}
-        onRemove={ann.author === "user" ? onRemove : undefined}
-        onSendToClaude={ann.type === "note" ? onSendToClaude : undefined}
-        {onEdit}
-        {onReply}
+        onAccept={canAccept(ann) ? onAccept : undefined}
+        onDismiss={canDismiss(ann) ? onDismiss : undefined}
+        onRemove={canRemove(ann) ? onRemove : undefined}
+        onSendToClaude={canSendToClaude(ann) ? onSendToClaude : undefined}
+        onEdit={canEdit(ann) ? onEdit : undefined}
+        onReply={canReply(ann) ? onReply : undefined}
+        openRequest={cardOpenRequest?.id === ann.id ? cardOpenRequest : null}
       />
     </div>
   {/each}

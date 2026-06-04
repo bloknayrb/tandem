@@ -1,4 +1,5 @@
 <script lang="ts">
+import { untrack } from "svelte";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import CommentThread from "./CommentThread.svelte";
@@ -10,9 +11,14 @@ interface Props {
   isPending: boolean;
   isEditing: boolean;
   onReply?: (id: string, text: string) => Promise<boolean>;
+  /**
+   * #999: monotonic nonce from the native context menu's Reply… item (via
+   * AnnotationCard). A bump opens the composer; the mount value is ignored.
+   */
+  openNonce?: number;
 }
 
-let { annotation, replies, isPending, isEditing, onReply }: Props = $props();
+let { annotation, replies, isPending, isEditing, onReply, openNonce = 0 }: Props = $props();
 
 // Single client-display fan-out point. Notes show their (private) reply
 // threads to the owning user (#1000); highlights never show replies. This is
@@ -31,6 +37,18 @@ const hasText = $derived(Boolean(replyText.trim()));
 
 $effect(() => {
   if (isReplying) replyTextareaEl?.focus();
+});
+
+// #999: open the composer when the context-menu Reply… nonce bumps. Seeded from
+// the mount value via untrack so it never auto-opens on mount; the existing
+// focus effect above follows once isReplying flips true. A stale request while
+// the composer can't render (resolved card / mid-edit) is a harmless no-op — the
+// `{#if isPending && onReply && !isEditing}` guard simply won't mount it.
+let lastOpenNonce = untrack(() => openNonce);
+$effect(() => {
+  if (openNonce === lastOpenNonce) return;
+  lastOpenNonce = openNonce;
+  isReplying = true;
 });
 
 function handleReplyKeyDown(e: KeyboardEvent) {
