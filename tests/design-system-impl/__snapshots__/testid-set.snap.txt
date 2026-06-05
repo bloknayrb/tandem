@@ -319,6 +319,12 @@ shortcut-reset-{*}
 shortcut-row-{*}
 shortcuts-reset-all
 solo-rail-hidden-toggle
+source-view-annotation-warning
+source-view-container
+source-view-copy-btn
+source-view-error
+source-view-exit-btn
+source-view-textarea
 status-word-count
 store-readonly-banner
 store-readonly-dismiss
@@ -336,6 +342,7 @@ titlebar-brand-menu
 titlebar-brand-menu-popover
 titlebar-connect-ai
 titlebar-default-model
+titlebar-source-toggle
 titlebar-update-available-dot
 toast-action-{*}
 toast-container

@@ -43,6 +43,7 @@ import { annotationPluginKey } from "./editor/extensions/annotation";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
+import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import { createAiReadiness } from "./hooks/useAiReadiness.svelte";
@@ -132,9 +133,25 @@ function closeTabAndRecord(tabId: string) {
       scratchpadPersistence.clearUnsaved(uuid);
     }
   }
+  // #1021: warn before closing a tab with uncommitted markdown-source edits
+  // (mirrors the #864 scratchpad confirm above). The disk file is intact — this
+  // is loss of unsaved source-view work only.
+  if (sourceDirtyTabs.has(tabId)) {
+    const ok = window.confirm(
+      "This document has unsaved markdown-source edits that will be lost. Close it anyway?",
+    );
+    if (!ok) return;
+  }
   if (tab && !isUploadPath(tab.filePath)) {
     closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
   }
+  // Drop any source-view flag + draft for the closed tab so the maps don't leak (#1021).
+  if (sourceViewTabs.has(tabId)) {
+    const next = new Set(sourceViewTabs);
+    next.delete(tabId);
+    sourceViewTabs = next;
+  }
+  clearSourceDraft(tabId);
   yjsSync.handleTabClose(tabId);
 }
 
@@ -600,6 +617,7 @@ wireActionDeps({
     settingsState.updateSettings({
       formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
+  toggleSourceView: () => toggleSourceView(),
   saveAs: async () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
     // Save-As is a PROMOTION path — only offer it for ephemeral upload://
@@ -743,6 +761,39 @@ let marginLayerEl = $state<HTMLDivElement | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
+// Per-tab raw-markdown source view (#1021). Ephemeral (not persisted): the set
+// of tab IDs currently showing the markdown source editor instead of WYSIWYG.
+let sourceViewTabs = $state(new Set<string>());
+// In-progress source text + dirty flags, keyed by tab ID, lifted out of
+// SourceView so uncommitted edits survive a tab switch (which unmounts the
+// component) and so tab close / app quit can warn before discarding them
+// (#1021 review SHOULD-FIX).
+let sourceDrafts = $state(new Map<string, string>());
+let sourceDirtyTabs = $state(new Set<string>());
+
+function updateSourceDraft(tabId: string, text: string, dirty: boolean): void {
+  const drafts = new Map(sourceDrafts);
+  const dirtyTabs = new Set(sourceDirtyTabs);
+  if (dirty) {
+    drafts.set(tabId, text);
+    dirtyTabs.add(tabId);
+  } else {
+    drafts.delete(tabId);
+    dirtyTabs.delete(tabId);
+  }
+  sourceDrafts = drafts;
+  sourceDirtyTabs = dirtyTabs;
+}
+
+function clearSourceDraft(tabId: string): void {
+  if (!sourceDrafts.has(tabId) && !sourceDirtyTabs.has(tabId)) return;
+  const drafts = new Map(sourceDrafts);
+  const dirtyTabs = new Set(sourceDirtyTabs);
+  drafts.delete(tabId);
+  dirtyTabs.delete(tabId);
+  sourceDrafts = drafts;
+  sourceDirtyTabs = dirtyTabs;
+}
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
 let newTabMenuTrigger = $state(0);
@@ -883,6 +934,11 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   },
   save: (e) => {
     e.preventDefault();
+    // In source view, SourceView owns Ctrl+S (it commits the edit) and
+    // stopPropagations — this is belt-and-suspenders against that invariant
+    // being broken later: the global save must never write the stale Y.Doc to
+    // disk underneath an open source edit (#1021 review must-fix).
+    if (inSourceView) return;
     void triggerSave(yjsSync.activeTabId);
   },
   "save-as": (e) => {
@@ -1182,6 +1238,53 @@ $effect(() => {
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
+// Raw-markdown source view (#1021). Only editable .md documents qualify
+// (read-only .md like CHANGELOG and non-.md formats are excluded).
+const canSourceView = $derived(
+  !!activeTab && activeTab.format === "md" && activeTab.readOnly !== true,
+);
+const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+
+function toggleSourceView(): void {
+  if (!activeTab) return;
+  const id = activeTab.id;
+  const next = new Set(sourceViewTabs);
+  if (next.has(id)) {
+    next.delete(id);
+  } else {
+    if (!canSourceView) return;
+    next.add(id);
+    // Source view replaces the Tiptap editor; close editor-bound overlays so
+    // they don't linger non-functional over the textarea.
+    findBarOpen = false;
+    slashCommandMenuOpen = false;
+    paletteOpen = false;
+  }
+  sourceViewTabs = next;
+}
+
+function exitSourceView(id: string): void {
+  if (!sourceViewTabs.has(id)) return;
+  const next = new Set(sourceViewTabs);
+  next.delete(id);
+  sourceViewTabs = next;
+  // Returning to WYSIWYG discards any in-progress draft (a dirty exit commits
+  // first via SourceView.handleExit, which already cleared it).
+  clearSourceDraft(id);
+}
+
+// Warn before unloading the page (reload / quit) while any source view holds
+// uncommitted edits — mirrors the scratchpad #864 beforeunload guard.
+$effect(() => {
+  const onBeforeUnload = (ev: BeforeUnloadEvent): void => {
+    if (sourceDirtyTabs.size === 0) return;
+    ev.preventDefault();
+    ev.returnValue = "You have unsaved markdown-source edits.";
+  };
+  window.addEventListener("beforeunload", onBeforeUnload);
+  return () => window.removeEventListener("beforeunload", onBeforeUnload);
+});
+
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
 // tab) with a live connection, auto-open a fresh scratchpad instead of
 // stranding them on "No document open."
@@ -1317,6 +1420,8 @@ const tutorial = createTutorial(
     aiChip={aiReadiness.chip}
     onConnectAi={connectAi}
     onRestartClaude={restartClaude}
+    sourceViewActive={inSourceView}
+    onToggleSourceView={canSourceView || inSourceView ? toggleSourceView : null}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -1804,7 +1909,30 @@ const tutorial = createTutorial(
         onSendToClaude={marginHandlers.onSendToClaude}
       />
     {/snippet}
-    <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
+    {#if inSourceView && activeTab}
+      <!-- Raw-markdown source view (#1021) replaces the WYSIWYG stage entirely.
+           The Tiptap editor unmounts (editor → null); margin hooks park safely
+           via their null-editor guards (see createMarginPositions).
+
+           This UNMOUNTS marginLayerEl, which INVARIANT 1 below forbids across
+           *marginView* toggles. It's safe here because `inSourceView` is
+           margin-independent state — no margin effect reads or writes it, so
+           there's no bind:this feedback loop (the storm INVARIANT 1 guards is a
+           self-triggering cycle, not a one-way unmount on an external toggle). -->
+      <!-- Keyed on the tab ID so switching to another source-view tab remounts
+           a fresh SourceView that re-fetches + restores that tab's own draft —
+           rather than reactively swapping documentId on a shared instance. -->
+      {#key activeTab.id}
+        <SourceView
+          documentId={activeTab.id}
+          ydoc={activeTab.ydoc}
+          initialDraft={sourceDrafts.get(activeTab.id)}
+          onDraftChange={(text, dirty) => updateSourceDraft(activeTab!.id, text, dirty)}
+          onExit={() => exitSourceView(activeTab!.id)}
+        />
+      {/key}
+    {:else}
+      <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
          The layer wraps editor content so its block height matches the
          editor's; bubble Y-positions + scroll sync are measured against it.
 
@@ -1897,6 +2025,7 @@ const tutorial = createTutorial(
       <div class="editor-end-marker" aria-hidden="true">
         <span class="editor-end-pill">End of document</span>
       </div>
+    {/if}
     {/if}
     <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
     <FindReplaceBar

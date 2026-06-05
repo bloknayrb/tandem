@@ -810,25 +810,92 @@ describe("renameDocument — note privacy (ADR-027)", () => {
 
   // Companion to the survival test above, exercising the branch its comment
   // calls out as proven-elsewhere. The survival case is "guaranteed structurally"
-  // precisely because closeStore re-converges the moved envelope to equal the
-  // live Y.Map, so loadAndMerge's `withFileSync` block performs ZERO mutations.
-  // This variant DEFEATS that convergence so the REAL merge branch runs a live-
-  // note write:
+  // precisely because the rename converges the moved envelope to equal the
+  // live Y.Map, so the file-wins merge performs ZERO mutations. These two
+  // variants DEFEAT that convergence so the REAL merge branch runs a live-note
+  // write, through both production paths that can reach it:
   //
   //   1. Flush a note at rev 2 (the "file" body) — this lands in the envelope.
   //   2. Mutate the LIVE Y.Map note to rev 1 (a different "live" body) via
   //      `withInternal`. The durable-sync observer skips `internal` writes
   //      (DURABLE_SKIP = {file-sync, internal}), so NO debounced write is queued
-  //      and closeStore(oldHash) flushes nothing new — the moved envelope keeps
-  //      its rev-2 file body while the live Y.Map diverges to rev 1.
-  //   3. At re-wire, loadAndMerge sees file.rev(2) > ymap.rev(1) → pickWinner
-  //      returns "file" → `annMap.set("note-1", fileRec)` executes INSIDE the
+  //      — the envelope keeps its rev-2 file body while the live Y.Map diverges
+  //      to rev 1.
+  //   3. Drive the file-wins merge: file.rev(2) > ymap.rev(1) → pickWinner
+  //      returns "file" → `annMap.set("note-1", fileRec)` executes INSIDE a
   //      `withFileSync(ydoc, …)` transaction. That is a live-note mutation that
   //      *could* emit if the channel observer didn't gate on origin.
   //
+  // Variant A drives it through renameDocument (Fold 0 / mergeEnvelopeForward —
+  // #1040×#1041: the rename folds file-newer envelope records forward before
+  // the RMW snapshot, so the file-wins contract holds across rename). Variant B
+  // drives it through an explicit store re-wire, the open/reload path
+  // (loadAndMerge on a doc whose envelope advanced past the live Y.Map).
+  //
   // Assert the gate holds on BOTH surfaces: no channel event leaks the note, and
   // getDocumentStore (what tandem_getAnnotations reads) still hides it from Claude.
-  it("a withFileSync merge that mutates a live note post-flush emits no channel event and stays hidden from Claude", async () => {
+  it("a withFileSync merge during rename that mutates a live note emits no channel event and stays hidden from Claude", async () => {
+    const { docId, filePath, doc } = await openFileDoc("private.md", "body");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    withBrowser(doc, () =>
+      annMap.set(
+        "note-1",
+        makeAnnotation("note-1", {
+          type: "note",
+          author: "user",
+          content: "FILE BODY — must never leak",
+          rev: 2,
+        }),
+      ),
+    );
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    withInternal(doc, () =>
+      annMap.set(
+        "note-1",
+        makeAnnotation("note-1", {
+          type: "note",
+          author: "user",
+          content: "LIVE BODY — also private",
+          rev: 1,
+        }),
+      ),
+    );
+
+    // Start collecting channel events BEFORE the rename so the real withFileSync
+    // merge write (file rev 2 over live rev 1, via Fold 0) is observed if it
+    // were to emit.
+    attachObservers(docId, doc);
+    const { events, cleanup } = collectEvents();
+
+    const result = await renameDocument(docId, "private-renamed.md");
+    expect(result.status).toBe("renamed");
+
+    // Fold 0 genuinely fired the file-wins branch: the live Y.Map note now
+    // carries the rev-2 file body. If this fails, rename stopped honoring the
+    // file-wins contract (the #1040×#1041 regression).
+    const merged = annMap.get("note-1") as { rev?: number; content?: string } | undefined;
+    expect(merged?.rev).toBe(2);
+    expect(merged?.content).toBe("FILE BODY — must never leak");
+
+    // ADR-027 surface 1: no channel event leaked the note.
+    const annEvents = events.filter(
+      (e) => e.type === "annotation:created" || e.type === "annotation:edited",
+    );
+    expect(annEvents).toHaveLength(0);
+    cleanup();
+    detachObservers(docId);
+
+    // ADR-027 surface 2: Claude must see zero annotations here.
+    const store = getDocumentStore(docId);
+    expect(store).not.toBeNull();
+    const claudeVisible = store!.listAnnotationsRefreshed().filter((a) => a.type !== "note");
+    expect(claudeVisible).toHaveLength(0);
+    expect(store!.listAnnotationsRefreshed().some((a) => a.id === "note-1")).toBe(true);
+  });
+
+  it("a withFileSync merge via open/reload re-wire that mutates a live note emits no channel event and stays hidden from Claude", async () => {
     const { docId, filePath, doc } = await openFileDoc("private.md", "body");
     const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
 
@@ -848,8 +915,8 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     await createStore(docHash(filePath), { filePath }).flush();
 
     // Diverge the live Y.Map to rev 1 via `withInternal`. The durable-sync
-    // observer skips `internal`, so this queues no debounced write — closeStore
-    // re-converges nothing, and the moved envelope retains its rev-2 file body.
+    // observer skips `internal`, so this queues no debounced write — the
+    // envelope retains its rev-2 file body.
     withInternal(doc, () =>
       annMap.set(
         "note-1",
@@ -862,13 +929,18 @@ describe("renameDocument — note privacy (ADR-027)", () => {
       ),
     );
 
-    // Start collecting channel events BEFORE the rename so the real withFileSync
+    // Start collecting channel events BEFORE the re-wire so the real withFileSync
     // merge write (file rev 2 over live rev 1) is observed if it were to emit.
     attachObservers(docId, doc);
     const { events, cleanup } = collectEvents();
 
-    const result = await renameDocument(docId, "private-renamed.md");
-    expect(result.status).toBe("renamed");
+    // Force the re-wire: dispose the live context (dropping its in-memory
+    // ledger), then wire the store again at the same path so loadAndMerge reads
+    // the rev-2 envelope against the rev-1 live Y.Map and runs the file-wins
+    // merge inside withFileSync.
+    const { clearFileSyncContext } = await import("../../src/server/events/queue.js");
+    clearFileSyncContext(docId);
+    await wireAnnotationStore(docId, doc, filePath, { allowRecovery: false });
 
     // The merge genuinely fired the file-wins branch: the live Y.Map note now
     // carries the rev-2 file body (proving loadAndMerge ran annMap.set, not a
@@ -889,6 +961,7 @@ describe("renameDocument — note privacy (ADR-027)", () => {
 
     // ADR-027 surface 2: tandem_getAnnotations reads via getDocumentStore +
     // the `type !== "note"` filter. Claude must see zero annotations here.
+    // (getDocumentStore reflects the re-wired context registered above.)
     const store = getDocumentStore(docId);
     expect(store).not.toBeNull();
     const claudeVisible = store!.listAnnotationsRefreshed().filter((a) => a.type !== "note");

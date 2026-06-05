@@ -60,6 +60,12 @@ interface ActionDeps {
   toggleAuthorship: () => void;
   toggleFormattingBar: () => void;
   /**
+   * Toggle the raw-markdown source view for the active document (#1021). A
+   * no-op when the active doc isn't an editable .md (the App-level handler
+   * guards on format + read-only).
+   */
+  toggleSourceView: () => void;
+  /**
    * Save the active document under a new file path. Used to promote an
    * ephemeral scratchpad (or any `upload://`-backed doc) into a real file.
    * Resolves once the save attempt completes (success or failure) so action
@@ -809,6 +815,17 @@ const BUILTINS: Action[] = [
     group: "view",
     run() {
       guardedRun("toggle-formatting-bar", (d) => d.toggleFormattingBar());
+    },
+  },
+  {
+    // Palette-only: switches the active .md document between the formatted
+    // (WYSIWYG) editor and its raw-markdown source. A no-op for non-.md or
+    // read-only documents (the App handler guards).
+    id: "toggle-source-view",
+    label: "Toggle markdown source view",
+    group: "view",
+    run() {
+      guardedRun("toggle-source-view", (d) => d.toggleSourceView());
     },
   },
   {
