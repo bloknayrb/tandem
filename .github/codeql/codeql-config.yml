@@ -1,7 +1,2 @@
 paths-ignore:
   - src/server/annotations/rename-recovery.ts
-  # Temporarily excluded to force auto-close of legacy open alerts (#97/#98/#99)
-  # created before in-source suppressions were added. Re-enable in a follow-up
-  # after merge; the codeql[js/path-injection] comments in renameDocument will
-  # handle new scans correctly (creating dismissed, not open, alerts).
-  - src/server/mcp/document-service.ts
