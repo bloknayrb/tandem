@@ -16,6 +16,10 @@ vi.mock("../../src/client/utils/server-paths.js", () => ({
   openServerPath: vi.fn(),
 }));
 
+vi.mock("../../src/client/utils/default-directory.js", () => ({
+  resolveDefaultDirectory: vi.fn(async () => null),
+}));
+
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));

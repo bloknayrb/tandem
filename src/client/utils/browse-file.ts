@@ -1,4 +1,5 @@
 import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
+import { resolveDefaultDirectory } from "./default-directory.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./recentFiles.js";
 import { openServerPath } from "./server-paths.js";
 
@@ -13,10 +14,16 @@ const filterExtensions = Array.from(SUPPORTED_EXTENSIONS)
  */
 export async function pickNativeFilePath(): Promise<string | null> {
   const { open } = await import("@tauri-apps/plugin-dialog");
+  // Smart default (#1023): start the picker in the user's configured save
+  // folder, else the Claude working dir, else home — the same precedence the
+  // Save-As dialog uses, so "where my files live" is one notion. `undefined`
+  // (no tier resolved) lets the OS pick its own default starting directory.
+  const defaultPath = (await resolveDefaultDirectory()) ?? undefined;
   const selected = await open({
     multiple: false,
     directory: false,
     title: "Open file in Tandem",
+    defaultPath,
     filters: [{ name: "Documents", extensions: filterExtensions }],
   });
   return typeof selected === "string" ? selected : null;
