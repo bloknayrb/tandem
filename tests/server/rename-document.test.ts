@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
-import { withBrowser } from "../../src/shared/origins.js";
+import { withBrowser, withInternal } from "../../src/shared/origins.js";
 
 // Mock the session manager — saveSession/deleteSession touch disk for the
 // .tandem session sidecar, which is orthogonal to what these tests exercise.
@@ -61,6 +61,7 @@ const {
   resetForTesting: queueReset,
 } = await import("../../src/server/events/queue.js");
 const { wireAnnotationStore } = await import("../../src/server/mcp/file-opener.js");
+const { getDocumentStore } = await import("../../src/server/mcp/document-store.js");
 const { collectEvents } = await import("../helpers/event-collector.js");
 
 let docDir = "";
@@ -432,5 +433,94 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     const newEnvelope = await createStore(docHash(newPath), { filePath: newPath }).load();
     const moved = newEnvelope.annotations.find((a) => a.id === "note-1");
     expect(moved?.type).toBe("note");
+  });
+
+  // Companion to the survival test above, exercising the branch its comment
+  // calls out as proven-elsewhere. The survival case is "guaranteed structurally"
+  // precisely because closeStore re-converges the moved envelope to equal the
+  // live Y.Map, so loadAndMerge's `withFileSync` block performs ZERO mutations.
+  // This variant DEFEATS that convergence so the REAL merge branch runs a live-
+  // note write:
+  //
+  //   1. Flush a note at rev 2 (the "file" body) — this lands in the envelope.
+  //   2. Mutate the LIVE Y.Map note to rev 1 (a different "live" body) via
+  //      `withInternal`. The durable-sync observer skips `internal` writes
+  //      (DURABLE_SKIP = {file-sync, internal}), so NO debounced write is queued
+  //      and closeStore(oldHash) flushes nothing new — the moved envelope keeps
+  //      its rev-2 file body while the live Y.Map diverges to rev 1.
+  //   3. At re-wire, loadAndMerge sees file.rev(2) > ymap.rev(1) → pickWinner
+  //      returns "file" → `annMap.set("note-1", fileRec)` executes INSIDE the
+  //      `withFileSync(ydoc, …)` transaction. That is a live-note mutation that
+  //      *could* emit if the channel observer didn't gate on origin.
+  //
+  // Assert the gate holds on BOTH surfaces: no channel event leaks the note, and
+  // getDocumentStore (what tandem_getAnnotations reads) still hides it from Claude.
+  it("a withFileSync merge that mutates a live note post-flush emits no channel event and stays hidden from Claude", async () => {
+    const { docId, filePath, doc } = await openFileDoc("private.md", "body");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Flush the note at rev 2 — this is the body that lands in the envelope and
+    // will WIN the merge (higher rev).
+    withBrowser(doc, () =>
+      annMap.set(
+        "note-1",
+        makeAnnotation("note-1", {
+          type: "note",
+          author: "user",
+          content: "FILE BODY — must never leak",
+          rev: 2,
+        }),
+      ),
+    );
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    // Diverge the live Y.Map to rev 1 via `withInternal`. The durable-sync
+    // observer skips `internal`, so this queues no debounced write — closeStore
+    // re-converges nothing, and the moved envelope retains its rev-2 file body.
+    withInternal(doc, () =>
+      annMap.set(
+        "note-1",
+        makeAnnotation("note-1", {
+          type: "note",
+          author: "user",
+          content: "LIVE BODY — also private",
+          rev: 1,
+        }),
+      ),
+    );
+
+    // Start collecting channel events BEFORE the rename so the real withFileSync
+    // merge write (file rev 2 over live rev 1) is observed if it were to emit.
+    attachObservers(docId, doc);
+    const { events, cleanup } = collectEvents();
+
+    const result = await renameDocument(docId, "private-renamed.md");
+    expect(result.status).toBe("renamed");
+
+    // The merge genuinely fired the file-wins branch: the live Y.Map note now
+    // carries the rev-2 file body (proving loadAndMerge ran annMap.set, not a
+    // structural no-op). If this assertion fails the test is no longer covering
+    // the intended branch.
+    const merged = annMap.get("note-1") as { rev?: number; content?: string } | undefined;
+    expect(merged?.rev).toBe(2);
+    expect(merged?.content).toBe("FILE BODY — must never leak");
+
+    // ADR-027 surface 1: no channel event leaked the note (the withFileSync
+    // write was skipped by the channel observer's origin gate).
+    const annEvents = events.filter(
+      (e) => e.type === "annotation:created" || e.type === "annotation:edited",
+    );
+    expect(annEvents).toHaveLength(0);
+    cleanup();
+    detachObservers(docId);
+
+    // ADR-027 surface 2: tandem_getAnnotations reads via getDocumentStore +
+    // the `type !== "note"` filter. Claude must see zero annotations here.
+    const store = getDocumentStore(docId);
+    expect(store).not.toBeNull();
+    const claudeVisible = store!.listAnnotationsRefreshed().filter((a) => a.type !== "note");
+    expect(claudeVisible).toHaveLength(0);
+    // And the note is still present in the doc (private, not deleted).
+    expect(store!.listAnnotationsRefreshed().some((a) => a.id === "note-1")).toBe(true);
   });
 });

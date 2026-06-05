@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`tests/server/platform.test.ts` no longer binds hardcoded ports in the Windows reserved range (#1014)** — the three `waitForPort` tests bound fixed ports `49170`/`49171`/`49172`, which fall inside the IANA dynamic/ephemeral range that Windows reserves in chunks (Hyper-V/WSL/Docker). On such hosts those binds throw `EACCES` deterministically, failing the husky pre-push gate and forcing a blanket `HUSKY=0` bypass. The tests now bind an OS-assigned port (`listen(0)`) and use the resolved port, eliminating the reserved-range collision. Test-only; no production impact.
 - **Closed a test-coverage gap in `resolveWordComments` (#1012)** — the suite exercised the function only with a single `importCommentId` per call. Added two tests covering the multi-comment path: resolving two distinct comments in one call (each mapped to its *own* last-paragraph paraId) and the dedup-by-`commentId` filter (two suggestions sharing one comment, asserting a single `commentEx` entry). Test-only; the production path was already correct.
 
+### Tests
+
+- **Strengthened the ADR-027 note-privacy rename test to cover the live-note `withFileSync` merge path (#1041)** — the existing rename note-privacy test got zero channel events "for free" because `closeStore` re-converges the moved envelope to equal the live Y.Map, so `loadAndMerge`'s `withFileSync` block performed no mutation. The new variant defeats that convergence (flush a note at `rev 2`, then diverge the live Y.Map to `rev 1` via a `withInternal` write the durable-sync observer skips), so `loadAndMerge` actually runs `annMap.set` on a live note inside the `withFileSync` transaction during rename — then asserts the note still leaks neither via channel events nor via the `getDocumentStore` read path `tandem_getAnnotations` uses. Test-only; no `src/server/` change.
+
 ## [0.13.6] - 2026-06-04
 
 ### Added
