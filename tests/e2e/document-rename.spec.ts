@@ -124,3 +124,36 @@ test("an invalid name is rejected by the server and the label reverts", async ({
   await expect(page.locator(`[data-testid='tab-name-${id}']`)).toHaveText("sample.md");
   expect(fs.existsSync(path.join(tmpDir, "sample.md"))).toBe(true);
 });
+
+test("tandem_rename MCP tool renames the active document (no UI)", async () => {
+  // MCP-first coverage (ADR-038): the same renameDocument path the UI route
+  // calls, exercised directly through the tool. No `page` — this is a pure
+  // MCP probe asserting the tool result, the on-disk move, and that
+  // tandem_listDocuments reflects the new path under the SAME documentId.
+  await cleanupAllOpenDocuments(mcp);
+  const opened = (await mcp.callTool("tandem_open", {
+    filePath: path.join(tmpDir, "sample.md"),
+  })) as { data: { documentId: string } };
+  const id = opened.data.documentId;
+  await mcp.callTool("tandem_switchDocument", { documentId: id });
+
+  const result = (await mcp.callTool("tandem_rename", { newName: "mcp-renamed.md" })) as {
+    error: false;
+    data: { renamed: boolean; from: string; to: string; fileName: string };
+  };
+  expect(result.error).toBe(false);
+  expect(result.data.renamed).toBe(true);
+  expect(result.data.fileName).toBe("mcp-renamed.md");
+
+  // On disk: old gone, new present.
+  expect(fs.existsSync(path.join(tmpDir, "mcp-renamed.md"))).toBe(true);
+  expect(fs.existsSync(path.join(tmpDir, "sample.md"))).toBe(false);
+
+  // The documentId/room is stable; only the path/label migrate.
+  const list = (await mcp.callTool("tandem_listDocuments")) as {
+    data: { documents: Array<{ id: string; fileName: string; filePath: string }> };
+  };
+  const entry = list.data.documents.find((d) => d.id === id);
+  expect(entry?.fileName).toBe("mcp-renamed.md");
+  expect(entry?.filePath).toBe(path.join(tmpDir, "mcp-renamed.md"));
+});
