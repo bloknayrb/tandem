@@ -43,6 +43,7 @@ import { annotationPluginKey } from "./editor/extensions/annotation";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
+import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import { createAiReadiness } from "./hooks/useAiReadiness.svelte";
@@ -134,6 +135,12 @@ function closeTabAndRecord(tabId: string) {
   }
   if (tab && !isUploadPath(tab.filePath)) {
     closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
+  }
+  // Drop any source-view flag for the closed tab so the Set doesn't leak (#1021).
+  if (sourceViewTabs.has(tabId)) {
+    const next = new Set(sourceViewTabs);
+    next.delete(tabId);
+    sourceViewTabs = next;
   }
   yjsSync.handleTabClose(tabId);
 }
@@ -600,6 +607,7 @@ wireActionDeps({
     settingsState.updateSettings({
       formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
+  toggleSourceView: () => toggleSourceView(),
   saveAs: async () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
     // Save-As is a PROMOTION path — only offer it for ephemeral upload://
@@ -740,6 +748,9 @@ let marginLayerEl = $state<HTMLDivElement | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
+// Per-tab raw-markdown source view (#1021). Ephemeral (not persisted): the set
+// of tab IDs currently showing the markdown source editor instead of WYSIWYG.
+let sourceViewTabs = $state(new Set<string>());
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
 let newTabMenuTrigger = $state(0);
@@ -1179,6 +1190,38 @@ $effect(() => {
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
+// Raw-markdown source view (#1021). Only editable .md documents qualify
+// (read-only .md like CHANGELOG and non-.md formats are excluded).
+const canSourceView = $derived(
+  !!activeTab && activeTab.format === "md" && activeTab.readOnly !== true,
+);
+const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+
+function toggleSourceView(): void {
+  if (!activeTab) return;
+  const id = activeTab.id;
+  const next = new Set(sourceViewTabs);
+  if (next.has(id)) {
+    next.delete(id);
+  } else {
+    if (!canSourceView) return;
+    next.add(id);
+    // Source view replaces the Tiptap editor; close editor-bound overlays so
+    // they don't linger non-functional over the textarea.
+    findBarOpen = false;
+    slashCommandMenuOpen = false;
+    paletteOpen = false;
+  }
+  sourceViewTabs = next;
+}
+
+function exitSourceView(id: string): void {
+  if (!sourceViewTabs.has(id)) return;
+  const next = new Set(sourceViewTabs);
+  next.delete(id);
+  sourceViewTabs = next;
+}
+
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
 // tab) with a live connection, auto-open a fresh scratchpad instead of
 // stranding them on "No document open."
@@ -1314,6 +1357,8 @@ const tutorial = createTutorial(
     aiChip={aiReadiness.chip}
     onConnectAi={connectAi}
     onRestartClaude={restartClaude}
+    sourceViewActive={inSourceView}
+    onToggleSourceView={canSourceView || inSourceView ? toggleSourceView : null}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -1801,7 +1846,23 @@ const tutorial = createTutorial(
         onSendToClaude={marginHandlers.onSendToClaude}
       />
     {/snippet}
-    <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
+    {#if inSourceView && activeTab}
+      <!-- Raw-markdown source view (#1021) replaces the WYSIWYG stage entirely.
+           The Tiptap editor unmounts (editor → null); margin hooks park safely
+           via their null-editor guards (see createMarginPositions).
+
+           This UNMOUNTS marginLayerEl, which INVARIANT 1 below forbids across
+           *marginView* toggles. It's safe here because `inSourceView` is
+           margin-independent state — no margin effect reads or writes it, so
+           there's no bind:this feedback loop (the storm INVARIANT 1 guards is a
+           self-triggering cycle, not a one-way unmount on an external toggle). -->
+      <SourceView
+        documentId={activeTab.id}
+        ydoc={activeTab.ydoc}
+        onExit={() => exitSourceView(activeTab!.id)}
+      />
+    {:else}
+      <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
          The layer wraps editor content so its block height matches the
          editor's; bubble Y-positions + scroll sync are measured against it.
 
@@ -1894,6 +1955,7 @@ const tutorial = createTutorial(
       <div class="editor-end-marker" aria-hidden="true">
         <span class="editor-end-pill">End of document</span>
       </div>
+    {/if}
     {/if}
     <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
     <FindReplaceBar

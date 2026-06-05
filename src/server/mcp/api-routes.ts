@@ -5,6 +5,8 @@ import {
   API_APPLY_CHANGES,
   API_CLOSE,
   API_CONVERT,
+  API_DOCUMENT_RAW,
+  API_DOCUMENT_RELOAD,
   API_INFO,
   API_MODE,
   API_NOTIFY_STREAM,
@@ -26,6 +28,8 @@ import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
 import { handleClose } from "./routes/close.js";
 import { handleConvert } from "./routes/convert.js";
+import { handleGetDocumentRaw } from "./routes/document-raw.js";
+import { handleReloadFromMarkdown } from "./routes/document-reload.js";
 import { makeInfoHandler } from "./routes/info.js";
 import { handleMode } from "./routes/mode.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
@@ -172,6 +176,12 @@ export function registerApiRoutes(
 
   app.options(API_APPLY_CHANGES, mw);
   app.post(API_APPLY_CHANGES, mw, largeBody, handleApplyChanges);
+
+  // Raw-markdown source view/edit (#1021). GET is read-only (no loopback gate,
+  // like /api/mode); POST replaces document content from a user-supplied string.
+  app.get(API_DOCUMENT_RAW, mw, handleGetDocumentRaw);
+  app.options(API_DOCUMENT_RELOAD, mw);
+  app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
 
   app.options(API_SETUP, mw);
   app.post(API_SETUP, mw, largeBody, makeSetupHandler({ token }));

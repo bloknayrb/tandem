@@ -70,6 +70,7 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "NOT_RENAMABLE":
     case "ALREADY_EXISTS":
     case "RENAME_IN_PROGRESS":
+    case "RELOAD_IN_PROGRESS":
       return 409;
     case "FILE_TOO_LARGE":
       return 413;
@@ -107,6 +108,12 @@ function errorCodeToLabel(code: string): string {
     // their HTTP status, so they ARE listed in errorCodeToHttpStatus above.
     case "ANNOTATION_RESOLVED":
       return "ANNOTATION_RESOLVED";
+    // Source-view reload (#1021) codes flow through sendApiError, so unlike the
+    // rename codes they DO need labels here (plus their statuses above).
+    case "READ_ONLY":
+      return "READ_ONLY";
+    case "RELOAD_IN_PROGRESS":
+      return "RELOAD_IN_PROGRESS";
     case "FILE_TOO_LARGE":
       return "FILE_TOO_LARGE";
     case "EBUSY":
