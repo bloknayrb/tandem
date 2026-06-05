@@ -91,6 +91,63 @@ describe("resolveTheme", () => {
   });
 });
 
+// #993: when the OS reports a LIGHT appearance and the user chose the warm
+// light-variant, the system theme resolves to "warm" instead of "light". The
+// dark branch is unaffected — a dark OS appearance always resolves to "dark".
+describe("systemTheme / resolveTheme — systemLightVariant (#993)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
+  });
+
+  it("system + OS light + variant 'warm' → 'warm' (browser/matchMedia)", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    expect(systemTheme("warm")).toBe("warm");
+    expect(resolveTheme("system", "warm")).toBe("warm");
+  });
+
+  it("system + OS light + variant 'light' (default) → 'light'", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    expect(systemTheme("light")).toBe("light");
+    expect(systemTheme()).toBe("light"); // default param
+    expect(resolveTheme("system", "light")).toBe("light");
+    expect(resolveTheme("system")).toBe("light");
+  });
+
+  it("system + OS dark → 'dark' regardless of variant", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
+    expect(systemTheme("warm")).toBe("dark");
+    expect(systemTheme("light")).toBe("dark");
+    expect(resolveTheme("system", "warm")).toBe("dark");
+  });
+
+  it("variant only affects the 'system' pref — explicit themes pass through", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    // An explicit non-system pref never consults the variant.
+    expect(resolveTheme("light", "warm")).toBe("light");
+    expect(resolveTheme("dark", "warm")).toBe("dark");
+    expect(resolveTheme("warm", "light")).toBe("warm");
+  });
+
+  it("in Tauri, OS light + variant 'warm' resolves to 'warm' via __TANDEM_INITIAL_THEME__", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    vi.stubGlobal("window", { __TANDEM_INITIAL_THEME__: "light" });
+    expect(systemTheme("warm")).toBe("warm");
+  });
+
+  it("in Tauri, OS dark stays 'dark' even with variant 'warm'", () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    vi.stubGlobal("window", { __TANDEM_INITIAL_THEME__: "dark" });
+    expect(systemTheme("warm")).toBe("dark");
+  });
+
+  it("window-undefined (SSR) honors the warm variant default", () => {
+    // No window stub — globalThis.window absent in the vitest node env.
+    expect(systemTheme("warm")).toBe("warm");
+    expect(systemTheme("light")).toBe("light");
+  });
+});
+
 /**
  * Exercise applyTheme — the side-effect core of useTheme — against stubbed
  * document/window globals. This covers the useEffect body directly without
@@ -180,6 +237,19 @@ describe("useTheme — DOM side effects (via applyTheme)", () => {
     expect(attrs.get("data-theme")).toBe("dark");
     fireChange(false);
     expect(attrs.get("data-theme")).toBe("light");
+  });
+
+  it("with pref='system' + lightVariant='warm', light resolves to 'warm' and dark stays 'dark' (#993)", () => {
+    const { attrs, fireChange } = installDomStubs(false);
+    applyTheme("system", "warm");
+    // OS light → warm (the user's chosen light-family theme).
+    expect(attrs.get("data-theme")).toBe("warm");
+    // The onChange re-resolve must also honor the variant: dark stays dark…
+    fireChange(true);
+    expect(attrs.get("data-theme")).toBe("dark");
+    // …and flipping back to OS light returns warm, not neutral light.
+    fireChange(false);
+    expect(attrs.get("data-theme")).toBe("warm");
   });
 
   it("with pref='system', cleanup removes the matchMedia listener", () => {
