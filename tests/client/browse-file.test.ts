@@ -1,13 +1,22 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { browseNativeFile, openFileForRuntime } from "../../src/client/utils/browse-file.js";
+import {
+  browseNativeFile,
+  openFileForRuntime,
+  pickNativeFilePath,
+} from "../../src/client/utils/browse-file.js";
+import * as defaultDir from "../../src/client/utils/default-directory.js";
 import { loadRecentFiles } from "../../src/client/utils/recentFiles.js";
 import * as serverPaths from "../../src/client/utils/server-paths.js";
 import { RECENT_FILES_KEY } from "../../src/shared/constants.js";
 
 vi.mock("../../src/client/utils/server-paths.js", () => ({
   openServerPath: vi.fn(),
+}));
+
+vi.mock("../../src/client/utils/default-directory.js", () => ({
+  resolveDefaultDirectory: vi.fn(async () => null),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -127,5 +136,36 @@ describe("openFileForRuntime (runtime branch)", () => {
 
     expect(openModal).toHaveBeenCalledOnce();
     expect(vi.mocked(open)).not.toHaveBeenCalled();
+  });
+});
+
+describe("pickNativeFilePath defaultPath (#1023)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(defaultDir.resolveDefaultDirectory).mockResolvedValue(null);
+  });
+
+  it("passes the resolved smart-default directory as the dialog defaultPath", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("/home/me/notes/x.md");
+    vi.mocked(defaultDir.resolveDefaultDirectory).mockResolvedValue("/home/me/notes");
+
+    await pickNativeFilePath();
+
+    expect(vi.mocked(open)).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: "/home/me/notes" }),
+    );
+  });
+
+  it("passes defaultPath: undefined when no directory tier resolves", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue(null);
+    vi.mocked(defaultDir.resolveDefaultDirectory).mockResolvedValue(null);
+
+    await pickNativeFilePath();
+
+    expect(vi.mocked(open)).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: undefined }),
+    );
   });
 });

@@ -123,4 +123,105 @@ printf '%s' "$FAILED_COMMIT_INPUT" | bash "${HOOKS_DIR}/track-workflow-events.sh
 rm -rf "${REPO_ROOT}/.claude/.workflow-state/test-commit-clears-nudge-"* \
        "${REPO_ROOT}/.claude/.workflow-state/test-failed-commit-preserves-nudge-"* 2>/dev/null || true
 
+# -----------------------------------------------------------------------------
+# stop-cycle-check.sh: reminder injected as STDOUT hookSpecificOutput JSON
+# -----------------------------------------------------------------------------
+
+STOP_HOOK="${HOOKS_DIR}/stop-cycle-check.sh"
+HAS_JQ=0
+command -v jq >/dev/null 2>&1 && HAS_JQ=1
+
+# Pending source edits, not yet nudged -> emit additionalContext JSON on stdout.
+SESSION_ID="test-stop-pending-$$"
+EXPECTED_DIR="${REPO_ROOT}/.claude/.workflow-state/${SESSION_ID}"
+rm -rf "$EXPECTED_DIR" 2>/dev/null || true
+mkdir -p "$EXPECTED_DIR"
+: > "${EXPECTED_DIR}/${_WS_MARK_SOURCE_EDIT}"
+
+STOP_OUT=$(printf '{"session_id":"%s"}' "$SESSION_ID" | bash "$STOP_HOOK")
+STOP_RC=$?
+[[ "$STOP_RC" -eq 0 ]] && pass || fail "stop hook must exit 0 on pending-edits path"
+
+if [[ "$HAS_JQ" -eq 1 ]]; then
+  printf '%s' "$STOP_OUT" | jq -e '.hookSpecificOutput.hookEventName == "Stop"' >/dev/null \
+    && pass || fail "stop hook stdout must be JSON with hookSpecificOutput.hookEventName == Stop"
+  printf '%s' "$STOP_OUT" \
+    | jq -e '(.hookSpecificOutput.additionalContext | type == "string") and (.hookSpecificOutput.additionalContext | length > 0)' >/dev/null \
+    && pass || fail "stop hook must emit a non-empty additionalContext string"
+else
+  # No jq -> the hook falls back to stderr and stdout stays empty.
+  [[ -z "$STOP_OUT" ]] && pass || fail "stop hook stdout must be empty when jq is unavailable"
+fi
+
+# Re-running the same session is a no-op: stop-nudged mark is now present.
+STOP_OUT2=$(printf '{"session_id":"%s"}' "$SESSION_ID" | bash "$STOP_HOOK")
+STOP_RC2=$?
+[[ "$STOP_RC2" -eq 0 && -z "$STOP_OUT2" ]] \
+  && pass || fail "stop hook must emit nothing and exit 0 once already nudged"
+
+# No pending edits (no source-edit marker) -> emit nothing, exit 0.
+SESSION_ID="test-stop-clean-$$"
+EXPECTED_DIR="${REPO_ROOT}/.claude/.workflow-state/${SESSION_ID}"
+rm -rf "$EXPECTED_DIR" 2>/dev/null || true
+mkdir -p "$EXPECTED_DIR"
+STOP_OUT3=$(printf '{"session_id":"%s"}' "$SESSION_ID" | bash "$STOP_HOOK")
+STOP_RC3=$?
+[[ "$STOP_RC3" -eq 0 && -z "$STOP_OUT3" ]] \
+  && pass || fail "stop hook must emit nothing and exit 0 with no pending edits"
+
+# Committed after edit (commit newer than edit) -> emit nothing, exit 0.
+SESSION_ID="test-stop-committed-$$"
+EXPECTED_DIR="${REPO_ROOT}/.claude/.workflow-state/${SESSION_ID}"
+rm -rf "$EXPECTED_DIR" 2>/dev/null || true
+mkdir -p "$EXPECTED_DIR"
+: > "${EXPECTED_DIR}/${_WS_MARK_SOURCE_EDIT}"
+sleep 1
+: > "${EXPECTED_DIR}/${_WS_MARK_COMMIT}"
+STOP_OUT4=$(printf '{"session_id":"%s"}' "$SESSION_ID" | bash "$STOP_HOOK")
+STOP_RC4=$?
+[[ "$STOP_RC4" -eq 0 && -z "$STOP_OUT4" ]] \
+  && pass || fail "stop hook must emit nothing when a commit is newer than the edit"
+
+# stdout/stderr separation: in the jq-present happy path the reminder must go to
+# STDOUT only. A regression reintroducing `cat >&2` (emitting to both streams)
+# would keep the stdout-JSON assertion green, so guard stderr explicitly.
+if [[ "$HAS_JQ" -eq 1 ]]; then
+  SESSION_ID="test-stop-stderr-$$"
+  EXPECTED_DIR="${REPO_ROOT}/.claude/.workflow-state/${SESSION_ID}"
+  rm -rf "$EXPECTED_DIR" 2>/dev/null || true
+  mkdir -p "$EXPECTED_DIR"
+  : > "${EXPECTED_DIR}/${_WS_MARK_SOURCE_EDIT}"
+  STOP_ERR=$(printf '{"session_id":"%s"}' "$SESSION_ID" | bash "$STOP_HOOK" 2>&1 1>/dev/null)
+  [[ -z "$STOP_ERR" ]] \
+    && pass || fail "stop hook must emit nothing on stderr in the jq-present happy path"
+fi
+
+# jq present but FAILING -> the hook must fall back to stderr (never silently drop)
+# and must still write the one-shot marker, only AFTER surfacing the reminder. A
+# failing-jq PATH shim (rest of PATH intact) drives the same stderr-fallback branch
+# as jq-absence, so that branch is exercised on every run, not just where jq is gone.
+SESSION_ID="test-stop-jqfail-$$"
+EXPECTED_DIR="${REPO_ROOT}/.claude/.workflow-state/${SESSION_ID}"
+rm -rf "$EXPECTED_DIR" 2>/dev/null || true
+mkdir -p "$EXPECTED_DIR"
+: > "${EXPECTED_DIR}/${_WS_MARK_SOURCE_EDIT}"
+JQ_SHIM_DIR=$(mktemp -d)
+printf '#!/usr/bin/env bash\nexit 1\n' > "${JQ_SHIM_DIR}/jq"
+chmod +x "${JQ_SHIM_DIR}/jq"
+STOP_FAIL_ERRFILE=$(mktemp)
+STOP_FAIL_OUT=$(printf '{"session_id":"%s"}' "$SESSION_ID" \
+  | PATH="${JQ_SHIM_DIR}:${PATH}" bash "$STOP_HOOK" 2>"$STOP_FAIL_ERRFILE")
+STOP_FAIL_RC=$?
+[[ "$STOP_FAIL_RC" -eq 0 ]] \
+  && pass || fail "stop hook must exit 0 when jq is present but fails"
+[[ -z "$STOP_FAIL_OUT" ]] \
+  && pass || fail "stop hook stdout must be empty when jq fails (no partial JSON)"
+grep -q "uncommitted source edits" "$STOP_FAIL_ERRFILE" \
+  && pass || fail "stop hook must fall back to stderr when jq fails"
+[[ -f "${EXPECTED_DIR}/${_WS_MARK_STOP_NUDGED}" ]] \
+  && pass || fail "stop hook must still write the one-shot marker after the stderr fallback"
+rm -rf "$JQ_SHIM_DIR" "$STOP_FAIL_ERRFILE" 2>/dev/null || true
+
+rm -rf "${REPO_ROOT}/.claude/.workflow-state/test-stop-"* 2>/dev/null || true
+
 echo "OK: ${PASS_COUNT} assertions passed."
