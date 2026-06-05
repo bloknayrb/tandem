@@ -307,3 +307,42 @@ test("PR6: Network Advanced disclosure resets across modal close/open", async ({
   await page.locator("[data-testid='settings-modal-tab-network']").click();
   await expect(page.locator("[data-testid='network-advanced']")).not.toHaveAttribute("open", /.*/);
 });
+
+test("#993: 'Use Warm when system is light' resolves system-light to warm, keeps dark", async ({
+  page,
+}) => {
+  // Default theme is "system" and Chromium reports a light color scheme, so the
+  // app resolves to data-theme="light" out of the box. The new toggle should
+  // flip a light OS appearance to "warm" while a dark OS appearance stays "dark".
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  const html = page.locator("html");
+  // Sanity: system + OS light resolves to light before the toggle.
+  await expect(html).toHaveAttribute("data-theme", "light");
+
+  await openSettingsModal(page);
+  // Appearance is the default tab. The toggle is only rendered while Theme=system.
+  const toggle = page.locator("[data-testid='appearance-system-light-warm'] input");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).not.toBeChecked();
+
+  await toggle.check();
+  await expect(toggle).toBeChecked();
+  // System + OS light now resolves to the warm theme.
+  await expect(html).toHaveAttribute("data-theme", "warm");
+
+  // A dark OS appearance still resolves to dark regardless of the toggle.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(html).toHaveAttribute("data-theme", "dark");
+
+  // Back to light, warm is honored again.
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(html).toHaveAttribute("data-theme", "warm");
+
+  // Unchecking returns system-light to the neutral light theme.
+  await toggle.uncheck();
+  await expect(html).toHaveAttribute("data-theme", "light");
+});

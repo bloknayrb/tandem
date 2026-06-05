@@ -764,4 +764,48 @@ describe("loadSettings — migration chain", () => {
     expect(s._readOnly).toBe(true);
     expect(s.marginView).toBe(true);
   });
+
+  // v13→v14 (#993): introduce systemLightVariant (default "light"). Pure bump —
+  // a pre-v14 blob with no field defaults to "light" (prior behavior: system
+  // light always resolved to the neutral Light theme); an explicit "warm"
+  // survives. Invalid values coerce to the "light" default.
+  it("v13→v14: systemLightVariant defaults to 'light' when absent", () => {
+    writeRaw({ schemaVersion: 13, theme: "system" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.systemLightVariant).toBe("light");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it("v13→v14: an explicit 'warm' survives the bump", () => {
+    writeRaw({ schemaVersion: 13, theme: "system", systemLightVariant: "warm" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.systemLightVariant).toBe("warm");
+  });
+
+  it("normalizeKnownFields coerces an invalid systemLightVariant to 'light'", () => {
+    writeRaw({ schemaVersion: CURRENT_SCHEMA_VERSION, systemLightVariant: "neon" });
+    const s = loadSettings();
+    expect(s.systemLightVariant).toBe("light");
+  });
+
+  it("systemLightVariant='warm' is preserved across EVERY in-range schemaVersion bump", () => {
+    // Mirrors the marginView ratchet: a future migration step that rebuilds the
+    // object instead of spreading would silently reset this field.
+    for (let v = 2; v < CURRENT_SCHEMA_VERSION; v++) {
+      store.clear();
+      writeRaw({ schemaVersion: v, systemLightVariant: "warm" });
+      const s = loadSettings();
+      expect(s.schemaVersion, `start v${v}`).toBe(CURRENT_SCHEMA_VERSION);
+      expect(s.systemLightVariant, `systemLightVariant dropped starting at v${v}`).toBe("warm");
+    }
+  });
+
+  it("forward-compat (v99) preserves systemLightVariant='warm' (read-only path)", () => {
+    writeRaw({ schemaVersion: 99, systemLightVariant: "warm" });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.systemLightVariant).toBe("warm");
+  });
 });
