@@ -71,3 +71,32 @@ test("an editor link shows a pointer cursor and a title tooltip with its destina
   // ...and the cursor reads as interactive.
   await expect(link).toHaveCSS("cursor", "pointer");
 });
+
+test("a disallowed-scheme link renders inert — no live href, no title (#996 security)", async ({
+  page,
+}) => {
+  // mdast→Y.Doc stores link URLs verbatim (no scheme check), so a .md authored
+  // with a javascript: href reaches the editor. The renderHTML override must
+  // delegate to the base extension's isAllowedUri guard (which blanks the href)
+  // and must NOT mirror the disallowed scheme into a title tooltip.
+  const xssDir = createFixtureDir("link-xss.md");
+  try {
+    await mcp.callTool("tandem_open", { filePath: path.join(xssDir, "link-xss.md") });
+
+    await page.goto("/");
+    const editor = page.locator(".tandem-editor");
+    await expect(editor).toBeVisible({ timeout: 10_000 });
+    await expect(editor).toContainText("XSS Link");
+
+    const link = editor.locator("a", { hasText: "click me" });
+    await expect(link).toBeVisible({ timeout: 5_000 });
+
+    // The base guard blanks the href; our title-injection must not resurrect it.
+    const href = await link.getAttribute("href");
+    expect(href ?? "").not.toContain("javascript:");
+    const title = await link.getAttribute("title");
+    expect(title ?? "").not.toContain("javascript:");
+  } finally {
+    cleanupFixtureDir(xssDir);
+  }
+});
