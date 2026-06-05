@@ -788,7 +788,7 @@ export async function wireAnnotationStore(
   id: string,
   doc: Y.Doc,
   filePath: string,
-  opts?: { allowRecovery?: boolean },
+  opts?: { allowRecovery?: boolean; migrateTombstonesFrom?: string },
 ): Promise<void> {
   try {
     const hash = docHash(filePath);
@@ -808,12 +808,23 @@ export async function wireAnnotationStore(
     }
 
     const store = createStore(hash, { filePath });
-    const cleanup = await loadAndMerge({
-      ydoc: doc,
-      store,
-      docHash: hash,
-      meta: { filePath },
-    });
+    // Rename only (#1040, windows a2/a3): `migrateTombstonesFrom` (the oldHash)
+    // tells loadAndMerge to fold the oldHash tombstone ledger forward into this
+    // (new) hash AFTER its `store.load()` read but BEFORE the merge consults the
+    // ledger. That single, precisely-placed fold catches a DELETE that arrives
+    // either before this call (recorded into oldHash during the fs.rename) or
+    // DURING the load read (recorded by the still-attached old observer), so the
+    // merge applies the tombstone instead of re-inserting the just-deleted record
+    // from the RMW envelope. Undefined on every normal open/reload — no fold.
+    const cleanup = await loadAndMerge(
+      {
+        ydoc: doc,
+        store,
+        docHash: hash,
+        meta: { filePath },
+      },
+      { migrateTombstonesFrom: opts?.migrateTombstonesFrom },
+    );
     setFileSyncContext(id, { ydoc: doc, store, docHash: hash, meta: { filePath } }, cleanup);
   } catch (err) {
     // Annotations are additive durability — never block a doc open. But a

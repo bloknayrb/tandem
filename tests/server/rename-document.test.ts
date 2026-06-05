@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Y_MAP_ANNOTATIONS, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
-import { withBrowser } from "../../src/shared/origins.js";
+import { withBrowser, withInternal } from "../../src/shared/origins.js";
 
 // Mock the session manager — saveSession/deleteSession touch disk for the
 // .tandem session sidecar, which is orthogonal to what these tests exercise.
@@ -49,18 +49,22 @@ const { addDoc, removeDoc } = await import("../../src/server/documents/registry.
 const { getOpenDocs, setActiveDocId } = await import("../../src/server/mcp/document-service.js");
 const { getOrCreateDocument } = await import("../../src/server/yjs/provider.js");
 const { docHash } = await import("../../src/server/annotations/doc-hash.js");
-const { createStore, resetForTesting: storeReset } = await import(
-  "../../src/server/annotations/store.js"
-);
+const {
+  createStore,
+  envelopePath,
+  resetForTesting: storeReset,
+} = await import("../../src/server/annotations/store.js");
 const { getTombstones, resetForTesting: syncReset } = await import(
   "../../src/server/annotations/sync.js"
 );
 const {
   attachObservers,
+  clearFileSyncContext,
   detachObservers,
   resetForTesting: queueReset,
 } = await import("../../src/server/events/queue.js");
 const { wireAnnotationStore } = await import("../../src/server/mcp/file-opener.js");
+const { getDocumentStore } = await import("../../src/server/mcp/document-store.js");
 const { collectEvents } = await import("../helpers/event-collector.js");
 
 let docDir = "";
@@ -288,6 +292,191 @@ describe("renameDocument — tombstone survival (data-loss regression)", () => {
   });
 });
 
+describe("renameDocument — concurrent-DELETE resurrection window (#1040, window a)", () => {
+  // A DELETE arriving DURING the rename's async span (after the Phase-1 flush,
+  // while the old-hash observer is still attached) must not resurrect. The old
+  // observer records a tombstone into the oldHash ledger; renameDocument must
+  // migrate that ledger forward into the newHash envelope before the re-wire
+  // disposes the old observer. We inject the concurrent delete by spying on
+  // fs.rename (document-service imports `fs from "fs/promises"`): the delete
+  // fires from inside the rename call, exactly in the observer-attached gap.
+  it("a DELETE concurrent with the rename stays deleted (no resurrection)", async () => {
+    const { docId, filePath, doc } = await openFileDoc("concurrent.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Create + persist annotation A (rev 1).
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A")));
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    const newPath = path.join(docDir, "concurrent-renamed.md");
+
+    // Spy on the actual fs.rename used by document-service. On the FIRST call
+    // (the primary file rename), delete A via the live (still-attached) observer
+    // BEFORE delegating to the real rename — simulating a concurrent DELETE in
+    // the rename's observer span. The observer records A's tombstone (rev 2)
+    // into the oldHash ledger.
+    const fsModule = await import("node:fs/promises");
+    const realRename = fsModule.default.rename.bind(fsModule.default);
+    let fired = false;
+    const renameSpy = vi
+      .spyOn(fsModule.default, "rename")
+      .mockImplementation(async (from: Parameters<typeof realRename>[0], to) => {
+        if (!fired) {
+          fired = true;
+          withBrowser(doc, () => annMap.delete("A"));
+        }
+        return realRename(from, to);
+      });
+
+    try {
+      const result = await renameDocument(docId, "concurrent-renamed.md");
+      expect(result.status).toBe("renamed");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    // The migrated tombstone must land in the newHash envelope.
+    const newEnvelope = await createStore(docHash(newPath), { filePath: newPath }).load();
+    expect(newEnvelope.tombstones.map((t) => t.id)).toContain("A");
+    expect(newEnvelope.annotations.map((a) => a.id)).not.toContain("A");
+
+    // Resurrection vector: a stale tab re-introduces A at the pre-deletion rev,
+    // then the doc reopens. The migrated tombstone (rev 2 > A.rev 1) drops it.
+    const { clearFileSyncContext } = await import("../../src/server/events/queue.js");
+    clearFileSyncContext(docId);
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A", { rev: 1 })));
+    await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+    expect(annMap.has("A")).toBe(false);
+  });
+});
+
+describe("renameDocument — residual concurrent-DELETE windows (#1040, a2/a3)", () => {
+  // Window a3: a DELETE that fires DURING the RMW step-1 envelope WRITE — after
+  // the snapshot thunk already captured A as alive (so the written envelope's
+  // annotations include A), but before the re-wire. The old observer (still
+  // attached) records A's tombstone into the oldHash ledger. The just-written
+  // newHash envelope does NOT carry the tombstone, so the fix's UNION-not-clobber
+  // seed in loadAndMerge + the fold inside loadAndMerge + the post-re-wire flush must
+  // cooperate to land the tombstone in the newHash envelope and apply it.
+  //
+  // RED without the fix: loadAndMerge clobbered the newHash ledger with the
+  // file seed (no tombstone) at sync.ts:538, and there was no fold after the RMW
+  // write, so the migrated-forward tombstone was discarded → A resurrects.
+  it("a DELETE during the RMW envelope write stays deleted (no resurrection)", async () => {
+    const { docId, filePath, doc } = await openFileDoc("rmw-write.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A")));
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    const newPath = path.join(docDir, "rmw-write-renamed.md");
+
+    // Spy on the atomic-write temp-file write (store.ts → atomicWrite →
+    // fs.writeFile). Fire the DELETE exactly when the RMW step-1 content (which
+    // still lists A alive, with meta.filePath === newPath) is being written —
+    // i.e. mid-flush, after the thunk captured A as alive. The old observer
+    // records A's tombstone into the oldHash ledger.
+    const fsModule = await import("node:fs/promises");
+    const realWriteFile = fsModule.default.writeFile.bind(fsModule.default);
+    let fired = false;
+    const writeSpy = vi
+      .spyOn(fsModule.default, "writeFile")
+      .mockImplementation(async (target, content, ...rest) => {
+        const text = typeof content === "string" ? content : "";
+        if (!fired && text.includes('"A"') && text.includes(JSON.stringify(newPath))) {
+          fired = true;
+          // The envelope JSON listing A alive is about to land on disk; fire the
+          // concurrent delete before the bytes are written.
+          withBrowser(doc, () => annMap.delete("A"));
+        }
+        // @ts-expect-error — forward through to the real impl with original args.
+        return realWriteFile(target, content, ...rest);
+      });
+
+    try {
+      const result = await renameDocument(docId, "rmw-write-renamed.md");
+      expect(result.status).toBe("renamed");
+    } finally {
+      writeSpy.mockRestore();
+    }
+
+    expect(fired).toBe(true); // the injected delete actually ran
+
+    // The migrated-forward tombstone must land in the newHash envelope.
+    const newEnvelope = await createStore(docHash(newPath), { filePath: newPath }).load();
+    expect(newEnvelope.tombstones.map((t) => t.id)).toContain("A");
+    expect(newEnvelope.annotations.map((a) => a.id)).not.toContain("A");
+
+    // Resurrection vector: a stale tab re-introduces A at the pre-deletion rev,
+    // then the doc reopens. The persisted tombstone (rev 2 > A.rev 1) drops it.
+    const { clearFileSyncContext } = await import("../../src/server/events/queue.js");
+    clearFileSyncContext(docId);
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A", { rev: 1 })));
+    await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+    expect(annMap.has("A")).toBe(false);
+  });
+
+  // Window a2: a DELETE that fires DURING the re-wire's loadAndMerge `store.load()`
+  // read of the newHash envelope. The old observer is STILL attached at that
+  // moment (disposed only inside setFileSyncContext, after loadAndMerge resolves),
+  // so the delete records A's tombstone into the oldHash ledger. The newHash
+  // envelope was already written (RMW step 1) WITHOUT the tombstone, and the file
+  // seed loadAndMerge reads back also lacks it. The rename-gated fold runs
+  // INSIDE loadAndMerge (its `migrateTombstonesFrom` opt — after store.load(),
+  // before the merge) and must carry it forward, and the post-re-wire flush
+  // must persist it.
+  //
+  // RED without the fix: there was no fold inside loadAndMerge, and the prior
+  // "close" cleanup deleted the oldHash ledger before any later fold → tombstone
+  // lost → A resurrects.
+  it("a DELETE during the re-wire loadAndMerge read stays deleted (no resurrection)", async () => {
+    const { docId, filePath, doc } = await openFileDoc("loadmerge.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A")));
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    const newPath = path.join(docDir, "loadmerge-renamed.md");
+    const newEnvFile = envelopePath(docHash(newPath));
+
+    // Spy on fs.readFile. Fire the DELETE when loadAndMerge's store.load() reads
+    // the NEWLY-written newHash envelope (the RMW step-1 output). At that instant
+    // the old observer is still attached → it records A's tombstone into oldHash.
+    const fsModule = await import("node:fs/promises");
+    const realReadFile = fsModule.default.readFile.bind(fsModule.default);
+    let fired = false;
+    const readSpy = vi
+      .spyOn(fsModule.default, "readFile")
+      .mockImplementation(async (target, ...rest) => {
+        if (!fired && typeof target === "string" && target === newEnvFile) {
+          fired = true;
+          withBrowser(doc, () => annMap.delete("A"));
+        }
+        // @ts-expect-error — forward through to the real impl with original args.
+        return realReadFile(target, ...rest);
+      });
+
+    try {
+      const result = await renameDocument(docId, "loadmerge-renamed.md");
+      expect(result.status).toBe("renamed");
+    } finally {
+      readSpy.mockRestore();
+    }
+
+    expect(fired).toBe(true); // the injected delete actually ran
+
+    const newEnvelope = await createStore(docHash(newPath), { filePath: newPath }).load();
+    expect(newEnvelope.tombstones.map((t) => t.id)).toContain("A");
+    expect(newEnvelope.annotations.map((a) => a.id)).not.toContain("A");
+
+    const { clearFileSyncContext } = await import("../../src/server/events/queue.js");
+    clearFileSyncContext(docId);
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A", { rev: 1 })));
+    await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+    expect(annMap.has("A")).toBe(false);
+  });
+});
+
 describe("renameDocument — cross-doc envelope steal (Finding A)", () => {
   it("a byte-identical doc opened after rename does NOT steal the renamed doc's envelope", async () => {
     const SHARED_BODY = "identical body shared across two documents";
@@ -369,6 +558,78 @@ describe("renameDocument — fs.rename failure rollback (Phase 2)", () => {
     const envelope = await createStore(docHash(filePath), { filePath }).load();
     expect(envelope.annotations.map((a) => a.id)).toContain("post-rollback");
   });
+
+  // #1040 rollback regression: on rollback oldHash === the still-registered
+  // context's hash. The rollback re-wire's loadAndMerge re-seeds the oldHash
+  // tombstone ledger (UNION + tombstonesByDoc.set), and WITHOUT a pre-wire
+  // clearFileSyncContext the trailing setFileSyncContext "close"-disposes the
+  // still-present old oldHash context — deleting the just-re-seeded ledger. A
+  // later stale-tab merge re-adding A then writes an empty tombstone list,
+  // overwriting <oldHash>.json and resurrecting A. The fix restores the master
+  // ordering (clearFileSyncContext BEFORE the re-wire) on the rollback path.
+  //
+  // RED without the fix: the rollback "close"-dispose deletes the re-seeded
+  // ledger → the reopen's tombstone is gone → A resurrects (annMap.has("A") is
+  // true and the envelope tombstone for A is lost). GREEN with it.
+  it("a DELETED annotation stays deleted after a FAILED rename + rollback (no resurrection)", async () => {
+    const { docId, filePath, doc } = await openFileDoc("rb-resurrect.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Create + persist annotation A (rev 1).
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A")));
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    // DELETE A — tombstone rev 2 — and flush so <oldHash>.json durably carries it
+    // (Phase 1's closeStore would flush it anyway; flushing here makes the
+    // pre-condition explicit).
+    withBrowser(doc, () => annMap.delete("A"));
+    await createStore(docHash(filePath), { filePath }).flush();
+    expect(getTombstones(docHash(filePath)).map((t) => t.id)).toContain("A");
+
+    // Force fs.rename to fail so the Phase-2 rollback path runs. Deleting the
+    // source file makes fs.rename(oldPath, …) throw ENOENT (renameDocument never
+    // stats oldPath before the rename). Re-create it afterward so the post-
+    // rollback reopen still has a real file at oldPath.
+    await fsReal.rm(filePath);
+    const oldHash = docHash(filePath);
+    const result = await renameDocument(docId, "rb-resurrect-renamed.md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("ENOENT");
+    await fsReal.writeFile(filePath, "body content", "utf-8");
+
+    // DIRECT DISCRIMINATOR: after the rollback re-wire, the in-memory oldHash
+    // ledger MUST still carry A's tombstone. WITH the fix the pre-wire
+    // clearFileSyncContext drops the stale same-hash context first, so nothing
+    // "close"-disposes the ledger loadAndMerge re-seeds. WITHOUT it, the trailing
+    // setFileSyncContext "close"-disposes the still-present old context →
+    // tombstonesByDoc.delete(oldHash) → this ledger is empty (RED).
+    expect(getTombstones(oldHash).map((t) => t.id)).toContain("A");
+
+    // Resurrection vector: a stale tab re-introduces A (rev 1). The live
+    // rollback-wired observer serializes on the mutation and snapshots the
+    // in-memory ledger. WITH the fix the ledger still has A → the snapshot keeps
+    // the tombstone. WITHOUT it the empty ledger would write `tombstones: []`,
+    // overwriting durable <oldHash>.json and resurrecting A on reopen.
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A", { rev: 1 })));
+    await createStore(oldHash, { filePath }).flush();
+
+    // The durable envelope must still carry A's tombstone (not an empty list).
+    const overwritten = await createStore(oldHash, { filePath }).load();
+    expect(overwritten.tombstones.map((t) => t.id)).toContain("A");
+
+    // Reopen at the OLD path (rollback left the doc registered there): the file
+    // tombstone (rev 2 > A.rev 1) must drop the stale-merged A → it stays deleted
+    // in the Y.Map, and the ledger still carries the tombstone. (The on-disk
+    // envelope may still list A under `annotations` from the contradictory
+    // stale-merge snapshot; the tombstone is authoritative on load, which is why
+    // loadAndMerge drops A from the Y.Map here.)
+    clearFileSyncContext(docId);
+    await wireAnnotationStore(docId, doc, filePath, { allowRecovery: false });
+    expect(annMap.has("A")).toBe(false);
+    expect(getTombstones(oldHash).map((t) => t.id)).toContain("A");
+    const envelope = await createStore(oldHash, { filePath }).load();
+    expect(envelope.tombstones.map((t) => t.id)).toContain("A");
+  });
 });
 
 describe("renameDocument — post-commit best-effort (Phase 3)", () => {
@@ -395,6 +656,76 @@ describe("renameDocument — post-commit best-effort (Phase 3)", () => {
     expect(await fileExists(filePath)).toBe(false);
     expect(await fileExists(newPath)).toBe(true);
     expect(getOpenDocs().get(docId)?.filePath).toBe(newPath);
+  });
+});
+
+describe("renameDocument — re-wire-FAILURE stale observer disposal (#1040)", () => {
+  // The residual on the SUCCESS-disk path: Phase-3 moves the envelope to newHash
+  // and RMW step-2 clears <oldHash>.json. The re-wire is wrapped in a swallowing
+  // try/catch. If `wireAnnotationStore(... newPath ...)` THROWS, `setFileSyncContext`
+  // never ran, so the OLD oldHash observer stays REGISTERED and LIVE (still pointing
+  // at the vanished oldPath) AFTER renameDocument returns. A concurrent DELETE that
+  // arrives in that window schedules a fresh debounced write under oldHash — which
+  // RE-CREATES <oldHash>.json with the vanished oldPath AFTER the step-2 clear().
+  // That re-created envelope is a stale-envelope steal vector (a byte-identical open
+  // could match its vanished meta.filePath and steal it via recoverRenamedEnvelope).
+  //
+  // step-2's own clearOne() drops only the SYNCHRONOUSLY-pending write, so a delete
+  // arriving after the clear is NOT covered by it — the live observer schedules a
+  // brand-new write. The fix disposes the stale oldHash observer (clearFileSyncContext,
+  // gated on !rewired) so no such post-clear write can be scheduled at all. The guard
+  // MUST be gated on !rewired: on the success path docId points at newHash, so an
+  // unconditional clear would tear down the freshly-wired newHash observer.
+  //
+  // RED without the `!rewired` guard: the still-live oldHash observer serializes the
+  // post-return DELETE -> <oldHash>.json is re-created (steal vector reopened). GREEN
+  // with the guard: the observer was disposed, so the post-return DELETE writes
+  // nothing under oldHash and the envelope stays absent.
+  it("a DELETE after a FAILED re-wire does not re-create <oldHash>.json (steal vector closed)", async () => {
+    const { docId, filePath, doc } = await openFileDoc("rewire-fail.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Create + persist annotation A (rev 1) under oldHash. The live observer wired by
+    // openFileDoc is what stays registered if the Phase-3 re-wire throws.
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A")));
+    const oldHash = docHash(filePath);
+    await createStore(oldHash, { filePath }).flush();
+    expect(await fileExists(envelopePath(oldHash))).toBe(true);
+
+    const newPath = path.join(docDir, "rewire-fail-renamed.md");
+
+    // Force the Phase-3 re-wire to THROW so `rewired` stays false and the !rewired
+    // guard path runs. The OLD oldHash observer is never disposed by the (failed)
+    // re-wire -- only the guard's clearFileSyncContext can dispose it.
+    const fileOpener = await import("../../src/server/mcp/file-opener.js");
+    const rewireSpy = vi
+      .spyOn(fileOpener, "wireAnnotationStore")
+      .mockRejectedValueOnce(new Error("simulated re-wire failure"));
+
+    try {
+      const result = await renameDocument(docId, "rewire-fail-renamed.md");
+      // The disk rename committed; a re-wire failure must NOT flip the result.
+      expect(result.status).toBe("renamed");
+    } finally {
+      rewireSpy.mockRestore();
+    }
+
+    // Disk renamed; the old envelope was cleared by RMW step-2.
+    expect(await fileExists(newPath)).toBe(true);
+    expect(await fileExists(envelopePath(oldHash))).toBe(false);
+
+    // Concurrent DELETE arriving AFTER renameDocument returned. WITHOUT the guard the
+    // stale oldHash observer is still registered and would serialize this mutation,
+    // re-creating <oldHash>.json (the steal vector). WITH the guard the observer was
+    // disposed, so this writes nothing under oldHash.
+    withBrowser(doc, () => annMap.delete("A"));
+
+    // Let the debounce window (DEBOUNCE_MS) elapse so any scheduled write fires.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    // GREEN assertion: the old envelope was NOT re-created -- the steal vector is
+    // closed. (RED without the guard: the live observer's write re-creates it.)
+    expect(await fileExists(envelopePath(oldHash))).toBe(false);
   });
 });
 
@@ -432,5 +763,111 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     const newEnvelope = await createStore(docHash(newPath), { filePath: newPath }).load();
     const moved = newEnvelope.annotations.find((a) => a.id === "note-1");
     expect(moved?.type).toBe("note");
+  });
+
+  // Companion to the survival test above, exercising the branch its comment
+  // calls out as proven-elsewhere. The survival case is "guaranteed structurally"
+  // precisely because the rename converges the moved envelope to equal the
+  // live Y.Map, so loadAndMerge's `withFileSync` block performs ZERO mutations.
+  // This variant DEFEATS that convergence so the REAL merge branch runs a live-
+  // note write:
+  //
+  //   1. Flush a note at rev 2 (the "file" body) — this lands in the envelope.
+  //   2. Mutate the LIVE Y.Map note to rev 1 (a different "live" body) via
+  //      `withInternal`. The durable-sync observer skips `internal` writes
+  //      (DURABLE_SKIP = {file-sync, internal}), so NO debounced write is queued
+  //      — the envelope keeps its rev-2 file body while the live Y.Map diverges
+  //      to rev 1.
+  //   3. Force a store re-wire at the SAME path: loadAndMerge sees
+  //      file.rev(2) > ymap.rev(1) → pickWinner returns "file" →
+  //      `annMap.set("note-1", fileRec)` executes INSIDE the
+  //      `withFileSync(ydoc, …)` transaction. That is a live-note mutation that
+  //      *could* emit if the channel observer didn't gate on origin.
+  //
+  // NOTE (#1040/#1051): this scenario was originally driven through
+  // renameDocument, but the rename's envelope migration is now a read-modify-
+  // write that SNAPSHOTS the live Y.Doc into the new-hash envelope before the
+  // re-wire — by design, a rename can no longer apply stale file-side state
+  // over the live doc, so the file-wins branch is unreachable via rename. The
+  // explicit clearFileSyncContext + wireAnnotationStore below is the same
+  // re-wire step the rename used to reach it through, and is exactly how the
+  // file-wins path is still reached in production (open/reload of a doc whose
+  // envelope advanced past the live Y.Map).
+  //
+  // Assert the gate holds on BOTH surfaces: no channel event leaks the note, and
+  // getDocumentStore (what tandem_getAnnotations reads) still hides it from Claude.
+  it("a withFileSync merge that mutates a live note post-flush emits no channel event and stays hidden from Claude", async () => {
+    const { docId, filePath, doc } = await openFileDoc("private.md", "body");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Flush the note at rev 2 — this is the body that lands in the envelope and
+    // will WIN the merge (higher rev).
+    withBrowser(doc, () =>
+      annMap.set(
+        "note-1",
+        makeAnnotation("note-1", {
+          type: "note",
+          author: "user",
+          content: "FILE BODY — must never leak",
+          rev: 2,
+        }),
+      ),
+    );
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    // Diverge the live Y.Map to rev 1 via `withInternal`. The durable-sync
+    // observer skips `internal`, so this queues no debounced write — the
+    // envelope retains its rev-2 file body.
+    withInternal(doc, () =>
+      annMap.set(
+        "note-1",
+        makeAnnotation("note-1", {
+          type: "note",
+          author: "user",
+          content: "LIVE BODY — also private",
+          rev: 1,
+        }),
+      ),
+    );
+
+    // Start collecting channel events BEFORE the re-wire so the real withFileSync
+    // merge write (file rev 2 over live rev 1) is observed if it were to emit.
+    attachObservers(docId, doc);
+    const { events, cleanup } = collectEvents();
+
+    // Force the re-wire: dispose the live context (dropping its in-memory
+    // ledger), then wire the store again at the same path so loadAndMerge reads
+    // the rev-2 envelope against the rev-1 live Y.Map and runs the file-wins
+    // merge inside withFileSync.
+    const { clearFileSyncContext } = await import("../../src/server/events/queue.js");
+    clearFileSyncContext(docId);
+    await wireAnnotationStore(docId, doc, filePath, { allowRecovery: false });
+
+    // The merge genuinely fired the file-wins branch: the live Y.Map note now
+    // carries the rev-2 file body (proving loadAndMerge ran annMap.set, not a
+    // structural no-op). If this assertion fails the test is no longer covering
+    // the intended branch.
+    const merged = annMap.get("note-1") as { rev?: number; content?: string } | undefined;
+    expect(merged?.rev).toBe(2);
+    expect(merged?.content).toBe("FILE BODY — must never leak");
+
+    // ADR-027 surface 1: no channel event leaked the note (the withFileSync
+    // write was skipped by the channel observer's origin gate).
+    const annEvents = events.filter(
+      (e) => e.type === "annotation:created" || e.type === "annotation:edited",
+    );
+    expect(annEvents).toHaveLength(0);
+    cleanup();
+    detachObservers(docId);
+
+    // ADR-027 surface 2: tandem_getAnnotations reads via getDocumentStore +
+    // the `type !== "note"` filter. Claude must see zero annotations here.
+    // (getDocumentStore reflects the re-wired context registered above.)
+    const store = getDocumentStore(docId);
+    expect(store).not.toBeNull();
+    const claudeVisible = store!.listAnnotationsRefreshed().filter((a) => a.type !== "note");
+    expect(claudeVisible).toHaveLength(0);
+    // And the note is still present in the doc (private, not deleted).
+    expect(store!.listAnnotationsRefreshed().some((a) => a.id === "note-1")).toBe(true);
   });
 });
