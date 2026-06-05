@@ -59,6 +59,7 @@ const { getTombstones, resetForTesting: syncReset } = await import(
 );
 const {
   attachObservers,
+  clearFileSyncContext,
   detachObservers,
   resetForTesting: queueReset,
 } = await import("../../src/server/events/queue.js");
@@ -354,7 +355,7 @@ describe("renameDocument — residual concurrent-DELETE windows (#1040, a2/a3)",
   // annotations include A), but before the re-wire. The old observer (still
   // attached) records A's tombstone into the oldHash ledger. The just-written
   // newHash envelope does NOT carry the tombstone, so the fix's UNION-not-clobber
-  // seed in loadAndMerge + the disposal-time fold + the post-re-wire flush must
+  // seed in loadAndMerge + the fold inside loadAndMerge + the post-re-wire flush must
   // cooperate to land the tombstone in the newHash envelope and apply it.
   //
   // RED without the fix: loadAndMerge clobbered the newHash ledger with the
@@ -419,11 +420,12 @@ describe("renameDocument — residual concurrent-DELETE windows (#1040, a2/a3)",
   // moment (disposed only inside setFileSyncContext, after loadAndMerge resolves),
   // so the delete records A's tombstone into the oldHash ledger. The newHash
   // envelope was already written (RMW step 1) WITHOUT the tombstone, and the file
-  // seed loadAndMerge reads back also lacks it. The disposal-time, rename-gated
-  // fold (setFileSyncContext's migrateTombstonesFrom) must carry it forward, and
-  // the post-re-wire flush must persist it.
+  // seed loadAndMerge reads back also lacks it. The rename-gated fold runs
+  // INSIDE loadAndMerge (its `migrateTombstonesFrom` opt — after store.load(),
+  // before the merge) and must carry it forward, and the post-re-wire flush
+  // must persist it.
   //
-  // RED without the fix: there was no fold at disposal time, and the prior
+  // RED without the fix: there was no fold inside loadAndMerge, and the prior
   // "close" cleanup deleted the oldHash ledger before any later fold → tombstone
   // lost → A resurrects.
   it("a DELETE during the re-wire loadAndMerge read stays deleted (no resurrection)", async () => {
@@ -554,6 +556,78 @@ describe("renameDocument — fs.rename failure rollback (Phase 2)", () => {
     await createStore(docHash(filePath), { filePath }).flush();
     const envelope = await createStore(docHash(filePath), { filePath }).load();
     expect(envelope.annotations.map((a) => a.id)).toContain("post-rollback");
+  });
+
+  // #1040 rollback regression: on rollback oldHash === the still-registered
+  // context's hash. The rollback re-wire's loadAndMerge re-seeds the oldHash
+  // tombstone ledger (UNION + tombstonesByDoc.set), and WITHOUT a pre-wire
+  // clearFileSyncContext the trailing setFileSyncContext "close"-disposes the
+  // still-present old oldHash context — deleting the just-re-seeded ledger. A
+  // later stale-tab merge re-adding A then writes an empty tombstone list,
+  // overwriting <oldHash>.json and resurrecting A. The fix restores the master
+  // ordering (clearFileSyncContext BEFORE the re-wire) on the rollback path.
+  //
+  // RED without the fix: the rollback "close"-dispose deletes the re-seeded
+  // ledger → the reopen's tombstone is gone → A resurrects (annMap.has("A") is
+  // true and the envelope tombstone for A is lost). GREEN with it.
+  it("a DELETED annotation stays deleted after a FAILED rename + rollback (no resurrection)", async () => {
+    const { docId, filePath, doc } = await openFileDoc("rb-resurrect.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Create + persist annotation A (rev 1).
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A")));
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    // DELETE A — tombstone rev 2 — and flush so <oldHash>.json durably carries it
+    // (Phase 1's closeStore would flush it anyway; flushing here makes the
+    // pre-condition explicit).
+    withBrowser(doc, () => annMap.delete("A"));
+    await createStore(docHash(filePath), { filePath }).flush();
+    expect(getTombstones(docHash(filePath)).map((t) => t.id)).toContain("A");
+
+    // Force fs.rename to fail so the Phase-2 rollback path runs. Deleting the
+    // source file makes fs.rename(oldPath, …) throw ENOENT (renameDocument never
+    // stats oldPath before the rename). Re-create it afterward so the post-
+    // rollback reopen still has a real file at oldPath.
+    await fsReal.rm(filePath);
+    const oldHash = docHash(filePath);
+    const result = await renameDocument(docId, "rb-resurrect-renamed.md");
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("ENOENT");
+    await fsReal.writeFile(filePath, "body content", "utf-8");
+
+    // DIRECT DISCRIMINATOR: after the rollback re-wire, the in-memory oldHash
+    // ledger MUST still carry A's tombstone. WITH the fix the pre-wire
+    // clearFileSyncContext drops the stale same-hash context first, so nothing
+    // "close"-disposes the ledger loadAndMerge re-seeds. WITHOUT it, the trailing
+    // setFileSyncContext "close"-disposes the still-present old context →
+    // tombstonesByDoc.delete(oldHash) → this ledger is empty (RED).
+    expect(getTombstones(oldHash).map((t) => t.id)).toContain("A");
+
+    // Resurrection vector: a stale tab re-introduces A (rev 1). The live
+    // rollback-wired observer serializes on the mutation and snapshots the
+    // in-memory ledger. WITH the fix the ledger still has A → the snapshot keeps
+    // the tombstone. WITHOUT it the empty ledger would write `tombstones: []`,
+    // overwriting durable <oldHash>.json and resurrecting A on reopen.
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A", { rev: 1 })));
+    await createStore(oldHash, { filePath }).flush();
+
+    // The durable envelope must still carry A's tombstone (not an empty list).
+    const overwritten = await createStore(oldHash, { filePath }).load();
+    expect(overwritten.tombstones.map((t) => t.id)).toContain("A");
+
+    // Reopen at the OLD path (rollback left the doc registered there): the file
+    // tombstone (rev 2 > A.rev 1) must drop the stale-merged A → it stays deleted
+    // in the Y.Map, and the ledger still carries the tombstone. (The on-disk
+    // envelope may still list A under `annotations` from the contradictory
+    // stale-merge snapshot; the tombstone is authoritative on load, which is why
+    // loadAndMerge drops A from the Y.Map here.)
+    clearFileSyncContext(docId);
+    await wireAnnotationStore(docId, doc, filePath, { allowRecovery: false });
+    expect(annMap.has("A")).toBe(false);
+    expect(getTombstones(oldHash).map((t) => t.id)).toContain("A");
+    const envelope = await createStore(oldHash, { filePath }).load();
+    expect(envelope.tombstones.map((t) => t.id)).toContain("A");
   });
 });
 

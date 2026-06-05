@@ -381,8 +381,10 @@ export function migrateTombstoneLedger(fromHash: string, toHash: string): void {
   for (const [id, stone] of from) {
     const existing = to.get(id);
     if (!existing || stone.rev > existing.rev) {
-      // Re-key the record under the new hash; the id + rev + deletedAt carry over.
-      to.set(id, { id: stone.id, rev: stone.rev, deletedAt: stone.deletedAt });
+      // Re-key the record under the new hash. Spread the source so passthrough
+      // fields (TombstoneRecordSchemaV1 is `.passthrough()`) carry over, not just
+      // id/rev/deletedAt.
+      to.set(id, { ...stone });
     }
   }
 }

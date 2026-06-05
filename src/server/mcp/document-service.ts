@@ -733,13 +733,26 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // Log the ORIGINAL failure first — the rollback below can itself throw, and
       // we must not let a rollback error mask why the rename actually failed.
       console.error("[Rename] fs.rename failed for %s (%s -> %s):", docId, oldPath, newPath, err);
-      // Roll back the reversible prep: re-wire the old context + re-watch. The
-      // old observer is still attached (#1040 — we no longer detach in Phase 1),
-      // so re-wiring is an idempotent refresh: setFileSyncContext disposes the
-      // existing oldHash context and re-registers a fresh one at the same path.
+      // Roll back the reversible prep: re-wire the old context + re-watch.
+      //
+      // #1040 rollback fix: on rollback, oldHash === the still-registered
+      // context's hash (nothing was renamed). We MUST drop that stale same-hash
+      // context BEFORE re-wiring. Otherwise wireAnnotationStore → loadAndMerge
+      // re-seeds the oldHash tombstone ledger (UNION + tombstonesByDoc.set), and
+      // the trailing setFileSyncContext then finds the STILL-PRESENT old oldHash
+      // context and disposes it with the "close" phase — whose cleanup runs
+      // tombstonesByDoc.delete(oldHash) + forgetDoc(oldHash), deleting the ledger
+      // loadAndMerge just repopulated. A later snapshot would then write an empty
+      // tombstone list, resurrecting a deleted annotation. Restoring the master
+      // ordering (clearFileSyncContext first) removes the stale context so there
+      // is nothing for setFileSyncContext to "close"-dispose after the re-seed.
+      // Safe because Phase 1's closeStore(oldHash) already flushed the ledger to
+      // <oldHash>.json, so loadAndMerge re-seeds the tombstone from disk; nothing
+      // was renamed, so there is no concurrent-delete window on rollback.
       // Best-effort — a rollback failure is logged but the returned error stays
       // the original fs.rename failure (the actionable root cause).
       try {
+        clearFileSyncContext(docId);
         await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
         if (format !== "docx") wireFileWatcher(docId, oldPath, format);
       } catch (rollbackErr) {
