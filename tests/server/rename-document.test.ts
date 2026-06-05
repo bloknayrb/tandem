@@ -49,9 +49,11 @@ const { addDoc, removeDoc } = await import("../../src/server/documents/registry.
 const { getOpenDocs, setActiveDocId } = await import("../../src/server/mcp/document-service.js");
 const { getOrCreateDocument } = await import("../../src/server/yjs/provider.js");
 const { docHash } = await import("../../src/server/annotations/doc-hash.js");
-const { createStore, envelopePath, resetForTesting: storeReset } = await import(
-  "../../src/server/annotations/store.js"
-);
+const {
+  createStore,
+  envelopePath,
+  resetForTesting: storeReset,
+} = await import("../../src/server/annotations/store.js");
 const { getTombstones, resetForTesting: syncReset } = await import(
   "../../src/server/annotations/sync.js"
 );
