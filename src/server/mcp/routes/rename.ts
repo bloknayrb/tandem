@@ -1,3 +1,4 @@
+import path from "path";
 import type { Request, Response } from "express";
 import { renameDocument } from "../document-service.js";
 import { errorCodeToHttpStatus } from "./_shared.js";
@@ -11,13 +12,22 @@ import { errorCodeToHttpStatus } from "./_shared.js";
  * the path/name validation and the migration.
  */
 export async function handleRename(req: Request, res: Response): Promise<void> {
-  const { documentId, newName } = (req.body ?? {}) as Record<string, unknown>;
+  const { documentId, newName: rawNewName } = (req.body ?? {}) as Record<string, unknown>;
   if (!documentId || typeof documentId !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "documentId is required" });
     return;
   }
-  if (!newName || typeof newName !== "string") {
+  if (!rawNewName || typeof rawNewName !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "newName is required" });
+    return;
+  }
+  // Sanitize at the HTTP boundary: strip any directory components so the value
+  // reaching renameDocument is a clean basename. CodeQL's js/path-injection
+  // taint-tracker treats path.basename() as a barrier, terminating the taint
+  // chain from req.body before it reaches any file-system sink.
+  const newName = path.basename(rawNewName);
+  if (!newName) {
+    res.status(400).json({ error: "INVALID_PATH", message: "newName must not be empty" });
     return;
   }
 
