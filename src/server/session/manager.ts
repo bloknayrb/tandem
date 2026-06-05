@@ -26,7 +26,7 @@ export async function saveSession(filePath: string, format: string, doc: Y.Doc):
   // Upload paths have no disk file — skip stat
   if (!isUploadPath(filePath)) {
     try {
-      const stat = await fs.stat(filePath); // lgtm[js/path-injection]
+      const stat = await fs.stat(filePath);
       sourceFileMtime = stat.mtimeMs;
     } catch {
       // File may not exist yet (new doc)
@@ -97,7 +97,7 @@ export async function deleteSession(filePath: string): Promise<void> {
   const key = sessionKey(filePath);
   const sessionPath = path.join(SESSION_DIR, `${key}.json`);
   try {
-    await fs.unlink(sessionPath); // lgtm[js/path-injection]
+    await fs.unlink(sessionPath);
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {

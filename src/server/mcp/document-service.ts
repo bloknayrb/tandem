@@ -666,11 +666,8 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
   // Refuse to clobber an existing file. TOCTOU window is acceptable (matches
   // Save-As); fs.rename on Windows also throws EEXIST as a backstop.
-  // lgtm[js/path-injection] newPath = server-managed-dir + path.basename(validated-newName);
-  // oldPath is docState.filePath (set by server at open time, not user content).
-  // documentId is only a Map lookup key — the retrieved filePath is not user-supplied.
   const targetExists = await fs
-    .access(newPath) // lgtm[js/path-injection]
+    .access(newPath)
     .then(() => true)
     .catch(() => false);
   if (targetExists) {
@@ -720,7 +717,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
     // --- Phase 2: commit (point of no return) ---
     try {
-      await fs.rename(oldPath, newPath); // lgtm[js/path-injection]
+      await fs.rename(oldPath, newPath);
     } catch (err) {
       // Roll back the reversible prep: re-wire the old context + re-watch.
       await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
@@ -822,7 +819,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // autosave writes them to newPath.
     const fileName = path.basename(newPath);
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    const stat = await fs.stat(newPath).catch(() => null); // lgtm[js/path-injection]
+    const stat = await fs.stat(newPath).catch(() => null);
     withFileSync(doc, () => {
       meta.set("fileName", fileName);
       if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);

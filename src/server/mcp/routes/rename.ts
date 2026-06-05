@@ -12,8 +12,11 @@ import { errorCodeToHttpStatus } from "./_shared.js";
  * the path/name validation and the migration.
  */
 export async function handleRename(req: Request, res: Response): Promise<void> {
-  const { documentId, newName: rawNewName } = (req.body ?? {}) as Record<string, unknown>;
-  if (!documentId || typeof documentId !== "string") {
+  const { documentId: rawDocumentId, newName: rawNewName } = (req.body ?? {}) as Record<
+    string,
+    unknown
+  >;
+  if (!rawDocumentId || typeof rawDocumentId !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "documentId is required" });
     return;
   }
@@ -21,10 +24,17 @@ export async function handleRename(req: Request, res: Response): Promise<void> {
     res.status(400).json({ error: "BAD_REQUEST", message: "newName is required" });
     return;
   }
-  // Sanitize at the HTTP boundary: strip any directory components so the value
-  // reaching renameDocument is a clean basename. CodeQL's js/path-injection
-  // taint-tracker treats path.basename() as a barrier, terminating the taint
-  // chain from req.body before it reaches any file-system sink.
+  // Sanitize both inputs at the HTTP boundary via path.basename(). CodeQL's
+  // js/path-injection taint-tracker treats path.basename() as a sanitizer
+  // barrier, so both values are considered clean after this point. documentId
+  // is a hash (no separators) so path.basename() is a no-op on valid input;
+  // the call is here specifically to terminate the taint chain before either
+  // value reaches any file-system sink inside renameDocument.
+  const documentId = path.basename(rawDocumentId);
+  if (!documentId) {
+    res.status(400).json({ error: "BAD_REQUEST", message: "documentId is required" });
+    return;
+  }
   const newName = path.basename(rawNewName);
   if (!newName) {
     res.status(400).json({ error: "INVALID_PATH", message: "newName must not be empty" });
