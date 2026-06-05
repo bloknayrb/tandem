@@ -734,6 +734,15 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // annotations onto the other doc. Same best-effort posture as the recovery
     // module; closing it would require a read-modify-write to newHash instead of
     // the fs.rename + heal-write split.
+    //
+    // A third, mirror-image window (CRDT review Finding 4): between the fs.rename
+    // above and the envelope move below, <oldHash>.json still exists with the now-
+    // vanished oldPath + matching contentHash. A concurrent byte-identical open
+    // could re-key + unlink it; the move then no-ops (oldEnvelopeExists:false) and
+    // loadAndMerge(newHash) re-seeds an EMPTY tombstone ledger from the missing
+    // file — re-persisting A's annotations from the live Y.Map (no loss) but
+    // dropping A's tombstones, so a just-deleted annotation in A can resurrect.
+    // Same accepted best-effort posture; a double-open race only.
 
     // Move the annotation envelope (it carries annotations + tombstones) so the
     // re-wire at the new hash re-seeds them. Best-effort; a crash here is healed

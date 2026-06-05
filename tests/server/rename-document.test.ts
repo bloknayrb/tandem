@@ -351,9 +351,14 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     await createStore(docHash(filePath), { filePath }).flush();
 
     // Attach the channel observer + start collecting BEFORE the rename so we can
-    // assert the migration leaks nothing to Claude. The rename's writes all use
-    // withFileSync (in CHANNEL_SKIP) and the annotation Y.Map isn't mutated at
-    // all (file == Y.Map), so zero annotation events must fire.
+    // assert the migration leaks nothing to Claude. What this proves: the note
+    // SURVIVES the oldHash→newHash move and no event leaks during it. Note the
+    // zero-events result is guaranteed structurally — closeStore re-converges the
+    // moved envelope to equal the live Y.Map, so loadAndMerge performs no emitting
+    // mutation at all (independent of origin). The withFileSync→CHANNEL_SKIP path
+    // proper is proven directly in event-queue.test.ts ("FILE_SYNC_ORIGIN-tagged
+    // annotation writes do not emit events"); this test is the rename-flow
+    // survival + no-resurrection regression, not a second skip proof.
     attachObservers(docId, doc);
     const { events, cleanup } = collectEvents();
 
