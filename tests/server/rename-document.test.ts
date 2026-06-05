@@ -494,7 +494,6 @@ describe("renameDocument — note privacy (ADR-027)", () => {
     attachObservers(docId, doc);
     const { events, cleanup } = collectEvents();
 
-    const newPath = path.join(docDir, "private-renamed.md");
     const result = await renameDocument(docId, "private-renamed.md");
     expect(result.status).toBe("renamed");
 
