@@ -811,14 +811,14 @@ pub fn run() {
         })
         .on_window_event(move |window, event| {
             // Re-assert rounded corners + the no-outline border after snap or
-            // maximize, which reset the DWM corner preference (#984). Windows
-            // emits Resized (and usually Moved) on every snap-layout change.
+            // maximize, which reset the DWM corner preference (#984). Snap-layout
+            // changes (and maximize/restore) always change window size, so they
+            // deliver `Resized` — we key on that alone. `Moved` fires per
+            // mouse-move sample during a drag and never changes corner state, so
+            // including it would issue two DWM syscalls per drag tick for nothing.
             // No-op on non-Windows; `apply_window_chrome` is Windows-only.
             #[cfg(target_os = "windows")]
-            if matches!(
-                event,
-                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
-            ) {
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
                 apply_window_chrome(window);
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1751,7 +1751,10 @@ impl RawHwnd for tauri::Window {
 ///
 /// All DWM calls are best-effort: a failing `DwmSetWindowAttribute` (e.g. an
 /// older Windows 10 build that predates these attributes — they require Win11
-/// build 22000+) is logged at debug and ignored. It must never abort startup.
+/// build 22000+) is silently ignored so startup is never aborted. A `debug`-level
+/// log is emitted, but the shipping log filter is Info/Warn (and the log plugin is
+/// absent under the `devtools` feature), so in practice the failure leaves no trace
+/// — that is intentional: a pre-Win11 fallback is expected, not actionable.
 ///
 /// Generic over the window type so it accepts both the `WebviewWindow` from
 /// `setup()` and the `Window` delivered to the `on_window_event` handler — both
