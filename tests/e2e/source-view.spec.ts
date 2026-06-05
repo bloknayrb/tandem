@@ -96,3 +96,53 @@ test("Ctrl+S in source view commits the edit and does not write stale content to
     .toContain("Committed via Ctrl+S.");
   expect(fs.readFileSync(filePath, "utf-8")).not.toContain("The original paragraph body.");
 });
+
+test("uncommitted source edits survive a tab switch and back", async ({ page }) => {
+  // Second doc so we can switch away from the source-view tab and back.
+  const filePath2 = path.join(tmpDir, "doc2.md");
+  fs.writeFileSync(filePath2, "# Second\n\nSecond doc body.\n", "utf-8");
+  await mcp.callTool("tandem_open", { filePath: filePath2 });
+
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+
+  const inactiveTab = page.locator("[data-testid^='tab-'][role='tab'][data-active='false']");
+
+  // Switch to the first doc, enter source view, and make an uncommitted edit.
+  await inactiveTab.first().click();
+  await page.getByTestId("titlebar-source-toggle").click();
+  const textarea = page.getByTestId("source-view-textarea");
+  await expect(textarea).toBeVisible();
+  await textarea.fill("# Source Title\n\nUNCOMMITTED DRAFT TEXT.\n");
+
+  // Switch away to the other doc (WYSIWYG), then back.
+  await inactiveTab.first().click();
+  await expect(page.locator(".tandem-editor")).toBeVisible();
+  await inactiveTab.first().click();
+
+  // The draft is restored, not re-fetched from disk.
+  const restored = page.getByTestId("source-view-textarea");
+  await expect(restored).toBeVisible();
+  await expect(restored).toHaveValue(/UNCOMMITTED DRAFT TEXT\./);
+});
+
+test("closing a tab with uncommitted source edits prompts before discarding", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+
+  await page.getByTestId("titlebar-source-toggle").click();
+  const textarea = page.getByTestId("source-view-textarea");
+  await expect(textarea).toBeVisible();
+  await textarea.fill("# Source Title\n\nUnsaved edit.\n");
+
+  // Dismiss the confirm — the tab (and the source view) must stay open.
+  let dialogMessage = "";
+  page.once("dialog", (dialog) => {
+    dialogMessage = dialog.message();
+    void dialog.dismiss();
+  });
+  await page.getByRole("button", { name: "Close doc.md" }).click();
+
+  expect(dialogMessage).toContain("unsaved markdown-source edits");
+  await expect(page.getByTestId("source-view-textarea")).toBeVisible();
+});

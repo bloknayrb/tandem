@@ -133,15 +133,25 @@ function closeTabAndRecord(tabId: string) {
       scratchpadPersistence.clearUnsaved(uuid);
     }
   }
+  // #1021: warn before closing a tab with uncommitted markdown-source edits
+  // (mirrors the #864 scratchpad confirm above). The disk file is intact — this
+  // is loss of unsaved source-view work only.
+  if (sourceDirtyTabs.has(tabId)) {
+    const ok = window.confirm(
+      "This document has unsaved markdown-source edits that will be lost. Close it anyway?",
+    );
+    if (!ok) return;
+  }
   if (tab && !isUploadPath(tab.filePath)) {
     closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
   }
-  // Drop any source-view flag for the closed tab so the Set doesn't leak (#1021).
+  // Drop any source-view flag + draft for the closed tab so the maps don't leak (#1021).
   if (sourceViewTabs.has(tabId)) {
     const next = new Set(sourceViewTabs);
     next.delete(tabId);
     sourceViewTabs = next;
   }
+  clearSourceDraft(tabId);
   yjsSync.handleTabClose(tabId);
 }
 
@@ -751,6 +761,36 @@ let findBarForceScope = $state<"doc" | "tabs">("doc");
 // Per-tab raw-markdown source view (#1021). Ephemeral (not persisted): the set
 // of tab IDs currently showing the markdown source editor instead of WYSIWYG.
 let sourceViewTabs = $state(new Set<string>());
+// In-progress source text + dirty flags, keyed by tab ID, lifted out of
+// SourceView so uncommitted edits survive a tab switch (which unmounts the
+// component) and so tab close / app quit can warn before discarding them
+// (#1021 review SHOULD-FIX).
+let sourceDrafts = $state(new Map<string, string>());
+let sourceDirtyTabs = $state(new Set<string>());
+
+function updateSourceDraft(tabId: string, text: string, dirty: boolean): void {
+  const drafts = new Map(sourceDrafts);
+  const dirtyTabs = new Set(sourceDirtyTabs);
+  if (dirty) {
+    drafts.set(tabId, text);
+    dirtyTabs.add(tabId);
+  } else {
+    drafts.delete(tabId);
+    dirtyTabs.delete(tabId);
+  }
+  sourceDrafts = drafts;
+  sourceDirtyTabs = dirtyTabs;
+}
+
+function clearSourceDraft(tabId: string): void {
+  if (!sourceDrafts.has(tabId) && !sourceDirtyTabs.has(tabId)) return;
+  const drafts = new Map(sourceDrafts);
+  const dirtyTabs = new Set(sourceDirtyTabs);
+  drafts.delete(tabId);
+  dirtyTabs.delete(tabId);
+  sourceDrafts = drafts;
+  sourceDirtyTabs = dirtyTabs;
+}
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
 let newTabMenuTrigger = $state(0);
@@ -1225,7 +1265,22 @@ function exitSourceView(id: string): void {
   const next = new Set(sourceViewTabs);
   next.delete(id);
   sourceViewTabs = next;
+  // Returning to WYSIWYG discards any in-progress draft (a dirty exit commits
+  // first via SourceView.handleExit, which already cleared it).
+  clearSourceDraft(id);
 }
+
+// Warn before unloading the page (reload / quit) while any source view holds
+// uncommitted edits — mirrors the scratchpad #864 beforeunload guard.
+$effect(() => {
+  const onBeforeUnload = (ev: BeforeUnloadEvent): void => {
+    if (sourceDirtyTabs.size === 0) return;
+    ev.preventDefault();
+    ev.returnValue = "You have unsaved markdown-source edits.";
+  };
+  window.addEventListener("beforeunload", onBeforeUnload);
+  return () => window.removeEventListener("beforeunload", onBeforeUnload);
+});
 
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
 // tab) with a live connection, auto-open a fresh scratchpad instead of
@@ -1861,11 +1916,18 @@ const tutorial = createTutorial(
            margin-independent state — no margin effect reads or writes it, so
            there's no bind:this feedback loop (the storm INVARIANT 1 guards is a
            self-triggering cycle, not a one-way unmount on an external toggle). -->
-      <SourceView
-        documentId={activeTab.id}
-        ydoc={activeTab.ydoc}
-        onExit={() => exitSourceView(activeTab!.id)}
-      />
+      <!-- Keyed on the tab ID so switching to another source-view tab remounts
+           a fresh SourceView that re-fetches + restores that tab's own draft —
+           rather than reactively swapping documentId on a shared instance. -->
+      {#key activeTab.id}
+        <SourceView
+          documentId={activeTab.id}
+          ydoc={activeTab.ydoc}
+          initialDraft={sourceDrafts.get(activeTab.id)}
+          onDraftChange={(text, dirty) => updateSourceDraft(activeTab!.id, text, dirty)}
+          onExit={() => exitSourceView(activeTab!.id)}
+        />
+      {/key}
     {:else}
       <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
          The layer wraps editor content so its block height matches the

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { untrack } from "svelte";
 import type * as Y from "yjs";
 import { API_DOCUMENT_RAW, API_DOCUMENT_RELOAD } from "../../shared/api-paths.js";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
@@ -7,11 +8,34 @@ import { API_BASE } from "../utils/fileUpload.js";
 interface Props {
   documentId: string;
   ydoc: Y.Doc;
+  /**
+   * In-progress source text carried over from a previous mount of this same
+   * document (e.g. the user switched tabs away and back). When present it
+   * overrides the freshly-fetched disk content so edits aren't lost (#1021
+   * review). `undefined` → start from the disk content.
+   */
+  initialDraft?: string;
+  /**
+   * Report the current draft + dirty state up to App so it can (a) preserve the
+   * text across a tab switch that unmounts this component, and (b) warn on tab
+   * close / app quit. Event-driven (textarea input + commit) — deliberately NOT
+   * a reactive `$effect` reading this prop, which would re-fire on every parent
+   * re-render and loop.
+   */
+  onDraftChange: (text: string, dirty: boolean) => void;
   /** Return to the WYSIWYG editor. */
   onExit: () => void;
 }
 
-const { documentId, ydoc, onExit }: Props = $props();
+const { documentId, ydoc, initialDraft, onDraftChange, onExit }: Props = $props();
+
+// Capture the draft ONCE at mount (untrack makes the non-reactive read
+// explicit). The component is keyed on documentId by the parent, so this is the
+// correct tab's draft; not reading the prop inside the fetch $effect keeps that
+// effect from re-running on every keystroke — App updates `sourceDrafts` on
+// input, which would otherwise change the `initialDraft` prop and retrigger a
+// fetch that clobbers the live text.
+const draftAtMount = untrack(() => initialDraft);
 
 let originalMarkdown = $state("");
 let currentMarkdown = $state("");
@@ -54,7 +78,10 @@ $effect(() => {
       const json = (await res.json()) as { markdown?: string };
       if (cancelled) return;
       originalMarkdown = json.markdown ?? "";
-      currentMarkdown = originalMarkdown;
+      // Restore an in-progress draft (tab-switch round-trip) over the disk
+      // content; otherwise start from disk. Uses the mount-captured value so
+      // this effect never re-runs when App rewrites the live draft.
+      currentMarkdown = draftAtMount ?? originalMarkdown;
     } catch (err) {
       if (cancelled) return;
       errorMessage = err instanceof Error ? err.message : "Failed to load markdown source.";
@@ -86,6 +113,8 @@ async function commit(): Promise<boolean> {
       throw new Error(body.message ?? res.statusText);
     }
     originalMarkdown = currentMarkdown;
+    // Committed content now matches disk — clear the draft/dirty flag in App.
+    onDraftChange(currentMarkdown, false);
     return true;
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : "Failed to apply markdown changes.";
@@ -93,6 +122,12 @@ async function commit(): Promise<boolean> {
   } finally {
     saving = false;
   }
+}
+
+/** Report a textarea edit up to App for cross-switch preservation + close/quit warning. */
+function handleInput(e: Event): void {
+  const value = (e.target as HTMLTextAreaElement).value;
+  onDraftChange(value, value !== originalMarkdown);
 }
 
 async function handleExit(): Promise<void> {
@@ -171,6 +206,7 @@ async function copyToClipboard(): Promise<void> {
       class="source-view-textarea"
       data-testid="source-view-textarea"
       bind:value={currentMarkdown}
+      oninput={handleInput}
       onkeydown={handleKeydown}
       spellcheck="false"
       autocomplete="off"
