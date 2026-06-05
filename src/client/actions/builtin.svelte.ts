@@ -18,6 +18,7 @@ import {
   API_SCRATCHPAD,
 } from "../../shared/api-paths.js";
 import type { LauncherStatus } from "../../shared/launcher/contract.js";
+import { loadSettings } from "../hooks/useTandemSettings.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { type Action, registerAction } from "./registry.svelte.js";
 
@@ -165,6 +166,91 @@ type SaveAsFormat = "md" | "txt";
 
 let saveAsInflight = false;
 
+/**
+ * Pick the directory a desktop "Save As" dialog should open into, honoring the
+ * smart-default precedence (#1023): the user's configured save folder, else the
+ * Claude working directory, else the OS home directory. Returns `null` when all
+ * tiers are empty so the caller falls back to a bare filename (OS-default dir).
+ * Pure + exported so the precedence is unit-testable in one shot.
+ */
+export function pickSaveAsDirectory(
+  configuredDir: string | null | undefined,
+  claudeWorkingDir: string | null | undefined,
+  homeDir: string | null | undefined,
+): string | null {
+  for (const dir of [configuredDir, claudeWorkingDir, homeDir]) {
+    if (typeof dir === "string" && dir.trim()) return dir.trim();
+  }
+  return null;
+}
+
+/** Configured default save folder from persisted settings (#1023), or null. */
+function readDefaultSaveDirectory(): string | null {
+  try {
+    return loadSettings().defaultSaveDirectory;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Best-effort, time-boxed lookup of the configured Claude working directory for
+ * the Save-As smart default. Never throws and never blocks the dialog for more
+ * than ~250ms — any failure/timeout yields null so the next fallback tier (home)
+ * applies. Reads the same read-only `GET /api/integrations` the Settings tab uses.
+ */
+async function fetchClaudeWorkingDir(): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 250);
+  try {
+    const res = await fetch(`${API_BASE}/api/integrations`, { signal: controller.signal });
+    if (!res.ok) return null;
+    const file = (await res.json()) as {
+      integrations?: { kind?: string; workingDirectory?: string }[];
+    };
+    const dir = file.integrations?.find((i) => i.kind === "claude-code")?.workingDirectory;
+    return typeof dir === "string" && dir.trim() ? dir.trim() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Resolve the OS home directory via the Tauri path API, or null if unavailable. */
+async function resolveTauriHomeDir(): Promise<string | null> {
+  try {
+    const { homeDir } = await import("@tauri-apps/api/path");
+    const home = await homeDir();
+    return typeof home === "string" && home.trim() ? home : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the full `defaultPath` (dir + filename) for the Save-As dialog using
+ * the smart-default precedence. Each tier is consulted lazily so we never fetch
+ * the integrations endpoint or call into Tauri when an earlier tier already won.
+ * Falls back to the bare filename (OS-default dir) if no tier resolves or the
+ * path module is unavailable.
+ */
+async function resolveSaveAsDefaultPath(fileName: string): Promise<string> {
+  const configuredDir = readDefaultSaveDirectory();
+  const claudeWorkingDir = configuredDir ? null : await fetchClaudeWorkingDir();
+  const homeDir = configuredDir || claudeWorkingDir ? null : await resolveTauriHomeDir();
+  // pickSaveAsDirectory re-applies the precedence; the ternaries above only
+  // avoid the async work for already-decided tiers (not a correctness gate).
+  const dir = pickSaveAsDirectory(configuredDir, claudeWorkingDir, homeDir);
+  if (!dir) return fileName;
+  try {
+    const { join } = await import("@tauri-apps/api/path");
+    return await join(dir, fileName);
+  } catch {
+    return fileName;
+  }
+}
+
 /** Normalize a Tauri-dialog-returned path to the chosen format extension.
  *  Examples: ("notes.md", "md") → "notes.md"; ("notes", "md") → "notes.md";
  *  ("notes.rtf", "md") → "notes.md" (extension overridden to the chosen format
@@ -247,8 +333,12 @@ async function runTauriSaveAs(
   let selected: string | null;
   try {
     const { save } = await import("@tauri-apps/plugin-dialog");
+    // Smart default (#1023): open the dialog in the user's configured save
+    // folder, else the Claude working dir, else home — falling back to a bare
+    // filename (OS-default dir) when none resolve.
+    const defaultPath = await resolveSaveAsDefaultPath(defaultName);
     selected = await save({
-      defaultPath: defaultName,
+      defaultPath,
       filters: [
         { name: "Markdown", extensions: ["md"] },
         { name: "Plain Text", extensions: ["txt"] },

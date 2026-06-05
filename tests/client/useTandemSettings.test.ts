@@ -694,3 +694,49 @@ describe("soloRailHidden setting", () => {
     expect(s.soloRailHidden).toBe(true);
   });
 });
+
+describe("defaultSaveDirectory (#1023)", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("defaults to null when absent", () => {
+    expect(loadSettings().defaultSaveDirectory).toBeNull();
+  });
+
+  it("preserves a stored absolute path through normalizeKnownFields (not stripped)", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ defaultSaveDirectory: "/home/me/Documents" }));
+    expect(loadSettings().defaultSaveDirectory).toBe("/home/me/Documents");
+  });
+
+  it("trims surrounding whitespace on load", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ defaultSaveDirectory: "  /tmp/docs  " }));
+    expect(loadSettings().defaultSaveDirectory).toBe("/tmp/docs");
+  });
+
+  it("coerces a blank/whitespace string to null on load", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ defaultSaveDirectory: "   " }));
+    expect(loadSettings().defaultSaveDirectory).toBeNull();
+  });
+
+  it("coerces a non-string to null on load", () => {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify({ defaultSaveDirectory: 42 }));
+    expect(loadSettings().defaultSaveDirectory).toBeNull();
+  });
+
+  it("normalizes a blank write to null (mergeAndClampSettings)", () => {
+    const base = loadSettings();
+    expect(
+      mergeAndClampSettings(base, { defaultSaveDirectory: "   " }).defaultSaveDirectory,
+    ).toBeNull();
+    expect(
+      mergeAndClampSettings(base, { defaultSaveDirectory: "  /srv/notes  " }).defaultSaveDirectory,
+    ).toBe("/srv/notes");
+  });
+});

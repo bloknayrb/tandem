@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Editor: default save folder (#1023)** — a new "Default Save Folder" preference controls where new files land when you use **Save As** in the desktop app. Pick a folder with the native picker (or type a path), and the save dialog opens there. When unset, Save As falls back to a smart default: your AI's configured working directory, then your home folder. The setting is stored client-side (independent of the Claude working directory) and is a no-op in the browser distribution, where Save As is a download. The integration lookup is time-boxed so a slow/absent server never blocks the save dialog.
+
 ### Changed
 
 - **New-tab morph — clear two-phase motion (A29, follow-up to #977)** — the `+`→menu morph now expands **horizontally into a clean capsule first, then vertically into the card**, instead of co-timing both axes. The radius is held at a literal capsule value (`14px`, half the pill height) through the horizontal unroll and squares to the card radius only as the height grows, so the shape never flashes a flat lozenge; the interior rows cascade in during the vertical phase. Close reverses it. The card fill persists through the whole collapse (a *filled* card shrinks back into the `+`, with no empty-box gap), and the card/pill shadows crossfade so there's no shadow pop at the handoff. On close, focus is **restored to the element that was focused before the menu opened** (typically the editor) rather than parked on the `+`, so no stray focus ring lingers on the pill; the closing body is `inert` so focus is never stranded in the clipped panel, and on close the in-menu search field is **blurred synchronously** so a keyboard shortcut fired in the same tick (e.g. Escape then `Ctrl+W`) is no longer swallowed by the still-focused input. Fully reduced-motion-correct (all timing derives from the shared morph tokens).

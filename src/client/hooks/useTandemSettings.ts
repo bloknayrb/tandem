@@ -128,6 +128,14 @@ export interface TandemSettings {
    * `resolveFont`.
    */
   fontByExtension: Partial<Record<string, EditorFont>>;
+  /**
+   * Default folder new files are saved into when the user runs "Save As" on
+   * the desktop app (#1023). `null` means "no folder chosen" — Save As then
+   * falls back to the Claude working directory (if an integration is
+   * configured), then the OS home directory. Desktop-only: in the browser,
+   * Save As is a download and ignores this. Stored as an absolute path string.
+   */
+  defaultSaveDirectory: string | null;
   density: Density;
   defaultMode: TandemMode;
   highContrast: boolean;
@@ -218,6 +226,7 @@ const DEFAULTS: TandemSettings = {
   accentHue: 275,
   editorFont: "sans",
   fontByExtension: {},
+  defaultSaveDirectory: null,
   density: "cozy",
   defaultMode: "tandem",
   highContrast: false,
@@ -483,6 +492,12 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
         ? parsed.editorFont
         : DEFAULTS.editorFont,
     fontByExtension: parseFontByExtension(parsed.fontByExtension),
+    // Trim to a non-empty absolute path or coerce to null. Returning it here
+    // also auto-adds `defaultSaveDirectory` to the forward-compat `knownKeys`.
+    defaultSaveDirectory:
+      typeof parsed.defaultSaveDirectory === "string" && parsed.defaultSaveDirectory.trim()
+        ? parsed.defaultSaveDirectory.trim()
+        : null,
     density:
       parsed.density === "compact" || parsed.density === "cozy" || parsed.density === "spacious"
         ? parsed.density
@@ -791,6 +806,12 @@ export function mergeAndClampSettings(
     // Re-validate per-format overrides so a partial update can't persist a
     // junk value (e.g. `{ md: "comic-sans" }`).
     fontByExtension: parseFontByExtension(merged.fontByExtension),
+    // Normalize the save folder on write so a blank/whitespace string can't
+    // persist (and shadow the smart-default fallback) — coerce to null.
+    defaultSaveDirectory:
+      typeof merged.defaultSaveDirectory === "string" && merged.defaultSaveDirectory.trim()
+        ? merged.defaultSaveDirectory.trim()
+        : null,
     selectionDwellMs: Math.max(
       SELECTION_DWELL_MIN_MS,
       Math.min(SELECTION_DWELL_MAX_MS, merged.selectionDwellMs),
