@@ -87,6 +87,13 @@ const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth"
 let showRecent = $state(false);
 let recentFiles = $state<RecentFileEntry[]>([]);
 let openBtnEl: HTMLButtonElement | null = $state(null);
+// A29: the menu is right-anchored and grows LEFT by default (the `+` is normally near
+// the right of the tab strip). When the `+` slot sits too close to the viewport's left
+// edge to fit the menu growing left (few tabs / narrow window), flip to grow RIGHT so
+// the menu never spills off-screen. Decided once per open in toggleNewTabMenu; the class
+// flips both the shell anchor (right:0→left:0) and the `+`'s own anchor so the pill stays
+// pinned at the slot either way.
+let openRight = $state(false);
 // A29 (#798): the menu body stays mounted through the close collapse so its height
 // animates 1fr→0fr together with the shell (a box-collapse, not a height-snap the
 // instant it unmounts), then unmounts once the collapse ends. `bodyMounted` also
@@ -444,6 +451,7 @@ function toggleNewTabMenu() {
   if (opening) {
     recentFiles = loadRecentFilesCached();
     previouslyFocused = document.activeElement as HTMLElement | null;
+    openRight = shouldOpenRight();
   } else {
     closeMenu();
     return;
@@ -465,6 +473,22 @@ function closeMenu() {
   const active = document.activeElement as HTMLElement | null;
   if (active && morphEl?.contains(active)) active.blur();
   showRecent = false;
+}
+
+// Open-direction edge guard. The menu width matches the CSS clamp `min(460px,
+// 100vw - 16px)`. Default = grow left (return false). Flip to grow right only when the
+// menu would clip the left viewport edge growing left AND growing right has the room;
+// if neither side fits the full width (very narrow window), grow toward the larger gap.
+const NT_MENU_MAX_WIDTH = 460;
+const NT_VIEWPORT_MARGIN = 8;
+function shouldOpenRight(): boolean {
+  if (!openBtnEl) return false;
+  const rect = openBtnEl.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const width = Math.min(NT_MENU_MAX_WIDTH, vw - 2 * NT_VIEWPORT_MARGIN);
+  if (rect.right - width >= NT_VIEWPORT_MARGIN) return false; // fits growing left
+  if (rect.left + width <= vw - NT_VIEWPORT_MARGIN) return true; // fits growing right
+  return vw - rect.left > rect.right; // neither fits — pick the side with more room
 }
 
 // Body mount lifecycle (A29 box-collapse close). Open → mount immediately. Close →
@@ -654,7 +678,7 @@ $effect(() => {
        placeholder holds the in-flow slot stable while the absolute .nt-morph grows
        down-and-left from the + slot. -->
   <div class="nt-wrap">
-    <div class="nt-morph" class:open={showRecent} class:filled={showRecent || bodyMounted} bind:this={morphEl}>
+    <div class="nt-morph" class:open={showRecent} class:filled={showRecent || bodyMounted} class:grow-right={openRight} bind:this={morphEl}>
       <button
         bind:this={openBtnEl}
         onclick={toggleNewTabMenu}
@@ -798,6 +822,18 @@ $effect(() => {
       width var(--morph-p1) var(--tandem-ease-out) var(--morph-p2),
       border-radius var(--morph-p2) var(--tandem-ease-out),
       box-shadow var(--morph-p1) var(--tandem-ease-out) var(--morph-p2);
+  }
+  /* Edge guard: when the + slot is too close to the left viewport edge to fit the menu
+     growing left, openRight flips the anchor so the shell grows RIGHT instead. The + must
+     re-anchor to the same (now left) edge so the pill stays pinned at the slot. The width
+     animation and capsule radius are direction-symmetric, so the morph reads identically. */
+  .nt-morph.grow-right {
+    right: auto;
+    left: 0;
+  }
+  .nt-morph.grow-right .tab-add-pill {
+    right: auto;
+    left: 0;
   }
   /* FILL — the card surface (bg + border + clip). Driven by
      `class:filled={showRecent || bodyMounted}`, so it applies with .open on open AND

@@ -270,6 +270,10 @@ sessions-loading
 sessions-section
 sessions-toggle
 settings-content
+settings-default-save-folder
+settings-default-save-folder-input
+settings-default-save-folder-pick
+settings-default-save-folder-reset
 settings-display-name
 settings-mcp-status
 settings-modal
