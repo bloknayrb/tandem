@@ -1,6 +1,6 @@
 <script lang="ts">
 import { HocuspocusProvider } from "@hocuspocus/provider";
-import { Editor as TiptapEditor, mergeAttributes } from "@tiptap/core";
+import { mergeAttributes, Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Highlight from "@tiptap/extension-highlight";
