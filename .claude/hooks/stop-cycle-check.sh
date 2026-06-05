@@ -24,9 +24,20 @@ _ws_newer_than "$COMMIT_MARK" "$EDIT_MARK" && exit 0
 
 : > "$NUDGED_MARK"
 
-cat >&2 <<'EOF'
+# Emit the reminder as real context (STDOUT JSON) so Claude Code injects it via
+# hookSpecificOutput.additionalContext, not just as stderr noise. Build the JSON
+# with jq so the text is escaped correctly; fall back to stderr if jq is missing
+# so the reminder is never silently dropped.
+read -r -d '' REMINDER <<'EOF' || true
 ℹ Session has uncommitted source edits. Workflow:
    plan → agent review → implement → /simplify → verify → manual test → commit → PR → /pr-review-toolkit:review-pr.
 EOF
+
+if command -v jq >/dev/null 2>&1; then
+  jq -n --arg ctx "$REMINDER" \
+    '{hookSpecificOutput:{hookEventName:"Stop",additionalContext:$ctx}}'
+else
+  printf '%s\n' "$REMINDER" >&2
+fi
 
 exit 0
