@@ -691,17 +691,18 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       errorCode: "RENAME_IN_PROGRESS",
     };
   }
-  savingDocs.add(docId);
-
   const oldHash = docHash(oldPath);
   const newHash = docHash(newPath);
   const format = docState.format;
 
-  // file-opener imports document-service statically; dynamic import here avoids
-  // the cycle (same pattern as saveDocumentAsToDisk).
-  const { wireAnnotationStore, wireFileWatcher } = await import("./file-opener.js");
-
+  // Acquire the lock and resolve the dynamic import INSIDE the try so the finally
+  // always releases the lock — if either threw outside it, the lock would leak and
+  // permanently block this doc's future saves/renames with RENAME_IN_PROGRESS.
+  // file-opener imports document-service statically; the dynamic import avoids the
+  // cycle (same pattern as saveDocumentAsToDisk).
   try {
+    savingDocs.add(docId);
+    const { wireAnnotationStore, wireFileWatcher } = await import("./file-opener.js");
     const doc = getOrCreateDocument(docId);
 
     // --- Phase 1: reversible prep (flush BEFORE teardown) ---
@@ -724,9 +725,22 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     try {
       await fs.rename(oldPath, newPath); // codeql[js/path-injection] -- server-managed paths validated by assertPathSafe/openFileByPath before storage in openDocs
     } catch (err) {
+      // Log the ORIGINAL failure first — the rollback below can itself throw, and
+      // we must not let a rollback error mask why the rename actually failed.
+      console.error("[Rename] fs.rename failed for %s (%s -> %s):", docId, oldPath, newPath, err);
       // Roll back the reversible prep: re-wire the old context + re-watch.
-      await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
-      if (format !== "docx") wireFileWatcher(docId, oldPath, format);
+      // Best-effort — a rollback failure is logged but the returned error stays
+      // the original fs.rename failure (the actionable root cause).
+      try {
+        await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
+        if (format !== "docx") wireFileWatcher(docId, oldPath, format);
+      } catch (rollbackErr) {
+        console.error(
+          "[Rename] rollback after failed rename also failed for %s:",
+          docId,
+          rollbackErr,
+        );
+      }
       const code = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
       return {
         status: "error",
@@ -780,8 +794,14 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // Re-wire the durable store at the new path. loadAndMerge reads the moved
     // envelope, re-seeds tombstones, merges idempotently with the live Y.Maps,
     // and registers a fresh observer. allowRecovery:false — an active rename
-    // must never let recovery steal a DIFFERENT file's envelope.
-    await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+    // must never let recovery steal a DIFFERENT file's envelope. Best-effort: the
+    // disk rename already committed, so a re-wire failure must not flip the result
+    // to "error" — the next openFileByPath re-wires via the realpath fallback.
+    try {
+      await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+    } catch (err) {
+      console.error("[Rename] re-wire annotation store at new path failed for %s:", docId, err);
+    }
 
     // Heal the envelope's internal meta.filePath (#1017 review, Finding A):
     // loadAndMerge skips its write when the moved file already equals the Y.Map,
@@ -804,30 +824,39 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       console.error("[Rename] session move failed for %s:", docId, err);
     }
 
-    // Re-target the file watcher (skip .docx — binary, no live reload), then arm
-    // suppress so the first change event after re-watch doesn't bounce back.
-    if (format !== "docx") {
-      wireFileWatcher(docId, newPath, format);
-      suppressNextChange(newPath);
+    // Registry / watcher / tab-metadata bookkeeping. All best-effort: fs.rename
+    // already committed (the contract is met), so a throw here must NOT report
+    // "Rename failed" — that would tell the user the opposite of the truth (disk
+    // bears the new name) and revert the tab label against on-disk reality.
+    const fileName = path.basename(newPath);
+    try {
+      // Re-target the file watcher (skip .docx — binary, no live reload). No
+      // suppressNextChange here: fs.rename already happened before the new watch
+      // started (so it emits no change event to suppress), and nothing writes
+      // newPath afterward — an armed latch would only swallow a genuine external
+      // edit arriving within the TTL.
+      if (format !== "docx") wireFileWatcher(docId, newPath, format);
+
+      // Update the registry entry: same id/room, new path. addDoc overwrites by id.
+      addDoc(docId, { id: docId, filePath: newPath, format, readOnly: false, source: "file" });
+
+      // Update the tab's fileName + savedAt baseline. withFileSync is the right
+      // origin per ADR-031 (post-rename bookkeeping — a file-writer echo, not user
+      // intent or setup). fs.rename preserves bytes + mtime, so set savedAt to the
+      // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
+      // autosave writes them to newPath.
+      const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      const stat = await fs.stat(newPath).catch(() => null); // codeql[js/path-injection] -- newPath constructed from validated dir + basename-sanitized name
+      withFileSync(doc, () => {
+        meta.set("fileName", fileName);
+        if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
+      });
+
+      broadcastOpenDocs();
+    } catch (err) {
+      console.error("[Rename] post-commit bookkeeping failed for %s:", docId, err);
     }
 
-    // Update the registry entry: same id/room, new path. addDoc overwrites by id.
-    addDoc(docId, { id: docId, filePath: newPath, format, readOnly: false, source: "file" });
-
-    // Update the tab's fileName + savedAt baseline. withFileSync is the right
-    // origin per ADR-031 (post-rename bookkeeping — a file-writer echo, not user
-    // intent or setup). fs.rename preserves bytes + mtime, so set savedAt to the
-    // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
-    // autosave writes them to newPath.
-    const fileName = path.basename(newPath);
-    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    const stat = await fs.stat(newPath).catch(() => null); // codeql[js/path-injection] -- newPath constructed from validated dir + basename-sanitized name
-    withFileSync(doc, () => {
-      meta.set("fileName", fileName);
-      if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
-    });
-
-    broadcastOpenDocs();
     return { status: "renamed", oldPath, newPath, fileName };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

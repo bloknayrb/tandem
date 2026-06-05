@@ -116,8 +116,12 @@ test("Escape cancels the rename, leaving the label and file unchanged", async ({
 test("an invalid name is rejected by the server and the label reverts", async ({ page }) => {
   const id = await openEditor(page);
   const input = await startRenameByDblClick(page, id);
-  // ':' is the NTFS alternate-data-stream vector — server returns INVALID_NAME.
-  await input.fill("a:b.md");
+  // '<' is a Windows-illegal char that SURVIVES the boundary path.basename()
+  // normalization (unlike a separator or single-char drive prefix, which get
+  // stripped to a valid basename), so it reaches renameDocument's
+  // validateRenameFilename and returns INVALID_NAME — driving the reject+revert
+  // UX path end to end.
+  await input.fill("a<b.md");
   await input.press("Enter");
 
   // The optimistic label reverts to server truth; no stray file is written.

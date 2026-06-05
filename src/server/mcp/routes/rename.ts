@@ -26,10 +26,16 @@ export async function handleRename(req: Request, res: Response): Promise<void> {
   }
   // Sanitize both inputs at the HTTP boundary via path.basename(). CodeQL's
   // js/path-injection taint-tracker treats path.basename() as a sanitizer
-  // barrier, so both values are considered clean after this point. documentId
-  // is a hash (no separators) so path.basename() is a no-op on valid input;
-  // the call is here specifically to terminate the taint chain before either
-  // value reaches any file-system sink inside renameDocument.
+  // barrier, so the basename'd binding is what flows to renameDocument's
+  // file-system sinks. The `tandem_rename` MCP handler basenames identically
+  // (document.ts), so both entry points normalize a path-like input to its
+  // last component rather than rejecting it — separators (`sub/b.md` → `b.md`)
+  // and single-char drive prefixes (`a:b.md` → `b.md`) are stripped here. Every
+  // other illegal name (`<>"|?*`, control chars, reserved devices, trailing
+  // dot, multi-char `name:stream`) survives basename and is rejected by
+  // renameDocument's validateRenameFilename. documentId is a hash with no
+  // separators, so basename is a no-op on valid input; a malformed one strips
+  // to a value that just misses openDocs.get() → NOT_FOUND.
   const documentId = path.basename(rawDocumentId);
   if (!documentId) {
     res.status(400).json({ error: "BAD_REQUEST", message: "documentId is required" });

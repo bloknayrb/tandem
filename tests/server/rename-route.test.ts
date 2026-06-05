@@ -94,6 +94,46 @@ describe("handleRename — success + error mapping", () => {
   });
 });
 
+describe("handleRename — boundary sanitization (CodeQL path-injection barrier)", () => {
+  // path.basename() on both inputs is the live taint-barrier the CodeQL gate
+  // requires, and the basename'd binding is what flows to the (mocked here)
+  // renameDocument sink. The handler NORMALIZES a path-like input to its last
+  // component (matching the `tandem_rename` MCP handler, which basenames the
+  // same way) rather than rejecting it — so separators and single-char drive
+  // prefixes are stripped, while every other illegal name survives basename and
+  // is rejected downstream by renameDocument's validateRenameFilename. These go
+  // RED if the basename() calls are ever removed as "redundant".
+  it("strips path separators from newName before calling renameDocument", async () => {
+    renameDocument.mockResolvedValue({
+      status: "renamed",
+      oldPath: "/d/a.md",
+      newPath: "/d/b.md",
+      fileName: "b.md",
+    });
+    await handleRename(reqWith({ documentId: "d1", newName: "sub/b.md" }), mockRes());
+    expect(renameDocument).toHaveBeenCalledWith("d1", "b.md");
+  });
+
+  it("strips path separators from documentId before calling renameDocument", async () => {
+    renameDocument.mockResolvedValue({
+      status: "renamed",
+      oldPath: "/d/a.md",
+      newPath: "/d/b.md",
+      fileName: "b.md",
+    });
+    await handleRename(reqWith({ documentId: "../../etc/d1", newName: "b.md" }), mockRes());
+    expect(renameDocument).toHaveBeenCalledWith("d1", "b.md");
+  });
+
+  it("400s (INVALID_PATH) when newName basenames to empty, without calling renameDocument", async () => {
+    const res = mockRes();
+    await handleRename(reqWith({ documentId: "d1", newName: "/" }), res);
+    expect(res._status).toBe(400);
+    expect(res._json).toEqual({ error: "INVALID_PATH", message: "newName must not be empty" });
+    expect(renameDocument).not.toHaveBeenCalled();
+  });
+});
+
 describe("errorCodeToHttpStatus — rename codes", () => {
   it.each([
     ["INVALID_NAME", 400],

@@ -341,6 +341,63 @@ describe("closeDocumentById — tombstone flush order (Finding C)", () => {
   });
 });
 
+describe("renameDocument — fs.rename failure rollback (Phase 2)", () => {
+  it("surfaces the original errno and re-wires the old context when fs.rename throws", async () => {
+    const { docId, filePath, doc } = await openFileDoc("rollback.md", "body content");
+    const newPath = path.join(docDir, "rollback-renamed.md");
+
+    // Trigger a real fs.rename failure: delete the source file after validation
+    // would pass (renameDocument never stats oldPath before the rename), so
+    // fs.rename(oldPath, …) throws ENOENT → the Phase-2 rollback path runs.
+    await fsReal.rm(filePath);
+
+    const result = await renameDocument(docId, "rollback-renamed.md");
+
+    // The ORIGINAL fs.rename error propagates (not a masked rollback error).
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("ENOENT");
+
+    // New path never created; registry entry unchanged (still the old path).
+    expect(await fileExists(newPath)).toBe(false);
+    expect(getOpenDocs().get(docId)?.filePath).toBe(filePath);
+
+    // The rollback re-wired the annotation observer to the OLD path: a fresh
+    // annotation still serializes to the oldHash envelope.
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+    withBrowser(doc, () => annMap.set("post-rollback", makeAnnotation("post-rollback")));
+    await createStore(docHash(filePath), { filePath }).flush();
+    const envelope = await createStore(docHash(filePath), { filePath }).load();
+    expect(envelope.annotations.map((a) => a.id)).toContain("post-rollback");
+  });
+});
+
+describe("renameDocument — post-commit best-effort (Phase 3)", () => {
+  it("still reports renamed when a post-commit step throws (disk rename is the contract)", async () => {
+    const { docId, filePath } = await openFileDoc("committed.md", "body content");
+    const newPath = path.join(docDir, "committed-renamed.md");
+
+    // Make the post-commit annotation-store re-wire throw. fs.rename has already
+    // committed by then, so the rename MUST still report success rather than a
+    // misleading "Rename failed" (which would revert the tab against on-disk truth).
+    const fileOpener = await import("../../src/server/mcp/file-opener.js");
+    const rewireSpy = vi
+      .spyOn(fileOpener, "wireAnnotationStore")
+      .mockRejectedValueOnce(new Error("simulated re-wire failure"));
+    try {
+      const result = await renameDocument(docId, "committed-renamed.md");
+      expect(result.status).toBe("renamed");
+      expect(result.fileName).toBe("committed-renamed.md");
+    } finally {
+      rewireSpy.mockRestore();
+    }
+
+    // The disk rename committed despite the bookkeeping failure.
+    expect(await fileExists(filePath)).toBe(false);
+    expect(await fileExists(newPath)).toBe(true);
+    expect(getOpenDocs().get(docId)?.filePath).toBe(newPath);
+  });
+});
+
 describe("renameDocument — note privacy (ADR-027)", () => {
   it("a note annotation survives the envelope move and reloads under the new path-hash", async () => {
     const { docId, filePath, doc } = await openFileDoc("noted.md", "body");
