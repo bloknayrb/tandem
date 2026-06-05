@@ -18,6 +18,7 @@ annotations-tab
 app-info-footer
 appearance-formatting-bar
 appearance-show-raw-markdown
+appearance-system-light-warm
 apply-changes-btn
 archive-btn-{*}
 batch-promote-bar
