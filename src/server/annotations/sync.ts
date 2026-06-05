@@ -515,9 +515,21 @@ function mergeMap<T extends { rev: number; editedAt?: number }>(
  */
 export async function loadAndMerge(
   ctx: SyncContext,
+  opts?: { migrateTombstonesFrom?: string },
 ): Promise<(phase?: ObserverCleanupPhase) => void> {
   const { ydoc, store, docHash, meta } = ctx;
   const file = await store.load();
+
+  // Rename only (#1040, window a2): fold the oldHash tombstone ledger forward
+  // into `docHash` AFTER the `store.load()` read resolves but BEFORE the seed +
+  // merge below consult the ledger. A DELETE arriving DURING the read above is
+  // recorded into the oldHash ledger by the still-attached old observer; folding
+  // here ensures the union seed carries it, so the merge APPLIES the tombstone
+  // (and skips re-inserting the just-deleted record from the file) instead of
+  // resurrecting it. No-op when `from === to` or there is nothing to migrate.
+  if (opts?.migrateTombstonesFrom !== undefined) {
+    migrateTombstoneLedger(opts.migrateTombstonesFrom, docHash);
+  }
 
   const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
@@ -530,22 +542,50 @@ export async function loadAndMerge(
   // picks them up on its first snapshot. Highest rev wins on duplicate ids
   // (consistent with recordTombstone's dedup rule; valid disk files never
   // have duplicates, but corrupt/hand-edited files should keep the winner).
-  const seed = new Map<string, TombstoneRecordV1>();
+  //
+  // UNION, not clobber (#1040, window a3): a tombstone may already sit in the
+  // in-memory ledger for `docHash` that the file does NOT yet carry — the
+  // rename flow folds the oldHash ledger forward into newHash (via
+  // `migrateTombstoneLedger`) BEFORE this re-wire's `store.load()` returns, and
+  // a DELETE that lands after the rename's RMW snapshot is captured forward into
+  // newHash but is absent from the just-written file. Clobbering with only the
+  // file seed would discard it, re-opening the resurrection window. Merge both
+  // sides keeping the highest rev per id.
+  //
+  // Safe on force-reload: `clearAndReload` calls `clearFileSyncContext` (which
+  // runs the observer cleanup's "close" phase → `tombstonesByDoc.delete(hash)`)
+  // AND `store.clear()` BEFORE this runs, so the in-memory ledger starts empty
+  // there and the union degenerates to the (empty) file seed — no stale
+  // tombstone can be resurrected across a legitimate reload.
+  const seed = tombstonesByDoc.get(docHash) ?? new Map<string, TombstoneRecordV1>();
+  // Track whether the pre-existing in-memory ledger carries tombstones the file
+  // does not — those are migrated-forward deletes (rename) that must still be
+  // APPLIED against the Y.Map below and PERSISTED even on the file-empty path.
+  const fileTombstoneIds = new Set(file.tombstones.map((s) => s.id));
+  let seedHasExtraTombstones = false;
+  for (const id of seed.keys()) {
+    if (!fileTombstoneIds.has(id)) seedHasExtraTombstones = true;
+  }
   for (const stone of file.tombstones) {
     const existing = seed.get(stone.id);
+    // Preserve the file record as-is (TombstoneRecordV1 is `.passthrough()`),
+    // matching the original seed semantics — only override when the file copy
+    // wins on rev.
     if (!existing || stone.rev > existing.rev) seed.set(stone.id, stone);
   }
   tombstonesByDoc.set(docHash, seed);
+  // The authoritative tombstone set for the merge below is the UNIONED ledger,
+  // not just the file's — so a migrated-forward delete that never reached disk
+  // still drops a resurrected Y.Map entry.
+  const effectiveTombstones = Array.from(seed.values());
 
-  if (fileEmpty && ymapHasState) {
-    // First-upgrade path. Write one atomic snapshot capturing whatever the
-    // Y.Maps currently hold. No merge work needed.
-    store.queueWrite(() => snapshot(ydoc, docHash, meta));
-    return registerAnnotationObserver(ctx);
-  }
-
-  if (fileEmpty && !ymapHasState) {
-    // Both sides empty — nothing to merge, nothing to write.
+  if (fileEmpty && !seedHasExtraTombstones) {
+    if (ymapHasState) {
+      // First-upgrade path. Write one atomic snapshot capturing whatever the
+      // Y.Maps currently hold. No merge work needed.
+      store.queueWrite(() => snapshot(ydoc, docHash, meta));
+    }
+    // Both sides empty (and no migrated-forward tombstone) — nothing to merge.
     return registerAnnotationObserver(ctx);
   }
 
@@ -556,8 +596,11 @@ export async function loadAndMerge(
 
   withFileSync(ydoc, () => {
     // Apply tombstones first so a later merge step can't overwrite a winning
-    // delete.
-    for (const stone of file.tombstones) {
+    // delete. Iterate the UNIONED ledger (`effectiveTombstones`) — not just the
+    // file's — so a migrated-forward delete that never reached disk (#1040,
+    // window a3: a rename's late DELETE folded into newHash but absent from the
+    // just-written envelope) still drops its resurrected Y.Map entry.
+    for (const stone of effectiveTombstones) {
       const ymapAnn = normalizeAnnotation(annMap.get(stone.id), docHash);
       if (!ymapAnn) continue;
       if (stone.rev > ymapAnn.rev) {
@@ -574,7 +617,7 @@ export async function loadAndMerge(
     const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
     const winningTombstoneIds = new Set<string>();
     const tombstoneIds = new Set<string>();
-    for (const stone of file.tombstones) {
+    for (const stone of effectiveTombstones) {
       tombstoneIds.add(stone.id);
       const fileAnn = fileAnns.get(stone.id);
       if (fileAnn && stone.rev > fileAnn.rev) winningTombstoneIds.add(stone.id);
@@ -591,7 +634,10 @@ export async function loadAndMerge(
     if (repResult.needsWrite) needsWrite = true;
   });
 
-  if (needsWrite) {
+  // Force a write when the union pulled in tombstones the file lacked — those
+  // migrated-forward deletes must land on disk so a subsequent reopen (with an
+  // empty in-memory ledger) still sees them.
+  if (needsWrite || seedHasExtraTombstones) {
     store.queueWrite(() => snapshot(ydoc, docHash, meta));
   }
 

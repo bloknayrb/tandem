@@ -772,15 +772,25 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     //       the oldHash envelope (with its vanished oldPath) coexist for a
     //       byte-identical open to re-key.
     //
-    // Window (a) — a concurrent DELETE in the observer span — is handled by the
-    // tombstone-ledger migration below: the old observer stayed attached (Phase
-    // 1 deferred its teardown), so any in-span DELETE recorded a tombstone into
-    // the oldHash ledger; we fold that ledger forward into newHash before the
-    // RMW snapshot AND again immediately before the re-wire disposes the old
-    // observer, so the just-deleted annotation cannot resurrect.
+    // Window (a) — a concurrent DELETE while the old-hash observer is still
+    // attached — is closed by folding the oldHash tombstone ledger forward into
+    // newHash. The old observer stays attached across the fs.rename + envelope
+    // move + the re-wire's `loadAndMerge` IO (Phase 1 deferred its teardown), so
+    // an in-span DELETE records a tombstone into the oldHash ledger. TWO folds:
+    //
+    //   1. Before the RMW snapshot (the explicit fold immediately below): so the
+    //      freshly-written newHash envelope already carries any tombstone recorded
+    //      during the fs.rename itself. Redundant-but-cheap given fold 2.
+    //   2. The LOAD-BEARING fold (#1040, windows a2 + a3): `migrateTombstonesFrom`
+    //      threaded into the re-wire's wireAnnotationStore → loadAndMerge, which
+    //      folds oldHash→newHash AFTER its `store.load()` read but BEFORE the
+    //      merge. That single, precisely-placed fold catches a DELETE recorded
+    //      either before the re-wire OR during the load read, so loadAndMerge's
+    //      UNION-not-clobber seed carries it and the merge APPLIES the tombstone
+    //      instead of re-inserting the just-deleted record from the RMW envelope.
 
-    // Fold the oldHash tombstone ledger forward into newHash (captures any
-    // DELETE the still-attached old observer recorded during the fs.rename).
+    // Fold 1: captures any DELETE recorded during the fs.rename so the RMW
+    // envelope written next is tombstone-complete.
     migrateTombstoneLedger(oldHash, newHash);
 
     // RMW step 1: write the NEW envelope from the live Y.Maps + migrated ledger,
@@ -796,18 +806,34 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       console.error("[Rename] envelope RMW (write new) failed for %s:", docId, err);
     }
 
-    // Re-key one more time, then re-wire. The second migrate (synchronous, no
-    // await before the re-wire detaches the old observer) captures any DELETE
-    // recorded during the RMW await above; the re-wire's loadAndMerge then seeds
-    // the newHash ledger from the freshly-written envelope (which already carries
-    // the migrated tombstones) and applies them. allowRecovery:false — an active
-    // rename must never let recovery steal a DIFFERENT file's envelope.
-    // Best-effort: a re-wire failure must not flip the committed rename to "error".
-    migrateTombstoneLedger(oldHash, newHash);
+    // Re-wire at the new path. `migrateTombstonesFrom: oldHash` drives fold 2
+    // inside loadAndMerge (after the load read, before the merge) so any DELETE
+    // recorded into the oldHash ledger before or during that read is applied
+    // rather than resurrected. allowRecovery:false — an active rename must never
+    // let recovery steal a DIFFERENT file's envelope. Best-effort: a re-wire
+    // failure must not flip the committed rename to "error".
     try {
-      await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+      await wireAnnotationStore(docId, doc, newPath, {
+        allowRecovery: false,
+        migrateTombstonesFrom: oldHash,
+      });
     } catch (err) {
       console.error("[Rename] re-wire annotation store at new path failed for %s:", docId, err);
+    }
+
+    // RMW step 1b: flush the newHash envelope ONE more time, AFTER the re-wire.
+    // loadAndMerge's fold (fold 2) carries a late DELETE — one recorded into the
+    // oldHash ledger during the re-wire's load read — forward into the newHash
+    // ledger and queues a (debounced) write. This synchronous queueWrite + flush
+    // GUARANTEES that migrated-forward tombstone reaches disk before this call
+    // returns; without it the debounced write could still be pending, leaving the
+    // envelope tombstone-incomplete for an immediate reopen. Best-effort: the
+    // disk rename already committed.
+    try {
+      const newStore = createStore(newHash, { filePath: newPath });
+      await persistSnapshot(newStore, doc, newHash, newPath);
+    } catch (err) {
+      console.error("[Rename] envelope RMW (flush after re-wire) failed for %s:", docId, err);
     }
 
     // RMW step 2: remove the old envelope LAST — only after the re-wire has
