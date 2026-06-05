@@ -34,6 +34,7 @@ import {
 import {
   getTombstones,
   loadAndMerge,
+  migrateTombstoneLedger,
   pickWinner,
   recordTombstone,
   registerAnnotationObserver,
@@ -966,6 +967,115 @@ describe("loadAndMerge", () => {
     expect(survivor).toBeDefined();
     expect(survivor?.rev).toBe(7);
     expect(queueSpy).not.toHaveBeenCalled();
+    cleanup();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadAndMerge — rename tombstone union (#1040)
+// ---------------------------------------------------------------------------
+
+describe("loadAndMerge — rename tombstone union (#1040)", () => {
+  // Union-not-clobber (#1040, window a3): a migrated-forward DELETE may sit in the
+  // in-memory ledger for `docHash` that the just-written file does NOT yet carry.
+  // loadAndMerge must NOT clobber the seed with only the file tombstones — it must
+  // UNION both, keep the migrated-forward tombstone, APPLY it to the Y.Map, and
+  // FORCE a write (the `seedHasExtraTombstones` branch) so it reaches disk for a
+  // later reopen with an empty ledger.
+  it("preserves a seeded tombstone the file lacks, applies it, and forces a write", async () => {
+    // File envelope has A alive at rev 1 and NO tombstone for it.
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeAnnotationDoc(HASH_A, FILE_A, {
+        annotations: [annRecord({ id: "A", rev: 1 })],
+        tombstones: [],
+      }),
+    );
+    await store0.flush();
+    resetStoreForTesting();
+
+    // Pre-seed the in-memory ledger for HASH_A with a tombstone the file lacks —
+    // this stands in for a rename's migrated-forward DELETE (recordTombstone bumps
+    // to prevRev+1, so A is tombstoned at rev 2 > the file's alive rev 1).
+    recordTombstone(HASH_A, "A", 1);
+    expect(getTombstones(HASH_A).map((t) => t.id)).toContain("A");
+
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    // A is also live in the Y.Map at the pre-deletion rev (a stale-tab merge would
+    // re-introduce it); the union'd tombstone must drop it.
+    annMap.set("A", annRecord({ id: "A", rev: 1 }));
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const queueSpy = vi.spyOn(store, "queueWrite");
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    // The seeded tombstone is preserved (not clobbered by the file seed)...
+    expect(getTombstones(HASH_A).map((t) => t.id)).toContain("A");
+    // ...applied to the Y.Map (tombstone rev 2 > Y.Map rev 1 -> A dropped)...
+    expect(annMap.has("A")).toBe(false);
+    // ...and a write is FORCED so the migrated-forward delete reaches disk.
+    expect(queueSpy).toHaveBeenCalled();
+
+    await store.flush();
+    const persisted = await fs.readFile(
+      path.join(env.tmpRoot, "annotations", `${HASH_A}.json`),
+      "utf-8",
+    );
+    const parsed = parseAnnotationDoc(persisted);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.doc.tombstones.map((t) => t.id)).toContain("A");
+      expect(parsed.doc.annotations.map((a) => a.id)).not.toContain("A");
+    }
+    cleanup();
+  });
+
+  // Force-reload safety: clearAndReload clears the in-memory ledger (via
+  // clearFileSyncContext's "close" phase -> tombstonesByDoc.delete) AND the store
+  // BEFORE loadAndMerge runs, so the union degenerates to the (empty) file seed.
+  // A stale ledger entry must NOT survive a legitimate reload to eat a freshly
+  // resurrected annotation. We emulate that ordering: seed a stale tombstone,
+  // clear the ledger (migrateTombstoneLedger from an empty source is a no-op; the
+  // clear is what matters), then loadAndMerge against a file that legitimately
+  // carries the annotation alive — it must NOT be dropped.
+  it("a cleared ledger before reload leaves no stale tombstone to eat a live annotation", async () => {
+    // File envelope (post-reload disk state) has A alive at rev 5, no tombstone.
+    const store0 = createStore(HASH_A, { filePath: FILE_A });
+    store0.queueWrite(() =>
+      makeAnnotationDoc(HASH_A, FILE_A, {
+        annotations: [annRecord({ id: "A", rev: 5, content: "reloaded-alive" })],
+        tombstones: [],
+      }),
+    );
+    await store0.flush();
+
+    // A stale in-memory tombstone exists for A (e.g. from a pre-reload session).
+    recordTombstone(HASH_A, "A", 1);
+    expect(getTombstones(HASH_A).map((t) => t.id)).toContain("A");
+
+    // Force-reload prep clears the in-memory ledger for this hash (the "close"
+    // phase of clearFileSyncContext / resetForTesting does exactly this). After
+    // this the union below must start empty.
+    resetForTesting();
+    expect(getTombstones(HASH_A)).toHaveLength(0);
+
+    // migrateTombstoneLedger from an empty source is a no-op — there is nothing to
+    // fold forward — so the union remains empty and the file's live A survives.
+    migrateTombstoneLedger(HASH_B, HASH_A);
+
+    const ydoc = new Y.Doc();
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const store = createStore(HASH_A, { filePath: FILE_A });
+    const cleanup = await loadAndMerge(syncCtx(ydoc, store));
+
+    // The legitimately-resurrected (reloaded) annotation A is NOT eaten by a stale
+    // tombstone — the cleared ledger contributed nothing to the union.
+    const survivor = annMap.get("A") as AnnotationRecordV1 | undefined;
+    expect(survivor).toBeDefined();
+    expect(survivor?.rev).toBe(5);
+    expect(getTombstones(HASH_A).map((t) => t.id)).not.toContain("A");
     cleanup();
   });
 });

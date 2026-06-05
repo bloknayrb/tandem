@@ -658,6 +658,76 @@ describe("renameDocument — post-commit best-effort (Phase 3)", () => {
   });
 });
 
+describe("renameDocument — re-wire-FAILURE stale observer disposal (#1040)", () => {
+  // The residual on the SUCCESS-disk path: Phase-3 moves the envelope to newHash
+  // and RMW step-2 clears <oldHash>.json. The re-wire is wrapped in a swallowing
+  // try/catch. If `wireAnnotationStore(... newPath ...)` THROWS, `setFileSyncContext`
+  // never ran, so the OLD oldHash observer stays REGISTERED and LIVE (still pointing
+  // at the vanished oldPath) AFTER renameDocument returns. A concurrent DELETE that
+  // arrives in that window schedules a fresh debounced write under oldHash — which
+  // RE-CREATES <oldHash>.json with the vanished oldPath AFTER the step-2 clear().
+  // That re-created envelope is a stale-envelope steal vector (a byte-identical open
+  // could match its vanished meta.filePath and steal it via recoverRenamedEnvelope).
+  //
+  // step-2's own clearOne() drops only the SYNCHRONOUSLY-pending write, so a delete
+  // arriving after the clear is NOT covered by it — the live observer schedules a
+  // brand-new write. The fix disposes the stale oldHash observer (clearFileSyncContext,
+  // gated on !rewired) so no such post-clear write can be scheduled at all. The guard
+  // MUST be gated on !rewired: on the success path docId points at newHash, so an
+  // unconditional clear would tear down the freshly-wired newHash observer.
+  //
+  // RED without the `!rewired` guard: the still-live oldHash observer serializes the
+  // post-return DELETE -> <oldHash>.json is re-created (steal vector reopened). GREEN
+  // with the guard: the observer was disposed, so the post-return DELETE writes
+  // nothing under oldHash and the envelope stays absent.
+  it("a DELETE after a FAILED re-wire does not re-create <oldHash>.json (steal vector closed)", async () => {
+    const { docId, filePath, doc } = await openFileDoc("rewire-fail.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Create + persist annotation A (rev 1) under oldHash. The live observer wired by
+    // openFileDoc is what stays registered if the Phase-3 re-wire throws.
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A")));
+    const oldHash = docHash(filePath);
+    await createStore(oldHash, { filePath }).flush();
+    expect(await fileExists(envelopePath(oldHash))).toBe(true);
+
+    const newPath = path.join(docDir, "rewire-fail-renamed.md");
+
+    // Force the Phase-3 re-wire to THROW so `rewired` stays false and the !rewired
+    // guard path runs. The OLD oldHash observer is never disposed by the (failed)
+    // re-wire -- only the guard's clearFileSyncContext can dispose it.
+    const fileOpener = await import("../../src/server/mcp/file-opener.js");
+    const rewireSpy = vi
+      .spyOn(fileOpener, "wireAnnotationStore")
+      .mockRejectedValueOnce(new Error("simulated re-wire failure"));
+
+    try {
+      const result = await renameDocument(docId, "rewire-fail-renamed.md");
+      // The disk rename committed; a re-wire failure must NOT flip the result.
+      expect(result.status).toBe("renamed");
+    } finally {
+      rewireSpy.mockRestore();
+    }
+
+    // Disk renamed; the old envelope was cleared by RMW step-2.
+    expect(await fileExists(newPath)).toBe(true);
+    expect(await fileExists(envelopePath(oldHash))).toBe(false);
+
+    // Concurrent DELETE arriving AFTER renameDocument returned. WITHOUT the guard the
+    // stale oldHash observer is still registered and would serialize this mutation,
+    // re-creating <oldHash>.json (the steal vector). WITH the guard the observer was
+    // disposed, so this writes nothing under oldHash.
+    withBrowser(doc, () => annMap.delete("A"));
+
+    // Let the debounce window (DEBOUNCE_MS) elapse so any scheduled write fires.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    // GREEN assertion: the old envelope was NOT re-created -- the steal vector is
+    // closed. (RED without the guard: the live observer's write re-creates it.)
+    expect(await fileExists(envelopePath(oldHash))).toBe(false);
+  });
+});
+
 describe("renameDocument — note privacy (ADR-027)", () => {
   it("a note annotation survives the envelope move and reloads under the new path-hash", async () => {
     const { docId, filePath, doc } = await openFileDoc("noted.md", "body");

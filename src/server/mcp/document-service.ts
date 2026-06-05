@@ -825,11 +825,13 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // rather than resurrected. allowRecovery:false — an active rename must never
     // let recovery steal a DIFFERENT file's envelope. Best-effort: a re-wire
     // failure must not flip the committed rename to "error".
+    let rewired = false;
     try {
       await wireAnnotationStore(docId, doc, newPath, {
         allowRecovery: false,
         migrateTombstonesFrom: oldHash,
       });
+      rewired = true;
     } catch (err) {
       console.error("[Rename] re-wire annotation store at new path failed for %s:", docId, err);
     }
@@ -849,12 +851,25 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       console.error("[Rename] envelope RMW (flush after re-wire) failed for %s:", docId, err);
     }
 
-    // RMW step 2: remove the old envelope LAST — only after the re-wire has
-    // disposed the old observer. Removing it earlier would leave the old
-    // observer live with no envelope: a concurrent DELETE could then queue a
-    // debounced write that re-creates <oldHash>.json with the vanished oldPath
-    // (a fresh stale-envelope steal vector). clear() also drops any pending
-    // write the old store may still hold, so nothing re-creates it afterward.
+    // RMW step 2: remove the old envelope LAST. The stale-envelope steal vector
+    // (a concurrent DELETE queuing a debounced write that re-creates
+    // <oldHash>.json with the vanished oldPath) is closed on BOTH paths:
+    //   - success path: the re-wire's setFileSyncContext already disposed the
+    //     oldHash observer (docId now points at newHash), so nothing is left to
+    //     re-create the envelope.
+    //   - re-wire-FAILURE path: loadAndMerge threw before setFileSyncContext
+    //     ran, so the oldHash context is still registered and LIVE, now pointing
+    //     at the vanished oldPath. The !rewired guard below disposes it before
+    //     the clear() so no concurrent DELETE can queue a debounced write that
+    //     re-creates <oldHash>.json after the clear. This MUST be gated on
+    //     !rewired: on the success path docId already points at newHash, so an
+    //     unconditional clearFileSyncContext(docId) would tear down the
+    //     freshly-wired newHash observer.
+    // clear() also drops any pending write the old store may still hold, so
+    // nothing re-creates it afterward.
+    if (!rewired) {
+      clearFileSyncContext(docId);
+    }
     try {
       await createStore(oldHash, { filePath: oldPath }).clear();
     } catch (err) {
