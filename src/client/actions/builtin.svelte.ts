@@ -166,24 +166,6 @@ type SaveAsFormat = "md" | "txt";
 
 let saveAsInflight = false;
 
-/**
- * Pick the directory a desktop "Save As" dialog should open into, honoring the
- * smart-default precedence (#1023): the user's configured save folder, else the
- * Claude working directory, else the OS home directory. Returns `null` when all
- * tiers are empty so the caller falls back to a bare filename (OS-default dir).
- * Pure + exported so the precedence is unit-testable in one shot.
- */
-export function pickSaveAsDirectory(
-  configuredDir: string | null | undefined,
-  claudeWorkingDir: string | null | undefined,
-  homeDir: string | null | undefined,
-): string | null {
-  for (const dir of [configuredDir, claudeWorkingDir, homeDir]) {
-    if (typeof dir === "string" && dir.trim()) return dir.trim();
-  }
-  return null;
-}
-
 /** Configured default save folder from persisted settings (#1023), or null. */
 function readDefaultSaveDirectory(): string | null {
   try {
@@ -236,12 +218,11 @@ async function resolveTauriHomeDir(): Promise<string | null> {
  * path module is unavailable.
  */
 async function resolveSaveAsDefaultPath(fileName: string): Promise<string> {
-  const configuredDir = readDefaultSaveDirectory();
-  const claudeWorkingDir = configuredDir ? null : await fetchClaudeWorkingDir();
-  const homeDir = configuredDir || claudeWorkingDir ? null : await resolveTauriHomeDir();
-  // pickSaveAsDirectory re-applies the precedence; the ternaries above only
-  // avoid the async work for already-decided tiers (not a correctness gate).
-  const dir = pickSaveAsDirectory(configuredDir, claudeWorkingDir, homeDir);
+  // First non-empty tier wins; `||` short-circuits the async work so we never
+  // hit the integrations endpoint or Tauri once an earlier tier resolves. Each
+  // resolver returns a trimmed path or null.
+  const dir =
+    readDefaultSaveDirectory() || (await fetchClaudeWorkingDir()) || (await resolveTauriHomeDir());
   if (!dir) return fileName;
   try {
     const { join } = await import("@tauri-apps/api/path");

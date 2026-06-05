@@ -5,11 +5,7 @@
  * shim — both used by the Save As command (Ctrl+Shift+S / palette).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  downloadBlob,
-  normalizeSaveAsExtension,
-  pickSaveAsDirectory,
-} from "../../src/client/actions/builtin.svelte.js";
+import { downloadBlob, normalizeSaveAsExtension } from "../../src/client/actions/builtin.svelte.js";
 
 describe("normalizeSaveAsExtension", () => {
   it("keeps a matching extension untouched", () => {
@@ -41,32 +37,6 @@ describe("normalizeSaveAsExtension", () => {
   it("dots inside directory names are not treated as the file extension", () => {
     // The basename is `notes` (no dot), so the function should append .md.
     expect(normalizeSaveAsExtension("/tmp/my.folder/notes", "md")).toBe("/tmp/my.folder/notes.md");
-  });
-});
-
-describe("pickSaveAsDirectory", () => {
-  // Smart-default precedence (#1023): configured folder → Claude working dir → home.
-  it("prefers the configured folder over all fallbacks", () => {
-    expect(pickSaveAsDirectory("/configured", "/cwd", "/home/me")).toBe("/configured");
-  });
-
-  it("falls back to the Claude working directory when no folder is configured", () => {
-    expect(pickSaveAsDirectory(null, "/cwd", "/home/me")).toBe("/cwd");
-  });
-
-  it("falls back to the home directory when neither configured nor working dir is set", () => {
-    expect(pickSaveAsDirectory(null, null, "/home/me")).toBe("/home/me");
-    expect(pickSaveAsDirectory(undefined, undefined, "/home/me")).toBe("/home/me");
-  });
-
-  it("returns null when every tier is empty", () => {
-    expect(pickSaveAsDirectory(null, null, null)).toBeNull();
-    expect(pickSaveAsDirectory(undefined, undefined, undefined)).toBeNull();
-  });
-
-  it("skips blank/whitespace tiers and trims the winner", () => {
-    expect(pickSaveAsDirectory("   ", "/cwd", "/home/me")).toBe("/cwd");
-    expect(pickSaveAsDirectory("  /configured  ", null, null)).toBe("/configured");
   });
 });
 
