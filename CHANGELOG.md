@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Editor: default save folder (#1023)** — a new "Default Save Folder" preference controls where new files land when you use **Save As** in the desktop app. Pick a folder with the native picker (or type a path), and the save dialog opens there. When unset, Save As falls back to a smart default: your AI's configured working directory, then your home folder. The setting is stored client-side (independent of the Claude working directory) and is a no-op in the browser distribution, where Save As is a download. The integration lookup is time-boxed so a slow/absent server never blocks the save dialog.
+
 ### Changed
 
 - **Softer, friendlier wording on the two flagship error surfaces (#1016)** — the app-root error boundary and the lost-connection banner read less blunt without losing accuracy. The error boundary's heading goes from "Something went wrong" to "Something didn't go as planned", its body from "The editor encountered an unexpected error." to "The editor ran into an unexpected hiccup.", and the exhausted-recovery line from "Recovery attempts exhausted. Reload the page to continue." to "We weren't able to recover this time — reloading the page should get you going again." The connection banner goes from "Connection to the Tandem server has been lost. Ensure the server is running." to "We've lost the connection to the Tandem server. Please check that it's still running." Copy-only — no error codes, control flow, or testids changed; the still-accurate "reload" / "check the server is running" guidance is preserved, and no `err.message` or path is leaked. Unit + E2E assertions on the old strings were updated to match.
