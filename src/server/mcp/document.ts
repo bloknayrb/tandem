@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Root } from "mdast";
+import path from "path";
 import * as Y from "yjs";
 import { z } from "zod";
 import {
@@ -816,9 +817,16 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Document ID to rename (defaults to active document)"),
     },
-    withErrorBoundary("tandem_rename", async ({ newName, documentId }) => {
-      const id = documentId ?? getActiveDocId();
+    withErrorBoundary("tandem_rename", async ({ newName: rawNewName, documentId: rawDocId }) => {
+      const rawId = rawDocId ?? getActiveDocId();
+      if (!rawId) return mcpError("NO_DOCUMENT", "No document to rename.");
+      // Sanitize via path.basename() — CodeQL's recognized taint-terminator for
+      // js/path-injection. Both values are hashes or basenames (no separators on
+      // valid input); the calls break the taint chain before reaching fs sinks.
+      const id = path.basename(rawId);
       if (!id) return mcpError("NO_DOCUMENT", "No document to rename.");
+      const newName = path.basename(rawNewName);
+      if (!newName) return mcpError("INVALID_NAME", "newName must not be empty.");
 
       const result = await renameDocument(id, newName);
       if (result.status === "error") {
