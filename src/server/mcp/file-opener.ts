@@ -899,8 +899,13 @@ async function clearAndReload(
     // until the caller persists it.
     if (opts?.markCleanAfter !== false) markClean(id);
   } catch (err) {
+    // Static format literal; id/format pass as args (not interpolated into the
+    // format position) so a user-supplied documentId reaching this sink via
+    // reloadDocumentFromMarkdown can't be treated as a printf format string.
     console.error(
-      `[Tandem] clearAndReload: failed for ${id} (format=${format}). Y.Doc may be in a partially cleared state:`,
+      "[Tandem] clearAndReload: failed for %s (format=%s). Y.Doc may be in a partially cleared state:",
+      id,
+      format,
       err,
     );
     throw err;
