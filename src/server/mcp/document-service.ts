@@ -154,7 +154,7 @@ export async function saveDocumentToDisk(
       if (code === "ENOENT") {
         return { status: "skipped", reason: "Source file no longer exists" };
       }
-      console.error(`[AutoSave] Unexpected stat error for ${docState.filePath}:`, err);
+      console.error("[AutoSave] Unexpected stat error for %s:", docState.filePath, err);
       return { status: "skipped", reason: `Cannot verify file state: ${code}` };
     }
 
@@ -509,10 +509,10 @@ export async function autoSaveAllToDisk(): Promise<void> {
     try {
       const result = await saveDocumentToDisk(docId);
       if (result.status === "saved") {
-        console.error(`[AutoSave] Saved ${path.basename(state.filePath)} to disk`);
+        console.error("[AutoSave] Saved %s to disk", path.basename(state.filePath));
       }
     } catch (err) {
-      console.error(`[AutoSave] Unexpected error saving ${state.filePath}:`, err);
+      console.error("[AutoSave] Unexpected error saving %s:", state.filePath, err);
     }
   }
 }
@@ -563,7 +563,7 @@ export function broadcastOpenDocs(): void {
         meta.set(Y_MAP_ACTIVE_DOCUMENT_EPOCH, epoch);
       });
     } catch (err) {
-      console.error(`[Tandem] broadcastOpenDocs: failed to update doc ${docId}:`, err);
+      console.error("[Tandem] broadcastOpenDocs: failed to update doc %s:", docId, err);
     }
   }
 }
@@ -928,7 +928,7 @@ export async function closeDocumentById(
   try {
     await deleteSession(docState.filePath);
   } catch (err) {
-    console.error(`[Tandem] Failed to delete session for ${id}:`, err);
+    console.error("[Tandem] Failed to delete session for %s:", id, err);
   }
 
   if (getActiveDocId() === id) {
@@ -1030,12 +1030,12 @@ export async function restoreOpenDocuments(previousActiveDocId: string | null): 
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        console.error(`[Tandem] Skipping deleted file (removing stale session): ${filePath}`);
+        console.error("[Tandem] Skipping deleted file (removing stale session): %s", filePath);
         deleteSession(filePath).catch((err) => {
-          console.error(`[Tandem] Failed to delete stale session for ${filePath}:`, err);
+          console.error("[Tandem] Failed to delete stale session for %s:", filePath, err);
         });
       } else {
-        console.error(`[Tandem] Failed to restore ${filePath}:`, err);
+        console.error("[Tandem] Failed to restore %s:", filePath, err);
       }
     }
   }

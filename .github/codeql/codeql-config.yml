@@ -1,12 +1,2 @@
 paths-ignore:
   - src/server/annotations/rename-recovery.ts
-  # document-service.ts is the local-user file-orchestration layer: every
-  # fs.open/save/rename/stat operates on a path the local user explicitly chose
-  # (their own files). Under Tandem's same-user, loopback-only threat model
-  # (see CLAUDE.md "Security"), js/path-injection on these paths is not a
-  # meaningful vector, and CodeQL has only ever produced false positives here.
-  # GitHub CodeQL does not honor inline `// codeql[...]` suppression comments,
-  # so a per-sink suppression isn't possible; ignoring the file (rather than
-  # disabling js/path-injection repo-wide) keeps the rule active for the
-  # network-adjacent surfaces (integrations, routes) where it actually matters.
-  - src/server/mcp/document-service.ts
