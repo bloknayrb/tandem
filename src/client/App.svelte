@@ -705,7 +705,10 @@ $effect(() => {
   return () => document.body.classList.remove("tandem-reduce-motion");
 });
 
-createTheme(() => settingsState.settings.theme);
+createTheme(
+  () => settingsState.settings.theme,
+  () => settingsState.settings.systemLightVariant,
+);
 createAccentHue(() => settingsState.settings.accentHue);
 // #811: resolve the font from the ACTIVE tab's format so a tab switch
 // re-derives. `activeTab` MUST be dereferenced inside this getter closure —
