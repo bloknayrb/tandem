@@ -50,6 +50,7 @@ import {
   broadcastOpenDocs,
   getOpenDocs,
   type OpenDoc,
+  saveDocumentToDisk,
   setActiveDocId,
 } from "./document-service.js";
 import { injectTutorialAnnotations } from "./tutorial-annotations.js";
@@ -308,6 +309,89 @@ export async function openScratchpad(content?: string): Promise<OpenFileResult> 
     }),
     forceReloaded: false,
   };
+}
+
+/**
+ * Replace an open document's content from a user-supplied markdown string
+ * (raw-markdown source view/edit, #1021).
+ *
+ * Mirrors the force-reload lifecycle (`clearAndReload`) but sources content from
+ * the passed string instead of disk, and leaves the doc DIRTY so the new content
+ * is persisted to disk. Annotations are cleared (the source edit re-anchors the
+ * whole document — same trade-off as `tandem_open force:true`).
+ *
+ * Throws coded errors the routes map to HTTP status:
+ *  - NO_DOCUMENT        — not currently open
+ *  - UNSUPPORTED_FORMAT — only .md documents have an editable markdown source
+ *  - READ_ONLY          — a read-only .md (e.g. CHANGELOG) must not be replaced
+ *  - RELOAD_IN_PROGRESS — a concurrent reload (file-watcher or source edit) holds the guard
+ */
+export async function reloadDocumentFromMarkdown(id: string, markdown: string): Promise<void> {
+  const existing = getOpenDocs().get(id);
+  if (!existing) {
+    throw Object.assign(new Error("Document is not open."), { code: "NO_DOCUMENT" });
+  }
+  if (existing.format !== "md") {
+    throw Object.assign(new Error("Only .md documents support source editing."), {
+      code: "UNSUPPORTED_FORMAT",
+    });
+  }
+  if (existing.readOnly) {
+    throw Object.assign(new Error("Document is read-only."), { code: "READ_ONLY" });
+  }
+
+  // Serialize against the file-watcher reload path (which guards on the same
+  // Set) so two clear+repopulate transactions never interleave on one Y.Doc.
+  if (reloadInProgress.has(id)) {
+    throw Object.assign(new Error("A reload is already in progress for this document."), {
+      code: "RELOAD_IN_PROGRESS",
+    });
+  }
+  reloadInProgress.add(id);
+  try {
+    const doc = getDocument(id) ?? getOrCreateDocument(id);
+    // markCleanAfter:false keeps the doc dirty — the repopulation bumps the
+    // dirty version past savedVersion, so any concurrent autosave's
+    // markCleanIfUnchanged(snapshot) sees a newer version and won't clear-to-
+    // clean against stale content (#851 mechanism).
+    await clearAndReload(id, doc, existing.filePath, "md", existing, markdown, {
+      markCleanAfter: false,
+    });
+    // File-source docs re-wire the durable annotation store (clearAndReload
+    // wiped it) and persist the new markdown to disk immediately. Scratchpads
+    // (source: "upload") have no durable store and no disk file — skip both.
+    if (existing.source === "file") {
+      await wireAnnotationStore(id, doc, existing.filePath);
+      // Persist the new content to disk now. The only transient skip reachable
+      // here is the per-doc autosave lock (`savingDocs`) being held by a
+      // concurrent 60s autosave at this instant — every other skip reason is
+      // excluded (source is "file", not read-only, .md is save-eligible, the
+      // doc is open, and the just-set savedAt baseline rules out the external-
+      // modification guard). So retry briefly to close the window where this
+      // route would report success while disk still holds the pre-edit bytes
+      // (#1021 review SHOULD-FIX). If still skipped after the retries, the doc
+      // is left dirty (markCleanAfter:false) and the next autosave persists it.
+      let saved = await saveDocumentToDisk(id, "manual");
+      for (let attempt = 0; attempt < 5 && saved.status === "skipped"; attempt++) {
+        await new Promise((r) => setTimeout(r, 50));
+        saved = await saveDocumentToDisk(id, "manual");
+      }
+      if (saved.status === "error") {
+        // The disk write failed (saveDocumentToDisk already pushed a save-error
+        // notification). The Y.Doc reload succeeded and the doc is left dirty,
+        // so autosave will keep retrying — don't fail the in-memory reload.
+        console.error(
+          "[Tandem] reloadDocumentFromMarkdown: disk save failed for %s: %s",
+          id,
+          saved.reason,
+        );
+      }
+    }
+    broadcastOpenDocs();
+    ensureAutoSave();
+  } finally {
+    reloadInProgress.delete(id);
+  }
 }
 
 // --- Extracted helpers for openFileByPath ---
@@ -775,6 +859,12 @@ export async function wireAnnotationStore(
  * comment-extract/inject notification UX that #612 added to the normal-open
  * path: a malformed Word comment no longer silently drops on reload, and an
  * inject mid-transact failure rolls back partial annotation writes.
+ *
+ * `opts.markCleanAfter` (default true): force-reload reads FROM disk, so the
+ * repopulated body matches disk and the doc is clean. The source-view reload
+ * (#1021) repopulates from a user-edited markdown STRING that does NOT match
+ * disk yet, so it passes `false` to keep the doc dirty — its caller then writes
+ * the new content to disk explicitly.
  */
 async function clearAndReload(
   id: string,
@@ -783,6 +873,7 @@ async function clearAndReload(
   format: string,
   existing: OpenDoc,
   source: string | Buffer,
+  opts?: { markCleanAfter?: boolean },
 ): Promise<void> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
@@ -836,10 +927,19 @@ async function clearAndReload(
     // reload itself doesn't trigger a redundant write-back (#851). Done after
     // attachObservers re-registers the body observer (which preserves the
     // counter the in-transaction repopulation above may have bumped).
-    markClean(id);
+    //
+    // Skipped by the source-view reload (#1021): its body came from a user-
+    // edited string that does NOT yet match disk, so the doc must stay dirty
+    // until the caller persists it.
+    if (opts?.markCleanAfter !== false) markClean(id);
   } catch (err) {
+    // Static format literal; id/format pass as args (not interpolated into the
+    // format position) so a user-supplied documentId reaching this sink via
+    // reloadDocumentFromMarkdown can't be treated as a printf format string.
     console.error(
-      `[Tandem] clearAndReload: failed for ${id} (format=${format}). Y.Doc may be in a partially cleared state:`,
+      "[Tandem] clearAndReload: failed for %s (format=%s). Y.Doc may be in a partially cleared state:",
+      id,
+      format,
       err,
     );
     throw err;

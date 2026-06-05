@@ -11,6 +11,7 @@ declare module "express" {
   interface Request extends IncomingMessage {
     body: unknown;
     params: Record<string, string>;
+    query: Record<string, unknown>; // Express-parsed query string (strings/arrays/objects)
     method: string; // narrows IncomingMessage's string | undefined
     path: string; // Express-only (IncomingMessage has url, not path)
   }
