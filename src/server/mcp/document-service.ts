@@ -77,6 +77,13 @@ export {
 /** Internal alias for the registry's view of open docs — used by closures below. */
 const openDocs = getOpenDocs();
 
+/** Non-throwing existence probe (fs.access has no boolean variant). */
+const pathExists = (p: string): Promise<boolean> =>
+  fs
+    .access(p)
+    .then(() => true)
+    .catch(() => false);
+
 // --- Disk save ---
 
 /** Per-document save lock to prevent concurrent auto-save + manual save races. */
@@ -666,10 +673,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
   // Refuse to clobber an existing file. TOCTOU window is acceptable (matches
   // Save-As); fs.rename on Windows also throws EEXIST as a backstop.
-  const targetExists = await fs
-    .access(newPath)
-    .then(() => true)
-    .catch(() => false);
+  const targetExists = await pathExists(newPath);
   if (targetExists) {
     return {
       status: "error",
@@ -761,10 +765,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // on next open by the passive recoverRenamedEnvelope (old path now gone).
     try {
       const oldEnvelope = envelopePath(oldHash);
-      const oldEnvelopeExists = await fs
-        .access(oldEnvelope)
-        .then(() => true)
-        .catch(() => false);
+      const oldEnvelopeExists = await pathExists(oldEnvelope);
       if (oldEnvelopeExists) {
         // Remove any stale orphan at the target hash first — Windows fs.rename
         // throws EEXIST if the destination exists.

@@ -98,20 +98,13 @@ function errorCodeToLabel(code: string): string {
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
     case "INVALID_ARGUMENT":
-    case "EXTENSION_MISMATCH":
       return "BAD_REQUEST";
-    case "INVALID_NAME":
-      return "INVALID_NAME";
-    case "PATH_REJECTED":
-      return "PATH_REJECTED";
-    case "READ_ONLY":
-      return "READ_ONLY";
-    case "NOT_RENAMABLE":
-      return "NOT_RENAMABLE";
-    case "ALREADY_EXISTS":
-      return "ALREADY_EXISTS";
-    case "RENAME_IN_PROGRESS":
-      return "RENAME_IN_PROGRESS";
+    // NOTE: the rename error codes (INVALID_NAME / NOT_RENAMABLE / ALREADY_EXISTS
+    // / RENAME_IN_PROGRESS / PATH_REJECTED / EXTENSION_MISMATCH) are intentionally
+    // NOT mapped here. renameDocument's codes flow through routes/rename.ts (which
+    // emits the raw errorCode) and the tandem_rename MCP tool (mcpError) — never
+    // through sendApiError, the sole caller of this label mapper. They still need
+    // their HTTP status, so they ARE listed in errorCodeToHttpStatus above.
     case "ANNOTATION_RESOLVED":
       return "ANNOTATION_RESOLVED";
     case "FILE_TOO_LARGE":
