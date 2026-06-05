@@ -78,9 +78,10 @@ export {
 const openDocs = getOpenDocs();
 
 /** Non-throwing existence probe (fs.access has no boolean variant). */
+// codeql[js/path-injection] -- p is always a server-managed path validated by openFileByPath/assertPathSafe before storage
 const pathExists = (p: string): Promise<boolean> =>
   fs
-    .access(p) // codeql[js/path-injection] -- server-managed path; openFileByPath/assertPathSafe validates before addDoc
+    .access(p) // codeql[js/path-injection]
     .then(() => true)
     .catch(() => false);
 
