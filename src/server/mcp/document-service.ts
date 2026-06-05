@@ -15,7 +15,11 @@ import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { closeStore, createStore } from "../annotations/store.js";
-import { migrateTombstoneLedger, persistSnapshot } from "../annotations/sync.js";
+import {
+  mergeEnvelopeForward,
+  migrateTombstoneLedger,
+  persistSnapshot,
+} from "../annotations/sync.js";
 import {
   clearDirtyState,
   isDirty,
@@ -805,6 +809,25 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // Fold 1: captures any DELETE recorded during the fs.rename so the RMW
     // envelope written next is tombstone-complete.
     migrateTombstoneLedger(oldHash, newHash);
+
+    // Fold 0 (#1040 × #1041 regression): the RMW snapshot below reads ONLY the
+    // live Y.Doc. A durable annotation that is NEWER in the OLD file envelope than
+    // in the live map (e.g. a note flushed at rev 2 then diverged to rev 1 via a
+    // `withInternal` write the durable-sync observer skipped) would be DROPPED by
+    // that pure-live snapshot, and the subsequent re-wire's `loadAndMerge` — now
+    // reading the clobbered new-hash envelope — finds nothing newer than live, so
+    // the file-newer record is lost on rename. Fold the OLD envelope's alive
+    // records forward into the live doc FIRST (file-wins by rev) so the winning
+    // record lands in the RMW snapshot. The old envelope still exists here (RMW
+    // step 2 removes it last). Best-effort: a read/merge failure must not flip the
+    // committed rename to "error" — at worst we degrade to the prior live-only
+    // snapshot. In the common case (live == file) this is an idempotent no-op.
+    try {
+      const oldFile = await createStore(oldHash, { filePath: oldPath }).load();
+      mergeEnvelopeForward(doc, oldFile, newHash);
+    } catch (err) {
+      console.error("[Rename] old-envelope fold-forward failed for %s:", docId, err);
+    }
 
     // RMW step 1: write the NEW envelope from the live Y.Maps + migrated ledger,
     // with meta.filePath already = newPath. This is the move (annotations +
