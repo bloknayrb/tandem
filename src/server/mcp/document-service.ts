@@ -857,14 +857,20 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     //   - success path: the re-wire's setFileSyncContext already disposed the
     //     oldHash observer (docId now points at newHash), so nothing is left to
     //     re-create the envelope.
-    //   - re-wire-FAILURE path: loadAndMerge threw before setFileSyncContext
-    //     ran, so the oldHash context is still registered and LIVE, now pointing
-    //     at the vanished oldPath. The !rewired guard below disposes it before
-    //     the clear() so no concurrent DELETE can queue a debounced write that
+    //   - re-wire-FAILURE path: when wireAnnotationStore REJECTS at the call
+    //     boundary (e.g. a failed dynamic import) setFileSyncContext never ran,
+    //     so the oldHash context is still registered and LIVE, now pointing at
+    //     the vanished oldPath. The !rewired guard below disposes it before the
+    //     clear() so no concurrent DELETE can queue a debounced write that
     //     re-creates <oldHash>.json after the clear. This MUST be gated on
     //     !rewired: on the success path docId already points at newHash, so an
     //     unconditional clearFileSyncContext(docId) would tear down the
     //     freshly-wired newHash observer.
+    //     NOTE: wireAnnotationStore SWALLOWS *internal* failures (e.g. loadAndMerge
+    //     throwing) and returns normally, so rewired stays true and this guard does
+    //     not fire for that case — leaving the same accepted "duplicate/resurrect,
+    //     never lose, degraded-session" residual as master. Closing it needs
+    //     wireAnnotationStore to signal real internal success (#1057).
     // clear() also drops any pending write the old store may still hold, so
     // nothing re-creates it afterward.
     if (!rewired) {
