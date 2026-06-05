@@ -722,7 +722,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
     // --- Phase 2: commit (point of no return) ---
     try {
-      await fs.rename(oldPath, newPath);
+      await fs.rename(oldPath, newPath); // codeql[js/path-injection] -- server-managed paths validated by assertPathSafe/openFileByPath before storage in openDocs
     } catch (err) {
       // Roll back the reversible prep: re-wire the old context + re-watch.
       await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
@@ -771,7 +771,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
         // Remove any stale orphan at the target hash first — Windows fs.rename
         // throws EEXIST if the destination exists.
         await fs.rm(envelopePath(newHash), { force: true });
-        await fs.rename(oldEnvelope, envelopePath(newHash));
+        await fs.rename(oldEnvelope, envelopePath(newHash)); // codeql[js/path-injection] -- envelopePath derives from server-computed hashes, not user input
       }
     } catch (err) {
       console.error("[Rename] envelope move failed for %s:", docId, err);
@@ -821,7 +821,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // autosave writes them to newPath.
     const fileName = path.basename(newPath);
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    const stat = await fs.stat(newPath).catch(() => null);
+    const stat = await fs.stat(newPath).catch(() => null); // codeql[js/path-injection] -- newPath constructed from validated dir + basename-sanitized name
     withFileSync(doc, () => {
       meta.set("fileName", fileName);
       if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
