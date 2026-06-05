@@ -426,6 +426,7 @@ describe("closeDocumentById", () => {
     expect(hasDoc("fail-del")).toBe(false);
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining("Failed to delete session"),
+      "fail-del",
       expect.any(Error),
     );
     errorSpy.mockRestore();

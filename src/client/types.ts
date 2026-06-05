@@ -7,11 +7,29 @@ export interface DocListEntry {
   fileName: string;
   format: string;
   readOnly: boolean;
+  /**
+   * "file" = a real on-disk document; "upload" = an ephemeral scratchpad or
+   * uploaded file. Drives the rename affordance — only "file" docs are
+   * renamable (scratchpads/uploads use Save As). See #1017.
+   */
+  source: "file" | "upload";
 }
 
 export interface OpenTab extends DocListEntry {
   ydoc: Y.Doc;
   provider: HocuspocusProvider;
+}
+
+/**
+ * Single client-side definition of the rename affordance gate (#1017): only
+ * real on-disk files (`source: "file"`) that aren't read-only can be renamed —
+ * scratchpads/uploads use Save As, and `.docx`/changelog open read-only. The
+ * server re-validates authoritatively in `renameDocument`; this mirrors it so
+ * the three UI surfaces (TabItem `canRename`, the F2 handler, the
+ * DocumentTabs trigger re-check) can't drift in what they offer.
+ */
+export function isRenamable(tab: Pick<DocListEntry, "source" | "readOnly">): boolean {
+  return tab.source === "file" && !tab.readOnly;
 }
 
 // ---------------------------------------------------------------------------

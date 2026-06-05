@@ -4,7 +4,7 @@ import { createScratchpad } from "../actions/builtin.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { loadInvoke } from "../cowork/cowork-invoke.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
-import type { OpenTab } from "../types.js";
+import { isRenamable, type OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import {
   addRecentFile,
@@ -39,6 +39,11 @@ interface Props {
   /** Increment to toggle the new-tab menu from a parent keyboard shortcut
    * (Ctrl+T). The mount value 0 is skipped; each change flips the menu. */
   openMenuTrigger?: number;
+  /** Commit an inline tab rename (#1017): new basename for the tab. */
+  onTabRename?: (tabId: string, newName: string) => void;
+  /** Increment to start renaming the ACTIVE tab from a parent shortcut (F2).
+   * Mirrors openMenuTrigger; the mount value 0 is skipped. */
+  renameTrigger?: number;
   /** Reactive head of the closed-tab stack — drives "Reopen last closed". */
   closedTabTop?: ClosedTabRecord | null;
   onReopenClosed?: () => void;
@@ -55,9 +60,27 @@ const {
   reduceMotion = false,
   onRequestOpenDialog,
   openMenuTrigger = 0,
+  onTabRename,
+  renameTrigger = 0,
   closedTabTop = null,
   onReopenClosed,
 }: Props = $props();
+
+// Inline rename (#1017). DocumentTabs is the single source of truth for which
+// tab is editing; each TabItem derives `isRenaming` from it. Double-click (via
+// onstartrename) and the F2 trigger (below) both flow through `startRename`.
+let renamingTabId = $state<string | null>(null);
+
+function startRename(tabId: string) {
+  renamingTabId = tabId;
+}
+function commitRename(tabId: string, newName: string) {
+  renamingTabId = null;
+  onTabRename?.(tabId, newName);
+}
+function cancelRename() {
+  renamingTabId = null;
+}
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
 
@@ -586,6 +609,21 @@ $effect(() => {
 $effect(() => {
   if (openMenuTrigger > 0) untrack(toggleNewTabMenu);
 });
+
+// F2 (App-level fixed shortcut) starts renaming the active tab via this counter
+// prop. Mirrors openMenuTrigger: only `renameTrigger` is tracked, the mount
+// value 0 is skipped, and the body runs under `untrack` so reading/writing
+// `renamingTabId`/`activeTabId` can't re-subscribe this effect. App already
+// gates F2 on the active tab being a renamable file, but re-check here so a
+// stale counter can never open a rename on a read-only/scratchpad tab.
+$effect(() => {
+  if (renameTrigger > 0) {
+    untrack(() => {
+      const tab = tabs.find((t) => t.id === activeTabId);
+      if (tab && isRenamable(tab)) renamingTabId = tab.id;
+    });
+  }
+});
 </script>
 
 <!-- Transparent container so pill TabItems read as standalone chips against
@@ -624,6 +662,10 @@ $effect(() => {
         dropIndicator={dropTarget?.id === tab.id ? dropTarget.side : null}
         onkeydown={handleKeyDown}
         {reduceMotion}
+        isRenaming={renamingTabId === tab.id}
+        onstartrename={startRename}
+        onrename={commitRename}
+        onrenamecancel={cancelRename}
       />
     {/each}
   </div>

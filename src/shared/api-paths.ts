@@ -23,6 +23,7 @@ export const API_INFO = "/api/info";
 export const API_OPEN = "/api/open";
 export const API_CLOSE = "/api/close";
 export const API_SAVE = "/api/save";
+export const API_RENAME = "/api/rename";
 export const API_UPLOAD = "/api/upload";
 export const API_SCRATCHPAD = "/api/scratchpad";
 export const API_CONVERT = "/api/convert";

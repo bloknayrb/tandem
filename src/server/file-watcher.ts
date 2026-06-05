@@ -70,22 +70,22 @@ export function watchFile(filePath: string, onChanged: (filePath: string) => Pro
       entry.timer = setTimeout(() => {
         entry.timer = null;
         onChanged(filePath).catch((err) => {
-          console.error(`[FileWatcher] onChanged callback failed for ${filePath}:`, err);
+          console.error("[FileWatcher] onChanged callback failed for %s:", filePath, err);
         });
       }, 500);
     });
   } catch (err) {
-    console.error(`[FileWatcher] Failed to watch ${filePath}:`, err);
+    console.error("[FileWatcher] Failed to watch %s:", filePath, err);
     return;
   }
 
   watcher.on("error", (err) => {
-    console.error(`[FileWatcher] Watcher error for ${filePath}:`, err);
+    console.error("[FileWatcher] Watcher error for %s:", filePath, err);
     unwatchFile(filePath);
   });
 
   watched.set(filePath, { watcher, timer: null, suppressed: null });
-  console.error(`[FileWatcher] Watching ${filePath}`);
+  console.error("[FileWatcher] Watching %s", filePath);
 }
 
 /**
@@ -121,10 +121,10 @@ export function unwatchFile(filePath: string): void {
   try {
     entry.watcher.close();
   } catch (err) {
-    console.error(`[FileWatcher] watcher.close() failed for ${filePath}:`, err);
+    console.error("[FileWatcher] watcher.close() failed for %s:", filePath, err);
   }
   watched.delete(filePath);
-  console.error(`[FileWatcher] Unwatched ${filePath}`);
+  console.error("[FileWatcher] Unwatched %s", filePath);
 }
 
 /**

@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Root } from "mdast";
+import path from "path";
 import * as Y from "yjs";
 import { z } from "zod";
 import {
@@ -43,6 +44,7 @@ import {
   getCurrentDoc,
   getOpenDocs,
   hasDoc,
+  renameDocument,
   requireDocument,
   saveDocumentToDisk,
   setActiveDocId,
@@ -799,6 +801,43 @@ export function registerDocumentTools(server: McpServer): void {
         closed: true,
         was: result.closedPath,
         activeDocumentId: result.activeDocumentId,
+      });
+    }),
+  );
+
+  server.tool(
+    "tandem_rename",
+    "Rename an open on-disk document's file (same directory, same extension). Keeps the document open and its annotations intact. Renames the active document if no documentId is given. Not for scratchpads/uploads or read-only files.",
+    {
+      newName: z
+        .string()
+        .describe("New file name (basename only, e.g. 'notes.md' — must keep the same extension)"),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Document ID to rename (defaults to active document)"),
+    },
+    withErrorBoundary("tandem_rename", async ({ newName: rawNewName, documentId: rawDocId }) => {
+      const rawId = rawDocId ?? getActiveDocId();
+      if (!rawId) return mcpError("NO_DOCUMENT", "No document to rename.");
+      // Sanitize via path.basename() — CodeQL's recognized taint-terminator for
+      // js/path-injection. Both values are hashes or basenames (no separators on
+      // valid input); the calls break the taint chain before reaching fs sinks.
+      const id = path.basename(rawId);
+      if (!id) return mcpError("BAD_REQUEST", "documentId resolved to an empty string.");
+      const newName = path.basename(rawNewName);
+      if (!newName) return mcpError("INVALID_NAME", "newName must not be empty.");
+
+      const result = await renameDocument(id, newName);
+      if (result.status === "error") {
+        return mcpError(result.errorCode ?? "RENAME_FAILED", result.reason ?? "Rename failed.");
+      }
+
+      return mcpSuccess({
+        renamed: true,
+        from: result.oldPath,
+        to: result.newPath,
+        fileName: result.fileName,
       });
     }),
   );
