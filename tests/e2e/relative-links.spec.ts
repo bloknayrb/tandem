@@ -50,3 +50,24 @@ test("clicking a relative .md link opens the target file as a new tab", async ({
   });
   await expect(sourceTabName).toBeVisible();
 });
+
+test("an editor link shows a pointer cursor and a title tooltip with its destination (#996)", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "link-source.md") });
+
+  await page.goto("/");
+  const editor = page.locator(".tandem-editor");
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await expect(editor).toContainText("Link Source");
+
+  const link = editor.locator("a", { hasText: "Open the target document" });
+  await expect(link).toBeVisible({ timeout: 5_000 });
+
+  // The href in the fixture is the relative path "link-target.md".
+  await expect(link).toHaveAttribute("href", "link-target.md");
+  // Hover affordance: the destination URL is surfaced as a native title tooltip.
+  await expect(link).toHaveAttribute("title", "link-target.md");
+  // ...and the cursor reads as interactive.
+  await expect(link).toHaveCSS("cursor", "pointer");
+});

@@ -1,6 +1,6 @@
 <script lang="ts">
 import { HocuspocusProvider } from "@hocuspocus/provider";
-import { Editor as TiptapEditor } from "@tiptap/core";
+import { Editor as TiptapEditor, mergeAttributes } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Highlight from "@tiptap/extension-highlight";
@@ -37,6 +37,24 @@ import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
 
 /** File extensions that open as new Tandem tabs when clicked as relative links. .docx excluded — not navigable as a link target. */
 const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
+
+// Link mark that surfaces the destination URL on hover via a native `title`
+// tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
+// `href` (plus our configured rel/target) but no title, so links give no hover
+// affordance for where they point. We override renderHTML to mirror the href
+// into `title` whenever the rendered mark actually has an href and no explicit
+// title already (e.g. a .docx-imported title attr wins). Pointer-cursor styling
+// lives in editor.css (`.tandem-editor a[href]`).
+const LinkWithHoverTitle = Link.extend({
+  renderHTML({ HTMLAttributes }) {
+    const href = HTMLAttributes.href;
+    const attrs =
+      typeof href === "string" && href.length > 0 && HTMLAttributes.title == null
+        ? mergeAttributes(HTMLAttributes, { title: href })
+        : HTMLAttributes;
+    return ["a", mergeAttributes(this.options.HTMLAttributes, attrs), 0];
+  },
+});
 
 // SAFE_EXTERNAL_PREFIXES + isSafeExternalHref hoisted to ./utils/url-safety.ts
 // so the click-time anchor intercept and the paste-time link sanitizer share
@@ -146,7 +164,7 @@ $effect(() => {
       StarterKit.configure({ history: false, listItem: false }),
       ListItemCheckbox,
       Highlight.configure({ multicolor: true }),
-      Link.configure({
+      LinkWithHoverTitle.configure({
         openOnClick: false,
         HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
       }),
