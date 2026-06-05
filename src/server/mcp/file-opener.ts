@@ -773,7 +773,7 @@ async function clearAndReload(
   existing: OpenDoc,
   source: string | Buffer,
 ): Promise<void> {
-  console.error(`[Tandem] clearAndReload: reloading ${id} from disk`);
+  console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
   // 0. Detach durable-annotation sync for this doc before clearing Y.Maps so
   //    the observer doesn't queue a write snapshotting the mid-clear state,
@@ -837,10 +837,10 @@ async function clearAndReload(
   // 4. Delete session after successful reload so stale state doesn't restore on next startup.
   //    Runs last: if readFile or transact fails above, the session survives as a recovery path.
   await deleteSession(existing.filePath).catch((err) => {
-    console.error(`[Tandem] clearAndReload: deleteSession failed for ${id}:`, err);
+    console.error("[Tandem] clearAndReload: deleteSession failed for %s:", id, err);
   });
 
-  console.error(`[Tandem] clearAndReload: complete for ${id}`);
+  console.error("[Tandem] clearAndReload: complete for %s", id);
 }
 
 /**
@@ -916,12 +916,12 @@ function buildResult(
  */
 async function reloadFromDisk(id: string, filePath: string, format: string): Promise<void> {
   if (reloadInProgress.has(id)) {
-    console.error(`[FileWatcher] reload already in progress for ${id}, skipping`);
+    console.error("[FileWatcher] reload already in progress for %s, skipping", id);
     return;
   }
   reloadInProgress.add(id);
   try {
-    console.error(`[FileWatcher] reloadFromDisk: reloading ${id} from ${filePath}`);
+    console.error("[FileWatcher] reloadFromDisk: reloading %s from %s", id, filePath);
 
     const doc = getOrCreateDocument(id);
 
@@ -1008,7 +1008,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     // write-back (#851).
     markClean(id);
 
-    console.error(`[FileWatcher] reloadFromDisk: complete for ${id}`);
+    console.error("[FileWatcher] reloadFromDisk: complete for %s", id);
   } finally {
     reloadInProgress.delete(id);
   }
@@ -1033,7 +1033,7 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
           timestamp: Date.now(),
         });
       } catch (err) {
-        console.error(`[FileWatcher] reloadFromDisk failed for ${filePath}:`, err);
+        console.error("[FileWatcher] reloadFromDisk failed for %s:", filePath, err);
         pushNotification({
           id: generateNotificationId(),
           type: "general-error",
@@ -1046,7 +1046,7 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
       }
     });
   } catch (err) {
-    console.error(`[FileWatcher] wireFileWatcher failed for ${filePath}:`, err);
+    console.error("[FileWatcher] wireFileWatcher failed for %s:", filePath, err);
   }
 }
 

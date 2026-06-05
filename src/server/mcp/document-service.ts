@@ -78,10 +78,9 @@ export {
 const openDocs = getOpenDocs();
 
 /** Non-throwing existence probe (fs.access has no boolean variant). */
-// codeql[js/path-injection] -- p is always a server-managed path validated by openFileByPath/assertPathSafe before storage
 const pathExists = (p: string): Promise<boolean> =>
   fs
-    .access(p) // codeql[js/path-injection]
+    .access(p)
     .then(() => true)
     .catch(() => false);
 
@@ -723,7 +722,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
 
     // --- Phase 2: commit (point of no return) ---
     try {
-      await fs.rename(oldPath, newPath); // codeql[js/path-injection] -- server-managed paths validated by assertPathSafe/openFileByPath before storage in openDocs
+      await fs.rename(oldPath, newPath);
     } catch (err) {
       // Log the ORIGINAL failure first — the rollback below can itself throw, and
       // we must not let a rollback error mask why the rename actually failed.
@@ -785,7 +784,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
         // Remove any stale orphan at the target hash first — Windows fs.rename
         // throws EEXIST if the destination exists.
         await fs.rm(envelopePath(newHash), { force: true });
-        await fs.rename(oldEnvelope, envelopePath(newHash)); // codeql[js/path-injection] -- envelopePath derives from server-computed hashes, not user input
+        await fs.rename(oldEnvelope, envelopePath(newHash));
       }
     } catch (err) {
       console.error("[Rename] envelope move failed for %s:", docId, err);
@@ -846,7 +845,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
       // autosave writes them to newPath.
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-      const stat = await fs.stat(newPath).catch(() => null); // codeql[js/path-injection] -- newPath constructed from validated dir + basename-sanitized name
+      const stat = await fs.stat(newPath).catch(() => null);
       withFileSync(doc, () => {
         meta.set("fileName", fileName);
         if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
