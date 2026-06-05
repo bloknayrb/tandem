@@ -50,6 +50,15 @@ tauri-plugin-updater = "2"
 tauri-plugin-prevent-default = "5"
 tauri-plugin-decorum = "1"
 
+# Windows-only DWM bindings: force rounded window corners (DWMWCP_ROUND) so
+# snapping/maximizing keeps the floating-chrome rounded surface, and suppress
+# the borderless-window outline (DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE). See #984.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+] }
+
 [features]
 # Test-only hooks: TANDEM_COWORK_ROOT_OVERRIDE env-var reads.
 # Auto-enabled for `cargo test` via `#[cfg(test)]`; OFF for `cargo build --release`.

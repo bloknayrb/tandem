@@ -796,6 +796,13 @@ pub fn run() {
                 if let Err(e) = main_window.eval(&script) {
                     log::warn!("Failed to seed initial theme: {e}");
                 }
+
+                // Force rounded corners + suppress the borderless outline (#984).
+                // No-op on non-Windows. Re-asserted on resize/move in the
+                // window-event handler since snap/maximize resets the corner
+                // preference.
+                #[cfg(target_os = "windows")]
+                apply_window_chrome(&main_window);
             } else {
                 log::warn!("main window not found at theme-seed time — useTauriTheme bridge will handle initial theme");
             }
@@ -803,6 +810,17 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(move |window, event| {
+            // Re-assert rounded corners + the no-outline border after snap or
+            // maximize, which reset the DWM corner preference (#984). Windows
+            // emits Resized (and usually Moved) on every snap-layout change.
+            // No-op on non-Windows; `apply_window_chrome` is Windows-only.
+            #[cfg(target_os = "windows")]
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+            ) {
+                apply_window_chrome(window);
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if tray_flag_for_close.load(Ordering::Acquire) {
                     // Tray available: hide to tray, server keeps running
@@ -1690,6 +1708,100 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Abstracts over the Tauri window types that expose a native `hwnd()` on
+/// Windows. `setup()` hands us a `WebviewWindow`; the `on_window_event` handler
+/// hands us a `Window`. Both have an inherent `hwnd()`; we normalize the result
+/// to a raw `*mut c_void` so `apply_window_chrome` never has to name the
+/// `windows`-crate `HWND` type (which Tauri does not publicly re-export) and is
+/// agnostic to whether the underlying `HWND.0` is a pointer or an `isize`.
+#[cfg(target_os = "windows")]
+trait RawHwnd {
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String>;
+}
+
+#[cfg(target_os = "windows")]
+impl RawHwnd for tauri::WebviewWindow {
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String> {
+        // `as isize as *mut _` normalizes across `windows`-crate versions where
+        // `HWND.0` is either a raw pointer or an `isize`.
+        self.hwnd().map(|h| h.0 as isize as *mut core::ffi::c_void).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl RawHwnd for tauri::Window {
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String> {
+        self.hwnd().map(|h| h.0 as isize as *mut core::ffi::c_void).map_err(|e| e.to_string())
+    }
+}
+
+/// Force rounded window corners and suppress the borderless-window outline via
+/// the Desktop Window Manager. Windows-only; a no-op stub on every other OS so
+/// call sites stay platform-agnostic. See issue #984.
+///
+/// Windows 11 rounds normal windows by default but **squares the corners when
+/// the window is snapped or maximized**, and the `decorations: false`
+/// borderless window can draw a thin 1px outline. We explicitly opt in to
+/// `DWMWCP_ROUND` (so snapped/maximized windows stay rounded) and set the
+/// border color to `DWMWA_COLOR_NONE` (so no outline is drawn). Both attributes
+/// reset on some window-state transitions, so this is invoked at setup AND
+/// re-asserted from the window-event handler on resize/move.
+///
+/// All DWM calls are best-effort: a failing `DwmSetWindowAttribute` (e.g. an
+/// older Windows 10 build that predates these attributes — they require Win11
+/// build 22000+) is logged at debug and ignored. It must never abort startup.
+///
+/// Generic over the window type so it accepts both the `WebviewWindow` from
+/// `setup()` and the `Window` delivered to the `on_window_event` handler — both
+/// expose `hwnd()` on Windows.
+#[cfg(target_os = "windows")]
+fn apply_window_chrome<W: RawHwnd>(window: &W) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+
+    // DWMWA_COLOR_NONE (0xFFFFFFFE) suppresses the border entirely, giving a
+    // rounded window with no outline. Not exposed as a named constant by
+    // windows-sys, so spell it out (matches dwmapi.h / the MS docs).
+    const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+
+    let hwnd: HWND = match window.raw_hwnd() {
+        Ok(ptr) => ptr as HWND,
+        Err(e) => {
+            log::warn!("apply_window_chrome: hwnd() unavailable: {e}");
+            return;
+        }
+    };
+
+    // SAFETY: `hwnd` is a live top-level window handle owned by this process for
+    // the lifetime of the call. Each attribute value is a stack local whose size
+    // we pass exactly; DwmSetWindowAttribute only reads `cbAttribute` bytes.
+    unsafe {
+        let corner_pref: i32 = DWMWCP_ROUND;
+        let hr = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            std::ptr::addr_of!(corner_pref).cast(),
+            std::mem::size_of::<i32>() as u32,
+        );
+        if hr != 0 {
+            log::debug!("DwmSetWindowAttribute(CORNER_PREFERENCE) failed: hr=0x{hr:08x}");
+        }
+
+        let border_color: u32 = DWMWA_COLOR_NONE;
+        let hr = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR as u32,
+            std::ptr::addr_of!(border_color).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
+        if hr != 0 {
+            log::debug!("DwmSetWindowAttribute(BORDER_COLOR) failed: hr=0x{hr:08x}");
+        }
+    }
 }
 
 /// Invoked from `TitleBar.svelte` after the WebView page has loaded.
