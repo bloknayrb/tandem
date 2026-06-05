@@ -22,22 +22,29 @@ COMMIT_MARK="${STATE_DIR}/${_WS_MARK_COMMIT}"
 [[ -f "$EDIT_MARK" ]] || exit 0
 _ws_newer_than "$COMMIT_MARK" "$EDIT_MARK" && exit 0
 
-: > "$NUDGED_MARK"
-
 # Emit the reminder as real context (STDOUT JSON) so Claude Code injects it via
 # hookSpecificOutput.additionalContext, not just as stderr noise. Build the JSON
 # with jq so the text is escaped correctly; fall back to stderr if jq is missing
-# so the reminder is never silently dropped.
+# OR the jq invocation itself fails, so the reminder is never silently dropped.
 read -r -d '' REMINDER <<'EOF' || true
 ℹ Session has uncommitted source edits. Workflow:
    plan → agent review → implement → /simplify → verify → manual test → commit → PR → /pr-review-toolkit:review-pr.
 EOF
 
-if command -v jq >/dev/null 2>&1; then
-  jq -n --arg ctx "$REMINDER" \
-    '{hookSpecificOutput:{hookEventName:"Stop",additionalContext:$ctx}}'
+# Emit FIRST, then write the one-shot gate marker. If we marked before emitting and
+# jq were present but failed (broken install, SIGPIPE, future filter edit), the ERR
+# trap would exit 0 with nothing on either stream while the marker suppressed the
+# nudge for the rest of the session -- the exact silent-drop this hook prevents.
+# `command -v` and the `&&` short-circuit live in an `if` condition, so a jq failure
+# here is trap-exempt and falls through to the stderr fallback.
+if command -v jq >/dev/null 2>&1 \
+  && jq -n --arg ctx "$REMINDER" \
+       '{hookSpecificOutput:{hookEventName:"Stop",additionalContext:$ctx}}'; then
+  :
 else
   printf '%s\n' "$REMINDER" >&2
 fi
+
+: > "$NUDGED_MARK"
 
 exit 0
