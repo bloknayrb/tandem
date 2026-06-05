@@ -623,6 +623,18 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     };
   }
 
+  // Explicit separator guard so CodeQL's js/path-injection taint-tracker sees a
+  // recognized barrier before newName reaches path.join. validateRenameFilename
+  // already enforces this via path.basename equivalence, but CodeQL requires an
+  // inline string check to terminate the taint chain.
+  if (newName.includes("/") || newName.includes("\\") || newName.includes("\0")) {
+    return {
+      status: "error",
+      reason: "Filename must not contain directory separators or null bytes.",
+      errorCode: "INVALID_PATH",
+    };
+  }
+
   const newPath = path.resolve(path.join(path.dirname(oldPath), path.basename(newName)));
 
   // Reject UNC + `\\?\` extended-length prefixes (cross-platform string check).
