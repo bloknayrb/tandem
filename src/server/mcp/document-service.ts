@@ -623,7 +623,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     };
   }
 
-  const newPath = path.resolve(path.join(path.dirname(oldPath), newName));
+  const newPath = path.resolve(path.join(path.dirname(oldPath), path.basename(newName)));
 
   // Reject UNC + `\\?\` extended-length prefixes (cross-platform string check).
   const prefixReason = rejectUnsafeWindowsPrefix(newName) ?? rejectUnsafeWindowsPrefix(newPath);
