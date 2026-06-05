@@ -563,6 +563,31 @@ export async function loadAndMerge(
   return registerAnnotationObserver(ctx);
 }
 
+/**
+ * Force one durable snapshot write for a document — capturing the current Y.Map
+ * + tombstone-ledger state under `docHash` with `filePath` in the envelope meta,
+ * then flush it synchronously.
+ *
+ * Used by `renameDocument` (#1017) to heal the envelope's internal
+ * `meta.filePath` after a rename: `loadAndMerge` skips its post-merge write when
+ * the moved envelope already equals the live Y.Map (`needsWrite === false`),
+ * which would leave the stale pre-rename path in the envelope. A stale
+ * `meta.filePath` (now a vanished path) is exactly the signal the PASSIVE
+ * rename-recovery scan matches on — so it could match and STEAL this envelope
+ * for a byte-identical doc opened later. Forcing one snapshot through the same
+ * per-hash write queue rewrites `meta.filePath` to the post-rename path, closing
+ * that window.
+ */
+export async function persistSnapshot(
+  store: DocStore,
+  ydoc: Y.Doc,
+  docHash: string,
+  filePath: string,
+): Promise<void> {
+  store.queueWrite(() => snapshot(ydoc, docHash, { filePath }));
+  await store.flush();
+}
+
 // ---------------------------------------------------------------------------
 // Test-only reset
 // ---------------------------------------------------------------------------

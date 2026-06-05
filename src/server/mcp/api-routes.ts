@@ -10,6 +10,7 @@ import {
   API_NOTIFY_STREAM,
   API_OPEN,
   API_REMOVE_ANNOTATION,
+  API_RENAME,
   API_ROTATE_TOKEN,
   API_SAVE,
   API_SCRATCHPAD,
@@ -30,6 +31,7 @@ import { handleMode } from "./routes/mode.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
 import { handleOpen } from "./routes/open.js";
 import { handleRemoveAnnotation } from "./routes/remove-annotation.js";
+import { handleRename } from "./routes/rename.js";
 import { makeRotateTokenHandler } from "./routes/rotate-token.js";
 import { handleSave } from "./routes/save.js";
 import { handleScratchpad } from "./routes/scratchpad.js";
@@ -150,6 +152,14 @@ export function registerApiRoutes(
 
   app.options(API_SAVE, mw);
   app.post(API_SAVE, mw, largeBody, handleSave);
+
+  // Rename inherits the same Host-header (DNS-rebinding) + CORS Origin posture
+  // as open/close/save via `mw`. There is no loopback gate here (and
+  // assertLoopbackForMutation is a no-op on the default loopback bind anyway);
+  // CSRF is closed because a cross-origin JSON POST triggers a preflight that
+  // `mw` answers with Allow-Origin: null. See #1017 security review.
+  app.options(API_RENAME, mw);
+  app.post(API_RENAME, mw, largeBody, handleRename);
 
   app.options(API_UPLOAD, mw);
   app.post(API_UPLOAD, mw, largeBody, handleUpload);

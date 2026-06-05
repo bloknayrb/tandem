@@ -13,7 +13,9 @@ import {
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
-import { closeStore } from "../annotations/store.js";
+import { docHash } from "../annotations/doc-hash.js";
+import { closeStore, createStore, envelopePath } from "../annotations/store.js";
+import { persistSnapshot } from "../annotations/sync.js";
 import {
   clearDirtyState,
   isDirty,
@@ -23,6 +25,7 @@ import {
 } from "../documents/dirty.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
+import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, getAdapter } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
@@ -515,6 +518,10 @@ export function toDocListEntry(d: OpenDoc) {
     fileName: path.basename(d.filePath),
     format: d.format,
     readOnly: d.readOnly,
+    // `source` distinguishes on-disk files ("file") from ephemeral
+    // scratchpads/uploads ("upload"). The client uses it to gate the rename
+    // affordance (only "file" docs are renamable); see #1017.
+    source: d.source,
   };
 }
 
@@ -554,6 +561,271 @@ export function broadcastOpenDocs(): void {
   }
 }
 
+export interface RenameResult {
+  status: "renamed" | "error";
+  /** When renamed: the previous on-disk path. */
+  oldPath?: string;
+  /** When renamed: the new on-disk path. */
+  newPath?: string;
+  /** When renamed: the new basename the tab displays. */
+  fileName?: string;
+  reason?: string;
+  errorCode?: string;
+}
+
+/**
+ * Rename an open on-disk document's file, keeping its documentId / Hocuspocus
+ * room STABLE (mirrors Save-As's promote-in-place, see `saveDocumentAsToDisk`).
+ * Only the path migrates — disk file, durable annotation envelope, session,
+ * file-watch target, registry entry, and the tab's fileName metadata. Connected
+ * clients keep their Y.Doc/room and just see a new tab label. See #1017.
+ *
+ * NOT for scratchpads/uploads (`source !== "file"` → use Save-As) or read-only
+ * docs (incl. .docx). Renaming preserves bytes + extension — no format change.
+ *
+ * The ordering here is reviewed and load-bearing; see the inline notes
+ * (flush-before-teardown, envelope move + meta heal-write) before changing it.
+ */
+export async function renameDocument(docId: string, newName: string): Promise<RenameResult> {
+  // --- Phase 0: validate (every rejection BEFORE any mutation) ---
+  const docState = openDocs.get(docId);
+  if (!docState) {
+    return { status: "error", reason: "Document not open", errorCode: "NOT_FOUND" };
+  }
+  if (docState.readOnly) {
+    return {
+      status: "error",
+      reason: "Read-only documents cannot be renamed.",
+      errorCode: "READ_ONLY",
+    };
+  }
+  if (docState.source !== "file") {
+    return {
+      status: "error",
+      reason: "Only on-disk files can be renamed; scratchpads and uploads use Save As.",
+      errorCode: "NOT_RENAMABLE",
+    };
+  }
+
+  const nameCheck = validateRenameFilename(newName);
+  if (!nameCheck.ok) {
+    return { status: "error", reason: nameCheck.reason, errorCode: nameCheck.code };
+  }
+
+  const oldPath = docState.filePath;
+  const oldExt = path.extname(oldPath).toLowerCase();
+  const newExt = path.extname(newName).toLowerCase();
+  if (newExt !== oldExt) {
+    return {
+      status: "error",
+      reason: `File extension must stay '${oldExt}' (renaming does not convert formats).`,
+      errorCode: "EXTENSION_MISMATCH",
+    };
+  }
+
+  const newPath = path.resolve(path.join(path.dirname(oldPath), newName));
+
+  // Reject UNC + `\\?\` extended-length prefixes (cross-platform string check).
+  const prefixReason = rejectUnsafeWindowsPrefix(newName) ?? rejectUnsafeWindowsPrefix(newPath);
+  if (prefixReason) {
+    return { status: "error", reason: prefixReason, errorCode: "INVALID_PATH" };
+  }
+
+  // Reject a symlinked path component (a planted symlink could redirect the
+  // rename onto a protected file). Widen allowed-roots to the path's own fs
+  // root — same as Save-As — since the user renames within their existing dir.
+  try {
+    assertPathSafe(newPath, { allowedRoots: [path.parse(newPath).root] });
+  } catch (err) {
+    return {
+      status: "error",
+      reason: err instanceof Error ? err.message : String(err),
+      errorCode: "PATH_REJECTED",
+    };
+  }
+
+  // No-op rename (same resolved path) — nothing to migrate. Checked BEFORE the
+  // exists-guard below, which would otherwise reject renaming a file to itself.
+  // (A case-only rename on a case-insensitive filesystem is a known v1 gap: the
+  // exists-guard sees the same inode and rejects it as ALREADY_EXISTS.)
+  if (path.resolve(oldPath) === newPath) {
+    return { status: "renamed", oldPath, newPath, fileName: path.basename(newPath) };
+  }
+
+  // Refuse to clobber an existing file. TOCTOU window is acceptable (matches
+  // Save-As); fs.rename on Windows also throws EEXIST as a backstop.
+  const targetExists = await fs
+    .access(newPath)
+    .then(() => true)
+    .catch(() => false);
+  if (targetExists) {
+    return {
+      status: "error",
+      reason: `A file already exists at ${path.basename(newPath)}.`,
+      errorCode: "ALREADY_EXISTS",
+    };
+  }
+
+  // Share the per-doc save lock so auto-save / tandem_save can't race the rename.
+  if (savingDocs.has(docId)) {
+    return {
+      status: "error",
+      reason: "A save is in progress; try again.",
+      errorCode: "RENAME_IN_PROGRESS",
+    };
+  }
+  savingDocs.add(docId);
+
+  const oldHash = docHash(oldPath);
+  const newHash = docHash(newPath);
+  const format = docState.format;
+
+  // file-opener imports document-service statically; dynamic import here avoids
+  // the cycle (same pattern as saveDocumentAsToDisk).
+  const { wireAnnotationStore, wireFileWatcher } = await import("./file-opener.js");
+
+  try {
+    const doc = getOrCreateDocument(docId);
+
+    // --- Phase 1: reversible prep (flush BEFORE teardown) ---
+    // Flush the live store first so <oldHash>.json captures current annotations
+    // + the still-intact tombstone ledger. closeStore MUST precede
+    // clearFileSyncContext (whose "close" cleanup deletes the ledger) or
+    // tombstones are lost — a deleted annotation would resurrect after rename.
+    try {
+      await closeStore(oldHash);
+    } catch (err) {
+      console.error("[Rename] closeStore(old) failed for %s:", docId, err);
+    }
+    clearFileSyncContext(docId);
+
+    // Stop watching the old path before the rename so the delete/create events
+    // fs.rename emits don't fire a spurious reloadFromDisk.
+    unwatchFile(oldPath);
+
+    // --- Phase 2: commit (point of no return) ---
+    try {
+      await fs.rename(oldPath, newPath);
+    } catch (err) {
+      // Roll back the reversible prep: re-wire the old context + re-watch.
+      await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
+      if (format !== "docx") wireFileWatcher(docId, oldPath, format);
+      const code = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+      return {
+        status: "error",
+        reason: err instanceof Error ? err.message : String(err),
+        errorCode: code,
+      };
+    }
+
+    // --- Phase 3: best-effort, each wrapped (the disk rename is the contract) ---
+    // NOTE: a concurrent annotation DELETE arriving in the brief async window
+    // between clearFileSyncContext and the wireAnnotationStore below (observer
+    // detached) won't be tombstoned and could be resurrected by the merge. The
+    // window spans the fs.rename + envelope move; accepted as a narrow v1
+    // limitation (no data loss — at worst a just-deleted annotation reappears).
+    //
+    // A second, symmetric v1 limitation (CRDT review R1): between the envelope
+    // move below and the meta heal-write, the envelope sits at newHash with a
+    // stale meta.filePath (the now-vanished oldPath). A *concurrent*
+    // openFileByPath of a DIFFERENT byte-identical doc (allowRecovery:true)
+    // could, in that sub-second window, match this envelope in
+    // recoverRenamedEnvelope and re-key it — duplicating (never losing) doc A's
+    // annotations onto the other doc. Same best-effort posture as the recovery
+    // module; closing it would require a read-modify-write to newHash instead of
+    // the fs.rename + heal-write split.
+
+    // Move the annotation envelope (it carries annotations + tombstones) so the
+    // re-wire at the new hash re-seeds them. Best-effort; a crash here is healed
+    // on next open by the passive recoverRenamedEnvelope (old path now gone).
+    try {
+      const oldEnvelope = envelopePath(oldHash);
+      const oldEnvelopeExists = await fs
+        .access(oldEnvelope)
+        .then(() => true)
+        .catch(() => false);
+      if (oldEnvelopeExists) {
+        // Remove any stale orphan at the target hash first — Windows fs.rename
+        // throws EEXIST if the destination exists.
+        await fs.rm(envelopePath(newHash), { force: true });
+        await fs.rename(oldEnvelope, envelopePath(newHash));
+      }
+    } catch (err) {
+      console.error("[Rename] envelope move failed for %s:", docId, err);
+    }
+
+    // Re-wire the durable store at the new path. loadAndMerge reads the moved
+    // envelope, re-seeds tombstones, merges idempotently with the live Y.Maps,
+    // and registers a fresh observer. allowRecovery:false — an active rename
+    // must never let recovery steal a DIFFERENT file's envelope.
+    await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+
+    // Heal the envelope's internal meta.filePath (#1017 review, Finding A):
+    // loadAndMerge skips its write when the moved file already equals the Y.Map,
+    // leaving the stale pre-rename path — which the passive recovery scan could
+    // match (vanished old path) and STEAL for a byte-identical doc. Force one
+    // snapshot so meta.filePath = newPath lands immediately.
+    try {
+      const healStore = createStore(newHash, { filePath: newPath });
+      await persistSnapshot(healStore, doc, newHash, newPath);
+    } catch (err) {
+      console.error("[Rename] envelope meta heal-write failed for %s:", docId, err);
+    }
+
+    // Move the session: write the new one BEFORE deleting the old so a crash
+    // leaves the durable copy. saveSession stats newPath for its mtime baseline.
+    try {
+      await saveSession(newPath, format, doc);
+      await deleteSession(oldPath);
+    } catch (err) {
+      console.error("[Rename] session move failed for %s:", docId, err);
+    }
+
+    // Re-target the file watcher (skip .docx — binary, no live reload), then arm
+    // suppress so the first change event after re-watch doesn't bounce back.
+    if (format !== "docx") {
+      wireFileWatcher(docId, newPath, format);
+      suppressNextChange(newPath);
+    }
+
+    // Update the registry entry: same id/room, new path. addDoc overwrites by id.
+    addDoc(docId, { id: docId, filePath: newPath, format, readOnly: false, source: "file" });
+
+    // Update the tab's fileName + savedAt baseline. withFileSync is the right
+    // origin per ADR-031 (post-rename bookkeeping — a file-writer echo, not user
+    // intent or setup). fs.rename preserves bytes + mtime, so set savedAt to the
+    // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
+    // autosave writes them to newPath.
+    const fileName = path.basename(newPath);
+    const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+    const stat = await fs.stat(newPath).catch(() => null);
+    withFileSync(doc, () => {
+      meta.set("fileName", fileName);
+      if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
+    });
+
+    broadcastOpenDocs();
+    return { status: "renamed", oldPath, newPath, fileName };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+    pushNotification({
+      id: generateNotificationId(),
+      type: "save-error",
+      severity: "error",
+      message: `Rename failed for ${path.basename(oldPath)}: ${msg}`,
+      toolName: "manual",
+      errorCode: errCode,
+      documentId: docId,
+      dedupKey: `rename:${docId}`,
+      timestamp: Date.now(),
+    });
+    return { status: "error", reason: msg, errorCode: errCode };
+  } finally {
+    savingDocs.delete(docId);
+  }
+}
+
 /**
  * Close a document by ID. Saves the session, removes from tracking,
  * picks a new active doc if needed, stops auto-save if no docs remain,
@@ -575,19 +847,23 @@ export async function closeDocumentById(
   // Stop watching for external changes before removing the document
   unwatchFile(docState.filePath);
 
-  // Flush the durable annotation store + drop the per-doc file-sync observer
-  // before removing the doc, so a pending debounced write doesn't race with
-  // the doc being evicted from Hocuspocus (and the Y.Doc being destroyed).
-  // The registry hands back the docHash we stashed at open time so we don't
-  // need to recompute it from the file path.
-  const dropped = clearFileSyncContext(id);
-  if (dropped) {
-    try {
-      await closeStore(dropped.docHash);
-    } catch (err) {
-      console.error("[Tandem] closeDocumentById: closeStore failed for %s:", id, err);
-    }
+  // Flush the durable annotation store FIRST (while the in-memory tombstone
+  // ledger is still intact), THEN drop the per-doc file-sync observer.
+  //
+  // Order is load-bearing (#1017 review, Finding C): `clearFileSyncContext`'s
+  // "close" cleanup DELETES `tombstonesByDoc[hash]`. If we cleared before
+  // flushing, a pending debounced snapshot would serialize an emptied ledger —
+  // so a delete-then-close within the 100ms debounce window would drop the
+  // tombstone, and the deleted annotation could resurrect on a later stale-tab
+  // CRDT merge. `docHash(filePath)` is exactly the hash wireAnnotationStore
+  // registered the context under, so flushing it first is correct; it is a
+  // harmless no-op for ephemeral docs that have no store.
+  try {
+    await closeStore(docHash(docState.filePath));
+  } catch (err) {
+    console.error("[Tandem] closeDocumentById: closeStore failed for %s:", id, err);
   }
+  clearFileSyncContext(id);
 
   // Clear save lock to prevent a close-reopen race where the old lock blocks new saves
   savingDocs.delete(id);

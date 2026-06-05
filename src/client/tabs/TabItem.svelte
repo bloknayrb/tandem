@@ -1,7 +1,8 @@
 <script lang="ts">
 import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
 import { tabExit } from "../panels/cardMotion.js";
-import type { OpenTab } from "../types.js";
+import { isRenamable, type OpenTab } from "../types.js";
+import TabRenameInput from "./TabRenameInput.svelte";
 
 interface Props {
   tab: OpenTab;
@@ -13,6 +14,14 @@ interface Props {
   onkeydown: (e: KeyboardEvent, id: string) => void;
   /** App reduce-motion setting; threaded from DocumentTabs (s3, #798). */
   reduceMotion?: boolean;
+  /** True when THIS tab is in inline-rename mode (#1017). Container-owned. */
+  isRenaming?: boolean;
+  /** Request to enter rename mode for this tab (double-click on the name). */
+  onstartrename?: (id: string) => void;
+  /** Commit a rename: new basename for this tab. */
+  onrename?: (id: string, newName: string) => void;
+  /** Cancel rename mode (Escape / blur). */
+  onrenamecancel?: () => void;
 }
 
 const {
@@ -24,7 +33,15 @@ const {
   dropIndicator,
   onkeydown,
   reduceMotion = false,
+  isRenaming = false,
+  onstartrename,
+  onrename,
+  onrenamecancel,
 }: Props = $props();
+
+// Only real on-disk files are renamable; scratchpads/uploads use Save As, and
+// read-only docs (incl. .docx) can't be renamed. Mirrors the server gate.
+const canRename = $derived(isRenamable(tab));
 
 // ---- useTabDirty logic inlined (hooks can't be imported into Svelte) ----
 let dirty = $state(false);
@@ -175,13 +192,31 @@ function handleMouseLeaveClose() {
     {/if}
   </span>
 
-  <span
-    data-testid={`tab-name-${tab.id}`}
-    title={tab.filePath}
-    style={`font-weight: ${isActive ? 500 : 400}; min-width: 80px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`}
-  >
-    {tab.fileName}
-  </span>
+  {#if isRenaming}
+    <TabRenameInput
+      initial={tab.fileName}
+      testId={`tab-rename-input-${tab.id}`}
+      oncommit={(value) => onrename?.(tab.id, value)}
+      oncancel={() => onrenamecancel?.()}
+    />
+  {:else}
+    <!-- Double-click the name to rename (file docs only). The wrapper is a
+         presentational span; dblclick (not a focusable control) carries the
+         affordance, mirroring the editor's double-click-to-select-word idiom. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <span
+      data-testid={`tab-name-${tab.id}`}
+      title={canRename ? `${tab.filePath} — double-click or F2 to rename` : tab.filePath}
+      style={`font-weight: ${isActive ? 500 : 400}; min-width: 80px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`}
+      ondblclick={(e) => {
+        if (!canRename) return;
+        e.stopPropagation();
+        onstartrename?.(tab.id);
+      }}
+    >
+      {tab.fileName}
+    </span>
+  {/if}
 
   {#if tab.readOnly}
     <span

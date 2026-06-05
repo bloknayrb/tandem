@@ -82,6 +82,16 @@ interface ResolvedPath {
 }
 
 /**
+ * Compare two filesystem paths for identity. Case-insensitive on Windows, to
+ * match `docIdFromPath`'s lowercasing and the OS's case-insensitive semantics.
+ */
+function pathsEqual(a: string, b: string): boolean {
+  const ra = path.resolve(a);
+  const rb = path.resolve(b);
+  return process.platform === "win32" ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+}
+
+/**
  * Open a file by its absolute path on disk.
  * Throws on errors (ENOENT, EACCES, EBUSY, etc.) — caller maps to MCP or HTTP responses.
  * Pass `force: true` to reload from disk even if already open (clears all document state).
@@ -101,7 +111,23 @@ export async function openFileByPath(
   const readOnly = options?.readOnly === true ? true : derivedReadOnly;
   const fileName = path.basename(resolved);
   const openDocs = getOpenDocs();
-  const existing = openDocs.get(id);
+  let existingId = id;
+  let existing = openDocs.get(id);
+
+  // Realpath fallback: after a rename, a doc stays registered under its ORIGINAL
+  // path-hash id but now points at `resolved`. `docIdFromPath(resolved)` no
+  // longer matches that id, so without this scan openFileByPath would open a
+  // DUPLICATE tab of the same file. (Save-As has the same latent property —
+  // promote keeps the upload-derived id; this cures both. See #1017.)
+  if (!existing) {
+    for (const [openId, d] of openDocs) {
+      if (d.source === "file" && pathsEqual(d.filePath, resolved)) {
+        existingId = openId;
+        existing = d;
+        break;
+      }
+    }
+  }
 
   // Already open — force-reload or switch to existing
   if (existing) {
@@ -112,18 +138,18 @@ export async function openFileByPath(
       // where `resolved` was just produced by resolveAndValidatePath —
       // CodeQL traces the sanitizer cross-line within a function but not
       // across function boundaries.
-      const doc = getDocument(id) ?? getOrCreateDocument(id);
+      const doc = getDocument(existingId) ?? getOrCreateDocument(existingId);
       const reloadBuffer =
         format === "docx" ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
-      await clearAndReload(id, doc, resolved, format, existing, reloadBuffer);
-      addDoc(id, { id, filePath: resolved, format, readOnly, source: "file" });
-      setActiveDocId(id);
-      await wireAnnotationStore(id, doc, resolved);
+      await clearAndReload(existingId, doc, resolved, format, existing, reloadBuffer);
+      addDoc(existingId, { id: existingId, filePath: resolved, format, readOnly, source: "file" });
+      setActiveDocId(existingId);
+      await wireAnnotationStore(existingId, doc, resolved);
       broadcastOpenDocs();
       ensureAutoSave();
       return {
         ...buildResult(doc, {
-          documentId: id,
+          documentId: existingId,
           filePath: resolved,
           fileName,
           format,
@@ -135,8 +161,8 @@ export async function openFileByPath(
       };
     }
     return handleAlreadyOpen(
-      id,
-      getOrCreateDocument(id),
+      existingId,
+      getOrCreateDocument(existingId),
       format,
       resolved,
       readOnly,
@@ -992,7 +1018,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
  * Wire up the file watcher for a document. Calls reloadFromDisk on
  * external changes and pushes a browser notification.
  */
-function wireFileWatcher(id: string, filePath: string, format: string): void {
+export function wireFileWatcher(id: string, filePath: string, format: string): void {
   try {
     watchFile(filePath, async () => {
       try {

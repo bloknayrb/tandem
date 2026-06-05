@@ -2,7 +2,12 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { getOpenDocs, removeDoc, setActiveDocId } from "../../src/server/mcp/document-service.js";
+import {
+  addDoc,
+  getOpenDocs,
+  removeDoc,
+  setActiveDocId,
+} from "../../src/server/mcp/document-service.js";
 import {
   openFileByPath,
   openFileFromContent,
@@ -122,6 +127,33 @@ describe("openFileByPath — duplicate detection", () => {
     const second = await openFileByPath(f);
     expect(second.alreadyOpen).toBe(true);
     expect(second.documentId).toBe(first.documentId);
+  });
+
+  it("reopening a renamed file by its NEW path resolves to the same tab, not a duplicate (#1017)", async () => {
+    // After a rename the doc keeps its OLD documentId (= docIdFromPath(oldPath))
+    // but its registry filePath is the NEW path. A later openFileByPath(newPath)
+    // computes a DIFFERENT id and would open a duplicate tab without the realpath
+    // fallback. Simulate the post-rename registry state, then reopen by new path.
+    const oldPath = path.join(tmpDir, "before.md");
+    await fs.writeFile(oldPath, "# Body");
+    const first = await openFileByPath(oldPath);
+    expect(first.alreadyOpen).toBe(false);
+
+    // Rename on disk + reflect the promote-in-place registry state (same id).
+    const newPath = path.join(tmpDir, "after.md");
+    await fs.rename(oldPath, newPath);
+    const state = getOpenDocs().get(first.documentId);
+    if (!state) throw new Error("doc vanished");
+    addDoc(first.documentId, { ...state, filePath: newPath });
+
+    const second = await openFileByPath(newPath);
+    expect(second.alreadyOpen).toBe(true);
+    expect(second.documentId).toBe(first.documentId);
+    // Exactly one tab for this file — the fallback prevented a duplicate.
+    const fileDocs = [...getOpenDocs().values()].filter(
+      (d) => d.source === "file" && path.resolve(d.filePath) === path.resolve(newPath),
+    );
+    expect(fileDocs).toHaveLength(1);
   });
 });
 

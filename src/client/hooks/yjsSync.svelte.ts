@@ -1,6 +1,6 @@
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
-import { API_CLOSE } from "../../shared/api-paths.js";
+import { API_CLOSE, API_RENAME } from "../../shared/api-paths.js";
 import {
   CTRL_ROOM,
   DEFAULT_MCP_PORT,
@@ -37,6 +37,7 @@ export interface YjsSyncState {
   readonly activeTabId: string | null;
   setActiveTabId: (id: string) => void;
   handleTabClose: (id: string) => void;
+  handleTabRename: (id: string, newName: string, onError?: (message: string) => void) => void;
   readonly connected: boolean;
   readonly connectionStatus: ConnectionStatus;
   readonly reconnectAttempts: number;
@@ -289,7 +290,8 @@ export function createYjsSync(): YjsSyncState {
           entry.fileName === t.fileName &&
           entry.filePath === t.filePath &&
           entry.format === t.format &&
-          entry.readOnly === t.readOnly
+          entry.readOnly === t.readOnly &&
+          entry.source === t.source
         ) {
           return t; // no metadata drift — preserve identity to avoid needless rerenders
         }
@@ -299,6 +301,12 @@ export function createYjsSync(): YjsSyncState {
           filePath: entry.filePath,
           format: entry.format,
           readOnly: entry.readOnly,
+          // `source` must be refreshed too (#1017): a scratchpad Save-As-to-disk
+          // (#827) keeps the same documentId/room but flips source upload→file.
+          // Without this, the promoted tab keeps a stale `source: "upload"` and
+          // the rename affordance (gated on source === "file") stays disabled
+          // until a full reload.
+          source: entry.source,
         };
       });
     tabsState = [...kept, ...newTabs];
@@ -496,6 +504,47 @@ export function createYjsSync(): YjsSyncState {
       });
   };
 
+  const handleTabRename = (tabId: string, newName: string, onError?: (message: string) => void) => {
+    const target = tabsState.find((t) => t.id === tabId);
+    if (!target) return;
+    const prevFileName = target.fileName;
+
+    // Optimistically update the visible label by reassigning the array with a
+    // fresh tab object — matching the reassign style handleDocumentList uses.
+    // The server broadcast reconciles fileName + filePath authoritatively (the
+    // metadata-drift path in handleDocumentList); on failure we revert + toast.
+    const renameLocal = (name: string) =>
+      tabsState.map((t) => (t.id === tabId ? { ...t, fileName: name } : t));
+    tabsState = renameLocal(newName);
+
+    const revert = (message: string) => {
+      tabsState = renameLocal(prevFileName);
+      onError?.(message);
+    };
+
+    fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_RENAME}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId: tabId, newName }),
+    })
+      .then(async (res) => {
+        if (res.ok) return;
+        let message = `Rename failed (${res.status}).`;
+        try {
+          const body = (await res.json()) as { message?: string };
+          if (body?.message) message = body.message;
+        } catch {
+          // non-JSON body — keep the status-code message
+        }
+        console.warn("[Tandem] Server rejected rename:", res.status, message);
+        revert(message);
+      })
+      .catch((err) => {
+        console.warn("[Tandem] Failed to rename document on server:", err);
+        revert("Rename failed: could not reach the server.");
+      });
+  };
+
   const destroy = () => {
     if (destroyed) return;
     destroyed = true;
@@ -538,6 +587,7 @@ export function createYjsSync(): YjsSyncState {
     },
     setActiveTabId,
     handleTabClose,
+    handleTabRename,
     get connected() {
       return connected;
     },

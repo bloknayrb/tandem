@@ -60,8 +60,16 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
     case "INVALID_ARGUMENT":
+    case "INVALID_NAME":
+    case "EXTENSION_MISMATCH":
+    case "PATH_REJECTED":
       return 400;
+    case "READ_ONLY":
+      return 403;
     case "ANNOTATION_RESOLVED":
+    case "NOT_RENAMABLE":
+    case "ALREADY_EXISTS":
+    case "RENAME_IN_PROGRESS":
       return 409;
     case "FILE_TOO_LARGE":
       return 413;
@@ -90,7 +98,20 @@ function errorCodeToLabel(code: string): string {
     case "UNSUPPORTED_FORMAT":
     case "NO_SUGGESTIONS":
     case "INVALID_ARGUMENT":
+    case "EXTENSION_MISMATCH":
       return "BAD_REQUEST";
+    case "INVALID_NAME":
+      return "INVALID_NAME";
+    case "PATH_REJECTED":
+      return "PATH_REJECTED";
+    case "READ_ONLY":
+      return "READ_ONLY";
+    case "NOT_RENAMABLE":
+      return "NOT_RENAMABLE";
+    case "ALREADY_EXISTS":
+      return "ALREADY_EXISTS";
+    case "RENAME_IN_PROGRESS":
+      return "RENAME_IN_PROGRESS";
     case "ANNOTATION_RESOLVED":
       return "ANNOTATION_RESOLVED";
     case "FILE_TOO_LARGE":

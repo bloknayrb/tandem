@@ -344,6 +344,15 @@ function filePathFor(docHash: string): string {
 }
 
 /**
+ * Absolute path to a document's on-disk annotation envelope (`<dir>/<hash>.json`).
+ * Exported so `renameDocument` (#1017) can move an envelope between docHashes
+ * when a file is renamed, without re-deriving the annotations-dir layout.
+ */
+export function envelopePath(docHash: string): string {
+  return filePathFor(docHash);
+}
+
+/**
  * Does an on-disk envelope exist for this docHash? Used by the rename-recovery
  * gate (#313): recovery only runs when NO path-hash envelope exists, so it can
  * never steal annotations from a live document. Feature-off and read errors

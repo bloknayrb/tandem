@@ -43,6 +43,7 @@ import {
   getCurrentDoc,
   getOpenDocs,
   hasDoc,
+  renameDocument,
   requireDocument,
   saveDocumentToDisk,
   setActiveDocId,
@@ -799,6 +800,36 @@ export function registerDocumentTools(server: McpServer): void {
         closed: true,
         was: result.closedPath,
         activeDocumentId: result.activeDocumentId,
+      });
+    }),
+  );
+
+  server.tool(
+    "tandem_rename",
+    "Rename an open on-disk document's file (same directory, same extension). Keeps the document open and its annotations intact. Renames the active document if no documentId is given. Not for scratchpads/uploads or read-only files.",
+    {
+      newName: z
+        .string()
+        .describe("New file name (basename only, e.g. 'notes.md' — must keep the same extension)"),
+      documentId: z
+        .string()
+        .optional()
+        .describe("Document ID to rename (defaults to active document)"),
+    },
+    withErrorBoundary("tandem_rename", async ({ newName, documentId }) => {
+      const id = documentId ?? getActiveDocId();
+      if (!id) return mcpError("NO_DOCUMENT", "No document to rename.");
+
+      const result = await renameDocument(id, newName);
+      if (result.status === "error") {
+        return mcpError(result.errorCode ?? "RENAME_FAILED", result.reason ?? "Rename failed.");
+      }
+
+      return mcpSuccess({
+        renamed: true,
+        from: result.oldPath,
+        to: result.newPath,
+        fileName: result.fileName,
       });
     }),
   );

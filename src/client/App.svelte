@@ -98,6 +98,7 @@ import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import { tabIdsToCloseOthers, tabIdsToCloseRight } from "./tabs/tab-context-menu.js";
+import { isRenamable } from "./types.js";
 import { openFileForRuntime } from "./utils/browse-file";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
@@ -742,6 +743,9 @@ let findBarForceScope = $state<"doc" | "tabs">("doc");
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
 let newTabMenuTrigger = $state(0);
+// F2 (#1017): increment to start renaming the active tab. DocumentTabs owns the
+// rename-edit state; this counter is its trigger, mirroring newTabMenuTrigger.
+let renameTabTrigger = $state(0);
 
 const leftPanelWidth = loadPanelWidth("left");
 const rightPanelWidth = loadPanelWidth("right");
@@ -1104,6 +1108,21 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
 
 $effect(() => {
   function handler(e: KeyboardEvent) {
+    // F2 = rename the active tab (#1017). A bare function key can't be a
+    // remappable chord (isBindableChord requires a modifier), so it's handled
+    // here as a FIXED shortcut, outside matchShortcut. shouldIgnoreShortcut
+    // suppresses INPUT/TEXTAREA + IME (not contenteditable), so F2 still fires
+    // with the caret in the editor — the dominant "rename while working" case —
+    // but not while typing in a field (incl. the rename input itself).
+    if (e.key === "F2" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      if (shouldIgnoreShortcut(e)) return;
+      const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
+      if (tab && isRenamable(tab)) {
+        e.preventDefault();
+        renameTabTrigger += 1;
+      }
+      return;
+    }
     // Read overrides at call time (not as an effect dep) so the listener is
     // registered exactly once and never churns / captures a stale map.
     const match = matchShortcut(
@@ -1633,6 +1652,17 @@ const tutorial = createTutorial(
     reduceMotion={settingsState.settings.reduceMotion}
     onRequestOpenDialog={() => void requestOpenFile()}
     openMenuTrigger={newTabMenuTrigger}
+    onTabRename={(tabId, newName) =>
+      yjsSync.handleTabRename(tabId, newName, (message) =>
+        notifications.push({
+          id: generateNotificationId(),
+          type: "launcher",
+          severity: "error",
+          message,
+          timestamp: Date.now(),
+        }),
+      )}
+    renameTrigger={renameTabTrigger}
     closedTabTop={closedTabStack.top}
     onReopenClosed={reopenClosedTab}
   />

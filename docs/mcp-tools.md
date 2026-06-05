@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem exposes 30 tools via MCP HTTP (27 active, 3 deprecated stubs that return structured errors). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 31 tools via MCP HTTP (28 active, 3 deprecated stubs that return structured errors). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -347,6 +347,26 @@ Close a document. Closes the active document if no `documentId` specified.
 ```json
 { "closed": true, "was": "C:\\Users\\bkolb\\docs\\report.md", "activeDocumentId": "invoice-d4e5f6" }
 ```
+
+---
+
+### tandem_rename
+
+Rename an open on-disk document's file, keeping the same directory and extension (no format conversion, no move). The documentId / collaboration room stays stable — only the path and tab label change, and annotations follow the file. Renames the active document if no `documentId` is given.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `newName` | string | yes | New basename only (e.g. `"notes.md"`). Must keep the same extension. |
+| `documentId` | string | no | Document ID to rename (defaults to active document) |
+
+**Returns:**
+```json
+{ "renamed": true, "from": "C:\\Users\\bkolb\\docs\\draft.md", "to": "C:\\Users\\bkolb\\docs\\final.md", "fileName": "final.md" }
+```
+
+**Notes:** Only on-disk files (`source: "file"`) are renamable — scratchpads/uploads use Save As, and read-only docs (incl. `.docx`) are rejected. The basename is validated against path separators, `..`, Windows-illegal characters (`< > : " | ? *`, the `:` NTFS alternate-data-stream vector), reserved device names (`CON`/`NUL`/`COM1`…), trailing dots/spaces, and UNC/symlink targets.
+
+**Errors:** `NOT_FOUND`, `READ_ONLY`, `NOT_RENAMABLE`, `INVALID_NAME`, `EXTENSION_MISMATCH`, `ALREADY_EXISTS`, `RENAME_IN_PROGRESS`, `PATH_REJECTED`
 
 ---
 
