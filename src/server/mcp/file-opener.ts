@@ -362,7 +362,30 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
     // (source: "upload") have no durable store and no disk file — skip both.
     if (existing.source === "file") {
       await wireAnnotationStore(id, doc, existing.filePath);
-      await saveDocumentToDisk(id, "manual");
+      // Persist the new content to disk now. The only transient skip reachable
+      // here is the per-doc autosave lock (`savingDocs`) being held by a
+      // concurrent 60s autosave at this instant — every other skip reason is
+      // excluded (source is "file", not read-only, .md is save-eligible, the
+      // doc is open, and the just-set savedAt baseline rules out the external-
+      // modification guard). So retry briefly to close the window where this
+      // route would report success while disk still holds the pre-edit bytes
+      // (#1021 review SHOULD-FIX). If still skipped after the retries, the doc
+      // is left dirty (markCleanAfter:false) and the next autosave persists it.
+      let saved = await saveDocumentToDisk(id, "manual");
+      for (let attempt = 0; attempt < 5 && saved.status === "skipped"; attempt++) {
+        await new Promise((r) => setTimeout(r, 50));
+        saved = await saveDocumentToDisk(id, "manual");
+      }
+      if (saved.status === "error") {
+        // The disk write failed (saveDocumentToDisk already pushed a save-error
+        // notification). The Y.Doc reload succeeded and the doc is left dirty,
+        // so autosave will keep retrying — don't fail the in-memory reload.
+        console.error(
+          "[Tandem] reloadDocumentFromMarkdown: disk save failed for %s: %s",
+          id,
+          saved.reason,
+        );
+      }
     }
     broadcastOpenDocs();
     ensureAutoSave();

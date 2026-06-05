@@ -891,6 +891,11 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   },
   save: (e) => {
     e.preventDefault();
+    // In source view, SourceView owns Ctrl+S (it commits the edit) and
+    // stopPropagations — this is belt-and-suspenders against that invariant
+    // being broken later: the global save must never write the stale Y.Doc to
+    // disk underneath an open source edit (#1021 review must-fix).
+    if (inSourceView) return;
     void triggerSave(yjsSync.activeTabId);
   },
   "save-as": (e) => {

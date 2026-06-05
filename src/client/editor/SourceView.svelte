@@ -105,8 +105,14 @@ async function handleExit(): Promise<void> {
 
 async function handleKeydown(e: KeyboardEvent): Promise<void> {
   // Ctrl/Cmd+S commits the source edit instead of saving stale Y.Doc content.
+  // stopPropagation is load-bearing: without it the event bubbles to App's
+  // window-level keydown listener, whose `save` branch has no form-field guard
+  // and would `triggerSave()` the STALE Y.Doc to disk, racing this commit
+  // (#1021 review must-fix). This handler runs first (bubble phase, target),
+  // so stopping propagation here keeps the global save from ever firing.
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
+    e.stopPropagation();
     if (dirty && !saving) await commit();
   }
 }

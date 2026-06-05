@@ -72,3 +72,27 @@ test("entering source view with no edits restores the editor unchanged", async (
   await expect(editor).toBeVisible();
   await expect(editor).toContainText("The original paragraph body.");
 });
+
+test("Ctrl+S in source view commits the edit and does not write stale content to disk", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+
+  await page.getByTestId("titlebar-source-toggle").click();
+  const textarea = page.getByTestId("source-view-textarea");
+  await expect(textarea).toBeVisible();
+
+  // Edit the source, then commit via Ctrl+S (NOT the exit button).
+  await textarea.fill("# Source Title\n\nCommitted via Ctrl+S.\n");
+  await textarea.press("ControlOrMeta+s");
+
+  // Regression guard for the must-fix: Ctrl+S must commit only (write the NEW
+  // content). Before the fix it also bubbled to the global `save` shortcut,
+  // which wrote the STALE Y.Doc — so disk could transiently hold the original
+  // paragraph. With the fix, disk deterministically converges to the new body.
+  await expect
+    .poll(() => fs.readFileSync(filePath, "utf-8"), { timeout: 10_000 })
+    .toContain("Committed via Ctrl+S.");
+  expect(fs.readFileSync(filePath, "utf-8")).not.toContain("The original paragraph body.");
+});
