@@ -647,6 +647,66 @@ export async function loadAndMerge(
 }
 
 /**
+ * Merge an ALREADY-LOADED file envelope's alive records forward into the live
+ * Y.Doc, applying `pickWinner` (file-wins by rev, then editedAt). Mutates the
+ * Y.Maps in place under a single `FILE_SYNC_ORIGIN` transaction; records NO
+ * observer and queues NO write (the caller owns persistence + observer wiring).
+ *
+ * RENAME-ONLY (#1040 × #1041 regression): #1051's rename RMW writes the new-hash
+ * envelope from a pure live `snapshot()`. When a durable annotation is NEWER in
+ * the OLD file envelope than in the live Y.Doc (e.g. a note flushed at rev 2 but
+ * diverged to rev 1 in the live map via a `withInternal` write the durable-sync
+ * observer skipped), that pure-live snapshot DROPS the file-newer record, and the
+ * subsequent re-wire's `loadAndMerge` — now reading the just-clobbered new-hash
+ * envelope — finds nothing newer than live, so the rev-2 record is lost on rename.
+ * Folding the old envelope's alive records into the live doc BEFORE the RMW
+ * snapshot lets the file-newer record win and land in the new envelope, so the
+ * file-wins branch survives the rename. In the common case (live == file) this is
+ * an idempotent no-op (every record ties on rev, so `pickWinner` leaves the live
+ * entry untouched).
+ *
+ * Tombstones from the old envelope are handled separately by the rename flow's
+ * `migrateTombstoneLedger` fold + the re-wire's unioned-ledger application, so a
+ * winning tombstone still drops any record this fold resurrects — order does not
+ * matter (the re-wire applies tombstones after). We still SKIP inserting a record
+ * the effective ledger already tombstones-out, so a just-deleted note isn't
+ * resurrected by this pre-fold even before the re-wire runs.
+ */
+export function mergeEnvelopeForward(ydoc: Y.Doc, file: AnnotationDocV1, docHash: string): void {
+  const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+  const repMap = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES);
+
+  // Effective tombstone rev per id = the in-memory ledger for this docHash unioned
+  // with the file's own tombstones (highest rev wins). Mirrors `loadAndMerge`'s
+  // seed so a file-alive record that a tombstone beats is never inserted by this
+  // fold. Computed into a LOCAL map — this helper must not mutate the shared
+  // ledger (the re-wire's `loadAndMerge` owns the authoritative union + persist).
+  const effectiveRev = new Map<string, number>();
+  const ledger = tombstonesByDoc.get(docHash);
+  if (ledger) {
+    for (const [id, stone] of ledger) effectiveRev.set(id, stone.rev);
+  }
+  for (const stone of file.tombstones) {
+    const existing = effectiveRev.get(stone.id);
+    if (existing === undefined || stone.rev > existing) effectiveRev.set(stone.id, stone.rev);
+  }
+  const fileAnns = new Map(file.annotations.map((a) => [a.id, a]));
+  const winningTombstoneIds = new Set<string>();
+  for (const [id, ann] of fileAnns) {
+    const stoneRev = effectiveRev.get(id);
+    if (stoneRev !== undefined && stoneRev > ann.rev) winningTombstoneIds.add(id);
+  }
+
+  withFileSync(ydoc, () => {
+    mergeMap(annMap, fileAnns, (raw) => normalizeAnnotation(raw, docHash), {
+      shouldSkipInsert: (id) => winningTombstoneIds.has(id),
+    });
+    const fileReplies = new Map(file.replies.map((r) => [r.id, r]));
+    mergeMap(repMap, fileReplies, normalizeReply);
+  });
+}
+
+/**
  * Force one durable snapshot write for a document — capturing the current Y.Map
  * + tombstone-ledger state under `docHash` with `filePath` in the envelope meta,
  * then flush it synchronously.
