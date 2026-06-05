@@ -79,12 +79,8 @@ const openDocs = getOpenDocs();
 
 /** Non-throwing existence probe (fs.access has no boolean variant). */
 const pathExists = (p: string): Promise<boolean> =>
-  // codeql[js/path-injection] -- p is a server-managed path: either newPath (constructed
-  // from docState.filePath validated by openFileByPath/assertPathSafe + path.basename(newName)
-  // sanitized at the HTTP/MCP boundary) or oldEnvelope (derived from docHash of the same
-  // validated path). CodeQL can't see through openFileByPath's assertPathSafe validator.
   fs
-    .access(p)
+    .access(p) // codeql[js/path-injection] -- server-managed path; openFileByPath/assertPathSafe validates before addDoc
     .then(() => true)
     .catch(() => false);
 
