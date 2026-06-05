@@ -824,7 +824,7 @@ export function registerDocumentTools(server: McpServer): void {
       // js/path-injection. Both values are hashes or basenames (no separators on
       // valid input); the calls break the taint chain before reaching fs sinks.
       const id = path.basename(rawId);
-      if (!id) return mcpError("NO_DOCUMENT", "No document to rename.");
+      if (!id) return mcpError("BAD_REQUEST", "documentId resolved to an empty string.");
       const newName = path.basename(rawNewName);
       if (!newName) return mcpError("INVALID_NAME", "newName must not be empty.");
 
