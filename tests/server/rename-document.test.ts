@@ -292,6 +292,49 @@ describe("renameDocument — tombstone survival (data-loss regression)", () => {
   });
 });
 
+describe("renameDocument — file-newer annotation survival (#1040 × #1041 regression)", () => {
+  // The data-loss regression the #1041 note-privacy test surfaced, asserted here
+  // on a NON-note (Claude-visible) annotation so the guard is independent of the
+  // ADR-027 privacy framing.
+  //
+  // #1051's rename RMW writes the new-hash envelope from a pure LIVE snapshot.
+  // When a durable annotation is NEWER in the OLD file envelope than in the live
+  // Y.Doc — e.g. flushed at rev 2, then diverged to rev 1 in the live map via a
+  // `withInternal` write the durable-sync observer SKIPS (so no debounced write
+  // re-converges the envelope) — that pure-live snapshot DROPS the rev-2 record,
+  // and the re-wire's loadAndMerge (reading the just-clobbered envelope) finds
+  // nothing newer than live. Result before the fix: the file-newer record is LOST
+  // on rename. The old-envelope fold-forward (Fold 0) restores file-wins.
+  it("a comment that is newer in the OLD file than in the live doc wins the rename merge", async () => {
+    const { docId, filePath, doc } = await openFileDoc("doc.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Flush comment C at rev 2 (the FILE body — this lands in the envelope).
+    withBrowser(doc, () => annMap.set("C", makeAnnotation("C", { content: "FILE BODY", rev: 2 })));
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    // Diverge the LIVE map to rev 1 via withInternal — the durable-sync observer
+    // skips internal writes, so NO debounced write is queued; the envelope keeps
+    // rev 2 while the live map sits at rev 1.
+    withInternal(doc, () => annMap.set("C", makeAnnotation("C", { content: "LIVE BODY", rev: 1 })));
+
+    const newPath = path.join(docDir, "doc-renamed.md");
+    const result = await renameDocument(docId, "doc-renamed.md");
+    expect(result.status).toBe("renamed");
+
+    // The file-wins merge applied: the live map now carries the rev-2 FILE body.
+    const live = annMap.get("C") as { rev?: number; content?: string } | undefined;
+    expect(live?.rev).toBe(2);
+    expect(live?.content).toBe("FILE BODY");
+
+    // And it survived durably under the new path-hash (no data loss on rename).
+    const newEnvelope = await createStore(docHash(newPath), { filePath: newPath }).load();
+    const moved = newEnvelope.annotations.find((a) => a.id === "C");
+    expect(moved?.rev).toBe(2);
+    expect(moved?.content).toBe("FILE BODY");
+  });
+});
+
 describe("renameDocument — concurrent-DELETE resurrection window (#1040, window a)", () => {
   // A DELETE arriving DURING the rename's async span (after the Phase-1 flush,
   // while the old-hash observer is still attached) must not resurrect. The old
