@@ -288,6 +288,64 @@ describe("renameDocument — tombstone survival (data-loss regression)", () => {
   });
 });
 
+describe("renameDocument — concurrent-DELETE resurrection window (#1040, window a)", () => {
+  // A DELETE arriving DURING the rename's async span (after the Phase-1 flush,
+  // while the old-hash observer is still attached) must not resurrect. The old
+  // observer records a tombstone into the oldHash ledger; renameDocument must
+  // migrate that ledger forward into the newHash envelope before the re-wire
+  // disposes the old observer. We inject the concurrent delete by spying on
+  // fs.rename (document-service imports `fs from "fs/promises"`): the delete
+  // fires from inside the rename call, exactly in the observer-attached gap.
+  it("a DELETE concurrent with the rename stays deleted (no resurrection)", async () => {
+    const { docId, filePath, doc } = await openFileDoc("concurrent.md", "body content");
+    const annMap = doc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Create + persist annotation A (rev 1).
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A")));
+    await createStore(docHash(filePath), { filePath }).flush();
+
+    const newPath = path.join(docDir, "concurrent-renamed.md");
+
+    // Spy on the actual fs.rename used by document-service. On the FIRST call
+    // (the primary file rename), delete A via the live (still-attached) observer
+    // BEFORE delegating to the real rename — simulating a concurrent DELETE in
+    // the rename's observer span. The observer records A's tombstone (rev 2)
+    // into the oldHash ledger.
+    const fsModule = await import("node:fs/promises");
+    const realRename = fsModule.default.rename.bind(fsModule.default);
+    let fired = false;
+    const renameSpy = vi
+      .spyOn(fsModule.default, "rename")
+      .mockImplementation(async (from: Parameters<typeof realRename>[0], to) => {
+        if (!fired) {
+          fired = true;
+          withBrowser(doc, () => annMap.delete("A"));
+        }
+        return realRename(from, to);
+      });
+
+    try {
+      const result = await renameDocument(docId, "concurrent-renamed.md");
+      expect(result.status).toBe("renamed");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    // The migrated tombstone must land in the newHash envelope.
+    const newEnvelope = await createStore(docHash(newPath), { filePath: newPath }).load();
+    expect(newEnvelope.tombstones.map((t) => t.id)).toContain("A");
+    expect(newEnvelope.annotations.map((a) => a.id)).not.toContain("A");
+
+    // Resurrection vector: a stale tab re-introduces A at the pre-deletion rev,
+    // then the doc reopens. The migrated tombstone (rev 2 > A.rev 1) drops it.
+    const { clearFileSyncContext } = await import("../../src/server/events/queue.js");
+    clearFileSyncContext(docId);
+    withBrowser(doc, () => annMap.set("A", makeAnnotation("A", { rev: 1 })));
+    await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+    expect(annMap.has("A")).toBe(false);
+  });
+});
+
 describe("renameDocument — cross-doc envelope steal (Finding A)", () => {
   it("a byte-identical doc opened after rename does NOT steal the renamed doc's envelope", async () => {
     const SHARED_BODY = "identical body shared across two documents";

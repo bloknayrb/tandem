@@ -14,8 +14,8 @@ import {
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
-import { closeStore, createStore, envelopePath } from "../annotations/store.js";
-import { persistSnapshot } from "../annotations/sync.js";
+import { closeStore, createStore } from "../annotations/store.js";
+import { migrateTombstoneLedger, persistSnapshot } from "../annotations/sync.js";
 import {
   clearDirtyState,
   isDirty,
@@ -704,17 +704,23 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     const { wireAnnotationStore, wireFileWatcher } = await import("./file-opener.js");
     const doc = getOrCreateDocument(docId);
 
-    // --- Phase 1: reversible prep (flush BEFORE teardown) ---
+    // --- Phase 1: reversible prep (flush, keep observer ATTACHED) ---
     // Flush the live store first so <oldHash>.json captures current annotations
-    // + the still-intact tombstone ledger. closeStore MUST precede
-    // clearFileSyncContext (whose "close" cleanup deletes the ledger) or
+    // + the still-intact tombstone ledger. closeStore MUST precede any teardown
+    // of the old context (whose "close" cleanup deletes the ledger) or
     // tombstones are lost — a deleted annotation would resurrect after rename.
+    //
+    // #1040, window (a): we DELIBERATELY do NOT clearFileSyncContext here. The
+    // old-hash annotation observer stays attached across the fs.rename + envelope
+    // move so a concurrent DELETE arriving in that span still records a tombstone
+    // (into the oldHash ledger). Phase 3 then migrates that ledger forward into
+    // the newHash envelope before the old context is finally disposed by the
+    // re-wire — so the just-deleted annotation can't resurrect.
     try {
       await closeStore(oldHash);
     } catch (err) {
       console.error("[Rename] closeStore(old) failed for %s:", docId, err);
     }
-    clearFileSyncContext(docId);
 
     // Stop watching the old path before the rename so the delete/create events
     // fs.rename emits don't fire a spurious reloadFromDisk.
@@ -727,7 +733,10 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // Log the ORIGINAL failure first — the rollback below can itself throw, and
       // we must not let a rollback error mask why the rename actually failed.
       console.error("[Rename] fs.rename failed for %s (%s -> %s):", docId, oldPath, newPath, err);
-      // Roll back the reversible prep: re-wire the old context + re-watch.
+      // Roll back the reversible prep: re-wire the old context + re-watch. The
+      // old observer is still attached (#1040 — we no longer detach in Phase 1),
+      // so re-wiring is an idempotent refresh: setFileSyncContext disposes the
+      // existing oldHash context and re-registers a fresh one at the same path.
       // Best-effort — a rollback failure is logged but the returned error stays
       // the original fs.rename failure (the actionable root cause).
       try {
@@ -749,69 +758,68 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     }
 
     // --- Phase 3: best-effort, each wrapped (the disk rename is the contract) ---
-    // NOTE: a concurrent annotation DELETE arriving in the brief async window
-    // between clearFileSyncContext and the wireAnnotationStore below (observer
-    // detached) won't be tombstoned and could be resurrected by the merge. The
-    // window spans the fs.rename + envelope move; accepted as a narrow v1
-    // limitation (no data loss — at worst a just-deleted annotation reappears).
+    // The annotation envelope migration (#1040) collapses the old fs.rename +
+    // heal-write split into a single read-modify-write that writes the NEW
+    // envelope (with meta.filePath = newPath) BEFORE removing the old one. This
+    // closes the two stale-envelope resurrection windows from #1017/#1038:
     //
-    // A second, symmetric v1 limitation (CRDT review R1): between the envelope
-    // move below and the meta heal-write, the envelope sits at newHash with a
-    // stale meta.filePath (the now-vanished oldPath). A *concurrent*
-    // openFileByPath of a DIFFERENT byte-identical doc (allowRecovery:true)
-    // could, in that sub-second window, match this envelope in
-    // recoverRenamedEnvelope and re-key it — duplicating (never losing) doc A's
-    // annotations onto the other doc. Same best-effort posture as the recovery
-    // module; closing it would require a read-modify-write to newHash instead of
-    // the fs.rename + heal-write split.
+    //   (b) The newHash envelope no longer transiently carries a stale
+    //       meta.filePath (the vanished oldPath) — the RMW writes the corrected
+    //       path atomically, so a concurrent byte-identical open can never match
+    //       + steal it via recoverRenamedEnvelope.
+    //   (c) The oldHash envelope is removed only AFTER newHash is durably
+    //       written, so there's no point where BOTH the renamed disk file and
+    //       the oldHash envelope (with its vanished oldPath) coexist for a
+    //       byte-identical open to re-key.
     //
-    // A third, mirror-image window (CRDT review Finding 4): between the fs.rename
-    // above and the envelope move below, <oldHash>.json still exists with the now-
-    // vanished oldPath + matching contentHash. A concurrent byte-identical open
-    // could re-key + unlink it; the move then no-ops (oldEnvelopeExists:false) and
-    // loadAndMerge(newHash) re-seeds an EMPTY tombstone ledger from the missing
-    // file — re-persisting A's annotations from the live Y.Map (no loss) but
-    // dropping A's tombstones, so a just-deleted annotation in A can resurrect.
-    // Same accepted best-effort posture; a double-open race only.
+    // Window (a) — a concurrent DELETE in the observer span — is handled by the
+    // tombstone-ledger migration below: the old observer stayed attached (Phase
+    // 1 deferred its teardown), so any in-span DELETE recorded a tombstone into
+    // the oldHash ledger; we fold that ledger forward into newHash before the
+    // RMW snapshot AND again immediately before the re-wire disposes the old
+    // observer, so the just-deleted annotation cannot resurrect.
 
-    // Move the annotation envelope (it carries annotations + tombstones) so the
-    // re-wire at the new hash re-seeds them. Best-effort; a crash here is healed
-    // on next open by the passive recoverRenamedEnvelope (old path now gone).
+    // Fold the oldHash tombstone ledger forward into newHash (captures any
+    // DELETE the still-attached old observer recorded during the fs.rename).
+    migrateTombstoneLedger(oldHash, newHash);
+
+    // RMW step 1: write the NEW envelope from the live Y.Maps + migrated ledger,
+    // with meta.filePath already = newPath. This is the move (annotations +
+    // tombstones land under newHash) AND the heal-write (correct path), in one
+    // atomic write — before the old envelope is removed. Best-effort: the disk
+    // rename already committed, so a failure here must not flip the result to
+    // "error"; a crash is healed on next open by the passive recoverRenamedEnvelope.
     try {
-      const oldEnvelope = envelopePath(oldHash);
-      const oldEnvelopeExists = await pathExists(oldEnvelope);
-      if (oldEnvelopeExists) {
-        // Remove any stale orphan at the target hash first — Windows fs.rename
-        // throws EEXIST if the destination exists.
-        await fs.rm(envelopePath(newHash), { force: true });
-        await fs.rename(oldEnvelope, envelopePath(newHash));
-      }
+      const newStore = createStore(newHash, { filePath: newPath });
+      await persistSnapshot(newStore, doc, newHash, newPath);
     } catch (err) {
-      console.error("[Rename] envelope move failed for %s:", docId, err);
+      console.error("[Rename] envelope RMW (write new) failed for %s:", docId, err);
     }
 
-    // Re-wire the durable store at the new path. loadAndMerge reads the moved
-    // envelope, re-seeds tombstones, merges idempotently with the live Y.Maps,
-    // and registers a fresh observer. allowRecovery:false — an active rename
-    // must never let recovery steal a DIFFERENT file's envelope. Best-effort: the
-    // disk rename already committed, so a re-wire failure must not flip the result
-    // to "error" — the next openFileByPath re-wires via the realpath fallback.
+    // Re-key one more time, then re-wire. The second migrate (synchronous, no
+    // await before the re-wire detaches the old observer) captures any DELETE
+    // recorded during the RMW await above; the re-wire's loadAndMerge then seeds
+    // the newHash ledger from the freshly-written envelope (which already carries
+    // the migrated tombstones) and applies them. allowRecovery:false — an active
+    // rename must never let recovery steal a DIFFERENT file's envelope.
+    // Best-effort: a re-wire failure must not flip the committed rename to "error".
+    migrateTombstoneLedger(oldHash, newHash);
     try {
       await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
     } catch (err) {
       console.error("[Rename] re-wire annotation store at new path failed for %s:", docId, err);
     }
 
-    // Heal the envelope's internal meta.filePath (#1017 review, Finding A):
-    // loadAndMerge skips its write when the moved file already equals the Y.Map,
-    // leaving the stale pre-rename path — which the passive recovery scan could
-    // match (vanished old path) and STEAL for a byte-identical doc. Force one
-    // snapshot so meta.filePath = newPath lands immediately.
+    // RMW step 2: remove the old envelope LAST — only after the re-wire has
+    // disposed the old observer. Removing it earlier would leave the old
+    // observer live with no envelope: a concurrent DELETE could then queue a
+    // debounced write that re-creates <oldHash>.json with the vanished oldPath
+    // (a fresh stale-envelope steal vector). clear() also drops any pending
+    // write the old store may still hold, so nothing re-creates it afterward.
     try {
-      const healStore = createStore(newHash, { filePath: newPath });
-      await persistSnapshot(healStore, doc, newHash, newPath);
+      await createStore(oldHash, { filePath: oldPath }).clear();
     } catch (err) {
-      console.error("[Rename] envelope meta heal-write failed for %s:", docId, err);
+      console.error("[Rename] envelope RMW (remove old) failed for %s:", docId, err);
     }
 
     // Move the session: write the new one BEFORE deleting the old so a crash

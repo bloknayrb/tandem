@@ -352,6 +352,41 @@ export function getTombstones(docHash: string): TombstoneRecordV1[] {
   return entries ? Array.from(entries.values()) : [];
 }
 
+/**
+ * Migrate (merge) the in-memory tombstone ledger from `fromHash` into
+ * `toHash`, in place. Used by `renameDocument` (#1040) to carry tombstones
+ * across the oldHash → newHash rename WITHOUT a window where neither ledger
+ * holds a just-recorded deletion.
+ *
+ * Why a union, not a move: a concurrent DELETE arriving during the rename's
+ * observer-detached gap (window (a)) records into the OLD-hash ledger via the
+ * still-attached observer. Folding old → new (dedup by id, highest rev wins)
+ * means that late tombstone survives into the post-rename envelope instead of
+ * being dropped — closing the resurrection window. Idempotent and order-
+ * independent: re-running is a no-op, and a record already present at an equal-
+ * or-higher rev under `toHash` is preserved.
+ *
+ * The `fromHash` ledger is left intact; the caller's subsequent
+ * `clearFileSyncContext` / observer teardown ("close" phase) deletes it.
+ */
+export function migrateTombstoneLedger(fromHash: string, toHash: string): void {
+  if (fromHash === toHash) return;
+  const from = tombstonesByDoc.get(fromHash);
+  if (!from || from.size === 0) return;
+  let to = tombstonesByDoc.get(toHash);
+  if (!to) {
+    to = new Map();
+    tombstonesByDoc.set(toHash, to);
+  }
+  for (const [id, stone] of from) {
+    const existing = to.get(id);
+    if (!existing || stone.rev > existing.rev) {
+      // Re-key the record under the new hash; the id + rev + deletedAt carry over.
+      to.set(id, { id: stone.id, rev: stone.rev, deletedAt: stone.deletedAt });
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Merge
 // ---------------------------------------------------------------------------
