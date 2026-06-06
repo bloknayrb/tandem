@@ -1,5 +1,5 @@
 <script lang="ts">
-import { tick } from "svelte";
+import { tick, untrack } from "svelte";
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 
 /**
@@ -58,8 +58,9 @@ let {
 // one Settings uses). The value SET is stable per axis (only labels change), so
 // snapshotting it once is correct; `() => value` reads the live selection per
 // key and the closure reads the live `onSet`.
-// svelte-ignore state_referenced_locally
-const chipValues = options.map((o) => o.value);
+// `untrack` reads `options` without subscribing — the value set is stable per
+// axis at runtime (only labels change), so snapshotting once is intentional.
+const chipValues = untrack(() => options.map((o) => o.value));
 const rg = createRadioGroup<string>(
   () => value,
   chipValues,
@@ -127,7 +128,6 @@ $effect(() => {
   role="radiogroup"
   aria-label={groupAriaLabel}
   data-testid={groupTestId}
-  tabindex="0"
   bind:this={bar}
   onkeydown={rg.handleKeyDown}
 >
