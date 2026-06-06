@@ -1712,28 +1712,26 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
 
 /// Abstracts over the Tauri window types that expose a native `hwnd()` on
 /// Windows. `setup()` hands us a `WebviewWindow`; the `on_window_event` handler
-/// hands us a `Window`. Both have an inherent `hwnd()`; we normalize the result
-/// to a raw `*mut c_void` so `apply_window_chrome` never has to name the
-/// `windows`-crate `HWND` type (which Tauri does not publicly re-export) and is
-/// agnostic to whether the underlying `HWND.0` is a pointer or an `isize`.
+/// hands us a `Window`. Both expose `hwnd()` returning a `windows`-crate `HWND`
+/// (a `pub struct HWND(pub isize)` newtype); `.0` extracts the raw `isize`, which
+/// is the same representation as `windows-sys 0.59`'s `type HWND = isize`, so no
+/// intermediate pointer hop is needed.
 #[cfg(target_os = "windows")]
 trait RawHwnd {
-    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String>;
+    fn raw_hwnd(&self) -> Result<isize, String>;
 }
 
 #[cfg(target_os = "windows")]
 impl RawHwnd for tauri::WebviewWindow {
-    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String> {
-        // `as isize as *mut _` normalizes across `windows`-crate versions where
-        // `HWND.0` is either a raw pointer or an `isize`.
-        self.hwnd().map(|h| h.0 as isize as *mut core::ffi::c_void).map_err(|e| e.to_string())
+    fn raw_hwnd(&self) -> Result<isize, String> {
+        self.hwnd().map(|h| h.0).map_err(|e| e.to_string())
     }
 }
 
 #[cfg(target_os = "windows")]
 impl RawHwnd for tauri::Window {
-    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String> {
-        self.hwnd().map(|h| h.0 as isize as *mut core::ffi::c_void).map_err(|e| e.to_string())
+    fn raw_hwnd(&self) -> Result<isize, String> {
+        self.hwnd().map(|h| h.0).map_err(|e| e.to_string())
     }
 }
 
@@ -1772,7 +1770,7 @@ fn apply_window_chrome<W: RawHwnd>(window: &W) {
     const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
 
     let hwnd: HWND = match window.raw_hwnd() {
-        Ok(ptr) => ptr as HWND,
+        Ok(v) => v,
         Err(e) => {
             log::warn!("apply_window_chrome: hwnd() unavailable: {e}");
             return;
