@@ -128,12 +128,15 @@ async function handleSendReply() {
       <span class="art-arrow" aria-hidden="true">›</span>
       {visibleReplies.length === 1 ? "1 reply" : `${visibleReplies.length} replies`}
     </button>
-  {/if}
-
-  {#if !isNote && open && visibleReplies.length > 0}
-    <div class="art-replies" transition:discloseUnfold={{ reduceMotion }}>
-      <CommentThread replies={visibleReplies} />
-    </div>
+    <!-- Nesting the replies block inside the outer guard means `transition:discloseUnfold`
+         only fires when `open` changes (user gesture), not when `visibleReplies.length`
+         changes (data update). Without this structure, deleting the last reply while the
+         disclosure is open would trigger an uninvited closing animation. -->
+    {#if open}
+      <div class="art-replies" transition:discloseUnfold={{ reduceMotion }}>
+        <CommentThread replies={visibleReplies} />
+      </div>
+    {/if}
   {/if}
 
   {#if isPending && onReply && !isEditing}
