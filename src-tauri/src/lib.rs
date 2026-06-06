@@ -1713,24 +1713,25 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
 /// Abstracts over the Tauri window types that expose a native `hwnd()` on
 /// Windows. `setup()` hands us a `WebviewWindow`; the `on_window_event` handler
 /// hands us a `Window`. Both expose `hwnd()` returning a `windows`-crate `HWND`
-/// (`pub struct HWND(pub *mut core::ffi::c_void)`). We cast `.0 as isize` to
-/// match `windows-sys 0.59`'s `type HWND = isize`.
+/// (`pub struct HWND(pub *mut core::ffi::c_void)`); `.0` extracts the raw pointer,
+/// which is the same underlying type as `windows-sys`'s `type HWND = *mut c_void`,
+/// so no cast is needed at either end.
 #[cfg(target_os = "windows")]
 trait RawHwnd {
-    fn raw_hwnd(&self) -> Result<isize, String>;
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String>;
 }
 
 #[cfg(target_os = "windows")]
 impl RawHwnd for tauri::WebviewWindow {
-    fn raw_hwnd(&self) -> Result<isize, String> {
-        self.hwnd().map(|h| h.0 as isize).map_err(|e| e.to_string())
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String> {
+        self.hwnd().map(|h| h.0).map_err(|e| e.to_string())
     }
 }
 
 #[cfg(target_os = "windows")]
 impl RawHwnd for tauri::Window {
-    fn raw_hwnd(&self) -> Result<isize, String> {
-        self.hwnd().map(|h| h.0 as isize).map_err(|e| e.to_string())
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String> {
+        self.hwnd().map(|h| h.0).map_err(|e| e.to_string())
     }
 }
 
