@@ -128,6 +128,7 @@ $effect(() => {
   role="radiogroup"
   aria-label={groupAriaLabel}
   data-testid={groupTestId}
+  tabindex="-1"
   bind:this={bar}
   onkeydown={rg.handleKeyDown}
 >
