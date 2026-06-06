@@ -365,3 +365,4 @@ updater-banner-visible
 user-name-input
 view-changelog-btn
 view-documentation-btn
+{*}-{*}
