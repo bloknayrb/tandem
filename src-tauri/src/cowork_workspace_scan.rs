@@ -17,8 +17,14 @@
 
 #![cfg(target_os = "windows")]
 
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
+
+use rand::RngCore;
+use serde::Serialize;
 
 /// Maximum number of workspaces processed in a single walk.
 /// Logs a warning and stops if exceeded.
@@ -26,6 +32,135 @@ const MAX_WORKSPACES: usize = 100;
 
 /// `FILE_ATTRIBUTE_REPARSE_POINT` — from the Windows API.
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
+// ---------------------------------------------------------------------------
+// Snapshot registry (TOCTOU hardening — issue #433)
+// ---------------------------------------------------------------------------
+//
+// The UI scan and the per-workspace install/uninstall IPC calls are two
+// separate trips across the Tauri boundary. Re-scanning the filesystem at IPC
+// time leaves a time-of-check-to-time-of-use window: between the scan the UI
+// rendered and the install click, a workspace directory could be moved,
+// replaced with a junction/symlink, or a brand-new path injected into the
+// caller-supplied string.
+//
+// To close that window we hand the UI an *opaque handle* for each validated
+// workspace instead of a bare path. The handle maps — inside this process — to
+// the exact canonical `PathBuf` that passed the four-layer guard during the
+// scan. Install/uninstall resolve the handle back to that stored path rather
+// than trusting (and re-scanning around) a caller-supplied string. A handle
+// therefore can only ever name a path that the scan already validated; an
+// injected or swapped path has no handle and cannot be acted on.
+//
+// The token is a 256-bit random value rendered as lowercase hex. It is opaque,
+// unguessable, and process-local (a fresh registry per launch), so it cannot be
+// forged or replayed across runs.
+
+/// An opaque, validated reference to a single Cowork workspace directory,
+/// returned by [`scan_workspaces_with_handles`].
+///
+/// `token` is the only field the UI must round-trip back to install/uninstall.
+/// `path` is included for display purposes only — it is NOT trusted on the way
+/// back in; the token is the authority.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceHandle {
+    /// Opaque process-local token. Round-tripped to install/uninstall.
+    pub token: String,
+    /// Canonical path, for display in the UI only.
+    pub path: String,
+}
+
+/// Process-global registry mapping handle token → validated canonical path.
+///
+/// Rebuilt from scratch on every [`scan_workspaces_with_handles`] call so a
+/// stale token from a previous scan cannot be reused after the workspace set
+/// changes. Cleared, not merged.
+static SNAPSHOT: Mutex<Option<HashMap<String, PathBuf>>> = Mutex::new(None);
+
+/// Generate a 256-bit random, hex-encoded handle token.
+fn new_token() -> String {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        // Infallible: writing to a String never errors.
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Scan for Cowork workspaces and return an opaque handle for each.
+///
+/// Replaces the in-process snapshot registry with the freshly validated set, so
+/// only handles from the most recent scan resolve. Callers (the UI) must pass a
+/// handle's `token` back to [`resolve_handle`] via the install/uninstall IPC
+/// commands — the bare path is never trusted on the return trip.
+pub fn scan_workspaces_with_handles() -> Vec<WorkspaceHandle> {
+    let paths = find_cowork_workspaces();
+
+    let mut map = HashMap::with_capacity(paths.len());
+    let mut handles = Vec::with_capacity(paths.len());
+    for path in paths {
+        let token = new_token();
+        handles.push(WorkspaceHandle {
+            token: token.clone(),
+            path: path.to_string_lossy().into_owned(),
+        });
+        map.insert(token, path);
+    }
+
+    // Replace (never merge) the registry so prior-scan tokens stop resolving.
+    let mut guard = SNAPSHOT.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = Some(map);
+
+    handles
+}
+
+/// Resolve a snapshot handle token back to the canonical path validated during
+/// the scan that produced it.
+///
+/// Returns `None` if the token is unknown — e.g. it was forged, it came from a
+/// scan that has since been superseded, or no scan has run this session. The
+/// returned path was guard-validated at scan time; callers SHOULD still re-run
+/// [`check_path_safe`] against it immediately before any file I/O to catch a
+/// directory that was swapped *after* the scan (defense-in-depth).
+pub fn resolve_handle(token: &str) -> Option<PathBuf> {
+    let guard = SNAPSHOT.lock().unwrap_or_else(|p| p.into_inner());
+    guard.as_ref().and_then(|m| m.get(token).cloned())
+}
+
+/// Re-run the four-layer guard against a path resolved from a snapshot handle,
+/// catching a directory swapped *after* the scan that produced the handle.
+///
+/// Recomputes the canonical scan root for `candidate` (so the containment check
+/// has a fresh, validated root) and runs [`check_path_safe`]. Returns the
+/// re-canonicalized path on success, or `Err` if no current root contains the
+/// candidate or any guard layer rejects it. This is the final defense-in-depth
+/// gate the IPC commands run immediately before any file I/O.
+pub fn revalidate_resolved_path(candidate: &Path) -> Result<PathBuf, String> {
+    for root in cowork_roots() {
+        let canonical_root = match std::fs::canonicalize(&root) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if let Ok(safe) = check_path_safe(candidate, &canonical_root) {
+            return Ok(safe);
+        }
+    }
+    Err(format!(
+        "resolved workspace path {} is no longer within a canonical Cowork root",
+        candidate.display()
+    ))
+}
+
+/// Clear the snapshot registry. Test-only helper so suites do not leak handles
+/// across cases.
+#[cfg(test)]
+pub(crate) fn clear_snapshot_for_test() {
+    let mut guard = SNAPSHOT.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = None;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -377,5 +512,112 @@ mod tests {
             has_reparse_point_in_chain(bogus),
             "has_reparse_point_in_chain must fail closed on lstat errors"
         );
+    }
+
+    #[test]
+    fn test_token_is_64_hex_chars_and_unique() {
+        let a = new_token();
+        let b = new_token();
+        assert_eq!(a.len(), 64, "token must be 32 bytes hex-encoded");
+        assert!(
+            a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "token must be lowercase hex: {a}"
+        );
+        assert_ne!(a, b, "two tokens must not collide");
+    }
+
+    #[test]
+    fn test_scan_with_handles_round_trips_via_resolve() {
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        clear_snapshot_for_test();
+
+        let dir = std::env::temp_dir().join("tandem_cowork_handles_test");
+        let _ = fs::remove_dir_all(&dir);
+        let vm = dir.join("ws-abc").join("vm-123");
+        fs::create_dir_all(&vm).unwrap();
+
+        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
+        let handles = scan_workspaces_with_handles();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        assert_eq!(handles.len(), 1, "expected 1 handle, got {handles:?}");
+        let token = &handles[0].token;
+
+        // A valid token resolves to the canonical validated path.
+        let resolved = resolve_handle(token).expect("valid token must resolve");
+        assert!(resolved.ends_with("vm-123"), "resolved {resolved:?}");
+
+        // An unknown token does not resolve.
+        assert!(
+            resolve_handle("deadbeef").is_none(),
+            "forged token must not resolve"
+        );
+
+        clear_snapshot_for_test();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rescan_invalidates_prior_tokens() {
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        clear_snapshot_for_test();
+
+        let dir = std::env::temp_dir().join("tandem_cowork_rescan_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("ws").join("vm")).unwrap();
+
+        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
+        let first = scan_workspaces_with_handles();
+        let old_token = first[0].token.clone();
+        assert!(resolve_handle(&old_token).is_some());
+
+        // A fresh scan replaces (not merges) the registry — old tokens die.
+        let second = scan_workspaces_with_handles();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        let new_token = &second[0].token;
+        assert_ne!(&old_token, new_token, "rescan must mint a fresh token");
+        assert!(
+            resolve_handle(&old_token).is_none(),
+            "prior-scan token must stop resolving after a rescan"
+        );
+        assert!(resolve_handle(new_token).is_some());
+
+        clear_snapshot_for_test();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_revalidate_resolved_path_accepts_in_root() {
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("tandem_cowork_reval_ok_test");
+        let _ = fs::remove_dir_all(&dir);
+        let vm = dir.join("ws").join("vm");
+        fs::create_dir_all(&vm).unwrap();
+
+        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
+        let canon_vm = std::fs::canonicalize(&vm).unwrap();
+        let result = revalidate_resolved_path(&canon_vm);
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "path inside the root must revalidate: {result:?}");
+    }
+
+    #[test]
+    fn test_revalidate_resolved_path_rejects_outside_root() {
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("tandem_cowork_reval_bad_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("ws").join("vm")).unwrap();
+
+        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
+        // A path that exists but is NOT under the override root.
+        let outside = std::env::temp_dir();
+        let result = revalidate_resolved_path(&outside);
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.is_err(), "path outside the root must be rejected");
     }
 }
