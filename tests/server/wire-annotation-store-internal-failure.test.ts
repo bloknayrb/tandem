@@ -22,7 +22,10 @@ import { withBrowser } from "../../src/shared/origins.js";
 const syncOverride = vi.hoisted(() => ({
   loadAndMergeImpl: null as
     | null
-    | ((ctx: { meta: { filePath: string }; docHash: string }) => Promise<unknown> | unknown),
+    | ((
+        ctx: { meta: { filePath: string }; docHash: string },
+        opts?: unknown,
+      ) => Promise<unknown> | unknown),
 }));
 
 vi.mock("../../src/server/annotations/sync.js", async (importOriginal) => {
@@ -33,7 +36,11 @@ vi.mock("../../src/server/annotations/sync.js", async (importOriginal) => {
       ctx: Parameters<typeof actual.loadAndMerge>[0],
       opts?: Parameters<typeof actual.loadAndMerge>[1],
     ) => {
-      if (syncOverride.loadAndMergeImpl) return syncOverride.loadAndMergeImpl(ctx);
+      // Thread `opts` (carries migrateTombstonesFrom) through to the override so
+      // the seam matches the real loadAndMerge signature; current overrides only
+      // throw/reject and ignore it, but a future partial-delegating override won't
+      // silently lose it.
+      if (syncOverride.loadAndMergeImpl) return syncOverride.loadAndMergeImpl(ctx, opts);
       return actual.loadAndMerge(ctx, opts);
     },
   };
@@ -246,6 +253,13 @@ describe("renameDocument — internal re-wire failure disposes the stale observe
     // (fired because wired:false) disposed the stale oldHash observer, so this
     // mutation schedules NO write under oldHash — the steal vector stays closed.
     withBrowser(doc, () => annMap.delete("A"));
+    // NOTE: this fixed sleep proves a write does NOT happen, so it is coupled to
+    // the durable-store debounce interval — it must exceed it for the would-be
+    // erroneous write to have fired. The store debounce is well under 400ms today
+    // (DEBOUNCE_MS = 100 in annotations/store.ts); if that constant is ever raised
+    // at/above 400ms, raise this sleep in lockstep or this
+    // regression will go green for the wrong reason (the bad write simply hasn't
+    // fired yet). The load-bearing guarantee remains "verified red without the fix".
     await new Promise((resolve) => setTimeout(resolve, 400));
 
     expect(await fileExists(envelopePath(oldHash))).toBe(false);
