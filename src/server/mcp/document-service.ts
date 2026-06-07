@@ -81,7 +81,16 @@ export {
 /** Internal alias for the registry's view of open docs — used by closures below. */
 const openDocs = getOpenDocs();
 
-/** Non-throwing existence probe (fs.access has no boolean variant). */
+/**
+ * Non-throwing existence probe (fs.access has no boolean variant).
+ *
+ * Safe FS sink (CodeQL js/path-injection): the sole caller is renameDocument,
+ * which passes `newPath` only AFTER it has cleared validateRenameFilename, the
+ * inline separator/null-byte guard, rejectUnsafeWindowsPrefix, and the
+ * assertPathSafe realpath/symlink walk. CodeQL cannot trace those barriers
+ * across the function boundary, so a path-injection alert here is a false
+ * positive — see issue #1042 for the Security-tab dismissal rationale.
+ */
 const pathExists = (p: string): Promise<boolean> =>
   fs
     .access(p)
@@ -141,7 +150,11 @@ export async function saveDocumentToDisk(
 
   savingDocs.add(docId);
   try {
-    // Guard against overwriting external modifications
+    // Guard against overwriting external modifications.
+    // Safe FS sink (CodeQL js/path-injection): `docState.filePath` is the
+    // registry's server-managed path (only ever set by openFileByPath /
+    // resolveAndValidatePath / a validated rename or save-as) — never raw user
+    // input. An alert here is a false positive; dismiss per issue #1042.
     try {
       const stat = await fs.stat(docState.filePath);
       // Compare to the session's mtime — if the file changed externally, skip
@@ -731,6 +744,15 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     unwatchFile(oldPath);
 
     // --- Phase 2: commit (point of no return) ---
+    // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
+    // server-managed `docState.filePath` (only ever set by openFileByPath /
+    // resolveAndValidatePath); `newPath` was built from path.dirname(oldPath) +
+    // path.basename(newName) and then cleared validateRenameFilename, the inline
+    // separator/null-byte guard, rejectUnsafeWindowsPrefix, and assertPathSafe
+    // above. Both entry points (POST /api/rename, tandem_rename) additionally
+    // path.basename() the raw input — CodeQL's recognized taint terminator —
+    // before it reaches renameDocument. Any alert here is a false positive;
+    // dismiss per issue #1042.
     try {
       await fs.rename(oldPath, newPath);
     } catch (err) {
@@ -822,6 +844,11 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // step 2 removes it last). Best-effort: a read/merge failure must not flip the
     // committed rename to "error" — at worst we degrade to the prior live-only
     // snapshot. In the common case (live == file) this is an idempotent no-op.
+    // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
+    // server-managed `docState.filePath`, and the envelope is read/written under
+    // `docHash(oldPath)` — a fixed-length hash with no path component. No
+    // user-controlled string reaches this store's filesystem path; an alert here
+    // is a false positive (dismiss per issue #1042).
     try {
       const oldFile = await createStore(oldHash, { filePath: oldPath }).load();
       mergeEnvelopeForward(doc, oldFile, newHash);
@@ -936,6 +963,9 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
       // autosave writes them to newPath.
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      // Safe FS sink (CodeQL js/path-injection): `newPath` is the validated
+      // rename target (see the Phase-0 barriers above) — not raw user input.
+      // An alert here is a false positive; dismiss per issue #1042.
       const stat = await fs.stat(newPath).catch(() => null);
       withFileSync(doc, () => {
         meta.set("fileName", fileName);
