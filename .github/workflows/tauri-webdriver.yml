@@ -60,11 +60,17 @@ jobs:
       - name: Download Node sidecar
         run: node scripts/download-node-sidecar.mjs
 
-      # The Tauri frontend (dist/client) is a build resource checked by
-      # tauri_build::build(); produce the real client bundle.
-      - name: Build frontend + server bundles
-        run: npm run build
+      # `cargo tauri build` needs the Tauri CLI (cargo-tauri) — it is NOT a
+      # built-in cargo subcommand and the repo doesn't vendor @tauri-apps/cli,
+      # so install it explicitly (tauri-release.yml sidesteps this via
+      # tauri-action, which vendors the CLI).
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
 
+      # No separate frontend build step: tauri.conf.json's
+      # `beforeBuildCommand: npm run build` produces the dist/client + dist/server
+      # bundles (the build resources tauri_build::build() checks) as part of the
+      # build below, so an explicit `npm run build` here would just build twice.
       - name: Build Tauri debug binary
         run: cargo tauri build -- --debug --no-bundle
 

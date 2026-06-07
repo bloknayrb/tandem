@@ -25,11 +25,15 @@ import path from "node:path";
 // Repo root is two levels up from tests/tauri-driver/.
 const repoRoot = path.resolve(__dirname, "..", "..");
 
-// The built debug binary. `productName` in tauri.conf.json is "Tandem", so the
-// Cargo artifact is `Tandem` (or `Tandem.exe` on Windows). We test the --debug
-// build because it is faster to produce in CI than a full --release bundle and
-// the prevent-default plugin behaves identically.
-const binaryName = process.platform === "win32" ? "Tandem.exe" : "Tandem";
+// The built debug binary. The Cargo package is `tandem-desktop`
+// (src-tauri/Cargo.toml) and `cargo tauri build -- --no-bundle` skips the
+// bundler's rename step, so the artifact is the raw cargo binary
+// `tandem-desktop` (`tandem-desktop.exe` on Windows) — NOT the `productName`
+// "Tandem", which only names the bundled installer. (The release workflow
+// references `target/release/tandem-desktop.exe` for the same reason.) We test
+// the --debug build because it is faster to produce in CI than a full --release
+// bundle and the prevent-default plugin behaves identically.
+const binaryName = process.platform === "win32" ? "tandem-desktop.exe" : "tandem-desktop";
 const application = path.resolve(repoRoot, "src-tauri", "target", "debug", binaryName);
 
 // `tauri-driver` is installed via `cargo install tauri-driver --locked` and
@@ -79,7 +83,7 @@ export const config: WebdriverIO.Config = {
       if (!existsSync(application)) {
         throw new Error(
           `TAURI_SKIP_BUILD=1 but the debug binary is missing at ${application}. ` +
-            `Build it first with: npm run tauri build -- --debug --no-bundle`,
+            `Build it first with: cargo tauri build -- --debug --no-bundle`,
         );
       }
       return;
@@ -122,7 +126,14 @@ export const config: WebdriverIO.Config = {
       setTimeout(resolve, 2_000);
     }),
 
-  // Always tear the driver down so the port is released for the next run.
+  // Always tear the driver down so its proxy port is released for the next run.
+  // NOTE: this reaps `tauri-driver` only — not the Tandem Node sidecar the
+  // launched desktop binary spawns on :3478/:3479. The app kills its own sidecar
+  // on a clean `RunEvent::Exit` (src-tauri/src/lib.rs); a SIGKILLed teardown or
+  // app crash can orphan it. This harness deliberately runs OUTSIDE Playwright's
+  // `freePort()`, so the CI job is assumed one-shot (fresh runner) — for repeated
+  // LOCAL runs, free :3478/:3479 between runs if a launch collides with a stale
+  // sidecar.
   afterSession: () => {
     tauriDriver?.kill();
     tauriDriver = undefined;

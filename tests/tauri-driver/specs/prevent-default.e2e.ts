@@ -76,12 +76,16 @@ describe("prevent-default reload interception", () => {
     expect(after).toBe(stamped);
   });
 
-  it("does not block ordinary typing (interception is reload-only)", async () => {
-    // Discriminating control: a benign key must NOT be swallowed by the plugin.
-    // We can't observe a global preventDefault directly via WebDriver, so we
-    // assert the positive path stays intact — the sentinel persists across an
-    // ordinary key, confirming the WebView is alive and not reloading on every
-    // keystroke (which a too-broad flag bag could cause).
+  it("stays alive after an ordinary key (liveness smoke check, not a discrimination proof)", async () => {
+    // HONEST SCOPE: this only asserts the WebView is still alive and did not
+    // reload after a benign key — it does NOT prove interception is "reload-only
+    // and not too-broad". A too-broad flag bag that swallowed *every* key would
+    // also leave the sentinel intact, so this passes in both the correct and the
+    // over-broad state. We can't observe a global preventDefault directly via
+    // WebDriver. TODO(#560): to make this a real discriminating control, give the
+    // benign key an observable side effect (e.g. focus the `find-input` testid,
+    // type into it, and assert its value changed — proving the key reached the
+    // page and was NOT swallowed).
     const stamped = await stampSentinel();
 
     await browser.keys(["a"]);
