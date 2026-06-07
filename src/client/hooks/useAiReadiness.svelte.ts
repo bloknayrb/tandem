@@ -1,37 +1,66 @@
 /**
- * AI-readiness reader (#1018/#1022).
+ * AI-readiness reader (#1018/#1022/#1054).
  *
- * "AI" in Tandem today is the external Claude Code integration, spawned and
- * supervised by the launcher. Whether AI actually works is therefore the
- * launcher's `GET /api/launcher/status` truth — NOT the document-sync
- * connection (the green "Synced" dot) and NOT `claudeActive` (which is
- * Claude's *activity* presence: it flaps to `false` every few seconds when
- * Claude is idle between tool calls, so gating a setup CTA on it would make a
- * working user's chip oscillate). `claudeActive` stays the idle/working
- * animation on the status dot; readiness keys on launcher status.
+ * "AI" in Tandem today is the external Claude Code integration. The
+ * auto-launcher (#477 PR 4) can spawn and supervise it, but it is NOT the only
+ * way an agent connects: a user can launch Claude Code manually from a terminal
+ * with the tandem MCP server configured. That externally-launched agent is
+ * invisible to the launcher (which only knows about the process IT spawned), so
+ * the launcher truthfully reports `running: false` even while the agent is live
+ * (#1054).
+ *
+ * Readiness therefore folds in TWO signals:
+ *   1. The launcher's `GET /api/launcher/status` — the supervised process.
+ *   2. The server's `GET /health` `hasSession` field (loopback-only) — whether
+ *      ANY MCP client transport is currently open, supervised or not. This is
+ *      the authoritative "an agent is actually connected" signal.
+ *
+ * An active MCP session means AI works regardless of launcher state, so it
+ * promotes readiness to `ready` and suppresses both the restart CTA and the
+ * "no AI is connected" send notice. Without it, a manually-launched session
+ * would show "Restart Claude Code" — and clicking it would spawn a SECOND agent
+ * on the same documents (#1054).
+ *
+ * Readiness keys on these connection facts — NOT the document-sync connection
+ * (the green "Synced" dot) and NOT `claudeActive` (Claude's *activity* presence:
+ * it flaps to `false` every few seconds when Claude is idle between tool calls,
+ * so gating a setup CTA on it would make a working user's chip oscillate).
+ * `claudeActive` stays the idle/working animation on the status dot.
  *
  * States:
  *   - `booting`      — not yet known (still connecting / first status read
  *                      pending). Render nothing; never flash a CTA on boot.
  *   - `unconfigured` — launcher unavailable (`available: false`: stdio mode,
- *                      disabled, or no claude-code integration). Prompt setup.
+ *                      disabled, or no claude-code integration) AND no active
+ *                      MCP session. Prompt setup.
  *   - `stopped`      — configured but not running (`available: true,
- *                      running: false` — crashed/stopped). Prompt restart, NOT
- *                      the setup wizard (the user is already set up).
- *   - `ready`        — Claude Code running.
+ *                      running: false` — crashed/stopped) AND no active MCP
+ *                      session. Prompt restart, NOT the setup wizard (the user
+ *                      is already set up).
+ *   - `ready`        — Claude Code running OR an MCP session is active.
  *
- * `shouldPrompt` folds in Solo-mode suppression: in Solo mode the user has
- * deliberately chosen to work without AI surfacing, so a persistent "Connect
- * AI" nag would contradict that intent.
+ * `chip` folds in Solo-mode suppression: in Solo mode the user has deliberately
+ * chosen to work without AI surfacing, so a persistent "Connect AI" nag would
+ * contradict that intent.
  *
- * Fail-safe: a transient status-fetch failure (network blip, non-OK) keeps the
- * PRIOR status rather than clobbering to "unconfigured" — mirroring
+ * Fail-safe: a transient fetch failure (network blip, non-OK) keeps the PRIOR
+ * value rather than clobbering to a scarier state — mirroring
  * `useFirstRunNeeded`'s "don't assert a scary state on a hiccup" discipline.
+ * This applies to both the launcher status and `hasSession`, so a momentary
+ * `/health` blip never flips a connected agent's chip back on.
  */
 import { onDestroy } from "svelte";
-import { API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
+import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
 import type { LauncherStatus } from "../../shared/launcher/contract.js";
 import { API_BASE } from "../utils/fileUpload.js";
+
+/** Loopback `/health` response. `hasSession` is omitted for non-loopback
+ * callers; the client only ever talks to 127.0.0.1 so it is present in
+ * practice, but absence is treated as "unknown" (no promotion). */
+interface HealthResponse {
+  status?: string;
+  hasSession?: boolean;
+}
 
 export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
 
@@ -42,7 +71,7 @@ export interface AiReadiness {
   readonly state: AiReadinessState;
   /** The CTA to surface, with Solo-mode suppression already applied. */
   readonly chip: AiChip;
-  /** Re-poll launcher status now (e.g. just after triggering a restart). */
+  /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
 }
 
@@ -54,16 +83,24 @@ export function createAiReadiness(deps: {
   soloMode: () => boolean;
 }): AiReadiness {
   let status = $state<LauncherStatus | null>(null);
-  // Have we ever read status successfully? Distinguishes "still booting" from
-  // a genuine `available: false`, so the chip never flashes during cold start.
+  // Whether an MCP client transport is currently open (from `/health`). An
+  // active session means AI works regardless of launcher state (#1054).
+  let mcpSessionActive = $state(false);
+  // Have we ever read launcher status successfully? Distinguishes "still
+  // booting" from a genuine `available: false`, so the chip never flashes
+  // during cold start. `/health` is not gated on this: readiness derives
+  // `booting` until launcher status settles, and `hasSession` only ever
+  // PROMOTES to ready (never demotes), so a missing first `/health` read can't
+  // surface a false CTA.
   let settledOnce = $state(false);
 
   // Drop stale async resolves (a poll that resolves after the component is
   // gone, or after a newer poll superseded it). Mirrors useFirstRunNeeded's gen.
+  // Shared by both fetches so a single generation bump invalidates all in-flight
+  // requests from a superseded poll.
   let gen = 0;
 
-  async function poll(): Promise<void> {
-    const mine = ++gen;
+  async function pollLauncherStatus(mine: number): Promise<void> {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
@@ -80,8 +117,35 @@ export function createAiReadiness(deps: {
     }
   }
 
-  void poll();
-  const interval = setInterval(() => void poll(), POLL_MS);
+  async function pollHealth(mine: number): Promise<void> {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${API_HEALTH}`);
+    } catch {
+      return; // network blip — keep prior hasSession (fail-safe)
+    }
+    if (mine !== gen) return;
+    if (!res.ok) return; // transient server error — keep prior hasSession
+    try {
+      const body = (await res.json()) as HealthResponse;
+      // Only update when the field is present (loopback). Absence is "unknown",
+      // not "no session" — keep the prior value rather than demote to false.
+      if (typeof body.hasSession === "boolean") {
+        mcpSessionActive = body.hasSession;
+      }
+    } catch {
+      // malformed body — keep prior hasSession
+    }
+  }
+
+  function poll(): void {
+    const mine = ++gen;
+    void pollLauncherStatus(mine);
+    void pollHealth(mine);
+  }
+
+  poll();
+  const interval = setInterval(() => poll(), POLL_MS);
   onDestroy(() => {
     gen++;
     clearInterval(interval);
@@ -91,6 +155,9 @@ export function createAiReadiness(deps: {
     if (!deps.firstRunSettled() || !deps.connected() || !settledOnce || status === null) {
       return "booting";
     }
+    // An active MCP session means an agent is connected and AI works, whether
+    // or not the launcher spawned it. Promote to ready and skip the CTA.
+    if (mcpSessionActive) return "ready";
     if (status.available === false) return "unconfigured";
     return status.running === true ? "ready" : "stopped";
   });
@@ -109,6 +176,6 @@ export function createAiReadiness(deps: {
     get chip() {
       return chip;
     },
-    refresh: () => void poll(),
+    refresh: () => poll(),
   };
 }
