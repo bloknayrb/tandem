@@ -798,7 +798,7 @@ pub fn run() {
                 }
 
                 // Force rounded corners + suppress the borderless outline (#984).
-                // No-op on non-Windows. Re-asserted on resize/move in the
+                // No-op on non-Windows. Re-asserted on `Resized` in the
                 // window-event handler since snap/maximize resets the corner
                 // preference.
                 #[cfg(target_os = "windows")]
@@ -1745,7 +1745,7 @@ impl RawHwnd for tauri::Window {
 /// `DWMWCP_ROUND` (so snapped/maximized windows stay rounded) and set the
 /// border color to `DWMWA_COLOR_NONE` (so no outline is drawn). Both attributes
 /// reset on some window-state transitions, so this is invoked at setup AND
-/// re-asserted from the window-event handler on resize/move.
+/// re-asserted from the window-event handler on `Resized`.
 ///
 /// All DWM calls are best-effort: a failing `DwmSetWindowAttribute` (e.g. an
 /// older Windows 10 build that predates these attributes — they require Win11
@@ -1761,13 +1761,9 @@ impl RawHwnd for tauri::Window {
 fn apply_window_chrome<W: RawHwnd>(window: &W) {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
-
-    // DWMWA_COLOR_NONE (0xFFFFFFFE) suppresses the border entirely, giving a
-    // rounded window with no outline. Not exposed as a named constant by
-    // windows-sys, so spell it out (matches dwmapi.h / the MS docs).
-    const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
 
     let hwnd: HWND = match window.raw_hwnd() {
         Ok(v) => v,
