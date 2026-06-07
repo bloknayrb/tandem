@@ -140,7 +140,7 @@ export function resolveClaudeSessionId(): string | undefined {
  * `X-Claude-Session-Id` header. No-op when no session id is resolvable, so
  * callers can wrap every outbound request unconditionally.
  */
-export function withClaudeSessionHeader(init?: HeadersInit): Headers {
+export function withClaudeSessionHeader(init?: RequestInit["headers"]): Headers {
   const headers = new Headers(init);
   const sessionId = resolveClaudeSessionId();
   if (sessionId !== undefined) headers.set(CLAUDE_SESSION_HEADER, sessionId);
