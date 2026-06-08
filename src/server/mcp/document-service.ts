@@ -144,18 +144,19 @@ export async function saveDocumentToDisk(
 
   const isBinary = BINARY_SAVE_FORMATS.has(docState.format);
 
+  // Read-only blocks every save path. The read-only signal is the user's
+  // intent and dominates the format/source distinction: a read-only .docx is
+  // never overwritten, whether the trigger is auto-save or an explicit save.
+  // A writable .docx falls through to the binary branch below.
+  if (docState.readOnly) {
+    return { status: "skipped", reason: "Read-only document" };
+  }
+
   // Binary formats (.docx) write back only on an EXPLICIT user/agent save. The
   // auto-save timer must never overwrite the original with a re-export of a
   // lossy mammoth import.
   if (isBinary && source === "auto-save") {
     return { status: "skipped", reason: "Binary formats save only on explicit save" };
-  }
-
-  // Read-only blocks the text auto-save path. A read-only .docx that reaches an
-  // explicit save still cannot be overwritten (the read-only signal is the
-  // user's intent); a writable .docx falls through to the binary branch.
-  if (docState.readOnly) {
-    return { status: "skipped", reason: "Read-only document" };
   }
 
   if (!isBinary && !AUTO_SAVE_FORMATS.has(docState.format)) {
