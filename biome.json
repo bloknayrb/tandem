@@ -25,7 +25,8 @@
       "*.{ts,json,html}",
       "!dist/**",
       "!node_modules/**",
-      "!package-lock.json"
+      "!package-lock.json",
+      "!tests/tauri-driver/**"
     ]
   }
 }

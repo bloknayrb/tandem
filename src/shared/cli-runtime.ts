@@ -84,6 +84,70 @@ const VALID_TOKEN_RE = /^[A-Za-z0-9_\-]{32,}$/;
 let _warnedInvalidToken = false;
 
 /**
+ * Header carrying the Claude Code session id on stdio-shim → Tandem-server
+ * requests. Lets the server correlate channel traffic (replies, awareness,
+ * error reports) with the originating Claude Code session for multi-session
+ * disambiguation and diagnostics. Read-only metadata: routes that don't
+ * consume it ignore the header, so no server-route schema change is required.
+ */
+export const CLAUDE_SESSION_HEADER = "X-Claude-Session-Id";
+
+/**
+ * Bound on the session-id length we forward. Claude Code sets a UUID
+ * (the same `session_id` passed to hooks; CHANGELOG 2.1.157 / 2.1.163), but we
+ * treat the value as opaque and only guard against an oversized header line.
+ */
+const MAX_SESSION_ID_LEN = 256;
+
+/**
+ * Printable-ASCII guard. A stray CR/LF (or other control char) would split the
+ * header line — reject anything outside `\x21`–`\x7e`. The length bound is
+ * enforced separately against MAX_SESSION_ID_LEN so there's one source of truth.
+ */
+const SESSION_ID_RE = /^[\x21-\x7e]+$/;
+
+/**
+ * Resolve the Claude Code session id from the process environment.
+ *
+ * Claude Code injects `CLAUDE_CODE_SESSION_ID` (and `CLAUDECODE=1`) into the
+ * environment of the stdio MCP server subprocesses it spawns — the Tandem
+ * channel shim and stdio proxy are exactly such subprocesses (Claude Code
+ * CHANGELOG 2.1.157; also forwarded on `--resume` since 2.1.163). The value
+ * mirrors the `session_id` passed to hooks/Bash (a UUID).
+ *
+ * Returns `undefined` when the launch is not a Claude Code session
+ * (`CLAUDECODE !== "1"` — so a value a user happened to export in their own
+ * shell is never forwarded), the var is unset/blank, or it fails the
+ * printable-ASCII length guard. Whitespace is trimmed and the value is
+ * length-bounded so it can be forwarded as an HTTP header without
+ * header-injection or oversize risk.
+ */
+export function resolveClaudeSessionId(): string | undefined {
+  // Only trust the id inside an actual Claude Code launch. `CLAUDECODE=1` is
+  // set alongside CLAUDE_CODE_SESSION_ID by the same CLI release; gating on it
+  // avoids forwarding a value a user happened to export in their own shell.
+  if (process.env.CLAUDECODE !== "1") return undefined;
+  const raw = process.env.CLAUDE_CODE_SESSION_ID;
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.length > MAX_SESSION_ID_LEN) return undefined;
+  if (!SESSION_ID_RE.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+/**
+ * Merge the resolved Claude session id (if any) into a `HeadersInit` as the
+ * `X-Claude-Session-Id` header. No-op when no session id is resolvable, so
+ * callers can wrap every outbound request unconditionally.
+ */
+export function withClaudeSessionHeader(init?: RequestInit["headers"]): Headers {
+  const headers = new Headers(init);
+  const sessionId = resolveClaudeSessionId();
+  if (sessionId !== undefined) headers.set(CLAUDE_SESSION_HEADER, sessionId);
+  return headers;
+}
+
+/**
  * Fetch wrapper that automatically injects `Authorization: Bearer <token>`
  * when a resolved Tandem auth token is set and valid.
  *
@@ -94,11 +158,14 @@ let _warnedInvalidToken = false;
  * so operators know why auth headers are absent.
  */
 export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  // Always attach the Claude session header (no-op when not resolvable) so the
+  // server can correlate channel traffic with the originating Claude session,
+  // independent of whether an auth token is configured.
+  const headers = withClaudeSessionHeader(init?.headers);
   const { token, source } = resolveAuthTokenCandidate();
   if (token !== undefined) {
     const trimmed = token.trim();
     if (VALID_TOKEN_RE.test(trimmed)) {
-      const headers = new Headers(init?.headers);
       headers.set("Authorization", `Bearer ${trimmed}`);
       return fetch(url, { ...init, headers });
     }
@@ -110,5 +177,5 @@ export async function authFetch(url: string, init?: RequestInit): Promise<Respon
       );
     }
   }
-  return fetch(url, init);
+  return fetch(url, { ...init, headers });
 }
