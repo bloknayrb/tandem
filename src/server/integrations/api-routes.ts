@@ -599,11 +599,12 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           }
         }
 
-        // Default-on for Claude Code (#985). On a desktop bundle CHANNEL_DIST
-        // resolves outside the resource dir and won't exist, so the helper
-        // returns false and the wizard cleanly defers to the /api/setup
-        // startup path (which carries the correct Tauri-resolved channel
-        // path) — no broken entry is written. The `create`-wins guard in
+        // Default-on for Claude Code (#985). On a desktop bundle the correct
+        // resource-dir channel path is injected via TANDEM_CHANNEL_DIST on
+        // sidecar spawn (resolveChannelDist), so CHANNEL_DIST resolves to an
+        // existing file and the shim registers. When the build artifact is
+        // genuinely absent the helper returns false and only the tandem HTTP
+        // entry is written — no broken entry. The `create`-wins guard in
         // applyConfig keeps a user-confirmed removal from deleting the entry
         // we just created.
         const withChannelShim = (deps.shouldRegisterChannelShim ?? shouldRegisterChannelShim)(

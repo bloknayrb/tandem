@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
+import { applyConfigWithToken } from "../server/integrations/apply.js";
 import { API_ROTATE_TOKEN } from "../shared/api-paths.js";
 import { getTokenFilePath, readTokenFromFile } from "../shared/auth/token-file.js";
 import { resolveAuthTokenCandidate, resolveTandemUrl } from "../shared/cli-runtime.js";
-import { applyConfigWithToken } from "./setup.js";
 
 /** SHA-256 fingerprint — first 8 hex chars. Never logs the full token value. */
 function fingerprint(token: string): string {

@@ -28,7 +28,7 @@ The tutorial dismisses after all three steps and won't appear again (progress is
 
 **Tip:** Start the Tandem server first, then open Claude Code with the channel flag. Having Claude connected before the tutorial means you'll see real responses when you ask a question in step 2.
 
-**Desktop app users:** The server starts automatically when you open Tandem. Claude Code is configured on every launch — no need to run `tandem setup`.
+**Desktop app users:** The server starts automatically when you open Tandem. On first run, the integration wizard walks you through connecting Claude Code — no need to run `tandem setup` from a terminal.
 
 ## The Editor
 
@@ -263,9 +263,9 @@ Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets
 
 ### Connection
 
-Start the Tandem server first (`tandem` for global install, or `npm run dev:standalone` for development). Then start Claude Code. Claude's tools become available automatically via the MCP configuration written by `tandem setup` (global) or `.mcp.json` (development).
+Start the Tandem server first (`tandem` for global install, or `npm run dev:standalone` for development). Then start Claude Code. Claude's tools become available via the MCP configuration written by the integration wizard (or `tandem setup --apply` for a scripted setup), or `.mcp.json` (development).
 
-**Desktop app:** The server is already running. Claude Code is auto-configured on every launch — your `tandem_*` tools are available immediately. Skip to [Real-Time Push](#real-time-push-recommended) if you want channel notifications.
+**Desktop app:** The server is already running. On first run the integration wizard configures Claude Code; once connected, your `tandem_*` tools are available immediately. You can re-open the wizard any time from the tray "Setup AI Assistant" item or Settings. Skip to [Real-Time Push](#real-time-push-recommended) if you want channel notifications.
 
 Claude can check the connection with `tandem_status`, which reports open documents, connection state, and your current mode (Solo or Tandem).
 

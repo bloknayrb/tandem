@@ -16,6 +16,10 @@ import {
   type PickedIntegration,
 } from "../hooks/useIntegrationWizard.svelte.js";
 
+/** Canonical Claude download URL — mirrors the former CLAUDE_DOWNLOAD_URL in
+ *  src-tauri/src/lib.rs (removed with show_no_claude_dialog in #477 PR 3c-ii-c). */
+const CLAUDE_DOWNLOAD_URL = "https://claude.ai/download";
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -193,8 +197,9 @@ function configBadge(config: IntegrationConfig): string {
 
       {#if wizard.step === "detect"}
         <section data-testid="integration-wizard-step-detect">
-          <p>Looking for existing AI integrations on your system…</p>
-          {#if wizard.existing.length > 0}
+          {#if wizard.detecting}
+            <p>Looking for existing AI integrations on your system…</p>
+          {:else if wizard.existing.length > 0}
             <ul class="iw-existing">
               {#each wizard.existing as install (install.target.configPath)}
                 <li>
@@ -206,6 +211,26 @@ function configBadge(config: IntegrationConfig): string {
                 </li>
               {/each}
             </ul>
+          {:else}
+            <!-- Relocated from the native show_no_claude_dialog (#477 PR 3c-ii-c):
+                 with no Claude install detected, nudge installation here instead
+                 of a Tauri-only dialog so the npm-browser path gets it too. -->
+            <div class="iw-no-client" data-testid="integration-wizard-no-client">
+              <p>
+                No AI client detected. Tandem works as a standalone editor — to collaborate
+                with an AI, install an MCP-capable client. Claude (Claude Code or Claude
+                Desktop) is the default and best-supported choice today.
+              </p>
+              <a
+                class="iw-download-link"
+                href={CLAUDE_DOWNLOAD_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="integration-wizard-download-claude"
+              >
+                Download Claude
+              </a>
+            </div>
           {/if}
           <div class="iw-actions">
             <button
@@ -464,6 +489,22 @@ function configBadge(config: IntegrationConfig): string {
     display: block;
     font-size: var(--tandem-text-xs);
     color: var(--tandem-fg-muted);
+  }
+
+  .iw-no-client {
+    padding: var(--tandem-space-3);
+    background: var(--tandem-info-bg);
+    color: var(--tandem-info-fg-strong);
+    border: 1px solid var(--tandem-info-border);
+    border-radius: var(--tandem-r-2);
+    margin: var(--tandem-space-3) 0;
+  }
+  .iw-no-client p {
+    margin: 0 0 var(--tandem-space-2);
+  }
+  .iw-download-link {
+    color: var(--tandem-info-fg-strong);
+    font-weight: 600;
   }
 
   .iw-actions {

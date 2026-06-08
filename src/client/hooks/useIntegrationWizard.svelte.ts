@@ -58,6 +58,10 @@ export interface PickedIntegration {
 
 export interface IntegrationWizardState {
   readonly step: WizardStep;
+  /** True while `begin()`'s detection fetch is in flight. Lets the modal
+   *  distinguish "still looking" from "detected nothing" so the no-AI-client
+   *  notice doesn't flash before detection resolves. */
+  readonly detecting: boolean;
   readonly existing: ExistingMcpInstall[];
   readonly picked: PickedIntegration[];
   readonly errorMessage: string | null;
@@ -119,6 +123,7 @@ export function createIntegrationWizard(
     opts.keychainBackend ?? createDefaultKeychainBackend({ fetchFn, baseUrl });
 
   let step = $state<WizardStep>("detect");
+  let detecting = $state(false);
   let existing = $state<ExistingMcpInstall[]>([]);
   let picked = $state<PickedIntegration[]>([]);
   let errorMessage = $state<string | null>(null);
@@ -132,11 +137,13 @@ export function createIntegrationWizard(
   const setError = (msg: string) => {
     errorMessage = msg;
     step = "error";
+    detecting = false;
   };
 
   const begin = async () => {
     const myGen = ++beginGen;
     step = "detect";
+    detecting = true;
     errorMessage = null;
     try {
       const res = await fetchFn(`${baseUrl}${API_INTEGRATIONS_EXISTING}`);
@@ -148,6 +155,7 @@ export function createIntegrationWizard(
       const body = (await res.json()) as { installs: ExistingMcpInstall[] };
       if (myGen !== beginGen) return;
       existing = body.installs;
+      detecting = false;
     } catch (err) {
       if (myGen !== beginGen) return;
       setError(err instanceof Error ? err.message : String(err));
@@ -288,6 +296,7 @@ export function createIntegrationWizard(
 
   const reset = () => {
     step = "detect";
+    detecting = false;
     existing = [];
     picked = [];
     errorMessage = null;
@@ -298,6 +307,9 @@ export function createIntegrationWizard(
   return {
     get step() {
       return step;
+    },
+    get detecting() {
+      return detecting;
     },
     get existing() {
       return existing;

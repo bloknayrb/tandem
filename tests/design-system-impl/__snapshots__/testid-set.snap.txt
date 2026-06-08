@@ -163,7 +163,9 @@ integration-wizard-continue-detect
 integration-wizard-continue-pick
 integration-wizard-continue-secrets
 integration-wizard-done-close
+integration-wizard-download-claude
 integration-wizard-keychain-fallback
+integration-wizard-no-client
 integration-wizard-pick-{*}
 integration-wizard-save
 integration-wizard-secret-input-{*}

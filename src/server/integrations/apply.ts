@@ -59,7 +59,36 @@ const PACKAGE_ROOT = (() => {
   if (existsSync(join(fromBundle, "package.json"))) return fromBundle;
   return resolve(__dirname, "../../..");
 })();
-const CHANNEL_DIST = resolve(PACKAGE_ROOT, "dist/channel/index.js");
+/**
+ * Resolve the bundled channel-shim entry registered as Claude Code's push
+ * transport.
+ *
+ * On a Tauri **desktop bundle** the `PACKAGE_ROOT` derivation above points at
+ * the sidecar's own location, NOT the app's resource dir where `dist/channel/`
+ * is bundled — so the computed path doesn't exist and `shouldRegisterChannelShim`
+ * skips registration. The Tauri shell injects `TANDEM_CHANNEL_DIST` with the
+ * resource-dir-resolved path on sidecar spawn (`src-tauri/src/lib.rs`); prefer
+ * it when it points at an existing file. A bogus/missing injected path is
+ * ignored so a broken injection degrades to the computed path rather than
+ * registering an unresolvable MCP command. In npm-global / tsx-dev there is no
+ * env var and the `PACKAGE_ROOT` derivation is correct.
+ *
+ * This replaces the old `/api/setup` startup round-trip, which used to be the
+ * only path carrying the Tauri-resolved channel path (#477 PR 3c-ii-c).
+ *
+ * Exported (with `exists` injectable) so the env-precedence can be unit-tested
+ * without re-importing the module to re-run the const initializer.
+ */
+export function resolveChannelDist(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (p: string) => boolean = existsSync,
+): string {
+  const injected = env.TANDEM_CHANNEL_DIST;
+  if (injected && exists(injected)) return injected;
+  return resolve(PACKAGE_ROOT, "dist/channel/index.js");
+}
+
+const CHANNEL_DIST = resolveChannelDist();
 
 const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
 
@@ -843,10 +872,10 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
  * - Otherwise: default-on for Claude Code, but only if `channelPath` exists.
  *   That `existsSync` guard does double duty — it degrades gracefully when
  *   `tandem` runs from source without a build, AND it stops the CLI/wizard
- *   from writing a wrong `CHANNEL_DIST` on a desktop bundle (where it
- *   resolves outside the resource dir): there the helper returns false and
- *   the `/api/setup` startup path, which carries the correct Tauri-resolved
- *   channel path, registers the shim instead.
+ *   from writing a wrong `CHANNEL_DIST` on a desktop bundle. On the desktop
+ *   bundle the correct resource-dir channel path is injected via the
+ *   `TANDEM_CHANNEL_DIST` env var (see `resolveChannelDist`), so `CHANNEL_DIST`
+ *   already resolves to an existing file there and the shim registers.
  */
 export function shouldRegisterChannelShim(
   targetKind: TargetKind,

@@ -9,16 +9,19 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runSetup } from "../../src/cli/setup.js";
+// These helpers moved to src/server/integrations/apply.ts in #477 PR 3c-ii-a;
+// the back-compat re-export from src/cli/setup.ts was dropped in PR 3c-ii-c.
 import {
   applyConfig,
   applyOpsForCli,
   buildMcpEntries,
   detectTargets,
   installSkill,
+  shouldRegisterChannelShim,
   validateChannelShimPrereq,
-} from "../../src/cli/setup.js";
-import { shouldRegisterChannelShim } from "../../src/server/integrations/apply.js";
+} from "../../src/server/integrations/apply.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 
 describe("buildMcpEntries", () => {
@@ -519,5 +522,33 @@ describe("runSetup plugin instructions", () => {
   it("package .claude-plugin/plugin.json exists at expected path", () => {
     const manifestPath = resolve(import.meta.dirname, "../../.claude-plugin/plugin.json");
     expect(existsSync(manifestPath)).toBe(true);
+  });
+});
+
+describe("runSetup — non-interactive (#477 PR 3c-ii-c)", () => {
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errSpy.mockRestore();
+  });
+
+  const stderr = () => errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+
+  it("bare `tandem setup` prints wizard-driven guidance and writes nothing", async () => {
+    await runSetup();
+    const out = stderr();
+    expect(out).toContain("wizard-driven");
+    expect(out).toContain("tandem setup --apply");
+    // The default path must not announce a config write — that's the behavior
+    // change: bare `tandem setup` no longer silently configures Claude.
+    expect(out).not.toContain("Writing MCP configuration");
+  });
+
+  it("`apply: false` is equivalent to no flags (guidance only)", async () => {
+    await runSetup({ apply: false, force: true });
+    expect(stderr()).toContain("wizard-driven");
   });
 });

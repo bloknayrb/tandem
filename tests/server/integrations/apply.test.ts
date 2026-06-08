@@ -8,9 +8,31 @@ import {
   assertPathSafe,
   MSIX_PACKAGE_PATTERN,
   PathRejectedError,
+  resolveChannelDist,
 } from "../../../src/server/integrations/apply.js";
 
 const POSIX_ONLY = process.platform !== "win32";
+
+describe("resolveChannelDist — TANDEM_CHANNEL_DIST precedence (#477 PR 3c-ii-c)", () => {
+  // The Tauri desktop bundle injects TANDEM_CHANNEL_DIST on sidecar spawn
+  // because the package-root derivation resolves outside the resource dir.
+  it("prefers an injected env path when it points at an existing file", () => {
+    const injected = "/app/Resources/dist/channel/index.js";
+    expect(resolveChannelDist({ TANDEM_CHANNEL_DIST: injected }, () => true)).toBe(injected);
+  });
+
+  it("falls back to the package-root derivation when env is unset", () => {
+    const resolved = resolveChannelDist({}, () => true);
+    expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/channel\/index\.js$/);
+    expect(resolved).not.toBe("/app/Resources/dist/channel/index.js");
+  });
+
+  it("ignores a bogus env path that does not exist (degrades to derivation)", () => {
+    const resolved = resolveChannelDist({ TANDEM_CHANNEL_DIST: "/nope/channel.js" }, () => false);
+    expect(resolved).not.toBe("/nope/channel.js");
+    expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/channel\/index\.js$/);
+  });
+});
 
 describe("assertPathSafe", () => {
   let tmpDir: string;

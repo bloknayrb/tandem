@@ -3,12 +3,12 @@
  * Shebang is added by tsup banner at build time.
  *
  * Usage:
- *   tandem            Start the Tandem server and open the editor
- *   tandem setup      Register Tandem MCP tools with your AI client (Claude Code / Claude Desktop by default)
- *   tandem setup --force  Register even if no AI install is auto-detected
- *   tandem doctor     Diagnose setup issues (add --json for machine-readable output)
- *   tandem --help     Show this help
- *   tandem --version  Show version
+ *   tandem               Start the Tandem server and open the editor
+ *   tandem setup         Print first-run setup guidance (setup is wizard-driven)
+ *   tandem setup --apply Non-interactively write MCP config to detected clients
+ *   tandem doctor        Diagnose setup issues (add --json for machine-readable output)
+ *   tandem --help        Show this help
+ *   tandem --version     Show version
  */
 
 import updateNotifier from "update-notifier";
@@ -47,9 +47,13 @@ if (args.includes("--help") || args.includes("-h")) {
 
 Usage:
   tandem                            Start Tandem server and open the editor
-  tandem setup                      Register MCP tools with your AI client (Claude Code / Claude Desktop by default)
-  tandem setup --force              Register to default paths regardless of detection
-  tandem setup --with-channel-shim  Also register the stdio channel shim (legacy opt-in)
+  tandem setup                      Print first-run setup guidance (setup is wizard-driven)
+  tandem setup --apply              Write MCP config to detected AI clients non-interactively
+  tandem setup --apply --force      Apply to default paths regardless of detection
+  tandem setup --apply --target=claude-code|claude-desktop
+                                    Restrict --apply to specific client(s)
+  tandem setup --apply --with-channel-shim
+                                    Also register the stdio channel shim (legacy opt-in)
   tandem doctor                     Diagnose setup issues (Node version, .mcp.json,
                                     ports, server health, annotation store)
   tandem doctor --json              Same checks, emit a single JSON report on stdout
@@ -81,9 +85,19 @@ try {
     process.exit(exitCode);
   } else if (args[0] === "setup") {
     const { runSetup } = await import("./setup.js");
+    // `--target=claude-code` / `--target=claude-desktop`, repeatable. Unknown
+    // values are ignored (filtered against detected targets downstream).
+    const targets = args
+      .filter((a) => a.startsWith("--target="))
+      .map((a) => a.slice("--target=".length))
+      .filter(
+        (t): t is "claude-code" | "claude-desktop" => t === "claude-code" || t === "claude-desktop",
+      );
     await runSetup({
+      apply: args.includes("--apply"),
       force: args.includes("--force"),
       withChannelShim: args.includes("--with-channel-shim"),
+      targets,
     });
   } else if (args[0] === "mcp-stdio") {
     const { runMcpStdio } = await import("./mcp-stdio.js");

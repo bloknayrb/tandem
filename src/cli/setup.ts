@@ -6,47 +6,60 @@ import {
   applyOpsForCli,
   buildMcpEntries,
   CHANNEL_DIST,
+  type DetectedTarget,
   detectTargets,
   installSkill,
   PACKAGE_ROOT,
   shouldRegisterChannelShim,
-  validateChannelShimPrereq,
-} from "../server/integrations/apply.js";
-
-/**
- * Back-compat re-exports.
- *
- * The helpers below now live in `src/server/integrations/apply.ts`
- * (#477 PR 3c-ii-a — server library factor). External consumers
- * (`tandem rotate-token`, tests, anything that bundles against the
- * CLI surface) keep importing from `src/cli/setup.js` for now. The
- * re-export goes away in PR 3c-ii-c when `runSetup` is rewritten as
- * a non-interactive `--apply` wrapper and the CLI surface is reduced.
- */
-export {
-  type ApplyOps,
-  applyConfig,
-  applyConfigWithToken,
-  applyOpsForCli,
-  type BuildMcpEntriesOptions,
-  buildMcpEntries,
-  type DetectedTarget,
-  type DetectOptions,
-  detectTargets,
-  installSkill,
-  type McpEntries,
-  type McpEntry,
-  PathRejectedError,
-  type RemovableEntry,
   type TargetKind,
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
 
-/** Run the setup command. Writes MCP config to all detected Claude installs. */
-export async function runSetup(
-  opts: { force?: boolean; withChannelShim?: boolean } = {},
-): Promise<void> {
-  console.error("\nTandem Setup\n");
+export interface SetupOptions {
+  /**
+   * When false (the default `tandem setup` with no flags) we only print
+   * guidance — first-run setup is wizard-driven now (ADR-038 §2b). `--apply`
+   * opts into writing the MCP config non-interactively (scriptable path for
+   * CI / dotfile users).
+   */
+  apply?: boolean;
+  force?: boolean;
+  withChannelShim?: boolean;
+  /**
+   * Restrict to specific target kinds (`--target=claude-code|claude-desktop`).
+   * Empty/undefined = all detected targets.
+   */
+  targets?: TargetKind[];
+}
+
+/**
+ * `tandem setup` entry point.
+ *
+ * Auto-configuration of Claude on Tauri startup and the old interactive
+ * `tandem setup` flow were removed in #477 PR 3c-ii-c — setup runs through the
+ * in-app wizard, with this CLI surviving only as a non-interactive
+ * `--apply` escape hatch for scripts. The bare `tandem setup` prints guidance.
+ */
+export async function runSetup(opts: SetupOptions = {}): Promise<void> {
+  if (!opts.apply) {
+    printGuidance();
+    return;
+  }
+  await applySetup(opts);
+}
+
+function printGuidance(): void {
+  console.error(
+    "\nTandem setup is wizard-driven.\n\n" +
+      "  • Run `tandem` to launch the editor; the first-run wizard connects\n" +
+      "    Claude (Claude Code / Claude Desktop) for you.\n" +
+      "  • Or run `tandem setup --apply` to write the default Claude MCP config\n" +
+      "    non-interactively. Honors --force, --target=<kind>, --with-channel-shim.\n",
+  );
+}
+
+async function applySetup(opts: SetupOptions): Promise<void> {
+  console.error("\nTandem Setup (--apply)\n");
 
   if (opts.withChannelShim && !validateChannelShimPrereq(CHANNEL_DIST)) {
     console.error(
@@ -58,23 +71,63 @@ export async function runSetup(
 
   console.error("Detecting Claude installations...");
 
-  const targets = detectTargets({ force: opts.force });
+  let targets = detectTargets({ force: opts.force });
+  if (opts.targets && opts.targets.length > 0) {
+    const wanted = new Set(opts.targets);
+    targets = targets.filter((t) => wanted.has(t.kind));
+  }
 
+  let failures = 0;
   if (targets.length === 0) {
     console.error(
-      "  No Claude installations detected.\n" +
+      "  No matching Claude installations detected.\n" +
         "  If Claude Code is installed, ensure ~/.claude exists.\n" +
-        "  You can force configuration to default paths with: tandem setup --force",
+        "  Force configuration to default paths with: tandem setup --apply --force",
     );
-    return;
+  } else {
+    for (const t of targets) {
+      console.error(`  Found: ${t.label} (${t.configPath})`);
+    }
+
+    console.error("\nWriting MCP configuration...");
+    failures = await writeTargets(targets, opts);
+
+    if (failures === targets.length) {
+      console.error("\nSetup failed — could not write any configuration. Check file permissions.");
+    } else if (failures > 0) {
+      console.error(
+        `\nSetup partially complete (${failures} target(s) failed). Start Tandem with: tandem`,
+      );
+    } else {
+      console.error("\nSetup complete! Start Tandem with: tandem");
+      console.error("Then in Claude, your tandem_* tools will be available.");
+    }
   }
 
-  for (const t of targets) {
-    console.error(`  Found: ${t.label} (${t.configPath})`);
+  // Skill install is per-user, not per-integration — run it on any --apply
+  // invocation (contrarian review S5), even when no targets were written.
+  console.error("\nInstalling Claude Code skill...");
+  try {
+    await installSkill();
+    console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
+  } catch (err) {
+    console.error(
+      `  \x1b[33m⚠\x1b[0m Could not install skill: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
-  console.error("\nWriting MCP configuration...");
+  if (targets.length > 0 && failures < targets.length) {
+    printPushStatus();
+  }
 
+  // Non-zero exit only when we attempted writes and every one failed, so
+  // `tandem setup --apply` stays scriptable (CI can branch on exit code).
+  if (targets.length > 0 && failures === targets.length) {
+    process.exit(1);
+  }
+}
+
+async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<number> {
   let failures = 0;
   for (const t of targets) {
     // Default-on for Claude Code (channel shim is its push transport, #985);
@@ -97,54 +150,32 @@ export async function runSetup(
       );
     }
   }
+  return failures;
+}
 
-  if (failures === targets.length) {
-    console.error("\nSetup failed — could not write any configuration. Check file permissions.");
-    process.exit(1);
-  } else if (failures > 0) {
-    console.error(
-      `\nSetup partially complete (${failures} target(s) failed). Start Tandem with: tandem`,
-    );
-  } else {
-    console.error("\nSetup complete! Start Tandem with: tandem");
-    console.error("Then in Claude, your tandem_* tools will be available.");
-  }
+function printPushStatus(): void {
+  // Real-time push is delivered by the channel shim, registered by default
+  // above; the plugin monitor it was meant to replace cannot activate via any
+  // path Claude Code exposes today (Spike B / #985), so it's framed as
+  // forward-looking, not the path.
+  const channelRegistered = validateChannelShimPrereq(CHANNEL_DIST);
+  const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
+  const devInstructions = existsSync(pluginManifest)
+    ? `  For development, you can also load the package directly:\n\n` +
+      `    claude --plugin-dir ${PACKAGE_ROOT}\n\n`
+    : "";
 
-  // Install Claude Code skill (best-effort — doesn't block MCP setup)
-  console.error("\nInstalling Claude Code skill...");
-  try {
-    await installSkill();
-    console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
-  } catch (err) {
-    console.error(
-      `  \x1b[33m⚠\x1b[0m Could not install skill: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
-  // Real-time push status (shown on all successful setups). Push is delivered
-  // by the channel shim, registered by default above; the plugin monitor it
-  // was meant to replace cannot activate via any path Claude Code exposes
-  // today (Spike B / #985), so it's framed as forward-looking, not the path.
-  if (failures < targets.length) {
-    const channelRegistered = validateChannelShimPrereq(CHANNEL_DIST);
-    const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
-    const devInstructions = existsSync(pluginManifest)
-      ? `  For development, you can also load the package directly:\n\n` +
-        `    claude --plugin-dir ${PACKAGE_ROOT}\n\n`
-      : "";
-
-    console.error(
-      "\n\x1b[1mReal-time push notifications:\x1b[0m\n" +
-        (channelRegistered
-          ? "  \x1b[32mEnabled\x1b[0m — the channel shim is registered; Claude Code receives events in real time.\n" +
-            "  Relaunch any Claude Code session you started manually so it picks up the new server.\n\n"
-          : "  \x1b[33mUnavailable\x1b[0m — dist/channel/index.js not found; Claude Code will poll via tandem_checkInbox.\n" +
-            "  Run 'npm run build' and re-run setup to enable push.\n\n") +
-        "  A Tandem plugin is also published (skill + MCP; the real-time monitor it carries is\n" +
-        "  forward-looking, pending Claude Code support):\n\n" +
-        "    claude plugin marketplace add bloknayrb/tandem\n" +
-        "    claude plugin install tandem@tandem-editor\n\n" +
-        devInstructions,
-    );
-  }
+  console.error(
+    "\n\x1b[1mReal-time push notifications:\x1b[0m\n" +
+      (channelRegistered
+        ? "  \x1b[32mEnabled\x1b[0m — the channel shim is registered; Claude Code receives events in real time.\n" +
+          "  Relaunch any Claude Code session you started manually so it picks up the new server.\n\n"
+        : "  \x1b[33mUnavailable\x1b[0m — dist/channel/index.js not found; Claude Code will poll via tandem_checkInbox.\n" +
+          "  Run 'npm run build' and re-run setup to enable push.\n\n") +
+      "  A Tandem plugin is also published (skill + MCP; the real-time monitor it carries is\n" +
+      "  forward-looking, pending Claude Code support):\n\n" +
+      "    claude plugin marketplace add bloknayrb/tandem\n" +
+      "    claude plugin install tandem@tandem-editor\n\n" +
+      devInstructions,
+  );
 }

@@ -49,8 +49,10 @@ export const API_SESSIONS = "/api/sessions";
 export const API_SESSIONS_DELETE = "/api/sessions/delete";
 export const API_SESSIONS_CLEAR = "/api/sessions/clear";
 
-// --- Setup / auth -----------------------------------------------------------
-export const API_SETUP = "/api/setup";
+// --- Auth -------------------------------------------------------------------
+// NOTE: the legacy `/api/setup` route was removed in #477 PR 3c-ii-c; setup is
+// now wizard-driven (`POST /api/integrations/apply`) or scriptable via
+// `tandem setup --apply`.
 export const API_ROTATE_TOKEN = "/api/rotate-token";
 
 // --- Auto-launcher (Claude Code supervisor, #477 PR 4b) ---------------------

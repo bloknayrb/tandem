@@ -292,7 +292,7 @@ The channel replaces polling for user actions. Instead of Claude calling `tandem
 
 ### Activation
 
-The channel shim is registered **by default** for the Claude Code target by every setup path (`tandem setup`, the in-app wizard, and the desktop tray/startup `/api/setup` run) — #985. Claude Code must additionally be started with the `--dangerously-load-development-channels` flag to activate real-time push (the desktop auto-launcher passes it automatically; hand-started "bring-your-own" sessions need it explicitly):
+The channel shim is registered **by default** for the Claude Code target by every setup path (`tandem setup --apply` and the in-app wizard) — #985. On the desktop bundle the wizard's apply path uses the channel-shim path injected into the sidecar via `TANDEM_CHANNEL_DIST` on spawn (resolved from the resource dir by `src-tauri/src/lib.rs`), since the server's own package-root derivation resolves outside the bundle. Claude Code must additionally be started with the `--dangerously-load-development-channels` flag to activate real-time push (the desktop auto-launcher passes it automatically; hand-started "bring-your-own" sessions need it explicitly):
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
@@ -420,7 +420,7 @@ The plugin monitor and legacy channel shim both bound their outbound HTTP calls 
 
 ### Why `tandem-channel` Is Now Opt-In
 
-Running the plugin alongside the channel shim subscribes `/api/events` twice, producing duplicate notifications for every event. `tandem setup` now writes only the HTTP `tandem` MCP entry. Legacy users who cannot install the plugin pass `--with-channel-shim` to restore the old behavior. The Tauri desktop app's `/api/setup` endpoint always includes the shim for internal Tauri-to-Claude wiring regardless of this setting.
+Running the plugin alongside the channel shim subscribes `/api/events` twice, producing duplicate notifications for every event. For Claude Code, the channel shim is registered by default (it's the push transport, #985); on a Claude Desktop target only the HTTP `tandem` MCP entry is written. `tandem setup --apply --with-channel-shim` forces the shim on; the in-app wizard registers it by default for Claude Code via the `TANDEM_CHANNEL_DIST` path injected into the sidecar.
 
 ---
 
@@ -651,17 +651,13 @@ On launch, the Rust core:
 
 The sidecar child handle is stored in `SidecarState` (a `Mutex<Option<CommandChild>>`) in Tauri managed state. Stdout/stderr from the sidecar are forwarded to the Tauri log system for diagnostics.
 
-### MCP Auto-Setup
+### MCP Setup (wizard-driven)
 
-After the health check passes, the Rust core POSTs to `POST /api/setup` with:
+Silent auto-configuration on startup was removed in #477 PR 3c-ii-c (ADR-038 §2b). The Rust core no longer POSTs to a setup endpoint on launch; instead it injects the resolved channel-shim path into the sidecar as `TANDEM_CHANNEL_DIST` so the channel shim still registers correctly on the desktop bundle.
 
-```json
-{ "nodeBinary": "<path to node-sidecar binary>", "channelPath": "<path to dist/channel/index.js>" }
-```
+First-run setup is driven by the in-app integration wizard, which auto-opens when `integrations.json` is empty (transport-agnostic — covers both the desktop bundle and the npm-browser path). The wizard persists intent via `POST /api/integrations` and applies it via `POST /api/integrations/apply`. The CLI equivalent is `tandem setup --apply` (non-interactive; honors `--force`, `--target=<kind>`, `--with-channel-shim`).
 
-This triggers the same setup logic as `tandem setup` — auto-detecting Claude Code and Claude Desktop installations and writing MCP config entries. It runs on every launch (idempotent), so MCP config stays correct after reinstalls or path changes. In dev mode, `nodeBinary` is `"node"` (from PATH) and `channelPath` points to the repo-relative `dist/channel/index.js`.
-
-If no Claude installation is detected, a non-blocking dialog appears suggesting the user download Claude.
+If no Claude installation is detected, the wizard's detect step surfaces a "No AI client detected" notice with a download link (replacing the former native dialog). The tray "Setup AI Assistant" item focuses the window and re-opens the wizard.
 
 ### System Tray
 
@@ -755,7 +751,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 ### CLI (`src/cli/`)
 
 - `index.ts` -- CLI entrypoint for the `tandem` global command. Handles `--help`, `--version`, `setup`, and default start. Top-level error handler with reinstall guidance.
-- `setup.ts` -- `tandem setup` command. Auto-detects Claude Code (`~/.claude/`) and Claude Desktop (platform-specific paths). Writes MCP config atomically (EXDEV fallback for Windows cross-drive). Exports `buildMcpEntries`, `detectTargets`, `applyConfig`.
+- `setup.ts` -- `tandem setup` command. Bare invocation prints wizard-driven guidance; `tandem setup --apply [--force] [--target=<kind>] [--with-channel-shim]` writes MCP config non-interactively. The config-writing helpers (`buildMcpEntries`, `detectTargets`, `applyConfig`, `applyConfigWithToken`, `installSkill`) live in `src/server/integrations/apply.ts` (#477 PR 3c-ii-a).
 - `start.ts` -- `tandem start` (default command). Spawns `node dist/server/index.js` with the user environment, forwards signals, pre-validates server entry point exists.
 
 ### Channel Shim (`src/channel/`)
@@ -812,7 +808,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `tauri.conf.json` -- App config: identifier (`com.tandem.editor`), window dimensions (1200×800, min 800×600), `bundle.externalBin` (node-sidecar), `bundle.resources` (dist/server/, dist/channel/, dist/client/, sample/), CSP, updater endpoint (GitHub Releases `latest.json`), `bundle.createUpdaterArtifacts: true`
 - `capabilities/default.json` -- Core permissions: window events, shell sidecar, fs read/write, dialog
 - `capabilities/desktop.json` -- Desktop-only permissions: single-instance, window-state save/restore, updater
-- `src/lib.rs` -- All Tauri logic: plugin registration (single-instance **first**), sidecar lifecycle (spawn, health-poll, exponential backoff, kill on exit), `run_setup()` (POST /api/setup), system tray build + event handlers, window hide-on-close, auto-updater (launch + periodic 8h), `strip_win_prefix()` for Windows `\\?\` paths, `copy_sample_files()` (first-run copy to app-data dir)
+- `src/lib.rs` -- All Tauri logic: plugin registration (single-instance **first**), sidecar lifecycle (spawn, health-poll, exponential backoff, kill on exit), `resolve_channel_dist()` (injects `TANDEM_CHANNEL_DIST` into the sidecar so the channel shim registers from the resource dir; replaced `run_setup()`/`/api/setup` in #477 PR 3c-ii-c), system tray build + event handlers (tray "Setup AI Assistant" emits `open-integration-wizard`), window hide-on-close, auto-updater (launch + periodic 8h), `strip_win_prefix()` for Windows `\\?\` paths, `copy_sample_files()` (first-run copy to app-data dir)
 - `src/main.rs` -- Entry point, delegates to `lib::run()`
 
 ### Shared (`src/shared/`)

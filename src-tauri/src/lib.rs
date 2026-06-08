@@ -46,7 +46,6 @@ use tauri_plugin_updater::UpdaterExt;
 /// out the bare `localhost` hostname in #477 PR 2, so a `Host: localhost:3479`
 /// request returns 403 Forbidden and the supervisor's health-poll times out.
 const HEALTH_URL: &str = "http://127.0.0.1:3479/health";
-const SETUP_URL: &str = "http://127.0.0.1:3479/api/setup";
 const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -818,11 +817,10 @@ pub fn run() {
                     return;
                 }
 
-                // Setup fires after health check passes — in BOTH paths
-                // (freshly spawned sidecar OR already-running dev server)
-                if let Err(e) = run_setup(&handle, &client).await {
-                    log::warn!("MCP setup failed (non-fatal): {e}");
-                }
+                // Auto-configuration of Claude on startup was removed in #477 PR
+                // 3c-ii-c — first-run setup is wizard-driven (the client opens the
+                // wizard when integrations.json is empty). The channel-shim path is
+                // now injected into the sidecar via TANDEM_CHANNEL_DIST on spawn.
 
                 check_for_update(&handle, false).await;
             });
@@ -860,29 +858,14 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     MENU_OPEN => show_main_window(app),
                     MENU_SETUP => {
-                        let handle = app.clone();
-                        let client = app.state::<reqwest::Client>().inner().clone();
-                        tauri::async_runtime::spawn(async move {
-                            use tauri_plugin_dialog::DialogExt;
-                            match run_setup(&handle, &client).await {
-                                Ok(()) => {
-                                    log::info!("MCP setup re-run from tray menu");
-                                    handle
-                                        .dialog()
-                                        .message("MCP configuration updated successfully.")
-                                        .title("Setup Complete")
-                                        .show(|_| {});
-                                }
-                                Err(e) => {
-                                    log::warn!("MCP setup failed: {e}");
-                                    handle
-                                        .dialog()
-                                        .message(format!("Setup failed: {e}"))
-                                        .title("Setup Error")
-                                        .show(|_| {});
-                                }
-                            }
-                        });
+                        // Auto-config was removed in #477 PR 3c-ii-c — setup is
+                        // wizard-driven now. Focus the window and ask the client
+                        // to open the integration wizard (App.svelte listens for
+                        // "open-integration-wizard").
+                        show_main_window(app);
+                        if let Err(e) = app.emit("open-integration-wizard", ()) {
+                            log::warn!("Failed to emit open-integration-wizard: {e}");
+                        }
                     }
                     MENU_UPDATE => {
                         let handle = app.clone();
@@ -1498,6 +1481,19 @@ async fn start_sidecar(
         }
     };
 
+    // Resolve the bundled channel-shim path and inject it as TANDEM_CHANNEL_DIST
+    // so the Node server can register Claude Code's push transport from the
+    // correct resource-dir path. On a desktop bundle the server's own
+    // package-root derivation resolves OUTSIDE the resource dir, so without this
+    // the channel shim silently fails to register (real-time push degrades to
+    // polling). Replaces the /api/setup startup round-trip removed in #477 PR
+    // 3c-ii-c. None = no built channel artifact (source dev) → server falls back
+    // to its package-root derivation.
+    let channel_dist: Option<String> = resolve_channel_dist(handle);
+    if channel_dist.is_none() {
+        log::warn!("Channel shim path unresolved — Claude Code push may fall back to polling");
+    }
+
     for attempt in 0..=MAX_RESTARTS {
         if attempt > 0 {
             let backoff = Duration::from_secs(2u64.pow(attempt - 1));
@@ -1517,6 +1513,10 @@ async fn start_sidecar(
 
         if let Some(ref token) = auth_token {
             cmd = cmd.env("TANDEM_AUTH_TOKEN", token.as_str());
+        }
+
+        if let Some(ref cd) = channel_dist {
+            cmd = cmd.env("TANDEM_CHANNEL_DIST", cd.as_str());
         }
 
         // Crash reporting (#921): forward the opt-in DSN so the sidecar reports
@@ -1676,6 +1676,11 @@ async fn wait_for_port_release(client: &reqwest::Client, deadline_secs: u64) -> 
 }
 
 /// Resolve the sidecar executable path (alongside the main binary).
+///
+/// Windows-only since #477 PR 3c-ii-c removed `resolve_setup_paths` (the
+/// cross-platform caller) — the sole remaining consumer is the Windows-gated
+/// `wait_for_sidecar_unlock`. Gated to avoid a dead-code warning elsewhere.
+#[cfg(target_os = "windows")]
 fn sidecar_exe_path() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("current_exe failed: {e}"))?;
@@ -1725,121 +1730,34 @@ async fn wait_for_sidecar_unlock(deadline_secs: u64) -> bool {
     false
 }
 
-const CLAUDE_DOWNLOAD_URL: &str = "https://claude.ai/download";
-
-/// POST to /api/setup with resolved paths. Best-effort — failures are logged, not fatal.
-async fn run_setup(handle: &tauri::AppHandle, client: &reqwest::Client) -> Result<(), String> {
-    let (node_binary, channel_path) = resolve_setup_paths(handle)?;
-
-    let body = serde_json::json!({
-        "nodeBinary": node_binary,
-        "channelPath": channel_path,
-    });
-
-    let resp = client
-        .post(SETUP_URL)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Setup request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Setup returned {status}: {text}"));
-    }
-
-    let result: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Setup response parse error: {e}"))?;
-
-    // Validate response shape
-    if result.get("data").is_none() {
-        return Err("Setup response missing 'data' field".to_string());
-    }
-
-    // Log what was configured
-    let configured_count = if let Some(configured) = result["data"]["configured"].as_array() {
-        for target in configured {
-            if let Some(label) = target.as_str() {
-                log::info!("MCP config written for {label}");
-            }
-        }
-        configured.len()
-    } else {
-        0
-    };
-
-    // Check for errors — return Err if all targets failed
-    if let Some(errors) = result["data"]["errors"].as_array() {
-        if !errors.is_empty() {
-            let msgs: Vec<&str> = errors.iter().filter_map(|e| e.as_str()).collect();
-            if configured_count == 0 {
-                return Err(format!("All config writes failed: {}", msgs.join("; ")));
-            }
-            // Partial success: log warnings but don't fail
-            for msg in &msgs {
-                log::warn!("Setup error: {msg}");
-            }
-        }
-    }
-
-    // Show dialog if no Claude installations found
-    let targets = result["data"]["targets"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
-
-    if targets == 0 {
-        show_no_claude_dialog(handle);
-    }
-
-    Ok(())
-}
-
-/// Resolve nodeBinary and channelPath based on build mode.
+/// Resolve the bundled channel-shim JS path, injected into the sidecar as
+/// `TANDEM_CHANNEL_DIST` so the Node server registers Claude Code's push
+/// transport from the correct resource-dir path. Replaces `resolve_setup_paths`
+/// + the `/api/setup` round-trip removed in #477 PR 3c-ii-c.
 ///
-/// Sidecar binaries live alongside the main executable (not in resource_dir)
-/// and use the naming convention `node-sidecar-{target-triple}[.exe]`.
-/// Channel JS and other resources live in resource_dir.
-fn resolve_setup_paths(handle: &tauri::AppHandle) -> Result<(String, String), String> {
-    if cfg!(debug_assertions) {
-        // Dev mode: use bare "node" (PATH-dependent). Resolve the channel JS from
-        // resource_dir first — `cargo tauri dev` materializes bundled resources
-        // there (target/debug/dist/channel) and runs with cwd = src-tauri/, so the
-        // old current_dir-only path (src-tauri/dist/channel/index.js) never existed
-        // and the #985 channel-shim existence gate silently skipped registration.
-        // Fall back to a repo-relative path for non-Tauri dev layouts (cwd = repo
-        // root, e.g. dev:standalone). strip_win_prefix handles the `\\?\` prefix
-        // resource_dir can carry on Windows (Node can't resolve it).
-        let resource_channel = handle
-            .path()
-            .resource_dir()
-            .ok()
-            .map(|d| d.join("dist/channel/index.js"));
-        let channel_path = match resource_channel {
-            Some(p) if p.exists() => p,
-            _ => std::env::current_dir()
-                .map_err(|e| format!("Failed to get cwd: {e}"))?
-                .join("dist/channel/index.js"),
-        };
-        Ok(("node".to_string(), strip_win_prefix(&channel_path)))
+/// Prefers `resource_dir/dist/channel/index.js` (always present in a release
+/// bundle; `cargo tauri dev` materializes it under target/<profile>/). Falls
+/// back to a cwd-relative path for non-Tauri dev layouts (cwd = repo root, e.g.
+/// `dev:standalone`). `strip_win_prefix` drops the `\\?\` prefix resource_dir
+/// can carry on Windows (Node can't resolve it). `None` when no built artifact
+/// exists (running from source without a build) → the server falls back to its
+/// own package-root derivation.
+fn resolve_channel_dist(handle: &tauri::AppHandle) -> Option<String> {
+    let resource_channel = handle
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|d| d.join("dist/channel/index.js"));
+    if let Some(p) = resource_channel {
+        if p.exists() {
+            return Some(strip_win_prefix(&p));
+        }
+    }
+    let cwd_channel = std::env::current_dir().ok()?.join("dist/channel/index.js");
+    if cwd_channel.exists() {
+        Some(strip_win_prefix(&cwd_channel))
     } else {
-        // Release mode: channel JS is a resource
-        let resource_dir = handle
-            .path()
-            .resource_dir()
-            .map_err(|e| format!("Failed to resolve resource dir: {e}"))?;
-        let channel_path = resource_dir.join("dist/channel/index.js");
-
-        let node_binary = sidecar_exe_path()
-            .map_err(|e| format!("Failed to resolve sidecar exe path: {e}"))?;
-
-        Ok((
-            strip_win_prefix(&node_binary),
-            strip_win_prefix(&channel_path),
-        ))
+        None
     }
 }
 
@@ -2726,22 +2644,10 @@ fn is_leap(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-/// Show a non-blocking dialog informing the user that no AI client was detected.
-fn show_no_claude_dialog(handle: &tauri::AppHandle) {
-    use tauri_plugin_dialog::DialogExt;
-
-    handle
-        .dialog()
-        .message(format!(
-            "No AI client detected.\n\n\
-             Tandem works as a standalone editor. To collaborate with an AI, install \
-             an MCP-capable client. Claude (Claude Code or Claude Desktop) is the \
-             default and best-supported choice today.\n\n\
-             Download Claude at: {CLAUDE_DOWNLOAD_URL}"
-        ))
-        .title("No AI Client Detected")
-        .show(|_| {});
-}
+// The "no AI client detected" nudge (formerly show_no_claude_dialog) moved into
+// the integration wizard's detect step in #477 PR 3c-ii-c — transport-agnostic
+// (covers npm-browser too) and no longer gated on the deleted /api/setup
+// round-trip. See src/client/components/IntegrationWizardModal.svelte.
 
 /// Prompt the user to install an available update. Returns true if they accept.
 /// This is intentionally a sync `fn`, NOT `async fn` — `blocking_show()` blocks
@@ -3123,11 +3029,7 @@ mod url_constants_tests {
     // "Server failed to start after 3 restart attempts".
     #[test]
     fn supervisor_urls_use_loopback_ip_not_localhost() {
-        for (name, url) in [
-            ("HEALTH_URL", HEALTH_URL),
-            ("SETUP_URL", SETUP_URL),
-            ("OPEN_URL", OPEN_URL),
-        ] {
+        for (name, url) in [("HEALTH_URL", HEALTH_URL), ("OPEN_URL", OPEN_URL)] {
             assert!(
                 url.starts_with("http://127.0.0.1:"),
                 "{name} must use 127.0.0.1 (got {url}) — see #477 PR 2"
