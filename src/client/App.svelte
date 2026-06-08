@@ -152,6 +152,9 @@ function closeTabAndRecord(tabId: string) {
     sourceViewTabs = next;
   }
   clearSourceDraft(tabId);
+  // Drop the closed tab's remembered scroll position so scrollMemory doesn't
+  // leak across long sessions (mirrors the source-view/draft cleanup above; #1055).
+  scrollMemory.delete(tabId);
   yjsSync.handleTabClose(tabId);
 }
 
@@ -1238,6 +1241,71 @@ $effect(() => {
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
+// #1055: per-tab vertical scroll memory. The `.editor-scroll` container is
+// always-mounted across tab switches (only its inner content remounts via the
+// `{#key activeTab.id}` block), so we remember each document's scrollTop keyed
+// by documentId and restore it on switch-back instead of jumping to the top.
+let editorScrollEl = $state<HTMLDivElement | null>(null);
+const scrollMemory = new Map<string, number>();
+// The document id currently displayed in `editorScrollEl`. A plain variable
+// (not reactive state): the scroll listener reads it to attribute live scroll
+// to the right document without re-triggering the switch effect.
+let scrollMemoryDocId: string | undefined;
+
+// Continuously record the active document's live scrollTop. Capturing on every
+// scroll (rather than only when switching away) is timing-independent: by the
+// time the switch effect re-runs the inner content has already remounted via
+// `{#key activeTab.id}` and the container's scrollTop has reset, so reading it
+// then would record the WRONG (incoming) position for the outgoing document.
+$effect(() => {
+  const el = editorScrollEl;
+  if (!el) return;
+  const onScroll = (): void => {
+    if (scrollMemoryDocId !== undefined) {
+      scrollMemory.set(scrollMemoryDocId, el.scrollTop);
+    }
+  };
+  el.addEventListener("scroll", onScroll, { passive: true });
+  return () => el.removeEventListener("scroll", onScroll);
+});
+
+// Restore the saved scrollTop whenever the active document changes.
+$effect(() => {
+  const el = editorScrollEl;
+  // Read the active document id so this effect re-runs on tab switch. (The
+  // derived may re-fire with the same id when the tab array updates for
+  // unrelated reasons — the `=== scrollMemoryDocId` guard makes those re-runs
+  // no-ops so we never disturb the user's live scroll position.)
+  const nextId = activeTab?.id;
+  if (!el) return;
+  if (nextId === scrollMemoryDocId) return;
+
+  scrollMemoryDocId = nextId;
+  if (nextId === undefined) return;
+
+  const saved = scrollMemory.get(nextId) ?? 0;
+
+  // Content height isn't final synchronously after the `{#key}` content swap,
+  // so re-apply the saved offset across a few frames until the container can
+  // actually hold it (the browser clamps scrollTop to scrollHeight -
+  // clientHeight otherwise). Bounded so a now-shorter document can't loop.
+  let frame = 0;
+  let cancelled = false;
+  const apply = (): void => {
+    if (cancelled || scrollMemoryDocId !== nextId) return;
+    el.scrollTop = saved;
+    if (el.scrollTop < saved && frame < 30) {
+      frame += 1;
+      requestAnimationFrame(apply);
+    }
+  };
+  requestAnimationFrame(apply);
+
+  return () => {
+    cancelled = true;
+  };
+});
+
 // Raw-markdown source view (#1021). Only editable .md documents qualify
 // (read-only .md like CHANGELOG and non-.md formats are excluded).
 const canSourceView = $derived(
@@ -1842,6 +1910,8 @@ const tutorial = createTutorial(
 
 {#snippet editorColumn()}
   <div
+    bind:this={editorScrollEl}
+    data-testid="editor-scroll-container"
     class="editor-scroll tandem-scroll-fade-y"
     class:hide-raw-md={!settingsState.settings.showRawMarkdown}
     use:scrollFade={"y"}

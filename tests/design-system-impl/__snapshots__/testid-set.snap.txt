@@ -106,6 +106,7 @@ edit-text-{*}
 editor-font-{*}-btn
 editor-measure-{*}
 editor-root
+editor-scroll-container
 editor-stage
 empty-state-connect-ai
 empty-state-open-file
