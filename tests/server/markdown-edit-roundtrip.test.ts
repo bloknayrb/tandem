@@ -148,7 +148,7 @@ describe("markdown fidelity — un-pinned construct coverage (#981)", () => {
   it("a loose list is normalized to tight (documented normalization, not loss)", () => {
     // CommonMark "loose" list (blank lines between items) → mdast spread:true.
     // yDocToMdast always emits spread:false, so the on-disk form is tight. The
-    // item TEXT must survive; the spacing change is the documented normalization.
+    // item TEXT must survive; the spacing change is the documented normalization (see ADR-042).
     const out = roundTrip("- one\n\n- two\n\n- three\n");
     expect(out).toContain("- one");
     expect(out).toContain("- two");

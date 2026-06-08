@@ -813,7 +813,7 @@ Both are silent from the user's perspective today; both end when the integration
 
 **Visibility toggle:** a new `showRawMarkdown` setting (default on) flips a `hide-raw-md` class on the `.editor-scroll` wrapper; `editor.css` then `display:none`s `.tandem-raw-md` spans and `[data-markdown-raw]` paragraphs (CSS only — the source is always in the Y.Doc and saves regardless of the toggle). Surfaced in Appearance settings (`appearance-show-raw-markdown`).
 
-**Documented normalizations (deliberate, not loss):** `remark-stringify` canonicalizes setext→ATX headings, indented→fenced code, bullet/emphasis markers to `-`/`*`, hard-break style, entity decoding, and autolinks to angle form (`<https://…>`). The fidelity test asserts **idempotency + content-preservation**, not byte-identity to hand-authored input.
+**Documented normalizations (deliberate, not loss):** `remark-stringify` canonicalizes setext→ATX headings, indented→fenced code, bullet/emphasis markers to `-`/`*`, hard-break style, entity decoding, autolinks to angle form (`<https://…>`), and loose-list paragraphs → tight (blank lines between list items are dropped; `spread: false` is hardcoded in `yDocToMdast`). The fidelity test asserts **idempotency + content-preservation**, not byte-identity to hand-authored input.
 
 **Deferred (#982):** GFM task lists / checkboxes need a first-class `TaskList`/`TaskItem` node and `checked` mapping; today they degrade to plain bullets. This is a documented gap pinned by `markdown-fidelity.test.ts` so it can never become a silent drop.
 
