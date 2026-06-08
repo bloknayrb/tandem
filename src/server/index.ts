@@ -44,13 +44,13 @@ import {
 } from "./mcp/server.js";
 import { pushNotification } from "./notifications.js";
 import { freePort, LAST_SEEN_VERSION_FILE, SESSION_DIR, waitForPort } from "./platform.js";
+import { captureFatal, initSidecarCrashReporting } from "./sentry.js";
 import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
   cleanupStaleTombstones,
   stopAutoSave,
 } from "./session/manager.js";
-import { captureFatal, initSidecarCrashReporting } from "./sentry.js";
 import { maybeOpenStartupFile } from "./startup-file.js";
 import { checkVersionChange } from "./version-check.js";
 import { setDocLifecycleCallbacks, startHocuspocus } from "./yjs/provider.js";
