@@ -1123,3 +1123,42 @@ data: {"type":"warning","title":"Save Warning","message":"File is read-only","ti
 Spawn a Claude Code process with the channel shim connected. No request body required.
 
 **Response:** `{ "status": "launched", "pid": 12345 }` or `{ "status": "already_running", "pid": 12345 }`
+
+---
+
+## Claude Code CLI Runtime Contract
+
+Claude is Tandem's default integration ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), so the Claude Code CLI runtime is part of Tandem's effective MCP wire contract. This section records the contract surfaces and how Tandem behaves against recent CLI changes (issue #1043, reviewing CLI releases 2.1.141–2.1.165).
+
+### Streaming tool execution
+
+As of CLI **2.1.154**, "Streaming tool execution is now always enabled, including when telemetry is disabled or on Bedrock/Vertex/Foundry." This was previously opt-in.
+
+Tandem's MCP tools each return a **single discrete result** — there is no partial-result emission, no progress streaming, and no inter-call ordering dependency between tools. Streaming tool execution governs how the CLI *invokes and renders* tool calls (it can dispatch a tool before fully rendering the prior turn); it does **not** change the request/response shape an MCP server sees. So enabling it everywhere does not alter Tandem's contract.
+
+**What "always enabled" can change in practice:** the CLI may issue tool calls more eagerly and with more concurrency. The HTTP MCP server (`McpServer`) and the stdio proxy (`src/cli/mcp-stdio.ts`) already tolerate concurrent in-flight requests — the proxy tracks each request id independently in `pendingRequests` and matches responses by id, so out-of-order completion is already handled.
+
+**Smoke test (manual — not part of the automated suite).** Run against a current Claude Code CLI with the Tandem server up (`npm run dev:standalone`), connect via `/mcp`, then exercise the long-running / mutating tools and confirm each returns exactly one well-formed result with no partial output, truncation, or ordering surprise:
+
+1. `tandem_edit` on a multi-paragraph document (verify the edit lands once, ranges resolve).
+2. `tandem_save` (verify a single save result, file written once).
+3. `tandem_open` with `force: true` (force-reload; verify content/annotations clear-and-repopulate in one result).
+4. Issue two tool calls back-to-back (e.g. `tandem_getOutline` then `tandem_edit`) and confirm responses are correctly correlated to their requests.
+
+Expected result: no behavioral change versus the pre-2.1.154 opt-in path. Record the observed CLI version and outcome on issue #1043 when run.
+
+### Session correlation env vars (`CLAUDE_CODE_SESSION_ID` / `CLAUDECODE`)
+
+CLI **2.1.157** began injecting `CLAUDE_CODE_SESSION_ID` and `CLAUDECODE=1` into the environment of stdio MCP server subprocesses the CLI spawns; **2.1.163** extended this to `--resume`. The session id mirrors the `session_id` passed to hooks/Bash (a UUID).
+
+**Decision: consume it as an opaque correlation tag, forwarded as an HTTP header.** Both stdio entry points Tandem ships are exactly such subprocesses — the channel shim (`src/channel/`) and the stdio proxy (`src/cli/mcp-stdio.ts`). `resolveClaudeSessionId()` in `src/shared/cli-runtime.ts` reads the id, but **only when `CLAUDECODE === "1"`** (so a value a user happened to export in their own shell is never forwarded), trims it, and applies a printable-ASCII length-bounded guard (header-injection / oversize defense). The id is then attached as the `X-Claude-Session-Id` header on outbound requests to the Tandem server:
+
+- `authFetch` (channel/monitor SSE path: awareness, mode, error-report POSTs) attaches it unconditionally.
+- The channel shim's `tandem_reply` and permission-relay POSTs attach it via `withClaudeSessionHeader`.
+- The stdio proxy attaches it to every forwarded JSON-RPC POST via the transport's `requestInit.headers`.
+
+This is deliberately a **read-only metadata header**, not a route schema change: server routes that don't read it ignore it, so no server-side change was required to start emitting the correlation data onto the wire. The header gives the server (and host logs) the raw material to disambiguate concurrent Claude sessions in the channel queue. Wiring the server to *act* on the header (e.g. tagging channel-queue entries or scoping inbox traffic per session) is deferred until a concrete multi-session disambiguation need lands — the value is captured at the boundary now so that follow-up doesn't require touching every call site again.
+
+### `claude mcp` secret redaction
+
+CLI **2.1.141** fixed `claude mcp` list/get/add printing secrets to the terminal: `${VAR}` references are no longer expanded, and credential headers and URL secrets are redacted. Tandem writes a bearer token into the `.mcp.json` MCP-server entry headers (`src/server/integrations/apply.ts`), so on CLI ≥ 2.1.141 `claude mcp get tandem` no longer echoes that token to the terminal. See [troubleshooting.md](troubleshooting.md) for the operator-facing note.
