@@ -19,6 +19,11 @@ mod firewall;
 #[cfg(target_os = "windows")]
 mod cowork_meta;
 
+// Windows-only: kill-on-job-close ownership so the sidecar dies with the shell
+// even on ungraceful exit (taskkill / crash / dev-runner restart). See #987.
+#[cfg(target_os = "windows")]
+mod sidecar_job;
+
 // Spike #477 PR 4: sidecar launcher validation. Test-only; not shipped.
 #[cfg(test)]
 mod integrations_probe;
@@ -61,6 +66,88 @@ pub(crate) const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
 /// to decide between posting immediately vs queueing. Static (process-wide):
 /// there is exactly one sidecar per process.
 static SIDECAR_HEALTHY: AtomicBool = AtomicBool::new(false);
+
+/// Buffered cold-start file-open rejection reason CODE (stable, path-free), for
+/// the WebView to surface as a toast once it has mounted. See issue #630.
+///
+/// ## Why buffer instead of just emitting an event
+///
+/// A cold-start "Open With" rejection (`extract_file_arg` returns `Err`) is
+/// classified in `setup()` — which runs BEFORE the Svelte `App.svelte`
+/// `onMount` listener exists. Emitting a Tauri event there drops silently on
+/// the exact failure mode it's meant to surface. So the reason is buffered
+/// here and polled via `get_startup_rejection()` on mount. The runtime
+/// `RunEvent::Opened` (macOS) path, which fires while the app is already
+/// running, ALSO emits the `startup-file-rejected` event for the live case.
+///
+/// ## Why a `Mutex<Option<_>>` and not a `OnceLock`
+///
+/// `OnceLock` cannot be cleared, but the buffer MUST be cleared on
+/// `restart_sidecar` so a stale rejection from a previous launch isn't replayed
+/// against the new sidecar. A `Mutex<Option<String>>` gives set / take / clear.
+///
+/// ## No path leakage
+///
+/// The buffer holds a stable reason CODE only (e.g. `"unsupported-extension"`),
+/// never the rejected path — the resolved path is already logged at `warn` for
+/// diagnostics, and the human-readable toast message is composed client-side
+/// (mirrors the path-free `sidecar-restart-failed` toast contract).
+static STARTUP_REJECTION: Mutex<Option<String>> = Mutex::new(None);
+
+/// Tauri event name for a startup-file rejection surfaced to the WebView.
+/// The payload is a stable reason code (see `rejection_reason_code`).
+const EVENT_STARTUP_FILE_REJECTED: &str = "startup-file-rejected";
+
+/// Map a typed [`RejectionReason`] to a stable, path-free reason code for the
+/// WebView toast bus. Kept in sync with the `startup-file-rejected` handler in
+/// `App.svelte`, which composes the user-facing message from this code.
+fn rejection_reason_code(reason: &RejectionReason) -> &'static str {
+    match reason {
+        RejectionReason::SuspiciousColon { .. } => "suspicious-path",
+        RejectionReason::UnsupportedExtension { .. } => "unsupported-extension",
+        RejectionReason::NotAFile { .. } => "not-a-file",
+    }
+}
+
+/// Record a cold-start rejection in the buffer for the WebView to poll on mount.
+/// Last-write-wins (a single argv carries at most one candidate, so this only
+/// ever holds one). Path-free by construction.
+fn buffer_startup_rejection(reason: &RejectionReason) {
+    let code = rejection_reason_code(reason);
+    match STARTUP_REJECTION.lock() {
+        Ok(mut guard) => *guard = Some(code.to_string()),
+        Err(poisoned) => {
+            log::error!("STARTUP_REJECTION mutex poisoned — recovering");
+            *poisoned.into_inner() = Some(code.to_string());
+        }
+    }
+}
+
+/// Clear any buffered cold-start rejection. Called from `restart_sidecar` so a
+/// stale rejection from the previous launch can't be replayed on the next mount
+/// poll. See the `STARTUP_REJECTION` doc comment.
+fn clear_startup_rejection() {
+    match STARTUP_REJECTION.lock() {
+        Ok(mut guard) => *guard = None,
+        Err(poisoned) => {
+            log::error!("STARTUP_REJECTION mutex poisoned during clear — recovering");
+            *poisoned.into_inner() = None;
+        }
+    }
+}
+
+/// WebView-polled accessor for the buffered cold-start rejection code. Returns
+/// `Some(code)` exactly once per buffered rejection: the value is TAKEN, so a
+/// re-mount (e.g. an in-WebView reload) doesn't replay a toast the user already
+/// saw. The `App.svelte` `onMount` poll consumes it; the runtime
+/// `startup-file-rejected` event covers post-mount rejections.
+#[tauri::command]
+fn get_startup_rejection() -> Option<String> {
+    match STARTUP_REJECTION.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    }
+}
 
 /// Strip the Windows extended-length path prefix (`\\?\`) that Tauri's
 /// `resource_dir()` / `app_data_dir()` return. Node.js can't resolve these.
@@ -180,6 +267,19 @@ impl std::fmt::Display for OpenedUrlRejection {
                 write!(f, "failed to convert URL to file path")
             }
         }
+    }
+}
+
+/// Map an [`OpenedUrlRejection`] to a stable, path-free reason code for the
+/// WebView toast bus. Mirrors `rejection_reason_code` for the argv path; both
+/// codes are handled by the `startup-file-rejected` listener in `App.svelte`.
+/// macOS-only (the only caller is the macOS-gated `handle_opened_urls`).
+#[cfg(target_os = "macos")]
+fn opened_url_reason_code(reason: &OpenedUrlRejection) -> &'static str {
+    match reason {
+        OpenedUrlRejection::NonFileScheme => "non-file-url",
+        OpenedUrlRejection::NonEmptyHost => "suspicious-path",
+        OpenedUrlRejection::ConversionFailed => "not-a-file",
     }
 }
 
@@ -446,6 +546,15 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
             Ok(path) => path,
             Err(reason) => {
                 log::warn!("Ignoring URL from Opened event ({reason}): {url}");
+                // The app is already running here (Apple Event arrives post-
+                // launch), so the WebView listener exists — emit the rejection
+                // event directly rather than buffering. Path-free reason code,
+                // matching the cold-start contract. See #630.
+                if let Err(e) =
+                    app.emit(EVENT_STARTUP_FILE_REJECTED, opened_url_reason_code(&reason))
+                {
+                    log::warn!("Failed to emit {EVENT_STARTUP_FILE_REJECTED}: {e}");
+                }
                 continue;
             }
         };
@@ -539,6 +648,15 @@ pub fn run() {
                     log::warn!(
                         "extract_file_arg (second-instance) rejected candidate: {reason}"
                     );
+                    // Warm-start rejection: the app is already running so the
+                    // WebView listener exists — emit directly (no buffering).
+                    // Path-free reason code, matching the cold-start contract.
+                    // See #630.
+                    if let Err(e) =
+                        app.emit(EVENT_STARTUP_FILE_REJECTED, rejection_reason_code(&reason))
+                    {
+                        log::warn!("Failed to emit {EVENT_STARTUP_FILE_REJECTED}: {e}");
+                    }
                 }
             }
         }));
@@ -551,6 +669,16 @@ pub fn run() {
     #[cfg(feature = "devtools")]
     {
         builder = builder.plugin(tauri_plugin_devtools::init());
+    }
+
+    // Windows-only kill-on-job-close ownership of the sidecar (#987). Managed
+    // here (not in the fluent chain below) so the `#[cfg]` is a clean statement.
+    // Held for the parent process's lifetime; the OS closes the job handle on
+    // parent exit — graceful OR crash/taskkill — reaping the sidecar. macOS and
+    // Linux rely on the existing RunEvent::Exit + kill_sidecar path.
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.manage(sidecar_job::SidecarJob::new());
     }
 
     // Crash-reporting plugin (#921). Registered immediately after
@@ -649,6 +777,12 @@ pub fn run() {
                         log::warn!(
                             "extract_file_arg (cold-start) rejected candidate: {reason}"
                         );
+                        // Buffer a path-free reason code so the WebView can
+                        // toast once it mounts (the listener doesn't exist yet
+                        // here — see STARTUP_REJECTION). The user double-clicked
+                        // a file and silently landed on welcome.md; this is the
+                        // feedback. See #630.
+                        buffer_startup_rejection(&reason);
                         None
                     }
                 }
@@ -884,6 +1018,7 @@ pub fn run() {
             cowork_set_lan_ip_override,
             cowork_retry_admin_elevation,
             restart_sidecar,
+            get_startup_rejection,
             show_in_file_manager,
             show_context_menu,
             show_tab_context_menu,
@@ -922,6 +1057,10 @@ fn restart_sidecar(app: tauri::AppHandle) {
     // `wait_for_health`.
     let pending: tauri::State<'_, PendingOpens> = app.state();
     clear_healthy_under_lock(&pending);
+    // Drop any buffered cold-start rejection so a stale reason from the previous
+    // launch can't be replayed against the freshly restarted sidecar on the next
+    // mount poll. See the STARTUP_REJECTION doc comment (#630 risk note).
+    clear_startup_rejection();
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -1403,6 +1542,19 @@ async fn start_sidecar(
         let (rx, child) = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
+
+        // Windows-only (#987): bind this sidecar to the kill-on-job-close job
+        // object so it dies with the shell even on an ungraceful parent exit
+        // (taskkill / crash / dev-runner rebuild) where RunEvent::Exit never
+        // fires. Best-effort: a failure here only logs and falls back to the
+        // graceful kill path — it never blocks startup. Done before `child` is
+        // moved into SidecarState; the job holds its own reference to the
+        // process. A restarted sidecar (new PID) re-assigns to the same job.
+        #[cfg(target_os = "windows")]
+        {
+            let job = handle.state::<sidecar_job::SidecarJob>();
+            job.assign(child.pid());
+        }
 
         // Shared flag: drain task sets true on Terminated, health poll bails early
         let sidecar_dead = Arc::new(AtomicBool::new(false));
@@ -3562,6 +3714,134 @@ mod classify_opened_url_tests {
             got,
             Ok(PathBuf::from("/foo")),
             "Unix accepts /foo as an absolute path"
+        );
+    }
+}
+
+/// Tests for the startup-file rejection surfacing (issue #630): the path-free
+/// reason-code mapping and the buffered-rejection take/clear semantics.
+#[cfg(test)]
+mod startup_rejection_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Mutex as StdMutex;
+
+    // Serialize tests that mutate STARTUP_REJECTION (a process-wide static).
+    static REJECTION_LOCK: StdMutex<()> = StdMutex::new(());
+
+    #[test]
+    fn reason_code_is_stable_and_path_free() {
+        // The codes are the cross-process contract with the App.svelte toast
+        // map — assert the exact strings so a rename can't silently desync.
+        assert_eq!(
+            rejection_reason_code(&RejectionReason::UnsupportedExtension {
+                ext: "exe".into(),
+                path: PathBuf::from("/secret/place/file.exe"),
+            }),
+            "unsupported-extension"
+        );
+        assert_eq!(
+            rejection_reason_code(&RejectionReason::NotAFile {
+                path: PathBuf::from("/secret/place/dir"),
+            }),
+            "not-a-file"
+        );
+        assert_eq!(
+            rejection_reason_code(&RejectionReason::SuspiciousColon {
+                path: PathBuf::from("/secret/place/file.md:Zone.Identifier"),
+                index: 7,
+            }),
+            "suspicious-path"
+        );
+    }
+
+    #[test]
+    fn reason_code_never_leaks_the_path() {
+        // The reason code is a fixed enum string; assert it shares no substring
+        // with a path that would be sensitive to leak into a DOM toast.
+        let secret = "/Users/victim/Secret Plans.md";
+        let code = rejection_reason_code(&RejectionReason::NotAFile {
+            path: PathBuf::from(secret),
+        });
+        assert!(
+            !code.contains("Secret") && !code.contains('/'),
+            "reason code must not embed the rejected path"
+        );
+    }
+
+    #[test]
+    fn buffer_then_get_takes_once_then_returns_none() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+
+        buffer_startup_rejection(&RejectionReason::UnsupportedExtension {
+            ext: "exe".into(),
+            path: PathBuf::from("/x/file.exe"),
+        });
+        assert_eq!(
+            get_startup_rejection(),
+            Some("unsupported-extension".to_string()),
+            "first poll returns the buffered code"
+        );
+        assert_eq!(
+            get_startup_rejection(),
+            None,
+            "the buffer is TAKEN — a second poll (e.g. WebView reload) returns None"
+        );
+    }
+
+    #[test]
+    fn clear_drops_a_buffered_rejection() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+
+        buffer_startup_rejection(&RejectionReason::NotAFile {
+            path: PathBuf::from("/x/missing.md"),
+        });
+        // restart_sidecar calls clear_startup_rejection — a stale rejection from
+        // the previous launch must not survive into the next mount poll.
+        clear_startup_rejection();
+        assert_eq!(
+            get_startup_rejection(),
+            None,
+            "clear must drop the buffered rejection"
+        );
+    }
+
+    #[test]
+    fn buffer_is_last_write_wins() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+
+        buffer_startup_rejection(&RejectionReason::NotAFile {
+            path: PathBuf::from("/x/a.md"),
+        });
+        buffer_startup_rejection(&RejectionReason::UnsupportedExtension {
+            ext: "exe".into(),
+            path: PathBuf::from("/x/b.exe"),
+        });
+        assert_eq!(
+            get_startup_rejection(),
+            Some("unsupported-extension".to_string()),
+            "the most recent buffered reason wins"
+        );
+        clear_startup_rejection();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn opened_url_reason_codes_are_path_free_and_stable() {
+        assert_eq!(
+            opened_url_reason_code(&OpenedUrlRejection::NonFileScheme),
+            "non-file-url"
+        );
+        assert_eq!(
+            opened_url_reason_code(&OpenedUrlRejection::NonEmptyHost),
+            "suspicious-path"
+        );
+        assert_eq!(
+            opened_url_reason_code(&OpenedUrlRejection::ConversionFailed),
+            "not-a-file"
         );
     }
 }

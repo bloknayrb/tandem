@@ -62,10 +62,15 @@ tauri-plugin-decorum = "1"
 # Windows-only DWM bindings: force rounded window corners (DWMWCP_ROUND) so
 # snapping/maximizing keeps the floating-chrome rounded surface, and suppress
 # the borderless-window outline (DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE). See #984.
+# Job-object + threading bindings (#987): bind the Node sidecar to a
+# kill-on-job-close job object so it dies with the shell even on ungraceful exit.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
 ] }
 
 [features]
