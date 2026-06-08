@@ -14,6 +14,12 @@ describe("authFetch", () => {
   beforeEach(() => {
     delete process.env.TANDEM_AUTH_TOKEN;
     delete process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
+    // Clear the Claude-session vars too so the clean-wire assertions are
+    // deterministic even when the suite itself runs inside Claude Code (where
+    // CLAUDECODE=1 + a real CLAUDE_CODE_SESSION_ID would otherwise survive in
+    // originalEnv and attach X-Claude-Session-Id to every request here).
+    delete process.env.CLAUDECODE;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
     fetchSpy = vi.fn().mockResolvedValue(new Response("ok"));
     vi.stubGlobal("fetch", fetchSpy);
   });
