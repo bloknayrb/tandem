@@ -139,19 +139,33 @@ pub fn resolve_handle(token: &str) -> Option<PathBuf> {
 /// candidate or any guard layer rejects it. This is the final defense-in-depth
 /// gate the IPC commands run immediately before any file I/O.
 pub fn revalidate_resolved_path(candidate: &Path) -> Result<PathBuf, String> {
+    // Capture the most specific `check_path_safe` rejection (reparse point in
+    // chain / UNC / canonicalize-failed-on-deleted-dir / outside-root) so the
+    // final error names *why* the post-scan re-check failed — load-bearing for
+    // incident triage of a junction-swap or deleted-workspace attack, which is
+    // exactly what this gate exists to catch. Without it every distinct
+    // rejection collapses into one generic line.
+    let mut last_reason: Option<String> = None;
     for root in cowork_roots() {
         let canonical_root = match std::fs::canonicalize(&root) {
             Ok(p) => p,
             Err(_) => continue,
         };
-        if let Ok(safe) = check_path_safe(candidate, &canonical_root) {
-            return Ok(safe);
+        match check_path_safe(candidate, &canonical_root) {
+            Ok(safe) => return Ok(safe),
+            Err(reason) => last_reason = Some(reason),
         }
     }
-    Err(format!(
-        "resolved workspace path {} is no longer within a canonical Cowork root",
-        candidate.display()
-    ))
+    Err(match last_reason {
+        Some(reason) => format!(
+            "resolved workspace path {} failed re-validation: {reason}",
+            candidate.display()
+        ),
+        None => format!(
+            "resolved workspace path {} is no longer within a canonical Cowork root (no current root resolved)",
+            candidate.display()
+        ),
+    })
 }
 
 /// Clear the snapshot registry. Test-only helper so suites do not leak handles
@@ -619,5 +633,72 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         assert!(result.is_err(), "path outside the root must be rejected");
+    }
+
+    #[test]
+    fn test_revalidate_rejects_deleted_workspace() {
+        // Reject-on-missing: a workspace directory that existed at scan time but
+        // was removed before the re-check must fail revalidation. This is the
+        // branch the old "outside-root" test never exercised — a *missing* path
+        // goes through the reparse-fail-closed / canonicalize-failure path, not
+        // the containment check. The root stays intact so we test the workspace
+        // swap specifically, not a vanished root.
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("tandem_cowork_reval_deleted_test");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = dir.join("ws-del");
+        let vm = ws.join("vm-del");
+        fs::create_dir_all(&vm).unwrap();
+
+        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
+        let canon_vm = std::fs::canonicalize(&vm).unwrap();
+        // Delete the workspace AFTER capturing its canonical path (root intact).
+        let _ = fs::remove_dir_all(&ws);
+        let result = revalidate_resolved_path(&canon_vm);
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            result.is_err(),
+            "a workspace deleted after the scan must fail re-validation: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_then_revalidate_rejects_after_workspace_deleted() {
+        // The literal #433 attack, end-to-end: mint a handle from a real scan,
+        // then remove/swap the workspace before the install click. The in-memory
+        // handle still resolves (the registry is unaffected by the fs change),
+        // but the defense-in-depth re-check must reject the now-missing path so
+        // no file I/O happens against a swapped/deleted directory.
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        clear_snapshot_for_test();
+
+        let dir = std::env::temp_dir().join("tandem_cowork_resolve_reval_test");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = dir.join("ws-e2e");
+        let vm = ws.join("vm-e2e");
+        fs::create_dir_all(&vm).unwrap();
+
+        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
+        let handles = scan_workspaces_with_handles();
+        assert_eq!(handles.len(), 1, "expected 1 handle, got {handles:?}");
+        let token = handles[0].token.clone();
+
+        // Handle resolves (registry is in-memory, independent of the filesystem).
+        let resolved = resolve_handle(&token).expect("token from this scan must resolve");
+
+        // Swap: remove the workspace after the scan, before the re-check.
+        let _ = fs::remove_dir_all(&ws);
+        let result = revalidate_resolved_path(&resolved);
+
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+        clear_snapshot_for_test();
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            result.is_err(),
+            "resolve → revalidate must reject a workspace deleted after the scan (the #433 TOCTOU defense): {result:?}"
+        );
     }
 }

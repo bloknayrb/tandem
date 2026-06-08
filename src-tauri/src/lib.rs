@@ -1848,14 +1848,17 @@ pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
 const WINDOWS_ONLY_ERR: &str = "Cowork integration is Windows-only in v0.8.0";
 
 /// Scan for Cowork workspace directories.
+///
+/// Returns an opaque, validated [`cowork_workspace_scan::WorkspaceHandle`] per
+/// workspace rather than a bare path. The handle's `token` must be round-tripped
+/// to `cowork_install_into_workspace` / `cowork_uninstall_from_workspace`, which
+/// resolve it back to the exact canonical path validated here — closing the
+/// TOCTOU window between this scan and the install IPC call (issue #433). The
+/// `path` field is for display only and is never trusted on the return trip.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
-    let paths = cowork_workspace_scan::find_cowork_workspaces();
-    Ok(paths
-        .into_iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect())
+fn cowork_scan_workspaces() -> Result<Vec<cowork_workspace_scan::WorkspaceHandle>, String> {
+    Ok(cowork_workspace_scan::scan_workspaces_with_handles())
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
@@ -2305,80 +2308,77 @@ fn cowork_apply_token(_token: String) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Install the Tandem plugin into a specific workspace path.
+/// Resolve a snapshot handle token to its validated canonical workspace path.
 ///
-/// Precondition: the path must be under the canonical `local-agent-mode-sessions\`
-/// root — this command re-applies invariant §3 before any file I/O (§9).
-/// On mismatch: returns `Err`, does NOT trust the walker.
+/// Closes the TOCTOU window (issue #433): instead of re-scanning the filesystem
+/// and trusting a caller-supplied string, the token can only name a path that
+/// `cowork_scan_workspaces` already validated this session. The resolved path is
+/// then re-run through the four-layer guard (`revalidate_resolved_path`) to
+/// catch a directory swapped *after* the scan. An unknown token — forged, or
+/// from a superseded scan — is rejected with no file I/O. The re-validation's
+/// specific rejection reason is preserved (single informative message, not
+/// re-flattened) for incident triage.
+#[cfg(target_os = "windows")]
+fn cowork_resolve_validated_handle(handle: &str, op: &str) -> Result<std::path::PathBuf, String> {
+    let Some(resolved) = cowork_workspace_scan::resolve_handle(handle) else {
+        log::warn!(
+            "[cowork] {op}: unknown workspace handle — rejected (no current scan token matches)"
+        );
+        return Err("Unknown or expired workspace handle — re-scan and try again".to_string());
+    };
+
+    // Defense-in-depth: re-run the four-layer guard against the stored path to
+    // catch a post-scan swap (directory replaced with a junction, moved, etc.).
+    cowork_workspace_scan::revalidate_resolved_path(&resolved).map_err(|reason| {
+        log::warn!("[cowork] {op}: resolved handle failed re-validation — rejected: {reason}");
+        reason
+    })
+}
+
+/// Install the Tandem plugin into a specific workspace, named by an opaque
+/// snapshot handle from `cowork_scan_workspaces`.
+///
+/// The handle resolves — in-process — to the exact canonical path validated at
+/// scan time, which is re-checked against invariant §3 before any file I/O (§9).
+/// A caller-supplied path string is never trusted; an unknown handle is rejected.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_install_into_workspace(ws_path: String) -> Result<String, String> {
+fn cowork_install_into_workspace(handle: String) -> Result<String, String> {
     use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
-    use cowork_workspace_scan::find_cowork_workspaces;
 
-    let path = std::path::PathBuf::from(&ws_path);
-
-    // Re-apply invariant §9 path check: the path must match one of the
-    // workspaces returned by the guarded walker. The walker is the single
-    // source of safe paths; if the user-supplied path isn't in that list,
-    // reject — do NOT install.
-    let valid_roots = find_cowork_workspaces();
-    let canonical_supplied = std::fs::canonicalize(&path)
-        .map_err(|e| format!("invalid workspace path: {e}"))?;
-    let path_valid = valid_roots
-        .iter()
-        .any(|valid| valid == &canonical_supplied);
-    if !path_valid {
-        log::warn!(
-            "[cowork] cowork_install_into_workspace: path {} is not in the canonical workspace list — rejected",
-            ws_path
-        );
-        return Err("Path is not within the canonical Cowork workspace root".to_string());
-    }
+    let validated_path = cowork_resolve_validated_handle(&handle, "cowork_install_into_workspace")?;
 
     let token = token_store::get_or_create_token()?;
     let meta = cowork_meta::load().map_err(|e| e.to_string())?;
     let tandem_url = resolve_tandem_url(&meta);
 
-    let report = install_tandem_plugin_into_workspace(&canonical_supplied, &token, &tandem_url)
+    let report = install_tandem_plugin_into_workspace(&validated_path, &token, &tandem_url)
         .map_err(|e| e.to_string())?;
 
     Ok(serde_json::to_string(&report).map_err(|e| e.to_string())?)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn cowork_install_into_workspace(_ws_path: String) -> Result<String, String> {
+fn cowork_install_into_workspace(_handle: String) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Uninstall the Tandem plugin from a specific workspace path.
+/// Uninstall the Tandem plugin from a specific workspace, named by an opaque
+/// snapshot handle from `cowork_scan_workspaces`. See
+/// [`cowork_install_into_workspace`] for the handle contract.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_uninstall_from_workspace(ws_path: String) -> Result<String, String> {
-    use cowork_workspace_scan::find_cowork_workspaces;
+fn cowork_uninstall_from_workspace(handle: String) -> Result<String, String> {
+    let validated_path =
+        cowork_resolve_validated_handle(&handle, "cowork_uninstall_from_workspace")?;
 
-    let path = std::path::PathBuf::from(&ws_path);
-    let valid_roots = find_cowork_workspaces();
-    let canonical_supplied = std::fs::canonicalize(&path)
-        .map_err(|e| format!("invalid workspace path: {e}"))?;
-    let path_valid = valid_roots
-        .iter()
-        .any(|valid| valid == &canonical_supplied);
-    if !path_valid {
-        log::warn!(
-            "[cowork] cowork_uninstall_from_workspace: path {} is not in the canonical workspace list — rejected",
-            ws_path
-        );
-        return Err("Path is not within the canonical Cowork workspace root".to_string());
-    }
-
-    let report = cowork_installer::uninstall_tandem_plugin_from_workspace(&canonical_supplied)
+    let report = cowork_installer::uninstall_tandem_plugin_from_workspace(&validated_path)
         .map_err(|e| e.to_string())?;
     Ok(serde_json::to_string(&report).map_err(|e| e.to_string())?)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn cowork_uninstall_from_workspace(_ws_path: String) -> Result<String, String> {
+fn cowork_uninstall_from_workspace(_handle: String) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
