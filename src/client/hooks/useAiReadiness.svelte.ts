@@ -153,6 +153,14 @@ export function createAiReadiness(deps: {
 
   const state = $derived.by((): AiReadinessState => {
     if (!deps.firstRunSettled() || !deps.connected() || !settledOnce || status === null) {
+      // NOTE: this booting gate intentionally OUTRANKS the mcpSessionActive
+      // promotion below. If the launcher route (`/api/launcher/status`) fails
+      // permanently, `status` stays null / `settledOnce` stays false, so a live
+      // MCP session is rendered as "booting" (chip suppressed) rather than
+      // "ready" — never a false CTA, but also never an affirmative ready. This
+      // precedence is deliberate (don't flash a state until the launcher truth
+      // settles); it is not an oversight. A never-settling launcher masking a
+      // live session is the accepted trade-off.
       return "booting";
     }
     // An active MCP session means an agent is connected and AI works, whether
