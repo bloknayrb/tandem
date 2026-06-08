@@ -3,7 +3,7 @@
 **Issue:** [#438](https://github.com/bloknayrb/tandem/issues/438) — *spec: per-client identity to support Claude Code + Cowork running concurrently*
 **Status:** Design spec — no production code. Prerequisite for [#452](https://github.com/bloknayrb/tandem/issues/452) (multi-Claude concurrent) per `docs/roadmap.md` (#438 → #452 dependency edge).
 **Audience:** Contributors implementing the per-client identity model.
-**Related ADRs:** ADR-003 (MCP over REST), ADR-012 (Streamable HTTP transport), ADR-013 (chat persistence via JSON), ADR-019 (channel shim / SSE push), ADR-023 (Cowork plugin bridge — stdio via npx), ADR-024 (`bearer_methods_supported` empirical findings), ADR-027 (audience-based annotation model), ADR-031 (origin-tagged transactions), ADR-038 (MCP-first integration policy). This spec, when accepted, should land as a new ADR (next free number — ADR-043 at time of writing) cross-linked from `docs/decisions.md`.
+**Related ADRs:** ADR-003 (MCP over REST), ADR-012 (Streamable HTTP transport), ADR-013 (chat persistence via JSON), ADR-019 (channel shim / SSE push), ADR-023 (Cowork plugin bridge — stdio via npx), ADR-024 (`bearer_methods_supported` empirical findings), ADR-027 (audience-based annotation model), ADR-031 (origin-tagged transactions), ADR-038 (MCP-first integration policy). This spec, when accepted, should land as a new ADR (next free number — ADR-044 at time of writing; ADR-043 was assigned to the Tauri updater audit, see `docs/decisions.md`) cross-linked from `docs/decisions.md`.
 
 ---
 
@@ -227,7 +227,7 @@ The redesign mockup's "Bind mode" + "Rotate token" Claude Code panel assumes one
 
 | Issue acceptance criterion | Addressed by |
 |---|---|
-| Design document specifying per-client identity model | This document (→ promote to ADR-043). |
+| Design document specifying per-client identity model | This document (→ promote to ADR-044). |
 | Claude Code and Cowork connect simultaneously without evicting each other | §3.2 — key transports by `Mcp-Session-Id`, never evict on init. |
 | `tandem_checkInbox` returns independent results per client | §3.3 — per-client surfaced ledger + chat cursor; per-client channel-dedup (§3.4). |
 | Auth model distinguishes client type (Code vs. Cowork vs. future) | §3.1 — `clientInfo` + proxy-stamped marker; synthesized stable `clientId`. |
