@@ -16,7 +16,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { API_CHANNEL_PERMISSION, API_CHANNEL_REPLY } from "../shared/api-paths.js";
-import { redirectConsoleToStderr, resolveTandemUrl } from "../shared/cli-runtime.js";
+import {
+  redirectConsoleToStderr,
+  resolveTandemUrl,
+  withClaudeSessionHeader,
+} from "../shared/cli-runtime.js";
 import {
   CHANNEL_PERMISSION_FETCH_TIMEOUT_MS,
   CHANNEL_REPLY_FETCH_TIMEOUT_MS,
@@ -97,7 +101,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
           `${tandemUrl}${API_CHANNEL_REPLY}`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withClaudeSessionHeader({ "Content-Type": "application/json" }),
             body: JSON.stringify(args),
           },
           CHANNEL_REPLY_FETCH_TIMEOUT_MS,
@@ -162,7 +166,7 @@ export async function runChannel(opts: RunChannelOptions = {}): Promise<void> {
         `${tandemUrl}${API_CHANNEL_PERMISSION}`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: withClaudeSessionHeader({ "Content-Type": "application/json" }),
           body: JSON.stringify({
             requestId: params.request_id,
             toolName: params.tool_name,

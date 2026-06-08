@@ -81,7 +81,16 @@ export {
 /** Internal alias for the registry's view of open docs — used by closures below. */
 const openDocs = getOpenDocs();
 
-/** Non-throwing existence probe (fs.access has no boolean variant). */
+/**
+ * Non-throwing existence probe (fs.access has no boolean variant).
+ *
+ * Safe FS sink (CodeQL js/path-injection): the sole caller is renameDocument,
+ * which passes `newPath` only AFTER it has cleared validateRenameFilename, the
+ * inline separator/null-byte guard, rejectUnsafeWindowsPrefix, and the
+ * assertPathSafe realpath/symlink walk. CodeQL cannot trace those barriers
+ * across the function boundary, so a path-injection alert here is a false
+ * positive — see issue #1042 for the Security-tab dismissal rationale.
+ */
 const pathExists = (p: string): Promise<boolean> =>
   fs
     .access(p)
@@ -141,7 +150,11 @@ export async function saveDocumentToDisk(
 
   savingDocs.add(docId);
   try {
-    // Guard against overwriting external modifications
+    // Guard against overwriting external modifications.
+    // Safe FS sink (CodeQL js/path-injection): `docState.filePath` is the
+    // registry's server-managed path (only ever set by openFileByPath /
+    // resolveAndValidatePath / a validated rename or save-as) — never raw user
+    // input. An alert here is a false positive; dismiss per issue #1042.
     try {
       const stat = await fs.stat(docState.filePath);
       // Compare to the session's mtime — if the file changed externally, skip
@@ -731,6 +744,15 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     unwatchFile(oldPath);
 
     // --- Phase 2: commit (point of no return) ---
+    // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
+    // server-managed `docState.filePath` (only ever set by openFileByPath /
+    // resolveAndValidatePath); `newPath` was built from path.dirname(oldPath) +
+    // path.basename(newName) and then cleared validateRenameFilename, the inline
+    // separator/null-byte guard, rejectUnsafeWindowsPrefix, and assertPathSafe
+    // above. Both entry points (POST /api/rename, tandem_rename) additionally
+    // path.basename() the raw input — CodeQL's recognized taint terminator —
+    // before it reaches renameDocument. Any alert here is a false positive;
+    // dismiss per issue #1042.
     try {
       await fs.rename(oldPath, newPath);
     } catch (err) {
@@ -822,6 +844,11 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // step 2 removes it last). Best-effort: a read/merge failure must not flip the
     // committed rename to "error" — at worst we degrade to the prior live-only
     // snapshot. In the common case (live == file) this is an idempotent no-op.
+    // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
+    // server-managed `docState.filePath`, and the envelope is read/written under
+    // `docHash(oldPath)` — a fixed-length hash with no path component. No
+    // user-controlled string reaches this store's filesystem path; an alert here
+    // is a false positive (dismiss per issue #1042).
     try {
       const oldFile = await createStore(oldHash, { filePath: oldPath }).load();
       mergeEnvelopeForward(doc, oldFile, newHash);
@@ -850,11 +877,17 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // failure must not flip the committed rename to "error".
     let rewired = false;
     try {
-      await wireAnnotationStore(docId, doc, newPath, {
+      // `wired` is true only when loadAndMerge AND setFileSyncContext both ran
+      // to completion (#1057). wireAnnotationStore SWALLOWS internal failures
+      // (so the rename stays committed) but now reports them via `wired:false`,
+      // so an internal loadAndMerge throw — where setFileSyncContext never ran
+      // and the oldHash observer is still live — leaves `rewired` false and the
+      // !rewired guard below fires, exactly like a boundary rejection.
+      const result = await wireAnnotationStore(docId, doc, newPath, {
         allowRecovery: false,
         migrateTombstonesFrom: oldHash,
       });
-      rewired = true;
+      rewired = result.wired;
     } catch (err) {
       console.error("[Rename] re-wire annotation store at new path failed for %s:", docId, err);
     }
@@ -880,20 +913,20 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     //   - success path: the re-wire's setFileSyncContext already disposed the
     //     oldHash observer (docId now points at newHash), so nothing is left to
     //     re-create the envelope.
-    //   - re-wire-FAILURE path: when wireAnnotationStore REJECTS at the call
-    //     boundary (e.g. a failed dynamic import) setFileSyncContext never ran,
-    //     so the oldHash context is still registered and LIVE, now pointing at
-    //     the vanished oldPath. The !rewired guard below disposes it before the
-    //     clear() so no concurrent DELETE can queue a debounced write that
-    //     re-creates <oldHash>.json after the clear. This MUST be gated on
-    //     !rewired: on the success path docId already points at newHash, so an
-    //     unconditional clearFileSyncContext(docId) would tear down the
-    //     freshly-wired newHash observer.
-    //     NOTE: wireAnnotationStore SWALLOWS *internal* failures (e.g. loadAndMerge
-    //     throwing) and returns normally, so rewired stays true and this guard does
-    //     not fire for that case — leaving the same accepted "duplicate/resurrect,
-    //     never lose, degraded-session" residual as master. Closing it needs
-    //     wireAnnotationStore to signal real internal success (#1057).
+    //   - re-wire-FAILURE path: when the re-wire does not complete,
+    //     setFileSyncContext never ran, so the oldHash context is still
+    //     registered and LIVE, now pointing at the vanished oldPath. The
+    //     !rewired guard below disposes it before the clear() so no concurrent
+    //     DELETE can queue a debounced write that re-creates <oldHash>.json
+    //     after the clear. This MUST be gated on !rewired: on the success path
+    //     docId already points at newHash, so an unconditional
+    //     clearFileSyncContext(docId) would tear down the freshly-wired newHash
+    //     observer.
+    //     This covers BOTH failure modes (#1057): a boundary rejection (caught
+    //     above) AND an internal loadAndMerge throw (wireAnnotationStore now
+    //     reports `wired:false` instead of swallowing silently). In both, the
+    //     oldHash observer is still live and `rewired` is false, so the guard
+    //     fires and the internal-throw steal vector is closed.
     // clear() also drops any pending write the old store may still hold, so
     // nothing re-creates it afterward.
     if (!rewired) {
@@ -936,6 +969,9 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
       // autosave writes them to newPath.
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      // Safe FS sink (CodeQL js/path-injection): `newPath` is the validated
+      // rename target (see the Phase-0 barriers above) — not raw user input.
+      // An alert here is a false positive; dismiss per issue #1042.
       const stat = await fs.stat(newPath).catch(() => null);
       withFileSync(doc, () => {
         meta.set("fileName", fileName);

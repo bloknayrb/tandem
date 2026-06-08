@@ -10,6 +10,7 @@ import { randomUUID } from "crypto";
 import type { Server } from "http";
 import { createRequire } from "module";
 
+import { API_HEALTH } from "../../shared/api-paths.js";
 import { DEFAULT_BIND_HOST, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
@@ -323,7 +324,7 @@ export async function startMcpServerHttp(
   // Auth-exempt: health is public diagnostic info.
   // Invariant 7: omit hasSession when request is non-loopback (session presence leaks).
   app.get(
-    "/health",
+    API_HEALTH,
     lanAwareApiMiddleware,
     (req: import("express").Request, res: import("express").Response) => {
       const body: Record<string, unknown> = {
