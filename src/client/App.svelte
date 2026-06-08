@@ -291,6 +291,78 @@ if (isTauriRuntime()) {
   });
 }
 
+// Surface OS file-association open failures (Tauri-only) as a warning toast.
+// The Rust side classifies the rejected double-clicked file and signals a
+// STABLE, PATH-FREE reason code via two surfaces, both handled here (see #630):
+//  - cold-start: buffered in a OnceLock-style slot (the App listener doesn't
+//    exist yet at classification time) — polled once via `get_startup_rejection`
+//    on mount. The buffer is TAKEN, so a WebView reload won't replay it.
+//  - warm-start / macOS Apple-Event: emitted live as `startup-file-rejected`.
+// The user double-clicked a file and silently landed on welcome.md; this is the
+// feedback. The message is composed here from the code so no path reaches the
+// DOM (mirrors the sidecar-restart-failed contract).
+if (isTauriRuntime()) {
+  const messageForCode = (code: string): string => {
+    switch (code) {
+      case "unsupported-extension":
+        return "That file type can't be opened in Tandem.";
+      case "not-a-file":
+      case "non-file-url":
+        return "That file couldn't be opened — it may have moved or been deleted.";
+      case "suspicious-path":
+        return "That file path was rejected for safety reasons.";
+      default:
+        return "That file couldn't be opened in Tandem.";
+    }
+  };
+  const pushStartupRejection = (code: string): void => {
+    notifications.push({
+      id: `startup-file-rejected-${Date.now()}`,
+      type: "general-error",
+      severity: "warning",
+      message: messageForCode(code),
+      dedupKey: "startup-file-rejected",
+      timestamp: Date.now(),
+      errorCode: "STARTUP_FILE_REJECTED",
+    });
+  };
+
+  let unlistenRejected: (() => void) | null = null;
+  let rejectedCancelled = false;
+
+  // Live (warm-start / macOS Apple-Event) rejections arrive as events.
+  import("@tauri-apps/api/event")
+    .then(({ listen }) =>
+      listen<string>("startup-file-rejected", (event) => {
+        pushStartupRejection(typeof event.payload === "string" ? event.payload : "");
+      }),
+    )
+    .then((un) => {
+      if (rejectedCancelled) un();
+      else unlistenRejected = un;
+    })
+    .catch((err) => {
+      console.warn("[App] Failed to wire startup-file-rejected listener:", err);
+    });
+
+  // Cold-start rejection was buffered before this listener existed — drain it
+  // once. `get_startup_rejection` TAKES the value, so this is idempotent across
+  // re-mounts.
+  import("@tauri-apps/api/core")
+    .then(({ invoke }) => invoke<string | null>("get_startup_rejection"))
+    .then((code) => {
+      if (code) pushStartupRejection(code);
+    })
+    .catch((err) => {
+      console.warn("[App] Failed to poll buffered startup rejection:", err);
+    });
+
+  onDestroy(() => {
+    rejectedCancelled = true;
+    unlistenRejected?.();
+  });
+}
+
 let settingsOpen = $state(false);
 let settingsModalOpen = $state(false);
 
