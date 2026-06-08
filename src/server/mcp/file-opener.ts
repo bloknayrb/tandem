@@ -1004,8 +1004,9 @@ function writeDocMeta(
 ): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   withInternal(doc, () => {
-    // Tombstone any session-persisted value so CRDT clock conflicts (old session's
-    // higher-clock true) can't override the authoritative readOnly from the registry.
+    // Tombstone any session-persisted value so a stale session's higher-clock
+    // write can't override the authoritative readOnly passed by the caller.
+    // The same delete-before-set pattern is required in handleAlreadyOpen.
     meta.delete(Y_MAP_READ_ONLY);
     meta.set(Y_MAP_READ_ONLY, readOnly);
     meta.set("format", format);
