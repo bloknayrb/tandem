@@ -152,6 +152,9 @@ function closeTabAndRecord(tabId: string) {
     sourceViewTabs = next;
   }
   clearSourceDraft(tabId);
+  // Drop the closed tab's remembered scroll position so scrollMemory doesn't
+  // leak across long sessions (mirrors the source-view/draft cleanup above; #1055).
+  scrollMemory.delete(tabId);
   yjsSync.handleTabClose(tabId);
 }
 
