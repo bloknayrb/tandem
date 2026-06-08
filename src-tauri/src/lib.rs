@@ -1,4 +1,5 @@
 pub mod keychain;
+mod sentry_reporting;
 mod token_store;
 
 #[cfg(target_os = "windows")]
@@ -490,6 +491,16 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Crash reporting (#921) — OPT-IN, off by default. Returns `Some(guard)`
+    // only when `TANDEM_SENTRY_DSN` is set; with no DSN this is `None`, so the
+    // plugin is never registered below (no WebView IPC wiring, no minidump
+    // handler). The guard MUST outlive the Tauri event loop — it flushes pending
+    // events on drop — so it is bound here and held until `run()` returns, after
+    // `.run(...)` blocks. Initialised BEFORE the builder per the plugin contract
+    // ("everything before here runs in both the app and the crash-reporter
+    // process").
+    let _sentry_guard = sentry_reporting::init();
+
     let tray_available = Arc::new(AtomicBool::new(false));
     let tray_flag_for_setup = tray_available.clone();
     let tray_flag_for_close = tray_available.clone();
@@ -540,6 +551,25 @@ pub fn run() {
     #[cfg(feature = "devtools")]
     {
         builder = builder.plugin(tauri_plugin_devtools::init());
+    }
+
+    // Crash-reporting plugin (#921). Registered immediately after
+    // single-instance (which MUST stay the FIRST plugin) so it bridges the
+    // WebView's `@sentry/browser` events to the Rust client over IPC and
+    // attaches OS/device context. Only registered when a DSN was configured
+    // (opt-in) — `sentry_reporting::init` returns `None` otherwise, so the
+    // WebView IPC command is never wired for a default (telemetry-off) launch.
+    //
+    // `init_with_no_injection` is used instead of `init` so the WebView is NOT
+    // auto-injected with a bundled `@sentry/browser`: Tandem's own client-side
+    // `src/client/sentry.ts` owns `Sentry.init` (with our `beforeSend`
+    // scrubbing) and routes events through the plugin's IPC transport. Two
+    // initializers would double-count events and bypass our scrubbing hook.
+    //
+    // `ClientInitGuard` derefs to `sentry::Client`, satisfying the plugin's
+    // `&Client` signature.
+    if let Some(ref guard) = _sentry_guard {
+        builder = builder.plugin(tauri_plugin_sentry::init_with_no_injection(guard.client()));
     }
 
     builder
@@ -841,6 +871,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             setup_overlay_titlebar,
             get_app_theme,
+            sentry_enabled,
             cowork_scan_workspaces,
             cowork_toggle_integration,
             cowork_rescan,
@@ -1349,6 +1380,17 @@ async fn start_sidecar(
             cmd = cmd.env("TANDEM_AUTH_TOKEN", token.as_str());
         }
 
+        // Crash reporting (#921): forward the opt-in DSN so the sidecar reports
+        // to the SAME Sentry/GlitchTip project as the shell (separate event
+        // source). `tauri-plugin-shell` does NOT inherit the parent env, so we
+        // must pass it explicitly. Unset → not forwarded → sidecar reporting
+        // stays off (default posture).
+        if let Ok(dsn) = std::env::var(sentry_reporting::SENTRY_DSN_ENV) {
+            if !dsn.trim().is_empty() {
+                cmd = cmd.env(sentry_reporting::SENTRY_DSN_ENV, dsn);
+            }
+        }
+
         // Cold-start file open from OS file association (Windows/Linux argv).
         // Only set on the first spawn — sidecar restarts must not re-trigger
         // an open (the file has already been registered in openDocuments).
@@ -1827,6 +1869,15 @@ fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
         Ok(_) => Ok("light".to_string()),
         Err(e) => Err(format!("theme() error: {e}")),
     }
+}
+
+/// Whether opt-in crash reporting (#921) is active. The WebView calls this to
+/// decide whether to initialise `@sentry/browser`; it can't read the
+/// `TANDEM_SENTRY_DSN` env var itself. Returns `false` (default posture) unless
+/// the operator configured a DSN at launch.
+#[tauri::command]
+fn sentry_enabled() -> bool {
+    sentry_reporting::is_enabled()
 }
 
 /// Returns the set of keyboard shortcuts that should be blocked in the Tauri
