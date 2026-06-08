@@ -783,13 +783,24 @@ async function finalizeDocOpen(
  *
  * Errors here MUST NOT fail the open — annotations are additive durability,
  * not required for rendering. We log and continue.
+ *
+ * Returns `{ wired: boolean }` so callers that care about a genuine internal
+ * failure can branch on it (#1057). `wired` is `true` only when `loadAndMerge`
+ * AND `setFileSyncContext` both ran to completion. An internal failure (e.g. a
+ * `loadAndMerge` throw) is still SWALLOWED — the open/save must never fail — but
+ * now reports `{ wired: false }` so the caller knows `setFileSyncContext` never
+ * ran and any prior file-sync context is still registered and live.
+ * `renameDocument` gates its old-envelope removal on this to close the
+ * internal-failure steal vector that the boundary-rejection guard alone misses.
+ * (Boundary rejections — e.g. a failed dynamic import upstream — are unaffected
+ * here and continue to propagate to the caller's own try/catch.)
  */
 export async function wireAnnotationStore(
   id: string,
   doc: Y.Doc,
   filePath: string,
   opts?: { allowRecovery?: boolean; migrateTombstonesFrom?: string },
-): Promise<void> {
+): Promise<{ wired: boolean }> {
   try {
     const hash = docHash(filePath);
 
@@ -826,6 +837,7 @@ export async function wireAnnotationStore(
       { migrateTombstonesFrom: opts?.migrateTombstonesFrom },
     );
     setFileSyncContext(id, { ydoc: doc, store, docHash: hash, meta: { filePath } }, cleanup);
+    return { wired: true };
   } catch (err) {
     // Annotations are additive durability — never block a doc open. But a
     // silent console.error means the user never knows their pre-existing
@@ -841,6 +853,13 @@ export async function wireAnnotationStore(
       dedupKey: `annotation-wire:${id}`,
       timestamp: Date.now(),
     });
+    // Signal the internal failure to callers that care (#1057). `wired:false`
+    // means setFileSyncContext did NOT run, so the prior file-sync context (if
+    // any) is still registered and live. renameDocument uses this to fire its
+    // !rewired guard and dispose the stale oldHash observer before clear(),
+    // closing the steal vector even on an internal loadAndMerge throw. Other
+    // callers ignore the result — the swallow keeps open/save non-fatal.
+    return { wired: false };
   }
 }
 
