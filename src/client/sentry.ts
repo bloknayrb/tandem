@@ -39,9 +39,6 @@
 
 import type * as SentryBrowser from "@sentry/browser";
 
-/** Mirror of `SENTRY_DSN_ENV` in `src-tauri/src/sentry_reporting.rs`. */
-const SENTRY_DSN_ENV = "TANDEM_SENTRY_DSN";
-
 let sentry: typeof SentryBrowser | null = null;
 
 /** True inside the Tauri WebView (where the IPC transport is available). */
