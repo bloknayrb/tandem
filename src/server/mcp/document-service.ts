@@ -29,8 +29,9 @@ import {
 } from "../documents/dirty.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
+import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
-import { atomicWrite, getAdapter } from "../file-io/index.js";
+import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
@@ -96,18 +97,36 @@ const savingDocs = new Set<string>();
 /** Formats eligible for disk auto-save (adapter.save defined && not binary). */
 const AUTO_SAVE_FORMATS = new Set(["md", "txt"]);
 
+/**
+ * Binary formats that write back via `adapter.saveBinary` + `atomicWriteBuffer`
+ * (#576). EXPLICIT-SAVE-ONLY: deliberately disjoint from `AUTO_SAVE_FORMATS` so
+ * the 60s auto-save timer never round-trips a lossy `.docx` import back to disk.
+ * The protective layer for `.docx` is "never overwrite without an explicit
+ * user save" (supersedes ADR-004's read-only default).
+ */
+const BINARY_SAVE_FORMATS = new Set(["docx"]);
+
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
   reason?: string;
   errorCode?: string;
+  /**
+   * Body-export fidelity warnings (#576, `.docx` only) — content the export
+   * downgraded (unsupported blocks, non-embedded images). Present on a
+   * successful binary save so the caller can surface a post-save notice. The
+   * lossy-mammoth-import ceiling is surfaced separately at open time.
+   */
+  fidelityWarnings?: string[];
 }
 
 /**
  * Save a document to disk. Shared by tandem_save, POST /api/save, and auto-save.
  *
  * Guards:
- * - Only .md and .txt formats (adapter.save defined, see ADR-036)
- * - Not read-only, not upload://
+ * - Text formats (.md/.txt) via `adapter.save` + `atomicWrite` (auto-saveable).
+ * - Binary formats (.docx) via `adapter.saveBinary` + `atomicWriteBuffer` —
+ *   EXPLICIT save only (`source !== "auto-save"`); see `BINARY_SAVE_FORMATS`.
+ * - Not upload://
  * - Checks source file mtime to skip if externally modified
  * - Per-document lock prevents concurrent writes
  */
@@ -122,15 +141,29 @@ export async function saveDocumentToDisk(
   if (docState.source === "upload") {
     return { status: "skipped", reason: "Upload-only document" };
   }
+
+  const isBinary = BINARY_SAVE_FORMATS.has(docState.format);
+
+  // Binary formats (.docx) write back only on an EXPLICIT user/agent save. The
+  // auto-save timer must never overwrite the original with a re-export of a
+  // lossy mammoth import.
+  if (isBinary && source === "auto-save") {
+    return { status: "skipped", reason: "Binary formats save only on explicit save" };
+  }
+
+  // Read-only blocks the text auto-save path. A read-only .docx that reaches an
+  // explicit save still cannot be overwritten (the read-only signal is the
+  // user's intent); a writable .docx falls through to the binary branch.
   if (docState.readOnly) {
     return { status: "skipped", reason: "Read-only document" };
   }
-  if (!AUTO_SAVE_FORMATS.has(docState.format)) {
+
+  if (!isBinary && !AUTO_SAVE_FORMATS.has(docState.format)) {
     return { status: "skipped", reason: `Format '${docState.format}' not eligible for disk save` };
   }
 
   const adapter = getAdapter(docState.format);
-  if (!adapter.save) {
+  if (isBinary ? !adapter.saveBinary : !adapter.save) {
     return { status: "skipped", reason: "Adapter cannot save" };
   }
 
@@ -163,16 +196,26 @@ export async function saveDocumentToDisk(
     }
 
     const doc = getOrCreateDocument(docId);
-    // `adapter.save` was guard-checked above; assert it for the type narrow
-    // here. Per ADR-036 a missing `save` means the format is read-only.
     // Snapshot the dirty version BEFORE the async write so a content edit that
-    // lands DURING atomicWrite/saveSession isn't lost — markCleanIfUnchanged
-    // only clears the flag if no newer edit arrived (#851).
+    // lands DURING the write isn't lost — markCleanIfUnchanged only clears the
+    // flag if no newer edit arrived (#851).
     const dirtySnapshot = snapshotDirtyVersion(docId);
-    const output = adapter.save(doc);
 
-    suppressNextChange(docState.filePath);
-    await atomicWrite(docState.filePath, output);
+    let fidelityWarnings: string[] | undefined;
+    if (isBinary) {
+      // Binary branch (#576, .docx). Capture fidelity warnings against the same
+      // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
+      // (atomicWrite's UTF-8 encoding would corrupt the binary).
+      const warnings = detectExportFidelityIssues(doc);
+      const buffer = await adapter.saveBinary!(doc);
+      suppressNextChange(docState.filePath);
+      await atomicWriteBuffer(docState.filePath, buffer);
+      fidelityWarnings = warnings.length > 0 ? warnings : undefined;
+    } else {
+      const output = adapter.save!(doc);
+      suppressNextChange(docState.filePath);
+      await atomicWrite(docState.filePath, output);
+    }
     await saveSession(docState.filePath, docState.format, doc);
 
     // Mark document clean
@@ -180,7 +223,7 @@ export async function saveDocumentToDisk(
     withMcp(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
     markCleanIfUnchanged(docId, dirtySnapshot);
 
-    return { status: "saved" };
+    return { status: "saved", fidelityWarnings };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";

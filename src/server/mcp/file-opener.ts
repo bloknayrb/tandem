@@ -437,8 +437,12 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   }
 
   const format = detectFormat(resolved);
-  const isDocx = format === "docx";
-  const readOnly = isDocx;
+  // .docx is now editable (#576): edits are held in the Y.Doc and written back
+  // to the original on EXPLICIT save (`saveDocumentToDisk` binary branch). The
+  // protective layer is "never overwrite without an explicit save", not
+  // read-only — so .docx opens writable like .md / .txt. (Auto-save still skips
+  // .docx via BINARY_SAVE_FORMATS being disjoint from AUTO_SAVE_FORMATS.)
+  const readOnly = false;
   const id = docIdFromPath(resolved);
 
   return { resolved, format, readOnly, id };

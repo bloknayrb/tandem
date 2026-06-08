@@ -14,8 +14,10 @@
 **See ADR-038:** the MCP contract here applies to any MCP-capable client, not only Claude. The title's "for Claude Integration" framing pre-dates ADR-038's policy.
 
 ## ADR-004: .docx Review-Only by Default
-**Decision:** .docx files open in review-only mode. Never overwrite the original.
-**Rationale:** mammoth.js import is lossy (no complex tables, tracked changes, footnotes). Review-only prevents accidental data loss.
+**Status:** Superseded by #576 (v1.0 docx write-back). `.docx` is now editable; the protective layer is "never overwrite without an explicit save", not `contenteditable=false`.
+**Original decision:** .docx files open in review-only mode. Never overwrite the original.
+**Original rationale:** mammoth.js import is lossy (no complex tables, tracked changes, footnotes). Review-only prevents accidental data loss.
+**Supersession (#576):** mammoth import is still lossy, so the data-loss concern is real — but it's addressed by *explicit-save gating* rather than by blocking edits. `.docx` opens writable; edits are held in the Y.Doc and serialized back to `.docx` (body content only — comments/tracked-changes are v1.1) **only on an explicit user/agent save** via the `docx` package (`saveBinary` adapter capability + `atomicWriteBuffer`). Auto-save never writes `.docx` (`BINARY_SAVE_FORMATS` is disjoint from `AUTO_SAVE_FORMATS`). Lossy-import warnings surface at open; export-downgrade warnings surface on save. The export is trust-boundary-gated (scrubbed hyperlinks, inline-only image embeds, no OLE objects, plain-text fallback for unknown nodes). See `src/server/file-io/docx-export.ts`.
 
 ## ADR-005: Node-Anchored Ranges for Overlays
 **Decision:** Overlays use node-relative anchors (nodeId + offset) instead of character offsets.
