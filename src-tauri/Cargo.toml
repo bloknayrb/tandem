@@ -21,6 +21,15 @@ tauri-build = { version = "2.5.6", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+# Crash reporting (#921), opt-in / off by default. `sentry::init` with an empty
+# DSN yields a disabled (no-op) client. The default feature set does NOT install
+# a global `tracing` subscriber (only the optional `sentry-tracing` integration
+# does), so there is no collision with `tauri-plugin-log` or the `devtools`
+# feature — both of which own the global subscriber. The minidump handler is
+# re-exported by the plugin (`tauri_plugin_sentry::minidump`); no separate
+# `sentry-rust-minidump` dependency is needed.
+sentry = "0.42"
+tauri-plugin-sentry = "0.5"
 # linux-libxdo: makes native Cut/Copy/Paste/Select All PredefinedMenuItems work
 # on Linux (muda uses libxdo to synthesize them); off by default. Required by
 # the editor context menu (#923).
