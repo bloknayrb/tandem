@@ -1155,7 +1155,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // is the common case (user has selected text in the editor).
     e.preventDefault();
     const hasSelection = !!editor && editor.state.selection.from !== editor.state.selection.to;
-    const reviewOnly = activeTab?.readOnly === true;
+    const reviewOnly = isReadOnly;
     const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
     if (popupSuppressed) {
       // Palette/find UI is the active context; user understands why.
@@ -1380,9 +1380,8 @@ $effect(() => {
 
 // Raw-markdown source view (#1021). Only editable .md documents qualify
 // (read-only .md like CHANGELOG and non-.md formats are excluded).
-const canSourceView = $derived(
-  !!activeTab && activeTab.format === "md" && activeTab.readOnly !== true,
-);
+const isReadOnly = $derived(activeTab?.readOnly === true);
+const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
 
 function toggleSourceView(): void {
@@ -1778,7 +1777,7 @@ const tutorial = createTutorial(
       claudeStatus={yjsSync.claudeStatus}
       claudeActive={yjsSync.claudeActive}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
-      readOnly={yjsSync.readOnly}
+      readOnly={isReadOnly}
       saving={saveStore.saving}
       {editor}
     />
@@ -1995,14 +1994,14 @@ const tutorial = createTutorial(
     ondrop={fileDrop.handleEditorDrop}
   >
     <ReviewOnlyBanner
-      visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
+      visible={isReadOnly && activeTab?.format === "docx"}
       documentId={activeTab?.id}
     />
     {#snippet editorContent()}
       <Editor
         ydoc={activeTab!.ydoc}
         provider={activeTab!.provider}
-        readOnly={yjsSync.readOnly}
+        readOnly={isReadOnly}
         currentFilePath={activeTab!.filePath}
         format={activeTab!.format}
         {activeAnnotationId}
