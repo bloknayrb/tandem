@@ -15,6 +15,23 @@ import {
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
 
+/**
+ * Parse repeatable `--target=<kind>` CLI args into valid target kinds plus the
+ * unrecognized leftovers (so the caller can warn on typos). Only the
+ * `--target=<value>` form is recognized — `--target foo` (space, no `=`) is
+ * silently ignored, and `--target=` (empty value) lands in `unknown` and is
+ * treated as a typo by the caller. Pure + side-effect-free for unit testing.
+ */
+export function parseTargetArgs(args: string[]): {
+  targets: TargetKind[];
+  unknown: string[];
+} {
+  const raw = args.filter((a) => a.startsWith("--target=")).map((a) => a.slice("--target=".length));
+  const targets = raw.filter((t): t is TargetKind => t === "claude-code" || t === "claude-desktop");
+  const unknown = raw.filter((t) => t !== "claude-code" && t !== "claude-desktop");
+  return { targets, unknown };
+}
+
 export interface SetupOptions {
   /**
    * When false (the default `tandem setup` with no flags) we only print

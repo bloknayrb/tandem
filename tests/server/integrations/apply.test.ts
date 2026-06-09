@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyConfig,
@@ -31,6 +31,20 @@ describe("resolveChannelDist — TANDEM_CHANNEL_DIST precedence (#477 PR 3c-ii-c
     const resolved = resolveChannelDist({ TANDEM_CHANNEL_DIST: "/nope/channel.js" }, () => false);
     expect(resolved).not.toBe("/nope/channel.js");
     expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/channel\/index\.js$/);
+  });
+
+  it("logs a diagnostic naming the bad path when env is set but the file is missing", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      resolveChannelDist({ TANDEM_CHANNEL_DIST: "/nope/channel.js" }, () => false);
+      const logged = errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+      // The breadcrumb is the entire point of this branch — it must name the
+      // bad path and the consequence (push degradation), not silently fall back.
+      expect(logged).toContain("/nope/channel.js");
+      expect(logged).toMatch(/TANDEM_CHANNEL_DIST/);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("ignores an empty-string env var (empty string is falsy — falls back to derivation)", () => {

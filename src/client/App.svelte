@@ -313,6 +313,19 @@ if (isTauriRuntime()) {
     })
     .catch((err) => {
       console.warn("[App] Failed to wire open-integration-wizard listener:", err);
+      // The tray "Setup AI Assistant" item is now the primary replacement for
+      // the removed run_setup() round-trip; if its listener can't wire, clicking
+      // it would be a silent no-op (Rust emits the event, nothing receives it).
+      // Surface a recoverable warning instead of swallowing it to console.
+      notifications.push({
+        id: `open-wizard-listener-failed-${Date.now()}`,
+        type: "launcher",
+        severity: "warning",
+        message:
+          "Couldn't enable the Setup shortcut. Open Settings → Reopen wizard to configure integrations.",
+        dedupKey: "open-wizard-listener-failed",
+        timestamp: Date.now(),
+      });
     });
   onDestroy(() => {
     cancelled = true;

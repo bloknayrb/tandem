@@ -92,6 +92,26 @@ describe("runSetup({ apply: true }) orchestration", () => {
     expect(stderr()).toContain("Setup failed");
   });
 
+  it("partial failure (some targets succeed, some fail) does not exit", async () => {
+    vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+    // writeTargets iterates in order: claude-code succeeds, claude-desktop fails
+    // → failures=1, targets.length=2 → the `failures > 0 && failures < length`
+    // partial branch, which must NOT exit(1).
+    vi.mocked(applyConfig)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("EACCES"));
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    await runSetup({ apply: true });
+
+    expect(applyConfig).toHaveBeenCalledTimes(2);
+    expect(installSkill).toHaveBeenCalledTimes(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(stderr()).toContain("partially complete");
+  });
+
   it("does not exit when zero targets are detected, but still installs the skill", async () => {
     vi.mocked(detectTargets).mockReturnValue([]);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {

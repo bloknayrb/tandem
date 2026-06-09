@@ -158,6 +158,33 @@ describe("createIntegrationWizard", () => {
     expect(wizard.errorMessage).toMatch(/Could not reach the Tandem server/);
   });
 
+  it("a WKWebView 'Load failed' network error also gets the friendly message", async () => {
+    // Tauri's macOS WebView is WKWebView, which throws `TypeError: Load failed`
+    // (no "fetch" substring) on network failure. Guards against a future edit
+    // narrowing the discriminant back to /fetch/i and regressing macOS desktop.
+    const fetchFn = (() => Promise.reject(new TypeError("Load failed"))) as unknown as typeof fetch;
+    const wizard = createIntegrationWizard({ fetchFn });
+
+    await wizard.begin();
+    flushSync();
+    expect(wizard.step).toBe("error");
+    expect(wizard.errorMessage).toMatch(/Could not reach the Tandem server/);
+  });
+
+  it("a structural TypeError surfaces its real message, not 'server unreachable'", async () => {
+    // A programming TypeError (not a network failure) must NOT be mislabeled as
+    // "server unreachable" — it should fall through to its real text.
+    const fetchFn = (() =>
+      Promise.reject(new TypeError("x is not a function"))) as unknown as typeof fetch;
+    const wizard = createIntegrationWizard({ fetchFn });
+
+    await wizard.begin();
+    flushSync();
+    expect(wizard.step).toBe("error");
+    expect(wizard.errorMessage).toBe("x is not a function");
+    expect(wizard.errorMessage).not.toMatch(/Could not reach the Tandem server/);
+  });
+
   it("submitSecret(): stores secret and stamps tokenSecretRef on the picked config", async () => {
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([

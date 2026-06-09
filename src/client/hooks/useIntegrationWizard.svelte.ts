@@ -241,10 +241,13 @@ export function createIntegrationWizard(
     } catch (err) {
       if (myGen !== beginGen) return;
       // A network failure (server not up yet — common on first launch) rejects
-      // with a TypeError ("Failed to fetch"). Surface an actionable message
-      // instead of the raw browser string. A genuine programming TypeError would
-      // also land here, but "server unreachable" is still a reasonable surface.
-      if (err instanceof TypeError) {
+      // with a TypeError whose message varies by engine: Chromium "Failed to
+      // fetch", WKWebView (Tauri macOS) "Load failed", Firefox "NetworkError
+      // when attempting to fetch resource". Match those so we surface an
+      // actionable message — but gate on the message so a genuine programming
+      // TypeError (e.g. a structural error in the preselect chain above) falls
+      // through to its real text instead of being mislabeled "server unreachable".
+      if (err instanceof TypeError && /fetch|load failed|network/i.test(err.message)) {
         setError("Could not reach the Tandem server. Make sure Tandem is running, then try again.");
         return;
       }

@@ -84,23 +84,26 @@ try {
     const exitCode = await runUninstallScrub();
     process.exit(exitCode);
   } else if (args[0] === "setup") {
-    const { runSetup } = await import("./setup.js");
-    // `--target=claude-code` / `--target=claude-desktop`, repeatable. Unknown
-    // values are dropped here; warn so a typo doesn't silently become a
-    // confusing "No matching installations" downstream.
-    const rawTargets = args
-      .filter((a) => a.startsWith("--target="))
-      .map((a) => a.slice("--target=".length));
-    for (const t of rawTargets) {
-      if (t !== "claude-code" && t !== "claude-desktop") {
-        console.error(
-          `[tandem] Ignoring unrecognized --target value "${t}" (expected claude-code or claude-desktop).`,
-        );
-      }
+    const { runSetup, parseTargetArgs } = await import("./setup.js");
+    // `--target=claude-code` / `--target=claude-desktop`, repeatable. Warn on
+    // unrecognized values so a typo doesn't silently become a confusing "No
+    // matching installations" downstream.
+    const { targets, unknown } = parseTargetArgs(args);
+    for (const t of unknown) {
+      console.error(
+        `[tandem] Ignoring unrecognized --target value "${t}" (expected claude-code or claude-desktop).`,
+      );
     }
-    const targets = rawTargets.filter(
-      (t): t is "claude-code" | "claude-desktop" => t === "claude-code" || t === "claude-desktop",
-    );
+    // If the user asked for targets but NONE resolved, fail closed rather than
+    // falling through to "no filter → apply to every detected client" — writing
+    // config to clients they didn't ask for is a surprising side effect on a
+    // --apply write path.
+    if (unknown.length > 0 && targets.length === 0) {
+      console.error(
+        "[tandem] No valid --target values given (expected claude-code or claude-desktop); refusing to apply to all clients. Aborting.",
+      );
+      process.exit(1);
+    }
     await runSetup({
       apply: args.includes("--apply"),
       force: args.includes("--force"),

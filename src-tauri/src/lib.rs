@@ -2646,9 +2646,11 @@ fn is_leap(year: i64) -> bool {
 }
 
 // The "no AI client detected" nudge (formerly show_no_claude_dialog) moved into
-// the integration wizard's detect step in #477 PR 3c-ii-c — transport-agnostic
+// the integration wizard's connect step in #477 PR 3c-ii-c — transport-agnostic
 // (covers npm-browser too) and no longer gated on the deleted /api/setup
-// round-trip. See src/client/components/IntegrationWizardModal.svelte.
+// round-trip. (The wizard's "Install Claude Code" empty state, added by #1084,
+// now owns that surface; its testid retains the legacy `-step-detect` name.)
+// See src/client/components/IntegrationWizardModal.svelte.
 
 /// Prompt the user to install an available update. Returns true if they accept.
 /// This is intentionally a sync `fn`, NOT `async fn` — `blocking_show()` blocks

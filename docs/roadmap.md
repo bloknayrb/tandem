@@ -348,7 +348,7 @@ Health polling (200ms interval, 15s timeout), exponential backoff restart (up to
 
 ### Step 4: MCP auto-setup — SUPERSEDED (removed in #477 PR 3c-ii-c)
 
-Originally `run_setup()` POSTed to `/api/setup` with bundled `nodeBinary` + `channelPath` after health check, on every launch. **Removed in #477 PR 3c-ii-c** (ADR-038 §2b): setup is now wizard-driven, the channel-shim path is injected into the sidecar as `TANDEM_CHANNEL_DIST` on spawn, the "no AI client detected" nudge lives in the wizard's detect step, and the tray "Setup AI Assistant" item re-opens the wizard. The non-interactive CLI equivalent is `tandem setup --apply`.
+Originally `run_setup()` POSTed to `/api/setup` with bundled `nodeBinary` + `channelPath` after health check, on every launch. **Removed in #477 PR 3c-ii-c** (ADR-038 §2b): setup is now wizard-driven, the channel-shim path is injected into the sidecar as `TANDEM_CHANNEL_DIST` on spawn, the "no AI client detected" nudge lives in the wizard's connect step (the #1084 "Install Claude Code" empty state), and the tray "Setup AI Assistant" item re-opens the wizard. The non-interactive CLI equivalent is `tandem setup --apply`.
 
 ### Step 5: System tray + window management — DONE
 
