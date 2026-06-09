@@ -437,8 +437,12 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   }
 
   const format = detectFormat(resolved);
-  const isDocx = format === "docx";
-  const readOnly = isDocx;
+  // .docx is now editable (#576): edits are held in the Y.Doc and written back
+  // to the original on EXPLICIT save (`saveDocumentToDisk` binary branch). The
+  // protective layer is "never overwrite without an explicit save", not
+  // read-only — so .docx opens writable like .md / .txt. (Auto-save still skips
+  // .docx via BINARY_SAVE_FORMATS being disjoint from AUTO_SAVE_FORMATS.)
+  const readOnly = false;
   const id = docIdFromPath(resolved);
 
   return { resolved, format, readOnly, id };
@@ -467,7 +471,10 @@ function handleAlreadyOpen(
   if (explicitReadOnly && !existing.readOnly) {
     addDoc(id, { ...existing, readOnly: true });
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    withInternal(doc, () => meta.set(Y_MAP_READ_ONLY, true));
+    withInternal(doc, () => {
+      meta.delete(Y_MAP_READ_ONLY);
+      meta.set(Y_MAP_READ_ONLY, true);
+    });
   }
 
   setActiveDocId(id);
@@ -783,13 +790,24 @@ async function finalizeDocOpen(
  *
  * Errors here MUST NOT fail the open — annotations are additive durability,
  * not required for rendering. We log and continue.
+ *
+ * Returns `{ wired: boolean }` so callers that care about a genuine internal
+ * failure can branch on it (#1057). `wired` is `true` only when `loadAndMerge`
+ * AND `setFileSyncContext` both ran to completion. An internal failure (e.g. a
+ * `loadAndMerge` throw) is still SWALLOWED — the open/save must never fail — but
+ * now reports `{ wired: false }` so the caller knows `setFileSyncContext` never
+ * ran and any prior file-sync context is still registered and live.
+ * `renameDocument` gates its old-envelope removal on this to close the
+ * internal-failure steal vector that the boundary-rejection guard alone misses.
+ * (Boundary rejections — e.g. a failed dynamic import upstream — are unaffected
+ * here and continue to propagate to the caller's own try/catch.)
  */
 export async function wireAnnotationStore(
   id: string,
   doc: Y.Doc,
   filePath: string,
   opts?: { allowRecovery?: boolean; migrateTombstonesFrom?: string },
-): Promise<void> {
+): Promise<{ wired: boolean }> {
   try {
     const hash = docHash(filePath);
 
@@ -826,6 +844,7 @@ export async function wireAnnotationStore(
       { migrateTombstonesFrom: opts?.migrateTombstonesFrom },
     );
     setFileSyncContext(id, { ydoc: doc, store, docHash: hash, meta: { filePath } }, cleanup);
+    return { wired: true };
   } catch (err) {
     // Annotations are additive durability — never block a doc open. But a
     // silent console.error means the user never knows their pre-existing
@@ -841,6 +860,13 @@ export async function wireAnnotationStore(
       dedupKey: `annotation-wire:${id}`,
       timestamp: Date.now(),
     });
+    // Signal the internal failure to callers that care (#1057). `wired:false`
+    // means setFileSyncContext did NOT run, so the prior file-sync context (if
+    // any) is still registered and live. renameDocument uses this to fire its
+    // !rewired guard and dispose the stale oldHash observer before clear(),
+    // closing the steal vector even on an internal loadAndMerge throw. Other
+    // callers ignore the result — the swallow keeps open/save non-fatal.
+    return { wired: false };
   }
 }
 
@@ -913,6 +939,7 @@ async function clearAndReload(
       applyPreparedContent(doc, prepared, ctx);
       // Rewrite metadata + dirty-tracking baseline
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      meta.delete(Y_MAP_READ_ONLY);
       meta.set(Y_MAP_READ_ONLY, isDocx);
       meta.set("format", format);
       meta.set("documentId", id);
@@ -977,6 +1004,10 @@ function writeDocMeta(
 ): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   withInternal(doc, () => {
+    // Tombstone any session-persisted value so a stale session's higher-clock
+    // write can't override the authoritative readOnly passed by the caller.
+    // The same delete-before-set pattern is required in handleAlreadyOpen.
+    meta.delete(Y_MAP_READ_ONLY);
     meta.set(Y_MAP_READ_ONLY, readOnly);
     meta.set("format", format);
     meta.set("documentId", id);

@@ -14,6 +14,12 @@ describe("authFetch", () => {
   beforeEach(() => {
     delete process.env.TANDEM_AUTH_TOKEN;
     delete process.env.CLAUDE_PLUGIN_OPTION_AUTH_TOKEN;
+    // Clear the Claude-session vars too so the clean-wire assertions are
+    // deterministic even when the suite itself runs inside Claude Code (where
+    // CLAUDECODE=1 + a real CLAUDE_CODE_SESSION_ID would otherwise survive in
+    // originalEnv and attach X-Claude-Session-Id to every request here).
+    delete process.env.CLAUDECODE;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
     fetchSpy = vi.fn().mockResolvedValue(new Response("ok"));
     vi.stubGlobal("fetch", fetchSpy);
   });
@@ -127,5 +133,99 @@ describe("authFetch", () => {
     await authFetch("http://localhost/test");
     expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it("attaches X-Claude-Session-Id when spawned by Claude Code, no token", async () => {
+    delete process.env.TANDEM_AUTH_TOKEN;
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "11111111-2222-3333-4444-555555555555";
+    const authFetch = await importAuthFetch();
+    await authFetch("http://localhost/test");
+    const [, init] = fetchSpy.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("X-Claude-Session-Id")).toBe("11111111-2222-3333-4444-555555555555");
+    expect(headers.has("Authorization")).toBe(false);
+  });
+
+  it("attaches both Authorization and X-Claude-Session-Id when token + session present", async () => {
+    process.env.TANDEM_AUTH_TOKEN = "A".repeat(32);
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "abc-session";
+    const authFetch = await importAuthFetch();
+    await authFetch("http://localhost/test");
+    const [, init] = fetchSpy.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe(`Bearer ${"A".repeat(32)}`);
+    expect(headers.get("X-Claude-Session-Id")).toBe("abc-session");
+  });
+
+  it("does NOT attach the session header outside a Claude Code launch (CLAUDECODE unset)", async () => {
+    delete process.env.CLAUDECODE;
+    process.env.CLAUDE_CODE_SESSION_ID = "leaked-from-user-shell";
+    const authFetch = await importAuthFetch();
+    await authFetch("http://localhost/test");
+    const [, init] = fetchSpy.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.has("X-Claude-Session-Id")).toBe(false);
+  });
+});
+
+describe("resolveClaudeSessionId", () => {
+  const originalEnv = { ...process.env };
+
+  async function importResolver() {
+    vi.resetModules();
+    return (await import("../../src/shared/cli-runtime.js")).resolveClaudeSessionId;
+  }
+
+  beforeEach(() => {
+    delete process.env.CLAUDECODE;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.resetModules();
+  });
+
+  it("returns the trimmed id when CLAUDECODE=1 and the id is set", async () => {
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "  sess-123  ";
+    const resolve = await importResolver();
+    expect(resolve()).toBe("sess-123");
+  });
+
+  it("returns undefined when CLAUDECODE is not exactly '1'", async () => {
+    process.env.CLAUDECODE = "true";
+    process.env.CLAUDE_CODE_SESSION_ID = "sess-123";
+    const resolve = await importResolver();
+    expect(resolve()).toBeUndefined();
+  });
+
+  it("returns undefined when the id is unset", async () => {
+    process.env.CLAUDECODE = "1";
+    const resolve = await importResolver();
+    expect(resolve()).toBeUndefined();
+  });
+
+  it("returns undefined when the id is blank after trim", async () => {
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "   ";
+    const resolve = await importResolver();
+    expect(resolve()).toBeUndefined();
+  });
+
+  it("rejects an id containing control chars (header-injection guard)", async () => {
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "sess\r\nX-Evil: 1";
+    const resolve = await importResolver();
+    expect(resolve()).toBeUndefined();
+  });
+
+  it("rejects an oversized id", async () => {
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "x".repeat(257);
+    const resolve = await importResolver();
+    expect(resolve()).toBeUndefined();
   });
 });

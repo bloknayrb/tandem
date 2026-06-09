@@ -333,7 +333,7 @@ test("bulk-confirm resets when a filter changes (issue #199 regression)", async 
   // The pre-fix code only reset on `pending.length` changes, so changing a
   // filter (which doesn't necessarily change the length) would leave the
   // confirm dialog pointing at a stale set of annotations.
-  await page.locator("[data-testid='filter-author']").selectOption("claude");
+  await page.getByTestId("filter-author-claude").click();
 
   // Confirm must be dismissed — this is the pinned regression behavior.
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
@@ -372,7 +372,7 @@ test("bulk-confirm resets when filter-type changes", async ({ page }) => {
   // Change type filter — comment filter leaves 2 pending comments, so the
   // bulk actions row remains mounted and the confirm must be dismissed by
   // the filter-change effect specifically (not by parent unmount).
-  await page.locator("[data-testid='filter-type']").selectOption("comment");
+  await page.getByTestId("filter-type-comment").click();
   // Sanity check: the bulk row must still be mounted — otherwise this test
   // regresses to the same false-positive it was written to avoid.
   await expect(bulkDismiss).toBeVisible({ timeout: 2_000 });
@@ -400,7 +400,7 @@ test("bulk-confirm resets when filter-status changes", async ({ page }) => {
   // Filter to "pending" — all 3 annotations are still pending so the bulk
   // row stays mounted; the confirm reset can only come from the filter-
   // change effect firing on the `filterStatus` dep.
-  await page.locator("[data-testid='filter-status']").selectOption("pending");
+  await page.getByTestId("filter-status-pending").click();
   await expect(bulkAccept).toBeVisible({ timeout: 2_000 });
   await expect(confirm).not.toBeVisible({ timeout: 2_000 });
 });
@@ -500,7 +500,7 @@ test("side panel resets scroll to top on filter change (no active annotation)", 
   expect(scrollBefore).toBeGreaterThan(0);
 
   // Change the type filter — effect should scroll back to 0.
-  await page.locator("[data-testid='filter-type']").selectOption("comment");
+  await page.getByTestId("filter-type-comment").click();
   await expect
     .poll(async () => scrollContainer.evaluate((el) => el.scrollTop), {
       timeout: 2_000,
@@ -510,8 +510,8 @@ test("side panel resets scroll to top on filter change (no active annotation)", 
 
 test("Clear-filters button also resets scroll to top", async ({ page }) => {
   // The Clear button is a sibling trigger for the same scroll-reset effect.
-  // Guards against a regression where the effect is wired to selectOption
-  // events but not to the Clear path that sets all three filters at once.
+  // Guards against a regression where the effect is wired to per-chip filter
+  // changes but not to the Clear path that sets all three filters at once.
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await Promise.all(
     Array.from({ length: 15 }, (_, i) =>
@@ -532,7 +532,7 @@ test("Clear-filters button also resets scroll to top", async ({ page }) => {
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(15);
 
   // Set a filter so the Clear button appears.
-  await page.locator("[data-testid='filter-type']").selectOption("comment");
+  await page.getByTestId("filter-type-comment").click();
 
   // Scroll to the bottom.
   await scrollContainer.evaluate((el) => {
@@ -730,13 +730,13 @@ test("note filter shows only notes, hides comments (ADR-027 C1)", async ({ page 
   });
 
   // Filter to "note" — only the note card should be visible.
-  await page.locator("[data-testid='filter-type']").selectOption("note");
+  await page.getByTestId("filter-type-note").click();
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 3_000,
   });
 
   // Switch filter to "comment" — only the MCP comment should be visible.
-  await page.locator("[data-testid='filter-type']").selectOption("comment");
+  await page.getByTestId("filter-type-comment").click();
   await expect(page.locator("[data-testid^='annotation-card-']")).toHaveCount(1, {
     timeout: 3_000,
   });

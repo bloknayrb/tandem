@@ -9,6 +9,7 @@ vi.mock("../../src/server/file-io/docx.js", async (importOriginal) => {
   return {
     ...actual,
     loadDocx: vi.fn().mockResolvedValue("<p>Body</p>"),
+    loadDocxWithWarnings: vi.fn().mockResolvedValue({ html: "<p>Body</p>", warnings: [] }),
     htmlToYDoc: vi.fn(),
   };
 });
@@ -27,9 +28,12 @@ describe("FormatAdapter registry (ADR-036)", () => {
     expect(adapter.save).toBeDefined();
   });
 
-  it("returns docx adapter for 'docx' — save is omitted (read-only)", () => {
+  it("returns docx adapter for 'docx' — text `save` omitted, binary `saveBinary` provided (#576)", () => {
     const adapter = getAdapter("docx");
+    // .docx never takes the text auto-save path (`save`); write-back is the
+    // explicit-only binary path (`saveBinary`, #576).
     expect(adapter.save).toBeUndefined();
+    expect(adapter.saveBinary).toBeDefined();
   });
 
   it("falls back to plaintext for unknown formats — save is defined", () => {
@@ -112,8 +116,9 @@ describe("MarkdownAdapter — two-phase parse/apply", () => {
 describe("DocxAdapter — two-phase parse/apply (#696, ADR-036, PR #707 review)", () => {
   it("parse returns kind: 'comments-failed' issue when extractDocxComments rejects", async () => {
     const adapter = getAdapter("docx");
-    // A non-zip buffer rejects in mammoth's JSZip parse — exercises the
-    // issues path without mocking the comment-extractor itself.
+    // The body parser (loadDocxWithWarnings) is stubbed to succeed at the top
+    // of this file; extractDocxComments runs for real and rejects on the
+    // non-zip buffer, exercising the comments-failed issue path.
     const prepared = await adapter.parse(Buffer.from("not-a-docx"));
     expect(prepared.format).toBe("docx");
     expect(prepared.issues.length).toBeGreaterThanOrEqual(1);
@@ -154,8 +159,9 @@ describe("DocxAdapter — two-phase parse/apply (#696, ADR-036, PR #707 review)"
     }
   });
 
-  it("save is omitted — adapter cannot write .docx back to disk", () => {
+  it("text `save` is omitted — .docx never takes the text auto-save path (#576 uses `saveBinary`)", () => {
     const adapter = getAdapter("docx");
     expect(adapter.save).toBeUndefined();
+    expect(adapter.saveBinary).toBeDefined();
   });
 });

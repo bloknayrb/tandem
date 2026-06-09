@@ -29,8 +29,9 @@ import {
 } from "../documents/dirty.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
+import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
-import { atomicWrite, getAdapter } from "../file-io/index.js";
+import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
@@ -81,7 +82,16 @@ export {
 /** Internal alias for the registry's view of open docs — used by closures below. */
 const openDocs = getOpenDocs();
 
-/** Non-throwing existence probe (fs.access has no boolean variant). */
+/**
+ * Non-throwing existence probe (fs.access has no boolean variant).
+ *
+ * Safe FS sink (CodeQL js/path-injection): the sole caller is renameDocument,
+ * which passes `newPath` only AFTER it has cleared validateRenameFilename, the
+ * inline separator/null-byte guard, rejectUnsafeWindowsPrefix, and the
+ * assertPathSafe realpath/symlink walk. CodeQL cannot trace those barriers
+ * across the function boundary, so a path-injection alert here is a false
+ * positive — see issue #1042 for the Security-tab dismissal rationale.
+ */
 const pathExists = (p: string): Promise<boolean> =>
   fs
     .access(p)
@@ -96,18 +106,36 @@ const savingDocs = new Set<string>();
 /** Formats eligible for disk auto-save (adapter.save defined && not binary). */
 const AUTO_SAVE_FORMATS = new Set(["md", "txt"]);
 
+/**
+ * Binary formats that write back via `adapter.saveBinary` + `atomicWriteBuffer`
+ * (#576). EXPLICIT-SAVE-ONLY: deliberately disjoint from `AUTO_SAVE_FORMATS` so
+ * the 60s auto-save timer never round-trips a lossy `.docx` import back to disk.
+ * The protective layer for `.docx` is "never overwrite without an explicit
+ * user save" (supersedes ADR-004's read-only default).
+ */
+const BINARY_SAVE_FORMATS = new Set(["docx"]);
+
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
   reason?: string;
   errorCode?: string;
+  /**
+   * Body-export fidelity warnings (#576, `.docx` only) — content the export
+   * downgraded (unsupported blocks, non-embedded images). Present on a
+   * successful binary save so the caller can surface a post-save notice. The
+   * lossy-mammoth-import ceiling is surfaced separately at open time.
+   */
+  fidelityWarnings?: string[];
 }
 
 /**
  * Save a document to disk. Shared by tandem_save, POST /api/save, and auto-save.
  *
  * Guards:
- * - Only .md and .txt formats (adapter.save defined, see ADR-036)
- * - Not read-only, not upload://
+ * - Text formats (.md/.txt) via `adapter.save` + `atomicWrite` (auto-saveable).
+ * - Binary formats (.docx) via `adapter.saveBinary` + `atomicWriteBuffer` —
+ *   EXPLICIT save only (`source !== "auto-save"`); see `BINARY_SAVE_FORMATS`.
+ * - Not upload://
  * - Checks source file mtime to skip if externally modified
  * - Per-document lock prevents concurrent writes
  */
@@ -122,15 +150,30 @@ export async function saveDocumentToDisk(
   if (docState.source === "upload") {
     return { status: "skipped", reason: "Upload-only document" };
   }
+
+  const isBinary = BINARY_SAVE_FORMATS.has(docState.format);
+
+  // Read-only blocks every save path. The read-only signal is the user's
+  // intent and dominates the format/source distinction: a read-only .docx is
+  // never overwritten, whether the trigger is auto-save or an explicit save.
+  // A writable .docx falls through to the binary branch below.
   if (docState.readOnly) {
     return { status: "skipped", reason: "Read-only document" };
   }
-  if (!AUTO_SAVE_FORMATS.has(docState.format)) {
+
+  // Binary formats (.docx) write back only on an EXPLICIT user/agent save. The
+  // auto-save timer must never overwrite the original with a re-export of a
+  // lossy mammoth import.
+  if (isBinary && source === "auto-save") {
+    return { status: "skipped", reason: "Binary formats save only on explicit save" };
+  }
+
+  if (!isBinary && !AUTO_SAVE_FORMATS.has(docState.format)) {
     return { status: "skipped", reason: `Format '${docState.format}' not eligible for disk save` };
   }
 
   const adapter = getAdapter(docState.format);
-  if (!adapter.save) {
+  if (isBinary ? !adapter.saveBinary : !adapter.save) {
     return { status: "skipped", reason: "Adapter cannot save" };
   }
 
@@ -141,7 +184,11 @@ export async function saveDocumentToDisk(
 
   savingDocs.add(docId);
   try {
-    // Guard against overwriting external modifications
+    // Guard against overwriting external modifications.
+    // Safe FS sink (CodeQL js/path-injection): `docState.filePath` is the
+    // registry's server-managed path (only ever set by openFileByPath /
+    // resolveAndValidatePath / a validated rename or save-as) — never raw user
+    // input. An alert here is a false positive; dismiss per issue #1042.
     try {
       const stat = await fs.stat(docState.filePath);
       // Compare to the session's mtime — if the file changed externally, skip
@@ -163,16 +210,26 @@ export async function saveDocumentToDisk(
     }
 
     const doc = getOrCreateDocument(docId);
-    // `adapter.save` was guard-checked above; assert it for the type narrow
-    // here. Per ADR-036 a missing `save` means the format is read-only.
     // Snapshot the dirty version BEFORE the async write so a content edit that
-    // lands DURING atomicWrite/saveSession isn't lost — markCleanIfUnchanged
-    // only clears the flag if no newer edit arrived (#851).
+    // lands DURING the write isn't lost — markCleanIfUnchanged only clears the
+    // flag if no newer edit arrived (#851).
     const dirtySnapshot = snapshotDirtyVersion(docId);
-    const output = adapter.save(doc);
 
-    suppressNextChange(docState.filePath);
-    await atomicWrite(docState.filePath, output);
+    let fidelityWarnings: string[] | undefined;
+    if (isBinary) {
+      // Binary branch (#576, .docx). Capture fidelity warnings against the same
+      // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
+      // (atomicWrite's UTF-8 encoding would corrupt the binary).
+      const warnings = detectExportFidelityIssues(doc);
+      const buffer = await adapter.saveBinary!(doc);
+      suppressNextChange(docState.filePath);
+      await atomicWriteBuffer(docState.filePath, buffer);
+      fidelityWarnings = warnings.length > 0 ? warnings : undefined;
+    } else {
+      const output = adapter.save!(doc);
+      suppressNextChange(docState.filePath);
+      await atomicWrite(docState.filePath, output);
+    }
     await saveSession(docState.filePath, docState.format, doc);
 
     // Mark document clean
@@ -180,7 +237,7 @@ export async function saveDocumentToDisk(
     withMcp(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
     markCleanIfUnchanged(docId, dirtySnapshot);
 
-    return { status: "saved" };
+    return { status: "saved", fidelityWarnings };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
@@ -731,6 +788,15 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     unwatchFile(oldPath);
 
     // --- Phase 2: commit (point of no return) ---
+    // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
+    // server-managed `docState.filePath` (only ever set by openFileByPath /
+    // resolveAndValidatePath); `newPath` was built from path.dirname(oldPath) +
+    // path.basename(newName) and then cleared validateRenameFilename, the inline
+    // separator/null-byte guard, rejectUnsafeWindowsPrefix, and assertPathSafe
+    // above. Both entry points (POST /api/rename, tandem_rename) additionally
+    // path.basename() the raw input — CodeQL's recognized taint terminator —
+    // before it reaches renameDocument. Any alert here is a false positive;
+    // dismiss per issue #1042.
     try {
       await fs.rename(oldPath, newPath);
     } catch (err) {
@@ -822,6 +888,11 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // step 2 removes it last). Best-effort: a read/merge failure must not flip the
     // committed rename to "error" — at worst we degrade to the prior live-only
     // snapshot. In the common case (live == file) this is an idempotent no-op.
+    // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
+    // server-managed `docState.filePath`, and the envelope is read/written under
+    // `docHash(oldPath)` — a fixed-length hash with no path component. No
+    // user-controlled string reaches this store's filesystem path; an alert here
+    // is a false positive (dismiss per issue #1042).
     try {
       const oldFile = await createStore(oldHash, { filePath: oldPath }).load();
       mergeEnvelopeForward(doc, oldFile, newHash);
@@ -850,11 +921,17 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // failure must not flip the committed rename to "error".
     let rewired = false;
     try {
-      await wireAnnotationStore(docId, doc, newPath, {
+      // `wired` is true only when loadAndMerge AND setFileSyncContext both ran
+      // to completion (#1057). wireAnnotationStore SWALLOWS internal failures
+      // (so the rename stays committed) but now reports them via `wired:false`,
+      // so an internal loadAndMerge throw — where setFileSyncContext never ran
+      // and the oldHash observer is still live — leaves `rewired` false and the
+      // !rewired guard below fires, exactly like a boundary rejection.
+      const result = await wireAnnotationStore(docId, doc, newPath, {
         allowRecovery: false,
         migrateTombstonesFrom: oldHash,
       });
-      rewired = true;
+      rewired = result.wired;
     } catch (err) {
       console.error("[Rename] re-wire annotation store at new path failed for %s:", docId, err);
     }
@@ -880,20 +957,20 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     //   - success path: the re-wire's setFileSyncContext already disposed the
     //     oldHash observer (docId now points at newHash), so nothing is left to
     //     re-create the envelope.
-    //   - re-wire-FAILURE path: when wireAnnotationStore REJECTS at the call
-    //     boundary (e.g. a failed dynamic import) setFileSyncContext never ran,
-    //     so the oldHash context is still registered and LIVE, now pointing at
-    //     the vanished oldPath. The !rewired guard below disposes it before the
-    //     clear() so no concurrent DELETE can queue a debounced write that
-    //     re-creates <oldHash>.json after the clear. This MUST be gated on
-    //     !rewired: on the success path docId already points at newHash, so an
-    //     unconditional clearFileSyncContext(docId) would tear down the
-    //     freshly-wired newHash observer.
-    //     NOTE: wireAnnotationStore SWALLOWS *internal* failures (e.g. loadAndMerge
-    //     throwing) and returns normally, so rewired stays true and this guard does
-    //     not fire for that case — leaving the same accepted "duplicate/resurrect,
-    //     never lose, degraded-session" residual as master. Closing it needs
-    //     wireAnnotationStore to signal real internal success (#1057).
+    //   - re-wire-FAILURE path: when the re-wire does not complete,
+    //     setFileSyncContext never ran, so the oldHash context is still
+    //     registered and LIVE, now pointing at the vanished oldPath. The
+    //     !rewired guard below disposes it before the clear() so no concurrent
+    //     DELETE can queue a debounced write that re-creates <oldHash>.json
+    //     after the clear. This MUST be gated on !rewired: on the success path
+    //     docId already points at newHash, so an unconditional
+    //     clearFileSyncContext(docId) would tear down the freshly-wired newHash
+    //     observer.
+    //     This covers BOTH failure modes (#1057): a boundary rejection (caught
+    //     above) AND an internal loadAndMerge throw (wireAnnotationStore now
+    //     reports `wired:false` instead of swallowing silently). In both, the
+    //     oldHash observer is still live and `rewired` is false, so the guard
+    //     fires and the internal-throw steal vector is closed.
     // clear() also drops any pending write the old store may still hold, so
     // nothing re-creates it afterward.
     if (!rewired) {
@@ -936,6 +1013,9 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
       // autosave writes them to newPath.
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      // Safe FS sink (CodeQL js/path-injection): `newPath` is the validated
+      // rename target (see the Phase-0 barriers above) — not raw user input.
+      // An alert here is a false positive; dismiss per issue #1042.
       const stat = await fs.stat(newPath).catch(() => null);
       withFileSync(doc, () => {
         meta.set("fileName", fileName);

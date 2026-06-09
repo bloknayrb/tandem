@@ -152,6 +152,9 @@ function closeTabAndRecord(tabId: string) {
     sourceViewTabs = next;
   }
   clearSourceDraft(tabId);
+  // Drop the closed tab's remembered scroll position so scrollMemory doesn't
+  // leak across long sessions (mirrors the source-view/draft cleanup above; #1055).
+  scrollMemory.delete(tabId);
   yjsSync.handleTabClose(tabId);
 }
 
@@ -288,6 +291,78 @@ if (isTauriRuntime()) {
   onDestroy(() => {
     cancelled = true;
     unlisten?.();
+  });
+}
+
+// Surface OS file-association open failures (Tauri-only) as a warning toast.
+// The Rust side classifies the rejected double-clicked file and signals a
+// STABLE, PATH-FREE reason code via two surfaces, both handled here (see #630):
+//  - cold-start: buffered in a OnceLock-style slot (the App listener doesn't
+//    exist yet at classification time) — polled once via `get_startup_rejection`
+//    on mount. The buffer is TAKEN, so a WebView reload won't replay it.
+//  - warm-start / macOS Apple-Event: emitted live as `startup-file-rejected`.
+// The user double-clicked a file and silently landed on welcome.md; this is the
+// feedback. The message is composed here from the code so no path reaches the
+// DOM (mirrors the sidecar-restart-failed contract).
+if (isTauriRuntime()) {
+  const messageForCode = (code: string): string => {
+    switch (code) {
+      case "unsupported-extension":
+        return "That file type can't be opened in Tandem.";
+      case "not-a-file":
+      case "non-file-url":
+        return "That file couldn't be opened — it may have moved or been deleted.";
+      case "suspicious-path":
+        return "That file path was rejected for safety reasons.";
+      default:
+        return "That file couldn't be opened in Tandem.";
+    }
+  };
+  const pushStartupRejection = (code: string): void => {
+    notifications.push({
+      id: `startup-file-rejected-${Date.now()}`,
+      type: "general-error",
+      severity: "warning",
+      message: messageForCode(code),
+      dedupKey: "startup-file-rejected",
+      timestamp: Date.now(),
+      errorCode: "STARTUP_FILE_REJECTED",
+    });
+  };
+
+  let unlistenRejected: (() => void) | null = null;
+  let rejectedCancelled = false;
+
+  // Live (warm-start / macOS Apple-Event) rejections arrive as events.
+  import("@tauri-apps/api/event")
+    .then(({ listen }) =>
+      listen<string>("startup-file-rejected", (event) => {
+        pushStartupRejection(typeof event.payload === "string" ? event.payload : "");
+      }),
+    )
+    .then((un) => {
+      if (rejectedCancelled) un();
+      else unlistenRejected = un;
+    })
+    .catch((err) => {
+      console.warn("[App] Failed to wire startup-file-rejected listener:", err);
+    });
+
+  // Cold-start rejection was buffered before this listener existed — drain it
+  // once. `get_startup_rejection` TAKES the value, so this is idempotent across
+  // re-mounts.
+  import("@tauri-apps/api/core")
+    .then(({ invoke }) => invoke<string | null>("get_startup_rejection"))
+    .then((code) => {
+      if (code) pushStartupRejection(code);
+    })
+    .catch((err) => {
+      console.warn("[App] Failed to poll buffered startup rejection:", err);
+    });
+
+  onDestroy(() => {
+    rejectedCancelled = true;
+    unlistenRejected?.();
   });
 }
 
@@ -1080,7 +1155,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // is the common case (user has selected text in the editor).
     e.preventDefault();
     const hasSelection = !!editor && editor.state.selection.from !== editor.state.selection.to;
-    const reviewOnly = activeTab?.readOnly === true;
+    const reviewOnly = isReadOnly;
     const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
     if (popupSuppressed) {
       // Palette/find UI is the active context; user understands why.
@@ -1238,11 +1313,75 @@ $effect(() => {
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
+// #1055: per-tab vertical scroll memory. The `.editor-scroll` container is
+// always-mounted across tab switches (only its inner content remounts via the
+// `{#key activeTab.id}` block), so we remember each document's scrollTop keyed
+// by documentId and restore it on switch-back instead of jumping to the top.
+let editorScrollEl = $state<HTMLDivElement | null>(null);
+const scrollMemory = new Map<string, number>();
+// The document id currently displayed in `editorScrollEl`. A plain variable
+// (not reactive state): the scroll listener reads it to attribute live scroll
+// to the right document without re-triggering the switch effect.
+let scrollMemoryDocId: string | undefined;
+
+// Continuously record the active document's live scrollTop. Capturing on every
+// scroll (rather than only when switching away) is timing-independent: by the
+// time the switch effect re-runs the inner content has already remounted via
+// `{#key activeTab.id}` and the container's scrollTop has reset, so reading it
+// then would record the WRONG (incoming) position for the outgoing document.
+$effect(() => {
+  const el = editorScrollEl;
+  if (!el) return;
+  const onScroll = (): void => {
+    if (scrollMemoryDocId !== undefined) {
+      scrollMemory.set(scrollMemoryDocId, el.scrollTop);
+    }
+  };
+  el.addEventListener("scroll", onScroll, { passive: true });
+  return () => el.removeEventListener("scroll", onScroll);
+});
+
+// Restore the saved scrollTop whenever the active document changes.
+$effect(() => {
+  const el = editorScrollEl;
+  // Read the active document id so this effect re-runs on tab switch. (The
+  // derived may re-fire with the same id when the tab array updates for
+  // unrelated reasons — the `=== scrollMemoryDocId` guard makes those re-runs
+  // no-ops so we never disturb the user's live scroll position.)
+  const nextId = activeTab?.id;
+  if (!el) return;
+  if (nextId === scrollMemoryDocId) return;
+
+  scrollMemoryDocId = nextId;
+  if (nextId === undefined) return;
+
+  const saved = scrollMemory.get(nextId) ?? 0;
+
+  // Content height isn't final synchronously after the `{#key}` content swap,
+  // so re-apply the saved offset across a few frames until the container can
+  // actually hold it (the browser clamps scrollTop to scrollHeight -
+  // clientHeight otherwise). Bounded so a now-shorter document can't loop.
+  let frame = 0;
+  let cancelled = false;
+  const apply = (): void => {
+    if (cancelled || scrollMemoryDocId !== nextId) return;
+    el.scrollTop = saved;
+    if (el.scrollTop < saved && frame < 30) {
+      frame += 1;
+      requestAnimationFrame(apply);
+    }
+  };
+  requestAnimationFrame(apply);
+
+  return () => {
+    cancelled = true;
+  };
+});
+
 // Raw-markdown source view (#1021). Only editable .md documents qualify
 // (read-only .md like CHANGELOG and non-.md formats are excluded).
-const canSourceView = $derived(
-  !!activeTab && activeTab.format === "md" && activeTab.readOnly !== true,
-);
+const isReadOnly = $derived(activeTab?.readOnly === true);
+const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
 
 function toggleSourceView(): void {
@@ -1638,7 +1777,7 @@ const tutorial = createTutorial(
       claudeStatus={yjsSync.claudeStatus}
       claudeActive={yjsSync.claudeActive}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
-      readOnly={yjsSync.readOnly}
+      readOnly={isReadOnly}
       saving={saveStore.saving}
       {editor}
     />
@@ -1842,6 +1981,8 @@ const tutorial = createTutorial(
 
 {#snippet editorColumn()}
   <div
+    bind:this={editorScrollEl}
+    data-testid="editor-scroll-container"
     class="editor-scroll tandem-scroll-fade-y"
     class:hide-raw-md={!settingsState.settings.showRawMarkdown}
     use:scrollFade={"y"}
@@ -1853,14 +1994,14 @@ const tutorial = createTutorial(
     ondrop={fileDrop.handleEditorDrop}
   >
     <ReviewOnlyBanner
-      visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
+      visible={isReadOnly && activeTab?.format === "docx"}
       documentId={activeTab?.id}
     />
     {#snippet editorContent()}
       <Editor
         ydoc={activeTab!.ydoc}
         provider={activeTab!.provider}
-        readOnly={yjsSync.readOnly}
+        readOnly={isReadOnly}
         currentFilePath={activeTab!.filePath}
         format={activeTab!.format}
         {activeAnnotationId}

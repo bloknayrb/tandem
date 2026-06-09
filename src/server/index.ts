@@ -44,6 +44,7 @@ import {
 } from "./mcp/server.js";
 import { pushNotification } from "./notifications.js";
 import { freePort, LAST_SEEN_VERSION_FILE, SESSION_DIR, waitForPort } from "./platform.js";
+import { captureFatal, initSidecarCrashReporting } from "./sentry.js";
 import {
   cleanupOrphanedAnnotationFiles,
   cleanupSessions,
@@ -91,7 +92,12 @@ let launcherUnavailableReason: import("../shared/launcher/contract.js").Launcher
   process.env.TANDEM_DISABLE_LAUNCHER === "1" ? "disabled-by-env" : "stdio-mode";
 
 // Swallow known Hocuspocus/ws protocol errors but crash on genuine bugs.
-function handleFatalError(label: string, value: unknown): void {
+// Async so we can ship the unknown error to Sentry (when crash reporting is
+// opt-in-enabled via TANDEM_SENTRY_DSN) and flush BEFORE exiting. captureFatal
+// is a bounded no-op when reporting is disabled, so the default-launch exit
+// path is unchanged (synchronous-equivalent: it awaits an immediately-resolved
+// promise). Reporting can never block exit beyond captureFatal's flush bound.
+async function handleFatalError(label: string, value: unknown): Promise<void> {
   if (value instanceof Error && isKnownHocuspocusError(value)) {
     console.error("[Tandem] Known WS error (swallowed):", value.message, value.stack);
     return;
@@ -106,10 +112,16 @@ function handleFatalError(label: string, value: unknown): void {
     console.error(`[Tandem] ${label} (FATAL):`, value);
   }
   console.error(`[Tandem] Fatal context: openDocuments=${docCount()}`);
+  // Best-effort, bounded ship+flush. Never throws (captureFatal swallows).
+  await captureFatal(value);
   process.exit(1);
 }
-process.on("uncaughtException", (err) => handleFatalError("uncaughtException", err));
-process.on("unhandledRejection", (reason) => handleFatalError("unhandledRejection", reason));
+process.on("uncaughtException", (err) => {
+  void handleFatalError("uncaughtException", err);
+});
+process.on("unhandledRejection", (reason) => {
+  void handleFatalError("unhandledRejection", reason);
+});
 process.on("exit", (code) => {
   console.error(`[Tandem] Process exiting with code ${code}`);
 });
@@ -167,6 +179,12 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 
 async function main() {
   console.error(`[Tandem] Starting server (transport: ${transportMode})...`);
+
+  // Crash reporting (#921) — opt-in, off by default. Enabled only when the
+  // Tauri shell forwarded TANDEM_SENTRY_DSN to the sidecar. Awaited so a fatal
+  // error early in startup can still be shipped by handleFatalError. No-op
+  // (and no @sentry/node load) when the DSN is unset.
+  await initSidecarCrashReporting();
 
   // Prune stale `.claude.json` backups left over from a previous run.
   // Idempotent and bounded — only touches Tandem's own `.backups/` dir.
