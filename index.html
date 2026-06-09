@@ -79,6 +79,11 @@
         --tandem-fg-faint: oklch(0.64 0.005 280);
         --tandem-accent-h: 275deg;
         --tandem-accent: oklch(0.52 0.16 var(--tandem-accent-h));
+        /* Hover state for accent-filled buttons: darker in light mode. The
+           dark block overrides with a LIGHTER value (dark-mode surfaces
+           brighten on hover). Use this instead of color-mix(..., black),
+           which washes out an already-dark accent in dark mode. */
+        --tandem-accent-hover: oklch(0.46 0.17 var(--tandem-accent-h));
         --tandem-accent-fg: oklch(0.99 0.005 var(--tandem-accent-h));
         --tandem-accent-bg: oklch(0.95 0.03 var(--tandem-accent-h));
         --tandem-accent-fg-strong: oklch(0.42 0.18 var(--tandem-accent-h));
@@ -437,6 +442,8 @@
         --tandem-fg-faint: oklch(0.58 0.008 280);
         --tandem-accent-h: 275deg;
         --tandem-accent: oklch(0.72 0.14 var(--tandem-accent-h));
+        /* Lighter on hover — see the :root counterpart's rationale. */
+        --tandem-accent-hover: oklch(0.78 0.14 var(--tandem-accent-h));
         --tandem-accent-fg: oklch(0.15 0.01 var(--tandem-accent-h));
         --tandem-accent-bg: oklch(0.30 0.05 var(--tandem-accent-h));
         --tandem-accent-fg-strong: oklch(0.85 0.14 var(--tandem-accent-h));

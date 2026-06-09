@@ -27,7 +27,6 @@ import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import EmptyState from "./components/EmptyState.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
-import FirstRunModelPickerModal from "./components/FirstRunModelPickerModal.svelte";
 import HelpModal from "./components/HelpModal.svelte";
 import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
@@ -353,26 +352,17 @@ function readDismissed(): string | null {
 // Server says first-run is needed AND the user hasn't dismissed this
 // server version yet. `&&` (not `||`) so a stomped/absent localStorage
 // value still triggers when the server says it's needed.
+// `firstRun.needed` is intentionally MCP-anchored: the Node server can only
+// see MCP-client config (it has no visibility into model state, which lives
+// in client localStorage, or Cowork state, which lives behind Tauri). The
+// unified wizard surfaces models + Cowork client-side under "More
+// integrations" — do NOT try to make `needed` "smart" about them.
 const isAutoOpenFirstRun = $derived(
   firstRun.needed === true &&
     firstRun.serverVersion !== null &&
     dismissedForVersion !== firstRun.serverVersion,
 );
 const shouldShowWizard = $derived(manuallyReopened || isAutoOpenFirstRun);
-
-// The first-run model picker is the leading step of the auto-open flow.
-// Manual reopen is excluded — that path re-runs the MCP-client wizard
-// only; Settings → Models is the post-first-run surface.
-let modelPickerHandled = $state(false);
-// Gated off behind BYO_MODELS_ENABLED (#1018/#1022): with the in-app model
-// path hidden, first-run leads straight to the Claude Code wizard (the
-// `{:else if shouldShowWizard}` branch) instead of the model picker.
-const shouldShowModelPicker = $derived(
-  BYO_MODELS_ENABLED &&
-    isAutoOpenFirstRun &&
-    settingsState.settings.models.length === 0 &&
-    !modelPickerHandled,
-);
 
 function closeIntegrationWizard(): void {
   // Only persist dismissal when this close ends an auto-open session.
@@ -387,7 +377,6 @@ function closeIntegrationWizard(): void {
     }
   }
   manuallyReopened = false;
-  modelPickerHandled = false;
 }
 
 // Sync dismissal state across tabs: if one tab dismisses (writes to
@@ -1577,9 +1566,7 @@ const tutorial = createTutorial(
       effectiveShortcutLabels={effectiveShortcutLabels}
     />
 
-    {#if shouldShowModelPicker}
-      <FirstRunModelPickerModal onComplete={() => (modelPickerHandled = true)} />
-    {:else if shouldShowWizard}
+    {#if shouldShowWizard}
       <IntegrationWizardModal open={true} onClose={closeIntegrationWizard} />
     {/if}
 
@@ -1625,7 +1612,11 @@ const tutorial = createTutorial(
       }}
     />
 
-    {#if isTauriRuntime()}
+    {#if isTauriRuntime() && !shouldShowWizard}
+      <!-- Gated off while the wizard is open so only ONE createCoworkStatus
+           poller is live at a time and the wizard's Cowork sub-view owns the
+           declined state inline. On wizard close this re-mounts and re-derives
+           uacDeclined from its own poller (no App-level armed state). -->
       <CoworkAdminDeclinedModal />
     {/if}
 

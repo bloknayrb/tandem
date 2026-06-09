@@ -1,24 +1,27 @@
 /**
  * Integration wizard state machine.
  *
- * Drives the wizard modal through four steps:
- *   detect   — `GET /api/integrations/existing` populates the "we found these"
- *              preview from `~/.claude.json` + Claude Desktop config.
- *   pick     — user toggles which integrations to register. The picked list
- *              starts pre-selected with whatever was detected.
- *   secrets  — for each picked integration, optionally enter an auth token.
- *              The token is sent to `POST /api/integrations/secrets/:ref` and
- *              the resulting opaque `ref` is stored on the integration record.
- *              `KEYCHAIN_UNAVAILABLE` (503) flips the step into env-var
+ * Drives the wizard modal through three steps (+ error):
+ *   connect  — `GET /api/integrations/existing` populates the "we found these"
+ *              card list from `~/.claude.json` + Claude Desktop config.
+ *              Selectable installs are preselected as soon as detection
+ *              resolves (`isSelectable` — see below). The user toggles cards
+ *              and may optionally store an auth token per integration under
+ *              an Advanced disclosure: the token is sent to
+ *              `POST /api/integrations/secrets/:ref` and the resulting opaque
+ *              `ref` is stored on the integration record.
+ *              `KEYCHAIN_UNAVAILABLE` (503) flips the disclosure into env-var
  *              fallback guidance — the user is told to set
  *              `TANDEM_INTEGRATION_<id>_TOKEN` instead, and the integration
  *              is saved without a `tokenSecretRef`.
- *   review   — final confirmation; `POST /api/integrations` writes the file.
+ *   applying — `save()` in flight: `POST /api/integrations` persists, then
+ *              `POST /api/integrations/apply` writes Claude's config.
+ *   done     — per-integration apply outcomes.
  *
  * The wizard never owns secrets in memory beyond the duration of the
- * secrets step — each `setSecret` POST happens immediately on submit, not
- * batched, so an interrupted session doesn't strand a secret in the page's
- * heap.
+ * Advanced disclosure — each `setSecret` POST happens immediately on submit,
+ * not batched, so an interrupted session doesn't strand a secret in the
+ * page's heap.
  *
  * **Tauri keychain limitation:** when the Tauri sidecar bundle can't
  * resolve `@napi-rs/keyring` (until the Rust bridge follow-up ships),
@@ -42,7 +45,7 @@ import {
   createDefaultKeychainBackend,
 } from "../keychain/keychain-backend.js";
 
-export type WizardStep = "detect" | "pick" | "secrets" | "review" | "saving" | "done" | "error";
+export type WizardStep = "connect" | "applying" | "done" | "error";
 
 export interface PickedIntegration {
   /** Stable client-side id, mirrored into `IntegrationConfig.id` on save. */
@@ -58,6 +61,12 @@ export interface PickedIntegration {
 
 export interface IntegrationWizardState {
   readonly step: WizardStep;
+  /** True while `begin()`'s detection fetch is in flight. Distinguishes the
+   *  connect screen's loading sub-state from a genuine "nothing detected"
+   *  empty state (`existing` is `[]` in both). Initializes `true` so the
+   *  first paint (before the open-effect's `begin()` runs) shows loading
+   *  rather than flashing the empty state. */
+  readonly detecting: boolean;
   readonly existing: ExistingMcpInstall[];
   readonly picked: PickedIntegration[];
   readonly errorMessage: string | null;
@@ -68,13 +77,29 @@ export interface IntegrationWizardState {
   /** Whether the keychain is known-unavailable on this server (set after first 503). */
   readonly keychainUnavailable: boolean;
   begin(): Promise<void>;
-  advanceToPick(): void;
   setPicked(picked: PickedIntegration[]): void;
-  advanceToSecrets(): void;
   submitSecret(picked: PickedIntegration, secret: string): Promise<void>;
-  advanceToReview(): void;
   save(): Promise<void>;
   reset(): void;
+}
+
+/**
+ * The single source of truth for "the on-disk tandem entry is hand-edited /
+ * invalid, leave it alone". Shared by `isSelectable` (preselection), `save()`
+ * (apply: "skip"), and the card's status line — these three must never
+ * diverge or the UI lies about what apply will do.
+ */
+export function tandemEntryValidationFailed(install: ExistingMcpInstall): boolean {
+  return install.tandemValidation !== undefined && install.tandemValidation.status !== "valid";
+}
+
+/**
+ * Whether a detected install should be offered (and preselected) for
+ * connection — readable on disk AND not locked by a failed entry validation.
+ */
+export function isSelectable(install: ExistingMcpInstall): boolean {
+  const readable = install.status === "ok" || install.status === "missing";
+  return readable && !tandemEntryValidationFailed(install);
 }
 
 /**
@@ -91,6 +116,56 @@ export interface IntegrationWizardState {
 function makeSecretRef(integrationId: string): string {
   const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   return `${integrationId}-${suffix}`;
+}
+
+/**
+ * Build a stable id. `Date.now()` has only millisecond resolution and
+ * `IntegrationsFileSchema` doesn't reject duplicate ids — two rapid picks
+ * in the same tick would silently overwrite each other downstream.
+ */
+function newPickedId(kindPrefix: string): string {
+  return `${kindPrefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+/**
+ * Map a detected install to a fresh `PickedIntegration`. Returns null for
+ * target kinds the wizard can't auto-configure (none today — detection only
+ * surfaces claude-code / claude-desktop — but the shape is future-proof).
+ */
+export function detectedToPicked(install: ExistingMcpInstall): PickedIntegration | null {
+  if (install.target.kind === "claude-code") {
+    const url = install.tandemEntry?.url ?? "http://127.0.0.1:3479";
+    const id = newPickedId("claude-code");
+    return {
+      id,
+      config: {
+        kind: "claude-code",
+        id,
+        label: install.target.label,
+        configPath: install.target.configPath,
+        transport: "http",
+        url,
+      },
+      hasStoredSecret: false,
+      keychainUnavailable: false,
+    };
+  }
+  if (install.target.kind === "claude-desktop") {
+    const id = newPickedId("claude-desktop");
+    return {
+      id,
+      config: {
+        kind: "claude-desktop",
+        id,
+        label: install.target.label,
+        configPath: install.target.configPath,
+        transport: "stdio",
+      },
+      hasStoredSecret: false,
+      keychainUnavailable: false,
+    };
+  }
+  return null;
 }
 
 export interface IntegrationWizardOptions {
@@ -118,7 +193,10 @@ export function createIntegrationWizard(
   const keychainBackend =
     opts.keychainBackend ?? createDefaultKeychainBackend({ fetchFn, baseUrl });
 
-  let step = $state<WizardStep>("detect");
+  let step = $state<WizardStep>("connect");
+  // True so the first paint (before the open-effect's begin()) shows the
+  // loading sub-state instead of flashing "nothing detected".
+  let detecting = $state(true);
   let existing = $state<ExistingMcpInstall[]>([]);
   let picked = $state<PickedIntegration[]>([]);
   let errorMessage = $state<string | null>(null);
@@ -136,7 +214,8 @@ export function createIntegrationWizard(
 
   const begin = async () => {
     const myGen = ++beginGen;
-    step = "detect";
+    detecting = true;
+    step = "connect";
     errorMessage = null;
     try {
       const res = await fetchFn(`${baseUrl}${API_INTEGRATIONS_EXISTING}`);
@@ -148,22 +227,37 @@ export function createIntegrationWizard(
       const body = (await res.json()) as { installs: ExistingMcpInstall[] };
       if (myGen !== beginGen) return;
       existing = body.installs;
+      // Preselect everything connectable as soon as detection resolves —
+      // the connect screen renders cards pre-checked, no separate pick step.
+      picked = body.installs
+        .filter(isSelectable)
+        .map(detectedToPicked)
+        .filter((p): p is PickedIntegration => p !== null);
     } catch (err) {
       if (myGen !== beginGen) return;
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      // Only the winning generation clears the loading flag — a superseded
+      // begin() finishing late must not hide the newer run's loading state.
+      if (myGen === beginGen) detecting = false;
     }
   };
 
-  const advanceToPick = () => {
-    step = "pick";
-  };
-
   const setPicked = (next: PickedIntegration[]) => {
+    // Best-effort: if an entry that already stored a secret is removed from
+    // the selection (unchecking a card after entering a token under Advanced),
+    // delete its keychain ref so it isn't orphaned. The single-screen redesign
+    // makes store-then-unpick reachable; the old multi-step flow picked before
+    // the separate secrets step, so this couldn't happen. Errors are swallowed
+    // — an unreferenced ref in the user's own keychain isn't worth a toast.
+    const dropped = picked.filter(
+      (prev) => prev.config.tokenSecretRef && !next.some((n) => n.id === prev.id),
+    );
     picked = next;
-  };
-
-  const advanceToSecrets = () => {
-    step = "secrets";
+    for (const p of dropped) {
+      const ref = p.config.tokenSecretRef;
+      if (ref) void keychainBackend.delete(ref);
+    }
   };
 
   const submitSecret = async (target: PickedIntegration, secret: string) => {
@@ -193,10 +287,6 @@ export function createIntegrationWizard(
     );
   };
 
-  const advanceToReview = () => {
-    step = "review";
-  };
-
   /**
    * Best-effort cleanup: when save fails after `submitSecret` calls have
    * already stored secrets in the OS keychain, delete each one so the user
@@ -217,7 +307,7 @@ export function createIntegrationWizard(
    * `applyResults` so the done step can surface per-integration failures.
    */
   const save = async () => {
-    step = "saving";
+    step = "applying";
     // Determine apply intent per picked integration. Failed-validation
     // existing entries pre-set to "skip" so re-validated entries don't
     // get overwritten with a wizard-generated shape that differs (the
@@ -235,8 +325,7 @@ export function createIntegrationWizard(
       // validation, apply: "skip".
       const configPath = p.config.configPath;
       const matched = existing.find((e) => e.target.configPath === configPath);
-      const validationFailed =
-        matched?.tandemValidation !== undefined && matched.tandemValidation.status !== "valid";
+      const validationFailed = matched !== undefined && tandemEntryValidationFailed(matched);
       return {
         ...p.config,
         apply: validationFailed ? "skip" : "create",
@@ -287,7 +376,8 @@ export function createIntegrationWizard(
   };
 
   const reset = () => {
-    step = "detect";
+    step = "connect";
+    detecting = false;
     existing = [];
     picked = [];
     errorMessage = null;
@@ -298,6 +388,9 @@ export function createIntegrationWizard(
   return {
     get step() {
       return step;
+    },
+    get detecting() {
+      return detecting;
     },
     get existing() {
       return existing;
@@ -315,11 +408,8 @@ export function createIntegrationWizard(
       return keychainUnavailable;
     },
     begin,
-    advanceToPick,
     setPicked,
-    advanceToSecrets,
     submitSecret,
-    advanceToReview,
     save,
     reset,
   };
