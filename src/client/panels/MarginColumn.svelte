@@ -53,6 +53,7 @@ interface Props {
   onEdit?: (id: string, content: string) => void;
   onReply?: (id: string, text: string) => Promise<boolean>;
   onSendToClaude?: (id: string) => void;
+  reduceMotion?: boolean;
 }
 
 let {
@@ -75,6 +76,7 @@ let {
   onEdit,
   onReply,
   onSendToClaude,
+  reduceMotion = false,
 }: Props = $props();
 
 // Vertical inset from the bubble's top edge to its padded content row.
@@ -335,6 +337,7 @@ $effect(() => subscribeAnnotationActions());
         replies={visibleReplies}
         isReviewTarget={ann.id === activeAnnotationId}
         {density}
+        {reduceMotion}
         onClick={() => onClick(ann)}
         onAccept={canAccept(ann) ? onAccept : undefined}
         onDismiss={canDismiss(ann) ? onDismiss : undefined}

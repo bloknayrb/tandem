@@ -253,3 +253,27 @@ export function popupEnter(node: HTMLElement, { reduceMotion }: BarInParams): Tr
       `opacity:${t}; width:${t * w}px; height:${t * h}px; overflow:clip; box-sizing:border-box;`,
   };
 }
+
+const DISCLOSE_MS = 380;
+
+/**
+ * A13 — reply-thread disclosure unfold. A single `transition:` on the `{#if open}`
+ * replies block (plays BOTH directions, since the morph is symmetric). Measures
+ * the block's real border-box height at transition start (like `cardEnter`) so
+ * the card grows in / collapses out continuously — no magic `max-height` to clip
+ * a long thread. `overflow:clip` keeps the full-height inner thread from spilling
+ * below the animating container while it grows (the per-reply cascade is a
+ * separate CSS `@keyframes` on the freshly-mounted `.ct-reply` items). Reduced
+ * motion → `{duration:0}`: the thread shows/hides instantly, no unfold.
+ */
+export function discloseUnfold(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const { h, mb } = geometry(node);
+  return {
+    duration: DISCLOSE_MS,
+    easing: easeOut,
+    // t: 0→1 (present), shared by intro (open) and reversed outro (close).
+    css: (t) =>
+      `opacity:${t}; height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box;`,
+  };
+}
