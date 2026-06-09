@@ -50,9 +50,22 @@ import { detectClaudeCli as detectClaudeCliDefault } from "./apply.js";
 
 const execFileAsyncDefault = promisify(execFile);
 
+/** Apex of the pinned installer domain. */
 const INSTALLER_HOST = "claude.ai";
 const INSTALLER_URL_POSIX = "https://claude.ai/install.sh";
 const INSTALLER_URL_WIN = "https://claude.ai/install.ps1";
+
+/**
+ * Accept the apex AND any `*.claude.ai` subdomain. The official installer
+ * 302-redirects `https://claude.ai/install.{sh,ps1}` →
+ * `https://downloads.claude.ai/claude-code-releases/bootstrap.{sh,ps1}`, so an
+ * exact-apex pin would reject the real download host. The leading-dot suffix
+ * check means `evilclaude.ai` / `claude.ai.evil.com` do NOT match (the former
+ * lacks the `.claude.ai` suffix; the latter's hostname ends in `.evil.com`).
+ */
+function isPinnedHost(hostname: string): boolean {
+  return hostname === INSTALLER_HOST || hostname.endsWith(`.${INSTALLER_HOST}`);
+}
 /** Streamed-byte cap. Aborts mid-response; does not trust Content-Length. */
 const MAX_SCRIPT_BYTES = 10 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
@@ -128,24 +141,25 @@ export function fetchInstallerScript(
       reject(err);
       return;
     }
-    if (parsed.protocol !== "https:" || parsed.hostname !== INSTALLER_HOST) {
+    if (parsed.protocol !== "https:" || !isPinnedHost(parsed.hostname)) {
       reject(
         new Error(
-          `Installer URL must be https://${INSTALLER_HOST}/… — refusing ${parsed.protocol}//${parsed.hostname}`,
+          `Installer URL must be https://(*.)${INSTALLER_HOST}/… — refusing ${parsed.protocol}//${parsed.hostname}`,
         ),
       );
       return;
     }
 
-    // Hand httpsGet a URL rebuilt from a literal `https://` scheme + the pinned
-    // host constant, so the protocol reaching the download sink is a
-    // compile-time constant rather than a value derived from the (untrusted)
-    // redirect Location header. Equivalent to `url` for every accepted request
-    // (protocol+host are already proven https/claude.ai above); the explicit
-    // reconstruction is what satisfies CodeQL js/insecure-download, which keys
-    // on the scheme of the string flowing into the request and does not model
-    // the guard above as a protocol barrier.
-    const pinnedUrl = `https://${INSTALLER_HOST}${parsed.pathname}${parsed.search}`;
+    // Hand httpsGet a URL rebuilt from a literal `https://` scheme, so the
+    // protocol reaching the download sink is a compile-time constant rather
+    // than a value derived from the (untrusted) redirect Location header. The
+    // host is carried from the just-validated URL (`parsed.host` keeps any
+    // explicit port) — it has already passed `isPinnedHost` above. Equivalent
+    // to `url` for every accepted request; the explicit reconstruction is what
+    // satisfies CodeQL js/insecure-download, which keys on the scheme of the
+    // string flowing into the request and does not model the guard above as a
+    // protocol barrier.
+    const pinnedUrl = `https://${parsed.host}${parsed.pathname}${parsed.search}`;
 
     const req = httpsGet(pinnedUrl, (res) => {
       const status = res.statusCode ?? 0;
