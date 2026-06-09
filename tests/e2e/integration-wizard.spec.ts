@@ -144,6 +144,28 @@ test("Manual reopen → close does NOT persist wizard dismissal", async ({ page 
   expect(dismissed).toBeNull();
 });
 
+// Unified-wizard "More integrations" section. In the browser (E2E) the
+// Cowork row is hidden because `loadInvoke`/`isTauriRuntime()` reject — only
+// the "AI models — coming soon" line is shown. The Cowork sub-view renders
+// only in the Tauri WebView (claude-in-chrome can't drive it; covered by
+// unit tests with a mocked invoke + Bryan's manual Tauri pass).
+test("More integrations section shows models coming-soon; Cowork row hidden in browser", async ({
+  page,
+}) => {
+  await openSettingsModal(page);
+  await page.locator(AI_TAB).click();
+  await page.locator(OPEN_WIZARD_BTN).click();
+  await expect(page.locator(WIZARD)).toBeVisible();
+
+  const more = page.locator("[data-testid='integration-wizard-more']");
+  await expect(more).toBeVisible();
+  await expect(more).toContainText("AI models");
+  await expect(more).toContainText("coming soon");
+  // Cowork is Tauri-only — its row/Set-up button must not render in the browser.
+  await expect(page.locator("[data-testid='integration-wizard-cowork-setup']")).toHaveCount(0);
+  await expect(page.locator("[data-testid='integration-wizard-cowork-step']")).toHaveCount(0);
+});
+
 // The pre-3c-ii-b preview toggle has been removed (the wizard now
 // auto-opens via server-side first-run detection). Pin its absence so a
 // future Settings tab refactor doesn't accidentally resurrect it.

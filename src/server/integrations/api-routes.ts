@@ -14,6 +14,12 @@
  *                                                  side-effect (apply) per ADR-038 §2b.
  *   POST   /api/integrations/secrets/:ref        — store a secret in the OS keychain under `ref`.
  *   DELETE /api/integrations/secrets/:ref        — remove a secret.
+ *   GET    /api/integrations/claude-cli-status   — `{ presence }` binary probe.
+ *                                                  Read-only, no gates (enum-only
+ *                                                  output — never the resolved path).
+ *   POST   /api/integrations/install-claude-code — download + run the native
+ *                                                  installer. Origin + loopback
+ *                                                  gates + mutex, NO nonce (S3).
  *
  * **Secrets never travel back to the client.** There is no `GET .../secrets/:ref`
  * route — only the server reads secrets when proxying to MCP clients. The
@@ -46,12 +52,17 @@ import {
 import {
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
+  API_INTEGRATIONS_CLAUDE_CLI_STATUS,
   API_INTEGRATIONS_EXISTING,
   API_INTEGRATIONS_FIRST_RUN,
+  API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
   type ApplyItemErrorCode,
   type ApplyItemResult,
+  type ClaudeCliStatusResponse,
   ERROR_CODE_APPLY_IN_PROGRESS,
   ERROR_CODE_BAD_ORIGIN,
+  ERROR_CODE_INSTALL_FAILED,
+  ERROR_CODE_INSTALL_IN_PROGRESS,
   ERROR_CODE_INVALID_APPLY_REQUEST,
   ERROR_CODE_INVALID_INTEGRATIONS_FILE,
   ERROR_CODE_INVALID_NONCE,
@@ -62,7 +73,9 @@ import {
   ERROR_CODE_PATH_REJECTED,
   ERROR_CODE_SECRET_MISSING,
   ERROR_CODE_TARGET_NOT_DETECTED,
+  ERROR_CODE_UNSUPPORTED_PLATFORM,
   ERROR_CODE_WRITE_FAILED,
+  type InstallClaudeCodeResponse,
 } from "../../shared/integrations/contract.js";
 import { isLoopback } from "../auth/middleware.js";
 import { isLocalhostOrigin } from "../mcp/api-routes.js";
@@ -72,6 +85,7 @@ import {
   applyConfig,
   buildMcpEntries,
   CHANNEL_DIST,
+  detectClaudeCli,
   detectTargets,
   installSkill,
   PathRejectedError,
@@ -79,6 +93,11 @@ import {
   shouldRegisterChannelShim,
 } from "./apply.js";
 import { hasExistingTandemEntry, type readExistingTandemEntries } from "./existing-config.js";
+import {
+  ClaudeInstallError,
+  installClaudeCli,
+  UnsupportedPlatformError,
+} from "./install-claude-cli.js";
 import { type Keychain, KeychainUnavailableError } from "./keychain.js";
 import { type IntegrationConfig, IntegrationsFileSchema } from "./schema.js";
 import type { IntegrationsStore } from "./storage.js";
@@ -86,8 +105,10 @@ import type { IntegrationsStore } from "./storage.js";
 export {
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
+  API_INTEGRATIONS_CLAUDE_CLI_STATUS,
   API_INTEGRATIONS_EXISTING,
   API_INTEGRATIONS_FIRST_RUN,
+  API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
 } from "../../shared/integrations/contract.js";
 /** Express route pattern — `:ref` is filled in by the client via {@link apiIntegrationsSecretPath}. */
 export const API_INTEGRATIONS_SECRET = "/api/integrations/secrets/:ref";
@@ -114,6 +135,19 @@ export interface IntegrationsRoutesDeps {
    * be built in the working tree.
    */
   shouldRegisterChannelShim?: typeof shouldRegisterChannelShim;
+  /**
+   * Optional Claude-CLI binary detector override. Production leaves this
+   * undefined and calls the real `detectClaudeCli()`. Tests inject a stub so
+   * the status route's response doesn't depend on whether the test process
+   * happens to have the `claude` binary on PATH.
+   */
+  detectClaudeCli?: typeof detectClaudeCli;
+  /**
+   * Optional installer-runner override. Production leaves this undefined.
+   * Tests inject a stub so the install route never downloads + executes the
+   * real installer.
+   */
+  installClaudeCli?: typeof installClaudeCli;
 }
 
 /**
@@ -154,6 +188,35 @@ export function _resetApplyGateForTests(): void {
   applyGate = createApplyGate();
 }
 
+/**
+ * Concurrency mutex for `POST /api/integrations/install-claude-code`. Unlike
+ * {@link ApplyGateState} this carries NO nonce (S3): there's no persisted
+ * intent to bind the call to, the install is host-pinned + idempotent, and a
+ * loopback-origin attacker who could read a GET-exposed nonce could already
+ * run the installer directly. Origin + loopback gates + this mutex are the
+ * full protection.
+ */
+let installInFlight = false;
+
+function getInstallGate(): { inFlight: boolean } {
+  return {
+    get inFlight() {
+      return installInFlight;
+    },
+    set inFlight(v: boolean) {
+      installInFlight = v;
+    },
+  };
+}
+
+/** Test-only: clear the install mutex between cases. */
+export function _resetInstallGateForTests(): void {
+  if (process.env.VITEST !== "true") {
+    throw new Error("_resetInstallGateForTests is test-only");
+  }
+  installInFlight = false;
+}
+
 export function registerIntegrationsRoutes(
   app: Express,
   largeBody: Handler,
@@ -176,6 +239,13 @@ export function registerIntegrationsRoutes(
   app.options(API_INTEGRATIONS_SECRET, mw);
   app.post(API_INTEGRATIONS_SECRET, mw, largeBody, makePostSecretHandler(deps));
   app.delete(API_INTEGRATIONS_SECRET, mw, makeDeleteSecretHandler(deps));
+
+  app.options(API_INTEGRATIONS_CLAUDE_CLI_STATUS, mw);
+  app.get(API_INTEGRATIONS_CLAUDE_CLI_STATUS, mw, makeGetClaudeCliStatusHandler(deps));
+
+  app.options(API_INTEGRATIONS_INSTALL_CLAUDE_CODE, mw);
+  // No body parser — the install route takes no request body.
+  app.post(API_INTEGRATIONS_INSTALL_CLAUDE_CODE, mw, makePostInstallClaudeCodeHandler(deps));
 }
 
 /**
@@ -737,6 +807,87 @@ function makeDeleteSecretHandler(deps: IntegrationsRoutesDeps): Handler {
       res.status(200).json({ existed });
     } catch (err) {
       sendKeychainError(res, err, "Failed to delete secret");
+    }
+  };
+}
+
+/**
+ * GET /api/integrations/claude-cli-status
+ *
+ * Read-only binary probe. Intentionally NO origin / loopback gate (mirrors
+ * `GET .../existing`) — it's reachable from LAN under
+ * `TANDEM_ALLOW_UNAUTHENTICATED_LAN`, so the response is **enum-only**: the
+ * `ClaudeCliStatusResponse` type carries no path field, and the handler must
+ * never widen it (F6 — a path would leak the home layout / username).
+ */
+function makeGetClaudeCliStatusHandler(deps: IntegrationsRoutesDeps): Handler {
+  return async (_req: Request, res: Response) => {
+    try {
+      const presence = (deps.detectClaudeCli ?? detectClaudeCli)();
+      const body: ClaudeCliStatusResponse = { presence };
+      res.json(body);
+    } catch (err) {
+      sendInternal(res, err, "Failed to probe Claude CLI status");
+    }
+  };
+}
+
+/**
+ * POST /api/integrations/install-claude-code
+ *
+ * Downloads + runs the official native installer. Gated by origin allowlist +
+ * loopback-only (the install touches files outside Tandem's data dir) + a
+ * concurrency mutex. NO confirmation nonce (S3): there's no persisted intent
+ * to bind, the install is host-pinned + idempotent, and the protection the
+ * nonce gives elsewhere (intent-binding for persist→apply) doesn't apply.
+ */
+function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler {
+  return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS_INSTALL_CLAUDE_CODE)) return;
+    if (assertLoopbackForMutation(req, res)) return;
+
+    const gate = getInstallGate();
+    if (gate.inFlight) {
+      res.status(429).json({
+        error: "TOO_MANY_REQUESTS",
+        code: ERROR_CODE_INSTALL_IN_PROGRESS,
+        message: "Another install is in progress",
+      });
+      return;
+    }
+
+    try {
+      // Set inside the try so a throw between the check and the body can't
+      // strand the mutex (mirrors makeApplyHandler).
+      gate.inFlight = true;
+      const presence = await (deps.installClaudeCli ?? installClaudeCli)();
+      const body: InstallClaudeCodeResponse = { ok: true, presence };
+      res.status(200).json(body);
+    } catch (err) {
+      if (err instanceof UnsupportedPlatformError) {
+        res.status(400).json({
+          error: "BAD_REQUEST",
+          code: ERROR_CODE_UNSUPPORTED_PLATFORM,
+          message: err.message,
+        });
+        return;
+      }
+      if (err instanceof ClaudeInstallError) {
+        // `stderrTail` is the one intentional detail-in-response exception
+        // (honest-failure-surfacing); the runner already scrubbed the temp
+        // path and the env never reached the script (F1).
+        res.status(500).json({
+          error: "INTERNAL",
+          code: ERROR_CODE_INSTALL_FAILED,
+          message: "Claude installer failed",
+          exitCode: err.exitCode,
+          stderrTail: err.stderrTail,
+        });
+        return;
+      }
+      sendInternal(res, err, "Failed to install Claude Code");
+    } finally {
+      gate.inFlight = false;
     }
   };
 }

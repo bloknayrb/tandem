@@ -2,7 +2,11 @@
 import { flushSync } from "svelte";
 import { describe, expect, it } from "vitest";
 
-import { createIntegrationWizard } from "../../src/client/hooks/useIntegrationWizard.svelte.js";
+import {
+  createIntegrationWizard,
+  isSelectable,
+} from "../../src/client/hooks/useIntegrationWizard.svelte.js";
+import type { ExistingMcpInstall } from "../../src/shared/integrations/contract.js";
 import {
   ERROR_CODE_KEYCHAIN_UNAVAILABLE,
   INTEGRATIONS_SCHEMA_VERSION,
@@ -39,7 +43,7 @@ function makeFetchStub(
 }
 
 describe("createIntegrationWizard", () => {
-  it("begin() fetches existing entries and lands on step=detect", async () => {
+  it("begin() fetches existing entries, preselects, and lands on step=connect", async () => {
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([
         {
@@ -53,6 +57,7 @@ describe("createIntegrationWizard", () => {
                   target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
                   status: "ok",
                   tandemEntry: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+                  tandemValidation: { status: "valid" },
                 },
               ],
             },
@@ -62,9 +67,65 @@ describe("createIntegrationWizard", () => {
     });
     await wizard.begin();
     flushSync();
-    expect(wizard.step).toBe("detect");
+    expect(wizard.step).toBe("connect");
+    expect(wizard.detecting).toBe(false);
     expect(wizard.existing).toHaveLength(1);
+    // Selectable installs are preselected by begin() — no separate pick step.
+    expect(wizard.picked).toHaveLength(1);
+    expect(wizard.picked[0]?.config.kind).toBe("claude-code");
     expect(wizard.errorMessage).toBeNull();
+  });
+
+  it("begin() exposes detecting=true while the fetch is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const wizard = createIntegrationWizard({
+      fetchFn: (async () => {
+        await gate;
+        return new Response(JSON.stringify({ installs: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+    const pending = wizard.begin();
+    flushSync();
+    expect(wizard.detecting).toBe(true);
+    release();
+    await pending;
+    flushSync();
+    expect(wizard.detecting).toBe(false);
+  });
+
+  it("begin() superseded by a newer begin() does not clear the newer run's detecting", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let call = 0;
+    const wizard = createIntegrationWizard({
+      fetchFn: (async () => {
+        call += 1;
+        if (call === 1)
+          await firstGate; // first begin() stalls
+        else await new Promise(() => {}); // second begin() never resolves
+        return new Response(JSON.stringify({ installs: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+    const first = wizard.begin();
+    void wizard.begin(); // supersedes — its fetch never resolves
+    flushSync();
+    expect(wizard.detecting).toBe(true);
+    releaseFirst();
+    await first; // stale generation finishes…
+    flushSync();
+    // …and must NOT clear the in-flight newer generation's loading state.
+    expect(wizard.detecting).toBe(true);
   });
 
   it("begin() surfaces errors via step=error", async () => {
@@ -81,55 +142,6 @@ describe("createIntegrationWizard", () => {
     flushSync();
     expect(wizard.step).toBe("error");
     expect(wizard.errorMessage).toMatch(/HTTP 500/);
-  });
-
-  it("detecting is false before begin() runs", () => {
-    const wizard = createIntegrationWizard({ fetchFn: makeFetchStub([]) });
-    expect(wizard.detecting).toBe(false);
-  });
-
-  it("detecting is true while the begin() fetch is in flight, then false once it resolves", async () => {
-    // makeFetchStub resolves immediately, so it cannot express "in flight".
-    // Use a deferred fetch the test resolves manually, and call begin()
-    // WITHOUT awaiting so the synchronous detecting=true is observable.
-    let resolveFetch!: (r: Response) => void;
-    const fetchFn = (() =>
-      new Promise<Response>((r) => {
-        resolveFetch = r;
-      })) as unknown as typeof fetch;
-    const wizard = createIntegrationWizard({ fetchFn });
-
-    const pending = wizard.begin();
-    flushSync();
-    expect(wizard.detecting).toBe(true);
-    expect(wizard.step).toBe("detect");
-
-    resolveFetch(
-      new Response(JSON.stringify({ installs: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    await pending;
-    flushSync();
-    expect(wizard.detecting).toBe(false);
-    expect(wizard.step).toBe("detect");
-  });
-
-  it("detecting resets to false on a non-ok response (step=error)", async () => {
-    const wizard = createIntegrationWizard({
-      fetchFn: makeFetchStub([
-        {
-          method: "GET",
-          urlMatch: /\/api\/integrations\/existing$/,
-          handler: () => ({ status: 500, body: { error: "boom" } }),
-        },
-      ]),
-    });
-    await wizard.begin();
-    flushSync();
-    expect(wizard.detecting).toBe(false);
-    expect(wizard.step).toBe("error");
   });
 
   it("a network failure (TypeError) surfaces a friendly 'server unreachable' message", async () => {
@@ -216,6 +228,159 @@ describe("createIntegrationWizard", () => {
     expect(wizard.picked[0]?.config.tokenSecretRef).toBeUndefined();
     // Wizard does NOT enter step=error — fallback is a non-fatal branch.
     expect(wizard.step).not.toBe("error");
+  });
+
+  it("submitSecret(): a backend error best-effort deletes the orphan ref (F2)", async () => {
+    // If the keychain write returns an error AFTER possibly storing the secret,
+    // the ref is never stamped on the picked entry — so nothing downstream
+    // could ever clean it up. submitSecret best-effort deletes the freshly
+    // generated ref to undo a partial write.
+    let deletes = 0;
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => ({ status: 500, body: { error: "INTERNAL", message: "boom" } }),
+        },
+        {
+          method: "DELETE",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => {
+            deletes++;
+            return { status: 204, body: null };
+          },
+        },
+      ]),
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.submitSecret(wizard.picked[0]!, "shhh");
+    flushSync();
+    expect(wizard.picked[0]?.config.tokenSecretRef).toBeUndefined();
+    expect(wizard.picked[0]?.hasStoredSecret).not.toBe(true);
+    expect(deletes).toBe(1);
+    expect(wizard.errorMessage).toContain("Could not store secret");
+  });
+
+  it("cleanupUnsavedSecrets(): deletes unsaved refs at step=connect (F1)", async () => {
+    let deletes = 0;
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => ({ status: 204, body: null }),
+        },
+        {
+          method: "DELETE",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => {
+            deletes++;
+            return { status: 204, body: null };
+          },
+        },
+      ]),
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.submitSecret(wizard.picked[0]!, "shhh");
+    flushSync();
+    expect(wizard.picked[0]?.config.tokenSecretRef).toMatch(/^cc-1-/);
+    expect(wizard.step).toBe("connect");
+    // Dismiss before save (still at "connect") → the orphan ref is deleted.
+    await wizard.cleanupUnsavedSecrets();
+    expect(deletes).toBe(1);
+  });
+
+  it("cleanupUnsavedSecrets(): is a no-op once persisted (step=done), protecting live refs (F1)", async () => {
+    // After a successful save the refs are file-referenced and LIVE; deleting
+    // them would re-introduce the SECRET_MISSING orphan that 498b7bb fixed.
+    // The step!=="connect" guard must skip cleanup entirely here.
+    let deletes = 0;
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => ({ status: 204, body: null }),
+        },
+        {
+          method: "DELETE",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => {
+            deletes++;
+            return { status: 204, body: null };
+          },
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations$/,
+          handler: () => ({
+            status: 200,
+            body: { ok: true, ids: ["cc-1"], confirmationNonce: "n1" },
+          }),
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/apply$/,
+          handler: () => ({
+            status: 200,
+            body: { results: [{ id: "cc-1", status: "applied" }], nextNonce: "n2" },
+          }),
+        },
+      ]),
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.submitSecret(wizard.picked[0]!, "shhh");
+    await wizard.save();
+    flushSync();
+    expect(wizard.step).toBe("done");
+    await wizard.cleanupUnsavedSecrets();
+    expect(deletes).toBe(0); // guard skipped cleanup — live refs preserved
   });
 
   it("save(): POSTs persist then apply and lands on step=done", async () => {
@@ -429,26 +594,227 @@ describe("createIntegrationWizard", () => {
     expect(deleted).toEqual(["cc-1-abc"]);
   });
 
-  it("reset(): returns to step=detect and clears state", async () => {
+  it("setPicked(): unchecking a card with a stored token deletes its keychain ref", async () => {
+    const deleted: string[] = [];
+    const wizard = createIntegrationWizard({
+      fetchFn: (async (input, init) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if ((init?.method ?? "GET") === "DELETE") {
+          const match = url.match(/\/secrets\/([^/?]+)/);
+          if (match) deleted.push(decodeURIComponent(match[1]));
+          return new Response(JSON.stringify({ existed: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+    // Entry as if submitSecret had already stamped the ref.
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+          tokenSecretRef: "cc-1-abc",
+        },
+        hasStoredSecret: true,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    // Unchecking the card drops it from the selection — the stored ref must
+    // not be left orphaned in the keychain (store-then-unpick is reachable
+    // only in the single-screen redesign).
+    wizard.setPicked([]);
+    flushSync();
+    // Cleanup is fire-and-forget — let the microtask settle before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleted).toEqual(["cc-1-abc"]);
+  });
+
+  it("save(): a per-integration apply error lands on done and surfaces via applyResults", async () => {
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations$/,
+          handler: () => ({
+            status: 200,
+            body: { ok: true, ids: ["cc-1"], confirmationNonce: "nonce-1" },
+          }),
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/apply$/,
+          handler: () => ({
+            status: 200,
+            body: {
+              results: [{ id: "cc-1", status: "error", code: "WRITE_FAILED" }],
+              nextNonce: "nonce-2",
+            },
+          }),
+        },
+      ]),
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.save();
+    flushSync();
+    // A per-item apply error is NOT a save failure — the apply HTTP call
+    // succeeded, so the wizard lands on `done` and surfaces the per-item error
+    // through applyResults (the modal renders the "Partly connected" title +
+    // the retry affordance from this).
+    expect(wizard.step).toBe("done");
+    expect(wizard.applyResults).toEqual([{ id: "cc-1", status: "error", code: "WRITE_FAILED" }]);
+  });
+
+  it("save(): a throw after persist succeeds does NOT delete the persisted secrets", async () => {
+    const deleted: string[] = [];
+    const wizard = createIntegrationWizard({
+      fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if ((init?.method ?? "GET") === "DELETE") {
+          const match = url.match(/\/secrets\/([^/?]+)/);
+          if (match) deleted.push(decodeURIComponent(match[1]));
+          return new Response(JSON.stringify({ existed: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (/\/api\/integrations$/.test(url)) {
+          // Persist succeeds — the file is durably written referencing cc-1-abc.
+          return new Response(
+            JSON.stringify({ ok: true, ids: ["cc-1"], confirmationNonce: "n1" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (/\/api\/integrations\/apply$/.test(url)) {
+          // Network drop between persist and a confirmed apply.
+          throw new TypeError("Failed to fetch");
+        }
+        return new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+          tokenSecretRef: "cc-1-abc",
+        },
+        hasStoredSecret: true,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.save();
+    flushSync();
+    // The throw lands in the catch, but persist already wrote the file
+    // referencing cc-1-abc — deleting the secret would dangle the persisted
+    // config (and Claude's, if apply ran), surfacing as SECRET_MISSING later.
+    expect(wizard.step).toBe("error");
+    expect(deleted).toEqual([]);
+  });
+
+  it("reset(): returns to step=connect and clears state", async () => {
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([
         {
           method: "GET",
           urlMatch: /existing$/,
-          handler: () => ({ status: 200, body: { installs: [] } }),
+          handler: () => ({
+            status: 200,
+            body: {
+              installs: [
+                {
+                  target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
+                  status: "ok",
+                },
+              ],
+            },
+          }),
         },
       ]),
     });
     await wizard.begin();
-    wizard.advanceToPick();
-    wizard.advanceToSecrets();
-    wizard.advanceToReview();
     flushSync();
-    expect(wizard.step).toBe("review");
+    // Dirty the state begin() produced (preselection + existing).
+    expect(wizard.existing).toHaveLength(1);
+    expect(wizard.picked).toHaveLength(1);
     wizard.reset();
     flushSync();
-    expect(wizard.step).toBe("detect");
+    expect(wizard.step).toBe("connect");
+    expect(wizard.detecting).toBe(false);
     expect(wizard.existing).toEqual([]);
     expect(wizard.picked).toEqual([]);
+    expect(wizard.errorMessage).toBeNull();
+  });
+
+  describe("isSelectable", () => {
+    const base = (over: Partial<ExistingMcpInstall>): ExistingMcpInstall => ({
+      target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
+      status: "ok",
+      ...over,
+    });
+
+    const cases: Array<[string, ExistingMcpInstall, boolean]> = [
+      ["ok, no existing entry", base({}), true],
+      ["missing config file (will be created)", base({ status: "missing" }), true],
+      ["malformed config file", base({ status: "malformed" }), false],
+      ["read error", base({ status: "error", errorMessage: "EACCES" }), false],
+      [
+        "existing entry with valid validation (refresh case)",
+        base({
+          tandemEntry: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+          tandemValidation: { status: "valid" },
+        }),
+        true,
+      ],
+      [
+        // The lockstep case with save(): status=ok but the on-disk entry is
+        // hand-edited — card shows "we won't touch it", so it must NOT be
+        // preselected even though the file itself read fine.
+        "ok status but invalid existing entry",
+        base({
+          tandemEntry: { type: "http", url: "http://evil.com/mcp" },
+          tandemValidation: { status: "invalid-url", reason: "non-loopback" },
+        }),
+        false,
+      ],
+    ];
+    it.each(cases)("%s → %s", (_name, install, expected) => {
+      expect(isSelectable(install)).toBe(expected);
+    });
   });
 });

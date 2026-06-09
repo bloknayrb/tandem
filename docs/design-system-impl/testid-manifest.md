@@ -109,10 +109,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - Edit form: `edit-btn-{*}`, `edit-{newtext,reason,text}-{*}`,
   `edit-{save,cancel}-btn-{*}`
 - Replies + threads: `reply-{btn,input,send-btn,cancel-btn}-{*}`,
-  `reply-thread-expand-{*}`, `reply-thread-overlay`,
-  `reply-thread-overlay-{close,input,send,cancel,reply}`,
-  `comment-thread`, `reply-{*}`, `reply-import-byline-{*}` (Word reviewer
-  byline on imported note replies, #1000)
+  `reply-toggle-{*}` (A13 disclosure), `comment-thread`, `reply-{*}`,
+  `reply-import-byline-{*}` (Word reviewer byline on imported note replies, #1000).
+  (`reply-thread-expand-{*}` + `reply-thread-overlay*` retired with the
+  portaled overlay — A13 #798, Bryan decision 2026-06-01.)
 - Suggestion + import variants: `suggestion-diff-{*}`,
   `annotation-import-byline-{*}`, `annotation-select-checkbox-{*}`
 - Margin column: `margin-column-{*}`, `margin-bubble-{*}`,
@@ -193,13 +193,20 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - Edit modal: `model-edit-{modal,cancel,provider,displayname,modelid,apikey,apikey-replace-btn,endpoint,save}`
 - First-run picker: `first-run-{model-modal,providers,provider-{*},displayname,modelid,apikey,endpoint,error,save,skip,skip-secondary}`
 
-### Integration wizard (F1–F6)
-- `integration-wizard{,-close,-save,-keychain-fallback,-done-close}`
-- Steps: `integration-wizard-step-{detect,pick,secrets,review,saving,done,error}`
-- `integration-wizard-continue-{detect,pick,secrets}`,
-  `integration-wizard-pick-{*}`,
+### Integration wizard (unified onboarding wizard)
+The wizard shipped as a detection-led single screen (MAIN view) + a Cowork
+opt-in sub-view, NOT the 6-step `pick→secrets→review→saving` flow the original
+manifest anticipated. The phantom step/continue/save testids below never
+shipped and were removed:
+- `integration-wizard{,-close,-keychain-fallback,-advanced}`
+- MCP connect machine: `integration-wizard-step-{detect,applying,done,error}`,
+  `integration-wizard-{connect-btn,check-again,done-close,done-retry,error-retry}`
+- Detected installs: `integration-wizard-card-{*}`, `integration-wizard-pick-{*}`,
   `integration-wizard-secret-{input,submit}-{*}`,
   `integration-wizard-apply-result-{*}`
+- More integrations + Cowork sub-view: `integration-wizard-more`,
+  `integration-wizard-cowork-{setup,step,back,error}`, plus the reused
+  `cowork-enable-confirm-btn` / `cowork-vethernet-cidr`
 
 ### Cowork modals & settings
 - `cowork-onboarding-{step,confirm,error,enable-btn,enable-confirm-btn,enable-cancel-btn,skip-btn,learn-more-btn,learn-more-link}`

@@ -14,7 +14,7 @@ import { generateAnnotationId } from "../../../shared/utils";
 import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
-import { ENTER_POPUP_MS, motionOff, popupEnter } from "../../panels/cardMotion";
+import { ENTER_POPUP_MS, motionOff, popupEnter, registerFlySource } from "../../panels/cardMotion";
 import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
@@ -580,20 +580,22 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
 });
 
+// Returns the new annotation id (so the A27 fly-to-margin can launch the card
+// from the popover footprint), or `undefined` if any creation guard trips.
 function createAnnotation(
   type: AnnotationType,
   content: string,
   extras?: { color?: HighlightColor },
-): void {
-  if (!editor || !ydoc) return;
+): string | undefined {
+  if (!editor || !ydoc) return undefined;
   // Structural empty-content guard (defense-in-depth): the textarea handlers
   // already guard, but keep the invariant at the write seam so no future caller
   // can persist a zero-content note/comment. Highlights carry no text.
-  if (type !== "highlight" && !content.trim()) return;
+  if (type !== "highlight" && !content.trim()) return undefined;
 
   const range = capturedRange ?? editor.state.selection;
   const { from, to } = range;
-  if (from === to) return;
+  if (from === to) return undefined;
 
   const flatFrom = pmPosToFlatOffset(editor.state.doc, toPmPos(from));
   const flatTo = pmPosToFlatOffset(editor.state.doc, toPmPos(to));
@@ -616,6 +618,7 @@ function createAnnotation(
   // ADR-031: browser-initiated user edit — must be origin-tagged.
   withBrowser(ydoc, () => ydoc.getMap(Y_MAP_ANNOTATIONS).set(id, annotation));
   capturedRange = null;
+  return id;
 }
 
 function captureSelectionRange() {
@@ -700,7 +703,12 @@ function openAnnotateMode() {
 
 function submitAsComment() {
   if (!annotationTextTrimmed) return;
-  createAnnotation("comment", annotationTextTrimmed);
+  // A27: capture the popover footprint BEFORE create (it's still mounted), then
+  // register the fly-source AFTER a successful create — dismissPopup() unmounts
+  // the popover, so the rect must be read first.
+  const rect = toolbarEl?.getBoundingClientRect();
+  const id = createAnnotation("comment", annotationTextTrimmed);
+  if (id && rect) registerFlySource(id, rect);
   // #1018: a comment is outbound (Claude reads it). If no AI is connected, App
   // shows a "saved, will be seen when AI connects" notice. ONLY comments —
   // notes/highlights are user-private (ADR-027) and never sent to AI, so a
@@ -711,7 +719,9 @@ function submitAsComment() {
 
 function submitAsNote() {
   if (!annotationTextTrimmed) return;
-  createAnnotation("note", annotationTextTrimmed);
+  const rect = toolbarEl?.getBoundingClientRect();
+  const id = createAnnotation("note", annotationTextTrimmed);
+  if (id && rect) registerFlySource(id, rect);
   dismissPopup();
 }
 

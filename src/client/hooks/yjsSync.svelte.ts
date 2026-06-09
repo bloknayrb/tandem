@@ -13,7 +13,6 @@ import {
   Y_MAP_DOCUMENT_META,
   Y_MAP_GENERATION_ID,
   Y_MAP_OPEN_DOCUMENTS,
-  Y_MAP_READ_ONLY,
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants";
 import { sanitizeAnnotation } from "../../shared/sanitize";
@@ -47,7 +46,6 @@ export interface YjsSyncState {
   readonly claudeActive: boolean;
   /** #651: current MCP tool Claude is executing on the active doc, or null. */
   readonly claudeWorking: ClaudeWorking | null;
-  readonly readOnly: boolean;
   /** True when the annotation store is locked by another Tandem instance. Annotations won't be saved. */
   readonly storeReadOnly: boolean;
   /** @internal Internal CTRL_ROOM connection mechanism — not intended for consumer use. */
@@ -90,7 +88,6 @@ export function createYjsSync(): YjsSyncState {
   let claudeStatus = $state<string | null>(null);
   let claudeActive = $state(false);
   let claudeWorking = $state<ClaudeWorking | null>(null);
-  let readOnly = $state(false);
   let storeReadOnly = $state(false);
   let ready = $state(false);
   let serverRestarted = $state(false);
@@ -171,28 +168,9 @@ export function createYjsSync(): YjsSyncState {
     awarenessMap.observe(awarenessObserver);
     awarenessObserver();
 
-    const documentMetaMap = ydoc.getMap(Y_MAP_DOCUMENT_META);
-    let prevReadOnly = false;
-    const documentMetaObserver = (event: Y.YMapEvent<unknown>) => {
-      // keysChanged guard #1 (preserves original line 128)
-      if (!event.keysChanged.has(Y_MAP_READ_ONLY)) return;
-      const ro = (documentMetaMap.get(Y_MAP_READ_ONLY) as boolean | undefined) === true;
-      if (ro !== prevReadOnly) {
-        prevReadOnly = ro;
-        readOnly = ro;
-      }
-    };
-    documentMetaMap.observe(documentMetaObserver);
-    const initRo = (documentMetaMap.get(Y_MAP_READ_ONLY) as boolean | undefined) === true;
-    if (initRo !== prevReadOnly) {
-      prevReadOnly = initRo;
-      readOnly = initRo;
-    }
-
     return () => {
       annotationsMap.unobserve(annotationObserver);
       awarenessMap.unobserve(awarenessObserver);
-      documentMetaMap.unobserve(documentMetaObserver);
     };
   };
 
@@ -464,7 +442,6 @@ export function createYjsSync(): YjsSyncState {
         claudeStatus = null;
         claudeActive = false;
         claudeWorking = null;
-        readOnly = false;
       }
     });
 
@@ -611,9 +588,6 @@ export function createYjsSync(): YjsSyncState {
     },
     get claudeWorking() {
       return claudeWorking;
-    },
-    get readOnly() {
-      return readOnly;
     },
     get storeReadOnly() {
       return storeReadOnly;

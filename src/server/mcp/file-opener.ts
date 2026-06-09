@@ -471,7 +471,10 @@ function handleAlreadyOpen(
   if (explicitReadOnly && !existing.readOnly) {
     addDoc(id, { ...existing, readOnly: true });
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    withInternal(doc, () => meta.set(Y_MAP_READ_ONLY, true));
+    withInternal(doc, () => {
+      meta.delete(Y_MAP_READ_ONLY);
+      meta.set(Y_MAP_READ_ONLY, true);
+    });
   }
 
   setActiveDocId(id);
@@ -936,6 +939,7 @@ async function clearAndReload(
       applyPreparedContent(doc, prepared, ctx);
       // Rewrite metadata + dirty-tracking baseline
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      meta.delete(Y_MAP_READ_ONLY);
       meta.set(Y_MAP_READ_ONLY, isDocx);
       meta.set("format", format);
       meta.set("documentId", id);
@@ -1000,6 +1004,10 @@ function writeDocMeta(
 ): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   withInternal(doc, () => {
+    // Tombstone any session-persisted value so a stale session's higher-clock
+    // write can't override the authoritative readOnly passed by the caller.
+    // The same delete-before-set pattern is required in handleAlreadyOpen.
+    meta.delete(Y_MAP_READ_ONLY);
     meta.set(Y_MAP_READ_ONLY, readOnly);
     meta.set("format", format);
     meta.set("documentId", id);
