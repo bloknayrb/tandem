@@ -7,11 +7,11 @@
  *              Selectable installs are preselected as soon as detection
  *              resolves (`isSelectable` — see below). The user toggles cards
  *              and may optionally store an auth token per integration under
- *              an Advanced disclosure: the token is sent to
- *              `POST /api/integrations/secrets/:ref` and the resulting opaque
- *              `ref` is stored on the integration record.
- *              `KEYCHAIN_UNAVAILABLE` (503) flips the disclosure into env-var
- *              fallback guidance — the user is told to set
+ *              an Advanced disclosure: the token goes to the keychain backend
+ *              under a client-generated opaque `ref` (`makeSecretRef`), which
+ *              is then recorded on the integration config as `tokenSecretRef`.
+ *              A `KEYCHAIN_UNAVAILABLE` result flips the disclosure into
+ *              env-var fallback guidance — the user is told to set
  *              `TANDEM_INTEGRATION_<id>_TOKEN` instead, and the integration
  *              is saved without a `tokenSecretRef`.
  *   applying — `save()` in flight: `POST /api/integrations` persists, then
@@ -19,14 +19,13 @@
  *   done     — per-integration apply outcomes.
  *
  * The wizard never owns secrets in memory beyond the duration of the
- * Advanced disclosure — each `setSecret` POST happens immediately on submit,
- * not batched, so an interrupted session doesn't strand a secret in the
- * page's heap.
- *
- * **Tauri keychain limitation:** when the Tauri sidecar bundle can't
- * resolve `@napi-rs/keyring` (until the Rust bridge follow-up ships),
- * the server returns 503 + KEYCHAIN_UNAVAILABLE on every `setSecret`
- * call and the wizard surfaces env-var fallback guidance.
+ * Advanced disclosure — each `setSecret` happens immediately on submit, not
+ * batched, so an interrupted session doesn't strand a secret in the page's
+ * heap. The keychain backend abstracts the transport: HTTP loopback to
+ * `POST /api/integrations/secrets/:ref` on the npm CLI path, and a direct Rust
+ * `invoke` in the desktop app (secrets never cross the loopback boundary
+ * there — see `keychain-backend.ts`). `KEYCHAIN_UNAVAILABLE` is one possible
+ * backend outcome, not a guaranteed desktop one.
  */
 
 import {
@@ -51,9 +50,9 @@ export interface PickedIntegration {
   /** Stable client-side id, mirrored into `IntegrationConfig.id` on save. */
   id: string;
   config: IntegrationConfig;
-  /** User-entered secret pending submission. Cleared once the secret is POSTed. */
-  pendingSecret?: string;
-  /** Server-issued ref returned from `POST /api/integrations/secrets/:ref` (we send our own ref). */
+  /** True once a token has been stored in the keychain for this integration
+   *  (the ref itself lives on `config.tokenSecretRef`); drives the "Token
+   *  saved" UI state. */
   hasStoredSecret: boolean;
   /** True iff the server returned 503 KEYCHAIN_UNAVAILABLE for this integration's setSecret. */
   keychainUnavailable: boolean;
@@ -265,9 +264,7 @@ export function createIntegrationWizard(
     const result = await keychainBackend.set(ref, secret);
     if (result.status === "unavailable") {
       keychainUnavailable = true;
-      picked = picked.map((p) =>
-        p.id === target.id ? { ...p, keychainUnavailable: true, pendingSecret: undefined } : p,
-      );
+      picked = picked.map((p) => (p.id === target.id ? { ...p, keychainUnavailable: true } : p));
       return;
     }
     if (result.status === "error") {
@@ -280,7 +277,6 @@ export function createIntegrationWizard(
             ...p,
             config: { ...p.config, tokenSecretRef: ref } as IntegrationConfig,
             hasStoredSecret: true,
-            pendingSecret: undefined,
             keychainUnavailable: false,
           }
         : p,
@@ -335,6 +331,15 @@ export function createIntegrationWizard(
       schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
       integrations,
     };
+    // Once persist returns 200 the integrations file on disk durably
+    // references the stored keychain refs, so the catch below must NOT delete
+    // them — doing so would dangle the persisted config (and, if apply also
+    // ran, Claude's freshly-written config), surfacing as a SECRET_MISSING
+    // failure on next use with no trace of the deletion. Only the pre-persist
+    // failure path cleans up. Realistic post-persist throw vectors: a network
+    // drop before/after the apply fetch, or an unguarded `.json()` parse of a
+    // malformed 200 body (lines below).
+    let persisted = false;
     try {
       const persistRes = await fetchFn(`${baseUrl}${API_INTEGRATIONS}`, {
         method: "POST",
@@ -347,6 +352,7 @@ export function createIntegrationWizard(
         setError(body?.message ?? `Could not save (HTTP ${persistRes.status}).`);
         return;
       }
+      persisted = true;
       const persistBody = (await persistRes.json()) as {
         ids: string[];
         confirmationNonce: string;
@@ -370,7 +376,8 @@ export function createIntegrationWizard(
       applyResults = applyBody.results;
       step = "done";
     } catch (err) {
-      await cleanupStoredSecrets();
+      // Skip cleanup once persisted — see the comment above the try.
+      if (!persisted) await cleanupStoredSecrets();
       setError(err instanceof Error ? err.message : String(err));
     }
   };

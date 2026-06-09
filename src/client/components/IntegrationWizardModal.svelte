@@ -331,9 +331,11 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
       bind:this={dialogEl}
       class="iw-dialog"
       onkeydown={(e) => {
-        // Handle Escape locally; the window-level handler never sees it
-        // because we stopPropagation on every non-Tab key below.
+        // Handle Escape locally and stop it here so the window-level fallback
+        // handler doesn't also fire close() (double-invoke). The early return
+        // below skips the shared stopPropagation, so this branch must call it.
         if (e.key === "Escape") {
+          e.stopPropagation();
           close();
           return;
         }

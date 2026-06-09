@@ -474,6 +474,112 @@ describe("createIntegrationWizard", () => {
     expect(deleted).toEqual(["cc-1-abc"]);
   });
 
+  it("save(): a per-integration apply error lands on done and surfaces via applyResults", async () => {
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations$/,
+          handler: () => ({
+            status: 200,
+            body: { ok: true, ids: ["cc-1"], confirmationNonce: "nonce-1" },
+          }),
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/apply$/,
+          handler: () => ({
+            status: 200,
+            body: {
+              results: [{ id: "cc-1", status: "error", code: "WRITE_FAILED" }],
+              nextNonce: "nonce-2",
+            },
+          }),
+        },
+      ]),
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.save();
+    flushSync();
+    // A per-item apply error is NOT a save failure — the apply HTTP call
+    // succeeded, so the wizard lands on `done` and surfaces the per-item error
+    // through applyResults (the modal renders the "Partly connected" title +
+    // the retry affordance from this).
+    expect(wizard.step).toBe("done");
+    expect(wizard.applyResults).toEqual([{ id: "cc-1", status: "error", code: "WRITE_FAILED" }]);
+  });
+
+  it("save(): a throw after persist succeeds does NOT delete the persisted secrets", async () => {
+    const deleted: string[] = [];
+    const wizard = createIntegrationWizard({
+      fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if ((init?.method ?? "GET") === "DELETE") {
+          const match = url.match(/\/secrets\/([^/?]+)/);
+          if (match) deleted.push(decodeURIComponent(match[1]));
+          return new Response(JSON.stringify({ existed: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (/\/api\/integrations$/.test(url)) {
+          // Persist succeeds — the file is durably written referencing cc-1-abc.
+          return new Response(
+            JSON.stringify({ ok: true, ids: ["cc-1"], confirmationNonce: "n1" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (/\/api\/integrations\/apply$/.test(url)) {
+          // Network drop between persist and a confirmed apply.
+          throw new TypeError("Failed to fetch");
+        }
+        return new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+          tokenSecretRef: "cc-1-abc",
+        },
+        hasStoredSecret: true,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.save();
+    flushSync();
+    // The throw lands in the catch, but persist already wrote the file
+    // referencing cc-1-abc — deleting the secret would dangle the persisted
+    // config (and Claude's, if apply ran), surfacing as SECRET_MISSING later.
+    expect(wizard.step).toBe("error");
+    expect(deleted).toEqual([]);
+  });
+
   it("reset(): returns to step=connect and clears state", async () => {
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([
