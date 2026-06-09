@@ -32,6 +32,11 @@ describe("resolveChannelDist — TANDEM_CHANNEL_DIST precedence (#477 PR 3c-ii-c
     expect(resolved).not.toBe("/nope/channel.js");
     expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/channel\/index\.js$/);
   });
+
+  it("ignores an empty-string env var (empty string is falsy — falls back to derivation)", () => {
+    const resolved = resolveChannelDist({ TANDEM_CHANNEL_DIST: "" }, () => true);
+    expect(resolved.replace(/\\/g, "/")).toMatch(/dist\/channel\/index\.js$/);
+  });
 });
 
 describe("assertPathSafe", () => {

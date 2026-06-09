@@ -380,7 +380,7 @@ function configBadge(config: IntegrationConfig): string {
         <section data-testid="integration-wizard-step-error">
           <p class="iw-error">Something went wrong: {wizard.errorMessage}</p>
           <div class="iw-actions">
-            <button type="button" onclick={() => wizard.reset()}>Start over</button>
+            <button type="button" onclick={() => { wizard.reset(); void wizard.begin(); }}>Start over</button>
             <button type="button" onclick={close}>Close</button>
           </div>
         </section>

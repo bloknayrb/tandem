@@ -34,7 +34,7 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 
 > Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 27 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
-> **Integration setup** runs through the integration setup wizard (#477 PR 3). Today's transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — is **deprecated when the wizard ships**.
+> **Integration setup** runs through the integration setup wizard (#477 PR 3). Silent auto-configuration of Claude's MCP config on startup was removed in #477 PR 3c-ii-c; setup is now wizard-driven and explicit.
 
 See [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) for the full policy, the four-term glossary, the auto-launch and auto-configuration sub-decisions, and the list of Claude-specific extras vs Claude-side dev tooling. The integration picker work below (#477) is the materialization of this policy in code, not a new direction.
 
@@ -502,7 +502,7 @@ Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave pl
 Full per-row table is in `docs/v10-triage.md`. Highlights:
 
 **Strategic (all Core; were TBD in original plan):**
-- **#477 Local LLM** — PR-2 + all three Phase 0 spikes (A/B/C) merged; PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b shipped **default-on in v0.13.0** (no feature-flag soak). PR 3c-ii-c (auto-config removal) lands v0.14.0; the non-MCP-provider adapter (PR 5) targets v1.0. Spike B's NO-GO means PR 4 retains `--dangerously-load-development-channels server:tandem-channel`.
+- **#477 Local LLM** — PR-2 + all three Phase 0 spikes (A/B/C) merged; PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b shipped **default-on in v0.13.0** (no feature-flag soak). PR 3c-ii-c (auto-config removal) landed v0.14.0; the non-MCP-provider adapter (PR 5) targets v1.0. Spike B's NO-GO means PR 4 retains `--dangerously-load-development-channels server:tandem-channel`.
 - **#576 .docx write-back (body export only)** — comment round-trip stays v1.1. HIGH risk; kill date 2026-05-28; LibreOffice fallback ready.
 - **#316 Cowork macOS/Linux auto-setup** — Core (was Defer). Couples to #428 cert work.
 

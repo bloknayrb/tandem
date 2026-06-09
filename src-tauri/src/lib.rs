@@ -1490,6 +1490,7 @@ async fn start_sidecar(
     // 3c-ii-c. None = no built channel artifact (source dev) → server falls back
     // to its package-root derivation.
     let channel_dist: Option<String> = resolve_channel_dist(handle);
+    // Warn once before the restart loop begins — not repeated on each restart attempt.
     if channel_dist.is_none() {
         log::warn!("Channel shim path unresolved — Claude Code push may fall back to polling");
     }

@@ -76,6 +76,11 @@ const PACKAGE_ROOT = (() => {
  * This replaces the old `/api/setup` startup round-trip, which used to be the
  * only path carrying the Tauri-resolved channel path (#477 PR 3c-ii-c).
  *
+ * No UNC/traversal validation is applied to the injected path because the sole
+ * setter is `resolve_channel_dist()` in `src-tauri/src/lib.rs` — trusted
+ * same-user Rust code that emits `resource_dir/dist/channel/index.js` or
+ * `cwd/dist/channel/index.js`. The path cannot arrive via any HTTP route.
+ *
  * Exported (with `exists` injectable) so the env-precedence can be unit-tested
  * without re-importing the module to re-run the const initializer.
  */
