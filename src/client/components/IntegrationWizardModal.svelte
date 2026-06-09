@@ -134,7 +134,7 @@ $effect(() => {
   if (!open) return;
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
-      onClose();
+      close();
     }
   };
   window.addEventListener("keydown", onKey);
@@ -218,7 +218,7 @@ const connectLabel = $derived(
 /** Friendly name for an apply-result row — results carry integration ids,
  *  so resolve back through `picked` for the human label. */
 function resultLabel(result: ApplyItemResult): string {
-  return wizard.picked.find((p) => p.id === result.id)?.config.label ?? result.id;
+  return wizard.picked.find((p) => p.id === result.id)?.config.label ?? "Unknown";
 }
 
 /** Plain-language sentence for a failed apply result. Falls back to the
@@ -619,7 +619,7 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                     <button
                       type="button"
                       class="iw-btn iw-btn-secondary iw-more-btn"
-                      onclick={() => (view = "cowork")}
+                      onclick={() => { coworkError = null; coworkBusy = false; view = "cowork"; }}
                       aria-label="Set up Cowork"
                       data-testid="integration-wizard-cowork-setup"
                     >

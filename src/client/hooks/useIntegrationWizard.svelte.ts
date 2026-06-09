@@ -28,6 +28,7 @@
  * backend outcome, not a guaranteed desktop one.
  */
 
+import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import {
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
@@ -133,7 +134,7 @@ function newPickedId(kindPrefix: string): string {
  */
 export function detectedToPicked(install: ExistingMcpInstall): PickedIntegration | null {
   if (install.target.kind === "claude-code") {
-    const url = install.tandemEntry?.url ?? "http://127.0.0.1:3479";
+    const url = install.tandemEntry?.url ?? `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
     const id = newPickedId("claude-code");
     return {
       id,
