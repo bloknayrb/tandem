@@ -99,9 +99,23 @@ export interface FormatAdapter {
   apply(doc: Y.Doc, prepared: Prepared, ctx?: ApplyContext): LoadIssue[];
 
   /**
-   * Serialize a Y.Doc back to file content. Optional — formats that
-   * can't write back omit this method. Callers check
-   * `if (adapter.save)` before invoking.
+   * Serialize a Y.Doc back to text file content. Optional — formats that
+   * can't write back as text omit this method. Callers check
+   * `if (adapter.save)` before invoking. Used by the text-based atomic-write
+   * path (`atomicWrite`) for .md / .txt.
    */
   save?(doc: Y.Doc): string;
+
+  /**
+   * Serialize a Y.Doc back to a binary file buffer (#576). Optional and
+   * distinct from `save` because binary formats (.docx) need `atomicWriteBuffer`
+   * (UTF-8 encoding would corrupt the ZIP) and an async serializer (the `docx`
+   * Packer is promise-based). Callers check `if (adapter.saveBinary)`.
+   *
+   * Binary save is an EXPLICIT-SAVE-only capability: it is NOT wired into the
+   * 60s auto-save timer (`AUTO_SAVE_FORMATS`). The protective layer for .docx
+   * (lossy mammoth import) is "never overwrite without an explicit user save",
+   * which supersedes ADR-004's read-only default.
+   */
+  saveBinary?(doc: Y.Doc): Promise<Buffer>;
 }

@@ -668,7 +668,9 @@ export function registerDocumentTools(server: McpServer): void {
         });
       }
 
-      // Read-only documents (e.g. .docx) — session-only save
+      // Read-only documents (e.g. CHANGELOG, uploads) — session-only save.
+      // .docx is no longer read-only (#576); it round-trips through the binary
+      // save branch below.
       if (readOnly) {
         await saveSession(r.filePath, format, r.doc);
         return mcpSuccess({
@@ -680,10 +682,18 @@ export function registerDocumentTools(server: McpServer): void {
         });
       }
 
-      // Delegate to shared save function
+      // Delegate to shared save function (handles .docx body export back to disk)
       const result = await saveDocumentToDisk(r.docId, "mcp");
       if (result.status === "saved") {
-        return mcpSuccess({ saved: true, filePath: r.filePath });
+        // Surface .docx body-export fidelity warnings (#576) so the agent knows
+        // what the round-trip downgraded (e.g. unsupported blocks → plain text).
+        return mcpSuccess({
+          saved: true,
+          filePath: r.filePath,
+          ...(result.fidelityWarnings && result.fidelityWarnings.length > 0
+            ? { fidelityWarnings: result.fidelityWarnings }
+            : {}),
+        });
       }
       if (result.status === "skipped") {
         // Fall back to session-only save for skipped formats

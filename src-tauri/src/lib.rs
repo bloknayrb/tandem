@@ -1,4 +1,5 @@
 pub mod keychain;
+mod sentry_reporting;
 mod token_store;
 
 #[cfg(target_os = "windows")]
@@ -17,6 +18,11 @@ mod cowork_installer;
 mod firewall;
 #[cfg(target_os = "windows")]
 mod cowork_meta;
+
+// Windows-only: kill-on-job-close ownership so the sidecar dies with the shell
+// even on ungraceful exit (taskkill / crash / dev-runner restart). See #987.
+#[cfg(target_os = "windows")]
+mod sidecar_job;
 
 // Spike #477 PR 4: sidecar launcher validation. Test-only; not shipped.
 #[cfg(test)]
@@ -60,6 +66,88 @@ pub(crate) const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
 /// to decide between posting immediately vs queueing. Static (process-wide):
 /// there is exactly one sidecar per process.
 static SIDECAR_HEALTHY: AtomicBool = AtomicBool::new(false);
+
+/// Buffered cold-start file-open rejection reason CODE (stable, path-free), for
+/// the WebView to surface as a toast once it has mounted. See issue #630.
+///
+/// ## Why buffer instead of just emitting an event
+///
+/// A cold-start "Open With" rejection (`extract_file_arg` returns `Err`) is
+/// classified in `setup()` — which runs BEFORE the Svelte `App.svelte`
+/// `onMount` listener exists. Emitting a Tauri event there drops silently on
+/// the exact failure mode it's meant to surface. So the reason is buffered
+/// here and polled via `get_startup_rejection()` on mount. The runtime
+/// `RunEvent::Opened` (macOS) path, which fires while the app is already
+/// running, ALSO emits the `startup-file-rejected` event for the live case.
+///
+/// ## Why a `Mutex<Option<_>>` and not a `OnceLock`
+///
+/// `OnceLock` cannot be cleared, but the buffer MUST be cleared on
+/// `restart_sidecar` so a stale rejection from a previous launch isn't replayed
+/// against the new sidecar. A `Mutex<Option<String>>` gives set / take / clear.
+///
+/// ## No path leakage
+///
+/// The buffer holds a stable reason CODE only (e.g. `"unsupported-extension"`),
+/// never the rejected path — the resolved path is already logged at `warn` for
+/// diagnostics, and the human-readable toast message is composed client-side
+/// (mirrors the path-free `sidecar-restart-failed` toast contract).
+static STARTUP_REJECTION: Mutex<Option<String>> = Mutex::new(None);
+
+/// Tauri event name for a startup-file rejection surfaced to the WebView.
+/// The payload is a stable reason code (see `rejection_reason_code`).
+const EVENT_STARTUP_FILE_REJECTED: &str = "startup-file-rejected";
+
+/// Map a typed [`RejectionReason`] to a stable, path-free reason code for the
+/// WebView toast bus. Kept in sync with the `startup-file-rejected` handler in
+/// `App.svelte`, which composes the user-facing message from this code.
+fn rejection_reason_code(reason: &RejectionReason) -> &'static str {
+    match reason {
+        RejectionReason::SuspiciousColon { .. } => "suspicious-path",
+        RejectionReason::UnsupportedExtension { .. } => "unsupported-extension",
+        RejectionReason::NotAFile { .. } => "not-a-file",
+    }
+}
+
+/// Record a cold-start rejection in the buffer for the WebView to poll on mount.
+/// Last-write-wins (a single argv carries at most one candidate, so this only
+/// ever holds one). Path-free by construction.
+fn buffer_startup_rejection(reason: &RejectionReason) {
+    let code = rejection_reason_code(reason);
+    match STARTUP_REJECTION.lock() {
+        Ok(mut guard) => *guard = Some(code.to_string()),
+        Err(poisoned) => {
+            log::error!("STARTUP_REJECTION mutex poisoned — recovering");
+            *poisoned.into_inner() = Some(code.to_string());
+        }
+    }
+}
+
+/// Clear any buffered cold-start rejection. Called from `restart_sidecar` so a
+/// stale rejection from the previous launch can't be replayed on the next mount
+/// poll. See the `STARTUP_REJECTION` doc comment.
+fn clear_startup_rejection() {
+    match STARTUP_REJECTION.lock() {
+        Ok(mut guard) => *guard = None,
+        Err(poisoned) => {
+            log::error!("STARTUP_REJECTION mutex poisoned during clear — recovering");
+            *poisoned.into_inner() = None;
+        }
+    }
+}
+
+/// WebView-polled accessor for the buffered cold-start rejection code. Returns
+/// `Some(code)` exactly once per buffered rejection: the value is TAKEN, so a
+/// re-mount (e.g. an in-WebView reload) doesn't replay a toast the user already
+/// saw. The `App.svelte` `onMount` poll consumes it; the runtime
+/// `startup-file-rejected` event covers post-mount rejections.
+#[tauri::command]
+fn get_startup_rejection() -> Option<String> {
+    match STARTUP_REJECTION.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    }
+}
 
 /// Strip the Windows extended-length path prefix (`\\?\`) that Tauri's
 /// `resource_dir()` / `app_data_dir()` return. Node.js can't resolve these.
@@ -179,6 +267,19 @@ impl std::fmt::Display for OpenedUrlRejection {
                 write!(f, "failed to convert URL to file path")
             }
         }
+    }
+}
+
+/// Map an [`OpenedUrlRejection`] to a stable, path-free reason code for the
+/// WebView toast bus. Mirrors `rejection_reason_code` for the argv path; both
+/// codes are handled by the `startup-file-rejected` listener in `App.svelte`.
+/// macOS-only (the only caller is the macOS-gated `handle_opened_urls`).
+#[cfg(target_os = "macos")]
+fn opened_url_reason_code(reason: &OpenedUrlRejection) -> &'static str {
+    match reason {
+        OpenedUrlRejection::NonFileScheme => "non-file-url",
+        OpenedUrlRejection::NonEmptyHost => "suspicious-path",
+        OpenedUrlRejection::ConversionFailed => "not-a-file",
     }
 }
 
@@ -445,6 +546,15 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
             Ok(path) => path,
             Err(reason) => {
                 log::warn!("Ignoring URL from Opened event ({reason}): {url}");
+                // The app is already running here (Apple Event arrives post-
+                // launch), so the WebView listener exists — emit the rejection
+                // event directly rather than buffering. Path-free reason code,
+                // matching the cold-start contract. See #630.
+                if let Err(e) =
+                    app.emit(EVENT_STARTUP_FILE_REJECTED, opened_url_reason_code(&reason))
+                {
+                    log::warn!("Failed to emit {EVENT_STARTUP_FILE_REJECTED}: {e}");
+                }
                 continue;
             }
         };
@@ -490,6 +600,16 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Crash reporting (#921) — OPT-IN, off by default. Returns `Some(guard)`
+    // only when `TANDEM_SENTRY_DSN` is set; with no DSN this is `None`, so the
+    // plugin is never registered below (no WebView IPC wiring, no minidump
+    // handler). The guard MUST outlive the Tauri event loop — it flushes pending
+    // events on drop — so it is bound here and held until `run()` returns, after
+    // `.run(...)` blocks. Initialised BEFORE the builder per the plugin contract
+    // ("everything before here runs in both the app and the crash-reporter
+    // process").
+    let _sentry_guard = sentry_reporting::init();
+
     let tray_available = Arc::new(AtomicBool::new(false));
     let tray_flag_for_setup = tray_available.clone();
     let tray_flag_for_close = tray_available.clone();
@@ -528,6 +648,15 @@ pub fn run() {
                     log::warn!(
                         "extract_file_arg (second-instance) rejected candidate: {reason}"
                     );
+                    // Warm-start rejection: the app is already running so the
+                    // WebView listener exists — emit directly (no buffering).
+                    // Path-free reason code, matching the cold-start contract.
+                    // See #630.
+                    if let Err(e) =
+                        app.emit(EVENT_STARTUP_FILE_REJECTED, rejection_reason_code(&reason))
+                    {
+                        log::warn!("Failed to emit {EVENT_STARTUP_FILE_REJECTED}: {e}");
+                    }
                 }
             }
         }));
@@ -540,6 +669,35 @@ pub fn run() {
     #[cfg(feature = "devtools")]
     {
         builder = builder.plugin(tauri_plugin_devtools::init());
+    }
+
+    // Windows-only kill-on-job-close ownership of the sidecar (#987). Managed
+    // here (not in the fluent chain below) so the `#[cfg]` is a clean statement.
+    // Held for the parent process's lifetime; the OS closes the job handle on
+    // parent exit — graceful OR crash/taskkill — reaping the sidecar. macOS and
+    // Linux rely on the existing RunEvent::Exit + kill_sidecar path.
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.manage(sidecar_job::SidecarJob::new());
+    }
+
+    // Crash-reporting plugin (#921). Registered immediately after
+    // single-instance (which MUST stay the FIRST plugin) so it bridges the
+    // WebView's `@sentry/browser` events to the Rust client over IPC and
+    // attaches OS/device context. Only registered when a DSN was configured
+    // (opt-in) — `sentry_reporting::init` returns `None` otherwise, so the
+    // WebView IPC command is never wired for a default (telemetry-off) launch.
+    //
+    // `init_with_no_injection` is used instead of `init` so the WebView is NOT
+    // auto-injected with a bundled `@sentry/browser`: Tandem's own client-side
+    // `src/client/sentry.ts` owns `Sentry.init` (with our `beforeSend`
+    // scrubbing) and routes events through the plugin's IPC transport. Two
+    // initializers would double-count events and bypass our scrubbing hook.
+    //
+    // `ClientInitGuard` derefs to `sentry::Client`, satisfying the plugin's
+    // `&Client` signature.
+    if let Some(ref guard) = _sentry_guard {
+        builder = builder.plugin(tauri_plugin_sentry::init_with_no_injection(guard.client()));
     }
 
     builder
@@ -619,6 +777,12 @@ pub fn run() {
                         log::warn!(
                             "extract_file_arg (cold-start) rejected candidate: {reason}"
                         );
+                        // Buffer a path-free reason code so the WebView can
+                        // toast once it mounts (the listener doesn't exist yet
+                        // here — see STARTUP_REJECTION). The user double-clicked
+                        // a file and silently landed on welcome.md; this is the
+                        // feedback. See #630.
+                        buffer_startup_rejection(&reason);
                         None
                     }
                 }
@@ -796,6 +960,13 @@ pub fn run() {
                 if let Err(e) = main_window.eval(&script) {
                     log::warn!("Failed to seed initial theme: {e}");
                 }
+
+                // Force rounded corners + suppress the borderless outline (#984).
+                // No-op on non-Windows. Re-asserted on `Resized` in the
+                // window-event handler since snap/maximize resets the corner
+                // preference.
+                #[cfg(target_os = "windows")]
+                apply_window_chrome(&main_window);
             } else {
                 log::warn!("main window not found at theme-seed time — useTauriTheme bridge will handle initial theme");
             }
@@ -803,6 +974,17 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(move |window, event| {
+            // Re-assert rounded corners + the no-outline border after snap or
+            // maximize, which reset the DWM corner preference (#984). Snap-layout
+            // changes (and maximize/restore) always change window size, so they
+            // deliver `Resized` — we key on that alone. `Moved` fires per
+            // mouse-move sample during a drag and never changes corner state, so
+            // including it would issue two DWM syscalls per drag tick for nothing.
+            // No-op on non-Windows; `apply_window_chrome` is Windows-only.
+            #[cfg(target_os = "windows")]
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
+                apply_window_chrome(window);
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if tray_flag_for_close.load(Ordering::Acquire) {
                     // Tray available: hide to tray, server keeps running
@@ -823,6 +1005,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             setup_overlay_titlebar,
             get_app_theme,
+            sentry_enabled,
             cowork_scan_workspaces,
             cowork_toggle_integration,
             cowork_rescan,
@@ -835,6 +1018,7 @@ pub fn run() {
             cowork_set_lan_ip_override,
             cowork_retry_admin_elevation,
             restart_sidecar,
+            get_startup_rejection,
             show_in_file_manager,
             show_context_menu,
             show_tab_context_menu,
@@ -873,6 +1057,10 @@ fn restart_sidecar(app: tauri::AppHandle) {
     // `wait_for_health`.
     let pending: tauri::State<'_, PendingOpens> = app.state();
     clear_healthy_under_lock(&pending);
+    // Drop any buffered cold-start rejection so a stale reason from the previous
+    // launch can't be replayed against the freshly restarted sidecar on the next
+    // mount poll. See the STARTUP_REJECTION doc comment (#630 risk note).
+    clear_startup_rejection();
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -1331,6 +1519,17 @@ async fn start_sidecar(
             cmd = cmd.env("TANDEM_AUTH_TOKEN", token.as_str());
         }
 
+        // Crash reporting (#921): forward the opt-in DSN so the sidecar reports
+        // to the SAME Sentry/GlitchTip project as the shell (separate event
+        // source). `tauri-plugin-shell` does NOT inherit the parent env, so we
+        // must pass it explicitly. Unset → not forwarded → sidecar reporting
+        // stays off (default posture).
+        if let Ok(dsn) = std::env::var(sentry_reporting::SENTRY_DSN_ENV) {
+            if !dsn.trim().is_empty() {
+                cmd = cmd.env(sentry_reporting::SENTRY_DSN_ENV, dsn);
+            }
+        }
+
         // Cold-start file open from OS file association (Windows/Linux argv).
         // Only set on the first spawn — sidecar restarts must not re-trigger
         // an open (the file has already been registered in openDocuments).
@@ -1343,6 +1542,19 @@ async fn start_sidecar(
         let (rx, child) = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
+
+        // Windows-only (#987): bind this sidecar to the kill-on-job-close job
+        // object so it dies with the shell even on an ungraceful parent exit
+        // (taskkill / crash / dev-runner rebuild) where RunEvent::Exit never
+        // fires. Best-effort: a failure here only logs and falls back to the
+        // graceful kill path — it never blocks startup. Done before `child` is
+        // moved into SidecarState; the job holds its own reference to the
+        // process. A restarted sidecar (new PID) re-assigns to the same job.
+        #[cfg(target_os = "windows")]
+        {
+            let job = handle.state::<sidecar_job::SidecarJob>();
+            job.assign(child.pid());
+        }
 
         // Shared flag: drain task sets true on Terminated, health poll bails early
         let sidecar_dead = Arc::new(AtomicBool::new(false));
@@ -1692,6 +1904,97 @@ fn copy_sample_files(handle: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Abstracts over the Tauri window types that expose a native `hwnd()` on
+/// Windows. `setup()` hands us a `WebviewWindow`; the `on_window_event` handler
+/// hands us a `Window`. Both expose `hwnd()` returning a `windows`-crate `HWND`
+/// (`pub struct HWND(pub *mut core::ffi::c_void)`); `.0` extracts the raw pointer,
+/// which is the same underlying type as `windows-sys`'s `type HWND = *mut c_void`,
+/// so no cast is needed at either end.
+#[cfg(target_os = "windows")]
+trait RawHwnd {
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String>;
+}
+
+#[cfg(target_os = "windows")]
+impl RawHwnd for tauri::WebviewWindow {
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String> {
+        self.hwnd().map(|h| h.0).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl RawHwnd for tauri::Window {
+    fn raw_hwnd(&self) -> Result<*mut core::ffi::c_void, String> {
+        self.hwnd().map(|h| h.0).map_err(|e| e.to_string())
+    }
+}
+
+/// Force rounded window corners and suppress the borderless-window outline via
+/// the Desktop Window Manager. Windows-only; a no-op stub on every other OS so
+/// call sites stay platform-agnostic. See issue #984.
+///
+/// Windows 11 rounds normal windows by default but **squares the corners when
+/// the window is snapped or maximized**, and the `decorations: false`
+/// borderless window can draw a thin 1px outline. We explicitly opt in to
+/// `DWMWCP_ROUND` (so snapped/maximized windows stay rounded) and set the
+/// border color to `DWMWA_COLOR_NONE` (so no outline is drawn). Both attributes
+/// reset on some window-state transitions, so this is invoked at setup AND
+/// re-asserted from the window-event handler on `Resized`.
+///
+/// All DWM calls are best-effort: a failing `DwmSetWindowAttribute` (e.g. an
+/// older Windows 10 build that predates these attributes — they require Win11
+/// build 22000+) is silently ignored so startup is never aborted. A `debug`-level
+/// log is emitted, but the shipping log filter is Info/Warn (and the log plugin is
+/// absent under the `devtools` feature), so in practice the failure leaves no trace
+/// — that is intentional: a pre-Win11 fallback is expected, not actionable.
+///
+/// Generic over the window type so it accepts both the `WebviewWindow` from
+/// `setup()` and the `Window` delivered to the `on_window_event` handler — both
+/// expose `hwnd()` on Windows.
+#[cfg(target_os = "windows")]
+fn apply_window_chrome<W: RawHwnd>(window: &W) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+
+    let hwnd: HWND = match window.raw_hwnd() {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("apply_window_chrome: hwnd() unavailable: {e}");
+            return;
+        }
+    };
+
+    // SAFETY: `hwnd` is a live top-level window handle owned by this process for
+    // the lifetime of the call. Each attribute value is a stack local whose size
+    // we pass exactly; DwmSetWindowAttribute only reads `cbAttribute` bytes.
+    unsafe {
+        let corner_pref: i32 = DWMWCP_ROUND;
+        let hr = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            std::ptr::addr_of!(corner_pref).cast(),
+            std::mem::size_of::<i32>() as u32,
+        );
+        if hr != 0 {
+            log::debug!("DwmSetWindowAttribute(CORNER_PREFERENCE) failed: hr=0x{hr:08x}");
+        }
+
+        let border_color: u32 = DWMWA_COLOR_NONE;
+        let hr = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR as u32,
+            std::ptr::addr_of!(border_color).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
+        if hr != 0 {
+            log::debug!("DwmSetWindowAttribute(BORDER_COLOR) failed: hr=0x{hr:08x}");
+        }
+    }
+}
+
 /// Invoked from `TitleBar.svelte` after the WebView page has loaded.
 /// `create_overlay_titlebar()` injects JS hit-test logic that is cleared on
 /// page navigation; calling post-load keeps it alive so button clicks reach the
@@ -1720,6 +2023,15 @@ fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
     }
 }
 
+/// Whether opt-in crash reporting (#921) is active. The WebView calls this to
+/// decide whether to initialise `@sentry/browser`; it can't read the
+/// `TANDEM_SENTRY_DSN` env var itself. Returns `false` (default posture) unless
+/// the operator configured a DSN at launch.
+#[tauri::command]
+fn sentry_enabled() -> bool {
+    sentry_reporting::is_enabled()
+}
+
 /// Returns the set of keyboard shortcuts that should be blocked in the Tauri
 /// webview. All shortcuts except DevTools (F12, Ctrl+Shift+I) are blocked.
 /// Exported so the regression test in tests/prevent_default.rs can assert
@@ -1739,14 +2051,17 @@ pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
 const WINDOWS_ONLY_ERR: &str = "Cowork integration is Windows-only in v0.8.0";
 
 /// Scan for Cowork workspace directories.
+///
+/// Returns an opaque, validated [`cowork_workspace_scan::WorkspaceHandle`] per
+/// workspace rather than a bare path. The handle's `token` must be round-tripped
+/// to `cowork_install_into_workspace` / `cowork_uninstall_from_workspace`, which
+/// resolve it back to the exact canonical path validated here — closing the
+/// TOCTOU window between this scan and the install IPC call (issue #433). The
+/// `path` field is for display only and is never trusted on the return trip.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
-    let paths = cowork_workspace_scan::find_cowork_workspaces();
-    Ok(paths
-        .into_iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect())
+fn cowork_scan_workspaces() -> Result<Vec<cowork_workspace_scan::WorkspaceHandle>, String> {
+    Ok(cowork_workspace_scan::scan_workspaces_with_handles())
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
@@ -2196,80 +2511,77 @@ fn cowork_apply_token(_token: String) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Install the Tandem plugin into a specific workspace path.
+/// Resolve a snapshot handle token to its validated canonical workspace path.
 ///
-/// Precondition: the path must be under the canonical `local-agent-mode-sessions\`
-/// root — this command re-applies invariant §3 before any file I/O (§9).
-/// On mismatch: returns `Err`, does NOT trust the walker.
+/// Closes the TOCTOU window (issue #433): instead of re-scanning the filesystem
+/// and trusting a caller-supplied string, the token can only name a path that
+/// `cowork_scan_workspaces` already validated this session. The resolved path is
+/// then re-run through the four-layer guard (`revalidate_resolved_path`) to
+/// catch a directory swapped *after* the scan. An unknown token — forged, or
+/// from a superseded scan — is rejected with no file I/O. The re-validation's
+/// specific rejection reason is preserved (single informative message, not
+/// re-flattened) for incident triage.
+#[cfg(target_os = "windows")]
+fn cowork_resolve_validated_handle(handle: &str, op: &str) -> Result<std::path::PathBuf, String> {
+    let Some(resolved) = cowork_workspace_scan::resolve_handle(handle) else {
+        log::warn!(
+            "[cowork] {op}: unknown workspace handle — rejected (no current scan token matches)"
+        );
+        return Err("Unknown or expired workspace handle — re-scan and try again".to_string());
+    };
+
+    // Defense-in-depth: re-run the four-layer guard against the stored path to
+    // catch a post-scan swap (directory replaced with a junction, moved, etc.).
+    cowork_workspace_scan::revalidate_resolved_path(&resolved).map_err(|reason| {
+        log::warn!("[cowork] {op}: resolved handle failed re-validation — rejected: {reason}");
+        reason
+    })
+}
+
+/// Install the Tandem plugin into a specific workspace, named by an opaque
+/// snapshot handle from `cowork_scan_workspaces`.
+///
+/// The handle resolves — in-process — to the exact canonical path validated at
+/// scan time, which is re-checked against invariant §3 before any file I/O (§9).
+/// A caller-supplied path string is never trusted; an unknown handle is rejected.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_install_into_workspace(ws_path: String) -> Result<String, String> {
+fn cowork_install_into_workspace(handle: String) -> Result<String, String> {
     use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
-    use cowork_workspace_scan::find_cowork_workspaces;
 
-    let path = std::path::PathBuf::from(&ws_path);
-
-    // Re-apply invariant §9 path check: the path must match one of the
-    // workspaces returned by the guarded walker. The walker is the single
-    // source of safe paths; if the user-supplied path isn't in that list,
-    // reject — do NOT install.
-    let valid_roots = find_cowork_workspaces();
-    let canonical_supplied = std::fs::canonicalize(&path)
-        .map_err(|e| format!("invalid workspace path: {e}"))?;
-    let path_valid = valid_roots
-        .iter()
-        .any(|valid| valid == &canonical_supplied);
-    if !path_valid {
-        log::warn!(
-            "[cowork] cowork_install_into_workspace: path {} is not in the canonical workspace list — rejected",
-            ws_path
-        );
-        return Err("Path is not within the canonical Cowork workspace root".to_string());
-    }
+    let validated_path = cowork_resolve_validated_handle(&handle, "cowork_install_into_workspace")?;
 
     let token = token_store::get_or_create_token()?;
     let meta = cowork_meta::load().map_err(|e| e.to_string())?;
     let tandem_url = resolve_tandem_url(&meta);
 
-    let report = install_tandem_plugin_into_workspace(&canonical_supplied, &token, &tandem_url)
+    let report = install_tandem_plugin_into_workspace(&validated_path, &token, &tandem_url)
         .map_err(|e| e.to_string())?;
 
     Ok(serde_json::to_string(&report).map_err(|e| e.to_string())?)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn cowork_install_into_workspace(_ws_path: String) -> Result<String, String> {
+fn cowork_install_into_workspace(_handle: String) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Uninstall the Tandem plugin from a specific workspace path.
+/// Uninstall the Tandem plugin from a specific workspace, named by an opaque
+/// snapshot handle from `cowork_scan_workspaces`. See
+/// [`cowork_install_into_workspace`] for the handle contract.
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn cowork_uninstall_from_workspace(ws_path: String) -> Result<String, String> {
-    use cowork_workspace_scan::find_cowork_workspaces;
+fn cowork_uninstall_from_workspace(handle: String) -> Result<String, String> {
+    let validated_path =
+        cowork_resolve_validated_handle(&handle, "cowork_uninstall_from_workspace")?;
 
-    let path = std::path::PathBuf::from(&ws_path);
-    let valid_roots = find_cowork_workspaces();
-    let canonical_supplied = std::fs::canonicalize(&path)
-        .map_err(|e| format!("invalid workspace path: {e}"))?;
-    let path_valid = valid_roots
-        .iter()
-        .any(|valid| valid == &canonical_supplied);
-    if !path_valid {
-        log::warn!(
-            "[cowork] cowork_uninstall_from_workspace: path {} is not in the canonical workspace list — rejected",
-            ws_path
-        );
-        return Err("Path is not within the canonical Cowork workspace root".to_string());
-    }
-
-    let report = cowork_installer::uninstall_tandem_plugin_from_workspace(&canonical_supplied)
+    let report = cowork_installer::uninstall_tandem_plugin_from_workspace(&validated_path)
         .map_err(|e| e.to_string())?;
     Ok(serde_json::to_string(&report).map_err(|e| e.to_string())?)
 }
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn cowork_uninstall_from_workspace(_ws_path: String) -> Result<String, String> {
+fn cowork_uninstall_from_workspace(_handle: String) -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
@@ -3402,6 +3714,134 @@ mod classify_opened_url_tests {
             got,
             Ok(PathBuf::from("/foo")),
             "Unix accepts /foo as an absolute path"
+        );
+    }
+}
+
+/// Tests for the startup-file rejection surfacing (issue #630): the path-free
+/// reason-code mapping and the buffered-rejection take/clear semantics.
+#[cfg(test)]
+mod startup_rejection_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Mutex as StdMutex;
+
+    // Serialize tests that mutate STARTUP_REJECTION (a process-wide static).
+    static REJECTION_LOCK: StdMutex<()> = StdMutex::new(());
+
+    #[test]
+    fn reason_code_is_stable_and_path_free() {
+        // The codes are the cross-process contract with the App.svelte toast
+        // map — assert the exact strings so a rename can't silently desync.
+        assert_eq!(
+            rejection_reason_code(&RejectionReason::UnsupportedExtension {
+                ext: "exe".into(),
+                path: PathBuf::from("/secret/place/file.exe"),
+            }),
+            "unsupported-extension"
+        );
+        assert_eq!(
+            rejection_reason_code(&RejectionReason::NotAFile {
+                path: PathBuf::from("/secret/place/dir"),
+            }),
+            "not-a-file"
+        );
+        assert_eq!(
+            rejection_reason_code(&RejectionReason::SuspiciousColon {
+                path: PathBuf::from("/secret/place/file.md:Zone.Identifier"),
+                index: 7,
+            }),
+            "suspicious-path"
+        );
+    }
+
+    #[test]
+    fn reason_code_never_leaks_the_path() {
+        // The reason code is a fixed enum string; assert it shares no substring
+        // with a path that would be sensitive to leak into a DOM toast.
+        let secret = "/Users/victim/Secret Plans.md";
+        let code = rejection_reason_code(&RejectionReason::NotAFile {
+            path: PathBuf::from(secret),
+        });
+        assert!(
+            !code.contains("Secret") && !code.contains('/'),
+            "reason code must not embed the rejected path"
+        );
+    }
+
+    #[test]
+    fn buffer_then_get_takes_once_then_returns_none() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+
+        buffer_startup_rejection(&RejectionReason::UnsupportedExtension {
+            ext: "exe".into(),
+            path: PathBuf::from("/x/file.exe"),
+        });
+        assert_eq!(
+            get_startup_rejection(),
+            Some("unsupported-extension".to_string()),
+            "first poll returns the buffered code"
+        );
+        assert_eq!(
+            get_startup_rejection(),
+            None,
+            "the buffer is TAKEN — a second poll (e.g. WebView reload) returns None"
+        );
+    }
+
+    #[test]
+    fn clear_drops_a_buffered_rejection() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+
+        buffer_startup_rejection(&RejectionReason::NotAFile {
+            path: PathBuf::from("/x/missing.md"),
+        });
+        // restart_sidecar calls clear_startup_rejection — a stale rejection from
+        // the previous launch must not survive into the next mount poll.
+        clear_startup_rejection();
+        assert_eq!(
+            get_startup_rejection(),
+            None,
+            "clear must drop the buffered rejection"
+        );
+    }
+
+    #[test]
+    fn buffer_is_last_write_wins() {
+        let _g = REJECTION_LOCK.lock().unwrap();
+        clear_startup_rejection();
+
+        buffer_startup_rejection(&RejectionReason::NotAFile {
+            path: PathBuf::from("/x/a.md"),
+        });
+        buffer_startup_rejection(&RejectionReason::UnsupportedExtension {
+            ext: "exe".into(),
+            path: PathBuf::from("/x/b.exe"),
+        });
+        assert_eq!(
+            get_startup_rejection(),
+            Some("unsupported-extension".to_string()),
+            "the most recent buffered reason wins"
+        );
+        clear_startup_rejection();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn opened_url_reason_codes_are_path_free_and_stable() {
+        assert_eq!(
+            opened_url_reason_code(&OpenedUrlRejection::NonFileScheme),
+            "non-file-url"
+        );
+        assert_eq!(
+            opened_url_reason_code(&OpenedUrlRejection::NonEmptyHost),
+            "suspicious-path"
+        );
+        assert_eq!(
+            opened_url_reason_code(&OpenedUrlRejection::ConversionFailed),
+            "not-a-file"
         );
     }
 }

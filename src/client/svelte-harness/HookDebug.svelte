@@ -22,7 +22,7 @@ const snapshot = $derived({
   annotationCount: sync.annotations.length,
   claudeStatus: sync.claudeStatus,
   claudeActive: sync.claudeActive,
-  readOnly: sync.readOnly,
+  readOnly: sync.tabs.find((t) => t.id === sync.activeTabId)?.readOnly ?? false,
   hasBootstrapYdoc: sync.bootstrapYdoc !== null,
 });
 </script>

@@ -7,6 +7,7 @@ activity-empty
 activity-pill
 activity-row-{*}
 activity-tray
+ai-readiness-harness
 annotation-card-{*}
 annotation-import-byline-{*}
 annotation-list-scroll-container
@@ -18,6 +19,7 @@ annotations-tab
 app-info-footer
 appearance-formatting-bar
 appearance-show-raw-markdown
+appearance-system-light-warm
 apply-changes-btn
 archive-btn-{*}
 batch-promote-bar
@@ -105,6 +107,7 @@ edit-text-{*}
 editor-font-{*}-btn
 editor-measure-{*}
 editor-root
+editor-scroll-container
 editor-stage
 empty-state-connect-ai
 empty-state-open-file
@@ -250,13 +253,7 @@ reply-cancel-btn-{*}
 reply-import-byline-{*}
 reply-input-{*}
 reply-send-btn-{*}
-reply-thread-expand-{*}
-reply-thread-overlay
-reply-thread-overlay-cancel
-reply-thread-overlay-close
-reply-thread-overlay-input
-reply-thread-overlay-reply
-reply-thread-overlay-send
+reply-toggle-{*}
 reply-{*}
 report-bug-link
 review-only-banner
@@ -322,6 +319,12 @@ shortcut-reset-{*}
 shortcut-row-{*}
 shortcuts-reset-all
 solo-rail-hidden-toggle
+source-view-annotation-warning
+source-view-container
+source-view-copy-btn
+source-view-error
+source-view-exit-btn
+source-view-textarea
 status-word-count
 store-readonly-banner
 store-readonly-dismiss
@@ -339,6 +342,7 @@ titlebar-brand-menu
 titlebar-brand-menu-popover
 titlebar-connect-ai
 titlebar-default-model
+titlebar-source-toggle
 titlebar-update-available-dot
 toast-action-{*}
 toast-container
@@ -361,3 +365,4 @@ updater-banner-visible
 user-name-input
 view-changelog-btn
 view-documentation-btn
+{*}-{*}

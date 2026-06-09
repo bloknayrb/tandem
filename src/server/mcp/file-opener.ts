@@ -50,6 +50,7 @@ import {
   broadcastOpenDocs,
   getOpenDocs,
   type OpenDoc,
+  saveDocumentToDisk,
   setActiveDocId,
 } from "./document-service.js";
 import { injectTutorialAnnotations } from "./tutorial-annotations.js";
@@ -310,6 +311,89 @@ export async function openScratchpad(content?: string): Promise<OpenFileResult> 
   };
 }
 
+/**
+ * Replace an open document's content from a user-supplied markdown string
+ * (raw-markdown source view/edit, #1021).
+ *
+ * Mirrors the force-reload lifecycle (`clearAndReload`) but sources content from
+ * the passed string instead of disk, and leaves the doc DIRTY so the new content
+ * is persisted to disk. Annotations are cleared (the source edit re-anchors the
+ * whole document — same trade-off as `tandem_open force:true`).
+ *
+ * Throws coded errors the routes map to HTTP status:
+ *  - NO_DOCUMENT        — not currently open
+ *  - UNSUPPORTED_FORMAT — only .md documents have an editable markdown source
+ *  - READ_ONLY          — a read-only .md (e.g. CHANGELOG) must not be replaced
+ *  - RELOAD_IN_PROGRESS — a concurrent reload (file-watcher or source edit) holds the guard
+ */
+export async function reloadDocumentFromMarkdown(id: string, markdown: string): Promise<void> {
+  const existing = getOpenDocs().get(id);
+  if (!existing) {
+    throw Object.assign(new Error("Document is not open."), { code: "NO_DOCUMENT" });
+  }
+  if (existing.format !== "md") {
+    throw Object.assign(new Error("Only .md documents support source editing."), {
+      code: "UNSUPPORTED_FORMAT",
+    });
+  }
+  if (existing.readOnly) {
+    throw Object.assign(new Error("Document is read-only."), { code: "READ_ONLY" });
+  }
+
+  // Serialize against the file-watcher reload path (which guards on the same
+  // Set) so two clear+repopulate transactions never interleave on one Y.Doc.
+  if (reloadInProgress.has(id)) {
+    throw Object.assign(new Error("A reload is already in progress for this document."), {
+      code: "RELOAD_IN_PROGRESS",
+    });
+  }
+  reloadInProgress.add(id);
+  try {
+    const doc = getDocument(id) ?? getOrCreateDocument(id);
+    // markCleanAfter:false keeps the doc dirty — the repopulation bumps the
+    // dirty version past savedVersion, so any concurrent autosave's
+    // markCleanIfUnchanged(snapshot) sees a newer version and won't clear-to-
+    // clean against stale content (#851 mechanism).
+    await clearAndReload(id, doc, existing.filePath, "md", existing, markdown, {
+      markCleanAfter: false,
+    });
+    // File-source docs re-wire the durable annotation store (clearAndReload
+    // wiped it) and persist the new markdown to disk immediately. Scratchpads
+    // (source: "upload") have no durable store and no disk file — skip both.
+    if (existing.source === "file") {
+      await wireAnnotationStore(id, doc, existing.filePath);
+      // Persist the new content to disk now. The only transient skip reachable
+      // here is the per-doc autosave lock (`savingDocs`) being held by a
+      // concurrent 60s autosave at this instant — every other skip reason is
+      // excluded (source is "file", not read-only, .md is save-eligible, the
+      // doc is open, and the just-set savedAt baseline rules out the external-
+      // modification guard). So retry briefly to close the window where this
+      // route would report success while disk still holds the pre-edit bytes
+      // (#1021 review SHOULD-FIX). If still skipped after the retries, the doc
+      // is left dirty (markCleanAfter:false) and the next autosave persists it.
+      let saved = await saveDocumentToDisk(id, "manual");
+      for (let attempt = 0; attempt < 5 && saved.status === "skipped"; attempt++) {
+        await new Promise((r) => setTimeout(r, 50));
+        saved = await saveDocumentToDisk(id, "manual");
+      }
+      if (saved.status === "error") {
+        // The disk write failed (saveDocumentToDisk already pushed a save-error
+        // notification). The Y.Doc reload succeeded and the doc is left dirty,
+        // so autosave will keep retrying — don't fail the in-memory reload.
+        console.error(
+          "[Tandem] reloadDocumentFromMarkdown: disk save failed for %s: %s",
+          id,
+          saved.reason,
+        );
+      }
+    }
+    broadcastOpenDocs();
+    ensureAutoSave();
+  } finally {
+    reloadInProgress.delete(id);
+  }
+}
+
 // --- Extracted helpers for openFileByPath ---
 
 /**
@@ -353,8 +437,12 @@ async function resolveAndValidatePath(filePath: string): Promise<ResolvedPath> {
   }
 
   const format = detectFormat(resolved);
-  const isDocx = format === "docx";
-  const readOnly = isDocx;
+  // .docx is now editable (#576): edits are held in the Y.Doc and written back
+  // to the original on EXPLICIT save (`saveDocumentToDisk` binary branch). The
+  // protective layer is "never overwrite without an explicit save", not
+  // read-only — so .docx opens writable like .md / .txt. (Auto-save still skips
+  // .docx via BINARY_SAVE_FORMATS being disjoint from AUTO_SAVE_FORMATS.)
+  const readOnly = false;
   const id = docIdFromPath(resolved);
 
   return { resolved, format, readOnly, id };
@@ -383,7 +471,10 @@ function handleAlreadyOpen(
   if (explicitReadOnly && !existing.readOnly) {
     addDoc(id, { ...existing, readOnly: true });
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    withInternal(doc, () => meta.set(Y_MAP_READ_ONLY, true));
+    withInternal(doc, () => {
+      meta.delete(Y_MAP_READ_ONLY);
+      meta.set(Y_MAP_READ_ONLY, true);
+    });
   }
 
   setActiveDocId(id);
@@ -699,13 +790,24 @@ async function finalizeDocOpen(
  *
  * Errors here MUST NOT fail the open — annotations are additive durability,
  * not required for rendering. We log and continue.
+ *
+ * Returns `{ wired: boolean }` so callers that care about a genuine internal
+ * failure can branch on it (#1057). `wired` is `true` only when `loadAndMerge`
+ * AND `setFileSyncContext` both ran to completion. An internal failure (e.g. a
+ * `loadAndMerge` throw) is still SWALLOWED — the open/save must never fail — but
+ * now reports `{ wired: false }` so the caller knows `setFileSyncContext` never
+ * ran and any prior file-sync context is still registered and live.
+ * `renameDocument` gates its old-envelope removal on this to close the
+ * internal-failure steal vector that the boundary-rejection guard alone misses.
+ * (Boundary rejections — e.g. a failed dynamic import upstream — are unaffected
+ * here and continue to propagate to the caller's own try/catch.)
  */
 export async function wireAnnotationStore(
   id: string,
   doc: Y.Doc,
   filePath: string,
-  opts?: { allowRecovery?: boolean },
-): Promise<void> {
+  opts?: { allowRecovery?: boolean; migrateTombstonesFrom?: string },
+): Promise<{ wired: boolean }> {
   try {
     const hash = docHash(filePath);
 
@@ -724,13 +826,25 @@ export async function wireAnnotationStore(
     }
 
     const store = createStore(hash, { filePath });
-    const cleanup = await loadAndMerge({
-      ydoc: doc,
-      store,
-      docHash: hash,
-      meta: { filePath },
-    });
+    // Rename only (#1040, windows a2/a3): `migrateTombstonesFrom` (the oldHash)
+    // tells loadAndMerge to fold the oldHash tombstone ledger forward into this
+    // (new) hash AFTER its `store.load()` read but BEFORE the merge consults the
+    // ledger. That single, precisely-placed fold catches a DELETE that arrives
+    // either before this call (recorded into oldHash during the fs.rename) or
+    // DURING the load read (recorded by the still-attached old observer), so the
+    // merge applies the tombstone instead of re-inserting the just-deleted record
+    // from the RMW envelope. Undefined on every normal open/reload — no fold.
+    const cleanup = await loadAndMerge(
+      {
+        ydoc: doc,
+        store,
+        docHash: hash,
+        meta: { filePath },
+      },
+      { migrateTombstonesFrom: opts?.migrateTombstonesFrom },
+    );
     setFileSyncContext(id, { ydoc: doc, store, docHash: hash, meta: { filePath } }, cleanup);
+    return { wired: true };
   } catch (err) {
     // Annotations are additive durability — never block a doc open. But a
     // silent console.error means the user never knows their pre-existing
@@ -746,6 +860,13 @@ export async function wireAnnotationStore(
       dedupKey: `annotation-wire:${id}`,
       timestamp: Date.now(),
     });
+    // Signal the internal failure to callers that care (#1057). `wired:false`
+    // means setFileSyncContext did NOT run, so the prior file-sync context (if
+    // any) is still registered and live. renameDocument uses this to fire its
+    // !rewired guard and dispose the stale oldHash observer before clear(),
+    // closing the steal vector even on an internal loadAndMerge throw. Other
+    // callers ignore the result — the swallow keeps open/save non-fatal.
+    return { wired: false };
   }
 }
 
@@ -764,6 +885,12 @@ export async function wireAnnotationStore(
  * comment-extract/inject notification UX that #612 added to the normal-open
  * path: a malformed Word comment no longer silently drops on reload, and an
  * inject mid-transact failure rolls back partial annotation writes.
+ *
+ * `opts.markCleanAfter` (default true): force-reload reads FROM disk, so the
+ * repopulated body matches disk and the doc is clean. The source-view reload
+ * (#1021) repopulates from a user-edited markdown STRING that does NOT match
+ * disk yet, so it passes `false` to keep the doc dirty — its caller then writes
+ * the new content to disk explicitly.
  */
 async function clearAndReload(
   id: string,
@@ -772,6 +899,7 @@ async function clearAndReload(
   format: string,
   existing: OpenDoc,
   source: string | Buffer,
+  opts?: { markCleanAfter?: boolean },
 ): Promise<void> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
@@ -811,6 +939,7 @@ async function clearAndReload(
       applyPreparedContent(doc, prepared, ctx);
       // Rewrite metadata + dirty-tracking baseline
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      meta.delete(Y_MAP_READ_ONLY);
       meta.set(Y_MAP_READ_ONLY, isDocx);
       meta.set("format", format);
       meta.set("documentId", id);
@@ -825,10 +954,19 @@ async function clearAndReload(
     // reload itself doesn't trigger a redundant write-back (#851). Done after
     // attachObservers re-registers the body observer (which preserves the
     // counter the in-transaction repopulation above may have bumped).
-    markClean(id);
+    //
+    // Skipped by the source-view reload (#1021): its body came from a user-
+    // edited string that does NOT yet match disk, so the doc must stay dirty
+    // until the caller persists it.
+    if (opts?.markCleanAfter !== false) markClean(id);
   } catch (err) {
+    // Static format literal; id/format pass as args (not interpolated into the
+    // format position) so a user-supplied documentId reaching this sink via
+    // reloadDocumentFromMarkdown can't be treated as a printf format string.
     console.error(
-      `[Tandem] clearAndReload: failed for ${id} (format=${format}). Y.Doc may be in a partially cleared state:`,
+      "[Tandem] clearAndReload: failed for %s (format=%s). Y.Doc may be in a partially cleared state:",
+      id,
+      format,
       err,
     );
     throw err;
@@ -866,6 +1004,10 @@ function writeDocMeta(
 ): void {
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   withInternal(doc, () => {
+    // Tombstone any session-persisted value so a stale session's higher-clock
+    // write can't override the authoritative readOnly passed by the caller.
+    // The same delete-before-set pattern is required in handleAlreadyOpen.
+    meta.delete(Y_MAP_READ_ONLY);
     meta.set(Y_MAP_READ_ONLY, readOnly);
     meta.set("format", format);
     meta.set("documentId", id);

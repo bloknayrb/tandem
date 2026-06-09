@@ -11,6 +11,7 @@
  * keys the alert div so screen readers re-announce on each fresh failure.
  */
 import type { Snippet } from "svelte";
+import { reportError } from "../sentry";
 import {
   ERROR_BOUNDARY_RECOVER_BTN_TESTID,
   ERROR_BOUNDARY_RELOAD_BTN_TESTID,
@@ -29,7 +30,11 @@ let errorSessionId = $state(0);
 </script>
 
 <svelte:boundary
-  onerror={() => {
+  onerror={(error) => {
+    // Report before showing the recover UI (#921). No-op unless crash
+    // reporting is active (opt-in + Tauri WebView). Reporting must never
+    // interfere with recovery, so it runs first and cannot throw.
+    reportError(error, { source: "ErrorBoundary" });
     errorSessionId += 1;
   }}
 >

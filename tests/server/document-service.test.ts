@@ -471,8 +471,8 @@ describe("saveDocumentToDisk", () => {
   it("skips read-only documents", async () => {
     addDoc("ro-doc", {
       id: "ro-doc",
-      filePath: "/tmp/file.docx",
-      format: "docx",
+      filePath: "/tmp/file.md",
+      format: "md",
       readOnly: true,
       source: "file",
     });

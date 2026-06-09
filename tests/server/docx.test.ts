@@ -440,8 +440,10 @@ describe("exportAnnotations", () => {
 describe("read-only guard", () => {
   it("currentDoc.readOnly blocks tandem_edit pattern", () => {
     // This is a unit-level check that the pattern works;
-    // the actual MCP integration is tested in the integration suite
-    const docState = { filePath: "test.docx", format: "docx", readOnly: true };
+    // the actual MCP integration is tested in the integration suite.
+    // NB: .docx is no longer read-only (#576) — it opens writable and saves
+    // back on explicit save. CHANGELOG.md is a representative read-only doc.
+    const docState = { filePath: "CHANGELOG.md", format: "md", readOnly: true };
     expect(docState.readOnly).toBe(true);
   });
 });

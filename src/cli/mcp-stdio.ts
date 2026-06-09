@@ -28,8 +28,10 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import {
+  CLAUDE_SESSION_HEADER,
   redirectConsoleToStderr,
   resolveAuthTokenCandidate,
+  resolveClaudeSessionId,
   resolveTandemUrl,
 } from "../shared/cli-runtime.js";
 import { probeTandemServer } from "./preflight.js";
@@ -119,8 +121,16 @@ export async function runMcpStdio(): Promise<void> {
   const baseUrl = resolveTandemUrl();
   const authToken = readAndValidateAuthToken();
 
+  // Forward the Claude Code session id (when this proxy was spawned by Claude
+  // Code) so the HTTP MCP server can correlate tool calls with the session.
+  // No-op when not in a Claude Code launch — see resolveClaudeSessionId.
+  const sessionId = resolveClaudeSessionId();
+  const upstreamHeaders: Record<string, string> = {};
+  if (authToken) upstreamHeaders.Authorization = `Bearer ${authToken}`;
+  if (sessionId !== undefined) upstreamHeaders[CLAUDE_SESSION_HEADER] = sessionId;
+
   const http = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
-    requestInit: authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : undefined,
+    requestInit: Object.keys(upstreamHeaders).length > 0 ? { headers: upstreamHeaders } : undefined,
   });
   const stdio = new StdioServerTransport();
 

@@ -14,8 +14,10 @@
 **See ADR-038:** the MCP contract here applies to any MCP-capable client, not only Claude. The title's "for Claude Integration" framing pre-dates ADR-038's policy.
 
 ## ADR-004: .docx Review-Only by Default
-**Decision:** .docx files open in review-only mode. Never overwrite the original.
-**Rationale:** mammoth.js import is lossy (no complex tables, tracked changes, footnotes). Review-only prevents accidental data loss.
+**Status:** Superseded by #576 (v1.0 docx write-back). `.docx` is now editable; the protective layer is "never overwrite without an explicit save", not `contenteditable=false`.
+**Original decision:** .docx files open in review-only mode. Never overwrite the original.
+**Original rationale:** mammoth.js import is lossy (no complex tables, tracked changes, footnotes). Review-only prevents accidental data loss.
+**Supersession (#576):** mammoth import is still lossy, so the data-loss concern is real — but it's addressed by *explicit-save gating* rather than by blocking edits. `.docx` opens writable; edits are held in the Y.Doc and serialized back to `.docx` (body content only — comments/tracked-changes are v1.1) **only on an explicit user/agent save** via the `docx` package (`saveBinary` adapter capability + `atomicWriteBuffer`). Auto-save never writes `.docx` (`BINARY_SAVE_FORMATS` is disjoint from `AUTO_SAVE_FORMATS`). Lossy-import warnings surface at open; export-downgrade warnings surface on save. The export is trust-boundary-gated (scrubbed hyperlinks, inline-only image embeds, no OLE objects, plain-text fallback for unknown nodes). See `src/server/file-io/docx-export.ts`.
 
 ## ADR-005: Node-Anchored Ranges for Overlays
 **Decision:** Overlays use node-relative anchors (nodeId + offset) instead of character offsets.
@@ -813,10 +815,24 @@ Both are silent from the user's perspective today; both end when the integration
 
 **Visibility toggle:** a new `showRawMarkdown` setting (default on) flips a `hide-raw-md` class on the `.editor-scroll` wrapper; `editor.css` then `display:none`s `.tandem-raw-md` spans and `[data-markdown-raw]` paragraphs (CSS only — the source is always in the Y.Doc and saves regardless of the toggle). Surfaced in Appearance settings (`appearance-show-raw-markdown`).
 
-**Documented normalizations (deliberate, not loss):** `remark-stringify` canonicalizes setext→ATX headings, indented→fenced code, bullet/emphasis markers to `-`/`*`, hard-break style, entity decoding, and autolinks to angle form (`<https://…>`). The fidelity test asserts **idempotency + content-preservation**, not byte-identity to hand-authored input.
+**Documented normalizations (deliberate, not loss):** `remark-stringify` canonicalizes setext→ATX headings, indented→fenced code, bullet/emphasis markers to `-`/`*`, hard-break style, entity decoding, autolinks to angle form (`<https://…>`), and loose-list paragraphs → tight (blank lines between list items are dropped; `spread: false` is hardcoded in `yDocToMdast`). The fidelity test asserts **idempotency + content-preservation**, not byte-identity to hand-authored input.
 
 **Deferred (#982):** GFM task lists / checkboxes need a first-class `TaskList`/`TaskItem` node and `checked` mapping; today they degrade to plain bullets. This is a documented gap pinned by `markdown-fidelity.test.ts` so it can never become a silent drop.
 
 **Consequences:** the round-trip is a stable fixed point (re-open re-parses the emitted source into the same gfm nodes and re-stores them). Coverage: `tests/fixtures/markdown-fidelity.md` + `markdown-fidelity.test.ts` (every construct, idempotency, the #982 gap) and `markdown-raw-constructs.test.ts` (forward/reverse mapping + slice-level flat-offset stability). New settings fields must be enumerated in `normalizeKnownFields` (an allowlist) or they are silently dropped at runtime — `showRawMarkdown` is pinned by a presence/default regression.
 
 **Cross-references:** ADR-027 (note privacy — raw passthrough is a view/serialization concern, not annotation data), ADR-031 (origin tagging — file-sync/internal writes), #981 (audit umbrella), #982 (task lists), #605 / lessons #69 (the remark-stringify escaper the wrapper bypasses).
+
+## ADR-043: Updater — No Rollback, No In-Updater Post-Restart Health Probe (v1)
+
+**Status:** Accepted (2026-06-07)
+
+**Context:** The Tauri auto-updater path (`perform_install` in `src-tauri/src/lib.rs`) runs `kill_sidecar` → `wait_for_port_release` (+ Windows `wait_for_sidecar_unlock`) → `update.download_and_install` (minisign-verified) → `app.restart()`. Issue #925 flagged two gaps: (1) no rollback if `app.restart()` fails to relaunch a broken/corrupt new binary, and (2) no health-poll *inside* the updater path after restart.
+
+**Decision:** Ship v1 with current behavior unchanged (option **(c)** of #925). The decisive constraint is that **Tauri v2 `AppHandle::restart()` is divergent** — it exits and relaunches the process without returning (tauri-apps/tauri #12310/#13923/#11392). Therefore: (2) an in-`perform_install` post-restart probe is unreachable dead code by construction; and (1) rollback cannot be driven from the old process, which is gone the instant `restart()` runs — true rollback would require a standalone watchdog/bootstrapper process plus a `.previous` binary copy and platform-specific swap-back logic. Neither the [Tauri v2 updater docs](https://v2.tauri.app/plugin/updater/) nor [CrabNebula's auto-updates guide](https://docs.crabnebula.dev/guides/auto-updates-tauri) recommend either; both stop at `download_and_install()` + relaunch with no rollback or post-restart verification.
+
+**Why this is acceptable:** The post-restart health verification #925 asks for **already exists for the sidecar** — the relaunched process's `start_sidecar` → `wait_for_health` (bounded) and the `MAX_RESTARTS` retry loop, which surfaces a native "Server Error" dialog on exhausted failure. (The `sidecar-restart-failed` WebView event is emitted only from the manual `restart_sidecar` command, **not** this startup path.) The only uncovered case is the Tauri *shell* failing to relaunch at all, which is rare (reached only after signature verification; a binary that won't run on the target OS fails the *first* launch, not a relaunch) and unobservable from Rust without an external supervisor.
+
+**Deferred follow-up (optional, not v1-blocking):** The one in-process-only hardening that survives the divergent-`restart()` constraint is a persisted "pending update" marker — write a sentinel before `restart()`; the next boot clears it on version-match or surfaces a one-time "your update may not have completed — report a bug" banner on mismatch. Diagnostic/recovery-hint only (no binary swap), sketched in `docs/spikes/updater-rollback-healthpoll-audit.md` §6, and must be compiled + runtime-verified in a real Tauri build before landing.
+
+**Cross-references:** Audit doc `docs/spikes/updater-rollback-healthpoll-audit.md`, #925, tauri-apps/tauri #12310 (`restart()` may exit before `RunEvent::Exit`).
