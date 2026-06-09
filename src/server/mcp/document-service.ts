@@ -29,6 +29,7 @@ import {
 } from "../documents/dirty.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
+import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
@@ -36,6 +37,7 @@ import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
+import { resolveAppDataDir } from "../platform.js";
 import {
   deleteSession,
   listSessionFilePaths,
@@ -227,6 +229,12 @@ export async function saveDocumentToDisk(
       fidelityWarnings = warnings.length > 0 ? warnings : undefined;
     } else {
       const output = adapter.save!(doc);
+      // Pre-overwrite snapshot of the on-disk original (first write per path
+      // per run). Never throws; a snapshot failure must not block the save.
+      await snapshotBeforeFirstWrite(docState.filePath, {
+        appDataDir: resolveAppDataDir(),
+        documentId: docId,
+      });
       suppressNextChange(docState.filePath);
       await atomicWrite(docState.filePath, output);
     }
@@ -412,9 +420,15 @@ export async function saveDocumentAsToDisk(
     const output = adapter.save(doc);
 
     // The file shouldn't exist yet (we're saving as new), but if it does,
-    // pre-arm the watcher suppress so its first change event after we write
-    // doesn't bounce back as an external-edit reload. Safe no-op if the path
-    // isn't being watched.
+    // this save OVERWRITES content Tandem never produced — snapshot the
+    // victim's bytes first (no-op when the target doesn't exist). Then
+    // pre-arm the watcher suppress so the write's first change event doesn't
+    // bounce back as an external-edit reload. Safe no-op if the path isn't
+    // being watched.
+    await snapshotBeforeFirstWrite(resolved, {
+      appDataDir: resolveAppDataDir(),
+      documentId: docId,
+    });
     suppressNextChange(resolved);
     await atomicWrite(resolved, output);
 

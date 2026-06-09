@@ -1,7 +1,9 @@
 import fs from "fs/promises";
 import path from "path";
+import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { atomicWrite } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
+import { resolveAppDataDir } from "../platform.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { extractMarkdown } from "./document-model.js";
 import { getCurrentDoc } from "./document-service.js";
@@ -138,7 +140,10 @@ export async function convertToMarkdown(
   // Avoid overwriting existing files
   resolvedOutput = await findAvailablePath(resolvedOutput);
 
-  // Write the markdown file
+  // findAvailablePath is best-effort TOCTOU — a file created between its check
+  // and this write would be clobbered. The snapshot no-ops when the path is
+  // (still) free, so this only costs anything in exactly the racy case.
+  await snapshotBeforeFirstWrite(resolvedOutput, { appDataDir: resolveAppDataDir() });
   await atomicWrite(resolvedOutput, markdown);
 
   // Open the new file in Tandem — include outputPath in error if this fails
