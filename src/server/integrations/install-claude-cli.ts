@@ -67,6 +67,13 @@ const EXEC_TIMEOUT_MS = 180_000;
  */
 const FETCH_TIMEOUT_MS = 30_000;
 const STDERR_TAIL_CHARS = 500;
+/**
+ * execFile stdout+stderr cap. Node's 1 MiB default can ENOBUFS-kill a chatty
+ * installer mid-run, surfacing as a misleading `exitCode: null` on a possibly-
+ * successful install; 10 MiB matches the script-fetch cap. `CI=1` keeps the
+ * official installer quiet, so this is a defensive ceiling, not a routine need.
+ */
+const EXEC_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
 /** Thrown when the host OS isn't one the native installer supports. */
 export class UnsupportedPlatformError extends Error {
@@ -239,6 +246,7 @@ async function runInterpreter(
     await execFileAsync(plan.interpreter, plan.args, {
       timeout: EXEC_TIMEOUT_MS,
       env: plan.env,
+      maxBuffer: EXEC_MAX_BUFFER_BYTES,
     });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -250,7 +258,11 @@ async function runInterpreter(
         "v1.0",
         "powershell.exe",
       );
-      await execFileAsync(fallback, plan.args, { timeout: EXEC_TIMEOUT_MS, env: plan.env });
+      await execFileAsync(fallback, plan.args, {
+        timeout: EXEC_TIMEOUT_MS,
+        env: plan.env,
+        maxBuffer: EXEC_MAX_BUFFER_BYTES,
+      });
       return;
     }
     throw err;
@@ -322,7 +334,21 @@ export async function installClaudeCli(
   if (before !== "NOT_INSTALLED") return before;
 
   const isWin = platform === "win32";
-  const script = await fetchScript(isWin ? INSTALLER_URL_WIN : INSTALLER_URL_POSIX);
+  // Map fetch failures (timeout, byte-cap, redirect downgrade, non-200) to a
+  // ClaudeInstallError so the client gets an actionable tail instead of an
+  // opaque generic 500. These messages are path/secret-free (the temp dir
+  // doesn't exist yet). The ACL/prep failures below deliberately do NOT get
+  // this treatment — acl-win errors can embed the user's SID/username, which
+  // must not reach the response; they stay on the generic sendInternal path.
+  let script: string;
+  try {
+    script = await fetchScript(isWin ? INSTALLER_URL_WIN : INSTALLER_URL_POSIX);
+  } catch (err) {
+    throw new ClaudeInstallError(
+      null,
+      sanitizeStderr(err instanceof Error ? err.message : String(err)).slice(-STDERR_TAIL_CHARS),
+    );
+  }
 
   const tmpDir = await mkdtemp(join(tmpdir(), "tandem-claude-install-"));
   try {
@@ -352,6 +378,14 @@ export async function installClaudeCli(
 
     return detect();
   } finally {
-    await rm(tmpDir, { recursive: true, force: true });
+    // Best-effort cleanup. A throw here (Windows EBUSY/EPERM — e.g. AV holding
+    // a lock on the just-run install.ps1; `force` only swallows ENOENT) would
+    // REPLACE the pending `return detect()` with a raw fs error, mis-reporting
+    // a successful install as a 500. The leaked temp dir is harmless (public
+    // script, 0700/user-only ACL, OS temp sweep — NOT the annotations-dir
+    // reaper, which doesn't sweep this path).
+    await rm(tmpDir, { recursive: true, force: true }).catch((err) => {
+      console.error("[Tandem] install: temp cleanup failed:", err);
+    });
   }
 }

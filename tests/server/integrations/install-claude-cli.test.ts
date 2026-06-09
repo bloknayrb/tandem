@@ -132,6 +132,25 @@ describe("installClaudeCli", () => {
     });
   });
 
+  it("maps a fetch failure to ClaudeInstallError(null, <fetch msg>) instead of a generic throw", async () => {
+    // SF-3: a fetch failure (timeout / byte-cap / redirect downgrade / non-200)
+    // is funneled through ClaudeInstallError so the client gets an actionable
+    // tail rather than an opaque 500. The fetch happens before the temp dir
+    // exists, so its message is path-free and safe to surface.
+    const fetchScript = vi.fn(async () => {
+      throw new Error("Installer fetch timed out after 30000ms");
+    });
+    const execFileAsync = vi.fn(async () => ({ stdout: "", stderr: "" })) as never;
+    const promise = installClaudeCli(baseDeps({ fetchScript, execFileAsync }));
+    await expect(promise).rejects.toBeInstanceOf(ClaudeInstallError);
+    await promise.catch((err: ClaudeInstallError) => {
+      expect(err.exitCode).toBeNull();
+      expect(err.stderrTail).toContain("timed out");
+    });
+    // Fetch failed → the interpreter was never spawned.
+    expect(execFileAsync).not.toHaveBeenCalled();
+  });
+
   it("strips ANSI/control sequences from stderrTail (PowerShell colorizes errors)", async () => {
     const execFileAsync = vi.fn(async () => {
       throw Object.assign(new Error("failed"), {

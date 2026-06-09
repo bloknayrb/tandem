@@ -110,6 +110,17 @@ export function createClaudeCliStatus(
       const body = (await res.json()) as InstallClaudeCodeResponse;
       if (!mounted) return null;
       presence = body.presence;
+      if (body.presence === "NOT_INSTALLED") {
+        // The install POST succeeded (exit 0) but the binary still isn't
+        // detected. The server honestly reports NOT_INSTALLED rather than
+        // faking success or hard-failing — `detectClaudeCli`'s probe locations
+        // may not be exhaustive on every OS, so a server-side throw would risk
+        // a false-positive failure on a genuinely successful install. Surface
+        // it here instead of silently re-rendering the identical install CTA.
+        installError =
+          "The installer finished but Claude wasn't detected yet. Open a new terminal and " +
+          'click "Check again", or install Claude Code manually.';
+      }
       return body.presence;
     } catch (err) {
       if (!mounted) return null;
