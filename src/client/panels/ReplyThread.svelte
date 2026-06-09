@@ -38,8 +38,6 @@ let {
 // private replies never reach Claude regardless of what is displayed here.
 const visibleReplies = $derived(getVisibleReplies(annotation, replies));
 const annotationId = $derived(annotation.id);
-// Notes: always-visible thread (no collapse toggle); comments: A13 disclosure.
-const isNote = $derived(annotation.type === "note");
 
 // A13 (#798): the existing replies are a collapse-by-default disclosure (was an
 // always-visible inline thread). Replaces the former portaled "Expand thread"
@@ -98,21 +96,7 @@ async function handleSendReply() {
      whole reply region in clamped/stub via `:global(.art-root)`. Plain block
      wrapper, so full-density vertical flow is unchanged. -->
 <div class="art-root">
-  {#if isNote && visibleReplies.length > 0}
-    <!-- Notes: always-visible thread (no toggle). Private from Claude, not from
-         the owning user (#1000 / ADR-027). -->
-    <div class="art-replies">
-      <CommentThread replies={visibleReplies} />
-    </div>
-    {#if !isPending || !onReply}
-      <!-- Read-only count badge when there's no reply affordance. -->
-      <span class="art-note-count">
-        {visibleReplies.length === 1 ? "1 reply" : `${visibleReplies.length} replies`}
-      </span>
-    {/if}
-  {/if}
-
-  {#if !isNote && visibleReplies.length > 0}
+  {#if visibleReplies.length > 0}
     <!-- A13 disclosure toggle: chevron rotates, replies unfold + cascade. -->
     <button
       type="button"
@@ -179,14 +163,13 @@ async function handleSendReply() {
           </div>
         </div>
       {:else}
-        <!-- For comments: count lives on the disclosure toggle above.
-             For notes: embed count in the button since there's no toggle. -->
+        <!-- Count lives on the disclosure toggle above for all annotation types. -->
         <button
           data-testid="reply-btn-{annotationId}"
           onclick={() => (isReplying = true)}
           style="padding: 1px 4px; font-size: var(--tandem-text-xs); border: none; background: none; color: var(--tandem-fg-subtle); cursor: pointer;"
         >
-          {isNote && visibleReplies.length > 0 ? `Reply (${visibleReplies.length})` : "Reply"}
+          Reply
         </button>
       {/if}
     </div>
@@ -199,14 +182,6 @@ async function handleSendReply() {
      wins on specificity. */
   .art-root {
     display: contents;
-  }
-
-  /* Note read-only count badge — shown when there's no reply affordance. */
-  .art-note-count {
-    display: inline-block;
-    margin-top: 4px;
-    font-size: var(--tandem-text-xs);
-    color: var(--tandem-fg-subtle);
   }
 
   /* A13 disclosure toggle + rotating chevron (#798). */
