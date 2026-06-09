@@ -6,15 +6,22 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   _resetApplyGateForTests,
+  _resetInstallGateForTests,
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
+  API_INTEGRATIONS_CLAUDE_CLI_STATUS,
   API_INTEGRATIONS_EXISTING,
   API_INTEGRATIONS_FIRST_RUN,
+  API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
   API_INTEGRATIONS_SECRET,
   type IntegrationsRoutesDeps,
   registerIntegrationsRoutes,
 } from "../../../src/server/integrations/api-routes.js";
 import type { ExistingMcpInstall } from "../../../src/server/integrations/existing-config.js";
+import {
+  ClaudeInstallError,
+  UnsupportedPlatformError,
+} from "../../../src/server/integrations/install-claude-cli.js";
 import {
   createKeychain,
   type KeychainBackend,
@@ -33,10 +40,13 @@ import {
 import {
   ERROR_CODE_APPLY_IN_PROGRESS,
   ERROR_CODE_BAD_ORIGIN,
+  ERROR_CODE_INSTALL_FAILED,
+  ERROR_CODE_INSTALL_IN_PROGRESS,
   ERROR_CODE_INVALID_APPLY_REQUEST,
   ERROR_CODE_INVALID_PERSISTED_FILE,
   ERROR_CODE_PATH_REJECTED,
   ERROR_CODE_SECRET_MISSING,
+  ERROR_CODE_UNSUPPORTED_PLATFORM,
 } from "../../../src/shared/integrations/contract.js";
 import { useEnvOverride, withEnvOverride } from "../../helpers/env-override.js";
 
@@ -1037,6 +1047,12 @@ describe("integrations API routes", () => {
         url: "/api/integrations/secrets/ref-1",
         body: undefined,
       },
+      {
+        label: "POST /api/integrations/install-claude-code",
+        method: "POST" as const,
+        url: API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+        body: undefined,
+      },
     ])("$label rejects non-loopback callers", async ({ method, url, body }) => {
       const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
       const res = await request(app, method, url, body);
@@ -1080,6 +1096,12 @@ describe("integrations API routes", () => {
         label: "DELETE /api/integrations/secrets/:ref",
         method: "DELETE" as const,
         url: "/api/integrations/secrets/ref-1",
+        body: undefined,
+      },
+      {
+        label: "POST /api/integrations/install-claude-code",
+        method: "POST" as const,
+        url: API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
         body: undefined,
       },
     ])("$label rejects evil origin with 403 BAD_ORIGIN", async ({ method, url, body }) => {
@@ -1130,6 +1152,123 @@ describe("integrations API routes", () => {
       } finally {
         if (prev !== undefined) process.env.VITEST = prev;
       }
+    });
+  });
+
+  describe(`GET ${API_INTEGRATIONS_CLAUDE_CLI_STATUS}`, () => {
+    it("returns the probed presence enum", async () => {
+      const app = makeApp({ ...deps, detectClaudeCli: () => "INSTALLED_NOT_ON_PATH" });
+      const res = await request(app, "GET", API_INTEGRATIONS_CLAUDE_CLI_STATUS);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ presence: "INSTALLED_NOT_ON_PATH" });
+    });
+
+    it("is read-only: no origin gate (reachable with an evil Origin)", async () => {
+      const app = makeApp({ ...deps, detectClaudeCli: () => "NOT_INSTALLED" });
+      const res = await request(app, "GET", API_INTEGRATIONS_CLAUDE_CLI_STATUS, undefined, {
+        Origin: "http://evil.com",
+      });
+      expect(res.status).toBe(200);
+      expect((res.body as { presence: string }).presence).toBe("NOT_INSTALLED");
+    });
+
+    it("is LAN-reachable under TANDEM_ALLOW_UNAUTHENTICATED_LAN (no loopback gate)", async () => {
+      await withEnvOverride(TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV, "1", async () => {
+        const app = makeAppWithRemoteAddress(
+          { ...deps, detectClaudeCli: () => "INSTALLED_ON_PATH" },
+          "192.168.1.100",
+        );
+        const res = await request(app, "GET", API_INTEGRATIONS_CLAUDE_CLI_STATUS);
+        expect(res.status).toBe(200);
+      });
+    });
+
+    it("never includes a path field in the response (F6)", async () => {
+      const app = makeApp({ ...deps, detectClaudeCli: () => "INSTALLED_NOT_ON_PATH" });
+      const res = await request(app, "GET", API_INTEGRATIONS_CLAUDE_CLI_STATUS);
+      expect(Object.keys(res.body as object)).toEqual(["presence"]);
+    });
+  });
+
+  describe(`POST ${API_INTEGRATIONS_INSTALL_CLAUDE_CODE}`, () => {
+    beforeEach(() => {
+      _resetInstallGateForTests();
+    });
+
+    it("returns { ok, presence } on a successful install", async () => {
+      const app = makeApp({
+        ...deps,
+        installClaudeCli: async () => "INSTALLED_NOT_ON_PATH",
+      });
+      const res = await request(app, "POST", API_INTEGRATIONS_INSTALL_CLAUDE_CODE);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, presence: "INSTALLED_NOT_ON_PATH" });
+    });
+
+    it("maps UnsupportedPlatformError to 400", async () => {
+      const app = makeApp({
+        ...deps,
+        installClaudeCli: async () => {
+          throw new UnsupportedPlatformError("aix");
+        },
+      });
+      const res = await request(app, "POST", API_INTEGRATIONS_INSTALL_CLAUDE_CODE);
+      expect(res.status).toBe(400);
+      expect((res.body as { code: string }).code).toBe(ERROR_CODE_UNSUPPORTED_PLATFORM);
+    });
+
+    it("maps ClaudeInstallError to 500 with exitCode + stderrTail", async () => {
+      const app = makeApp({
+        ...deps,
+        installClaudeCli: async () => {
+          throw new ClaudeInstallError(7, "network unreachable");
+        },
+      });
+      const res = await request(app, "POST", API_INTEGRATIONS_INSTALL_CLAUDE_CODE);
+      expect(res.status).toBe(500);
+      const body = res.body as { code: string; exitCode: number; stderrTail: string };
+      expect(body.code).toBe(ERROR_CODE_INSTALL_FAILED);
+      expect(body.exitCode).toBe(7);
+      expect(body.stderrTail).toBe("network unreachable");
+    });
+
+    it("returns 429 for a concurrent install (mutex)", async () => {
+      // Block the first install until released so the second overlaps it.
+      let release!: () => void;
+      const blocked = new Promise<void>((r) => {
+        release = r;
+      });
+      const app = makeApp({
+        ...deps,
+        installClaudeCli: async () => {
+          await blocked;
+          return "INSTALLED_NOT_ON_PATH";
+        },
+      });
+
+      const first = request(app, "POST", API_INTEGRATIONS_INSTALL_CLAUDE_CODE);
+      // Give the first request time to acquire the mutex before the second.
+      await new Promise((r) => setTimeout(r, 50));
+      const second = await request(app, "POST", API_INTEGRATIONS_INSTALL_CLAUDE_CODE);
+      expect(second.status).toBe(429);
+      expect((second.body as { code: string }).code).toBe(ERROR_CODE_INSTALL_IN_PROGRESS);
+
+      release();
+      const firstRes = await first;
+      expect(firstRes.status).toBe(200);
+    });
+
+    it("clears the mutex after a failed install (next call is not 429)", async () => {
+      const app = makeApp({
+        ...deps,
+        installClaudeCli: async () => {
+          throw new ClaudeInstallError(1, "boom");
+        },
+      });
+      const r1 = await request(app, "POST", API_INTEGRATIONS_INSTALL_CLAUDE_CODE);
+      expect(r1.status).toBe(500);
+      const r2 = await request(app, "POST", API_INTEGRATIONS_INSTALL_CLAUDE_CODE);
+      expect(r2.status).toBe(500); // 500 again, NOT 429 — mutex was released
     });
   });
 });
