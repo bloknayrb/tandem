@@ -89,7 +89,16 @@ export function resolveChannelDist(
   exists: (p: string) => boolean = existsSync,
 ): string {
   const injected = env.TANDEM_CHANNEL_DIST;
-  if (injected && exists(injected)) return injected;
+  if (injected) {
+    if (exists(injected)) return injected;
+    // Set-but-missing: a broken desktop injection would otherwise degrade push
+    // → polling with no trace. Behavior is unchanged (we still fall back); this
+    // only leaves a diagnostic breadcrumb on stderr (Critical Rule #3-safe).
+    console.error(
+      `[Tandem] TANDEM_CHANNEL_DIST set to "${injected}" but no file there — ` +
+        "falling back to bundled path; real-time push may be unavailable.",
+    );
+  }
   return resolve(PACKAGE_ROOT, "dist/channel/index.js");
 }
 

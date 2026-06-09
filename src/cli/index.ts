@@ -86,13 +86,21 @@ try {
   } else if (args[0] === "setup") {
     const { runSetup } = await import("./setup.js");
     // `--target=claude-code` / `--target=claude-desktop`, repeatable. Unknown
-    // values are ignored (filtered against detected targets downstream).
-    const targets = args
+    // values are dropped here; warn so a typo doesn't silently become a
+    // confusing "No matching installations" downstream.
+    const rawTargets = args
       .filter((a) => a.startsWith("--target="))
-      .map((a) => a.slice("--target=".length))
-      .filter(
-        (t): t is "claude-code" | "claude-desktop" => t === "claude-code" || t === "claude-desktop",
-      );
+      .map((a) => a.slice("--target=".length));
+    for (const t of rawTargets) {
+      if (t !== "claude-code" && t !== "claude-desktop") {
+        console.error(
+          `[tandem] Ignoring unrecognized --target value "${t}" (expected claude-code or claude-desktop).`,
+        );
+      }
+    }
+    const targets = rawTargets.filter(
+      (t): t is "claude-code" | "claude-desktop" => t === "claude-code" || t === "claude-desktop",
+    );
     await runSetup({
       apply: args.includes("--apply"),
       force: args.includes("--force"),

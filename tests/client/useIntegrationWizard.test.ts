@@ -83,6 +83,69 @@ describe("createIntegrationWizard", () => {
     expect(wizard.errorMessage).toMatch(/HTTP 500/);
   });
 
+  it("detecting is false before begin() runs", () => {
+    const wizard = createIntegrationWizard({ fetchFn: makeFetchStub([]) });
+    expect(wizard.detecting).toBe(false);
+  });
+
+  it("detecting is true while the begin() fetch is in flight, then false once it resolves", async () => {
+    // makeFetchStub resolves immediately, so it cannot express "in flight".
+    // Use a deferred fetch the test resolves manually, and call begin()
+    // WITHOUT awaiting so the synchronous detecting=true is observable.
+    let resolveFetch!: (r: Response) => void;
+    const fetchFn = (() =>
+      new Promise<Response>((r) => {
+        resolveFetch = r;
+      })) as unknown as typeof fetch;
+    const wizard = createIntegrationWizard({ fetchFn });
+
+    const pending = wizard.begin();
+    flushSync();
+    expect(wizard.detecting).toBe(true);
+    expect(wizard.step).toBe("detect");
+
+    resolveFetch(
+      new Response(JSON.stringify({ installs: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await pending;
+    flushSync();
+    expect(wizard.detecting).toBe(false);
+    expect(wizard.step).toBe("detect");
+  });
+
+  it("detecting resets to false on a non-ok response (step=error)", async () => {
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "GET",
+          urlMatch: /\/api\/integrations\/existing$/,
+          handler: () => ({ status: 500, body: { error: "boom" } }),
+        },
+      ]),
+    });
+    await wizard.begin();
+    flushSync();
+    expect(wizard.detecting).toBe(false);
+    expect(wizard.step).toBe("error");
+  });
+
+  it("a network failure (TypeError) surfaces a friendly 'server unreachable' message", async () => {
+    // Real fetch rejects with a TypeError on network failure; a plain Error
+    // would hit the generic error path instead, so reject with a TypeError.
+    const fetchFn = (() =>
+      Promise.reject(new TypeError("Failed to fetch"))) as unknown as typeof fetch;
+    const wizard = createIntegrationWizard({ fetchFn });
+
+    await wizard.begin();
+    flushSync();
+    expect(wizard.detecting).toBe(false);
+    expect(wizard.step).toBe("error");
+    expect(wizard.errorMessage).toMatch(/Could not reach the Tandem server/);
+  });
+
   it("submitSecret(): stores secret and stamps tokenSecretRef on the picked config", async () => {
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([

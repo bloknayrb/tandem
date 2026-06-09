@@ -40,7 +40,7 @@ export async function rotateToken(): Promise<void> {
   const oldToken = await readTokenFromFile();
   if (!oldToken) {
     console.error(
-      "[tandem] Error: no token file found. Run `tandem setup` first to initialize the token.",
+      "[tandem] Error: no token file found. Start the server once with `tandem` — it creates the token on first launch.",
     );
     process.exit(1);
   }

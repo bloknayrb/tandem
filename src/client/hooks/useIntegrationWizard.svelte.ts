@@ -158,6 +158,14 @@ export function createIntegrationWizard(
       detecting = false;
     } catch (err) {
       if (myGen !== beginGen) return;
+      // A network failure (server not up yet — common on first launch) rejects
+      // with a TypeError ("Failed to fetch"). Surface an actionable message
+      // instead of the raw browser string. A genuine programming TypeError would
+      // also land here, but "server unreachable" is still a reasonable surface.
+      if (err instanceof TypeError) {
+        setError("Could not reach the Tandem server. Make sure Tandem is running, then try again.");
+        return;
+      }
       setError(err instanceof Error ? err.message : String(err));
     }
   };
