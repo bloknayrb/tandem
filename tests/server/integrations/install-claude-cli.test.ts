@@ -132,6 +132,21 @@ describe("installClaudeCli", () => {
     });
   });
 
+  it("strips ANSI/control sequences from stderrTail (PowerShell colorizes errors)", async () => {
+    const execFileAsync = vi.fn(async () => {
+      throw Object.assign(new Error("failed"), {
+        code: 3,
+        // Real `pwsh` Write-Error output: SGR color codes around the message.
+        stderr: "\x1b[31;1mWrite-Error: \x1b[0msimulated failure\x1b[0m\n",
+      });
+    }) as never;
+
+    await installClaudeCli(baseDeps({ execFileAsync })).catch((err: ClaudeInstallError) => {
+      expect(err.stderrTail).not.toMatch(/\x1b/);
+      expect(err.stderrTail).toContain("Write-Error: simulated failure");
+    });
+  });
+
   it("scrubs the temp path out of stderrTail", async () => {
     let captured: string | undefined;
     const execFileAsync = vi.fn(async (_f: string, args: string[]) => {

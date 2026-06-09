@@ -268,7 +268,27 @@ function toClaudeInstallError(err: unknown, tmpDir: string): ClaudeInstallError 
   const exitCode = typeof e.code === "number" ? e.code : null;
   let stderr = typeof e.stderr === "string" ? e.stderr : (e.message ?? String(err));
   if (tmpDir) stderr = stderr.split(tmpDir).join("<tmp>");
-  return new ClaudeInstallError(exitCode, stderr.slice(-STDERR_TAIL_CHARS));
+  // Strip ANSI/control bytes BEFORE the tail-slice so the 500-char budget is
+  // real text — PowerShell's Write-Error emits SGR color codes that would
+  // otherwise render as literal `[31;1m…` junk in the wizard's error banner.
+  return new ClaudeInstallError(exitCode, sanitizeStderr(stderr).slice(-STDERR_TAIL_CHARS));
+}
+
+/**
+ * Remove terminal escape sequences (ANSI CSI/SGR, OSC, lone ESC) and leftover
+ * C0 control bytes (keeping tab + newline) from interpreter stderr before it's
+ * surfaced to the user. The installer runs under real shells whose error output
+ * is colorized; the banner shows this as plain text.
+ */
+function sanitizeStderr(s: string): string {
+  const withoutEscapes = s.replace(
+    // CSI (`ESC [ … final`), OSC (`ESC ] … BEL|ST`), or a lone ESC-class byte.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching escape bytes is the intent
+    /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g,
+    "",
+  );
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping residual control bytes is the intent
+  return withoutEscapes.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
 }
 
 /**
