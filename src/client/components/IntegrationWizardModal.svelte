@@ -148,7 +148,7 @@ $effect(() => {
   if (!open) return;
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
-      onClose();
+      close();
     }
   };
   window.addEventListener("keydown", onKey);
@@ -156,6 +156,11 @@ $effect(() => {
 });
 
 function close(): void {
+  // Delete any keychain secret stored under Advanced but never persisted (the
+  // user dismissed before saving). Gated inside the hook on the pre-persist
+  // state, so it can never delete a live, file-referenced ref. Must run before
+  // reset() clears `picked` — the hook captures the refs synchronously.
+  void wizard.cleanupUnsavedSecrets().catch(() => {});
   wizard.reset();
   secretInputs = {};
   onClose();
@@ -213,9 +218,13 @@ function trapTab(e: KeyboardEvent): void {
   }
 }
 
+// Match picked entries by `configPath` — the natural key the `{#each}` (keyed
+// on configPath) and `save()` already use. Matching on `(kind, label)` was a
+// fragile third identity key: two same-kind installs (classic + MSIX
+// claude-desktop) could conflate selection state.
 function togglePicked(install: ExistingMcpInstall): void {
   const existingIdx = wizard.picked.findIndex(
-    (p) => p.config.kind === install.target.kind && p.config.label === install.target.label,
+    (p) => p.config.configPath === install.target.configPath,
   );
   if (existingIdx >= 0) {
     wizard.setPicked(wizard.picked.filter((_, i) => i !== existingIdx));
@@ -226,9 +235,7 @@ function togglePicked(install: ExistingMcpInstall): void {
 }
 
 function isPicked(install: ExistingMcpInstall): boolean {
-  return wizard.picked.some(
-    (p) => p.config.kind === install.target.kind && p.config.label === install.target.label,
-  );
+  return wizard.picked.some((p) => p.config.configPath === install.target.configPath);
 }
 
 async function onSubmitSecret(picked: PickedIntegration): Promise<void> {
@@ -249,7 +256,7 @@ const connectLabel = $derived(
 /** Friendly name for an apply-result row — results carry integration ids,
  *  so resolve back through `picked` for the human label. */
 function resultLabel(result: ApplyItemResult): string {
-  return wizard.picked.find((p) => p.id === result.id)?.config.label ?? result.id;
+  return wizard.picked.find((p) => p.id === result.id)?.config.label ?? "Unknown";
 }
 
 /** Plain-language sentence for a failed apply result. Falls back to the
@@ -683,7 +690,7 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                     <button
                       type="button"
                       class="iw-btn iw-btn-secondary iw-more-btn"
-                      onclick={() => (view = "cowork")}
+                      onclick={() => { coworkError = null; coworkBusy = false; view = "cowork"; }}
                       aria-label="Set up Cowork"
                       data-testid="integration-wizard-cowork-setup"
                     >
