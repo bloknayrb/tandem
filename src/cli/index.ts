@@ -3,12 +3,12 @@
  * Shebang is added by tsup banner at build time.
  *
  * Usage:
- *   tandem            Start the Tandem server and open the editor
- *   tandem setup      Register Tandem MCP tools with your AI client (Claude Code / Claude Desktop by default)
- *   tandem setup --force  Register even if no AI install is auto-detected
- *   tandem doctor     Diagnose setup issues (add --json for machine-readable output)
- *   tandem --help     Show this help
- *   tandem --version  Show version
+ *   tandem               Start the Tandem server and open the editor
+ *   tandem setup         Print first-run setup guidance (setup is wizard-driven)
+ *   tandem setup --apply Non-interactively write MCP config to detected clients
+ *   tandem doctor        Diagnose setup issues (add --json for machine-readable output)
+ *   tandem --help        Show this help
+ *   tandem --version     Show version
  */
 
 import updateNotifier from "update-notifier";
@@ -47,9 +47,13 @@ if (args.includes("--help") || args.includes("-h")) {
 
 Usage:
   tandem                            Start Tandem server and open the editor
-  tandem setup                      Register MCP tools with your AI client (Claude Code / Claude Desktop by default)
-  tandem setup --force              Register to default paths regardless of detection
-  tandem setup --with-channel-shim  Also register the stdio channel shim (legacy opt-in)
+  tandem setup                      Print first-run setup guidance (setup is wizard-driven)
+  tandem setup --apply              Write MCP config to detected AI clients non-interactively
+  tandem setup --apply --force      Apply to default paths regardless of detection
+  tandem setup --apply --target=claude-code|claude-desktop
+                                    Restrict --apply to specific client(s)
+  tandem setup --apply --with-channel-shim
+                                    Also register the stdio channel shim (legacy opt-in)
   tandem doctor                     Diagnose setup issues (Node version, .mcp.json,
                                     ports, server health, annotation store)
   tandem doctor --json              Same checks, emit a single JSON report on stdout
@@ -80,10 +84,31 @@ try {
     const exitCode = await runUninstallScrub();
     process.exit(exitCode);
   } else if (args[0] === "setup") {
-    const { runSetup } = await import("./setup.js");
+    const { runSetup, parseTargetArgs } = await import("./setup.js");
+    // `--target=claude-code` / `--target=claude-desktop`, repeatable. Warn on
+    // unrecognized values so a typo doesn't silently become a confusing "No
+    // matching installations" downstream.
+    const { targets, unknown } = parseTargetArgs(args);
+    for (const t of unknown) {
+      console.error(
+        `[tandem] Ignoring unrecognized --target value "${t}" (expected claude-code or claude-desktop).`,
+      );
+    }
+    // If the user asked for targets but NONE resolved, fail closed rather than
+    // falling through to "no filter → apply to every detected client" — writing
+    // config to clients they didn't ask for is a surprising side effect on a
+    // --apply write path.
+    if (unknown.length > 0 && targets.length === 0) {
+      console.error(
+        "[tandem] No valid --target values given (expected claude-code or claude-desktop); refusing to apply to all clients. Aborting.",
+      );
+      process.exit(1);
+    }
     await runSetup({
+      apply: args.includes("--apply"),
       force: args.includes("--force"),
       withChannelShim: args.includes("--with-channel-shim"),
+      targets,
     });
   } else if (args[0] === "mcp-stdio") {
     const { runMcpStdio } = await import("./mcp-stdio.js");

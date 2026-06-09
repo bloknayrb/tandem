@@ -293,6 +293,46 @@ if (isTauriRuntime()) {
   });
 }
 
+// Tray "Setup AI Assistant" (Tauri-only): the Rust side emits
+// "open-integration-wizard" after focusing the window. Re-dispatch the same
+// window CustomEvent the Settings "Reopen wizard" affordance uses, so the
+// wizard opens on demand. Replaces the old run_setup() tray round-trip removed
+// in #477 PR 3c-ii-c.
+if (isTauriRuntime()) {
+  let unlisten: (() => void) | null = null;
+  let cancelled = false;
+  import("@tauri-apps/api/event")
+    .then(({ listen }) =>
+      listen("open-integration-wizard", () => {
+        window.dispatchEvent(new CustomEvent("tandem:open-integration-wizard"));
+      }),
+    )
+    .then((un) => {
+      if (cancelled) un();
+      else unlisten = un;
+    })
+    .catch((err) => {
+      console.warn("[App] Failed to wire open-integration-wizard listener:", err);
+      // The tray "Setup AI Assistant" item is now the primary replacement for
+      // the removed run_setup() round-trip; if its listener can't wire, clicking
+      // it would be a silent no-op (Rust emits the event, nothing receives it).
+      // Surface a recoverable warning instead of swallowing it to console.
+      notifications.push({
+        id: `open-wizard-listener-failed-${Date.now()}`,
+        type: "launcher",
+        severity: "warning",
+        message:
+          "Couldn't enable the Setup shortcut. Open Settings → Reopen wizard to configure integrations.",
+        dedupKey: "open-wizard-listener-failed",
+        timestamp: Date.now(),
+      });
+    });
+  onDestroy(() => {
+    cancelled = true;
+    unlisten?.();
+  });
+}
+
 // Surface OS file-association open failures (Tauri-only) as a warning toast.
 // The Rust side classifies the rejected double-clicked file and signals a
 // STABLE, PATH-FREE reason code via two surfaces, both handled here (see #630):

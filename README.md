@@ -85,7 +85,7 @@ The desktop app bundles the editor, the server it talks to, and storage for the 
 
 ### Other ways to install
 
-If you use a terminal, you can also install Tandem with `npm install -g tandem-editor`, then run `tandem setup` once and `tandem` to launch. This works the same as the desktop app and is mostly useful if you already have Node.js installed.
+If you use a terminal, you can also install Tandem with `npm install -g tandem-editor`, then run `tandem` to launch — the first-run wizard connects Claude. (For a scripted, non-interactive setup, run `tandem setup --apply` once first.) This works the same as the desktop app and is mostly useful if you already have Node.js installed.
 
 ### Got stuck
 
@@ -150,7 +150,7 @@ The integration policy is set by [ADR-038](docs/decisions.md#adr-038-mcp-first-i
 
 > Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 27 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
-> **Integration setup** runs through the integration setup wizard (#477 PR 3). Today's transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — is **deprecated when the wizard ships**. Going forward, every integration (Claude included) is configured via the wizard, never silently.
+> **Integration setup** runs through the integration setup wizard (#477 PR 3). The earlier transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — was **removed in #477 PR 3c-ii-c**. Every integration (Claude included) is now configured via the wizard, never silently; `tandem setup --apply` is the scriptable non-interactive equivalent.
 
 Client compatibility:
 
@@ -177,7 +177,7 @@ Client compatibility:
 Channel push delivers events (selections, annotation actions, chat messages) to the AI client over Server-Sent Events the moment they happen, so the AI does not have to poll. Two install options:
 
 ```bash
-tandem setup --with-channel-shim                           # persistent setup
+tandem setup --apply --with-channel-shim                   # persistent setup
 claude --dangerously-load-development-channels server:tandem-channel   # one-off
 ```
 

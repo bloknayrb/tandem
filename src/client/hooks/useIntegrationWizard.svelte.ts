@@ -214,6 +214,7 @@ export function createIntegrationWizard(
   const setError = (msg: string) => {
     errorMessage = msg;
     step = "error";
+    detecting = false;
   };
 
   const begin = async () => {
@@ -239,6 +240,17 @@ export function createIntegrationWizard(
         .filter((p): p is PickedIntegration => p !== null);
     } catch (err) {
       if (myGen !== beginGen) return;
+      // A network failure (server not up yet — common on first launch) rejects
+      // with a TypeError whose message varies by engine: Chromium "Failed to
+      // fetch", WKWebView (Tauri macOS) "Load failed", Firefox "NetworkError
+      // when attempting to fetch resource". Match those so we surface an
+      // actionable message — but gate on the message so a genuine programming
+      // TypeError (e.g. a structural error in the preselect chain above) falls
+      // through to its real text instead of being mislabeled "server unreachable".
+      if (err instanceof TypeError && /fetch|load failed|network/i.test(err.message)) {
+        setError("Could not reach the Tandem server. Make sure Tandem is running, then try again.");
+        return;
+      }
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       // Only the winning generation clears the loading flag — a superseded

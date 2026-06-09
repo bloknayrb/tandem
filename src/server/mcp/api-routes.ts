@@ -19,7 +19,6 @@ import {
   API_SESSIONS,
   API_SESSIONS_CLEAR,
   API_SESSIONS_DELETE,
-  API_SETUP,
   API_UPLOAD,
 } from "../../shared/api-paths.js";
 import { TAURI_HOSTNAME } from "../../shared/constants.js";
@@ -40,13 +39,11 @@ import { makeRotateTokenHandler } from "./routes/rotate-token.js";
 import { handleSave } from "./routes/save.js";
 import { handleScratchpad } from "./routes/scratchpad.js";
 import { handleClearSessions, handleDeleteSession, handleListSessions } from "./routes/sessions.js";
-import { makeSetupHandler } from "./routes/setup.js";
 import { handleUpload } from "./routes/upload.js";
 
 export type { Handler } from "./routes/_shared.js";
 // Re-export shared utilities that tests and other modules import from here
-export { errorCodeToHttpStatus, isValidChannelPath, isValidNodeBinary } from "./routes/_shared.js";
-export { runSetupHandler } from "./routes/setup.js";
+export { errorCodeToHttpStatus, isValidNodeBinary } from "./routes/_shared.js";
 
 /**
  * Check if a Host header value is allowed (127.0.0.1 + tauri.localhost + optional extra hosts).
@@ -133,7 +130,10 @@ export const apiMiddleware: Handler = createApiMiddleware();
 export function registerApiRoutes(
   app: Express,
   largeBody: Handler,
-  token: string | undefined,
+  // Formerly threaded into the (now-removed) /api/setup handler; auth-token
+  // wiring for rotate-token flows through setCurrentToken/getCurrentToken.
+  // Kept positionally so the caller signature is unchanged (#477 PR 3c-ii-c).
+  _token: string | undefined,
   mw: Handler,
   setCurrentToken: (t: string) => void,
   getCurrentToken: () => string | null,
@@ -182,9 +182,6 @@ export function registerApiRoutes(
   app.get(API_DOCUMENT_RAW, mw, handleGetDocumentRaw);
   app.options(API_DOCUMENT_RELOAD, mw);
   app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
-
-  app.options(API_SETUP, mw);
-  app.post(API_SETUP, mw, largeBody, makeSetupHandler({ token }));
 
   // Annotation reply: browser user posts a reply to an annotation thread
   app.options(API_ANNOTATION_REPLY, mw);

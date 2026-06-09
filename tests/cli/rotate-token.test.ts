@@ -41,7 +41,7 @@ vi.mock("../../src/shared/auth/token-file.js", () => ({
   getTokenFilePath: _getTokenPathSpy,
 }));
 
-vi.mock("../../src/cli/setup.js", () => ({
+vi.mock("../../src/server/integrations/apply.js", () => ({
   applyConfigWithToken: _applyConfigSpy,
 }));
 

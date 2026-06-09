@@ -6,7 +6,7 @@
 
 Real-world patterns for using Tandem with Claude on the kinds of documents an individual writes and reviews — reports, proposals, and prose drafts. The scenarios below use concrete example documents, but the workflow is the same whatever you are working on.
 
-> **Note:** These workflows assume the desktop app, where the server runs automatically and Claude Code is configured on launch. If you installed via npm instead (`npm install -g tandem-editor`), run `tandem setup` first, then `tandem` to start the server before proceeding.
+> **Note:** These workflows assume the desktop app, where the server runs automatically and the first-run wizard connects Claude Code. If you installed via npm instead (`npm install -g tandem-editor`), run `tandem` to start the server and complete the first-run wizard — or, for a scripted setup, run `tandem setup --apply` first.
 
 ## Quick Start (npm Global Install)
 
@@ -14,12 +14,12 @@ Real-world patterns for using Tandem with Claude on the kinds of documents an in
 
 ```bash
 npm install -g tandem-editor
-tandem setup
+tandem            # launches the editor; the first-run wizard connects Claude
 ```
 
-`tandem setup` auto-detects Claude Code and Claude Desktop, writes MCP config, and installs a Claude Code skill with workflow guidance:
+Prefer a non-interactive setup (CI / dotfiles)? `tandem setup --apply` detects Claude Code and Claude Desktop, writes MCP config, and installs a Claude Code skill with workflow guidance:
 ```
-Tandem Setup
+Tandem Setup (--apply)
 
 Detecting Claude installations...
   Found: Claude Code (~/.claude/mcp_settings.json)
@@ -33,6 +33,8 @@ Installing Claude Code skill...
 Setup complete! Start Tandem with: tandem
 Then in Claude, your tandem_* tools will be available.
 ```
+
+Bare `tandem setup` (no flags) prints this guidance instead of writing anything — setup is wizard-driven; `--apply` is the explicit opt-in to write config.
 
 The skill teaches Claude how to use Tandem's 30 MCP tools (27 active, 3 deprecated stubs) effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
 
@@ -55,10 +57,10 @@ Then try:
 
 Claude connects to the running Tandem server, opens the document, and starts reading. With the channel active, chat messages and annotation actions push to Claude instantly. Without it, Claude falls back to polling via `tandem_checkInbox`.
 
-**After upgrading** (re-run setup to update the skill and MCP paths):
+**After upgrading** (re-apply to update the skill and MCP paths):
 ```bash
 npm update -g tandem-editor
-tandem setup    # re-writes MCP config with new paths
+tandem setup --apply    # re-writes MCP config with new paths
 ```
 
 ## Reviewing a Progress Report
