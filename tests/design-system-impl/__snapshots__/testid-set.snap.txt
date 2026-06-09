@@ -169,7 +169,11 @@ integration-wizard-cowork-setup
 integration-wizard-cowork-step
 integration-wizard-done-close
 integration-wizard-done-retry
+integration-wizard-empty
 integration-wizard-error-retry
+integration-wizard-install-claude
+integration-wizard-install-error
+integration-wizard-install-success
 integration-wizard-keychain-fallback
 integration-wizard-more
 integration-wizard-pick-{*}

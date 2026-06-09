@@ -60,6 +60,21 @@ vi.mock("../../src/client/hooks/useCoworkStatus.svelte", () => ({
   }),
 }));
 
+// Stub the Claude-CLI status hook so the modal doesn't fire a real (blocked)
+// fetch at 127.0.0.1:3479 during these Cowork-focused tests. Presence ON_PATH
+// keeps the install CTA out of the empty state.
+vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
+  createClaudeCliStatus: () => ({
+    presence: "INSTALLED_ON_PATH",
+    loading: false,
+    error: null,
+    installing: false,
+    installError: null,
+    install: vi.fn(async () => "INSTALLED_ON_PATH"),
+    refetch: vi.fn(async () => {}),
+  }),
+}));
+
 // Empty-connect MCP state — keeps the MAIN view rendered with no /api fetch.
 vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", () => ({
   createIntegrationWizard: () => ({
