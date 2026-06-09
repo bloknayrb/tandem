@@ -285,9 +285,11 @@ export async function snapshotBeforeFirstWrite(
       .catch((err) => console.error("[DocBackup] source.txt write failed (continuing):", err));
 
     // Prune beyond MAX_DOC_BACKUPS, newest kept. The write added exactly one
-    // file to the listing we already have — no second readdir needed. The new
-    // name is newest by construction, but sort anyway in case of clock skew.
-    const all = [snapshotName, ...existing].sort().reverse();
+    // file to the listing we already have — no second readdir needed. Do NOT
+    // re-sort: the timestamp segment is second-granular, so two snapshots in
+    // the same second tie and fall to the random uuid8 — which can rank the
+    // just-written file "oldest" and prune it. By construction it is newest.
+    const all = [snapshotName, ...existing];
     for (const name of all.slice(MAX_DOC_BACKUPS)) {
       await fs
         .rm(path.join(subdir, name), { force: true })
