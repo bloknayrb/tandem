@@ -284,7 +284,7 @@ function handleReset() {
         type="submit"
         disabled={wdInflight}
         data-testid="settings-modal-working-directory-save"
-        style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-elevated); color: var(--tandem-fg); cursor: pointer;"
+        style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); color: var(--tandem-fg); cursor: pointer;"
       >Save</button>
     </form>
     <div style="display: flex; gap: var(--tandem-space-2);">
@@ -294,7 +294,7 @@ function handleReset() {
           onclick={pickFolder}
           disabled={wdInflight}
           data-testid="settings-modal-working-directory-pick"
-          style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-elevated); color: var(--tandem-fg); cursor: pointer;"
+          style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); color: var(--tandem-fg); cursor: pointer;"
         >Choose folder…</button>
       {/if}
       <button
@@ -317,7 +317,7 @@ function handleReset() {
   type="button"
   onclick={openWizard}
   data-testid="settings-modal-open-integration-wizard"
-  style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-elevated); color: var(--tandem-fg); cursor: pointer; align-self: flex-start;"
+  style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); color: var(--tandem-fg); cursor: pointer; align-self: flex-start;"
 >
   Reopen integration wizard…
 </button>

@@ -1,20 +1,46 @@
 <script lang="ts">
 /**
- * Integration setup wizard modal.
+ * Unified onboarding wizard modal (detection-led, progressive disclosure).
  *
- * Full-screen Svelte 5 modal driven by `createIntegrationWizard()`. All
- * steps (detect → pick → secrets → review → saving/done/error) live in
- * one file — splitting into sub-components added more indirection than
- * value at this size. App.svelte mounts via `{#if shouldShowWizard}` so
- * the state machine resets on close→reopen.
+ * MAIN view: the MCP connect machine driven by `createIntegrationWizard()`
+ * (detection → card selection → optional Advanced token → applying → done /
+ * error), with a "More integrations" section below it surfacing Cowork
+ * (opt-in, Windows-only) and an "AI models — coming soon" line.
+ *
+ * COWORK sub-view (`view === "cowork"`): a minimal enable screen lifted from
+ * CoworkSettings — the firewall/UAC warning renders first and
+ * `cowork-enable-confirm-btn` is the SOLE trigger of enable. The `{#if view}`
+ * swap lives INSIDE the stable dialog shell (the node carrying
+ * `bind:this={dialogEl}`); header/footer/scrim never churn, so the focus
+ * trap is preserved across the toggle.
+ *
+ * App.svelte mounts via `{#if shouldShowWizard}` so closing unmounts the
+ * component — that unmount (not `reset()`) is what restores freshness on
+ * reopen, including firing the Cowork poller's `onDestroy`.
+ *
+ * Chrome follows the onboarding-modal family (FirstRun/ModelEdit): a single
+ * padded card with flowing content — header, body, and actions stack with no
+ * internal divider bars, and the whole card scrolls when a tall state
+ * overflows. Shares the cluster-3.2 modal shell (color-mix scrim at
+ * --tandem-z-above-titlebar, r-5 + shadow-3) and a Tab focus trap re-queried
+ * per keypress (the Advanced <details> changes the focusable set while open).
  */
 import { untrack } from "svelte";
-import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
-import type { ExistingMcpInstall, IntegrationConfig } from "../../shared/integrations/contract.js";
+import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
+import {
+  coworkSettingsVariant,
+  formatCoworkError,
+  isTauriRuntime,
+} from "../cowork/cowork-helpers.js";
+import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
+import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
 import {
   createIntegrationWizard,
+  detectedToPicked,
   type PickedIntegration,
 } from "../hooks/useIntegrationWizard.svelte.js";
+import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
 
 interface Props {
   open: boolean;
@@ -27,6 +53,24 @@ let { open, onClose }: Props = $props();
 // other client modules (yjsSync, useNotifications, fileUpload) follow the
 // same pattern of pointing directly at the backend port.
 const wizard = createIntegrationWizard({ baseUrl: `http://127.0.0.1:${DEFAULT_MCP_PORT}` });
+
+// Single Cowork source of truth (feeds both the "More integrations" row and
+// the Cowork sub-view). `getActive` is a PURE runtime check — it must never
+// read coworkStatus.status/.loading, or the hook's own $effect (which writes
+// them) would self-trigger `effect_update_depth_exceeded`. In the browser
+// getActive() is false → the hook's effect early-returns, no interval ever
+// starts; on Tauri the poller lives only while this component is mounted.
+const coworkStatus = createCoworkStatus(() => isTauriRuntime());
+// Render subscriptions (NOT effect reads) — safe.
+const coworkVariant = $derived(coworkSettingsVariant(coworkStatus.status));
+
+// MAIN ↔ COWORK sub-view toggle. Reset to "main" on (re)open below.
+let view = $state<"main" | "cowork">("main");
+// Per-mount Cowork enable state — component-local $state so unmount clears it
+// and reopen is clean (explicitly NOT a module-level singleton).
+let coworkBusy = $state(false);
+let coworkError = $state<string | null>(null);
+
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
 // User-entered token text per integration id (cleared after submit).
@@ -45,16 +89,52 @@ $effect(() => {
 
 $effect(() => {
   if (!open) return;
+  // Reset to the MAIN view on (re)open. Unconditional (not `if (view ===
+  // "cowork")`) so this effect never subscribes to `view` and can't re-fire
+  // on a MAIN↔COWORK toggle. Defensive — a fresh mount already inits "main".
+  view = "main";
   // Kick off detection on open. begin() is idempotent — calling on re-open
   // refreshes the existing-entries list.
   void wizard.begin();
+});
+
+/** Enable Cowork. `cowork-enable-confirm-btn` is the SOLE caller — never the
+ *  footer, never sub-view mount. On success (or UAC-declined, which the Rust
+ *  side leaves fail-closed with enabled:false) we refetch and return to MAIN
+ *  so the Cowork row reflects the committed outcome; a thrown firewall error
+ *  (incl. adminDeclined) shows inline and keeps the user on the sub-view. */
+async function enableCowork(): Promise<void> {
+  coworkBusy = true;
+  coworkError = null;
+  try {
+    const invoke: InvokeFn = await loadInvoke();
+    await coworkToggleIntegration(invoke, true);
+    await coworkStatus.refetch();
+    view = "main";
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    coworkError = formatCoworkError(raw);
+  } finally {
+    coworkBusy = false;
+  }
+}
+
+/** Human-readable state line for the Cowork row in "More integrations". */
+const coworkRowDetail = $derived.by(() => {
+  if (coworkVariant === "loading") return "Checking…";
+  if (coworkVariant === "unsupported") return "Coming soon to macOS & Linux";
+  if (coworkVariant === "undetected") return "Not detected on this computer";
+  const s = coworkStatus.status;
+  if (s?.enabled) return "Connected — token provisioned";
+  if (s?.uacDeclined) return "Admin permission declined — set up to retry";
+  return "Let a teammate's Claude join from the Cowork VM";
 });
 
 $effect(() => {
   if (!open) return;
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
-      onClose();
+      close();
     }
   };
   window.addEventListener("keydown", onKey);
@@ -62,68 +142,58 @@ $effect(() => {
 });
 
 function close(): void {
+  // Delete any keychain secret stored under Advanced but never persisted (the
+  // user dismissed before saving). Gated inside the hook on the pre-persist
+  // state, so it can never delete a live, file-referenced ref. Must run before
+  // reset() clears `picked` — the hook captures the refs synchronously.
+  void wizard.cleanupUnsavedSecrets().catch(() => {});
   wizard.reset();
   secretInputs = {};
   onClose();
 }
 
+/** Re-run detection from scratch — the open-$effect only fires on the
+ *  open transition, so "Try again" / "Check again" must call begin()
+ *  explicitly after reset(). */
+function retryDetection(): void {
+  wizard.reset();
+  secretInputs = {};
+  void wizard.begin();
+}
+
 /**
- * Build a stable id. `Date.now()` has only millisecond resolution and
- * `IntegrationsFileSchema` doesn't reject duplicate ids — two rapid picks
- * in the same tick would silently overwrite each other downstream.
+ * Tab focus trap (ported from SettingsModal). Re-queries focusables on
+ * every Tab press because the Advanced <details> disclosure changes the
+ * set while the dialog is open.
  */
-function newPickedId(kindPrefix: string): string {
-  return `${kindPrefix}-${crypto.randomUUID().slice(0, 8)}`;
-}
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
-function detectedToPicked(install: ExistingMcpInstall): PickedIntegration | null {
-  if (install.target.kind === "claude-code") {
-    const url = install.tandemEntry?.url ?? "http://127.0.0.1:3479";
-    const id = newPickedId("claude-code");
-    return {
-      id,
-      config: {
-        kind: "claude-code",
-        id,
-        label: install.target.label,
-        configPath: install.target.configPath,
-        transport: "http",
-        url,
-      },
-      hasStoredSecret: false,
-      keychainUnavailable: false,
-    };
+function trapTab(e: KeyboardEvent): void {
+  if (e.key !== "Tab" || !dialogEl) return;
+  const focusables = Array.from(dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => el.offsetParent !== null,
+  );
+  if (focusables.length === 0) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  if (e.shiftKey && (active === first || active === dialogEl)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
   }
-  if (install.target.kind === "claude-desktop") {
-    const id = newPickedId("claude-desktop");
-    return {
-      id,
-      config: {
-        kind: "claude-desktop",
-        id,
-        label: install.target.label,
-        configPath: install.target.configPath,
-        transport: "stdio",
-      },
-      hasStoredSecret: false,
-      keychainUnavailable: false,
-    };
-  }
-  return null;
 }
 
-function preselectFromDetected(): void {
-  const next = wizard.existing
-    .filter((i) => i.status === "ok" || i.status === "missing")
-    .map(detectedToPicked)
-    .filter((p): p is PickedIntegration => p !== null);
-  wizard.setPicked(next);
-  wizard.advanceToPick();
-}
-
+// Match picked entries by `configPath` — the natural key the `{#each}` (keyed
+// on configPath) and `save()` already use. Matching on `(kind, label)` was a
+// fragile third identity key: two same-kind installs (classic + MSIX
+// claude-desktop) could conflate selection state.
 function togglePicked(install: ExistingMcpInstall): void {
   const existingIdx = wizard.picked.findIndex(
-    (p) => p.config.kind === install.target.kind && p.config.label === install.target.label,
+    (p) => p.config.configPath === install.target.configPath,
   );
   if (existingIdx >= 0) {
     wizard.setPicked(wizard.picked.filter((_, i) => i !== existingIdx));
@@ -134,30 +204,130 @@ function togglePicked(install: ExistingMcpInstall): void {
 }
 
 function isPicked(install: ExistingMcpInstall): boolean {
-  return wizard.picked.some(
-    (p) => p.config.kind === install.target.kind && p.config.label === install.target.label,
-  );
+  return wizard.picked.some((p) => p.config.configPath === install.target.configPath);
 }
 
 async function onSubmitSecret(picked: PickedIntegration): Promise<void> {
   const secret = secretInputs[picked.id] ?? "";
   if (secret.length === 0) return;
   await wizard.submitSecret(picked, secret);
-  secretInputs = { ...secretInputs, [picked.id]: "" };
+  secretInputs[picked.id] = "";
 }
 
-function configBadge(config: IntegrationConfig): string {
-  if (config.kind === "claude-code") return "Claude Code · HTTP";
-  if (config.kind === "claude-desktop") return "Claude Desktop · stdio";
-  return `Other MCP · ${config.transport}`;
+const HTTP_5XX_RE = /HTTP 5\d\d/;
+const HTTP_4XX_RE = /HTTP 4\d\d/;
+const NETWORK_ERROR_RE = /fetch|network|Failed to/i;
+
+const connectLabel = $derived(
+  wizard.picked.length === 1 ? `Connect ${wizard.picked[0].config.label}` : "Connect selected",
+);
+
+/** Friendly name for an apply-result row — results carry integration ids,
+ *  so resolve back through `picked` for the human label. */
+function resultLabel(result: ApplyItemResult): string {
+  return wizard.picked.find((p) => p.id === result.id)?.config.label ?? "Unknown";
 }
+
+/** Plain-language sentence for a failed apply result. Falls back to the
+ *  server message, which is validated leak-safe (contract.ts). */
+function resultErrorText(result: ApplyItemResult): string {
+  switch (result.code) {
+    case "WRITE_FAILED":
+      return "Couldn't write the settings file — check it isn't open in another program, then try again.";
+    case "SECRET_MISSING":
+      return "The access token wasn't found — re-enter it under Advanced and try again.";
+    case "TARGET_NOT_DETECTED":
+      return "This assistant's settings file couldn't be found anymore — it may have moved.";
+    case "PATH_REJECTED":
+      return "The settings file is in an unexpected location, so Tandem left it alone for safety.";
+    case "OTHER_MCP_NOT_APPLICABLE":
+      return "Tandem can't auto-configure this app — connect it manually from that app's settings.";
+    default:
+      return result.message ?? "Something went wrong applying this one.";
+  }
+}
+
+/** Plain-language lead for the error screen; raw detail stays in the
+ *  collapsed Technical details block. */
+const errorLead = $derived.by(() => {
+  const msg = wizard.errorMessage ?? "";
+  if (HTTP_5XX_RE.test(msg)) {
+    return "Tandem's helper isn't responding. Make sure Tandem is running, then try again.";
+  }
+  if (HTTP_4XX_RE.test(msg)) {
+    return "Tandem couldn't save the connection. Try again in a moment.";
+  }
+  if (NETWORK_ERROR_RE.test(msg)) {
+    return "Couldn't reach Tandem — is it still running?";
+  }
+  return null;
+});
+
+const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "error"));
 </script>
+
+{#snippet warningIcon(cls?: string)}
+  <svg
+    class={cls}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 3l9 16H3z" />
+    <path d="M12 9v4" />
+    <path d="M12 17h.01" />
+  </svg>
+{/snippet}
+
+{#snippet checkIcon()}
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M5 13l4 4L19 7" />
+  </svg>
+{/snippet}
+
+{#snippet chevronIcon()}
+  <svg
+    class="iw-chevron"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M9 6l6 6-6 6" />
+  </svg>
+{/snippet}
+
+{#snippet loadingDots(label: string)}
+  <div class="iw-loading" aria-live="polite">
+    <span class="iw-dots" aria-hidden="true">
+      <span class="iw-dot"></span><span class="iw-dot"></span><span class="iw-dot"></span>
+    </span>
+    {label}
+  </div>
+{/snippet}
 
 {#if open}
   <div
     role="presentation"
     class="iw-scrim"
-    onclick={close}
+    onclick={(e) => {
+      if (e.target === e.currentTarget) close();
+    }}
     data-testid="integration-wizard"
   >
     <div
@@ -167,19 +337,33 @@ function configBadge(config: IntegrationConfig): string {
       tabindex="-1"
       bind:this={dialogEl}
       class="iw-dialog"
-      onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => {
-        // Handle Escape locally; the window-level handler never sees it
-        // because we stopPropagation on every non-Tab key below.
+        // Handle Escape locally and stop it here so the window-level fallback
+        // handler doesn't also fire close() (double-invoke). The early return
+        // below skips the shared stopPropagation, so this branch must call it.
         if (e.key === "Escape") {
+          e.stopPropagation();
           close();
           return;
         }
-        if (e.key !== "Tab") e.stopPropagation();
+        if (e.key === "Tab") {
+          trapTab(e);
+          return;
+        }
+        e.stopPropagation();
       }}
     >
       <header class="iw-header">
-        <h2 class="iw-title">Connect an AI assistant</h2>
+        <div class="iw-header-text">
+          <h2 class="iw-title">
+            {view === "cowork" ? "Set up Cowork" : "Connect Claude to Tandem"}
+          </h2>
+          {#if view === "main" && wizard.step === "connect"}
+            <p class="iw-subtitle">Connect your AI assistant.</p>
+          {:else if view === "cowork"}
+            <p class="iw-subtitle">Let a teammate's Claude join from the Cowork VM.</p>
+          {/if}
+        </div>
         <button
           type="button"
           class="iw-close"
@@ -191,175 +375,365 @@ function configBadge(config: IntegrationConfig): string {
         </button>
       </header>
 
-      {#if wizard.step === "detect"}
-        <section data-testid="integration-wizard-step-detect">
-          <p>Looking for existing AI integrations on your system…</p>
-          {#if wizard.existing.length > 0}
-            <ul class="iw-existing">
-              {#each wizard.existing as install (install.target.configPath)}
-                <li>
-                  <strong>{install.target.label}</strong>
-                  <span class="iw-status iw-status-{install.status}">{install.status}</span>
-                  {#if install.tandemEntry}
-                    <span class="iw-hint">Tandem is already configured here.</span>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          <div class="iw-actions">
-            <button
-              type="button"
-              onclick={preselectFromDetected}
-              data-testid="integration-wizard-continue-detect"
-            >
-              Continue
-            </button>
-          </div>
-        </section>
-      {:else if wizard.step === "pick"}
-        <section data-testid="integration-wizard-step-pick">
-          <p>Select which AI integrations to register with Tandem.</p>
-          <ul class="iw-pick-list">
-            {#each wizard.existing as install (install.target.configPath)}
-              <li>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={isPicked(install)}
-                    onchange={() => togglePicked(install)}
-                    data-testid="integration-wizard-pick-{install.target.kind}"
+      <div class="iw-body">
+        <!-- The {#if view} swap nests INSIDE the stable .iw-dialog shell (the
+             node carrying bind:this={dialogEl}); only the body content swaps,
+             so the focus trap never re-binds. -->
+        {#if view === "cowork"}
+          <section class="iw-step" data-testid="integration-wizard-cowork-step">
+            {#if coworkStatus.status?.enabled}
+              <div class="iw-whats-next">
+                {@render checkIcon()}
+                <span>
+                  Cowork is enabled and a token is provisioned. Manage workspaces in
+                  Settings&nbsp;→&nbsp;Network.
+                </span>
+              </div>
+            {:else}
+              <div class="iw-banner-warning">
+                {@render warningIcon()}
+                <span>
+                  Windows will ask for admin permission to update firewall rules — this is
+                  expected. Tandem writes plugin entries to every detected Cowork workspace so a
+                  teammate's Claude can reach the documents you have open.
+                </span>
+              </div>
+              {#if coworkStatus.status?.vethernetCidr}
+                <p class="iw-hint-text" data-testid="cowork-vethernet-cidr">
+                  Detected Cowork environment:
+                  <code class="iw-code-inline">{coworkStatus.status.vethernetCidr}</code>
+                </p>
+              {/if}
+              {#if coworkStatus.status?.uacDeclined}
+                <p class="iw-hint-text">
+                  Admin permission was declined earlier — enabling will prompt again.
+                </p>
+              {/if}
+            {/if}
+            {#if coworkError}
+              <div
+                class="iw-banner-warning"
+                role="alert"
+                data-testid="integration-wizard-cowork-error"
+              >
+                {@render warningIcon()}
+                <span>{coworkError}</span>
+              </div>
+            {/if}
+          </section>
+        {:else}
+          {#if wizard.step === "connect"}
+            <!-- Testid must stay on this wrapper (rendered for ALL connect
+                 sub-states incl. loading/empty) — the E2E spec asserts it
+                 visible immediately on open. -->
+            <section class="iw-step" data-testid="integration-wizard-step-detect">
+            {#if wizard.detecting}
+              {@render loadingDots("Looking for Claude on your computer…")}
+            {:else if wizard.existing.length === 0}
+              <div class="iw-empty">
+                <p class="iw-empty-title">We couldn't find Claude on this computer.</p>
+                <p class="iw-hint-text">
+                  If you use Claude Code or Claude Desktop, open it once, then check again. To
+                  connect a different MCP-compatible app manually, point it at:
+                </p>
+                <code class="iw-code">http://127.0.0.1:{DEFAULT_MCP_PORT}/mcp</code>
+              </div>
+            {:else}
+              <p class="iw-intro">
+                We'll add a small entry to Claude's settings file so Claude can read and edit the
+                documents you have open in Tandem. Nothing else is touched, and you can undo this
+                any time.
+              </p>
+              <div class="iw-cards">
+                {#each wizard.existing as install (install.target.configPath)}
+                  <IntegrationTargetCard
+                    {install}
+                    selected={isPicked(install)}
+                    onToggle={() => togglePicked(install)}
                   />
-                  <strong>{install.target.label}</strong>
-                  <small>{install.target.configPath}</small>
-                </label>
-              </li>
-            {/each}
-          </ul>
-          <div class="iw-actions">
-            <button type="button" onclick={() => wizard.advanceToSecrets()} data-testid="integration-wizard-continue-pick">
-              Continue
-            </button>
-          </div>
-        </section>
-      {:else if wizard.step === "secrets"}
-        <section data-testid="integration-wizard-step-secrets">
-          <p>
-            Optional — store an auth token for each integration. Tandem keeps these in your
-            operating system's keychain, never in plain text.
-          </p>
-          {#if wizard.keychainUnavailable}
-            <p class="iw-warning" data-testid="integration-wizard-keychain-fallback">
-              Your operating system keychain isn't reachable from this Tandem build. Tokens
-              entered here can't be saved. Use the environment variable
-              <code>TANDEM_INTEGRATION_&lt;id&gt;_TOKEN</code> instead, or skip this step and
-              add the token via your AI client's own configuration.
-            </p>
+                {/each}
+              </div>
+
+              {#if wizard.picked.length > 0}
+                <details class="iw-advanced" data-testid="integration-wizard-advanced">
+                  <summary>
+                    {@render chevronIcon()}
+                    Advanced — set an access token
+                  </summary>
+                  <div class="iw-advanced-body">
+                    <p class="iw-hint-text">
+                      Only needed if you've changed Tandem to listen on your network instead of
+                      just this computer. Most people can skip this. Tokens are stored in your
+                      operating system's secure storage.
+                    </p>
+                    {#if wizard.keychainUnavailable}
+                      <div class="iw-banner-warning" data-testid="integration-wizard-keychain-fallback">
+                        {@render warningIcon()}
+                        <span>
+                          Your operating system's secure storage isn't reachable from this Tandem
+                          build, so tokens entered here can't be saved. Set the environment
+                          variable <code class="iw-code-inline">TANDEM_INTEGRATION_&lt;id&gt;_TOKEN</code>
+                          instead, or add the token in your AI client's own configuration.
+                        </span>
+                      </div>
+                    {/if}
+                    {#each wizard.picked as picked (picked.id)}
+                      <div class="iw-secret-row">
+                        <span class="iw-secret-label">{picked.config.label}</span>
+                        {#if picked.hasStoredSecret}
+                          <span class="iw-secret-stored">
+                            {@render checkIcon()}
+                            Token saved
+                          </span>
+                        {:else if picked.keychainUnavailable}
+                          <span class="iw-secret-skipped">Skipped (secure storage unavailable)</span>
+                        {:else}
+                          <div class="iw-secret-input">
+                            <input
+                              type="password"
+                              placeholder="Paste access token"
+                              bind:value={secretInputs[picked.id]}
+                              data-testid="integration-wizard-secret-input-{picked.id}"
+                            />
+                            <button
+                              type="button"
+                              class="iw-btn iw-btn-secondary"
+                              onclick={() => onSubmitSecret(picked)}
+                              disabled={!secretInputs[picked.id]}
+                              data-testid="integration-wizard-secret-submit-{picked.id}"
+                            >
+                              Save token
+                            </button>
+                          </div>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                </details>
+              {/if}
+            {/if}
+          </section>
+        {:else if wizard.step === "applying"}
+          <section class="iw-step iw-center" data-testid="integration-wizard-step-applying">
+            {@render loadingDots("Connecting Claude…")}
+            <p class="iw-hint-text">Updating Claude's settings file. This takes a second.</p>
+          </section>
+        {:else if wizard.step === "done"}
+          <section class="iw-step" data-testid="integration-wizard-step-done">
+            <div class="iw-done-header">
+              <svg
+                class="iw-done-check"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path class="iw-check-path" d="M4 13l5 5L20 7" />
+              </svg>
+              <h3 class="iw-done-title">
+                {anyApplyErrors ? "Partly connected" : "Claude is connected to Tandem"}
+              </h3>
+            </div>
+            {#if wizard.applyResults.length > 0}
+              <div class="iw-results">
+                {#each wizard.applyResults as result (result.id)}
+                  <div
+                    class="iw-result iw-result-{result.status}"
+                    data-testid="integration-wizard-apply-result-{result.id}"
+                  >
+                    <span class="iw-result-mark" aria-hidden="true">
+                      {#if result.status === "applied"}
+                        {@render checkIcon()}
+                      {:else if result.status === "skipped"}
+                        —
+                      {:else}
+                        {@render warningIcon()}
+                      {/if}
+                    </span>
+                    <span class="iw-result-text">
+                      <span class="iw-result-name">{resultLabel(result)}</span>
+                      {#if result.status === "applied"}
+                        <span class="iw-result-detail">Connected</span>
+                      {:else if result.status === "skipped"}
+                        <span class="iw-result-detail">
+                          Left unchanged (already set up, or couldn't be safely edited)
+                        </span>
+                      {:else}
+                        <span class="iw-result-detail">{resultErrorText(result)}</span>
+                      {/if}
+                    </span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            <div class="iw-whats-next">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 11v5" />
+                <path d="M12 8h.01" />
+              </svg>
+              <span>
+                Restart Claude Code, then type <code class="iw-code-inline">/mcp</code> to verify —
+                or just ask Claude to open a document.
+              </span>
+            </div>
+          </section>
+        {:else if wizard.step === "error"}
+          <section class="iw-step iw-center" data-testid="integration-wizard-step-error">
+            {@render warningIcon("iw-error-icon")}
+            <h3 class="iw-error-title">Something went wrong while connecting</h3>
+            {#if errorLead}
+              <p class="iw-hint-text">{errorLead}</p>
+            {/if}
+            {#if wizard.errorMessage}
+              <details class="iw-tech-details">
+                <summary>
+                  {@render chevronIcon()}
+                  Technical details
+                </summary>
+                <pre class="iw-tech-text">{wizard.errorMessage}</pre>
+              </details>
+            {/if}
+          </section>
           {/if}
-          <ul class="iw-secrets-list">
-            {#each wizard.picked as picked (picked.id)}
-              <li>
-                <div class="iw-secret-row">
-                  <strong>{picked.config.label}</strong>
-                  <small>{configBadge(picked.config)}</small>
-                </div>
-                {#if picked.hasStoredSecret}
-                  <em class="iw-stored">Token saved.</em>
-                {:else if picked.keychainUnavailable}
-                  <em class="iw-skipped">Skipped (keychain unavailable).</em>
-                {:else}
-                  <div class="iw-secret-input">
-                    <input
-                      type="password"
-                      placeholder="Paste auth token (optional)"
-                      bind:value={secretInputs[picked.id]}
-                      data-testid="integration-wizard-secret-input-{picked.id}"
-                    />
+
+          {#if wizard.step === "connect" || wizard.step === "done"}
+            <section class="iw-more" data-testid="integration-wizard-more">
+              <div class="iw-more-label">More integrations</div>
+              {#if isTauriRuntime()}
+                <div class="iw-more-row">
+                  <div class="iw-more-row-text">
+                    <span class="iw-more-row-name">Cowork</span>
+                    <span class="iw-more-row-detail">{coworkRowDetail}</span>
+                  </div>
+                  {#if coworkStatus.status?.enabled}
+                    <span class="iw-more-badge">
+                      {@render checkIcon()}
+                      Enabled
+                    </span>
+                  {:else if coworkVariant === "normal"}
                     <button
                       type="button"
-                      onclick={() => onSubmitSecret(picked)}
-                      disabled={!secretInputs[picked.id]}
-                      data-testid="integration-wizard-secret-submit-{picked.id}"
+                      class="iw-btn iw-btn-secondary iw-more-btn"
+                      onclick={() => { coworkError = null; coworkBusy = false; view = "cowork"; }}
+                      aria-label="Set up Cowork"
+                      data-testid="integration-wizard-cowork-setup"
                     >
-                      Save token
+                      Set up
                     </button>
-                  </div>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-          <div class="iw-actions">
-            <button
-              type="button"
-              onclick={() => wizard.advanceToReview()}
-              data-testid="integration-wizard-continue-secrets"
-            >
-              Continue
-            </button>
-          </div>
-        </section>
-      {:else if wizard.step === "review"}
-        <section data-testid="integration-wizard-step-review">
-          <p>Ready to save. Tandem will register these integrations:</p>
-          <ul class="iw-review-list">
-            {#each wizard.picked as picked (picked.id)}
-              <li>
-                <strong>{picked.config.label}</strong>
-                <small>{configBadge(picked.config)}</small>
-                {#if picked.config.tokenSecretRef}
-                  <span class="iw-token-badge">Token stored</span>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-          <div class="iw-actions">
-            <button
-              type="button"
-              onclick={() => wizard.save()}
-              data-testid="integration-wizard-save"
-            >
-              Save and finish
-            </button>
-          </div>
-        </section>
-      {:else if wizard.step === "saving"}
-        <section data-testid="integration-wizard-step-saving">
-          <p>Saving integration configuration…</p>
-        </section>
-      {:else if wizard.step === "done"}
-        <section data-testid="integration-wizard-step-done">
-          <p>Done — Tandem is connected to your AI client(s).</p>
-          {#if wizard.applyResults.length > 0}
-            <ul class="iw-apply-results">
-              {#each wizard.applyResults as result (result.id)}
-                <li
-                  class="iw-apply-result iw-apply-result-{result.status}"
-                  data-testid="integration-wizard-apply-result-{result.id}"
-                >
-                  <span class="iw-apply-result-id">{result.id}</span>
-                  <span class="iw-apply-result-status">{result.status}</span>
-                  {#if result.status === "error" && result.message}
-                    <span class="iw-apply-result-message">{result.message}</span>
                   {/if}
-                </li>
-              {/each}
-            </ul>
+                </div>
+              {/if}
+              {#if !BYO_MODELS_ENABLED}
+                <div class="iw-more-row iw-more-row-disabled">
+                  <div class="iw-more-row-text">
+                    <span class="iw-more-row-name">AI models</span>
+                    <span class="iw-more-row-detail">Bring your own model — coming soon</span>
+                  </div>
+                </div>
+              {/if}
+            </section>
           {/if}
-          <div class="iw-actions">
-            <button type="button" onclick={close} data-testid="integration-wizard-done-close">
-              Close
+        {/if}
+      </div>
+
+      <footer class="iw-footer">
+        {#if view === "cowork"}
+          <button
+            type="button"
+            class="iw-btn iw-btn-secondary"
+            onclick={() => (view = "main")}
+            data-testid="integration-wizard-cowork-back"
+            disabled={coworkBusy}
+          >
+            Back
+          </button>
+          {#if coworkStatus.status?.enabled}
+            <button type="button" class="iw-btn iw-btn-primary" onclick={() => (view = "main")}>
+              Done
             </button>
-          </div>
-        </section>
-      {:else if wizard.step === "error"}
-        <section data-testid="integration-wizard-step-error">
-          <p class="iw-error">Something went wrong: {wizard.errorMessage}</p>
-          <div class="iw-actions">
-            <button type="button" onclick={() => wizard.reset()}>Start over</button>
-            <button type="button" onclick={close}>Close</button>
-          </div>
-        </section>
-      {/if}
+          {:else}
+            <button
+              type="button"
+              class="iw-btn iw-btn-primary"
+              onclick={enableCowork}
+              disabled={coworkBusy}
+              data-testid="cowork-enable-confirm-btn"
+            >
+              {coworkBusy ? "Enabling…" : "Enable Cowork"}
+            </button>
+          {/if}
+        {:else if wizard.step === "connect"}
+          {#if wizard.detecting}
+            <button type="button" class="iw-btn iw-btn-secondary" onclick={close}>Cancel</button>
+          {:else if wizard.existing.length === 0}
+            <button type="button" class="iw-btn iw-btn-secondary" onclick={close}>Close</button>
+            <button
+              type="button"
+              class="iw-btn iw-btn-primary"
+              onclick={retryDetection}
+              data-testid="integration-wizard-check-again"
+            >
+              Check again
+            </button>
+          {:else}
+            <button type="button" class="iw-btn iw-btn-secondary" onclick={close}>
+              Not now
+            </button>
+            <button
+              type="button"
+              class="iw-btn iw-btn-primary"
+              onclick={() => wizard.save()}
+              disabled={wizard.picked.length === 0}
+              data-testid="integration-wizard-connect-btn"
+            >
+              {connectLabel}
+            </button>
+          {/if}
+        {:else if wizard.step === "applying"}
+          <button type="button" class="iw-btn iw-btn-secondary" disabled>Connecting…</button>
+        {:else if wizard.step === "done"}
+          {#if anyApplyErrors}
+            <button
+              type="button"
+              class="iw-btn iw-btn-secondary"
+              onclick={retryDetection}
+              data-testid="integration-wizard-done-retry"
+            >
+              Try again
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="iw-btn iw-btn-primary"
+            onclick={close}
+            data-testid="integration-wizard-done-close"
+          >
+            Done
+          </button>
+        {:else if wizard.step === "error"}
+          <button type="button" class="iw-btn iw-btn-secondary" onclick={close}>Close</button>
+          <button
+            type="button"
+            class="iw-btn iw-btn-primary"
+            onclick={retryDetection}
+            data-testid="integration-wizard-error-retry"
+          >
+            Try again
+          </button>
+        {/if}
+      </footer>
     </div>
   </div>
 {/if}
@@ -373,6 +747,7 @@ function configBadge(config: IntegrationConfig): string {
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: var(--tandem-space-5);
     z-index: var(--tandem-z-above-titlebar);
   }
 
@@ -380,24 +755,52 @@ function configBadge(config: IntegrationConfig): string {
     background-color: var(--tandem-surface);
     color: var(--tandem-fg);
     border: 1px solid var(--tandem-border);
+    /* Modal-family signature (cluster 3.2): r-5 corners + shadow-3, matching
+       SettingsModal/ModelEdit (FirstRun/palette use shadow-4). Onboarding-card
+       chrome — one padded card with flowing content (like FirstRun/ModelEdit),
+       not SettingsModal's bordered fixed header/footer bars. */
     border-radius: var(--tandem-r-5);
     box-shadow: var(--tandem-shadow-3);
+    width: 560px;
+    max-width: calc(100vw - var(--tandem-space-6));
+    max-height: min(640px, calc(100vh - var(--tandem-space-6)));
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-3);
     padding: var(--tandem-space-5);
-    width: 640px;
-    max-width: 95vw;
-    max-height: 90vh;
+    /* The whole card scrolls when a tall state overflows — header/footer flow
+       with content rather than pinning, matching the onboarding-modal family. */
     overflow-y: auto;
+    /* One above the scrim (sibling stacking) so the dialog sits over the
+       titlebar like SettingsModal. */
+    z-index: calc(var(--tandem-z-above-titlebar) + 1);
   }
 
   .iw-header {
     display: flex;
-    align-items: baseline;
+    align-items: flex-start;
     justify-content: space-between;
-    margin-bottom: var(--tandem-space-4);
+    gap: var(--tandem-space-3);
+    flex-shrink: 0;
+  }
+
+  .iw-header-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-1);
   }
 
   .iw-title {
-    font-size: var(--tandem-text-xl);
+    /* 18px·600 matches FirstRunModelPickerModal — the wizard's closest
+       onboarding-modal sibling (text-lg is 17px; the family heading is 18). */
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .iw-subtitle {
+    font-size: var(--tandem-text-sm);
+    color: var(--tandem-fg-muted);
     margin: 0;
   }
 
@@ -415,6 +818,7 @@ function configBadge(config: IntegrationConfig): string {
     place-items: center;
     padding: 0;
     border-radius: var(--tandem-r-2);
+    flex-shrink: 0;
   }
   .iw-close:hover,
   .iw-close:focus-visible {
@@ -423,160 +827,495 @@ function configBadge(config: IntegrationConfig): string {
     outline: none;
   }
 
-  .iw-existing,
-  .iw-pick-list,
-  .iw-secrets-list,
-  .iw-review-list {
-    list-style: none;
-    padding: 0;
-    margin: var(--tandem-space-3) 0;
+  .iw-body {
+    display: flex;
+    flex-direction: column;
   }
 
-  .iw-existing li,
-  .iw-pick-list li,
-  .iw-secrets-list li,
-  .iw-review-list li {
-    padding: var(--tandem-space-2) 0;
-    border-bottom: 1px solid var(--tandem-border-subtle);
+  .iw-step {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-4);
   }
 
-  .iw-status {
-    margin-left: var(--tandem-space-2);
-    font-size: var(--tandem-text-2xs);
-    padding: 2px 6px;
-    border-radius: var(--tandem-r-pill);
-  }
-  .iw-status-ok {
-    background: var(--tandem-success-bg);
-    color: var(--tandem-success-fg-strong);
-  }
-  .iw-status-missing {
-    background: var(--tandem-warning-bg);
-    color: var(--tandem-warning-fg-strong);
-  }
-  .iw-status-malformed,
-  .iw-status-error {
-    background: var(--tandem-error-bg);
-    color: var(--tandem-error-fg-strong);
+  .iw-center {
+    align-items: center;
+    text-align: center;
+    padding: var(--tandem-space-5) 0;
   }
 
-  .iw-hint {
-    display: block;
-    font-size: var(--tandem-text-xs);
+  .iw-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--tandem-space-2);
+    flex-shrink: 0;
+  }
+
+  .iw-btn {
+    padding: var(--tandem-space-2) var(--tandem-space-4);
+    font-size: var(--tandem-text-base);
+    font-weight: 500;
+    border-radius: var(--tandem-r-2);
+    cursor: pointer;
+    transition:
+      background 140ms ease,
+      border-color 140ms ease;
+  }
+  .iw-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .iw-btn-primary {
+    border: 1px solid transparent;
+    background: var(--tandem-accent);
+    color: var(--tandem-accent-fg);
+  }
+  .iw-btn-primary:hover:not(:disabled) {
+    background: var(--tandem-accent-hover);
+  }
+  .iw-btn-primary:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
+  }
+  .iw-btn-secondary {
+    border: 1px solid var(--tandem-border-strong);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+  }
+  .iw-btn-secondary:hover:not(:disabled) {
+    background: var(--tandem-surface-sunk);
+  }
+  .iw-btn-secondary:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
+  }
+
+  /* --- Connect: loading / empty / found --- */
+
+  .iw-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--tandem-space-3);
+    padding: var(--tandem-space-5) 0;
+    font-size: var(--tandem-text-base);
     color: var(--tandem-fg-muted);
   }
 
-  .iw-actions {
-    display: flex;
-    gap: var(--tandem-space-2);
-    justify-content: flex-end;
-    margin-top: var(--tandem-space-4);
+  .iw-dots {
+    display: inline-flex;
+    gap: 4px;
+  }
+  .iw-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--tandem-r-circle);
+    background: var(--tandem-fg-faint);
+    animation: iw-dot-pulse 1.2s ease-in-out infinite;
+  }
+  .iw-dot:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .iw-dot:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+  @keyframes iw-dot-pulse {
+    0%,
+    80%,
+    100% {
+      opacity: 0.3;
+      transform: scale(0.85);
+    }
+    40% {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
 
-  /* Default wizard action buttons read as ghost-primary (border + surface).
-     Continue/Save/Close keep this baseline — the primary-color promotion is
-     a follow-up once the step indicator lands so the visual hierarchy reads
-     as one. */
-  .iw-actions button {
-    padding: var(--tandem-space-2) var(--tandem-space-3);
-    border-radius: var(--tandem-r-2);
-    border: 1px solid var(--tandem-border);
-    background: var(--tandem-surface);
+  .iw-intro {
+    font-size: var(--tandem-text-base);
+    line-height: 1.55;
     color: var(--tandem-fg);
-    cursor: pointer;
+    margin: 0;
   }
-  .iw-actions button:hover {
+
+  .iw-cards {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+  }
+
+  .iw-empty {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-3);
+    padding: var(--tandem-space-4) 0;
+  }
+  .iw-empty-title {
+    font-size: var(--tandem-text-md);
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .iw-hint-text {
+    font-size: var(--tandem-text-sm);
+    line-height: 1.5;
+    color: var(--tandem-fg-muted);
+    margin: 0;
+  }
+
+  .iw-code {
+    align-self: flex-start;
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-sm);
     background: var(--tandem-surface-sunk);
+    padding: var(--tandem-space-1) var(--tandem-space-2);
+    border-radius: var(--tandem-r-2);
   }
-  .iw-actions button:focus-visible {
-    outline: none;
-    border-color: var(--tandem-accent-border);
+  .iw-code-inline {
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-xs);
+    background: var(--tandem-surface-sunk);
+    padding: 1px 4px;
+    border-radius: var(--tandem-r-2);
+  }
+
+  /* --- Advanced disclosure --- */
+
+  .iw-advanced summary,
+  .iw-tech-details summary {
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+    cursor: pointer;
+    list-style: none;
+    padding: var(--tandem-space-2) 0;
+    font-size: var(--tandem-text-sm);
+    font-weight: 600;
+    color: var(--tandem-fg);
+    user-select: none;
+  }
+  .iw-advanced summary::-webkit-details-marker,
+  .iw-tech-details summary::-webkit-details-marker {
+    display: none;
+  }
+  /* Firefox/Safari paint the standard ::marker triangle over the custom
+     chevron unless it's blanked too (matches CollapsibleSection). */
+  .iw-advanced summary::marker,
+  .iw-tech-details summary::marker {
+    content: "";
+  }
+
+  .iw-chevron {
+    width: 16px;
+    height: 16px;
+    color: var(--tandem-fg-subtle);
+    transition: transform 140ms ease;
+    flex-shrink: 0;
+  }
+  details[open] > summary .iw-chevron {
+    transform: rotate(90deg);
+  }
+
+  .iw-advanced-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-3);
+    padding: var(--tandem-space-2) 0 0;
+  }
+
+  .iw-banner-warning {
+    display: flex;
+    gap: var(--tandem-space-2);
+    align-items: flex-start;
+    padding: var(--tandem-space-3);
+    background: var(--tandem-warning-bg);
+    border: 1px solid var(--tandem-warning-border);
+    border-radius: var(--tandem-r-3);
+    color: var(--tandem-warning-fg-strong);
+    font-size: var(--tandem-text-sm);
+    line-height: 1.5;
+  }
+  .iw-banner-warning svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    margin-top: 1px;
   }
 
   .iw-secret-row {
     display: flex;
     flex-direction: column;
-    margin-bottom: var(--tandem-space-1);
+    gap: var(--tandem-space-1);
   }
-
+  .iw-secret-label {
+    /* Field-label recipe shared with .mem-label / .frm-label. */
+    font-size: var(--tandem-text-xs);
+    font-weight: 600;
+    color: var(--tandem-fg);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
   .iw-secret-input {
     display: flex;
     gap: var(--tandem-space-2);
   }
-
   .iw-secret-input input {
     flex: 1;
-    padding: var(--tandem-space-1) var(--tandem-space-2);
+    padding: var(--tandem-space-2);
+    font-size: var(--tandem-text-base);
+    font-family: var(--tandem-font-mono);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+    border: 1px solid var(--tandem-border-strong);
     border-radius: var(--tandem-r-2);
-    border: 1px solid var(--tandem-border);
   }
-
-  .iw-stored {
+  .iw-secret-input input:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -1px;
+  }
+  .iw-secret-stored {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--tandem-space-1);
+    font-size: var(--tandem-text-sm);
     color: var(--tandem-success-fg-strong);
   }
-  .iw-skipped {
+  .iw-secret-stored svg {
+    width: 14px;
+    height: 14px;
+  }
+  .iw-secret-skipped {
+    font-size: var(--tandem-text-sm);
     color: var(--tandem-warning-fg-strong);
   }
 
-  .iw-warning {
-    padding: var(--tandem-space-2);
-    background: var(--tandem-warning-bg);
-    color: var(--tandem-warning-fg-strong);
-    border-radius: var(--tandem-r-2);
-    margin: var(--tandem-space-2) 0;
+  /* --- Done --- */
+
+  .iw-done-header {
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-3);
+  }
+  .iw-done-check {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    /* Tints the currentColor stroke; matches the .iw-result-applied mark and
+       the success badge / secret-stored text. */
+    color: var(--tandem-success-fg-strong);
+  }
+  .iw-check-path {
+    stroke-dasharray: 24;
+    stroke-dashoffset: 0;
+    animation: iw-check-draw 260ms ease-out;
+  }
+  @keyframes iw-check-draw {
+    from {
+      stroke-dashoffset: 24;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  .iw-done-title {
+    font-size: var(--tandem-text-lg);
+    font-weight: 600;
+    margin: 0;
   }
 
-  .iw-error {
+  .iw-results {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+  }
+  .iw-result {
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    gap: var(--tandem-space-2);
+    align-items: start;
+    padding: var(--tandem-space-3);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+  }
+  .iw-result-mark {
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+  }
+  .iw-result-mark svg {
+    width: 100%;
+    height: 100%;
+  }
+  .iw-result-applied .iw-result-mark {
+    color: var(--tandem-success-fg-strong);
+  }
+  .iw-result-skipped .iw-result-mark {
+    color: var(--tandem-fg-faint);
+  }
+  .iw-result-error {
+    background: var(--tandem-error-bg);
+    border-color: var(--tandem-error-border);
+  }
+  .iw-result-error .iw-result-mark {
     color: var(--tandem-error-fg-strong);
   }
-
-  .iw-token-badge {
-    margin-left: var(--tandem-space-2);
-    font-size: var(--tandem-text-2xs);
-    padding: 2px 6px;
-    border-radius: var(--tandem-r-pill);
-    background: var(--tandem-success-bg);
-    color: var(--tandem-success-fg-strong);
+  .iw-result-error .iw-result-name {
+    color: var(--tandem-error-fg-strong);
   }
-
-  .iw-apply-results {
-    list-style: none;
-    padding: 0;
-    margin: var(--tandem-space-3) 0;
-  }
-  .iw-apply-result {
+  .iw-result-text {
     display: flex;
-    flex-wrap: wrap;
-    gap: var(--tandem-space-2);
-    padding: var(--tandem-space-2);
-    border-radius: var(--tandem-r-2);
-    margin-bottom: var(--tandem-space-1);
-    border: 1px solid var(--tandem-border-subtle);
+    flex-direction: column;
+    gap: 2px;
   }
-  .iw-apply-result-id {
+  .iw-result-name {
+    font-size: var(--tandem-text-base);
     font-weight: 600;
   }
-  .iw-apply-result-status {
-    font-size: var(--tandem-text-2xs);
-    padding: 2px 6px;
-    border-radius: var(--tandem-r-pill);
-    text-transform: uppercase;
-  }
-  .iw-apply-result-message {
-    flex-basis: 100%;
-    font-size: var(--tandem-text-xs);
+  .iw-result-detail {
+    font-size: var(--tandem-text-sm);
     color: var(--tandem-fg-muted);
   }
-  .iw-apply-result-applied {
-    background: var(--tandem-success-bg);
+  .iw-result-error .iw-result-detail {
+    color: var(--tandem-error-fg-strong);
+  }
+
+  .iw-whats-next {
+    display: flex;
+    gap: var(--tandem-space-2);
+    align-items: flex-start;
+    padding: var(--tandem-space-3);
+    background: var(--tandem-info-bg);
+    border: 1px solid var(--tandem-info-border);
+    border-radius: var(--tandem-r-3);
+    font-size: var(--tandem-text-sm);
+    line-height: 1.5;
+    color: var(--tandem-info-fg-strong);
+  }
+  .iw-whats-next svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* --- More integrations --- */
+
+  .iw-more {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+    margin-top: var(--tandem-space-4);
+    padding-top: var(--tandem-space-4);
+    border-top: 1px solid var(--tandem-border);
+  }
+  .iw-more-label {
+    font-size: var(--tandem-text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--tandem-fg);
+  }
+  .iw-more-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--tandem-space-3);
+    padding: var(--tandem-space-3);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+  }
+  .iw-more-row-disabled {
+    opacity: 0.6;
+  }
+  .iw-more-row-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .iw-more-row-name {
+    font-size: var(--tandem-text-base);
+    font-weight: 600;
+  }
+  .iw-more-row-detail {
+    font-size: var(--tandem-text-sm);
+    color: var(--tandem-fg-muted);
+  }
+  .iw-more-btn {
+    flex-shrink: 0;
+    padding: var(--tandem-space-1) var(--tandem-space-3);
+  }
+  .iw-more-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--tandem-space-1);
+    flex-shrink: 0;
+    font-size: var(--tandem-text-sm);
+    font-weight: 600;
     color: var(--tandem-success-fg-strong);
   }
-  .iw-apply-result-skipped {
-    background: var(--tandem-warning-bg);
-    color: var(--tandem-warning-fg-strong);
+  .iw-more-badge svg {
+    width: 14px;
+    height: 14px;
   }
-  .iw-apply-result-error {
-    background: var(--tandem-error-bg);
+
+  /* --- Error --- */
+
+  .iw-error-icon {
+    width: 32px;
+    height: 32px;
     color: var(--tandem-error-fg-strong);
+  }
+  .iw-error-title {
+    font-size: var(--tandem-text-lg);
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .iw-tech-details {
+    align-self: stretch;
+    text-align: left;
+  }
+  .iw-tech-text {
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+    background: var(--tandem-surface-sunk);
+    padding: var(--tandem-space-3);
+    border-radius: var(--tandem-r-2);
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* --- Reduced motion: both the OS preference and the in-app toggle. --- */
+  @media (prefers-reduced-motion: reduce) {
+    .iw-dot {
+      /* The pulse keyframe starts at 0.3 opacity; freezing there leaves the
+         dots nearly invisible, so pin a visible resting opacity. */
+      animation: none;
+      opacity: 0.7;
+    }
+    .iw-check-path {
+      animation: none;
+    }
+    .iw-btn,
+    .iw-chevron {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .iw-dot {
+    animation: none;
+    opacity: 0.7;
+  }
+  :global(body.tandem-reduce-motion) .iw-check-path {
+    animation: none;
+  }
+  :global(body.tandem-reduce-motion) .iw-btn,
+  :global(body.tandem-reduce-motion) .iw-chevron {
+    transition: none;
   }
 </style>
