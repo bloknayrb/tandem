@@ -71,6 +71,15 @@ const snapshottedPaths = new Set<string>();
 /** One cap-exceeded notification per server run. */
 let sizeCapNotified = false;
 
+/**
+ * Paths (by hash) whose snapshot failure was already toasted this run. Without
+ * this latch a persistent failure would re-toast every 60s autosave tick (the
+ * 6s toast auto-dismiss is far shorter than the retry interval, so dedupKey
+ * alone only coalesces the activity tray, not the toasts). Cleared on success
+ * so a NEW failure after recovery notifies again. stderr still logs every retry.
+ */
+const failureNotifiedPaths = new Set<string>();
+
 /** Windows ACL applied to the backup root this run (spawns subprocesses — once is enough). */
 let aclEnsured = false;
 
@@ -78,6 +87,7 @@ let aclEnsured = false;
 export function _resetDocBackupGateForTests(): void {
   snapshottedPaths.clear();
   sizeCapNotified = false;
+  failureNotifiedPaths.clear();
   aclEnsured = false;
 }
 
@@ -139,13 +149,23 @@ async function listSnapshots(dir: string): Promise<string[]> {
     .reverse();
 }
 
-/** Total size in bytes of all regular files under the doc-backups root. */
+/**
+ * Total size in bytes of regular files in the per-path subdirs directly under
+ * the doc-backups root (fixed two-level walk: root → hash-subdirs → files —
+ * this module never nests deeper).
+ */
 async function totalTreeBytes(root: string): Promise<number> {
   let total = 0;
   let subdirs: Dirent[];
   try {
     subdirs = await fs.readdir(root, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    // ENOENT = first run, root not created yet. Anything else (EACCES, EIO)
+    // means the cap fails open — log it so the eventual mkdir failure has a
+    // first-symptom trail.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error("[DocBackup] totalTreeBytes: failed to read backup root:", err);
+    }
     return 0;
   }
   for (const sub of subdirs) {
@@ -154,7 +174,10 @@ async function totalTreeBytes(root: string): Promise<number> {
     let files: Dirent[];
     try {
       files = await fs.readdir(subPath, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(`[DocBackup] totalTreeBytes: failed to read ${subPath}:`, err);
+      }
       continue;
     }
     for (const f of files) {
@@ -186,9 +209,12 @@ export type SnapshotOutcome =
  * byte-identical / size cap) mark the path done for this run. Only a FAILURE
  * leaves the gate unset so the next save retries.
  *
- * TOCTOU note: the read shares the existing save path's window — the external
- * -mtime guard in `saveDocumentToDisk` runs before it, and an external writer
- * racing the read was already a hazard for the save itself. Nothing new.
+ * TOCTOU note: the read shares the existing save path's window. In
+ * `saveDocumentToDisk` the external-mtime guard runs before it; in
+ * `saveDocumentAsToDisk` and `convertToMarkdown` there is no mtime guard, but
+ * those writes already clobbered a racing external writer before this module
+ * existed. An external writer racing the read was a hazard at every call site
+ * already — nothing new is introduced.
  */
 export async function snapshotBeforeFirstWrite(
   filePath: string,
@@ -275,6 +301,8 @@ export async function snapshotBeforeFirstWrite(
       await fs.writeFile(snapshotPath, original, { flag: "wx", mode: 0o600 });
     } catch (writeErr) {
       // Remove any partial file so it never counts as a valid snapshot.
+      // Best-effort: if the cleanup itself fails, the partial survives until
+      // a later prune; writeErr below is the error the caller needs to see.
       await fs.rm(snapshotPath, { force: true }).catch(() => {});
       throw writeErr;
     }
@@ -297,21 +325,29 @@ export async function snapshotBeforeFirstWrite(
     }
 
     snapshottedPaths.add(pathKey);
+    // A success after earlier failures re-arms the notification: if the path
+    // starts failing again later (disk refilled, ACL changed), notify anew.
+    failureNotifiedPaths.delete(pathKey);
     console.error(`[DocBackup] Snapshotted ${path.basename(filePath)} -> ${snapshotPath}`);
     return "written";
   } catch (err) {
-    // Gate stays unset — the next save retries. Notify once per path.
+    // Gate stays unset — the next save retries. The console line fires on
+    // every retry; the user-facing notification only once per path until a
+    // snapshot succeeds (a 60s autosave would otherwise re-toast each minute).
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[DocBackup] Snapshot failed for ${filePath} (save proceeds):`, err);
-    pushNotification({
-      id: generateNotificationId(),
-      type: "general-error",
-      severity: "warning",
-      message: `Could not back up ${path.basename(filePath)} before saving: ${msg}`,
-      documentId: opts.documentId,
-      dedupKey: `doc-backup:${pathKey}`,
-      timestamp: Date.now(),
-    });
+    if (!failureNotifiedPaths.has(pathKey)) {
+      failureNotifiedPaths.add(pathKey);
+      pushNotification({
+        id: generateNotificationId(),
+        type: "general-error",
+        severity: "warning",
+        message: `Could not back up ${path.basename(filePath)} before saving: ${msg}`,
+        documentId: opts.documentId,
+        dedupKey: `doc-backup:${pathKey}`,
+        timestamp: Date.now(),
+      });
+    }
     return "failed";
   }
 }
@@ -353,14 +389,19 @@ export async function sweepDocBackups(
     }
 
     let liveSnapshots = 0;
+    let unstattable = 0;
     for (const entry of entries) {
       if (!entry.isFile() || !SNAPSHOT_TAIL_RE.test(entry.name)) continue;
       const fullPath = path.join(subPath, entry.name);
-      let tooOld = false;
+      let tooOld: boolean;
       try {
         tooOld = nowMs - (await fs.stat(fullPath)).mtimeMs > SWEEP_AGE_MS;
       } catch {
-        // Raced away or unreadable — leave it alone.
+        // Raced away or unreadable — leave it alone, but don't count it as
+        // live either: a permanently unstattable entry would otherwise block
+        // the empty-dir cleanup below forever.
+        unstattable++;
+        continue;
       }
       if (!tooOld) {
         liveSnapshots++;
@@ -375,12 +416,25 @@ export async function sweepDocBackups(
       }
     }
 
-    if (liveSnapshots === 0) {
+    if (liveSnapshots === 0 && unstattable === 0) {
       // Only ever removes source.txt + the empty dir — the tail regex above
-      // guarantees no unexpected file is in scope, and a plain rmdir on a
-      // non-empty dir throws, which the catch swallows as "keep".
-      await fs.rm(path.join(subPath, SOURCE_MARKER_FILENAME), { force: true }).catch(() => {});
-      await fs.rmdir(subPath).catch(() => {});
+      // guarantees no unexpected file is in scope (an unstattable snapshot
+      // also blocks this branch: deleting source.txt while its snapshot
+      // lingers would orphan the bytes from their path metadata), and a
+      // plain rmdir on a non-empty dir throws ENOTEMPTY, which is the
+      // expected "keep" signal for stray files. Anything else (EACCES,
+      // EPERM) is a real problem worth a log line.
+      await fs.rm(path.join(subPath, SOURCE_MARKER_FILENAME), { force: true }).catch((err) => {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          console.error(`[DocBackup] sweep: failed to remove source.txt in ${subPath}:`, err);
+        }
+      });
+      await fs.rmdir(subPath).catch((err) => {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "ENOENT") {
+          console.error(`[DocBackup] sweep: failed to remove ${subPath}:`, err);
+        }
+      });
     }
   }
 

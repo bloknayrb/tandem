@@ -153,7 +153,7 @@ describe("doc-backup", () => {
       });
     });
 
-    it("returns failed (never throws), notifies, and retries on the next save", async () => {
+    it("returns failed (never throws), notifies once, and retries on the next save", async () => {
       writeFileSync(docPath, "original content\n");
       // A FILE at the doc-backups root makes every mkdir of a subdir fail.
       writeFileSync(docBackupsRoot(appDataDir), "not a directory");
@@ -165,6 +165,12 @@ describe("doc-backup", () => {
         documentId: "doc-1",
         severity: "warning",
       });
+
+      // A second failure on the same path retries but does NOT re-notify —
+      // the 60s autosave loop would otherwise toast every minute.
+      const stillFailing = await snapshotBeforeFirstWrite(docPath, { appDataDir });
+      expect(stillFailing).toBe("failed");
+      expect(pushNotificationMock).toHaveBeenCalledTimes(1);
 
       // Clear the obstruction — the gate was NOT set, so the next save retries.
       rmSync(docBackupsRoot(appDataDir));
