@@ -136,6 +136,32 @@ for (const row of FONT_FORMAT_ROWS) {
       </button>
     {/each}
   </div>
+  <!-- #993: when System resolves to a LIGHT OS appearance, let the user pick the
+       paper-tone Warm theme instead of neutral Light. Dark is unaffected. Only
+       meaningful while Theme === "system". -->
+  {#if settings.theme === "system"}
+    <label
+      data-testid="appearance-system-light-warm"
+      style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5); margin-top: var(--tandem-space-2);"
+    >
+      <input
+        type="checkbox"
+        checked={settings.systemLightVariant === "warm"}
+        onchange={(e) =>
+          onUpdate({
+            systemLightVariant: (e.target as HTMLInputElement).checked ? "warm" : "light",
+          })}
+        style="accent-color: var(--tandem-accent);"
+      />
+      <span>Use Warm when system is light</span>
+    </label>
+    <div
+      style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);"
+    >
+      When your OS reports a light appearance, use the paper-tone Warm theme instead of
+      neutral Light. A dark OS appearance still resolves to Dark.
+    </div>
+  {/if}
 </div>
 
 <!-- Default Tab -->

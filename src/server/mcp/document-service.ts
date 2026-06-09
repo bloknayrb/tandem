@@ -14,8 +14,12 @@ import {
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
-import { closeStore, createStore, envelopePath } from "../annotations/store.js";
-import { persistSnapshot } from "../annotations/sync.js";
+import { closeStore, createStore } from "../annotations/store.js";
+import {
+  mergeEnvelopeForward,
+  migrateTombstoneLedger,
+  persistSnapshot,
+} from "../annotations/sync.js";
 import {
   clearDirtyState,
   isDirty,
@@ -25,8 +29,9 @@ import {
 } from "../documents/dirty.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
+import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
-import { atomicWrite, getAdapter } from "../file-io/index.js";
+import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
@@ -77,7 +82,16 @@ export {
 /** Internal alias for the registry's view of open docs — used by closures below. */
 const openDocs = getOpenDocs();
 
-/** Non-throwing existence probe (fs.access has no boolean variant). */
+/**
+ * Non-throwing existence probe (fs.access has no boolean variant).
+ *
+ * Safe FS sink (CodeQL js/path-injection): the sole caller is renameDocument,
+ * which passes `newPath` only AFTER it has cleared validateRenameFilename, the
+ * inline separator/null-byte guard, rejectUnsafeWindowsPrefix, and the
+ * assertPathSafe realpath/symlink walk. CodeQL cannot trace those barriers
+ * across the function boundary, so a path-injection alert here is a false
+ * positive — see issue #1042 for the Security-tab dismissal rationale.
+ */
 const pathExists = (p: string): Promise<boolean> =>
   fs
     .access(p)
@@ -92,18 +106,36 @@ const savingDocs = new Set<string>();
 /** Formats eligible for disk auto-save (adapter.save defined && not binary). */
 const AUTO_SAVE_FORMATS = new Set(["md", "txt"]);
 
+/**
+ * Binary formats that write back via `adapter.saveBinary` + `atomicWriteBuffer`
+ * (#576). EXPLICIT-SAVE-ONLY: deliberately disjoint from `AUTO_SAVE_FORMATS` so
+ * the 60s auto-save timer never round-trips a lossy `.docx` import back to disk.
+ * The protective layer for `.docx` is "never overwrite without an explicit
+ * user save" (supersedes ADR-004's read-only default).
+ */
+const BINARY_SAVE_FORMATS = new Set(["docx"]);
+
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
   reason?: string;
   errorCode?: string;
+  /**
+   * Body-export fidelity warnings (#576, `.docx` only) — content the export
+   * downgraded (unsupported blocks, non-embedded images). Present on a
+   * successful binary save so the caller can surface a post-save notice. The
+   * lossy-mammoth-import ceiling is surfaced separately at open time.
+   */
+  fidelityWarnings?: string[];
 }
 
 /**
  * Save a document to disk. Shared by tandem_save, POST /api/save, and auto-save.
  *
  * Guards:
- * - Only .md and .txt formats (adapter.save defined, see ADR-036)
- * - Not read-only, not upload://
+ * - Text formats (.md/.txt) via `adapter.save` + `atomicWrite` (auto-saveable).
+ * - Binary formats (.docx) via `adapter.saveBinary` + `atomicWriteBuffer` —
+ *   EXPLICIT save only (`source !== "auto-save"`); see `BINARY_SAVE_FORMATS`.
+ * - Not upload://
  * - Checks source file mtime to skip if externally modified
  * - Per-document lock prevents concurrent writes
  */
@@ -118,15 +150,30 @@ export async function saveDocumentToDisk(
   if (docState.source === "upload") {
     return { status: "skipped", reason: "Upload-only document" };
   }
+
+  const isBinary = BINARY_SAVE_FORMATS.has(docState.format);
+
+  // Read-only blocks every save path. The read-only signal is the user's
+  // intent and dominates the format/source distinction: a read-only .docx is
+  // never overwritten, whether the trigger is auto-save or an explicit save.
+  // A writable .docx falls through to the binary branch below.
   if (docState.readOnly) {
     return { status: "skipped", reason: "Read-only document" };
   }
-  if (!AUTO_SAVE_FORMATS.has(docState.format)) {
+
+  // Binary formats (.docx) write back only on an EXPLICIT user/agent save. The
+  // auto-save timer must never overwrite the original with a re-export of a
+  // lossy mammoth import.
+  if (isBinary && source === "auto-save") {
+    return { status: "skipped", reason: "Binary formats save only on explicit save" };
+  }
+
+  if (!isBinary && !AUTO_SAVE_FORMATS.has(docState.format)) {
     return { status: "skipped", reason: `Format '${docState.format}' not eligible for disk save` };
   }
 
   const adapter = getAdapter(docState.format);
-  if (!adapter.save) {
+  if (isBinary ? !adapter.saveBinary : !adapter.save) {
     return { status: "skipped", reason: "Adapter cannot save" };
   }
 
@@ -137,7 +184,11 @@ export async function saveDocumentToDisk(
 
   savingDocs.add(docId);
   try {
-    // Guard against overwriting external modifications
+    // Guard against overwriting external modifications.
+    // Safe FS sink (CodeQL js/path-injection): `docState.filePath` is the
+    // registry's server-managed path (only ever set by openFileByPath /
+    // resolveAndValidatePath / a validated rename or save-as) — never raw user
+    // input. An alert here is a false positive; dismiss per issue #1042.
     try {
       const stat = await fs.stat(docState.filePath);
       // Compare to the session's mtime — if the file changed externally, skip
@@ -159,16 +210,26 @@ export async function saveDocumentToDisk(
     }
 
     const doc = getOrCreateDocument(docId);
-    // `adapter.save` was guard-checked above; assert it for the type narrow
-    // here. Per ADR-036 a missing `save` means the format is read-only.
     // Snapshot the dirty version BEFORE the async write so a content edit that
-    // lands DURING atomicWrite/saveSession isn't lost — markCleanIfUnchanged
-    // only clears the flag if no newer edit arrived (#851).
+    // lands DURING the write isn't lost — markCleanIfUnchanged only clears the
+    // flag if no newer edit arrived (#851).
     const dirtySnapshot = snapshotDirtyVersion(docId);
-    const output = adapter.save(doc);
 
-    suppressNextChange(docState.filePath);
-    await atomicWrite(docState.filePath, output);
+    let fidelityWarnings: string[] | undefined;
+    if (isBinary) {
+      // Binary branch (#576, .docx). Capture fidelity warnings against the same
+      // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
+      // (atomicWrite's UTF-8 encoding would corrupt the binary).
+      const warnings = detectExportFidelityIssues(doc);
+      const buffer = await adapter.saveBinary!(doc);
+      suppressNextChange(docState.filePath);
+      await atomicWriteBuffer(docState.filePath, buffer);
+      fidelityWarnings = warnings.length > 0 ? warnings : undefined;
+    } else {
+      const output = adapter.save!(doc);
+      suppressNextChange(docState.filePath);
+      await atomicWrite(docState.filePath, output);
+    }
     await saveSession(docState.filePath, docState.format, doc);
 
     // Mark document clean
@@ -176,7 +237,7 @@ export async function saveDocumentToDisk(
     withMcp(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
     markCleanIfUnchanged(docId, dirtySnapshot);
 
-    return { status: "saved" };
+    return { status: "saved", fidelityWarnings };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
@@ -704,23 +765,38 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     const { wireAnnotationStore, wireFileWatcher } = await import("./file-opener.js");
     const doc = getOrCreateDocument(docId);
 
-    // --- Phase 1: reversible prep (flush BEFORE teardown) ---
+    // --- Phase 1: reversible prep (flush, keep observer ATTACHED) ---
     // Flush the live store first so <oldHash>.json captures current annotations
-    // + the still-intact tombstone ledger. closeStore MUST precede
-    // clearFileSyncContext (whose "close" cleanup deletes the ledger) or
+    // + the still-intact tombstone ledger. closeStore MUST precede any teardown
+    // of the old context (whose "close" cleanup deletes the ledger) or
     // tombstones are lost — a deleted annotation would resurrect after rename.
+    //
+    // #1040, window (a): we DELIBERATELY do NOT clearFileSyncContext here. The
+    // old-hash annotation observer stays attached across the fs.rename + envelope
+    // move so a concurrent DELETE arriving in that span still records a tombstone
+    // (into the oldHash ledger). Phase 3 then migrates that ledger forward into
+    // the newHash envelope before the old context is finally disposed by the
+    // re-wire — so the just-deleted annotation can't resurrect.
     try {
       await closeStore(oldHash);
     } catch (err) {
       console.error("[Rename] closeStore(old) failed for %s:", docId, err);
     }
-    clearFileSyncContext(docId);
 
     // Stop watching the old path before the rename so the delete/create events
     // fs.rename emits don't fire a spurious reloadFromDisk.
     unwatchFile(oldPath);
 
     // --- Phase 2: commit (point of no return) ---
+    // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
+    // server-managed `docState.filePath` (only ever set by openFileByPath /
+    // resolveAndValidatePath); `newPath` was built from path.dirname(oldPath) +
+    // path.basename(newName) and then cleared validateRenameFilename, the inline
+    // separator/null-byte guard, rejectUnsafeWindowsPrefix, and assertPathSafe
+    // above. Both entry points (POST /api/rename, tandem_rename) additionally
+    // path.basename() the raw input — CodeQL's recognized taint terminator —
+    // before it reaches renameDocument. Any alert here is a false positive;
+    // dismiss per issue #1042.
     try {
       await fs.rename(oldPath, newPath);
     } catch (err) {
@@ -728,9 +804,25 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // we must not let a rollback error mask why the rename actually failed.
       console.error("[Rename] fs.rename failed for %s (%s -> %s):", docId, oldPath, newPath, err);
       // Roll back the reversible prep: re-wire the old context + re-watch.
+      //
+      // #1040 rollback fix: on rollback, oldHash === the still-registered
+      // context's hash (nothing was renamed). We MUST drop that stale same-hash
+      // context BEFORE re-wiring. Otherwise wireAnnotationStore → loadAndMerge
+      // re-seeds the oldHash tombstone ledger (UNION + tombstonesByDoc.set), and
+      // the trailing setFileSyncContext then finds the STILL-PRESENT old oldHash
+      // context and disposes it with the "close" phase — whose cleanup runs
+      // tombstonesByDoc.delete(oldHash) + forgetDoc(oldHash), deleting the ledger
+      // loadAndMerge just repopulated. A later snapshot would then write an empty
+      // tombstone list, resurrecting a deleted annotation. Restoring the master
+      // ordering (clearFileSyncContext first) removes the stale context so there
+      // is nothing for setFileSyncContext to "close"-dispose after the re-seed.
+      // Safe because Phase 1's closeStore(oldHash) already flushed the ledger to
+      // <oldHash>.json, so loadAndMerge re-seeds the tombstone from disk; nothing
+      // was renamed, so there is no concurrent-delete window on rollback.
       // Best-effort — a rollback failure is logged but the returned error stays
       // the original fs.rename failure (the actionable root cause).
       try {
+        clearFileSyncContext(docId);
         await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
         if (format !== "docx") wireFileWatcher(docId, oldPath, format);
       } catch (rollbackErr) {
@@ -749,69 +841,145 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     }
 
     // --- Phase 3: best-effort, each wrapped (the disk rename is the contract) ---
-    // NOTE: a concurrent annotation DELETE arriving in the brief async window
-    // between clearFileSyncContext and the wireAnnotationStore below (observer
-    // detached) won't be tombstoned and could be resurrected by the merge. The
-    // window spans the fs.rename + envelope move; accepted as a narrow v1
-    // limitation (no data loss — at worst a just-deleted annotation reappears).
+    // The annotation envelope migration (#1040) collapses the old fs.rename +
+    // heal-write split into a single read-modify-write that writes the NEW
+    // envelope (with meta.filePath = newPath) BEFORE removing the old one. This
+    // closes the two stale-envelope resurrection windows from #1017/#1038:
     //
-    // A second, symmetric v1 limitation (CRDT review R1): between the envelope
-    // move below and the meta heal-write, the envelope sits at newHash with a
-    // stale meta.filePath (the now-vanished oldPath). A *concurrent*
-    // openFileByPath of a DIFFERENT byte-identical doc (allowRecovery:true)
-    // could, in that sub-second window, match this envelope in
-    // recoverRenamedEnvelope and re-key it — duplicating (never losing) doc A's
-    // annotations onto the other doc. Same best-effort posture as the recovery
-    // module; closing it would require a read-modify-write to newHash instead of
-    // the fs.rename + heal-write split.
+    //   (b) The newHash envelope no longer transiently carries a stale
+    //       meta.filePath (the vanished oldPath) — the RMW writes the corrected
+    //       path atomically, so a concurrent byte-identical open can never match
+    //       + steal it via recoverRenamedEnvelope.
+    //   (c) The oldHash envelope is removed only AFTER newHash is durably
+    //       written, so there's no point where BOTH the renamed disk file and
+    //       the oldHash envelope (with its vanished oldPath) coexist for a
+    //       byte-identical open to re-key.
     //
-    // A third, mirror-image window (CRDT review Finding 4): between the fs.rename
-    // above and the envelope move below, <oldHash>.json still exists with the now-
-    // vanished oldPath + matching contentHash. A concurrent byte-identical open
-    // could re-key + unlink it; the move then no-ops (oldEnvelopeExists:false) and
-    // loadAndMerge(newHash) re-seeds an EMPTY tombstone ledger from the missing
-    // file — re-persisting A's annotations from the live Y.Map (no loss) but
-    // dropping A's tombstones, so a just-deleted annotation in A can resurrect.
-    // Same accepted best-effort posture; a double-open race only.
+    // Window (a) — a concurrent DELETE while the old-hash observer is still
+    // attached — is closed by folding the oldHash tombstone ledger forward into
+    // newHash. The old observer stays attached across the fs.rename + envelope
+    // move + the re-wire's `loadAndMerge` IO (Phase 1 deferred its teardown), so
+    // an in-span DELETE records a tombstone into the oldHash ledger. TWO folds:
+    //
+    //   1. Before the RMW snapshot (the explicit fold immediately below): so the
+    //      freshly-written newHash envelope already carries any tombstone recorded
+    //      during the fs.rename itself. Redundant-but-cheap given fold 2.
+    //   2. The LOAD-BEARING fold (#1040, windows a2 + a3): `migrateTombstonesFrom`
+    //      threaded into the re-wire's wireAnnotationStore → loadAndMerge, which
+    //      folds oldHash→newHash AFTER its `store.load()` read but BEFORE the
+    //      merge. That single, precisely-placed fold catches a DELETE recorded
+    //      either before the re-wire OR during the load read, so loadAndMerge's
+    //      UNION-not-clobber seed carries it and the merge APPLIES the tombstone
+    //      instead of re-inserting the just-deleted record from the RMW envelope.
 
-    // Move the annotation envelope (it carries annotations + tombstones) so the
-    // re-wire at the new hash re-seeds them. Best-effort; a crash here is healed
-    // on next open by the passive recoverRenamedEnvelope (old path now gone).
+    // Fold 1: captures any DELETE recorded during the fs.rename so the RMW
+    // envelope written next is tombstone-complete.
+    migrateTombstoneLedger(oldHash, newHash);
+
+    // Fold 0 (#1040 × #1041 regression): the RMW snapshot below reads ONLY the
+    // live Y.Doc. A durable annotation that is NEWER in the OLD file envelope than
+    // in the live map (e.g. a note flushed at rev 2 then diverged to rev 1 via a
+    // `withInternal` write the durable-sync observer skipped) would be DROPPED by
+    // that pure-live snapshot, and the subsequent re-wire's `loadAndMerge` — now
+    // reading the clobbered new-hash envelope — finds nothing newer than live, so
+    // the file-newer record is lost on rename. Fold the OLD envelope's alive
+    // records forward into the live doc FIRST (file-wins by rev) so the winning
+    // record lands in the RMW snapshot. The old envelope still exists here (RMW
+    // step 2 removes it last). Best-effort: a read/merge failure must not flip the
+    // committed rename to "error" — at worst we degrade to the prior live-only
+    // snapshot. In the common case (live == file) this is an idempotent no-op.
+    // Safe FS sink (CodeQL js/path-injection): `oldPath` is the registry's
+    // server-managed `docState.filePath`, and the envelope is read/written under
+    // `docHash(oldPath)` — a fixed-length hash with no path component. No
+    // user-controlled string reaches this store's filesystem path; an alert here
+    // is a false positive (dismiss per issue #1042).
     try {
-      const oldEnvelope = envelopePath(oldHash);
-      const oldEnvelopeExists = await pathExists(oldEnvelope);
-      if (oldEnvelopeExists) {
-        // Remove any stale orphan at the target hash first — Windows fs.rename
-        // throws EEXIST if the destination exists.
-        await fs.rm(envelopePath(newHash), { force: true });
-        await fs.rename(oldEnvelope, envelopePath(newHash));
-      }
+      const oldFile = await createStore(oldHash, { filePath: oldPath }).load();
+      mergeEnvelopeForward(doc, oldFile, newHash);
     } catch (err) {
-      console.error("[Rename] envelope move failed for %s:", docId, err);
+      console.error("[Rename] old-envelope fold-forward failed for %s:", docId, err);
     }
 
-    // Re-wire the durable store at the new path. loadAndMerge reads the moved
-    // envelope, re-seeds tombstones, merges idempotently with the live Y.Maps,
-    // and registers a fresh observer. allowRecovery:false — an active rename
-    // must never let recovery steal a DIFFERENT file's envelope. Best-effort: the
-    // disk rename already committed, so a re-wire failure must not flip the result
-    // to "error" — the next openFileByPath re-wires via the realpath fallback.
+    // RMW step 1: write the NEW envelope from the live Y.Maps + migrated ledger,
+    // with meta.filePath already = newPath. This is the move (annotations +
+    // tombstones land under newHash) AND the heal-write (correct path), in one
+    // atomic write — before the old envelope is removed. Best-effort: the disk
+    // rename already committed, so a failure here must not flip the result to
+    // "error"; a crash is healed on next open by the passive recoverRenamedEnvelope.
     try {
-      await wireAnnotationStore(docId, doc, newPath, { allowRecovery: false });
+      const newStore = createStore(newHash, { filePath: newPath });
+      await persistSnapshot(newStore, doc, newHash, newPath);
+    } catch (err) {
+      console.error("[Rename] envelope RMW (write new) failed for %s:", docId, err);
+    }
+
+    // Re-wire at the new path. `migrateTombstonesFrom: oldHash` drives fold 2
+    // inside loadAndMerge (after the load read, before the merge) so any DELETE
+    // recorded into the oldHash ledger before or during that read is applied
+    // rather than resurrected. allowRecovery:false — an active rename must never
+    // let recovery steal a DIFFERENT file's envelope. Best-effort: a re-wire
+    // failure must not flip the committed rename to "error".
+    let rewired = false;
+    try {
+      // `wired` is true only when loadAndMerge AND setFileSyncContext both ran
+      // to completion (#1057). wireAnnotationStore SWALLOWS internal failures
+      // (so the rename stays committed) but now reports them via `wired:false`,
+      // so an internal loadAndMerge throw — where setFileSyncContext never ran
+      // and the oldHash observer is still live — leaves `rewired` false and the
+      // !rewired guard below fires, exactly like a boundary rejection.
+      const result = await wireAnnotationStore(docId, doc, newPath, {
+        allowRecovery: false,
+        migrateTombstonesFrom: oldHash,
+      });
+      rewired = result.wired;
     } catch (err) {
       console.error("[Rename] re-wire annotation store at new path failed for %s:", docId, err);
     }
 
-    // Heal the envelope's internal meta.filePath (#1017 review, Finding A):
-    // loadAndMerge skips its write when the moved file already equals the Y.Map,
-    // leaving the stale pre-rename path — which the passive recovery scan could
-    // match (vanished old path) and STEAL for a byte-identical doc. Force one
-    // snapshot so meta.filePath = newPath lands immediately.
+    // RMW step 1b: flush the newHash envelope ONE more time, AFTER the re-wire.
+    // loadAndMerge's fold (fold 2) carries a late DELETE — one recorded into the
+    // oldHash ledger during the re-wire's load read — forward into the newHash
+    // ledger and queues a (debounced) write. This synchronous queueWrite + flush
+    // GUARANTEES that migrated-forward tombstone reaches disk before this call
+    // returns; without it the debounced write could still be pending, leaving the
+    // envelope tombstone-incomplete for an immediate reopen. Best-effort: the
+    // disk rename already committed.
     try {
-      const healStore = createStore(newHash, { filePath: newPath });
-      await persistSnapshot(healStore, doc, newHash, newPath);
+      const newStore = createStore(newHash, { filePath: newPath });
+      await persistSnapshot(newStore, doc, newHash, newPath);
     } catch (err) {
-      console.error("[Rename] envelope meta heal-write failed for %s:", docId, err);
+      console.error("[Rename] envelope RMW (flush after re-wire) failed for %s:", docId, err);
+    }
+
+    // RMW step 2: remove the old envelope LAST. The stale-envelope steal vector
+    // (a concurrent DELETE queuing a debounced write that re-creates
+    // <oldHash>.json with the vanished oldPath) is closed on BOTH paths:
+    //   - success path: the re-wire's setFileSyncContext already disposed the
+    //     oldHash observer (docId now points at newHash), so nothing is left to
+    //     re-create the envelope.
+    //   - re-wire-FAILURE path: when the re-wire does not complete,
+    //     setFileSyncContext never ran, so the oldHash context is still
+    //     registered and LIVE, now pointing at the vanished oldPath. The
+    //     !rewired guard below disposes it before the clear() so no concurrent
+    //     DELETE can queue a debounced write that re-creates <oldHash>.json
+    //     after the clear. This MUST be gated on !rewired: on the success path
+    //     docId already points at newHash, so an unconditional
+    //     clearFileSyncContext(docId) would tear down the freshly-wired newHash
+    //     observer.
+    //     This covers BOTH failure modes (#1057): a boundary rejection (caught
+    //     above) AND an internal loadAndMerge throw (wireAnnotationStore now
+    //     reports `wired:false` instead of swallowing silently). In both, the
+    //     oldHash observer is still live and `rewired` is false, so the guard
+    //     fires and the internal-throw steal vector is closed.
+    // clear() also drops any pending write the old store may still hold, so
+    // nothing re-creates it afterward.
+    if (!rewired) {
+      clearFileSyncContext(docId);
+    }
+    try {
+      await createStore(oldHash, { filePath: oldPath }).clear();
+    } catch (err) {
+      console.error("[Rename] envelope RMW (remove old) failed for %s:", docId, err);
     }
 
     // Move the session: write the new one BEFORE deleting the old so a crash
@@ -845,6 +1013,9 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       // real mtime and DO NOT markClean: unsaved edits must stay dirty so the next
       // autosave writes them to newPath.
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      // Safe FS sink (CodeQL js/path-injection): `newPath` is the validated
+      // rename target (see the Phase-0 barriers above) — not raw user input.
+      // An alert here is a false positive; dismiss per issue #1042.
       const stat = await fs.stat(newPath).catch(() => null);
       withFileSync(doc, () => {
         meta.set("fileName", fileName);

@@ -3,12 +3,13 @@ import fs from "fs/promises";
 import path from "path";
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { extractText, populateYDoc } from "../mcp/document-model.js";
-import { htmlToYDoc, loadDocx } from "./docx.js";
+import { htmlToYDoc, loadDocxWithWarnings } from "./docx.js";
 import {
   type DocxComment,
   extractDocxComments,
   injectCommentsAsAnnotations,
 } from "./docx-comments.js";
+import { exportYDocToDocx } from "./docx-export.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -52,23 +53,30 @@ const plaintextAdapter: FormatAdapter = {
 };
 
 /**
- * The .docx adapter omits `save` — .docx is read-only by ADR-004. Callers
- * check `adapter.save` (truthy) before attempting to serialize.
+ * The .docx adapter provides `saveBinary` (#576) — .docx write-back holds edits
+ * in the Y.Doc and serializes to a `.docx` buffer on EXPLICIT save only. This
+ * supersedes ADR-004's read-only default; the protective layer is now "never
+ * overwrite without an explicit save" rather than `contenteditable=false`.
+ * Body export only — Word comments + tracked changes stay v1.1.
  *
- *   - `parse` runs `loadDocx` + `extractDocxComments` in parallel; comment-
- *     extraction failures land as `LoadIssue { kind: "comments-failed" }`
- *     rather than being swallowed.
+ *   - `parse` runs `loadDocxWithWarnings` + `extractDocxComments` in parallel.
+ *     mammoth import-fidelity warnings land as a `LoadIssue { kind: "other" }`
+ *     so the UI can tell the user what formatting mammoth dropped (and thus
+ *     what the round-trip cannot recover). Comment-extraction failures land as
+ *     `LoadIssue { kind: "comments-failed" }` rather than being swallowed.
  *   - `apply` runs `htmlToYDoc` then `injectCommentsAsAnnotations`
  *     synchronously inside the caller's transact. The snapshot/undo dance
  *     around inject lives here because Yjs doesn't roll back inner-transact
  *     writes when a callback throws.
+ *   - `saveBinary` serializes the current Y.Doc body to a `.docx` buffer via
+ *     `exportYDocToDocx` (trust-boundary-gated). NOT wired into auto-save.
  */
 const docxAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
     const buffer = content as Buffer;
     const issues: LoadIssue[] = [];
-    const [html, comments] = await Promise.all([
-      loadDocx(buffer),
+    const [loaded, comments] = await Promise.all([
+      loadDocxWithWarnings(buffer),
       extractDocxComments(buffer).catch((err) => {
         console.error(
           "[docx-comments] Comment extraction failed; document will load without imported comments:",
@@ -78,7 +86,19 @@ const docxAdapter: FormatAdapter = {
         return [] as DocxComment[];
       }),
     ]);
-    return { format: "docx", html, comments, issues };
+    if (loaded.warnings.length > 0) {
+      issues.push({
+        kind: "other",
+        error: undefined,
+        message:
+          "Some Word formatting couldn't be imported and won't be preserved on save: " +
+          `${loaded.warnings.join("; ")}.`,
+      });
+    }
+    return { format: "docx", html: loaded.html, comments, issues };
+  },
+  async saveBinary(doc): Promise<Buffer> {
+    return exportYDocToDocx(doc);
   },
   apply(doc, prepared, ctx) {
     if (prepared.format !== "docx") return [];

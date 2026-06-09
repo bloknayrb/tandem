@@ -48,6 +48,13 @@ function safeCleanup(
  *
  * Callers don't need to think about the swap-vs-close distinction: the queue
  * picks the phase at teardown time based on which entrypoint ran.
+ *
+ * NOTE (#1040): the rename flow's oldHash→newHash tombstone fold does NOT live
+ * here. It is performed inside `loadAndMerge` (via its `migrateTombstonesFrom`
+ * option) AFTER the `store.load()` read but BEFORE the merge, which both feeds
+ * the union seed and applies the tombstone. By the time this replace branch runs
+ * the fold has already happened, so the prior context's `"close"` cleanup
+ * dropping the oldHash ledger is correct and lossless.
  */
 export function setFileSyncContext(
   docName: string,

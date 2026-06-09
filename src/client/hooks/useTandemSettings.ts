@@ -42,6 +42,13 @@ function isEditorMeasure(value: unknown): value is EditorMeasure {
   return typeof value === "string" && (EDITOR_MEASURES as readonly string[]).includes(value);
 }
 export type ThemePreference = "light" | "dark" | "warm" | "system";
+/**
+ * When `theme === "system"` and the OS reports a LIGHT appearance, this picks
+ * which light-family theme to resolve to: the neutral `"light"` (default,
+ * preserves prior behavior) or the paper-tone `"warm"` (#993). The dark branch
+ * is unaffected — a dark OS appearance always resolves to `"dark"`.
+ */
+export type SystemLightVariant = "light" | "warm";
 export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
 
 /**
@@ -118,6 +125,13 @@ export interface TandemSettings {
   reduceMotion: boolean;
   textSize: TextSize;
   theme: ThemePreference;
+  /**
+   * When `theme === "system"` and the OS reports a LIGHT appearance, resolve to
+   * this light-family theme (#993). Default `"light"` preserves prior behavior;
+   * `"warm"` lets the user keep the paper tone while still tracking the OS dark
+   * flip. Ignored when `theme !== "system"` and when the OS reports dark.
+   */
+  systemLightVariant: SystemLightVariant;
   accentHue: number;
   editorFont: EditorFont;
   /**
@@ -214,7 +228,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 13,
+  schemaVersion: 14,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -223,6 +237,7 @@ const DEFAULTS: TandemSettings = {
   reduceMotion: false,
   textSize: "m",
   theme: "system",
+  systemLightVariant: "light",
   accentHue: 275,
   editorFont: "sans",
   fontByExtension: {},
@@ -427,8 +442,12 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   safe regardless of the version step. Empty default preserves fresh-install
  *   behavior: with no override, `resolveFont` falls back to the global
  *   `editorFont`.
+ * v13→v14: introduce `systemLightVariant: "light"` (#993). Structural no-op —
+ *   pure version bump; `normalizeKnownFields` defaults a missing field to
+ *   `"light"` (preserving prior behavior: system-light always resolved to the
+ *   neutral `light` theme) and preserves an explicit `"warm"`.
  */
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -483,6 +502,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
       parsed.theme === "system"
         ? parsed.theme
         : DEFAULTS.theme,
+    systemLightVariant: parsed.systemLightVariant === "warm" ? "warm" : DEFAULTS.systemLightVariant,
     accentHue:
       typeof parsed.accentHue === "number" && parsed.accentHue >= 0 && parsed.accentHue <= 360
         ? parsed.accentHue
@@ -711,6 +731,13 @@ export function loadSettings(): TandemSettings {
         // `parseFontByExtension`. Empty default keeps fresh-install behavior
         // intact (resolution falls back to defaults).
         parsed = { ...parsed, schemaVersion: 13 };
+      }
+      if (parsed.schemaVersion === 13) {
+        // v13→v14: introduce `systemLightVariant: "light"` (#993). Pure version
+        // bump — do NOT set the field here (that would clobber an explicit
+        // "warm"). normalizeKnownFields defaults a missing field to "light"
+        // (preserving prior behavior) and preserves an explicit "warm".
+        parsed = { ...parsed, schemaVersion: 14 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`

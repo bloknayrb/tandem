@@ -53,6 +53,13 @@
 .tandem-editor p {
   margin: 0 0 0.9em;
 }
+/* Links read as interactive (pointer cursor) and surface their destination via
+ * a native `title` tooltip injected by the LinkWithHoverTitle mark (issue #996).
+ * openOnClick is false, so the click intercept in Editor.svelte owns navigation;
+ * the cursor + tooltip are purely an affordance hint. */
+.tandem-editor a[href] {
+  cursor: pointer;
+}
 .tandem-editor ul,
 .tandem-editor ol {
   padding-left: 1.5em;

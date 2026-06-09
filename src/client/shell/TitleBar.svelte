@@ -67,6 +67,14 @@ interface Props {
   onConnectAi?: () => void;
   /** Restarts the stopped/crashed Claude Code process. */
   onRestartClaude?: () => void;
+  /** Whether the active document is currently showing its raw-markdown source (#1021). */
+  sourceViewActive?: boolean;
+  /**
+   * Toggle the raw-markdown source view for the active document. `null` hides
+   * the button — only editable .md documents qualify (non-.md and read-only
+   * .md are excluded by the parent).
+   */
+  onToggleSourceView?: (() => void) | null;
 }
 
 let {
@@ -86,6 +94,8 @@ let {
   aiChip = null,
   onConnectAi,
   onRestartClaude,
+  sourceViewActive = false,
+  onToggleSourceView = null,
 }: Props = $props();
 
 let win = $state<TauriWindow | null>(null);
@@ -324,6 +334,22 @@ function chooseHelp() {
   <div class="title-bar-spacer" data-tauri-drag-region></div>
 
   <div class="title-bar-actions">
+    {#if onToggleSourceView}
+      <button
+        type="button"
+        class="source-toggle-btn"
+        class:on={sourceViewActive}
+        data-testid="titlebar-source-toggle"
+        data-tauri-drag-region="false"
+        aria-label={sourceViewActive ? "Switch to formatted editor" : "View markdown source"}
+        aria-pressed={sourceViewActive}
+        title={sourceViewActive ? "Switch to formatted editor" : "View markdown source"}
+        onclick={onToggleSourceView}
+      >
+        <span aria-hidden="true">&lt;/&gt;</span>
+      </button>
+    {/if}
+
     {#if tandemMode && onModeChange}
       <ModeToggle {tandemMode} {onModeChange} />
     {/if}
@@ -720,6 +746,34 @@ function chooseHelp() {
     display: inline-block;
     flex-shrink: 0;
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-author-claude) 18%, transparent);
+  }
+
+  /* #1021 raw-markdown source toggle. Monospace `</>` glyph; the active state
+     tints with the accent so it reads as "source mode on". */
+  .source-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    padding: 0 8px;
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-pill);
+    color: var(--tandem-fg-muted);
+    font-family: var(--tandem-font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .source-toggle-btn:hover {
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg);
+  }
+  .source-toggle-btn.on {
+    background: var(--tandem-accent-bg);
+    border-color: var(--tandem-accent-border);
+    color: var(--tandem-accent-fg-strong, var(--tandem-accent));
   }
 
   /* #659 default-model chip. Sits in the right action cluster; clicking

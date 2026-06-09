@@ -15,10 +15,14 @@
 2. **Additions are fine** but the snapshot must be regenerated (`npx vitest
    run tests/design-system-impl/testid-coverage.test.ts -u`) and committed in
    the same PR so the diff is reviewable.
-3. **Wrapper-prop passthroughs** (e.g. `ToolbarButton`, `FilterSelect`,
+3. **Wrapper-prop passthroughs** (e.g. `ToolbarButton`, `ChipGroup`,
    `CollapsibleSection`, `App.svelte#resizeHandle`) accept a testid prop and
    the literal value lives at the call site. The snapshot captures both the
-   wrapper's templated form and the call sites' literal strings.
+   wrapper's templated form and the call sites' literal strings. `ChipGroup`
+   (#798 A15) is fully templated — both its root (`{groupTestId}`) and per-chip
+   (`{groupTestId}-{value}`) testids normalize to `{*}`/`{*}-{*}`, so the
+   concrete filter chip testids are documented in the Filters bullet below
+   rather than captured literally by the scan.
 
 ## Enforcement
 
@@ -105,17 +109,22 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - Edit form: `edit-btn-{*}`, `edit-{newtext,reason,text}-{*}`,
   `edit-{save,cancel}-btn-{*}`
 - Replies + threads: `reply-{btn,input,send-btn,cancel-btn}-{*}`,
-  `reply-thread-expand-{*}`, `reply-thread-overlay`,
-  `reply-thread-overlay-{close,input,send,cancel,reply}`,
-  `comment-thread`, `reply-{*}`, `reply-import-byline-{*}` (Word reviewer
-  byline on imported note replies, #1000)
+  `reply-toggle-{*}` (A13 disclosure), `comment-thread`, `reply-{*}`,
+  `reply-import-byline-{*}` (Word reviewer byline on imported note replies, #1000).
+  (`reply-thread-expand-{*}` + `reply-thread-overlay*` retired with the
+  portaled overlay — A13 #798, Bryan decision 2026-06-01.)
 - Suggestion + import variants: `suggestion-diff-{*}`,
   `annotation-import-byline-{*}`, `annotation-select-checkbox-{*}`
 - Margin column: `margin-column-{*}`, `margin-bubble-{*}`,
   `margin-leaders-{*}`
 - Batch + bulk: `batch-promote-{bar,count,clear,confirm}`,
   `bulk-{confirm,cancel,accept,dismiss}-btn`
-- Filters: `filter-bar-toggle`, `clear-filters-btn`
+- Filters: `filter-bar-toggle`, `clear-filters-btn`; chip groups (#798 A15,
+  `ChipGroup`) — roots `filter-{type,author,status}`; per-chip
+  `filter-type-{all,highlight,comment,note,with-replacement}`,
+  `filter-author-{all,claude,user,import}`,
+  `filter-status-{all,pending,accepted,dismissed}` (replaced the `FilterSelect`
+  `<select>`s; e2e drives them with `.click()`, not `.selectOption()`)
 
 ### Side panels & rails
 - `left-outline-rail`, `annotations-tab`, `chat-tab`

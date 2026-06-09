@@ -1,6 +1,6 @@
 <script lang="ts">
 import { HocuspocusProvider } from "@hocuspocus/provider";
-import { Editor as TiptapEditor } from "@tiptap/core";
+import { mergeAttributes, Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Highlight from "@tiptap/extension-highlight";
@@ -37,6 +37,35 @@ import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
 
 /** File extensions that open as new Tandem tabs when clicked as relative links. .docx excluded — not navigable as a link target. */
 const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
+
+// Link mark that surfaces the destination URL on hover via a native `title`
+// tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
+// `href` (plus our configured rel/target) but no title, so links give no hover
+// affordance for where they point. We delegate to the base renderHTML via
+// `this.parent()` — which keeps its `isAllowedUri` security branch (blanking
+// `javascript:`/`data:`/etc. hrefs to "") — and then post-process: mirror the
+// href into `title` only when the BASE output's href survived (non-empty) and no
+// explicit title already exists (e.g. a .docx-imported title attr wins). Reading
+// the base output rather than the raw HTMLAttributes means a disallowed scheme is
+// never given a title and never resurrected. Pointer-cursor styling lives in
+// editor.css (`.tandem-editor a[href]`).
+const LinkWithHoverTitle = Link.extend({
+  renderHTML(props) {
+    const out = this.parent?.(props) ?? [
+      "a",
+      mergeAttributes(this.options.HTMLAttributes, props.HTMLAttributes),
+      0,
+    ];
+    if (Array.isArray(out) && out.length >= 2 && out[1] && typeof out[1] === "object") {
+      const attrs = out[1] as Record<string, unknown>;
+      const href = attrs.href;
+      if (typeof href === "string" && href.length > 0 && attrs.title == null) {
+        (out as unknown[])[1] = { ...attrs, title: href };
+      }
+    }
+    return out;
+  },
+});
 
 // SAFE_EXTERNAL_PREFIXES + isSafeExternalHref hoisted to ./utils/url-safety.ts
 // so the click-time anchor intercept and the paste-time link sanitizer share
@@ -146,7 +175,7 @@ $effect(() => {
       StarterKit.configure({ history: false, listItem: false }),
       ListItemCheckbox,
       Highlight.configure({ multicolor: true }),
-      Link.configure({
+      LinkWithHoverTitle.configure({
         openOnClick: false,
         HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
       }),

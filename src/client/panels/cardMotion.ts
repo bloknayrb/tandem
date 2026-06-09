@@ -194,6 +194,75 @@ export function barOut(
   };
 }
 
+/**
+ * A27 — annotation fly-to-margin (#798). When the user submits a new annotation
+ * from the selection popover, the new margin card launches from the closing
+ * popover's on-screen footprint and glides into its slot (a FLIP).
+ *
+ * Producer (Toolbar's submit handlers) and consumer (MarginColumn's bubble
+ * `in:` transition) share no prop path, so the popover's source rect crosses to
+ * the transition through this module-level singleton ledger. It mirrors the
+ * `exitModes` *delete-on-read discipline* (read + clear inside the transition so
+ * the value is fresh and never accumulates), but NOT its scope — `exitModes` is
+ * a component-instance Map threaded as a prop; this must be module-level because
+ * there is no shared channel between the two components. It is deliberately a
+ * plain Map, not `$state`: a cross-component reactive write would be an
+ * effect-graph hazard, and nothing needs to re-render when it changes.
+ */
+const flySources = new Map<string, DOMRect>();
+
+const FLY_MS = 480;
+/**
+ * Backstop so a registered-but-never-consumed source can't strand: if the card
+ * never mounts (margins off, annotation instantly filtered) its source is GC'd.
+ * The transition's delete-on-read makes this a no-op on the happy path. If a
+ * mount is so slow it exceeds this window the card simply snaps instead of
+ * flying — graceful degradation, never a leak or a broken card.
+ */
+const FLY_SOURCE_TTL_MS = 1000;
+
+/** Stash the popover's footprint for the just-submitted annotation id. */
+export function registerFlySource(id: string, rect: DOMRect): void {
+  flySources.set(id, rect);
+  setTimeout(() => flySources.delete(id), FLY_SOURCE_TTL_MS);
+}
+
+interface FlyToMarginParams {
+  /** Annotation id — the key into `flySources`. */
+  id: string;
+  /** App `reduceMotion` setting; OR-ed with the OS `prefers-reduced-motion`. */
+  reduceMotion?: boolean;
+}
+
+/**
+ * A27 — `in:` transition on the `margin-bubble-{id}` wrapper. Translates the
+ * card FROM the captured popover footprint TO its resolved slot (identity) +
+ * fades in. **Map-presence IS the gate:** only a submit registers a source, so
+ * every other mount (initial load, tab switch, scroll/filter re-render) finds no
+ * source and no-ops — the just-submitted card is the only one that flies. The
+ * source is consumed (deleted) BEFORE the reduced-motion gate so it can never
+ * strand. Translate-only (no scale): a full-rect scale would blur the card's
+ * text for the duration; the dominant motion is the translate anyway.
+ */
+export function cardFlyToMargin(
+  node: HTMLElement,
+  { id, reduceMotion }: FlyToMarginParams,
+): TransitionConfig {
+  const source = flySources.get(id);
+  flySources.delete(id);
+  if (!source || motionOff(reduceMotion)) return { duration: 0 };
+  const dest = node.getBoundingClientRect();
+  const dx = source.left - dest.left;
+  const dy = source.top - dest.top;
+  return {
+    duration: FLY_MS,
+    easing: easeOut,
+    // t: 0→1 (settled); u = 1−t. At u=1 the card sits over the popover
+    // footprint; at t=1 it rests at identity in its slot.
+    css: (t, u) => `transform:translate(${dx * u}px, ${dy * u}px); opacity:${0.2 + 0.8 * t};`,
+  };
+}
+
 const TAB_EXIT_MS = 200;
 
 /**
@@ -251,5 +320,29 @@ export function popupEnter(node: HTMLElement, { reduceMotion }: BarInParams): Tr
     // growing width+height from 0 unrolls away from it. No transform.
     css: (t) =>
       `opacity:${t}; width:${t * w}px; height:${t * h}px; overflow:clip; box-sizing:border-box;`,
+  };
+}
+
+const DISCLOSE_MS = 380;
+
+/**
+ * A13 — reply-thread disclosure unfold. A single `transition:` on the `{#if open}`
+ * replies block (plays BOTH directions, since the morph is symmetric). Measures
+ * the block's real border-box height at transition start (like `cardEnter`) so
+ * the card grows in / collapses out continuously — no magic `max-height` to clip
+ * a long thread. `overflow:clip` keeps the full-height inner thread from spilling
+ * below the animating container while it grows (the per-reply cascade is a
+ * separate CSS `@keyframes` on the freshly-mounted `.ct-reply` items). Reduced
+ * motion → `{duration:0}`: the thread shows/hides instantly, no unfold.
+ */
+export function discloseUnfold(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const { h, mb } = geometry(node);
+  return {
+    duration: DISCLOSE_MS,
+    easing: easeOut,
+    // t: 0→1 (present), shared by intro (open) and reversed outro (close).
+    css: (t) =>
+      `opacity:${t}; height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box;`,
   };
 }

@@ -18,6 +18,10 @@ export const API_LAUNCH_CLAUDE = "/api/launch-claude";
 // --- Mode / metadata --------------------------------------------------------
 export const API_MODE = "/api/mode";
 export const API_INFO = "/api/info";
+// Diagnostic health endpoint. Loopback callers additionally receive
+// `hasSession: boolean` — whether an MCP client transport is currently open
+// (an agent is connected, regardless of whether the auto-launcher spawned it).
+export const API_HEALTH = "/health";
 
 // --- Document lifecycle -----------------------------------------------------
 export const API_OPEN = "/api/open";
@@ -28,6 +32,10 @@ export const API_UPLOAD = "/api/upload";
 export const API_SCRATCHPAD = "/api/scratchpad";
 export const API_CONVERT = "/api/convert";
 export const API_APPLY_CHANGES = "/api/apply-changes";
+// Raw-markdown source view/edit (#1021). GET returns the document's literal
+// markdown; POST replaces the Y.Doc content from a user-supplied markdown string.
+export const API_DOCUMENT_RAW = "/api/document/raw";
+export const API_DOCUMENT_RELOAD = "/api/document/reload";
 
 // --- Annotations ------------------------------------------------------------
 export const API_ANNOTATION_REPLY = "/api/annotation-reply";

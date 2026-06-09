@@ -1,5 +1,6 @@
 <script lang="ts">
 import { createAppInfo } from "../../hooks/useAppInfo.svelte";
+import { isCrashReportingEnabled } from "../../sentry";
 import { openServerPath } from "../../utils/server-paths";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -60,6 +61,16 @@ const aboutRows = $derived.by(() => {
     });
   }
   if (info.changelogPath) rows.push({ label: "Changelog", value: info.changelogPath });
+
+  // Crash reporting (#921) is opt-in via the TANDEM_SENTRY_DSN env var and off
+  // by default; surface its status read-only (no toggle — the env var is the
+  // single source of truth).
+  rows.push({
+    label: "Crash reports",
+    value: isCrashReportingEnabled()
+      ? "On (TANDEM_SENTRY_DSN set)"
+      : "Off — opt in with TANDEM_SENTRY_DSN",
+  });
 
   return rows;
 });

@@ -1,7 +1,7 @@
 <script lang="ts">
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
-import FilterSelect from "./FilterSelect.svelte";
+import ChipGroup, { type ChipOption } from "./ChipGroup.svelte";
 
 export type FilterType = "highlight" | "comment" | "note" | "all" | "with-replacement";
 export type FilterAuthor = "all" | "claude" | "user" | "import";
@@ -34,49 +34,61 @@ let {
 }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
+
+// A15 (#798): the 3 native <select>s become compact icon-chip groups (REPLACE,
+// canon decision 5). Reset chip = text; type/status = inline glyphs; author =
+// authorship pips. `with-replacement`/accepted/dismissed glyphs carry their
+// status color. Per-chip counts are deferred (would need SidePanel→FilterBar
+// plumbing). Card collapse-out is already shipped via `cardExit` (A4/A10).
+const typeOptions: ChipOption[] = [
+  { value: "all", label: "All types", kind: "text" },
+  { value: "highlight", label: "Highlights", kind: "icon", icon: "highlight" },
+  { value: "comment", label: "Comments", kind: "icon", icon: "comment" },
+  { value: "note", label: "Notes", kind: "icon", icon: "lock" },
+  { value: "with-replacement", label: "With replacement", kind: "icon", icon: "sparkle" },
+];
+
+// $derived so the Claude chip's accessible name tracks the agent-label setting.
+const authorOptions = $derived<ChipOption[]>([
+  { value: "all", label: "Anyone", kind: "text" },
+  { value: "claude", label: agentLabel.family, kind: "pip", pip: "claude" },
+  { value: "user", label: "You", kind: "pip", pip: "user" },
+  { value: "import", label: "Imported", kind: "pip", pip: "import" },
+]);
+
+const statusOptions: ChipOption[] = [
+  { value: "all", label: "Any status", kind: "text" },
+  { value: "pending", label: "Pending", kind: "icon", icon: "pending" },
+  { value: "accepted", label: "Accepted", kind: "icon", icon: "check" },
+  { value: "dismissed", label: "Dismissed", kind: "icon", icon: "dismiss" },
+];
 </script>
 
 {#if open}
   <!-- Expanded full filter row -->
   <div
-    style="padding: 8px 16px; border-bottom: 1px solid var(--tandem-border); display: flex; gap: 4px; flex-wrap: wrap; align-items: center;"
+    style="padding: 8px 16px; border-bottom: 1px solid var(--tandem-border); display: flex; gap: 8px; flex-wrap: wrap; align-items: center;"
   >
-    <FilterSelect
-      testId="filter-type"
-      ariaLabel="Filter by type"
+    <ChipGroup
+      groupTestId="filter-type"
+      groupAriaLabel="Filter by type"
       value={filterType}
-      onChange={(v) => onSetFilterType(v as FilterType)}
-      options={[
-        { value: "all", label: "All types" },
-        { value: "highlight", label: "Highlights" },
-        { value: "comment", label: "Comments" },
-        { value: "note", label: "Notes" },
-        { value: "with-replacement", label: "With replacement" },
-      ]}
+      options={typeOptions}
+      onSet={(v) => onSetFilterType(v as FilterType)}
     />
-    <FilterSelect
-      testId="filter-author"
-      ariaLabel="Filter by author"
+    <ChipGroup
+      groupTestId="filter-author"
+      groupAriaLabel="Filter by author"
       value={filterAuthor}
-      onChange={(v) => onSetFilterAuthor(v as FilterAuthor)}
-      options={[
-        { value: "all", label: "Anyone" },
-        { value: "claude", label: agentLabel.family },
-        { value: "user", label: "You" },
-        { value: "import", label: "Imported" },
-      ]}
+      options={authorOptions}
+      onSet={(v) => onSetFilterAuthor(v as FilterAuthor)}
     />
-    <FilterSelect
-      testId="filter-status"
-      ariaLabel="Filter by status"
+    <ChipGroup
+      groupTestId="filter-status"
+      groupAriaLabel="Filter by status"
       value={filterStatus}
-      onChange={(v) => onSetFilterStatus(v as FilterStatus)}
-      options={[
-        { value: "all", label: "Any status" },
-        { value: "pending", label: "Pending" },
-        { value: "accepted", label: "Accepted" },
-        { value: "dismissed", label: "Dismissed" },
-      ]}
+      options={statusOptions}
+      onSet={(v) => onSetFilterStatus(v as FilterStatus)}
     />
     {#if hasFilters}
       <button

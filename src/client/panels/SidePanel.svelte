@@ -628,6 +628,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
               <AnnotationCard
                 annotation={ann}
                 replies={repliesMap.get(ann.id) ?? []}
+                {reduceMotion}
                 onUndo={review.undoResolveAnnotation}
                 undoable={review.getRecentlyResolved().has(ann.id)}
                 onClick={() => review.scrollToAnnotation(ann)}

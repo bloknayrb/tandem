@@ -18,7 +18,7 @@ import {
   API_SCRATCHPAD,
 } from "../../shared/api-paths.js";
 import type { LauncherStatus } from "../../shared/launcher/contract.js";
-import { loadSettings } from "../hooks/useTandemSettings.js";
+import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
 import { type Action, registerAction } from "./registry.svelte.js";
@@ -59,6 +59,12 @@ interface ActionDeps {
   selectBlock: () => void;
   toggleAuthorship: () => void;
   toggleFormattingBar: () => void;
+  /**
+   * Toggle the raw-markdown source view for the active document (#1021). A
+   * no-op when the active doc isn't an editable .md (the App-level handler
+   * guards on format + read-only).
+   */
+  toggleSourceView: () => void;
   /**
    * Save the active document under a new file path. Used to promote an
    * ephemeral scratchpad (or any `upload://`-backed doc) into a real file.
@@ -167,63 +173,15 @@ type SaveAsFormat = "md" | "txt";
 
 let saveAsInflight = false;
 
-/** Configured default save folder from persisted settings (#1023), or null. */
-function readDefaultSaveDirectory(): string | null {
-  try {
-    return loadSettings().defaultSaveDirectory;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Best-effort, time-boxed lookup of the configured Claude working directory for
- * the Save-As smart default. Never throws and never blocks the dialog for more
- * than ~250ms — any failure/timeout yields null so the next fallback tier (home)
- * applies. Reads the same read-only `GET /api/integrations` the Settings tab uses.
- */
-async function fetchClaudeWorkingDir(): Promise<string | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 250);
-  try {
-    const res = await fetch(`${API_BASE}/api/integrations`, { signal: controller.signal });
-    if (!res.ok) return null;
-    const file = (await res.json()) as {
-      integrations?: { kind?: string; workingDirectory?: string }[];
-    };
-    const dir = file.integrations?.find((i) => i.kind === "claude-code")?.workingDirectory;
-    return typeof dir === "string" && dir.trim() ? dir.trim() : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Resolve the OS home directory via the Tauri path API, or null if unavailable. */
-async function resolveTauriHomeDir(): Promise<string | null> {
-  try {
-    const { homeDir } = await import("@tauri-apps/api/path");
-    const home = await homeDir();
-    return typeof home === "string" && home.trim() ? home : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Resolve the full `defaultPath` (dir + filename) for the Save-As dialog using
- * the smart-default precedence. Each tier is consulted lazily so we never fetch
- * the integrations endpoint or call into Tauri when an earlier tier already won.
- * Falls back to the bare filename (OS-default dir) if no tier resolves or the
- * path module is unavailable.
+ * the shared smart-default directory precedence (configured save folder →
+ * Claude working dir → OS home; see `utils/default-directory.ts`). Falls back to
+ * the bare filename (OS-default dir) if no tier resolves or the path module is
+ * unavailable.
  */
 async function resolveSaveAsDefaultPath(fileName: string): Promise<string> {
-  // First non-empty tier wins; `||` short-circuits the async work so we never
-  // hit the integrations endpoint or Tauri once an earlier tier resolves. Each
-  // resolver returns a trimmed path or null.
-  const dir =
-    readDefaultSaveDirectory() || (await fetchClaudeWorkingDir()) || (await resolveTauriHomeDir());
+  const dir = await resolveDefaultDirectory();
   if (!dir) return fileName;
   try {
     const { join } = await import("@tauri-apps/api/path");
@@ -857,6 +815,17 @@ const BUILTINS: Action[] = [
     group: "view",
     run() {
       guardedRun("toggle-formatting-bar", (d) => d.toggleFormattingBar());
+    },
+  },
+  {
+    // Palette-only: switches the active .md document between the formatted
+    // (WYSIWYG) editor and its raw-markdown source. A no-op for non-.md or
+    // read-only documents (the App handler guards).
+    id: "toggle-source-view",
+    label: "Toggle markdown source view",
+    group: "view",
+    run() {
+      guardedRun("toggle-source-view", (d) => d.toggleSourceView());
     },
   },
   {

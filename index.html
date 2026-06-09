@@ -673,17 +673,31 @@
         try {
           // Key must match TANDEM_SETTINGS_KEY in src/shared/constants.ts
           var stored = localStorage.getItem("tandem:settings");
-          var theme = stored && JSON.parse(stored).theme;
-          if (theme !== "light" && theme !== "dark") {
-            theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          var parsed = stored ? JSON.parse(stored) : null;
+          var pref = parsed && parsed.theme;
+          var theme;
+          if (pref === "dark" || pref === "light" || pref === "warm") {
+            // Explicit preference wins (incl. Warm, previously unrecognized here).
+            theme = pref;
+          } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            theme = "dark";
+          } else {
+            // System + light OS resolves to Warm when the user opted in (#993),
+            // mirroring the runtime resolution so there's no light-flash on mount.
+            theme = parsed && parsed.systemLightVariant === "warm" ? "warm" : "light";
           }
           document.documentElement.dataset.theme = theme;
-          window.__TANDEM_INITIAL_THEME__ = theme;
+          // Seed reflects the raw OS appearance (light/dark) consumed by the Svelte
+          // theme bridge; "warm" derives from a light OS.
+          window.__TANDEM_INITIAL_THEME__ = theme === "warm" ? "light" : theme;
           // Sync theme-color meta tag so the browser chrome (mobile address bar,
           // PWA title bar) matches the app surface color from the first paint.
           var metaTheme = document.querySelector('meta[name="theme-color"]');
           if (metaTheme) {
-            metaTheme.setAttribute("content", theme === "dark" ? "#1c1c24" : "#fafaf9");
+            metaTheme.setAttribute(
+              "content",
+              theme === "dark" ? "#1c1c24" : theme === "warm" ? "#f1ead9" : "#fafaf9",
+            );
           }
         } catch (e) { /* incognito / storage disabled — no-op, Svelte resolves on mount */ }
       })();

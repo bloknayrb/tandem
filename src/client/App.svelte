@@ -42,6 +42,7 @@ import { annotationPluginKey } from "./editor/extensions/annotation";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
+import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
 import { createAiReadiness } from "./hooks/useAiReadiness.svelte";
@@ -131,9 +132,28 @@ function closeTabAndRecord(tabId: string) {
       scratchpadPersistence.clearUnsaved(uuid);
     }
   }
+  // #1021: warn before closing a tab with uncommitted markdown-source edits
+  // (mirrors the #864 scratchpad confirm above). The disk file is intact — this
+  // is loss of unsaved source-view work only.
+  if (sourceDirtyTabs.has(tabId)) {
+    const ok = window.confirm(
+      "This document has unsaved markdown-source edits that will be lost. Close it anyway?",
+    );
+    if (!ok) return;
+  }
   if (tab && !isUploadPath(tab.filePath)) {
     closedTabStack.push({ filePath: tab.filePath, closedAt: Date.now() });
   }
+  // Drop any source-view flag + draft for the closed tab so the maps don't leak (#1021).
+  if (sourceViewTabs.has(tabId)) {
+    const next = new Set(sourceViewTabs);
+    next.delete(tabId);
+    sourceViewTabs = next;
+  }
+  clearSourceDraft(tabId);
+  // Drop the closed tab's remembered scroll position so scrollMemory doesn't
+  // leak across long sessions (mirrors the source-view/draft cleanup above; #1055).
+  scrollMemory.delete(tabId);
   yjsSync.handleTabClose(tabId);
 }
 
@@ -270,6 +290,78 @@ if (isTauriRuntime()) {
   onDestroy(() => {
     cancelled = true;
     unlisten?.();
+  });
+}
+
+// Surface OS file-association open failures (Tauri-only) as a warning toast.
+// The Rust side classifies the rejected double-clicked file and signals a
+// STABLE, PATH-FREE reason code via two surfaces, both handled here (see #630):
+//  - cold-start: buffered in a OnceLock-style slot (the App listener doesn't
+//    exist yet at classification time) — polled once via `get_startup_rejection`
+//    on mount. The buffer is TAKEN, so a WebView reload won't replay it.
+//  - warm-start / macOS Apple-Event: emitted live as `startup-file-rejected`.
+// The user double-clicked a file and silently landed on welcome.md; this is the
+// feedback. The message is composed here from the code so no path reaches the
+// DOM (mirrors the sidecar-restart-failed contract).
+if (isTauriRuntime()) {
+  const messageForCode = (code: string): string => {
+    switch (code) {
+      case "unsupported-extension":
+        return "That file type can't be opened in Tandem.";
+      case "not-a-file":
+      case "non-file-url":
+        return "That file couldn't be opened — it may have moved or been deleted.";
+      case "suspicious-path":
+        return "That file path was rejected for safety reasons.";
+      default:
+        return "That file couldn't be opened in Tandem.";
+    }
+  };
+  const pushStartupRejection = (code: string): void => {
+    notifications.push({
+      id: `startup-file-rejected-${Date.now()}`,
+      type: "general-error",
+      severity: "warning",
+      message: messageForCode(code),
+      dedupKey: "startup-file-rejected",
+      timestamp: Date.now(),
+      errorCode: "STARTUP_FILE_REJECTED",
+    });
+  };
+
+  let unlistenRejected: (() => void) | null = null;
+  let rejectedCancelled = false;
+
+  // Live (warm-start / macOS Apple-Event) rejections arrive as events.
+  import("@tauri-apps/api/event")
+    .then(({ listen }) =>
+      listen<string>("startup-file-rejected", (event) => {
+        pushStartupRejection(typeof event.payload === "string" ? event.payload : "");
+      }),
+    )
+    .then((un) => {
+      if (rejectedCancelled) un();
+      else unlistenRejected = un;
+    })
+    .catch((err) => {
+      console.warn("[App] Failed to wire startup-file-rejected listener:", err);
+    });
+
+  // Cold-start rejection was buffered before this listener existed — drain it
+  // once. `get_startup_rejection` TAKES the value, so this is idempotent across
+  // re-mounts.
+  import("@tauri-apps/api/core")
+    .then(({ invoke }) => invoke<string | null>("get_startup_rejection"))
+    .then((code) => {
+      if (code) pushStartupRejection(code);
+    })
+    .catch((err) => {
+      console.warn("[App] Failed to poll buffered startup rejection:", err);
+    });
+
+  onDestroy(() => {
+    rejectedCancelled = true;
+    unlistenRejected?.();
   });
 }
 
@@ -589,6 +681,7 @@ wireActionDeps({
     settingsState.updateSettings({
       formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
+  toggleSourceView: () => toggleSourceView(),
   saveAs: async () => {
     const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
     // Save-As is a PROMOTION path — only offer it for ephemeral upload://
@@ -694,7 +787,10 @@ $effect(() => {
   return () => document.body.classList.remove("tandem-reduce-motion");
 });
 
-createTheme(() => settingsState.settings.theme);
+createTheme(
+  () => settingsState.settings.theme,
+  () => settingsState.settings.systemLightVariant,
+);
 createAccentHue(() => settingsState.settings.accentHue);
 // #811: resolve the font from the ACTIVE tab's format so a tab switch
 // re-derives. `activeTab` MUST be dereferenced inside this getter closure —
@@ -729,6 +825,39 @@ let marginLayerEl = $state<HTMLDivElement | null>(null);
 let slashCommandMenuOpen = $state(false);
 let findBarOpen = $state(false);
 let findBarForceScope = $state<"doc" | "tabs">("doc");
+// Per-tab raw-markdown source view (#1021). Ephemeral (not persisted): the set
+// of tab IDs currently showing the markdown source editor instead of WYSIWYG.
+let sourceViewTabs = $state(new Set<string>());
+// In-progress source text + dirty flags, keyed by tab ID, lifted out of
+// SourceView so uncommitted edits survive a tab switch (which unmounts the
+// component) and so tab close / app quit can warn before discarding them
+// (#1021 review SHOULD-FIX).
+let sourceDrafts = $state(new Map<string, string>());
+let sourceDirtyTabs = $state(new Set<string>());
+
+function updateSourceDraft(tabId: string, text: string, dirty: boolean): void {
+  const drafts = new Map(sourceDrafts);
+  const dirtyTabs = new Set(sourceDirtyTabs);
+  if (dirty) {
+    drafts.set(tabId, text);
+    dirtyTabs.add(tabId);
+  } else {
+    drafts.delete(tabId);
+    dirtyTabs.delete(tabId);
+  }
+  sourceDrafts = drafts;
+  sourceDirtyTabs = dirtyTabs;
+}
+
+function clearSourceDraft(tabId: string): void {
+  if (!sourceDrafts.has(tabId) && !sourceDirtyTabs.has(tabId)) return;
+  const drafts = new Map(sourceDrafts);
+  const dirtyTabs = new Set(sourceDirtyTabs);
+  drafts.delete(tabId);
+  dirtyTabs.delete(tabId);
+  sourceDrafts = drafts;
+  sourceDirtyTabs = dirtyTabs;
+}
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
 let newTabMenuTrigger = $state(0);
@@ -869,6 +998,11 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
   },
   save: (e) => {
     e.preventDefault();
+    // In source view, SourceView owns Ctrl+S (it commits the edit) and
+    // stopPropagations — this is belt-and-suspenders against that invariant
+    // being broken later: the global save must never write the stale Y.Doc to
+    // disk underneath an open source edit (#1021 review must-fix).
+    if (inSourceView) return;
     void triggerSave(yjsSync.activeTabId);
   },
   "save-as": (e) => {
@@ -1010,7 +1144,7 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // is the common case (user has selected text in the editor).
     e.preventDefault();
     const hasSelection = !!editor && editor.state.selection.from !== editor.state.selection.to;
-    const reviewOnly = activeTab?.readOnly === true;
+    const reviewOnly = isReadOnly;
     const popupSuppressed = slashCommandMenuOpen || findBarOpen || paletteOpen;
     if (popupSuppressed) {
       // Palette/find UI is the active context; user understands why.
@@ -1168,6 +1302,117 @@ $effect(() => {
 
 const activeTab = $derived(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId));
 
+// #1055: per-tab vertical scroll memory. The `.editor-scroll` container is
+// always-mounted across tab switches (only its inner content remounts via the
+// `{#key activeTab.id}` block), so we remember each document's scrollTop keyed
+// by documentId and restore it on switch-back instead of jumping to the top.
+let editorScrollEl = $state<HTMLDivElement | null>(null);
+const scrollMemory = new Map<string, number>();
+// The document id currently displayed in `editorScrollEl`. A plain variable
+// (not reactive state): the scroll listener reads it to attribute live scroll
+// to the right document without re-triggering the switch effect.
+let scrollMemoryDocId: string | undefined;
+
+// Continuously record the active document's live scrollTop. Capturing on every
+// scroll (rather than only when switching away) is timing-independent: by the
+// time the switch effect re-runs the inner content has already remounted via
+// `{#key activeTab.id}` and the container's scrollTop has reset, so reading it
+// then would record the WRONG (incoming) position for the outgoing document.
+$effect(() => {
+  const el = editorScrollEl;
+  if (!el) return;
+  const onScroll = (): void => {
+    if (scrollMemoryDocId !== undefined) {
+      scrollMemory.set(scrollMemoryDocId, el.scrollTop);
+    }
+  };
+  el.addEventListener("scroll", onScroll, { passive: true });
+  return () => el.removeEventListener("scroll", onScroll);
+});
+
+// Restore the saved scrollTop whenever the active document changes.
+$effect(() => {
+  const el = editorScrollEl;
+  // Read the active document id so this effect re-runs on tab switch. (The
+  // derived may re-fire with the same id when the tab array updates for
+  // unrelated reasons — the `=== scrollMemoryDocId` guard makes those re-runs
+  // no-ops so we never disturb the user's live scroll position.)
+  const nextId = activeTab?.id;
+  if (!el) return;
+  if (nextId === scrollMemoryDocId) return;
+
+  scrollMemoryDocId = nextId;
+  if (nextId === undefined) return;
+
+  const saved = scrollMemory.get(nextId) ?? 0;
+
+  // Content height isn't final synchronously after the `{#key}` content swap,
+  // so re-apply the saved offset across a few frames until the container can
+  // actually hold it (the browser clamps scrollTop to scrollHeight -
+  // clientHeight otherwise). Bounded so a now-shorter document can't loop.
+  let frame = 0;
+  let cancelled = false;
+  const apply = (): void => {
+    if (cancelled || scrollMemoryDocId !== nextId) return;
+    el.scrollTop = saved;
+    if (el.scrollTop < saved && frame < 30) {
+      frame += 1;
+      requestAnimationFrame(apply);
+    }
+  };
+  requestAnimationFrame(apply);
+
+  return () => {
+    cancelled = true;
+  };
+});
+
+// Raw-markdown source view (#1021). Only editable .md documents qualify
+// (read-only .md like CHANGELOG and non-.md formats are excluded).
+const isReadOnly = $derived(activeTab?.readOnly === true);
+const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
+const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+
+function toggleSourceView(): void {
+  if (!activeTab) return;
+  const id = activeTab.id;
+  const next = new Set(sourceViewTabs);
+  if (next.has(id)) {
+    next.delete(id);
+  } else {
+    if (!canSourceView) return;
+    next.add(id);
+    // Source view replaces the Tiptap editor; close editor-bound overlays so
+    // they don't linger non-functional over the textarea.
+    findBarOpen = false;
+    slashCommandMenuOpen = false;
+    paletteOpen = false;
+  }
+  sourceViewTabs = next;
+}
+
+function exitSourceView(id: string): void {
+  if (!sourceViewTabs.has(id)) return;
+  const next = new Set(sourceViewTabs);
+  next.delete(id);
+  sourceViewTabs = next;
+  // Returning to WYSIWYG discards any in-progress draft (a dirty exit commits
+  // first via SourceView.handleExit, which already cleared it).
+  clearSourceDraft(id);
+}
+
+// Warn before unloading the page (reload / quit) while any source view holds
+// uncommitted edits — mirrors the scratchpad #864 beforeunload guard.
+$effect(() => {
+  const onBeforeUnload = (ev: BeforeUnloadEvent): void => {
+    if (sourceDirtyTabs.size === 0) return;
+    ev.preventDefault();
+    ev.returnValue = "You have unsaved markdown-source edits.";
+  };
+  window.addEventListener("beforeunload", onBeforeUnload);
+  return () => window.removeEventListener("beforeunload", onBeforeUnload);
+});
+
 // #842: when the user reaches the empty tab-bar state (e.g. closes the last
 // tab) with a live connection, auto-open a fresh scratchpad instead of
 // stranding them on "No document open."
@@ -1303,6 +1548,8 @@ const tutorial = createTutorial(
     aiChip={aiReadiness.chip}
     onConnectAi={connectAi}
     onRestartClaude={restartClaude}
+    sourceViewActive={inSourceView}
+    onToggleSourceView={canSourceView || inSourceView ? toggleSourceView : null}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -1519,7 +1766,7 @@ const tutorial = createTutorial(
       claudeStatus={yjsSync.claudeStatus}
       claudeActive={yjsSync.claudeActive}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
-      readOnly={yjsSync.readOnly}
+      readOnly={isReadOnly}
       saving={saveStore.saving}
       {editor}
     />
@@ -1725,6 +1972,8 @@ const tutorial = createTutorial(
 
 {#snippet editorColumn()}
   <div
+    bind:this={editorScrollEl}
+    data-testid="editor-scroll-container"
     class="editor-scroll tandem-scroll-fade-y"
     class:hide-raw-md={!settingsState.settings.showRawMarkdown}
     use:scrollFade={"y"}
@@ -1736,14 +1985,14 @@ const tutorial = createTutorial(
     ondrop={fileDrop.handleEditorDrop}
   >
     <ReviewOnlyBanner
-      visible={activeTab?.readOnly === true && activeTab?.format === "docx"}
+      visible={isReadOnly && activeTab?.format === "docx"}
       documentId={activeTab?.id}
     />
     {#snippet editorContent()}
       <Editor
         ydoc={activeTab!.ydoc}
         provider={activeTab!.provider}
-        readOnly={yjsSync.readOnly}
+        readOnly={isReadOnly}
         currentFilePath={activeTab!.filePath}
         format={activeTab!.format}
         {activeAnnotationId}
@@ -1780,6 +2029,7 @@ const tutorial = createTutorial(
         {mode}
         {activeAnnotationId}
         repliesById={marginReplies.byId}
+        reduceMotion={settingsState.settings.reduceMotion}
         onClick={(ann) => {
           activeAnnotationId = ann.id;
           review.scrollToAnnotation(ann);
@@ -1792,7 +2042,30 @@ const tutorial = createTutorial(
         onSendToClaude={marginHandlers.onSendToClaude}
       />
     {/snippet}
-    <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
+    {#if inSourceView && activeTab}
+      <!-- Raw-markdown source view (#1021) replaces the WYSIWYG stage entirely.
+           The Tiptap editor unmounts (editor → null); margin hooks park safely
+           via their null-editor guards (see createMarginPositions).
+
+           This UNMOUNTS marginLayerEl, which INVARIANT 1 below forbids across
+           *marginView* toggles. It's safe here because `inSourceView` is
+           margin-independent state — no margin effect reads or writes it, so
+           there's no bind:this feedback loop (the storm INVARIANT 1 guards is a
+           self-triggering cycle, not a one-way unmount on an external toggle). -->
+      <!-- Keyed on the tab ID so switching to another source-view tab remounts
+           a fresh SourceView that re-fetches + restores that tab's own draft —
+           rather than reactively swapping documentId on a shared instance. -->
+      {#key activeTab.id}
+        <SourceView
+          documentId={activeTab.id}
+          ydoc={activeTab.ydoc}
+          initialDraft={sourceDrafts.get(activeTab.id)}
+          onDraftChange={(text, dirty) => updateSourceDraft(activeTab!.id, text, dirty)}
+          onExit={() => exitSourceView(activeTab!.id)}
+        />
+      {/key}
+    {:else}
+      <!-- Margin-annotation positioning layer + editor stage (#649 / Phase 3.5).
          The layer wraps editor content so its block height matches the
          editor's; bubble Y-positions + scroll sync are measured against it.
 
@@ -1885,6 +2158,7 @@ const tutorial = createTutorial(
       <div class="editor-end-marker" aria-hidden="true">
         <span class="editor-end-pill">End of document</span>
       </div>
+    {/if}
     {/if}
     <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
     <FindReplaceBar
