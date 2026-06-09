@@ -1,6 +1,6 @@
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
-import { API_CLOSE, API_RENAME } from "../../shared/api-paths.js";
+import { API_CLOSE, API_INFO, API_RENAME } from "../../shared/api-paths.js";
 import {
   CTRL_ROOM,
   DEFAULT_MCP_PORT,
@@ -11,7 +11,6 @@ import {
   Y_MAP_AWARENESS,
   Y_MAP_CLAUDE,
   Y_MAP_DOCUMENT_META,
-  Y_MAP_GENERATION_ID,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants";
@@ -99,7 +98,18 @@ export function createYjsSync(): YjsSyncState {
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
   /** Track whether we've ever connected — don't count initial attempt as a reconnect. */
   let hadConnection = false;
+  /**
+   * The server generation this client is synced against, fetched from
+   * GET /api/info (deliberately not broadcast via the ctrl Y.Map — a stale
+   * tab's merge-back could clobber a CRDT-carried value). Every provider pins
+   * it as its Hocuspocus auth token AT CONSTRUCTION: the token identifies the
+   * ydoc's provenance, so a provider whose ydoc predates a server restart
+   * keeps presenting the old generation and is rejected before its stale
+   * state can merge back.
+   */
   let generationId: string | null = null;
+  /** Single-flight guard for the authenticationFailed → rebuild path. */
+  let rebuildInFlight = false;
   // Last activation epoch applied from the server. Lets handleDocumentList tell a
   // genuine (re)activation (epoch advanced) from a stale re-broadcast of an
   // unchanged active id (epoch same), so the latter never clobbers a local tab
@@ -174,6 +184,105 @@ export function createYjsSync(): YjsSyncState {
     };
   };
 
+  // ---------- Generation fetch + full-rebuild plumbing (stale-tab resync) ----------
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  /** Fetch the current server generation id, or null if unreachable/absent.
+   *  Timeboxed: a half-open server (accepts TCP, never responds) must not
+   *  hang the connect/rebuild poll loops forever. */
+  const fetchGenerationId = async (): Promise<string | null> => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_INFO}`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as { generationId?: string | null };
+      return body.generationId ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Destroy every per-tab provider/ydoc (active, kept, and pending) and clear
+   *  tab state. Deliberately does NOT null `activeTabIdState`: the #842
+   *  auto-scratchpad gate (`shouldAutoOpenScratchpad`) requires a null active
+   *  id, so keeping the stale id closed prevents a stray scratchpad from
+   *  spawning during a >400ms resync window — and the post-rebuild doc
+   *  broadcast re-resolves the active tab anyway. */
+  const teardownAllTabs = () => {
+    for (const obs of observers.values()) obs.cleanup();
+    observers.clear();
+    for (const cleanup of tabMetaCleanups.values()) cleanup();
+    tabMetaCleanups.clear();
+    for (const pending of pendingProviders.values()) {
+      pending.provider.destroy();
+      pending.ydoc.destroy();
+    }
+    pendingProviders.clear();
+    pendingIds.clear();
+    for (const t of tabsState) {
+      t.provider.destroy();
+      t.ydoc.destroy();
+    }
+    tabsState = [];
+  };
+
+  /**
+   * authenticationFailed → the server rejected our pinned generation token,
+   * i.e. the server restarted and this client's Y.Docs are stale. Re-fetch the
+   * generation and rebuild everything (ctrl + tabs) from scratch — fresh empty
+   * Y.Docs sync cleanly from the server instead of CRDT-merging stale content
+   * back into it. Deferred to a microtask so no Y.Doc is destroyed while an
+   * observer or provider event is mid-dispatch.
+   *
+   * Note the rejected provider's websocket stays "connected" while denied (the
+   * server holds it until a 30s idle close) — provider status events are NOT a
+   * health signal here; this event is the only reliable trigger.
+   */
+  const scheduleRebuild = () => {
+    if (destroyed || rebuildInFlight) return;
+    rebuildInFlight = true;
+    queueMicrotask(async () => {
+      try {
+        while (!destroyed) {
+          const gen = await fetchGenerationId();
+          if (destroyed) return;
+          if (gen && gen === generationId) {
+            // Rejected without a generation change — near-unreachable
+            // (/api/info and the gate disagreeing). Nothing to rebuild, but
+            // don't wait out the server's ~30s idle close (the socket reports
+            // "connected" while denied, so the user would see a frozen doc
+            // with a green indicator): cycle every socket to re-auth NOW.
+            console.warn("[Tandem] Provider auth failed without a generation change");
+            bootstrapProviderRef?.disconnect();
+            bootstrapProviderRef?.connect();
+            for (const t of tabsState) {
+              t.provider.disconnect();
+              t.provider.connect();
+            }
+            return;
+          }
+          if (gen) {
+            console.warn("[Tandem] Server restarted — resyncing documents");
+            teardownAllTabs();
+            bootstrapCleanup?.();
+            // Banner state set AFTER cleanup (bootstrapCleanup clears restartTimer).
+            serverRestarted = true;
+            lastAppliedActiveEpoch = null;
+            restartTimer = setTimeout(() => {
+              serverRestarted = false;
+            }, 5000);
+            startBootstrap(gen);
+            return;
+          }
+          await sleep(1000); // server still down — poll until it's back
+        }
+      } finally {
+        rebuildInFlight = false;
+      }
+    });
+  };
+
   // ---------- handleDocumentList: reconcile tabs from server-broadcast list ----------
   const handleDocumentList = (
     docList: DocListEntry[],
@@ -213,7 +322,11 @@ export function createYjsSync(): YjsSyncState {
         url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
         name: doc.id,
         document: ydoc,
+        // Pinned string, not a closure: if the generation changes after this
+        // provider is built, its ydoc is stale and must NOT re-authenticate.
+        token: generationId,
       });
+      provider.on("authenticationFailed", scheduleRebuild);
       pendingProviders.set(doc.id, { ydoc, provider });
 
       const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
@@ -308,24 +421,30 @@ export function createYjsSync(): YjsSyncState {
     // genuine reactivation still satisfies activeEpoch !== lastAppliedActiveEpoch.
   };
 
-  // Forward-declared so the bootstrap block (below) can assign and destroy() can call.
+  // Forward-declared so startBootstrap (below) can assign and destroy() can call.
   let bootstrapCleanup: (() => void) | null = null;
   let bootstrapProviderRef: HocuspocusProvider | null = null;
 
-  // ---------- Bootstrap (collapsed Effect 1+2: connect bootstrap provider AND wire its observer) ----------
-  // Done inline (eager) so the bootstrap provider + observer are guaranteed
-  // wired before any active-tab observer effect runs. Mirrors React's effect-
-  // order guarantee without relying on Svelte $effect declaration order.
-  {
+  // ---------- Bootstrap: connect ctrl provider AND wire its observer ----------
+  // A function (not an inline block) because the authenticationFailed rebuild
+  // path re-runs it with the post-restart generation. The first run is gated
+  // on fetching the generation from /api/info — the ctrl provider needs the
+  // token at construction, and a ctrl Y.Map broadcast can't be the source (a
+  // stale tab's merge-back could clobber a CRDT-carried value).
+  function startBootstrap(gen: string) {
+    generationId = gen;
     const ydoc = new Y.Doc();
     const provider = new HocuspocusProvider({
       url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
       name: CTRL_ROOM,
       document: ydoc,
+      // Pinned string — same provenance rule as tab providers.
+      token: gen,
     });
     bootstrapYdocState = ydoc;
     bootstrapProviderRef = provider;
 
+    provider.on("authenticationFailed", scheduleRebuild);
     provider.on("status", ({ status }: { status: string }) => {
       connected = status === "connected";
       const known: ConnectionStatus[] = ["connected", "connecting", "disconnected"];
@@ -345,28 +464,12 @@ export function createYjsSync(): YjsSyncState {
       }
     });
 
-    // Wire bootstrap-doc meta observer (originally Effect 2)
+    // Wire bootstrap-doc meta observer. Guard #4 (generation-id key) is gone:
+    // restart detection moved to the authenticationFailed → scheduleRebuild
+    // path, which a stale tab cannot miss (the server gate rejects it) and a
+    // stale merge cannot clobber (it never reads the map's generation value).
     const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
     const bootstrapObserver = (event: Y.YMapEvent<unknown>) => {
-      // keysChanged guard #4 (preserves original line 275)
-      if (event.keysChanged.has(Y_MAP_GENERATION_ID)) {
-        const newGenId = meta.get(Y_MAP_GENERATION_ID) as string | undefined;
-        if (newGenId && generationId && newGenId !== generationId) {
-          console.warn("[Tandem] Server restarted — refreshing documents");
-          serverRestarted = true;
-          // The server's activeDocEpoch resets to 0 on restart and climbs back.
-          // Clear our last-applied epoch so the restored active id is always
-          // re-applied below — otherwise a post-restart epoch that numerically
-          // collides with the stale value would make the gate wrongly skip it.
-          lastAppliedActiveEpoch = null;
-          if (restartTimer) clearTimeout(restartTimer);
-          restartTimer = setTimeout(() => {
-            serverRestarted = false;
-          }, 5000);
-        }
-        if (newGenId) generationId = newGenId;
-      }
-
       // keysChanged guard #5 (preserves original line 286). Epoch key included so
       // the guard can't silently no-op if it is ever written alone.
       if (
@@ -388,15 +491,13 @@ export function createYjsSync(): YjsSyncState {
     meta.observe(bootstrapObserver);
 
     // Initial read — process state that synced before observer was wired
-    const initGenId = meta.get(Y_MAP_GENERATION_ID) as string | undefined;
-    if (initGenId) generationId = initGenId;
     const initDocs = meta.get(Y_MAP_OPEN_DOCUMENTS) as DocListEntry[] | undefined;
     const initActive = meta.get(Y_MAP_ACTIVE_DOCUMENT_ID) as string | null | undefined;
     const initEpoch = meta.get(Y_MAP_ACTIVE_DOCUMENT_EPOCH) as number | null | undefined;
     if (initDocs) handleDocumentList(initDocs, initActive ?? null, initEpoch ?? null);
     storeReadOnly = (meta.get(Y_MAP_STORE_READ_ONLY) as boolean | undefined) === true;
 
-    // Stash bootstrap cleanup for destroy()
+    // Stash bootstrap cleanup for destroy() and the rebuild path
     bootstrapCleanup = () => {
       meta.unobserve(bootstrapObserver);
       if (restartTimer) {
@@ -407,10 +508,33 @@ export function createYjsSync(): YjsSyncState {
       ydoc.destroy();
       bootstrapYdocState = null;
       bootstrapProviderRef = null;
+      bootstrapCleanup = null;
     };
 
     ready = true;
   }
+
+  // Initial connect: fetch the generation, then bootstrap. If the server is
+  // down at launch, flip `ready` + "disconnected" after the first failed
+  // attempt so the normal chrome and ConnectionBanner render (matching the
+  // old eager-bootstrap behavior) instead of a bare "Connecting…" screen —
+  // every `ready` consumer is reactive and null-guards `bootstrapYdoc`. The
+  // poll keeps running and bootstraps the moment the server answers.
+  void (async () => {
+    while (!destroyed) {
+      const gen = await fetchGenerationId();
+      if (destroyed) return;
+      if (gen) {
+        startBootstrap(gen);
+        return;
+      }
+      ready = true;
+      connectionStatus = "disconnected";
+      connected = false;
+      if (disconnectedSince === null) disconnectedSince = Date.now();
+      await sleep(1000);
+    }
+  })();
 
   // ---------- Effect: rewire active-tab observers ----------
   // Memoize the active tab via $derived so the effect only re-runs when the
@@ -527,29 +651,12 @@ export function createYjsSync(): YjsSyncState {
     destroyed = true;
     // Stop the $effect.root scope (tears down both effects)
     stopEffects();
-    // Tear down active observers
-    for (const obs of observers.values()) obs.cleanup();
-    observers.clear();
-    // Tear down per-tab meta observers
-    for (const cleanup of tabMetaCleanups.values()) cleanup();
-    tabMetaCleanups.clear();
-    // Destroy pending providers
-    for (const pending of pendingProviders.values()) {
-      pending.provider.destroy();
-      pending.ydoc.destroy();
-    }
-    pendingProviders.clear();
-    pendingIds.clear();
-    // Destroy real tab providers
-    for (const t of tabsState) {
-      t.provider.destroy();
-      t.ydoc.destroy();
-    }
+    // Tear down every per-tab observer + provider/ydoc (also resets tabsState)
+    teardownAllTabs();
     // Tear down bootstrap
     bootstrapCleanup?.();
     // Reset reactive state so consumers that still hold the state object
     // post-teardown can't read destroyed Y.Doc references.
-    tabsState = [];
     annotationsState = [];
     activeTabIdState = null;
     ready = false;

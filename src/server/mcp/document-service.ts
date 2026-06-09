@@ -6,7 +6,6 @@ import {
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_DOCUMENT_META,
-  Y_MAP_GENERATION_ID,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
@@ -45,7 +44,7 @@ import {
   saveSession,
   stopAutoSave,
 } from "../session/manager.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
+import { getOrCreateDocument, setGenerationTokenSource } from "../yjs/provider.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
 //
@@ -1151,13 +1150,32 @@ export async function restoreCtrlSession(): Promise<string | null> {
   return previousActiveDocId;
 }
 
-/** Write a unique generationId to the ctrl doc so clients can detect server restarts. */
+/**
+ * This process's generation id — the source of truth the Hocuspocus
+ * `onAuthenticate` gate compares client tokens against. Deliberately module
+ * state distributed over HTTP (GET /api/info), never broadcast via the ctrl
+ * Y.Map: a CRDT-carried value can be clobbered by a stale reconnecting client
+ * (concurrent YMap set resolves by clientID — a coin flip), which is exactly
+ * the corruption the gate exists to prevent.
+ */
+let currentGenerationId: string | null = null;
+
+/** The generation id for this server run, or null before writeGenerationId(). */
+export function getGenerationId(): string | null {
+  return currentGenerationId;
+}
+
+/**
+ * Mint a unique generationId for this server run. Clients receive it via
+ * GET /api/info and present it as their Hocuspocus auth token.
+ */
 export function writeGenerationId(): void {
-  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-  const generationId = randomUUID();
-  withInternal(ctrlDoc, () => meta.set(Y_MAP_GENERATION_ID, generationId));
-  console.error(`[Tandem] Server generationId: ${generationId}`);
+  currentGenerationId = randomUUID();
+  // Arm the Hocuspocus onAuthenticate gate (callback registration — provider
+  // must not import document-service back). Runs before Hocuspocus binds in
+  // both transports (index.ts boot order), so no connection ever races it.
+  setGenerationTokenSource(getGenerationId);
+  console.error(`[Tandem] Server generationId: ${currentGenerationId}`);
 }
 
 /**

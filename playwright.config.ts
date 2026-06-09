@@ -9,6 +9,14 @@ import { DEFAULT_MCP_PORT, TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "./src/sha
 // and avoids that problem entirely.
 process.env[TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV] = "1";
 
+// The isolated app-data dir (TANDEM_APP_DATA_DIR below) must be RESET per run,
+// not just isolated — stale annotation envelopes cascade failures through the
+// whole suite (see scripts/e2e-server.mjs for the full rationale). The wipe
+// lives in that launcher, NOT here: Playwright re-imports this config in every
+// worker process, so a config-eval rmSync would re-fire mid-run underneath
+// the live server.
+const E2E_APP_DATA_DIR = "/tmp/tandem-e2e-data";
+
 export default defineConfig({
   testDir: "tests/e2e",
   timeout: 30_000,
@@ -47,8 +55,8 @@ export default defineConfig({
     },
     {
       command: process.env.CI
-        ? "node dist/server/index.js"
-        : "node node_modules/tsx/dist/cli.mjs src/server/index.ts",
+        ? "node scripts/e2e-server.mjs dist/server/index.js"
+        : "node scripts/e2e-server.mjs node_modules/tsx/dist/cli.mjs src/server/index.ts",
       url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
@@ -62,8 +70,9 @@ export default defineConfig({
         ...(process.env as Record<string, string>),
         [TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV]: "1",
         // Isolate the E2E server's data dir so stale sessions/locks from the
-        // stdio-smoke step (or any previous run) can't delay startup.
-        TANDEM_APP_DATA_DIR: "/tmp/tandem-e2e-data",
+        // stdio-smoke step (or any previous run) can't delay startup. Wiped
+        // by scripts/e2e-server.mjs at server start — see the rationale there.
+        TANDEM_APP_DATA_DIR: E2E_APP_DATA_DIR,
         // Skip auto-opening sample/welcome.md on startup. The onboarding-tutorial
         // spec opens it explicitly via tandem_open, and openFileByPath injects
         // tutorial annotations idempotently whenever the sample doc is opened.

@@ -29,6 +29,16 @@ export function setShouldKeepDocument(fn: (name: string) => boolean): void {
   shouldKeepDocument = fn;
 }
 
+// Source of the expected generation token for the onAuthenticate gate.
+// Registered by document-service's writeGenerationId() (same callback pattern
+// as setShouldKeepDocument — provider must not import document-service back).
+// Fail-closed: while unregistered (or before a generation exists), every
+// connection is rejected; production always registers before Hocuspocus binds.
+let getExpectedGenerationToken: (() => string | null) | null = null;
+export function setGenerationTokenSource(fn: () => string | null): void {
+  getExpectedGenerationToken = fn;
+}
+
 /**
  * Get a document by room name. Returns undefined if it doesn't exist.
  */
@@ -59,6 +69,23 @@ export function removeDocument(name: string): boolean {
   return documents.delete(name);
 }
 
+/**
+ * Reject WebSocket upgrades whose Origin is not 127.0.0.1 / tauri.localhost.
+ * Narrowed in #477 PR 2: bare `localhost` is no longer accepted. Mirrors
+ * `isHostAllowed` / CORS in api-routes.ts.
+ */
+function assertAllowedOrigin(origin: string | undefined): void {
+  if (!origin) {
+    console.error("[Hocuspocus] Rejected connection: missing Origin header");
+    throw new Error("Connection rejected: missing origin header");
+  }
+  const url = new URL(origin);
+  if (url.hostname !== "127.0.0.1" && url.hostname !== TAURI_HOSTNAME) {
+    console.error(`[Hocuspocus] Rejected connection from origin: ${origin}`);
+    throw new Error("Connection rejected: invalid origin");
+  }
+}
+
 export async function startHocuspocus(port: number): Promise<Hocuspocus> {
   hocuspocusInstance = new Hocuspocus({
     port,
@@ -68,21 +95,34 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     quiet: true, // stdout is the MCP wire — suppress the startup banner
 
     async onConnect({ request, documentName }) {
-      // Origin validation: reject connections not from 127.0.0.1 / tauri.localhost (prevents DNS rebinding).
-      const origin = request?.headers?.origin;
-      if (!origin) {
-        console.error("[Hocuspocus] Rejected connection: missing Origin header");
-        throw new Error("Connection rejected: missing origin header");
-      }
-      const url = new URL(origin);
-      // Narrowed in #477 PR 2: the `localhost` hostname is no longer accepted on its
-      // own; only the Tauri WebView (`tauri.localhost`) and the sidecar / dev fetch
-      // path (`127.0.0.1`). Mirrors `isHostAllowed` / CORS in api-routes.ts.
-      if (url.hostname !== "127.0.0.1" && url.hostname !== TAURI_HOSTNAME) {
-        console.error(`[Hocuspocus] Rejected connection from origin: ${origin}`);
-        throw new Error("Connection rejected: invalid origin");
-      }
+      // Origin validation: reject connections not from 127.0.0.1 / tauri.localhost
+      // (prevents DNS rebinding). Belt-and-braces only — in @hocuspocus/server 2.x
+      // a thrown onConnect races already-queued message processing, so the
+      // authoritative copy of this check lives in onAuthenticate below.
+      assertAllowedOrigin(request?.headers?.origin);
       console.error(`[Hocuspocus] Client connected to: ${documentName}`);
+    },
+
+    // Generation gate. Defining this hook flips requiresAuthentication on for
+    // EVERY room: sync messages are queued per-document until the Auth message
+    // is validated, and a throw here sends PermissionDenied without ever
+    // draining the queue — the ordering guarantee onConnect cannot give.
+    // Clients present the generation id from GET /api/info as their token,
+    // pinned at provider construction; a tab that survived a server restart
+    // presents the previous run's id and is rejected before its stale Y.Doc
+    // state can CRDT-merge into (and corrupt) the freshly-loaded document.
+    // CTRL_ROOM is deliberately NOT exempt: a stale ctrl client merging back
+    // can clobber the broadcast generation id / openDocuments list itself.
+    async onAuthenticate({ token, documentName, requestHeaders }) {
+      assertAllowedOrigin(requestHeaders?.origin);
+      const expected = getExpectedGenerationToken?.() ?? null;
+      if (expected === null || token !== expected) {
+        console.error(
+          `[Hocuspocus] Rejected stale-generation connection to ${documentName} ` +
+            `(client token ${token ? `"${token.slice(0, 8)}…"` : "missing"})`,
+        );
+        throw new Error("Connection rejected: stale server generation");
+      }
     },
 
     async onDisconnect({ documentName }) {
