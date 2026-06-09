@@ -98,16 +98,6 @@ export class ClaudeInstallError extends Error {
   }
 }
 
-/** `new URL().protocol` keeps the trailing colon. */
-function assertPinnedUrl(raw: string): void {
-  const u = new URL(raw);
-  if (u.protocol !== "https:" || u.hostname !== INSTALLER_HOST) {
-    throw new Error(
-      `Installer URL must be https://${INSTALLER_HOST}/… — refusing ${u.protocol}//${u.hostname}`,
-    );
-  }
-}
-
 export interface FetchInstallerScriptOptions {
   httpsGet?: typeof httpsGetDefault;
   maxRedirects?: number;
@@ -127,11 +117,37 @@ export function fetchInstallerScript(
   const maxRedirects = opts.maxRedirects ?? MAX_REDIRECTS;
 
   return new Promise<string>((resolve, reject) => {
-    // Throwing here (sync, inside the executor) rejects the promise — this is
-    // the per-hop F2 scheme+host gate; recursion re-enters through this path.
-    assertPinnedUrl(url);
+    // Per-hop F2 scheme+host gate. The redirect recursion below re-enters this
+    // executor, so every hop is re-validated before its own fetch. A `Location:`
+    // that downgrades to http: or points off claude.ai is fatal (rejected), not
+    // silently corrected.
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    if (parsed.protocol !== "https:" || parsed.hostname !== INSTALLER_HOST) {
+      reject(
+        new Error(
+          `Installer URL must be https://${INSTALLER_HOST}/… — refusing ${parsed.protocol}//${parsed.hostname}`,
+        ),
+      );
+      return;
+    }
 
-    const req = httpsGet(url, (res) => {
+    // Hand httpsGet a URL rebuilt from a literal `https://` scheme + the pinned
+    // host constant, so the protocol reaching the download sink is a
+    // compile-time constant rather than a value derived from the (untrusted)
+    // redirect Location header. Equivalent to `url` for every accepted request
+    // (protocol+host are already proven https/claude.ai above); the explicit
+    // reconstruction is what satisfies CodeQL js/insecure-download, which keys
+    // on the scheme of the string flowing into the request and does not model
+    // the guard above as a protocol barrier.
+    const pinnedUrl = `https://${INSTALLER_HOST}${parsed.pathname}${parsed.search}`;
+
+    const req = httpsGet(pinnedUrl, (res) => {
       const status = res.statusCode ?? 0;
 
       if (status >= 300 && status < 400) {
