@@ -81,6 +81,10 @@ export interface IntegrationWizardState {
   submitSecret(picked: PickedIntegration, secret: string): Promise<void>;
   save(): Promise<void>;
   reset(): void;
+  /** Delete keychain secrets stored under Advanced but never persisted (the
+   *  user dismissed before saving). No-op unless step === "connect", so it can
+   *  never delete a live, file-referenced ref. Call BEFORE reset(). */
+  cleanupUnsavedSecrets(): Promise<void>;
 }
 
 /**
@@ -269,6 +273,12 @@ export function createIntegrationWizard(
       return;
     }
     if (result.status === "error") {
+      // The ref is never recorded on the picked entry below, so neither
+      // cleanupStoredSecrets nor the unpick cleanup could ever find it if the
+      // backend wrote it but then failed the response. Best-effort delete of
+      // the freshly-generated ref undoes a possible partial write (a no-op if
+      // nothing was stored).
+      void keychainBackend.delete(ref);
       setError(`Could not store secret: ${result.message}`);
       return;
     }
@@ -393,6 +403,20 @@ export function createIntegrationWizard(
     keychainUnavailable = false;
   };
 
+  /**
+   * Delete keychain secrets stored under Advanced but never persisted — the
+   * user pasted a token then dismissed before saving. Gated on `step ===
+   * "connect"`: a live, file-referenced ref only exists once persist succeeds,
+   * after which step is "done" or "error" — never "connect" — so this can
+   * never re-introduce the SECRET_MISSING orphan that 498b7bb fixed. Reads
+   * `picked` synchronously (via cleanupStoredSecrets) so callers may invoke it
+   * immediately before reset() clears `picked`.
+   */
+  const cleanupUnsavedSecrets = async (): Promise<void> => {
+    if (step !== "connect") return;
+    await cleanupStoredSecrets();
+  };
+
   return {
     get step() {
       return step;
@@ -420,5 +444,6 @@ export function createIntegrationWizard(
     submitSecret,
     save,
     reset,
+    cleanupUnsavedSecrets,
   };
 }

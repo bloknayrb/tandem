@@ -22,6 +22,18 @@ let { install, selected, onToggle }: Props = $props();
 
 const selectable = $derived(isSelectable(install));
 
+// Testid identity. `kind` is NOT unique — a single Windows box can surface a
+// classic AND an MSIX `claude-desktop` install, yielding duplicate testids
+// (Playwright strict-mode throw). `configPath` is the natural key the `{#each}`
+// and `save()` already use; slug it so the testid stays selector-safe.
+// `$derived`, not `const`, so a reused card instance can't carry a stale slug.
+const slug = $derived(
+  install.target.configPath
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase(),
+);
+
 interface StatusLine {
   text: string;
   /** Maps to a `--tandem-{family}-fg-strong` color class; null = muted neutral. */
@@ -57,7 +69,7 @@ const statusLine = $derived.by((): StatusLine => {
   class="itc-card"
   class:is-selected={selected}
   class:is-locked={!selectable}
-  data-testid="integration-wizard-card-{install.target.kind}"
+  data-testid="integration-wizard-card-{slug}"
 >
   <input
     type="checkbox"
@@ -65,7 +77,7 @@ const statusLine = $derived.by((): StatusLine => {
     checked={selected}
     disabled={!selectable}
     onchange={onToggle}
-    data-testid="integration-wizard-pick-{install.target.kind}"
+    data-testid="integration-wizard-pick-{slug}"
   />
   <span class="itc-icon" aria-hidden="true">
     {#if install.target.kind === "claude-code"}

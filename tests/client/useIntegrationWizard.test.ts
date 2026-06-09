@@ -216,6 +216,159 @@ describe("createIntegrationWizard", () => {
     expect(wizard.step).not.toBe("error");
   });
 
+  it("submitSecret(): a backend error best-effort deletes the orphan ref (F2)", async () => {
+    // If the keychain write returns an error AFTER possibly storing the secret,
+    // the ref is never stamped on the picked entry — so nothing downstream
+    // could ever clean it up. submitSecret best-effort deletes the freshly
+    // generated ref to undo a partial write.
+    let deletes = 0;
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => ({ status: 500, body: { error: "INTERNAL", message: "boom" } }),
+        },
+        {
+          method: "DELETE",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => {
+            deletes++;
+            return { status: 204, body: null };
+          },
+        },
+      ]),
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.submitSecret(wizard.picked[0]!, "shhh");
+    flushSync();
+    expect(wizard.picked[0]?.config.tokenSecretRef).toBeUndefined();
+    expect(wizard.picked[0]?.hasStoredSecret).not.toBe(true);
+    expect(deletes).toBe(1);
+    expect(wizard.errorMessage).toContain("Could not store secret");
+  });
+
+  it("cleanupUnsavedSecrets(): deletes unsaved refs at step=connect (F1)", async () => {
+    let deletes = 0;
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => ({ status: 204, body: null }),
+        },
+        {
+          method: "DELETE",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => {
+            deletes++;
+            return { status: 204, body: null };
+          },
+        },
+      ]),
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.submitSecret(wizard.picked[0]!, "shhh");
+    flushSync();
+    expect(wizard.picked[0]?.config.tokenSecretRef).toMatch(/^cc-1-/);
+    expect(wizard.step).toBe("connect");
+    // Dismiss before save (still at "connect") → the orphan ref is deleted.
+    await wizard.cleanupUnsavedSecrets();
+    expect(deletes).toBe(1);
+  });
+
+  it("cleanupUnsavedSecrets(): is a no-op once persisted (step=done), protecting live refs (F1)", async () => {
+    // After a successful save the refs are file-referenced and LIVE; deleting
+    // them would re-introduce the SECRET_MISSING orphan that 498b7bb fixed.
+    // The step!=="connect" guard must skip cleanup entirely here.
+    let deletes = 0;
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => ({ status: 204, body: null }),
+        },
+        {
+          method: "DELETE",
+          urlMatch: /\/api\/integrations\/secrets\//,
+          handler: () => {
+            deletes++;
+            return { status: 204, body: null };
+          },
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations$/,
+          handler: () => ({
+            status: 200,
+            body: { ok: true, ids: ["cc-1"], confirmationNonce: "n1" },
+          }),
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/apply$/,
+          handler: () => ({
+            status: 200,
+            body: { results: [{ id: "cc-1", status: "applied" }], nextNonce: "n2" },
+          }),
+        },
+      ]),
+    });
+    wizard.setPicked([
+      {
+        id: "cc-1",
+        config: {
+          kind: "claude-code",
+          id: "cc-1",
+          label: "Claude Code",
+          configPath: "/x",
+          transport: "http",
+          url: "http://127.0.0.1:3479",
+        },
+        hasStoredSecret: false,
+        keychainUnavailable: false,
+      },
+    ]);
+    flushSync();
+    await wizard.submitSecret(wizard.picked[0]!, "shhh");
+    await wizard.save();
+    flushSync();
+    expect(wizard.step).toBe("done");
+    await wizard.cleanupUnsavedSecrets();
+    expect(deletes).toBe(0); // guard skipped cleanup — live refs preserved
+  });
+
   it("save(): POSTs persist then apply and lands on step=done", async () => {
     let savedBody: unknown = null;
     let applyBody: unknown = null;

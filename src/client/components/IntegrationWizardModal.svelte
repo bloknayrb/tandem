@@ -142,6 +142,11 @@ $effect(() => {
 });
 
 function close(): void {
+  // Delete any keychain secret stored under Advanced but never persisted (the
+  // user dismissed before saving). Gated inside the hook on the pre-persist
+  // state, so it can never delete a live, file-referenced ref. Must run before
+  // reset() clears `picked` — the hook captures the refs synchronously.
+  void wizard.cleanupUnsavedSecrets().catch(() => {});
   wizard.reset();
   secretInputs = {};
   onClose();
@@ -182,9 +187,13 @@ function trapTab(e: KeyboardEvent): void {
   }
 }
 
+// Match picked entries by `configPath` — the natural key the `{#each}` (keyed
+// on configPath) and `save()` already use. Matching on `(kind, label)` was a
+// fragile third identity key: two same-kind installs (classic + MSIX
+// claude-desktop) could conflate selection state.
 function togglePicked(install: ExistingMcpInstall): void {
   const existingIdx = wizard.picked.findIndex(
-    (p) => p.config.kind === install.target.kind && p.config.label === install.target.label,
+    (p) => p.config.configPath === install.target.configPath,
   );
   if (existingIdx >= 0) {
     wizard.setPicked(wizard.picked.filter((_, i) => i !== existingIdx));
@@ -195,9 +204,7 @@ function togglePicked(install: ExistingMcpInstall): void {
 }
 
 function isPicked(install: ExistingMcpInstall): boolean {
-  return wizard.picked.some(
-    (p) => p.config.kind === install.target.kind && p.config.label === install.target.label,
-  );
+  return wizard.picked.some((p) => p.config.configPath === install.target.configPath);
 }
 
 async function onSubmitSecret(picked: PickedIntegration): Promise<void> {

@@ -75,6 +75,7 @@ vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", () => ({
     reset: vi.fn(),
     setPicked: vi.fn(),
     submitSecret: vi.fn(async () => {}),
+    cleanupUnsavedSecrets: vi.fn(async () => {}),
   }),
   detectedToPicked: vi.fn(() => null),
 }));
