@@ -34,6 +34,7 @@ import {
   isTauriRuntime,
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
+import { createClaudeCliStatus } from "../hooks/useClaudeCliStatus.svelte.js";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
 import {
   createIntegrationWizard,
@@ -63,6 +64,19 @@ const wizard = createIntegrationWizard({ baseUrl: `http://127.0.0.1:${DEFAULT_MC
 const coworkStatus = createCoworkStatus(() => isTauriRuntime());
 // Render subscriptions (NOT effect reads) — safe.
 const coworkVariant = $derived(coworkSettingsVariant(coworkStatus.status));
+
+// Claude CLI binary probe for the empty state's one-click install. `getActive`
+// reads only externals (`open`, `wizard.step`) — never cliStatus' own state —
+// so the hook's fetch $effect can't self-trigger.
+const cliStatus = createClaudeCliStatus(
+  () => open && wizard.step === "connect",
+  `http://127.0.0.1:${DEFAULT_MCP_PORT}`,
+);
+// Gate the install CTA on a CONFIRMED NOT_INSTALLED. While presence is null
+// (loading) we show the manual-MCP hint, so a user who already has the CLI
+// never sees a flash of the install button before the GET resolves.
+const showInstallCta = $derived(cliStatus.presence === "NOT_INSTALLED");
+const showInstalledNotOnPath = $derived(cliStatus.presence === "INSTALLED_NOT_ON_PATH");
 
 // MAIN ↔ COWORK sub-view toggle. Reset to "main" on (re)open below.
 let view = $state<"main" | "cowork">("main");
@@ -149,11 +163,28 @@ function close(): void {
 
 /** Re-run detection from scratch — the open-$effect only fires on the
  *  open transition, so "Try again" / "Check again" must call begin()
- *  explicitly after reset(). */
+ *  explicitly after reset(). Also re-probe binary presence: the cli-status
+ *  $effect is keyed on `getActive()`, which doesn't change post-install, so
+ *  it won't auto-re-probe. */
 function retryDetection(): void {
   wizard.reset();
   secretInputs = {};
   void wizard.begin();
+  void cliStatus.refetch();
+}
+
+/** One-click install from the empty state. Branch on the RETURNED presence
+ *  (not a post-await getter read — the install resolves in 30–120s, during
+ *  which the modal may have closed; the hook's `mounted` guard is the
+ *  load-bearing protection). If the CLI advanced past NOT_INSTALLED, re-run
+ *  detection — `wizard.begin()` no-ops on a dead wizard. `existing` stays
+ *  empty until the user first runs `claude` (which writes ~/.claude.json),
+ *  so the INSTALLED_NOT_ON_PATH success banner carries the next step. */
+async function onInstallClaude(): Promise<void> {
+  const next = await cliStatus.install();
+  if (next && next !== "NOT_INSTALLED") {
+    void wizard.begin();
+  }
 }
 
 /**
@@ -423,8 +454,41 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
             {#if wizard.detecting}
               {@render loadingDots("Looking for Claude on your computer…")}
             {:else if wizard.existing.length === 0}
-              <div class="iw-empty">
+              <div class="iw-empty" data-testid="integration-wizard-empty">
                 <p class="iw-empty-title">We couldn't find Claude on this computer.</p>
+                {#if showInstallCta}
+                  <p class="iw-hint-text">
+                    Don't have Claude Code yet? Install it now — a small, signed download
+                    straight from Anthropic.
+                  </p>
+                  <button
+                    type="button"
+                    class="iw-btn iw-btn-primary"
+                    onclick={onInstallClaude}
+                    disabled={cliStatus.installing}
+                    data-testid="integration-wizard-install-claude"
+                  >
+                    {cliStatus.installing ? "Installing…" : "Install Claude Code"}
+                  </button>
+                  {#if cliStatus.installError}
+                    <div
+                      class="iw-banner-warning"
+                      role="alert"
+                      data-testid="integration-wizard-install-error"
+                    >
+                      {@render warningIcon()}
+                      <span>{cliStatus.installError}</span>
+                    </div>
+                  {/if}
+                {:else if showInstalledNotOnPath}
+                  <div class="iw-whats-next" data-testid="integration-wizard-install-success">
+                    {@render checkIcon()}
+                    <span>
+                      Claude Code is installed. Open a new terminal and run <code>claude</code>
+                      once, then choose “Check again”.
+                    </span>
+                  </div>
+                {/if}
                 <p class="iw-hint-text">
                   If you use Claude Code or Claude Desktop, open it once, then check again. To
                   connect a different MCP-compatible app manually, point it at:
