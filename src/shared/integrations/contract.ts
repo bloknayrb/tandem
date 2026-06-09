@@ -218,3 +218,45 @@ export interface FirstRunNeededResponse {
   /** Required in the body of POST /api/integrations/apply (CSRF mitigation). */
   confirmationNonce: string;
 }
+
+// --- Claude CLI install (one-click "Install Claude Code" from the wizard) ----
+
+/** Read-only probe of whether the `claude` CLI binary is present. */
+export const API_INTEGRATIONS_CLAUDE_CLI_STATUS = "/api/integrations/claude-cli-status";
+/** Mutating: download + execute the official native installer. */
+export const API_INTEGRATIONS_INSTALL_CLAUDE_CODE = "/api/integrations/install-claude-code";
+
+/** Returned by POST /api/integrations/install-claude-code while another install is mid-flight. */
+export const ERROR_CODE_INSTALL_IN_PROGRESS = "INSTALL_IN_PROGRESS";
+/** Returned when the installer exits non-zero or throws. Carries exitCode + stderrTail. */
+export const ERROR_CODE_INSTALL_FAILED = "INSTALL_FAILED";
+/** Returned when the host OS isn't one the native installer supports. */
+export const ERROR_CODE_UNSUPPORTED_PLATFORM = "UNSUPPORTED_PLATFORM";
+
+/**
+ * Where the `claude` CLI binary is — independent of any config file.
+ *   - `NOT_INSTALLED`: not on PATH and not in the native install location.
+ *   - `INSTALLED_ON_PATH`: found on the server process's PATH (ready to use).
+ *   - `INSTALLED_NOT_ON_PATH`: present in `~/.local/bin` but not yet on PATH
+ *     (the usual immediately-post-install state — user must open a new shell).
+ */
+export type ClaudeCliPresence = "NOT_INSTALLED" | "INSTALLED_ON_PATH" | "INSTALLED_NOT_ON_PATH";
+
+/**
+ * GET /api/integrations/claude-cli-status response.
+ *
+ * **Enum only — never the resolved binary path or PATH contents.** This route
+ * is read-only and LAN-reachable under `TANDEM_ALLOW_UNAUTHENTICATED_LAN`; a
+ * path would leak the home-directory layout / username to the network. The
+ * type carries no path field by design (F6).
+ */
+export interface ClaudeCliStatusResponse {
+  presence: ClaudeCliPresence;
+}
+
+/** POST /api/integrations/install-claude-code success response. */
+export interface InstallClaudeCodeResponse {
+  ok: true;
+  /** Presence re-probed after the installer exits — usually `INSTALLED_NOT_ON_PATH`. */
+  presence: ClaudeCliPresence;
+}
