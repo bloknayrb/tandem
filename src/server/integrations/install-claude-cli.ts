@@ -58,6 +58,14 @@ const MAX_SCRIPT_BYTES = 10 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 /** Generous — a cold install (download + GPG verify) can take 30–120s. */
 const EXEC_TIMEOUT_MS = 180_000;
+/**
+ * Socket-inactivity timeout for the script fetch. The script is tiny, so 30s
+ * is ample. Load-bearing: without it a stalled/withholding peer (claude.ai
+ * hiccup, or an in-path adversary trickling bytes under the cap and never
+ * sending FIN) leaves the fetch pending forever, which strands the route's
+ * install mutex (the `finally` that clears it never runs) → 429 until restart.
+ */
+const FETCH_TIMEOUT_MS = 30_000;
 const STDERR_TAIL_CHARS = 500;
 
 /** Thrown when the host OS isn't one the native installer supports. */
@@ -166,6 +174,11 @@ export function fetchInstallerScript(
       res.on("error", reject);
     });
     req.on("error", reject);
+    // `destroy(err)` emits 'error', which the listener above turns into a
+    // reject — so a hung connection settles the promise instead of stranding it.
+    req.setTimeout(FETCH_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Installer fetch timed out after ${FETCH_TIMEOUT_MS}ms`));
+    });
   });
 }
 

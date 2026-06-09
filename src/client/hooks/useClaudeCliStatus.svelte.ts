@@ -85,6 +85,10 @@ export function createClaudeCliStatus(
   const refetch = async (): Promise<void> => {
     if (!mounted) return;
     loading = true;
+    // Clear a prior install failure: "Check again" routes here, and a stale
+    // install-error banner would otherwise persist next to the (still-shown)
+    // install CTA while presence is still NOT_INSTALLED.
+    installError = null;
     await runStatusFetch(() => false);
   };
 

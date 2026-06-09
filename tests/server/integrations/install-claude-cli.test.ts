@@ -192,7 +192,7 @@ describe("fetchInstallerScript — scheme/host pinning (F2)", () => {
         cb(res);
         res._emit();
       });
-      return { on: () => {}, destroy: () => {} };
+      return { on: () => {}, destroy: () => {}, setTimeout: () => {} };
     }) as never;
   }
 
