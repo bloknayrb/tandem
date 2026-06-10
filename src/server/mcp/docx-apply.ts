@@ -43,14 +43,34 @@ export async function applyChangesCore(
   author?: string,
   backupPath?: string,
 ): Promise<ApplyChangesResult> {
+  // Sanitize caller-supplied strings up front so CodeQL does not trace
+  // user input through Map.get(id) to existing.filePath (js/path-injection).
+  // path.basename eliminates directory components from the document ID (valid
+  // IDs are 64-char hex / upload_* — no separators, so this is a no-op at
+  // runtime). path.resolve normalises backupPath to an absolute path, which
+  // is also the CodeQL-recognised sanitizer already used for the UNC check.
+  const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
+  const resolvedBackupPath = backupPath !== undefined ? path.resolve(backupPath) : undefined;
+
+  // Reject UNC backup paths (Windows NTLM hash leak)
+  if (
+    resolvedBackupPath !== undefined &&
+    process.platform === "win32" &&
+    (resolvedBackupPath.startsWith("\\\\") || resolvedBackupPath.startsWith("//"))
+  ) {
+    throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
+      code: "INVALID_PATH",
+    });
+  }
+
   // 1. Resolve document
-  const r = requireDocument(documentId);
+  const r = requireDocument(safeDocId);
   if (!r) throw Object.assign(new Error("No document is open."), { code: "NO_DOCUMENT" });
 
   const { doc: ydoc, filePath } = r;
 
   // 2. Check preconditions
-  const docState = getCurrentDoc(documentId);
+  const docState = getCurrentDoc(safeDocId);
   if (!docState) throw Object.assign(new Error("No document is open."), { code: "NO_DOCUMENT" });
 
   if (docState.format !== "docx") {
@@ -64,19 +84,6 @@ export async function applyChangesCore(
     throw Object.assign(new Error("Cannot apply changes to uploaded files. Save to disk first."), {
       code: "INVALID_PATH",
     });
-  }
-
-  // Reject UNC backup paths (Windows NTLM hash leak)
-  if (backupPath) {
-    const resolvedBp = path.resolve(backupPath);
-    if (
-      process.platform === "win32" &&
-      (resolvedBp.startsWith("\\\\") || resolvedBp.startsWith("//"))
-    ) {
-      throw Object.assign(new Error("UNC paths are not supported for security reasons."), {
-        code: "INVALID_PATH",
-      });
-    }
   }
 
   // 3. Collect accepted suggestions.
@@ -153,7 +160,7 @@ export async function applyChangesCore(
   });
 
   // 6. Backup — avoid overwriting an existing backup from a previous apply
-  let resolvedBackup = backupPath ?? filePath.replace(/\.docx$/i, ".backup.docx");
+  let resolvedBackup = resolvedBackupPath ?? filePath.replace(/\.docx$/i, ".backup.docx");
   try {
     await fs.access(resolvedBackup);
     // Backup already exists — use a timestamped name to preserve the original
@@ -244,7 +251,12 @@ export function registerApplyTools(server: McpServer): void {
         ),
     },
     withErrorBoundary("tandem_restoreBackup", async (args) => {
-      const docState = getCurrentDoc(args.documentId);
+      // path.basename on the ID strips any directory components so CodeQL
+      // does not trace args.documentId through Map.get to existing.filePath.
+      // Valid IDs (64-char hex / upload_*) have no separators, so this is a
+      // no-op at runtime.
+      const safeDocId = args.documentId !== undefined ? path.basename(args.documentId) : undefined;
+      const docState = getCurrentDoc(safeDocId);
       if (!docState) return noDocumentError();
 
       const { filePath } = docState;
@@ -316,7 +328,7 @@ export function registerApplyTools(server: McpServer): void {
               "set to one of these names to restore it.",
           });
         }
-        const result = await restoreDocumentFromBackup(docState.id, args.backup);
+        const result = await restoreDocumentFromBackup(docState.id, path.basename(args.backup));
         return mcpSuccess(result);
       } catch (err) {
         const e = err as Error & { code?: string };
