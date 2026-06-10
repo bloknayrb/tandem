@@ -1,8 +1,2 @@
 paths-ignore:
   - src/server/annotations/rename-recovery.ts
-  - src/server/mcp/routes/docx-conflict.ts
-  # False-positive js/path-injection: taint propagates from user-supplied documentId
-  # through Map.get(id) to existing.filePath, but the document registry is
-  # server-managed (paths are set by openFileByPath / resolveAndValidatePath).
-  # Runtime defence: path.resolve() + VALID_DOC_ID_RE validation in route handlers.
-  - src/server/mcp/file-opener.ts

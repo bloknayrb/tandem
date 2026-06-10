@@ -1298,17 +1298,12 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     // external-modification guard (safe, conservative). Stat-after-read would
     // invert that — a baseline newer than the loaded content masks the
     // interleaved write and lets a save overwrite it.
-    // path.resolve() makes the path absolutely safe before the FS sinks and
-    // acts as a CodeQL sanitizer (js/path-injection). filePath is always an
-    // absolute, server-managed path (set by openFileByPath /
-    // resolveAndValidatePath / a validated rename), so resolve() is a no-op
-    // that satisfies static analysis. See issue #1042.
     const resolvedPath = path.resolve(filePath);
-    const diskStat = await fs.stat(resolvedPath).catch(() => null); // lgtm[js/path-injection]
+    const diskStat = await fs.stat(resolvedPath).catch(() => null);
     const fileContent =
       format === "docx"
-        ? await fs.readFile(resolvedPath) // lgtm[js/path-injection]
-        : await fs.readFile(resolvedPath, "utf-8"); // lgtm[js/path-injection]
+        ? await fs.readFile(resolvedPath)
+        : await fs.readFile(resolvedPath, "utf-8");
     const reloadAdapter = getAdapter(format);
     const reloadPrepared = await reloadAdapter.parse(fileContent);
 
@@ -1514,15 +1509,10 @@ export async function resolveExternalConflict(
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === undefined) return;
 
-  // path.resolve() acts as a CodeQL sanitizer (js/path-injection): it makes
-  // the absolute registry path explicit so static analysis does not trace the
-  // taint from the route's docId string through Map.get() to FS operations.
-  // existing.filePath is always server-managed (set by openFileByPath /
-  // resolveAndValidatePath / a validated rename); this is a no-op at runtime.
   const resolvedFilePath = path.resolve(existing.filePath);
 
   if (choice === "keep") {
-    const stat = await fs.stat(resolvedFilePath).catch(() => null); // lgtm[js/path-injection]
+    const stat = await fs.stat(resolvedFilePath).catch(() => null);
     withInternal(doc, () => {
       meta.delete(Y_MAP_EXTERNAL_CONFLICT);
       if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
