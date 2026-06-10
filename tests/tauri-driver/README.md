@@ -43,10 +43,11 @@ run, which exercises the browser frontend, not the Tauri shell.
    cargo install tauri-driver --locked
    ```
    (Override the lookup path with `TAURI_DRIVER_PATH` if it is not on `~/.cargo/bin`.)
-3. **The Node sidecar binary** under `src-tauri/binaries/` — the desktop shell
-   spawns it on launch:
+3. **The Node sidecar + reaper binaries** under `src-tauri/binaries/` — both are
+   `externalBin`s, so `cargo tauri build` fails without them:
    ```sh
    node scripts/download-node-sidecar.mjs
+   node scripts/build-reaper.mjs
    ```
 4. **Harness dependencies:**
    ```sh

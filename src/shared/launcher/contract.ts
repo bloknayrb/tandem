@@ -86,6 +86,16 @@ export const LAUNCHER_ERROR_PATH_REJECTED = "PATH_REJECTED";
 export const LAUNCHER_ERROR_IN_PROGRESS = "LAUNCHER_IN_PROGRESS";
 export const LAUNCHER_ERROR_NOT_AVAILABLE = "LAUNCHER_NOT_AVAILABLE";
 export const LAUNCHER_ERROR_NO_INTEGRATION = "NO_CLAUDE_INTEGRATION";
+/** The reaper binary is missing from the install — the supervisor cannot spawn
+ * Claude. Stable code so the UI can show a "reinstall Tandem" hint instead of a
+ * raw filesystem path. */
+export const LAUNCHER_ERROR_REAPER_NOT_FOUND = "REAPER_NOT_FOUND";
+
+/** Marker substring the supervisor embeds in the "binary not found" throw and
+ * the launcher route matches on to map it to `LAUNCHER_ERROR_REAPER_NOT_FOUND`.
+ * Shared so the producer (`supervisor.ts`) and consumer (`api-routes.ts`)
+ * cannot silently drift. */
+export const REAPER_NOT_FOUND_MARKER = "tandem-reaper binary not found";
 
 /** Max characters for a cwd payload — UNC paths and Windows MAX_PATH variants
  * all fit comfortably under 1024. Catches malformed/oversized inputs early

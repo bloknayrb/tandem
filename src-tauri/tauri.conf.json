@@ -41,7 +41,8 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/node-sidecar"
+      "binaries/node-sidecar",
+      "binaries/tandem-reaper"
     ],
     "macOS": {
       "entitlements": "entitlements.plist"

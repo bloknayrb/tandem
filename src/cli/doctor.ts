@@ -521,8 +521,8 @@ function checkAnnotationStore(r: Recorder): void {
 
   try {
     const raw = readFileSync(lockPath, "utf-8").trim();
-    const pid = Number.parseInt(raw, 10);
-    if (!Number.isFinite(pid)) {
+    const pid = parseLockPid(raw);
+    if (pid === null) {
       r.warn(
         `Annotation store lock at ${lockPath} has unparseable content: "${raw}"`,
         "Restart Tandem or delete the lock file if no server is running.",
@@ -550,6 +550,28 @@ function checkAnnotationStore(r: Recorder): void {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Extract the holder PID from a `store.lock` body, tolerating both formats the
+ * writer has used: a bare integer (`"28572"`) and a JSON object
+ * (`{"pid":28572,...}`). Returns the finite PID, or `null` when neither yields
+ * one — only then does the caller warn "unparseable".
+ */
+function parseLockPid(raw: string): number | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    // Reject the bare-number case (`JSON.parse("28572")` → 28572) so it falls
+    // through to parseInt; only an object carries a `pid` field.
+    if (typeof parsed === "object" && parsed !== null) {
+      const pid = (parsed as { pid?: unknown }).pid;
+      if (typeof pid === "number" && Number.isFinite(pid)) return pid;
+    }
+  } catch {
+    // Not JSON (e.g. a bare PID) — fall through to the integer parse.
+  }
+  const pid = Number.parseInt(raw, 10);
+  return Number.isFinite(pid) ? pid : null;
 }
 
 // ── Pure collector ──────────────────────────────────────────────────

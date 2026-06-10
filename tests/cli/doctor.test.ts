@@ -92,6 +92,42 @@ describe("runDoctor", () => {
     expect(withData?.data?.docCount).toBe(0);
     expect(withData?.data?.exists).toBe(false);
   });
+
+  // The lock writer has shipped two formats: a bare integer PID and a JSON
+  // object `{pid,...}`. Doctor must read both — a JSON lock used to be reported
+  // as "unparseable content". process.pid is the live doctor process.
+  const lockCases: Array<[string, string]> = [
+    ["bare-PID format", String(process.pid)],
+    ["JSON-object format", JSON.stringify({ pid: process.pid, startedAtMs: 123, app: "tandem" })],
+  ];
+  for (const [label, content] of lockCases) {
+    it(`reads a live-PID store.lock in ${label} without warning "unparseable"`, async () => {
+      const annDir = join(dataDir, "annotations");
+      mkdirSync(annDir, { recursive: true });
+      writeFileSync(join(annDir, "store.lock"), content);
+
+      const report = await runDoctor();
+      const messages = report.results
+        .filter((r) => r.check === "annotation-store")
+        .map((r) => r.message);
+
+      expect(messages.some((m) => m.includes("unparseable"))).toBe(false);
+      // A live PID resolves to the "held by live PID" pass branch.
+      expect(messages.some((m) => m.includes(`live PID ${process.pid}`))).toBe(true);
+    });
+  }
+
+  it('still warns "unparseable" when the lock is genuinely non-numeric', async () => {
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(join(annDir, "store.lock"), "not-a-pid-at-all");
+
+    const report = await runDoctor();
+    const messages = report.results
+      .filter((r) => r.check === "annotation-store")
+      .map((r) => r.message);
+    expect(messages.some((m) => m.includes("unparseable"))).toBe(true);
+  });
 });
 
 describe("runDoctorCli --json printer", () => {

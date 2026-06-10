@@ -88,6 +88,12 @@ jobs:
       - name: Download Node.js sidecar
         run: node scripts/download-node-sidecar.mjs --target ${{ matrix.node-target }}
 
+      # Compile the process-reaper crate into src-tauri/binaries/ alongside the
+      # sidecar. It's an externalBin, so `tauri_build::build()` fails without it
+      # — and the auto-launcher's "Relaunch Claude" cannot spawn without it.
+      - name: Build reaper
+        run: node scripts/build-reaper.mjs --target ${{ matrix.node-target }}
+
       # Windows signing uses Azure Trusted Signing via the Microsoft-maintained
       # dotnet/sign CLI. Authentication is OIDC -> federated credential on the
       # tandem-ci-trusted-signing service principal -- no AZURE_CLIENT_SECRET
@@ -303,7 +309,17 @@ jobs:
               errors=1
               continue
             fi
-            echo "ok: $app code-signed + notarization-stapled + sidecar allow-jit"
+            # The reaper is the externalBin the auto-launcher spawns. It shipped
+            # missing in every desktop build before this check existed; assert it
+            # is bundled so "Relaunch Claude" cannot silently regress. No JIT
+            # entitlement needed — the reaper is a tiny Rust binary, not V8.
+            reaper="$app/Contents/MacOS/tandem-reaper"
+            if [ ! -e "$reaper" ]; then
+              echo "::error::$app: tandem-reaper not found at $reaper — the auto-launcher cannot spawn Claude. Check externalBin in tauri.conf.json and the Build reaper step."
+              errors=1
+              continue
+            fi
+            echo "ok: $app code-signed + notarization-stapled + sidecar allow-jit + reaper bundled"
           done
           # .dmg stapling is best-effort (tauri does not always staple the disk
           # image itself); warn but do not fail — the stapled .app inside is the

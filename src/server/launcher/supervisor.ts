@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
-import type { LauncherErrorCode } from "../../shared/launcher/contract.js";
+import { type LauncherErrorCode, REAPER_NOT_FOUND_MARKER } from "../../shared/launcher/contract.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 
 interface SupervisorOpts {
@@ -195,7 +195,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // 3. Dev: top-level reaper crate output.
     const devPath = path.resolve(process.cwd(), "reaper", "target", "release", exeName);
     if (fs.existsSync(devPath) && process.env.NODE_ENV !== "production") return devPath;
-    throw new Error(`tandem-reaper binary not found (checked ${adjacent})`);
+    throw new Error(`${REAPER_NOT_FOUND_MARKER} (checked ${adjacent})`);
   }
 
   // TANDEM_CLAUDE_CMD honors PATH search via spawn. Security boundary is

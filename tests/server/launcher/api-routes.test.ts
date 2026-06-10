@@ -22,6 +22,7 @@ import {
 import type { Supervisor } from "../../../src/server/launcher/supervisor.js";
 import { TAURI_HOSTNAME } from "../../../src/shared/constants.js";
 import {
+  LAUNCHER_ERROR_REAPER_NOT_FOUND,
   type LauncherStatus,
   type LauncherUnavailableReason,
 } from "../../../src/shared/launcher/contract.js";
@@ -288,6 +289,53 @@ describe("POST /api/launcher/relaunch", () => {
     } finally {
       fs.rmSync(inside, { recursive: true, force: true });
     }
+  });
+
+  // Drive a relaunch that throws inside the supervisor and assert the 500 body
+  // carries the real reason — the old behavior returned a static "relaunch
+  // failed" string, so the UI could only show "Relaunch failed: relaunch failed".
+  async function relaunchThatThrows(err: Error): Promise<{ status: number; body: unknown }> {
+    const sup = makeFakeSupervisor({
+      relaunchHook: async () => {
+        throw err;
+      },
+    });
+    const { app } = makeApp(baseDeps(sup));
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    return request(app, "POST", "/api/launcher/relaunch", {
+      cwd: fs.realpathSync(os.homedir()),
+      nonce: nonce.nonce,
+    });
+  }
+
+  it("surfaces the real error message on an unexpected failure", async () => {
+    const res = await relaunchThatThrows(new Error("boom detail from supervisor"));
+    expect(res.status).toBe(500);
+    const body = res.body as { code: string; message: string };
+    expect(body.code).toBe("INTERNAL_ERROR");
+    // Detail only — the client prepends its own "Relaunch failed:" prefix, so we
+    // must NOT double up the label here.
+    expect(body.message).toBe("boom detail from supervisor");
+    expect(body.message).not.toBe("relaunch failed");
+  });
+
+  it("maps the missing-reaper throw to REAPER_NOT_FOUND with a friendly hint", async () => {
+    const res = await relaunchThatThrows(
+      new Error("tandem-reaper binary not found (checked /home/u/.local/tandem-reaper)"),
+    );
+    expect(res.status).toBe(500);
+    const body = res.body as { code: string; message: string };
+    expect(body.code).toBe(LAUNCHER_ERROR_REAPER_NOT_FOUND);
+    expect(body.message).toMatch(/reinstall Tandem/i);
+    // The raw checked path is not echoed back in the reaper-not-found case.
+    expect(body.message).not.toContain("/home/u/.local");
+  });
+
+  it("bounds an oversized error message to ~300 chars", async () => {
+    const res = await relaunchThatThrows(new Error("x".repeat(1000)));
+    const body = res.body as { message: string };
+    expect(body.message.length).toBeLessThanOrEqual(301); // 300 + ellipsis
+    expect(body.message.endsWith("…")).toBe(true);
   });
 });
 

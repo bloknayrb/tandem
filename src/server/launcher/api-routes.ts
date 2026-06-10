@@ -42,8 +42,10 @@ import {
   LAUNCHER_ERROR_NO_INTEGRATION,
   LAUNCHER_ERROR_NOT_AVAILABLE,
   LAUNCHER_ERROR_PATH_REJECTED,
+  LAUNCHER_ERROR_REAPER_NOT_FOUND,
   type LauncherStatus,
   type LauncherUnavailableReason,
+  REAPER_NOT_FOUND_MARKER,
   type SkillRefreshError,
 } from "../../shared/launcher/contract.js";
 import { isLoopback } from "../auth/middleware.js";
@@ -444,8 +446,34 @@ function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
   };
 }
 
+/** Cap on the error detail surfaced over the wire. These routes are loopback +
+ * origin-gated, so the caller is the same user on the same machine — the detail
+ * (including a checked filesystem path) is safe to return, but bound it anyway. */
+const MAX_ERROR_DETAIL = 300;
+
 function sendUnexpected(res: Response, err: unknown, label: string): void {
+  // Full error (stack, etc.) stays server-side; the wire gets a bounded message.
   console.error(`[Launcher routes] ${label}:`, err);
   if (res.headersSent) return;
-  res.status(500).json({ error: "INTERNAL_ERROR", code: "INTERNAL_ERROR", message: label });
+  const detail = err instanceof Error ? err.message : String(err);
+  // The missing-reaper throw is the one well-known, user-actionable failure.
+  // Give it a stable code + friendly hint rather than a raw path.
+  if (detail.includes(REAPER_NOT_FOUND_MARKER)) {
+    res.status(500).json({
+      error: "INTERNAL_ERROR",
+      code: LAUNCHER_ERROR_REAPER_NOT_FOUND,
+      message: "Claude launcher binary missing — reinstall Tandem to restore it.",
+    });
+    return;
+  }
+  const truncated =
+    detail.length > MAX_ERROR_DETAIL ? `${detail.slice(0, MAX_ERROR_DETAIL)}…` : detail;
+  // The client renders `${failPrefix}: ${message}`, so send the detail only —
+  // not `label` (it already supplies the prefix). Fall back to `label` when the
+  // error carries no message.
+  res.status(500).json({
+    error: "INTERNAL_ERROR",
+    code: "INTERNAL_ERROR",
+    message: truncated || label,
+  });
 }
