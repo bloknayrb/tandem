@@ -15,6 +15,7 @@ annotation-patterns-toggle
 annotation-private-pill
 annotation-select-checkbox-{*}
 annotation-snippet-{*}
+annotation-sort-toggle
 annotations-tab
 app-info-footer
 appearance-formatting-bar
