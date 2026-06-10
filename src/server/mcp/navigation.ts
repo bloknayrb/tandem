@@ -3,13 +3,16 @@ import { z } from "zod";
 import type { FlatOffset } from "../../shared/positions/types.js";
 import { toFlatOffset } from "../../shared/positions/types.js";
 import { getDocumentStore } from "./document-store.js";
+import { searchOutputShape } from "./output-schemas.js";
 import {
   escapeRegex,
   getErrorMessage,
   mcpError,
+  mcpStructured,
   mcpSuccess,
   noDocumentError,
   withErrorBoundary,
+  withStructuredErrors,
 } from "./response.js";
 
 export interface SearchMatch {
@@ -95,26 +98,31 @@ export function extractContext(
 }
 
 export function registerNavigationTools(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     "tandem_search",
-    "Search for text in the document. Returns matching positions.",
     {
-      query: z.string().describe("Search query (supports regex)"),
-      regex: z.boolean().optional().describe("Treat query as regex"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
+      description: "Search for text in the document. Returns matching positions.",
+      inputSchema: {
+        query: z.string().describe("Search query (supports regex)"),
+        regex: z.boolean().optional().describe("Treat query as regex"),
+        documentId: z
+          .string()
+          .optional()
+          .describe("Target document ID (defaults to active document)"),
+      },
+      outputSchema: searchOutputShape,
     },
-    withErrorBoundary("tandem_search", async ({ query, regex, documentId }) => {
-      const store = getDocumentStore(documentId);
-      if (!store) return noDocumentError();
+    withStructuredErrors(
+      withErrorBoundary("tandem_search", async ({ query, regex, documentId }) => {
+        const store = getDocumentStore(documentId);
+        if (!store) return noDocumentError();
 
-      const fullText = store.getText();
-      const result = searchText(fullText, query, regex);
-      if (result.error) return mcpError("FORMAT_ERROR", result.error);
-      return mcpSuccess({ matches: result.matches, count: result.matches.length });
-    }),
+        const fullText = store.getText();
+        const result = searchText(fullText, query, regex);
+        if (result.error) return mcpError("FORMAT_ERROR", result.error);
+        return mcpStructured({ matches: result.matches, count: result.matches.length });
+      }),
+    ),
   );
 
   server.tool(

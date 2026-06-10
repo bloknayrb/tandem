@@ -18,7 +18,14 @@ import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/q
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { extractText, getCurrentDoc } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
-import { mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
+import { checkInboxOutputShape } from "./output-schemas.js";
+import {
+  mcpStructured,
+  mcpSuccess,
+  noDocumentError,
+  withErrorBoundary,
+  withStructuredErrors,
+} from "./response.js";
 import { withTypingPresence } from "./typing-presence.js";
 
 // Track which annotation IDs have been surfaced to Claude via checkInbox.
@@ -76,138 +83,149 @@ export function registerAwarenessTools(server: McpServer): void {
     }),
   );
 
-  server.tool(
+  server.registerTool(
     "tandem_checkInbox",
-    "Check for user actions you haven't seen yet — new comments, notes, and responses to your annotations. Call this after completing any task, between steps, and whenever you pause. Low token cost.",
     {
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
+      description:
+        "Check for user actions you haven't seen yet — new comments, chat messages, and responses to your annotations. Call after completing any task, between steps, and whenever you pause. Low token cost.",
+      inputSchema: {
+        documentId: z
+          .string()
+          .optional()
+          .describe("Target document ID (defaults to active document)"),
+      },
+      outputSchema: checkInboxOutputShape,
     },
-    withErrorBoundary("tandem_checkInbox", async ({ documentId }) => {
-      const store = getDocumentStore(documentId);
-      if (!store) return noDocumentError();
-      const doc = store.ydoc;
-      const allAnnotations = store.listAnnotations();
-      const fullText = extractText(doc);
+    withStructuredErrors(
+      withErrorBoundary("tandem_checkInbox", async ({ documentId }) => {
+        const store = getDocumentStore(documentId);
+        if (!store) return noDocumentError();
+        const doc = store.ydoc;
+        const allAnnotations = store.listAnnotations();
+        const fullText = extractText(doc);
 
-      // Refresh only unsurfaced annotations; batch Y.Map writes.
-      // refreshAnnotation returns the refreshed annotation (the underlying
-      // refreshRange yields a tagged RefreshResult per ADR-032); the inbox
-      // surfacer doesn't currently distinguish refresh outcomes. A future
-      // enhancement could route `degraded` / `failed` annotations into a
-      // separate notification.
-      const unsurfaced: Annotation[] = [];
-      store.transactMcp(() => {
-        for (const raw of allAnnotations) {
-          const lastSurfacedEditedAt = surfacedIds.get(raw.id);
-          // Not yet surfaced
-          if (lastSurfacedEditedAt === undefined) {
-            unsurfaced.push(store.refreshAnnotation(raw));
-            continue;
+        // Refresh only unsurfaced annotations; batch Y.Map writes.
+        // refreshAnnotation returns the refreshed annotation (the underlying
+        // refreshRange yields a tagged RefreshResult per ADR-032); the inbox
+        // surfacer doesn't currently distinguish refresh outcomes. A future
+        // enhancement could route `degraded` / `failed` annotations into a
+        // separate notification.
+        const unsurfaced: Annotation[] = [];
+        store.transactMcp(() => {
+          for (const raw of allAnnotations) {
+            const lastSurfacedEditedAt = surfacedIds.get(raw.id);
+            // Not yet surfaced
+            if (lastSurfacedEditedAt === undefined) {
+              unsurfaced.push(store.refreshAnnotation(raw));
+              continue;
+            }
+            // Already surfaced — check if it's been edited since
+            if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
+              unsurfaced.push(store.refreshAnnotation(raw));
+            }
           }
-          // Already surfaced — check if it's been edited since
-          if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
-            unsurfaced.push(store.refreshAnnotation(raw));
+        });
+
+        const { userActions, userResponses } = processUnsurfacedInboxAnnotations(
+          unsurfaced,
+          fullText,
+          surfacedIds,
+          wasEmittedViaChannel,
+        );
+
+        // Bucket 3: unread chat messages from CTRL_ROOM
+        const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+        const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+        const chatMessages: Array<Omit<ChatMessage, "read" | "author">> = [];
+
+        chatMap.forEach((value) => {
+          const msg = value as ChatMessage;
+          if (msg.author === "user" && !msg.read) {
+            chatMessages.push({
+              id: msg.id,
+              text: msg.text,
+              timestamp: msg.timestamp,
+              ...(msg.documentId ? { documentId: msg.documentId } : {}),
+              ...(msg.anchor ? { anchor: msg.anchor } : {}),
+              ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+            });
+            // Mark as read
+            withMcp(ctrlDoc, () => chatMap.set(msg.id, { ...msg, read: true }));
           }
-        }
-      });
+        });
 
-      const { userActions, userResponses } = processUnsurfacedInboxAnnotations(
-        unsurfaced,
-        fullText,
-        surfacedIds,
-        wasEmittedViaChannel,
-      );
+        // Current user activity
+        const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
+        const selection = userAwareness.get(Y_MAP_SELECTION) as
+          | { from: FlatOffset; to: FlatOffset; timestamp: number }
+          | undefined;
+        const activity = userAwareness.get(Y_MAP_ACTIVITY) as
+          | {
+              isTyping: boolean;
+              cursor: number;
+              lastEdit: number;
+            }
+          | undefined;
 
-      // Bucket 3: unread chat messages from CTRL_ROOM
-      const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-      const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
-      const chatMessages: Array<Omit<ChatMessage, "read" | "author">> = [];
+        const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+        const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(
+          ctrlAwareness.get(Y_MAP_MODE),
+        );
 
-      chatMap.forEach((value) => {
-        const msg = value as ChatMessage;
-        if (msg.author === "user" && !msg.read) {
-          chatMessages.push({
-            id: msg.id,
-            text: msg.text,
-            timestamp: msg.timestamp,
-            ...(msg.documentId ? { documentId: msg.documentId } : {}),
-            ...(msg.anchor ? { anchor: msg.anchor } : {}),
-            ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
-          });
-          // Mark as read
-          withMcp(ctrlDoc, () => chatMap.set(msg.id, { ...msg, read: true }));
-        }
-      });
+        const hasSelection = selection && selection.from !== selection.to;
+        const selectedText = hasSelection
+          ? safeSlice(fullText, selection!.from, selection!.to)
+          : null;
 
-      // Current user activity
-      const userAwareness = doc.getMap(Y_MAP_USER_AWARENESS);
-      const selection = userAwareness.get(Y_MAP_SELECTION) as
-        | { from: FlatOffset; to: FlatOffset; timestamp: number }
-        | undefined;
-      const activity = userAwareness.get(Y_MAP_ACTIVITY) as
-        | {
-            isTyping: boolean;
-            cursor: number;
-            lastEdit: number;
+        // Build summary
+        const parts: string[] = [];
+        if (userActions.length > 0) {
+          const typeCounts: Record<string, number> = {};
+          for (const a of userActions) {
+            typeCounts[a.type] = (typeCounts[a.type] || 0) + 1;
           }
-        | undefined;
-
-      const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-      const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(ctrlAwareness.get(Y_MAP_MODE));
-
-      const hasSelection = selection && selection.from !== selection.to;
-      const selectedText = hasSelection
-        ? safeSlice(fullText, selection!.from, selection!.to)
-        : null;
-
-      // Build summary
-      const parts: string[] = [];
-      if (userActions.length > 0) {
-        const typeCounts: Record<string, number> = {};
-        for (const a of userActions) {
-          typeCounts[a.type] = (typeCounts[a.type] || 0) + 1;
+          const typeList = Object.entries(typeCounts)
+            .map(([t, n]) => `${n} ${t}${n > 1 ? "s" : ""}`)
+            .join(", ");
+          parts.push(`${userActions.length} new: ${typeList}`);
         }
-        const typeList = Object.entries(typeCounts)
-          .map(([t, n]) => `${n} ${t}${n > 1 ? "s" : ""}`)
-          .join(", ");
-        parts.push(`${userActions.length} new: ${typeList}`);
-      }
-      if (userResponses.length > 0) {
-        const statusCounts: Record<string, number> = {};
-        for (const r of userResponses) {
-          statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+        if (userResponses.length > 0) {
+          const statusCounts: Record<string, number> = {};
+          for (const r of userResponses) {
+            statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+          }
+          const statusList = Object.entries(statusCounts)
+            .map(([s, n]) => `${n} ${s}`)
+            .join(", ");
+          parts.push(statusList);
         }
-        const statusList = Object.entries(statusCounts)
-          .map(([s, n]) => `${n} ${s}`)
-          .join(", ");
-        parts.push(statusList);
-      }
-      if (chatMessages.length > 0) {
-        parts.push(`${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`);
-      }
-      const summary = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
+        if (chatMessages.length > 0) {
+          parts.push(
+            `${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`,
+          );
+        }
+        const summary = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
 
-      const hasNew = userActions.length > 0 || userResponses.length > 0 || chatMessages.length > 0;
+        const hasNew =
+          userActions.length > 0 || userResponses.length > 0 || chatMessages.length > 0;
 
-      return mcpSuccess({
-        summary,
-        hasNew,
-        mode,
-        storeReadOnly: isStoreReadOnly(),
-        userActions,
-        userResponses,
-        chatMessages,
-        activity: {
-          isTyping: activity?.isTyping ?? false,
-          cursor: activity?.cursor ?? null,
-          lastEdit: activity?.lastEdit ?? null,
-          selectedText,
-        },
-      });
-    }),
+        return mcpStructured({
+          summary,
+          hasNew,
+          mode,
+          storeReadOnly: isStoreReadOnly(),
+          userActions,
+          userResponses,
+          chatMessages,
+          activity: {
+            isTyping: activity?.isTyping ?? false,
+            cursor: activity?.cursor ?? null,
+            lastEdit: activity?.lastEdit ?? null,
+            selectedText,
+          },
+        });
+      }),
+    ),
   );
   server.tool(
     "tandem_reply",

@@ -18,6 +18,19 @@ All tools return responses in a standard envelope:
 { "error": true, "code": "ERROR_CODE", "message": "Human-readable description" }
 ```
 
+### Structured Output (`outputSchema` / `structuredContent`)
+
+Six data-returning tools additionally advertise an MCP `outputSchema` and emit `structuredContent` so typed clients can validate responses end-to-end:
+
+- `tandem_status`
+- `tandem_getTextContent`
+- `tandem_getAnnotations`
+- `tandem_checkInbox`
+- `tandem_listDocuments`
+- `tandem_search`
+
+For these tools, `structuredContent` carries the exact same object as the text envelope's `data` field — the text content is unchanged for backward compatibility. Error responses from these tools are marked with the MCP-level `isError: true` flag (and carry no `structuredContent`); the text content still holds the `{ "error": true, ... }` JSON envelope above. Schemas live in `src/server/mcp/output-schemas.ts`. Per ADR-027, the annotation schemas deliberately omit `type: "note"` — user-private notes can never appear in structured payloads.
+
 ### Error Codes
 
 | Code | Trigger |
@@ -135,7 +148,7 @@ tandem_scratchpad({ content: "# Test plan\n\n- Step one\n- Step two" })
 
 ### tandem_getTextContent
 
-Read document as plain text. ~60% fewer tokens than `getContent`.
+Read document as plain text whose offsets match the annotation coordinate system.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -495,14 +508,14 @@ tandem_comment({
 
 ### tandem_getAnnotations
 
-Read all annotations, optionally filtered. For checking new user actions, prefer `tandem_checkInbox`.
+Read annotations, optionally filtered by author/type/status. For checking new user actions, prefer `tandem_checkInbox`.
 
-By default, results exclude `note`-type annotations (user-private). Pass `type: "note"` to read user-authored notes addressed to Claude. Imported `.docx` reviewer comments surface as `author: "import"`, `type: "comment"` and are included by default — filter via `author: "import"` if you want to scope to them.
+User notes are **always excluded** — they are private to the user (ADR-027) and cannot be requested via any filter. Imported `.docx` reviewer comments land as private notes (`author: "import"`, `type: "note"`) and stay excluded until the user batch-promotes them via the side rail, at which point they surface as `author: "user"`, `type: "comment"`. The `notesExcluded` response field reports how many notes were filtered out (including not-yet-promoted imports). Each returned annotation includes a `replies` array (comment parents only; user-private replies are stripped).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment`, `note` |
+| `type` | enum | no | `highlight`, `comment` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -513,20 +526,22 @@ By default, results exclude `note`-type annotations (user-private). Pass `type: 
     {
       "id": "ann_1710936000000_a1b2c3",
       "author": "claude",
-      "type": "highlight",
+      "type": "comment",
       "range": { "from": 42, "to": 67 },
       "content": "This figure doesn't match the invoice",
       "status": "pending",
       "timestamp": 1710936000000,
-      "color": "yellow"
+      "audience": "outbound",
+      "textSnapshot": "the $42,500 figure",
+      "replies": []
     }
   ],
   "count": 1,
-  "notesExcluded": 0
+  "notesExcluded": 2
 }
 ```
 
-`notesExcluded` reports how many `note`-type annotations were filtered out (only present when > 0). If you need user notes, re-call with `type: "note"`.
+`notesExcluded` reports how many `note`-type annotations were filtered out (only present when > 0). Notes cannot be read via MCP — they are user-private (ADR-027).
 
 ---
 
@@ -828,7 +843,7 @@ Check if the user is actively editing and where their cursor is.
 
 ### tandem_checkInbox
 
-Check for user actions you haven't seen yet -- new highlights, comments, and responses to your annotations. Low token cost. Call this after completing any task, between steps, and whenever you pause.
+Check for user actions you haven't seen yet -- new comments, chat messages, and responses to your annotations. Low token cost. Call this after completing any task, between steps, and whenever you pause.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -837,24 +852,27 @@ Check for user actions you haven't seen yet -- new highlights, comments, and res
 **Returns:**
 ```json
 {
-  "summary": "2 new: 1 comment, 1 comment (for Claude). 1 accepted.",
+  "summary": "1 new: 1 comment. 1 accepted. 1 new chat message.",
   "hasNew": true,
+  "mode": "tandem",
+  "storeReadOnly": false,
   "userActions": [ { ...annotation, "textSnippet": "..." } ],
   "userResponses": [ { ...annotation, "textSnippet": "..." } ],
+  "chatMessages": [ { "id": "msg_...", "text": "...", "timestamp": 1710936000000 } ],
   "activity": {
     "isTyping": false,
     "cursor": 142,
     "lastEdit": 1710936000000,
     "selectedText": null
-  },
-  "mode": "tandem"
+  }
 }
 ```
 
 **Notes:**
-- Each annotation is surfaced only once -- subsequent calls return only new items.
-- `userActions`: annotations created by the user (highlights, comments, flags).
+- Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
+- `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
+- **Channel-less clients degrade gracefully:** items already pushed in real time via the SSE channel shim are deduplicated out of this response; for a generic MCP client with no channel attached, nothing is ever deduplicated and every action surfaces here through polling.
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 
