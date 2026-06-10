@@ -3,6 +3,8 @@ import type { Express, NextFunction, Request, Response } from "express";
 import {
   API_ANNOTATION_REPLY,
   API_APPLY_CHANGES,
+  API_BACKUPS,
+  API_BACKUPS_RESTORE,
   API_CLOSE,
   API_CONVERT,
   API_DIAGNOSTICS,
@@ -27,6 +29,7 @@ import { TAURI_HOSTNAME } from "../../shared/constants.js";
 import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
+import { handleListBackups, handleRestoreBackup } from "./routes/backups.js";
 import { handleClose } from "./routes/close.js";
 import { handleConvert } from "./routes/convert.js";
 import { makeDiagnosticsHandler } from "./routes/diagnostics.js";
@@ -193,6 +196,12 @@ export function registerApiRoutes(
   app.get(API_DOCUMENT_RAW, mw, handleGetDocumentRaw);
   app.options(API_DOCUMENT_RELOAD, mw);
   app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
+
+  // Pre-overwrite document backups (#1086). GET lists snapshots (read-only);
+  // POST restores one — same CSRF posture as /api/rename (see routes/backups.ts).
+  app.get(API_BACKUPS, mw, handleListBackups);
+  app.options(API_BACKUPS_RESTORE, mw);
+  app.post(API_BACKUPS_RESTORE, mw, largeBody, handleRestoreBackup);
 
   // Annotation reply: browser user posts a reply to an annotation thread
   app.options(API_ANNOTATION_REPLY, mw);

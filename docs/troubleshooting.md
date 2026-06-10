@@ -111,14 +111,18 @@ Durable annotations live in a separate `annotations/` directory alongside `sessi
 
 ## Recovering a previous version of a document
 
-Before Tandem's **first** write to a `.md`/`.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file (or you just want yesterday's version back), you can restore from there with any file manager — no Tandem needed.
+Before Tandem's **first** write to a `.md`/`.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file (or you just want yesterday's version back), there are three ways to restore:
+
+- **In the app:** open the command palette (Ctrl+Shift+P) and run "Restore a backup of this document…" — it lists the available snapshots and restores the most recent one. The document reloads in place; annotations are preserved.
+- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a text document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach.
+- **By hand:** with any file manager, no Tandem needed — see below.
 
 Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same per-OS table as above). Each document gets a subfolder named by a hash of its path, containing:
 
 - up to 3 timestamped copies, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), and
 - a `source.txt` recording the original file's full path.
 
-To restore: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content.
+To restore by hand: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content. (The in-product paths above handle this for you: they reload the open document from the restored bytes, so no quit is needed.)
 
 Notes:
 

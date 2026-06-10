@@ -39,6 +39,10 @@ export const API_APPLY_CHANGES = "/api/apply-changes";
 // markdown; POST replaces the Y.Doc content from a user-supplied markdown string.
 export const API_DOCUMENT_RAW = "/api/document/raw";
 export const API_DOCUMENT_RELOAD = "/api/document/reload";
+// Pre-overwrite document backups (#1086). GET lists a document's restorable
+// snapshots; POST restores one through the reload lifecycle.
+export const API_BACKUPS = "/api/backups";
+export const API_BACKUPS_RESTORE = "/api/backups/restore";
 
 // --- Annotations ------------------------------------------------------------
 export const API_ANNOTATION_REPLY = "/api/annotation-reply";

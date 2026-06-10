@@ -10,6 +10,8 @@
  */
 
 import {
+  API_BACKUPS,
+  API_BACKUPS_RESTORE,
   API_LAUNCHER_NONCE,
   API_LAUNCHER_RELAUNCH,
   API_LAUNCHER_START_FRESH,
@@ -580,6 +582,87 @@ async function startFreshConversation(d: ActionDeps): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Restore a backup of the active document (#1086)
+// ---------------------------------------------------------------------------
+
+interface BackupSnapshot {
+  name: string;
+  timestamp: string;
+  size: number;
+}
+
+let restoreBackupInflight = false;
+
+function formatBackupTimestamp(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+/**
+ * Minimal restore flow: list the document's snapshots (max 3, newest first),
+ * confirm, and restore the MOST RECENT one. The command palette has no
+ * dynamic-sublist support, so older snapshots are surfaced in the confirm text
+ * and restorable via Claude (`tandem_restoreBackup`) — the MCP tool is the
+ * primary surface (ADR-038); this action is the discoverable on-ramp.
+ */
+async function restoreBackupOfActiveDoc(d: ActionDeps): Promise<void> {
+  if (restoreBackupInflight) return;
+  const activeDocId = d.getActiveTabId();
+  if (!activeDocId) {
+    d.notify("warning", "No active document.");
+    return;
+  }
+  restoreBackupInflight = true;
+  try {
+    const listRes = await fetch(
+      `${API_BASE}${API_BACKUPS}?documentId=${encodeURIComponent(activeDocId)}`,
+    );
+    if (!listRes.ok) {
+      const body = (await listRes.json().catch(() => ({}))) as { message?: string };
+      d.notify("error", `Couldn't list backups: ${body.message ?? listRes.statusText}`);
+      return;
+    }
+    const listJson = (await listRes.json().catch(() => null)) as {
+      data?: { backups?: BackupSnapshot[] };
+    } | null;
+    const backups = listJson?.data?.backups ?? [];
+    if (backups.length === 0) {
+      d.notify(
+        "info",
+        "No backups exist for this document yet. Tandem snapshots the on-disk file before its first overwrite each session.",
+      );
+      return;
+    }
+    const newest = backups[0];
+    const lines = backups
+      .map((b, i) => `  ${i + 1}. ${formatBackupTimestamp(b.timestamp)}`)
+      .join("\n");
+    const ok = confirm(
+      `Available backups (newest first):\n${lines}\n\n` +
+        `Restore the most recent backup (${formatBackupTimestamp(newest.timestamp)})? ` +
+        "The document reloads with the backup's content; annotations are preserved.\n\n" +
+        "Older backups can be restored by asking Claude (tandem_restoreBackup).",
+    );
+    if (!ok) return;
+    const restoreRes = await fetch(`${API_BASE}${API_BACKUPS_RESTORE}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId: activeDocId, backup: newest.name }),
+    });
+    if (!restoreRes.ok) {
+      const body = (await restoreRes.json().catch(() => ({}))) as { message?: string };
+      d.notify("error", `Restore failed: ${body.message ?? restoreRes.statusText}`);
+      return;
+    }
+    d.notify("info", `Restored backup from ${formatBackupTimestamp(newest.timestamp)}.`);
+  } catch (err) {
+    d.notify("error", `Restore request failed: ${err instanceof Error ? err.message : err}`);
+  } finally {
+    restoreBackupInflight = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Show in file explorer — reveal the active doc in the OS file manager (#299)
 // ---------------------------------------------------------------------------
 
@@ -826,6 +909,16 @@ const BUILTINS: Action[] = [
     group: "view",
     run() {
       guardedRun("toggle-source-view", (d) => d.toggleSourceView());
+    },
+  },
+  {
+    // Palette-only: discoverable on-ramp to the pre-overwrite document
+    // backups (#1086). Restores the most recent snapshot after a confirm.
+    id: "restore-backup",
+    label: "Restore a backup of this document…",
+    group: "document",
+    run() {
+      guardedRun("restore-backup", (d) => void restoreBackupOfActiveDoc(d));
     },
   },
   {
