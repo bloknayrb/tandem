@@ -30,6 +30,28 @@ export function coworkSettingsVariant(status: CoworkStatus | null): CoworkSettin
 }
 
 /**
+ * Sub-state of the `undetected` variant, driving honest copy instead of a
+ * blanket "not detected":
+ *
+ * - `noClaude` — Claude Desktop itself wasn't found; install it first.
+ * - `noWorkspacesYet` — Claude Desktop is present but no Cowork session has
+ *   ever run, so no workspace dirs exist yet. Running Cowork once fixes it.
+ * - `blocked` — session dirs WERE found but every one was rejected by the
+ *   path security guard (network-redirected or cloud-synced AppData); telling
+ *   the user "run Cowork once" would be a promise Tandem can never keep.
+ *
+ * Fields are optional on `CoworkStatus` for stale-sidecar tolerance; both
+ * default to the conservative value here.
+ */
+export type UndetectedDetail = "noClaude" | "noWorkspacesYet" | "blocked";
+
+export function undetectedDetail(status: CoworkStatus): UndetectedDetail {
+  if (!(status.claudeDesktopDetected ?? false)) return "noClaude";
+  if ((status.workspacesBlocked ?? 0) > 0) return "blocked";
+  return "noWorkspacesYet";
+}
+
+/**
  * Render a distinct user-facing recovery hint per `FirewallError` variant.
  * Kept pure so `tests/client/cowork-settings.test.ts`
  * can exhaustively cover the variant → hint mapping.

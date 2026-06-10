@@ -91,8 +91,17 @@ pub struct ReconcileReport {
 /// Heuristic ACL check for a workspace path.
 ///
 /// Returns `CoworkError::InsecureAcl` when the path's canonical form is
-/// outside `%LOCALAPPDATA%` (indicating a redirected or OneDrive-synced path
-/// that could be world-readable).
+/// outside every allowed root (indicating a redirected or OneDrive-synced
+/// path that could be world-readable). Allowed roots:
+///
+/// 1. `%LOCALAPPDATA%` — covers the MSIX `Packages\…\LocalCache\Roaming`
+///    layout (historical behavior).
+/// 2. `<config_dir>\Claude\local-agent-mode-sessions` — the direct-installer
+///    Cowork sessions dir, and ONLY that subtree, NOT all of Roaming.
+///    Token-confidentiality note: Tandem already writes the same bearer token
+///    into Roaming via `claude_desktop_config.json` (integration wizard), so
+///    this allowance adds no new exposure class; roaming-profile sync of the
+///    token is pre-existing, documented behavior. See `warn_if_roaming`.
 ///
 /// TODO(v0.8.1): Replace with full DACL inspection via
 /// `GetFileSecurityW` / `GetEffectiveRightsFromAcl` from `windows-sys`.
@@ -114,12 +123,7 @@ fn check_acl(path: &Path) -> Result<(), CoworkError> {
         }
     }
 
-    let local_app_data = match dirs::data_local_dir() {
-        Some(d) => d,
-        None => return Ok(()), // Can't determine — allow optimistically
-    };
-
-    // Canonicalize both for comparison.
+    // Canonicalize the candidate for comparison.
     // Only fail-open for NotFound (path doesn't exist yet — that's fine for
     // new workspace directories). All other I/O errors propagate as IoError
     // (not InsecureAcl) so callers can distinguish a security rejection from
@@ -129,29 +133,48 @@ fn check_acl(path: &Path) -> Result<(), CoworkError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.into()),
     };
-    let canonical_lad = match std::fs::canonicalize(&local_app_data) {
-        Ok(p) => p,
-        Err(_) => return Ok(()),
-    };
 
-    // Check that the path starts with %LOCALAPPDATA%.
-    let path_components: Vec<_> = canonical_path.components().collect();
-    let lad_components: Vec<_> = canonical_lad.components().collect();
+    // Allowed root candidates (see doc comment).
+    let allowed_roots: Vec<PathBuf> = [
+        dirs::data_local_dir(),
+        dirs::config_dir().map(|c| c.join("Claude").join("local-agent-mode-sessions")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
-    let is_under_lad = lad_components.iter().zip(path_components.iter()).all(|(l, p)| l == p)
-        && path_components.len() > lad_components.len();
-
-    if !is_under_lad {
-        log::warn!(
-            "[cowork-install] InsecureAcl: {} is outside %LOCALAPPDATA%",
-            path.display()
-        );
-        return Err(CoworkError::InsecureAcl {
-            path: path.to_path_buf(),
-        });
+    let mut any_root_resolved = false;
+    for root in &allowed_roots {
+        let canonical_root = match std::fs::canonicalize(root) {
+            Ok(p) => p,
+            Err(_) => continue, // root doesn't exist / unreadable — try next
+        };
+        any_root_resolved = true;
+        if is_strict_component_child(&canonical_path, &canonical_root) {
+            return Ok(());
+        }
     }
 
-    Ok(())
+    if !any_root_resolved {
+        return Ok(()); // Can't determine any root — allow optimistically (historical behavior)
+    }
+
+    log::warn!(
+        "[cowork-install] InsecureAcl: {} is outside %LOCALAPPDATA% and the Roaming Claude sessions dir",
+        path.display()
+    );
+    Err(CoworkError::InsecureAcl {
+        path: path.to_path_buf(),
+    })
+}
+
+/// Component-wise "child is strictly under root" check (string-prefix checks
+/// are banned — they break on sibling names sharing a prefix).
+fn is_strict_component_child(child: &Path, root: &Path) -> bool {
+    let root_components: Vec<_> = root.components().collect();
+    let child_components: Vec<_> = child.components().collect();
+    child_components.len() > root_components.len()
+        && root_components.iter().zip(child_components.iter()).all(|(r, c)| r == c)
 }
 
 /// Check whether the canonical path contains "OneDrive" and log a one-time warning.
@@ -163,6 +186,26 @@ fn warn_if_onedrive(path: &Path) {
              Auth tokens will be uploaded to Microsoft cloud storage.",
             path.display()
         );
+    }
+}
+
+/// Warn when the workspace sits under Roaming AppData: roaming user profiles
+/// sync `%APPDATA%` to the domain file server at logoff, so the auth token in
+/// `installed_plugins.json` may leave the machine. Mirrors `warn_if_onedrive`;
+/// same exposure class as the wizard's `claude_desktop_config.json` write.
+fn warn_if_roaming(path: &Path) {
+    if let Some(config) = dirs::config_dir() {
+        if let (Ok(canonical_path), Ok(canonical_config)) =
+            (std::fs::canonicalize(path), std::fs::canonicalize(&config))
+        {
+            if is_strict_component_child(&canonical_path, &canonical_config) {
+                log::warn!(
+                    "[cowork-install] note: workspace path {} is under Roaming AppData; \
+                     roaming user profiles will sync the auth token to the profile server.",
+                    path.display()
+                );
+            }
+        }
     }
 }
 
@@ -185,7 +228,28 @@ pub fn install_tandem_plugin_into_workspace(
     let workspace_id = parent_component(ws_path);
     let vm_id = leaf_component(ws_path);
 
+    // Write-time revalidation (#433 defense, applied to ALL write paths — not
+    // just the handle-based install): re-run the four-layer path guard
+    // immediately before any file I/O so a directory swapped for a junction
+    // after the scan cannot receive the token.
+    let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
+        Ok(p) => p,
+        Err(reason) => {
+            log::warn!("[cowork-install] write-time revalidation failed: {reason}");
+            let failed = WriteStatus::Failed(format!("revalidation failed: {reason}"));
+            return Ok(WorkspaceWriteReport {
+                workspace_id,
+                vm_id,
+                installed_plugins: failed.clone(),
+                known_marketplaces: failed.clone(),
+                cowork_settings: failed,
+            });
+        }
+    };
+    let ws_path = ws_path.as_path();
+
     warn_if_onedrive(ws_path);
+    warn_if_roaming(ws_path);
 
     // ACL check before any write.
     let acl_result = check_acl(ws_path);
@@ -261,6 +325,24 @@ pub fn uninstall_tandem_plugin_from_workspace(
 ) -> Result<WorkspaceWriteReport, CoworkError> {
     let workspace_id = parent_component(ws_path);
     let vm_id = leaf_component(ws_path);
+
+    // Write-time revalidation — same #433 defense as install (uninstall also
+    // rewrites the three registry JSON files).
+    let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
+        Ok(p) => p,
+        Err(reason) => {
+            log::warn!("[cowork-install] write-time revalidation failed: {reason}");
+            let failed = WriteStatus::Failed(format!("revalidation failed: {reason}"));
+            return Ok(WorkspaceWriteReport {
+                workspace_id,
+                vm_id,
+                installed_plugins: failed.clone(),
+                known_marketplaces: failed.clone(),
+                cowork_settings: failed,
+            });
+        }
+    };
+    let ws_path = ws_path.as_path();
 
     let plugins_dir = ws_path.join("cowork_plugins");
 
@@ -874,6 +956,67 @@ mod tests {
             matches!(result, Err(CoworkError::InsecureAcl { .. })),
             "expected InsecureAcl for path outside %%LOCALAPPDATA%%, got: {:?}",
             result
+        );
+    }
+
+    #[test]
+    fn test_check_acl_accepts_roaming_claude_sessions_dir() {
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        let config = match dirs::config_dir() {
+            Some(c) => c,
+            None => return, // can't resolve — skip
+        };
+        let claude_dir = config.join("Claude");
+        let sessions = claude_dir.join("local-agent-mode-sessions");
+        let claude_existed = claude_dir.exists();
+        let sessions_existed = sessions.exists();
+        let test_ws_parent = sessions.join("tandem-test-acl-accept");
+        let ws = test_ws_parent.join("vm");
+        if fs::create_dir_all(&ws).is_err() {
+            return; // can't create — skip
+        }
+
+        let result = check_acl(&ws);
+
+        // Clean up ONLY what this test created — never the real sessions dir.
+        let _ = fs::remove_dir_all(&test_ws_parent);
+        if !sessions_existed {
+            let _ = fs::remove_dir(&sessions);
+        }
+        if !claude_existed {
+            let _ = fs::remove_dir(&claude_dir);
+        }
+
+        assert!(
+            result.is_ok(),
+            "Roaming Claude sessions subtree must pass check_acl: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_install_rejects_unscanned_path() {
+        // Write-time revalidation: a path outside every Cowork root must be
+        // rejected before any file I/O (the #433 defense on the non-handle
+        // write path).
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path().join("ws").join("vm");
+        fs::create_dir_all(&ws).unwrap();
+
+        let report =
+            install_tandem_plugin_into_workspace(&ws, "tok", DEFAULT_TANDEM_URL).unwrap();
+        assert!(
+            matches!(report.installed_plugins, WriteStatus::Failed(_)),
+            "expected revalidation failure, got {report:?}"
+        );
+        // Nothing may be written on rejection.
+        assert!(
+            !ws.join("cowork_plugins").exists(),
+            "rejected install must not create cowork_plugins"
         );
     }
 

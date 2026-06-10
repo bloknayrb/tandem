@@ -180,27 +180,55 @@ pub(crate) fn clear_snapshot_for_test() {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Aggregate counters from a single workspace scan.
+///
+/// `rejected_by_guard` counts candidates that passed the shape filter but
+/// failed the four-layer security guard (reparse point / UNC / canonicalize /
+/// containment). Surfaced to the UI as `workspacesBlocked` so redirected or
+/// cloud-synced AppData setups get honest messaging ("found but can't safely
+/// configure") instead of a perpetual "no workspace yet".
+///
+/// `rejected_by_shape` counts expected non-workspace siblings (e.g.
+/// `skills-plugin\…` under the Roaming root) and is log-only.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ScanStats {
+    pub rejected_by_guard: usize,
+    pub rejected_by_shape: usize,
+}
+
 /// Discover all Cowork workspace directories on this machine.
+///
+/// Convenience wrapper over [`find_cowork_workspaces_with_stats`] for callers
+/// that don't need rejection counters.
+pub fn find_cowork_workspaces() -> Vec<PathBuf> {
+    find_cowork_workspaces_with_stats().0
+}
+
+/// Discover all Cowork workspace directories on this machine, plus scan stats.
 ///
 /// # Returns
 /// A `Vec<PathBuf>` of VM-level directories (two levels below
-/// `local-agent-mode-sessions\`).  Returns an empty vec — not an error — when:
+/// `local-agent-mode-sessions\`) and a [`ScanStats`].  Returns an empty vec —
+/// not an error — when:
 ///   - Claude Desktop is not installed.
 ///   - `local-agent-mode-sessions\` does not exist yet.
 ///   - No workspaces are found.
 ///
-/// Paths that fail the security guard (reparse point, UNC, outside-root) are
-/// silently skipped after a `WARN` log.
-pub fn find_cowork_workspaces() -> Vec<PathBuf> {
+/// Candidates that fail the shape filter (see [`workspace_shape_ok`]) are
+/// debug-logged. Paths that fail the security guard (reparse point, UNC,
+/// outside-root) are skipped: the first per scan logs at WARN, the rest at
+/// debug (avoids WARN-per-candidate-per-poll on redirected-AppData machines).
+pub fn find_cowork_workspaces_with_stats() -> (Vec<PathBuf>, ScanStats) {
     let roots = cowork_roots();
+    let mut stats = ScanStats::default();
     if roots.is_empty() {
-        log::debug!("[cowork-scan] no Claude_* package directories found — Cowork not installed");
-        return vec![];
+        log::debug!("[cowork-scan] no Claude session roots found — Cowork not installed");
+        return (vec![], stats);
     }
 
     let mut results = Vec::new();
 
-    'root: for root in &roots {
+    for root in &roots {
         // Canonicalize the root for security comparisons.
         let canonical_root = match std::fs::canonicalize(root) {
             Ok(p) => p,
@@ -209,6 +237,10 @@ pub fn find_cowork_workspaces() -> Vec<PathBuf> {
                 continue;
             }
         };
+
+        // Per-root workspace cap: a first root with many accumulated session
+        // dirs must not starve later roots (dual MSIX + direct installs).
+        let mut root_count = 0usize;
 
         // Walk workspace-id level.
         let ws_entries = match std::fs::read_dir(root) {
@@ -219,7 +251,7 @@ pub fn find_cowork_workspaces() -> Vec<PathBuf> {
             }
         };
 
-        for ws_entry in ws_entries {
+        'ws_level: for ws_entry in ws_entries {
             let ws_entry = match ws_entry {
                 Ok(e) => e,
                 Err(e) => {
@@ -233,7 +265,7 @@ pub fn find_cowork_workspaces() -> Vec<PathBuf> {
             let vm_entries = match std::fs::read_dir(&ws_path) {
                 Ok(e) => e,
                 Err(e) => {
-                    log::warn!("[cowork-scan] cannot read vm-level dir {}: {e}", ws_path.display());
+                    log::debug!("[cowork-scan] cannot read vm-level dir {}: {e}", ws_path.display());
                     continue;
                 }
             };
@@ -248,42 +280,117 @@ pub fn find_cowork_workspaces() -> Vec<PathBuf> {
                 };
                 let vm_path = vm_entry.path();
 
+                // Shape filter BEFORE the security guard: only dirs that look
+                // like Cowork sessions are candidates. Rejections here are
+                // expected (non-workspace siblings), not suspicious.
+                if !workspace_shape_ok(&vm_path) {
+                    stats.rejected_by_shape += 1;
+                    log::debug!(
+                        "[cowork-scan] skipping {} — not workspace-shaped",
+                        vm_path.display()
+                    );
+                    continue;
+                }
+
                 // Security guard.
                 match check_path_safe(&vm_path, &canonical_root) {
                     Ok(safe_path) => {
                         results.push(safe_path);
-                        if results.len() >= MAX_WORKSPACES {
+                        root_count += 1;
+                        if root_count >= MAX_WORKSPACES {
                             log::warn!(
-                                "[cowork-scan] reached {MAX_WORKSPACES} workspace limit — stopping scan"
+                                "[cowork-scan] reached {MAX_WORKSPACES} workspace limit for root {} — moving to next root",
+                                root.display()
                             );
-                            break 'root;
+                            break 'ws_level;
                         }
                     }
                     Err(reason) => {
-                        log::warn!(
-                            "[cowork-scan] skipping {} — {reason}",
-                            vm_path.display()
-                        );
+                        stats.rejected_by_guard += 1;
+                        if stats.rejected_by_guard == 1 {
+                            log::warn!(
+                                "[cowork-scan] skipping {} — {reason}",
+                                vm_path.display()
+                            );
+                        } else {
+                            log::debug!(
+                                "[cowork-scan] skipping {} — {reason}",
+                                vm_path.display()
+                            );
+                        }
                     }
                 }
             }
         }
     }
 
-    log::info!("[cowork-scan] found {} workspace(s)", results.len());
-    results
+    if stats.rejected_by_shape > 0 {
+        // One aggregate line per scan so a Claude session-dir layout change is
+        // diagnosable from a single log line.
+        log::info!(
+            "[cowork-scan] {} candidate dir(s) rejected by shape guard",
+            stats.rejected_by_shape
+        );
+    }
+    log::info!(
+        "[cowork-scan] found {} workspace(s) ({} blocked by path guard)",
+        results.len(),
+        stats.rejected_by_guard
+    );
+    (results, stats)
+}
+
+// ---------------------------------------------------------------------------
+// Workspace shape filter
+// ---------------------------------------------------------------------------
+
+/// Structural UUID check: exactly 36 chars, hyphens at 8/13/18/23, ASCII hex
+/// elsewhere, case-insensitive. Deliberately not the `uuid` crate — this is a
+/// shape filter, not a parser.
+fn is_uuid_like(name: &str) -> bool {
+    let b = name.as_bytes();
+    if b.len() != 36 {
+        return false;
+    }
+    b.iter().enumerate().all(|(i, &c)| match i {
+        8 | 13 | 18 | 23 => c == b'-',
+        _ => c.is_ascii_hexdigit(),
+    })
+}
+
+/// A vm-level dir qualifies as a Cowork workspace when both path components
+/// are UUID-shaped (`<workspace-uuid>\<vm-uuid>` — the observed layout for
+/// both MSIX and direct installs) OR it carries a `cowork_plugins` directory
+/// (forward-compat escape hatch if a future Claude Desktop renames session
+/// dirs; the marker branch can only widen the UUID branch, never narrow it).
+///
+/// Non-workspace siblings under the Roaming root — e.g.
+/// `skills-plugin\<uuid>\<uuid>` — fail both branches and are skipped, which
+/// prevents plugin-registry files from being written into them.
+fn workspace_shape_ok(vm_path: &Path) -> bool {
+    let vm_name = vm_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ws_name = vm_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    (is_uuid_like(&ws_name) && is_uuid_like(&vm_name))
+        || vm_path.join("cowork_plugins").is_dir()
 }
 
 // ---------------------------------------------------------------------------
 // Root directory discovery
 // ---------------------------------------------------------------------------
 
-/// Returns all `local-agent-mode-sessions\` directories found under
-/// `%LOCALAPPDATA%\Packages\Claude_*\...`.
+/// Returns all `local-agent-mode-sessions\` directories on this machine.
 ///
-/// Supports the `TANDEM_COWORK_ROOT_OVERRIDE` environment variable for test
-/// fixtures: if set, returns that path as the sole root (skipping the glob).
-fn cowork_roots() -> Vec<PathBuf> {
+/// Two production layouts (see [`roots_under`]) plus the
+/// `TANDEM_COWORK_ROOT_OVERRIDE` environment variable for test fixtures: if
+/// set, returns that path as the sole root (skipping discovery).
+pub(crate) fn cowork_roots() -> Vec<PathBuf> {
     // Test hook: allow overriding the scan root for unit tests.
     //
     // Gated behind cfg(test) / the cowork-test-hooks feature so the env var
@@ -305,51 +412,166 @@ fn cowork_roots() -> Vec<PathBuf> {
         }
     }
 
-    let local_app_data = match dirs::data_local_dir() {
-        Some(d) => d,
-        None => {
-            log::warn!("[cowork-scan] cannot resolve %LOCALAPPDATA%");
-            return vec![];
-        }
-    };
+    let packages_dir = dirs::data_local_dir().map(|d| d.join("Packages"));
+    let roaming_config_dir = dirs::config_dir();
+    if packages_dir.is_none() && roaming_config_dir.is_none() {
+        log::warn!("[cowork-scan] cannot resolve %LOCALAPPDATA% or %APPDATA%");
+    }
+    roots_under(packages_dir.as_deref(), roaming_config_dir.as_deref())
+}
 
-    let packages_dir = local_app_data.join("Packages");
-    if !packages_dir.is_dir() {
-        return vec![];
+/// Enumerate Claude session roots under the given base directories. Split from
+/// [`cowork_roots`] so unit tests can exercise layout discovery against temp
+/// dirs without env vars.
+///
+/// Two layouts:
+/// - **MSIX (Microsoft Store):**
+///   `<packages_dir>\<claude-package>\LocalCache\Roaming\Claude\local-agent-mode-sessions`
+///   where `<claude-package>` is publisher-anchored (see
+///   [`is_claude_package_name`]).
+/// - **Direct installer:** `<roaming_config_dir>\Claude\local-agent-mode-sessions`.
+///   `dirs::config_dir()` resolves `FOLDERID_RoamingAppData` via the Known
+///   Folder API — note this ignores a modified `%APPDATA%` env var that an
+///   Electron app would honor (rare divergence, documented in ADR).
+///
+/// Dedup is exact-alias-only (canonical path equality). The MSIX-virtualized
+/// and real Roaming directories are *distinct* real directories by design
+/// (MSIX virtualization is a filter-driver overlay, not a junction), so a
+/// dual install legitimately yields two roots.
+fn roots_under(packages_dir: Option<&Path>, roaming_config_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+
+    if let Some(packages) = packages_dir {
+        if packages.is_dir() {
+            match std::fs::read_dir(packages) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name();
+                        let name_str = name.to_string_lossy();
+                        if !is_claude_package_name(&name_str) {
+                            continue;
+                        }
+
+                        let sessions_path = entry
+                            .path()
+                            .join("LocalCache")
+                            .join("Roaming")
+                            .join("Claude")
+                            .join("local-agent-mode-sessions");
+
+                        if sessions_path.is_dir() {
+                            log::debug!(
+                                "[cowork-scan] found MSIX sessions root: {}",
+                                sessions_path.display()
+                            );
+                            roots.push(sessions_path);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[cowork-scan] cannot read Packages dir: {e}");
+                }
+            }
+        }
     }
 
-    let entries = match std::fs::read_dir(&packages_dir) {
-        Ok(e) => e,
-        Err(e) => {
-            log::warn!("[cowork-scan] cannot read Packages dir: {e}");
-            return vec![];
-        }
-    };
-
-    let mut roots = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-
-        // Match Claude_* MSIX package directories.
-        if !name_str.starts_with("Claude_") {
-            continue;
-        }
-
-        let sessions_path = entry
-            .path()
-            .join("LocalCache")
-            .join("Roaming")
-            .join("Claude")
-            .join("local-agent-mode-sessions");
-
+    if let Some(config) = roaming_config_dir {
+        let sessions_path = config.join("Claude").join("local-agent-mode-sessions");
         if sessions_path.is_dir() {
-            log::debug!("[cowork-scan] found sessions root: {}", sessions_path.display());
+            log::debug!(
+                "[cowork-scan] found Roaming sessions root: {}",
+                sessions_path.display()
+            );
             roots.push(sessions_path);
         }
     }
 
+    // Dedup by canonical path — exact aliases only (see doc comment).
+    let mut seen: Vec<PathBuf> = Vec::new();
+    roots.retain(|r| {
+        let canon = std::fs::canonicalize(r).unwrap_or_else(|_| r.clone());
+        if seen.contains(&canon) {
+            false
+        } else {
+            seen.push(canon);
+            true
+        }
+    });
+
     roots
+}
+
+/// Publisher-anchored MSIX package-name match.
+///
+/// `Claude_*` is the historical pattern; `AnthropicPBC.Claude*` covers the
+/// `<Publisher>.<App>_<hash>` package-family naming. Deliberately NOT a bare
+/// `contains("Claude")`: each `Packages\` subdir is an MSIX container owned by
+/// (and readable to) that package's identity, so a foreign package named e.g.
+/// `EvilCorp.TotallyClaude_x` could otherwise stage the inner sessions layout
+/// inside its own container and receive Tandem's plugin-registry writes —
+/// including the auth token — across the app-sandbox boundary.
+///
+/// [Unverified] the exact Store family name for Claude Desktop; if it differs,
+/// Store installs stay undetected (no regression vs the old `Claude_*` glob)
+/// and the fix is a one-line prefix addition here.
+fn is_claude_package_name(name: &str) -> bool {
+    name.starts_with("Claude_") || name.starts_with("AnthropicPBC.Claude")
+}
+
+/// Returns true when a Claude Desktop installation is detectable on this
+/// machine even if no Cowork workspace exists yet. Existence checks only —
+/// the config file is never read or parsed.
+///
+/// Signals (any suffices):
+/// - `<roaming>\Claude\claude_desktop_config.json` (direct installer)
+/// - `<packages>\<claude-package>\LocalCache\Roaming\Claude\claude_desktop_config.json`
+///   (MSIX: `%APPDATA%` writes are virtualized into `LocalCache\Roaming`, so a
+///   Store install that never ran Cowork has *only* this copy)
+/// - any session root from [`roots_under`]
+pub fn claude_desktop_detected() -> bool {
+    // Test hook parity with cowork_roots(): under an override root, treat the
+    // override's existence as the Claude-install signal.
+    #[cfg(any(test, feature = "cowork-test-hooks"))]
+    {
+        if let Ok(override_root) = std::env::var("TANDEM_COWORK_ROOT_OVERRIDE") {
+            return PathBuf::from(&override_root).is_dir();
+        }
+    }
+
+    let roaming_config_dir = dirs::config_dir();
+    if let Some(config) = &roaming_config_dir {
+        if config
+            .join("Claude")
+            .join("claude_desktop_config.json")
+            .is_file()
+        {
+            return true;
+        }
+    }
+
+    let packages_dir = dirs::data_local_dir().map(|d| d.join("Packages"));
+    if let Some(packages) = &packages_dir {
+        if let Ok(entries) = std::fs::read_dir(packages) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if !is_claude_package_name(&name.to_string_lossy()) {
+                    continue;
+                }
+                if entry
+                    .path()
+                    .join("LocalCache")
+                    .join("Roaming")
+                    .join("Claude")
+                    .join("claude_desktop_config.json")
+                    .is_file()
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    !roots_under(packages_dir.as_deref(), roaming_config_dir.as_deref()).is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +681,149 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// UUID-shaped fixture names matching the real Cowork session layout
+    /// (`<workspace-uuid>\<vm-uuid>`), required by the shape guard.
+    const WS_UUID: &str = "ff68c797-99aa-416c-9b7d-f21bceeddb8d";
+    const VM_UUID: &str = "ca28ad17-dcdb-4ea1-8178-8a8861613939";
+    const VM_UUID_2: &str = "0b30dd94-eb52-48e2-851c-025e7b9a45ad";
+
+    #[test]
+    fn test_is_uuid_like() {
+        assert!(is_uuid_like(WS_UUID));
+        assert!(is_uuid_like(&WS_UUID.to_uppercase()));
+        // Wrong length.
+        assert!(!is_uuid_like("ff68c797"));
+        assert!(!is_uuid_like(""));
+        // `local_<uuid>` prefix used at the *third* level must be rejected.
+        assert!(!is_uuid_like("local_bac09b38-080d-4b88-be7f-48e15db575d8"));
+        // Hyphens in the wrong spots.
+        assert!(!is_uuid_like("ff68c797-99aa-416c-9b7d_f21bceeddb8d"));
+        // Non-hex content.
+        assert!(!is_uuid_like("zz68c797-99aa-416c-9b7d-f21bceeddb8d"));
+        // Non-UUID dir names from the real Roaming root.
+        assert!(!is_uuid_like("skills-plugin"));
+    }
+
+    #[test]
+    fn test_is_claude_package_name() {
+        assert!(is_claude_package_name("Claude_pzs8sxrjxfjjc"));
+        assert!(is_claude_package_name("AnthropicPBC.Claude_8wekyb3d8bbwe"));
+        // Foreign package containing "Claude" must NOT match (token would be
+        // written into a foreign MSIX container).
+        assert!(!is_claude_package_name("EvilCorp.TotallyClaude_x"));
+        assert!(!is_claude_package_name("MyClaude_y"));
+        assert!(!is_claude_package_name("Claude")); // no underscore suffix
+    }
+
+    #[test]
+    fn test_shape_guard_rejects_non_workspace_siblings() {
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("tandem_cowork_shape_test");
+        let _ = fs::remove_dir_all(&dir);
+        // Real workspace: <uuid>\<uuid>.
+        fs::create_dir_all(dir.join(WS_UUID).join(VM_UUID)).unwrap();
+        // Non-workspace sibling mirroring the real Roaming layout.
+        fs::create_dir_all(dir.join("skills-plugin").join(VM_UUID).join(WS_UUID)).unwrap();
+        // UUID workspace with non-UUID vm level and no marker → rejected.
+        fs::create_dir_all(dir.join(WS_UUID).join("not-a-uuid")).unwrap();
+
+        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
+        let (results, stats) = find_cowork_workspaces_with_stats();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(results.len(), 1, "expected only the <uuid>\\<uuid> dir: {results:?}");
+        assert!(results[0].ends_with(VM_UUID), "got {results:?}");
+        assert!(stats.rejected_by_shape >= 2, "shape rejections counted: {stats:?}");
+        assert_eq!(stats.rejected_by_guard, 0, "no guard rejections expected: {stats:?}");
+    }
+
+    #[test]
+    fn test_shape_guard_marker_accepts_non_uuid_dir() {
+        // Forward-compat: a non-UUID-named dir carrying cowork_plugins is
+        // accepted via the marker branch.
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("tandem_cowork_marker_test");
+        let _ = fs::remove_dir_all(&dir);
+        let vm = dir.join("renamed-ws").join("renamed-vm");
+        fs::create_dir_all(vm.join("cowork_plugins")).unwrap();
+
+        std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
+        let results = find_cowork_workspaces();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(results.len(), 1, "marker branch must accept: {results:?}");
+    }
+
+    #[test]
+    fn test_roots_under_discovers_both_layouts() {
+        // Pure fn — no env vars, no lock; unique temp dir for parallel safety.
+        let base = std::env::temp_dir().join("tandem_cowork_roots_both_test");
+        let _ = fs::remove_dir_all(&base);
+
+        // MSIX layout.
+        let packages = base.join("Packages");
+        let msix_sessions = packages
+            .join("AnthropicPBC.Claude_8wekyb3d8bbwe")
+            .join("LocalCache")
+            .join("Roaming")
+            .join("Claude")
+            .join("local-agent-mode-sessions");
+        fs::create_dir_all(&msix_sessions).unwrap();
+        // Foreign package with the same inner layout must be ignored.
+        fs::create_dir_all(
+            packages
+                .join("EvilCorp.TotallyClaude_x")
+                .join("LocalCache")
+                .join("Roaming")
+                .join("Claude")
+                .join("local-agent-mode-sessions"),
+        )
+        .unwrap();
+
+        // Direct-installer (Roaming) layout.
+        let roaming = base.join("Roaming");
+        let roaming_sessions = roaming.join("Claude").join("local-agent-mode-sessions");
+        fs::create_dir_all(&roaming_sessions).unwrap();
+
+        let roots = roots_under(Some(&packages), Some(&roaming));
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(roots.len(), 2, "expected MSIX + Roaming roots: {roots:?}");
+        assert!(roots.iter().any(|r| r.starts_with(&packages)), "{roots:?}");
+        assert!(roots.iter().any(|r| *r == roaming_sessions), "{roots:?}");
+        assert!(
+            !roots.iter().any(|r| r.to_string_lossy().contains("EvilCorp")),
+            "foreign package must not contribute a root: {roots:?}"
+        );
+    }
+
+    #[test]
+    fn test_roots_under_roaming_only() {
+        let base = std::env::temp_dir().join("tandem_cowork_roots_roaming_test");
+        let _ = fs::remove_dir_all(&base);
+        let roaming = base.join("Roaming");
+        let sessions = roaming.join("Claude").join("local-agent-mode-sessions");
+        fs::create_dir_all(&sessions).unwrap();
+
+        // Packages dir absent entirely.
+        let roots = roots_under(Some(&base.join("NoPackages")), Some(&roaming));
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(roots, vec![sessions]);
+    }
+
+    #[test]
+    fn test_roots_under_none_found() {
+        let base = std::env::temp_dir().join("tandem_cowork_roots_none_test");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("Roaming")).unwrap();
+        let roots = roots_under(Some(&base.join("Packages")), Some(&base.join("Roaming")));
+        let _ = fs::remove_dir_all(&base);
+        assert!(roots.is_empty(), "{roots:?}");
+    }
+
     #[test]
     fn test_is_unc_path() {
         assert!(is_unc_path(Path::new(r"\\?\UNC\server\share")));
@@ -504,7 +869,7 @@ mod tests {
         let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("tandem_cowork_scan_test");
         let _ = fs::remove_dir_all(&dir); // Clean up previous runs.
-        let ws_dir = dir.join("ws-abc").join("vm-123");
+        let ws_dir = dir.join(WS_UUID).join(VM_UUID);
         fs::create_dir_all(&ws_dir).unwrap();
 
         std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
@@ -547,7 +912,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("tandem_cowork_handles_test");
         let _ = fs::remove_dir_all(&dir);
-        let vm = dir.join("ws-abc").join("vm-123");
+        let vm = dir.join(WS_UUID).join(VM_UUID);
         fs::create_dir_all(&vm).unwrap();
 
         std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
@@ -559,7 +924,7 @@ mod tests {
 
         // A valid token resolves to the canonical validated path.
         let resolved = resolve_handle(token).expect("valid token must resolve");
-        assert!(resolved.ends_with("vm-123"), "resolved {resolved:?}");
+        assert!(resolved.ends_with(VM_UUID), "resolved {resolved:?}");
 
         // An unknown token does not resolve.
         assert!(
@@ -578,7 +943,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("tandem_cowork_rescan_test");
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("ws").join("vm")).unwrap();
+        fs::create_dir_all(dir.join(WS_UUID).join(VM_UUID)).unwrap();
 
         std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
         let first = scan_workspaces_with_handles();
@@ -676,8 +1041,8 @@ mod tests {
 
         let dir = std::env::temp_dir().join("tandem_cowork_resolve_reval_test");
         let _ = fs::remove_dir_all(&dir);
-        let ws = dir.join("ws-e2e");
-        let vm = ws.join("vm-e2e");
+        let ws = dir.join(WS_UUID);
+        let vm = ws.join(VM_UUID_2);
         fs::create_dir_all(&vm).unwrap();
 
         std::env::set_var("TANDEM_COWORK_ROOT_OVERRIDE", dir.to_str().unwrap());
