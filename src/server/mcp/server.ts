@@ -25,6 +25,7 @@ import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-rou
 import { registerAwarenessTools } from "./awareness.js";
 import { registerChannelRoutes } from "./channel-routes.js";
 import { registerDocumentTools } from "./document.js";
+import { getGenerationId } from "./document-service.js";
 import { registerApplyTools } from "./docx-apply.js";
 import { registerNavigationTools } from "./navigation.js";
 
@@ -390,6 +391,7 @@ export async function startMcpServerHttp(
       transport: "http",
       bindHost: host,
       bindPort: port,
+      getGenerationId,
     },
   );
 

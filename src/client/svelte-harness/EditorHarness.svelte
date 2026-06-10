@@ -6,7 +6,9 @@ import Editor from "../editor/Editor.svelte";
 
 // Fresh Y.Doc + a no-op-ish provider for harness rendering. The provider
 // will attempt to connect; failure is fine — we only need the object so
-// the CollaborationCursor extension constructs without throwing.
+// the CollaborationCursor extension constructs without throwing. (It carries
+// no generation token, so a live server would auth-reject it — also fine;
+// expect that line of console noise when a dev server is running.)
 const ydoc = new Y.Doc();
 const provider = new HocuspocusProvider({
   url: "ws://127.0.0.1:3478",

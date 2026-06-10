@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { writeGenerationId } from "../../src/server/mcp/document-service.js";
+import { getGenerationId, writeGenerationId } from "../../src/server/mcp/document-service.js";
 import {
   getDocument,
   getOrCreateDocument,
   removeDocument,
   setShouldKeepDocument,
 } from "../../src/server/yjs/provider.js";
-import { CTRL_ROOM, Y_MAP_DOCUMENT_META } from "../../src/shared/constants.js";
+import { CTRL_ROOM } from "../../src/shared/constants.js";
 
 describe("Y.Doc lifecycle (provider)", () => {
   it("getOrCreateDocument creates a new doc if none exists", () => {
@@ -84,24 +84,19 @@ describe("shouldKeepDocument guard", () => {
 });
 
 describe("writeGenerationId", () => {
-  it("writes a generationId to the CTRL_ROOM documentMeta", () => {
+  it("mints a generationId readable via getGenerationId()", () => {
     writeGenerationId();
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-    const genId = meta.get("generationId") as string;
+    const genId = getGenerationId();
     expect(genId).toBeDefined();
     expect(typeof genId).toBe("string");
-    expect(genId.length).toBeGreaterThan(0);
+    expect((genId as string).length).toBeGreaterThan(0);
   });
 
   it("produces a different generationId on each call", () => {
     writeGenerationId();
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-    const first = meta.get("generationId") as string;
+    const first = getGenerationId();
 
     writeGenerationId();
-    const second = meta.get("generationId") as string;
-    expect(second).not.toBe(first);
+    expect(getGenerationId()).not.toBe(first);
   });
 });
