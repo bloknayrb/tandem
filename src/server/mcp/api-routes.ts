@@ -10,6 +10,7 @@ import {
   API_DIAGNOSTICS,
   API_DOCUMENT_RAW,
   API_DOCUMENT_RELOAD,
+  API_DOCX_CONFLICT_RESOLVE,
   API_INFO,
   API_MODE,
   API_NOTIFY_STREAM,
@@ -36,6 +37,7 @@ import { handleConvert } from "./routes/convert.js";
 import { makeDiagnosticsHandler } from "./routes/diagnostics.js";
 import { handleGetDocumentRaw } from "./routes/document-raw.js";
 import { handleReloadFromMarkdown } from "./routes/document-reload.js";
+import { handleResolveDocxConflict } from "./routes/docx-conflict.js";
 import { makeInfoHandler } from "./routes/info.js";
 import { handleMode } from "./routes/mode.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
@@ -208,6 +210,11 @@ export function registerApiRoutes(
   app.get(API_BACKUPS, mw, handleListBackups);
   app.options(API_BACKUPS_RESTORE, mw);
   app.post(API_BACKUPS_RESTORE, mw, largeBody, handleRestoreBackup);
+
+  // .docx external-conflict resolution (#1069): keep unsaved edits or reload
+  // fresh from disk. Same CSRF posture as /api/document/reload (see handler).
+  app.options(API_DOCX_CONFLICT_RESOLVE, mw);
+  app.post(API_DOCX_CONFLICT_RESOLVE, mw, largeBody, handleResolveDocxConflict);
 
   // Annotation reply: browser user posts a reply to an annotation thread
   app.options(API_ANNOTATION_REPLY, mw);

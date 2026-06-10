@@ -63,6 +63,36 @@
   outline-color: var(--tandem-error-fg-strong);
 }
 
+/* Warning family — DocxConflictBanner (#1069). Same shape as error, swaps the
+   color tokens to the amber warning family. */
+.tandem-banner--warning {
+  background: var(--tandem-warning-bg);
+  color: var(--tandem-warning-fg-strong);
+  border-bottom-color: var(--tandem-warning-border);
+}
+.tandem-banner--warning .tandem-banner__icon {
+  color: var(--tandem-warning-fg-strong);
+}
+.tandem-banner--warning .tandem-banner__cta {
+  border-color: var(--tandem-warning-border);
+  color: var(--tandem-warning-fg-strong);
+}
+.tandem-banner--warning .tandem-banner__cta:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tandem-warning) 14%, transparent);
+}
+.tandem-banner--warning .tandem-banner__cta:focus-visible {
+  outline-color: var(--tandem-warning-fg-strong);
+}
+.tandem-banner--warning .tandem-banner__dismiss {
+  color: var(--tandem-warning-fg-strong);
+}
+.tandem-banner--warning .tandem-banner__dismiss:hover {
+  background: color-mix(in srgb, var(--tandem-warning) 14%, transparent);
+}
+.tandem-banner--warning .tandem-banner__dismiss:focus-visible {
+  outline-color: var(--tandem-warning-fg-strong);
+}
+
 .tandem-banner__icon {
   display: inline-flex;
   flex: 0 0 auto;

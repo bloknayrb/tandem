@@ -12,6 +12,8 @@
  * (server-enumerated names — no caller-supplied paths reach the filesystem).
  */
 
+import path from "node:path";
+
 import type { Request, Response } from "express";
 import { listDocBackups } from "../../file-io/doc-backup.js";
 import { resolveAppDataDir } from "../../platform.js";
@@ -44,22 +46,23 @@ export async function handleListBackups(req: Request, res: Response): Promise<vo
 }
 
 export async function handleRestoreBackup(req: Request, res: Response): Promise<void> {
-  const { documentId, backup } = (req.body ?? {}) as Record<string, unknown>;
-  if (documentId !== undefined && typeof documentId !== "string") {
-    res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
-    return;
-  }
+  const { backup } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof backup !== "string" || backup.length === 0) {
     res.status(400).json({ error: "BAD_REQUEST", message: "backup must be a non-empty string" });
     return;
   }
-  const docState = getCurrentDoc(documentId);
+  // path.basename strips any directory components from the caller-supplied
+  // backup name, eliminating path-traversal taint before it reaches the FS.
+  // docBackupSnapshotPath also validates against SNAPSHOT_TAIL_RE as a second
+  // layer, but basename here is the CodeQL-visible sanitizer.
+  const safeBackup = path.basename(backup);
+  const docState = getCurrentDoc();
   if (!docState) {
     res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
     return;
   }
   try {
-    const result = await restoreDocumentFromBackup(docState.id, backup);
+    const result = await restoreDocumentFromBackup(docState.id, safeBackup);
     res.json({ data: result });
   } catch (err) {
     sendApiError(res, err);

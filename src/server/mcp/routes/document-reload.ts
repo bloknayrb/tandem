@@ -21,9 +21,14 @@ const MAX_RELOAD_MARKDOWN_BYTES = 1_000_000;
  * no separate loopback gate is needed. The handler validates the markdown type
  * and size before the synchronous parse; `reloadDocumentFromMarkdown` enforces
  * the open / .md / not-read-only / not-already-reloading guards.
+ *
+ * documentId is intentionally not accepted from the request body: the source
+ * view is always rendered for the active document, so accepting a
+ * user-supplied ID would introduce an unnecessary taint path from request
+ * input to FS operations with no functional benefit.
  */
 export async function handleReloadFromMarkdown(req: Request, res: Response): Promise<void> {
-  const { documentId, markdown } = (req.body ?? {}) as Record<string, unknown>;
+  const { markdown } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof markdown !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "markdown (string) is required." });
     return;
@@ -34,7 +39,7 @@ export async function handleReloadFromMarkdown(req: Request, res: Response): Pro
       .json({ error: "PAYLOAD_TOO_LARGE", message: "Markdown exceeds the 1MB reload limit." });
     return;
   }
-  const docId = (typeof documentId === "string" ? documentId : null) ?? getActiveDocId();
+  const docId = getActiveDocId();
   if (!docId) {
     res.status(400).json({ error: "BAD_REQUEST", message: "No active document." });
     return;

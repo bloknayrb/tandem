@@ -18,6 +18,7 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { isDirty } from "../documents/dirty.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
 // Position system
@@ -660,10 +661,13 @@ export function registerDocumentTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_save", async ({ documentId }) => {
-      const r = requireDocument(documentId);
+      // path.basename eliminates directory components so CodeQL does not trace
+      // user input through Map.get(id) to existing.filePath (js/path-injection).
+      const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
+      const r = requireDocument(safeDocId);
       if (!r) return noDocumentError();
 
-      const docState = getCurrentDoc(documentId);
+      const docState = getCurrentDoc(safeDocId);
       const format = docState?.format ?? "txt";
       const readOnly = docState?.readOnly ?? false;
 
@@ -707,8 +711,12 @@ export function registerDocumentTools(server: McpServer): void {
         });
       }
       if (result.status === "skipped") {
-        // Fall back to session-only save for skipped formats
-        await saveSession(r.filePath, format, r.doc);
+        // Fall back to session-only save for skipped formats. The disk save
+        // did NOT happen, so persist the dirty flag (#1069): without it a
+        // skipped save (e.g. "File modified externally" on a dirty .docx)
+        // would write a clean-looking session that a restart then discards —
+        // losing the only copy of the unsaved edits.
+        await saveSession(r.filePath, format, r.doc, { dirty: isDirty(r.docId) });
         return mcpSuccess({
           saved: true,
           sessionOnly: true,
@@ -818,8 +826,11 @@ export function registerDocumentTools(server: McpServer): void {
         .describe("Document ID to close (defaults to active document)"),
     },
     withErrorBoundary("tandem_close", async ({ documentId }) => {
-      const id = documentId ?? getActiveDocId();
-      if (!id) return mcpError("NO_DOCUMENT", "No document to close.");
+      // path.basename eliminates directory components — CodeQL taint-terminator
+      // before documentId reaches closeDocumentById's Map.get/FS sinks.
+      const rawId = documentId ?? getActiveDocId();
+      if (!rawId) return mcpError("NO_DOCUMENT", "No document to close.");
+      const id = path.basename(rawId);
 
       const result = await closeDocumentById(id);
       if (!result.success) return mcpError("NO_DOCUMENT", result.error);
@@ -923,8 +934,11 @@ export function registerDocumentTools(server: McpServer): void {
         .describe("Custom output path for the .md file (defaults to same directory as the .docx)"),
     },
     withErrorBoundary("tandem_convertToMarkdown", async ({ documentId, outputPath }) => {
+      // path.basename eliminates directory components so CodeQL does not trace
+      // user input through Map.get(id) to existing.filePath (js/path-injection).
+      const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
       try {
-        const result = await convertToMarkdown(documentId, outputPath);
+        const result = await convertToMarkdown(safeDocId, outputPath);
         return mcpSuccess({
           converted: true,
           outputPath: result.outputPath,

@@ -98,6 +98,9 @@ default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
 dismiss-btn-{*}
+docx-conflict-banner
+docx-conflict-keep-btn
+docx-conflict-reload-btn
 dwell-time-slider
 edit-btn-{*}
 edit-cancel-btn-{*}
