@@ -3,10 +3,14 @@ import type { Express, NextFunction, Request, Response } from "express";
 import {
   API_ANNOTATION_REPLY,
   API_APPLY_CHANGES,
+  API_BACKUPS,
+  API_BACKUPS_RESTORE,
   API_CLOSE,
   API_CONVERT,
+  API_DIAGNOSTICS,
   API_DOCUMENT_RAW,
   API_DOCUMENT_RELOAD,
+  API_DOCX_CONFLICT_RESOLVE,
   API_INFO,
   API_MODE,
   API_NOTIFY_STREAM,
@@ -19,16 +23,21 @@ import {
   API_SESSIONS,
   API_SESSIONS_CLEAR,
   API_SESSIONS_DELETE,
+  API_SHUTDOWN,
+  API_STORE_RECLAIM_LOCK,
   API_UPLOAD,
 } from "../../shared/api-paths.js";
 import { TAURI_HOSTNAME } from "../../shared/constants.js";
 import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
+import { handleListBackups, handleRestoreBackup } from "./routes/backups.js";
 import { handleClose } from "./routes/close.js";
 import { handleConvert } from "./routes/convert.js";
+import { makeDiagnosticsHandler } from "./routes/diagnostics.js";
 import { handleGetDocumentRaw } from "./routes/document-raw.js";
 import { handleReloadFromMarkdown } from "./routes/document-reload.js";
+import { handleResolveDocxConflict } from "./routes/docx-conflict.js";
 import { makeInfoHandler } from "./routes/info.js";
 import { handleMode } from "./routes/mode.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
@@ -39,6 +48,8 @@ import { makeRotateTokenHandler } from "./routes/rotate-token.js";
 import { handleSave } from "./routes/save.js";
 import { handleScratchpad } from "./routes/scratchpad.js";
 import { handleClearSessions, handleDeleteSession, handleListSessions } from "./routes/sessions.js";
+import { makeShutdownHandler, type ShutdownRouteDeps } from "./routes/shutdown.js";
+import { handleStoreReclaimLock } from "./routes/store-reclaim.js";
 import { handleUpload } from "./routes/upload.js";
 
 export type { Handler } from "./routes/_shared.js";
@@ -126,6 +137,11 @@ export const apiMiddleware: Handler = createApiMiddleware();
  *   before rotation; used to register the grace-window slot from a trusted source
  *   rather than from the request body.
  * @param infoHandlerDeps - Dependencies for GET /api/info (version, toolCount, etc.).
+ * @param diagnosticsHandlerDeps - Dependencies for GET /api/diagnostics (live ports,
+ *   version, transport).
+ * @param shutdownDeps - Graceful-shutdown wiring for POST /api/shutdown (#1088).
+ *   Provided by the entry point in HTTP mode; when omitted (tests), the route
+ *   is not registered and callers get a 404.
  */
 export function registerApiRoutes(
   app: Express,
@@ -138,9 +154,15 @@ export function registerApiRoutes(
   setCurrentToken: (t: string) => void,
   getCurrentToken: () => string | null,
   infoHandlerDeps: Parameters<typeof makeInfoHandler>[0],
+  diagnosticsHandlerDeps: Parameters<typeof makeDiagnosticsHandler>[0],
+  shutdownDeps?: ShutdownRouteDeps,
 ): void {
   // App metadata endpoint — consumed by the client's About panel
   app.get(API_INFO, mw, makeInfoHandler(infoHandlerDeps));
+
+  // Embedded doctor report for the About panel's "Copy diagnostics" button.
+  // The handler additionally gates on loopback (the report embeds local paths).
+  app.get(API_DIAGNOSTICS, mw, makeDiagnosticsHandler(diagnosticsHandlerDeps));
 
   // SSE notification stream for browser toasts
   app.get(API_NOTIFY_STREAM, mw, handleNotifyStream);
@@ -183,12 +205,29 @@ export function registerApiRoutes(
   app.options(API_DOCUMENT_RELOAD, mw);
   app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
 
+  // Pre-overwrite document backups (#1086). GET lists snapshots (read-only);
+  // POST restores one — same CSRF posture as /api/rename (see routes/backups.ts).
+  app.get(API_BACKUPS, mw, handleListBackups);
+  app.options(API_BACKUPS_RESTORE, mw);
+  app.post(API_BACKUPS_RESTORE, mw, largeBody, handleRestoreBackup);
+
+  // .docx external-conflict resolution (#1069): keep unsaved edits or reload
+  // fresh from disk. Same CSRF posture as /api/document/reload (see handler).
+  app.options(API_DOCX_CONFLICT_RESOLVE, mw);
+  app.post(API_DOCX_CONFLICT_RESOLVE, mw, largeBody, handleResolveDocxConflict);
+
   // Annotation reply: browser user posts a reply to an annotation thread
   app.options(API_ANNOTATION_REPLY, mw);
   app.post(API_ANNOTATION_REPLY, mw, largeBody, handleAnnotationReply);
 
   app.options(API_REMOVE_ANNOTATION, mw);
   app.post(API_REMOVE_ANNOTATION, mw, largeBody, handleRemoveAnnotation);
+
+  // Stale store.lock reclaim (#1077). Mutating: the handler gates on origin
+  // allowlist + loopback before touching the lockfile (same posture as the
+  // session-management mutations).
+  app.options(API_STORE_RECLAIM_LOCK, mw);
+  app.post(API_STORE_RECLAIM_LOCK, mw, handleStoreReclaimLock);
 
   // Persisted-session management UI (#103): list (read-only), delete one, clear all.
   // The mutating routes gate on origin + loopback inside their handlers.
@@ -212,4 +251,14 @@ export function registerApiRoutes(
     largeBody,
     makeRotateTokenHandler({ setCurrentToken, getCurrentToken }),
   );
+
+  // Graceful shutdown (#1088): the Tauri shell POSTs here before falling back
+  // to a hard kill, so the Node shutdown sequence (dirty-doc flush + session
+  // save) runs on restart/update. No body parser — the route takes no request
+  // body. Gating (unconditional loopback + Origin allowlist when present)
+  // lives inside the handler.
+  if (shutdownDeps) {
+    app.options(API_SHUTDOWN, mw);
+    app.post(API_SHUTDOWN, mw, makeShutdownHandler(shutdownDeps));
+  }
 }

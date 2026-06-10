@@ -15,28 +15,13 @@
  * server-security-invariants.test.ts (Invariant 7).
  */
 
-import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
+import { request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeInfoHandler } from "../../src/server/mcp/routes/info.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
+import { allocPort } from "../helpers/alloc-port.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-async function allocPort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const addr = probe.address();
-      if (!addr || typeof addr === "string") {
-        probe.close();
-        reject(new Error("unexpected address"));
-        return;
-      }
-      const p = addr.port;
-      probe.close(() => resolve(p));
-    });
-  });
-}
 
 function closeServer(s: Server): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -126,6 +111,32 @@ describe("GET /api/info — loopback (full response)", () => {
   });
 });
 
+describe("GET /api/diagnostics — live-server wiring smoke", () => {
+  // The route's behavior is unit-tested in diagnostics-route.test.ts against
+  // the handler directly; what nothing else proves is that the deps actually
+  // thread through startMcpServerHttp → registerApiRoutes and the route is
+  // MOUNTED. This runs the real runDoctor (self-probes are timeout-bounded;
+  // the mcp probe hits this very test server's live port).
+  it("is mounted and returns the filtered report shape for loopback callers", async () => {
+    const { status, body } = await rawGet(port, "/api/diagnostics", `127.0.0.1:${port}`);
+    const b = body as Record<string, unknown>;
+
+    expect(status).toBe(200);
+    expect(typeof b.version).toBe("string");
+    expect(b.transport).toBe("http");
+    expect(typeof b.nodeVersion).toBe("string");
+
+    const report = b.report as { results: Array<{ check: string }> };
+    expect(Array.isArray(report.results)).toBe(true);
+    // Dev-repo-only checks must be filtered even though this IS a dev repo
+    // (where they would pass — filtering is unconditional, not status-based).
+    const checks = report.results.map((r) => r.check);
+    expect(checks).not.toContain("node-modules");
+    expect(checks).not.toContain("mcp-json");
+    expect(checks).toContain("node-version");
+  });
+});
+
 describe("GET /api/info — DNS rebinding protection", () => {
   it("returns 403 when Host header is not localhost", async () => {
     // rawGet uses http.request so the custom Host header is actually sent.
@@ -201,6 +212,7 @@ const BASE_DEPS = {
   storagePath: "/tmp/sessions",
   getTokenFilePath: () => `/tmp/token-file-${Date.now()}`,
   changelogPath: "/tmp/CHANGELOG.md",
+  getGenerationId: () => "gen-test",
 };
 
 describe("GET /api/info — non-loopback branch (unit)", () => {
@@ -223,9 +235,45 @@ describe("GET /api/info — non-loopback branch (unit)", () => {
     // Public fields must still be present
     expect(body.version).toBe("0.0.0-test");
     expect(body.transport).toBe("http");
-    // Sensitive fields must be absent
+    // Sensitive fields must be absent — generationId included: it's the
+    // Hocuspocus auth token clients pin, scoped loopback-only to match its
+    // consumer's reach (Hocuspocus binds 127.0.0.1).
     expect("storagePath" in body).toBe(false);
     expect("tokenRotatedAt" in body).toBe(false);
+    expect("generationId" in body).toBe(false);
+  });
+});
+
+describe("GET /api/info — generationId field (unit)", () => {
+  it("includes the generation id for loopback callers", async () => {
+    const handler = makeInfoHandler(BASE_DEPS);
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect(body.generationId).toBe("gen-test");
+  });
+
+  it("returns null before writeGenerationId() has run (dep absent)", async () => {
+    const handler = makeInfoHandler({ ...BASE_DEPS, getGenerationId: undefined });
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect("generationId" in body).toBe(true);
+    expect(body.generationId).toBeNull();
   });
 });
 

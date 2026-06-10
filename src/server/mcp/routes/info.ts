@@ -26,6 +26,12 @@ export interface InfoHandlerDeps {
   workflowsPath?: string;
   /** Active MCP transport mode. */
   transport?: "http" | "stdio";
+  /**
+   * This server run's generation id — clients pin it as their Hocuspocus auth
+   * token so stale tabs from a previous run are rejected before their Y.Doc
+   * state can merge back. Returns null before writeGenerationId() runs.
+   */
+  getGenerationId?: () => string | null;
   /** Bind host for HTTP transport (e.g. "127.0.0.1"). Undefined for stdio. */
   bindHost?: string;
   /** MCP HTTP port number. Undefined for stdio. */
@@ -87,6 +93,9 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
     if (loopback) {
       body.storagePath = deps.storagePath;
       body.tokenRotatedAt = tokenRotatedAt;
+      // Loopback-only to match its consumer's reach: Hocuspocus binds 127.0.0.1,
+      // so only loopback clients can ever use the generation token.
+      body.generationId = deps.getGenerationId?.() ?? null;
     }
 
     res.json(body);

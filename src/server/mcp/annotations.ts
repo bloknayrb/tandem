@@ -36,7 +36,15 @@ import { pushNotification } from "../notifications.js";
 import { anchoredRange } from "../positions.js";
 import { extractText, getCurrentDoc } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
-import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
+import { getAnnotationsOutputShape } from "./output-schemas.js";
+import {
+  mcpError,
+  mcpStructured,
+  mcpSuccess,
+  noDocumentError,
+  withErrorBoundary,
+  withStructuredErrors,
+} from "./response.js";
 import { sanitizeAnnotationIdForPresence, withTypingPresence } from "./typing-presence.js";
 
 /** Build an `onLossy` callback that relays to the migration-log for the given doc. */
@@ -469,46 +477,52 @@ export function registerAnnotationTools(server: McpServer): void {
     }),
   );
 
-  server.tool(
+  server.registerTool(
     "tandem_getAnnotations",
-    'Read all annotations, optionally filtered by author/type/status. User notes are always excluded — they are private to the user (ADR-027). For checking new user actions, prefer tandem_checkInbox. Imported Word reviewer comments land as **private notes** (`author: "import", type: "note", audience: "private"`) and are excluded by default; the user batch-promotes them via the side rail before Claude sees them, at which point they become `author: "user", type: "comment"`. The `notesExcluded` field in the response reports how many notes were filtered out (including any not-yet-promoted imports).',
     {
-      author: AuthorSchema.optional().describe("Filter by author"),
-      type: z.enum(["highlight", "comment"]).optional().describe("Filter by type"),
-      status: AnnotationStatusSchema.optional().describe("Filter by status"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
+      description:
+        "Read annotations, optionally filtered by author/type/status. User notes are always excluded — they are private (ADR-027); notesExcluded reports how many were filtered, including imported Word comments awaiting user promotion (promoted ones surface as user comments). For new user actions, prefer tandem_checkInbox.",
+      inputSchema: {
+        author: AuthorSchema.optional().describe("Filter by author"),
+        type: z.enum(["highlight", "comment"]).optional().describe("Filter by type"),
+        status: AnnotationStatusSchema.optional().describe("Filter by status"),
+        documentId: z
+          .string()
+          .optional()
+          .describe("Target document ID (defaults to active document)"),
+      },
+      outputSchema: getAnnotationsOutputShape,
     },
-    withErrorBoundary("tandem_getAnnotations", async ({ author, type, status, documentId }) => {
-      const store = getDocumentStore(documentId);
-      if (!store) return noDocumentError();
+    withStructuredErrors(
+      withErrorBoundary("tandem_getAnnotations", async ({ author, type, status, documentId }) => {
+        const store = getDocumentStore(documentId);
+        if (!store) return noDocumentError();
 
-      let results = store.listAnnotationsRefreshed();
-      if (author) results = results.filter((a) => a.author === author);
-      if (type) results = results.filter((a) => a.type === type);
-      if (status) results = results.filter((a) => a.status === status);
+        let results = store.listAnnotationsRefreshed();
+        if (author) results = results.filter((a) => a.author === author);
+        if (type) results = results.filter((a) => a.type === type);
+        if (status) results = results.filter((a) => a.status === status);
 
-      // User notes are always excluded — they are private (ADR-027).
-      const notesExcluded = results.filter((a) => a.type === "note").length;
-      results = results.filter((a) => a.type !== "note");
+        // User notes are always excluded — they are private (ADR-027).
+        const notesExcluded = results.filter((a) => a.type === "note").length;
+        results = results.filter((a) => a.type !== "note");
 
-      // ADR-027 + #1000: only comment parents expose replies, and `private`
-      // replies (note-authored or imported Word threads) are stripped even
-      // after a note→comment promotion. `channelVisibleReplies` enforces both
-      // gates so this read site can't drift from the export path / observer.
-      const annotationsWithReplies = results.map((ann) => ({
-        ...ann,
-        replies: channelVisibleReplies(ann, (id) => store.listReplies(id)),
-      }));
+        // ADR-027 + #1000: only comment parents expose replies, and `private`
+        // replies (note-authored or imported Word threads) are stripped even
+        // after a note→comment promotion. `channelVisibleReplies` enforces both
+        // gates so this read site can't drift from the export path / observer.
+        const annotationsWithReplies = results.map((ann) => ({
+          ...ann,
+          replies: channelVisibleReplies(ann, (id) => store.listReplies(id)),
+        }));
 
-      return mcpSuccess({
-        annotations: annotationsWithReplies,
-        count: annotationsWithReplies.length,
-        ...(notesExcluded > 0 ? { notesExcluded } : {}),
-      });
-    }),
+        return mcpStructured({
+          annotations: annotationsWithReplies,
+          count: annotationsWithReplies.length,
+          ...(notesExcluded > 0 ? { notesExcluded } : {}),
+        });
+      }),
+    ),
   );
 
   server.tool(
@@ -633,7 +647,7 @@ export function registerAnnotationTools(server: McpServer): void {
 
   server.tool(
     "tandem_exportAnnotations",
-    "Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files. Set writeToDisk:true to additionally write a sharable sidecar file (e.g. `<doc>.annotations.json`) next to the document.",
+    "Export all annotations as a review summary (markdown or json). writeToDisk:true also writes a sharable sidecar file (e.g. `<doc>.annotations.json`) next to the document.",
     {
       format: ExportFormatSchema.optional().describe("Output format (default: markdown)"),
       documentId: z
@@ -644,7 +658,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .boolean()
         .optional()
         .describe(
-          "When true, write the export to a sidecar file next to the document so it can be shared/backed up. Defaults to <docPath>.annotations.json (or .annotations.md for markdown). Overwrites any existing sidecar.",
+          "Write the export to a sharable sidecar file next to the document (default <docPath>.annotations.{json|md}). Overwrites any existing sidecar.",
         ),
       outputPath: z
         .string()
@@ -657,7 +671,7 @@ export function registerAnnotationTools(server: McpServer): void {
           message: "outputPath must not use UNC or extended-length / device-namespace prefixes.",
         })
         .describe(
-          "Custom absolute path for the sidecar file (only used when writeToDisk is true). May be a file path or an existing directory (the default filename is appended). Defaults to <docPath>.annotations.{json|md}.",
+          "Custom absolute sidecar path (used with writeToDisk). A file path, or an existing directory to which the default filename is appended.",
         ),
     },
     withErrorBoundary(

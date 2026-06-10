@@ -47,11 +47,27 @@ use tauri_plugin_updater::UpdaterExt;
 /// request returns 403 Forbidden and the supervisor's health-poll times out.
 const HEALTH_URL: &str = "http://127.0.0.1:3479/health";
 const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
+/// Graceful-shutdown endpoint on the sidecar (#1088). POSTing here triggers
+/// the Node shutdown sequence (dirty-doc flush + session save) before exit.
+/// Keep in sync with API_SHUTDOWN in src/shared/api-paths.ts.
+const SHUTDOWN_URL: &str = "http://127.0.0.1:3479/api/shutdown";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long to wait for the sidecar to exit after POST /api/shutdown before
+/// hard-killing it. The Node shutdown's disk flush is 5s-bounded
+/// (src/server/index.ts), so 6s covers the flush plus the session save in the
+/// common case while keeping the restart button responsive (#1088).
+const GRACEFUL_SHUTDOWN_DEADLINE_SECS: u64 = 6;
 const MAX_RESTARTS: u32 = 3;
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
+
+/// Cadence of the Cowork self-heal pass (see `cowork_heal_pass`): installs
+/// plugin entries into workspaces that appear after the integration was
+/// enabled (e.g. the user's first Cowork run) without requiring a settings
+/// visit. The first tick fires immediately at launch.
+#[cfg(target_os = "windows")]
+const COWORK_HEAL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// File extensions Tandem can open via OS file association. Keep aligned with
 /// `SUPPORTED_EXTENSIONS` in `src/server/mcp/file-opener.ts` — server-side is
@@ -836,6 +852,28 @@ pub fn run() {
                 }
             });
 
+            // Cowork self-heal: when the integration is enabled, periodically
+            // install plugin entries into workspaces that appeared after
+            // enable (e.g. the user's first Cowork session) — headless, no
+            // settings visit required. The first tick fires immediately so a
+            // workspace created while Tandem was closed heals at launch.
+            // No firewall work, no UAC; see `cowork_heal_pass` guards.
+            #[cfg(target_os = "windows")]
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(COWORK_HEAL_INTERVAL);
+                loop {
+                    interval.tick().await;
+                    match tauri::async_runtime::spawn_blocking(cowork_heal_pass).await {
+                        Ok(Ok(0)) => {}
+                        Ok(Ok(n)) => {
+                            log::info!("[cowork] heal pass installed into {n} workspace(s)");
+                        }
+                        Ok(Err(e)) => log::warn!("[cowork] heal pass failed: {e}"),
+                        Err(e) => log::warn!("[cowork] heal task join error: {e}"),
+                    }
+                }
+            });
+
             let open_i = MenuItem::with_id(app, MENU_OPEN, "Open Editor", true, None::<&str>)?;
             let setup_i = MenuItem::with_id(app, MENU_SETUP, "Setup AI Assistant", true, None::<&str>)?;
             let update_i = MenuItem::with_id(app, MENU_UPDATE, "Check for Updates", true, None::<&str>)?;
@@ -1028,14 +1066,30 @@ pub fn run() {
         });
 }
 
-/// Kill the sidecar process and spawn it again.
+/// Guards against concurrent `restart_sidecar` invocations. The command
+/// returns immediately (stop + respawn run on the async runtime), so the
+/// WebView's restart button re-enables while a restart is still in flight; a
+/// second click used to race two stop/start tasks (two spawned children, one
+/// orphaned out of `SidecarState`). The graceful-stop wait (#1088) widens
+/// that window to ~6s, so gate it explicitly: while a restart is in flight,
+/// further requests are logged no-ops.
+static RESTART_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Gracefully stop the sidecar (flush dirty docs + save session, #1088),
+/// hard-kill as fallback, then spawn it again.
 #[tauri::command]
 fn restart_sidecar(app: tauri::AppHandle) {
-    kill_sidecar(&app);
-    // Reset healthy flag so any RunEvent::Opened arriving mid-restart queues
-    // instead of POSTing to a dying server. Must clear under the PendingOpens
-    // mutex (see clear_healthy_under_lock) — a bare atomic store here would
-    // race a concurrent producer that read flag=true a moment ago.
+    if RESTART_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        log::warn!("restart_sidecar ignored — a restart is already in flight");
+        return;
+    }
+    // Reset healthy flag FIRST so any RunEvent::Opened arriving mid-restart
+    // queues instead of POSTing to a dying server. Must clear under the
+    // PendingOpens mutex (see clear_healthy_under_lock) — a bare atomic store
+    // here would race a concurrent producer that read flag=true a moment ago.
     // `start_sidecar` will set it back to true after the next successful
     // `wait_for_health`.
     let pending: tauri::State<'_, PendingOpens> = app.state();
@@ -1047,6 +1101,12 @@ fn restart_sidecar(app: tauri::AppHandle) {
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Graceful stop before the hard kill (#1088): POST /api/shutdown so
+        // the Node shutdown sequence flushes up to ~60s of unsaved edits and
+        // persists the session, then wait up to 6s for exit. A bare kill()
+        // here discarded those edits and made server/WebView histories
+        // diverge on every restart.
+        stop_sidecar_gracefully(&handle, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS).await;
         // Restart never re-injects the cold-start file: the original `setup()`
         // invocation already opened it and registered it in `openDocuments`.
         if let Err(e) = start_sidecar(&handle, &client, None).await {
@@ -1062,6 +1122,9 @@ fn restart_sidecar(app: tauri::AppHandle) {
                 log::error!("[restart_sidecar] failed to emit failure event: {emit_err}");
             }
         }
+        // Release the gate on success AND failure — a failed restart must
+        // leave the button usable for another attempt.
+        RESTART_IN_PROGRESS.store(false, Ordering::Release);
     });
 }
 
@@ -1412,6 +1475,57 @@ fn forward_context_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEv
             log::warn!("Failed to emit context-menu action {id}: {e}");
         }
     }
+}
+
+/// Graceful-then-hard sidecar stop (#1088).
+///
+/// When we own a sidecar child, POST `/api/shutdown` so the Node shutdown
+/// sequence runs (unwatchAll → stopAutoSave → autoSaveAllToDisk (5s-bounded)
+/// → saveCurrentSession) and wait up to `deadline_secs` for the port to
+/// release. Always finishes with `kill_sidecar`: on a graceful exit that just
+/// clears the stored child handle (killing an already-exited child is a
+/// logged no-op); on POST failure or timeout it is the hard-kill fallback —
+/// the old behavior.
+///
+/// When no child is owned (debug builds running against an external
+/// `dev:standalone` server) this never POSTs — we must not shut down a server
+/// we did not spawn.
+async fn stop_sidecar_gracefully(
+    handle: &tauri::AppHandle,
+    client: &reqwest::Client,
+    deadline_secs: u64,
+) {
+    let state: tauri::State<'_, SidecarState> = handle.state();
+    let owns_child = match state.0.lock() {
+        Ok(guard) => guard.is_some(),
+        Err(poisoned) => poisoned.into_inner().is_some(),
+    };
+    if owns_child {
+        let posted = match client.post(SHUTDOWN_URL).send().await {
+            Ok(resp) if resp.status().is_success() => true,
+            Ok(resp) => {
+                log::warn!(
+                    "Graceful shutdown POST returned HTTP {} — falling back to hard kill",
+                    resp.status()
+                );
+                false
+            }
+            Err(e) => {
+                log::warn!("Graceful shutdown POST failed ({e}) — falling back to hard kill");
+                false
+            }
+        };
+        if posted {
+            if wait_for_port_release(client, deadline_secs).await {
+                log::info!("Sidecar exited gracefully after /api/shutdown");
+            } else {
+                log::warn!(
+                    "Sidecar still up {deadline_secs}s after /api/shutdown — falling back to hard kill"
+                );
+            }
+        }
+    }
+    kill_sidecar(handle);
 }
 
 /// Kill the sidecar process if one is running.
@@ -2257,15 +2371,123 @@ fn cowork_rescan() -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
+/// One self-heal pass: when the Cowork integration is enabled, install the
+/// plugin entry into any workspace that lacks one. Runs from a background
+/// interval task (see `setup`) so a workspace created AFTER enable — e.g. the
+/// user's first Cowork session — gets configured headlessly, without the user
+/// reopening settings or clicking Re-scan.
+///
+/// Guards:
+/// - No-op unless `cowork_meta.enabled` (never arms anything by itself; no
+///   firewall work, no UAC, ever).
+/// - Read-only precheck first — zero writes when every workspace already has
+///   its entry (the steady state).
+/// - Attempt set keyed on *terminal* outcomes only: a workspace is recorded
+///   (and not retried this run) once its install succeeds OR fails terminally
+///   (`InsecureAcl` — a redirected/synced path that will never become safe).
+///   A *transient* failure (`Locked` / `SchemaDrift` / `Failed` / error) is left
+///   OUT of the set so the next tick self-heals a momentary glitch. New paths
+///   are attempted as they appear. The manual "Re-scan workspaces" button
+///   deliberately bypasses this guard (it force-reinstalls everything).
+///
+/// Returns the number of workspaces successfully installed this pass.
+#[cfg(target_os = "windows")]
+fn cowork_heal_pass() -> Result<usize, String> {
+    use std::collections::BTreeSet;
+
+    use cowork_installer::{
+        heal_outcome_is_terminal, install_tandem_plugin_into_workspace, resolve_tandem_url,
+        workspace_has_tandem_entry, WriteStatus,
+    };
+    use cowork_workspace_scan::find_cowork_workspaces;
+
+    static HEAL_ATTEMPTED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
+    let meta = cowork_meta::load().map_err(|e| e.to_string())?;
+    if !meta.enabled {
+        return Ok(0);
+    }
+
+    // Read-only precheck: which workspaces lack a tandem entry?
+    let missing: Vec<PathBuf> = find_cowork_workspaces()
+        .into_iter()
+        .filter(|ws| !workspace_has_tandem_entry(ws))
+        .collect();
+    if missing.is_empty() {
+        return Ok(0);
+    }
+
+    // Skip workspaces already terminally attempted this run (read-only snapshot;
+    // the heal pass is a single serialized interval task, so no concurrent pass
+    // races this — and manual rescan never touches HEAL_ATTEMPTED).
+    let to_attempt: Vec<PathBuf> = {
+        let attempted = HEAL_ATTEMPTED.lock().unwrap_or_else(|p| p.into_inner());
+        missing
+            .into_iter()
+            .filter(|ws| !attempted.contains(ws))
+            .collect()
+    };
+    if to_attempt.is_empty() {
+        return Ok(0);
+    }
+
+    let token = token_store::get_or_create_token()?;
+    let tandem_url = resolve_tandem_url(&meta);
+
+    let mut installed = 0usize;
+    let mut terminal: Vec<PathBuf> = Vec::new();
+    for ws in &to_attempt {
+        let status = match install_tandem_plugin_into_workspace(ws, &token, &tandem_url) {
+            Ok(report) => report.installed_plugins,
+            Err(e) => {
+                log::warn!("[cowork] heal: install into {} errored: {e}", ws.display());
+                // Treat an error as a transient Failed so it retries next tick.
+                WriteStatus::Failed(e.to_string())
+            }
+        };
+        match &status {
+            WriteStatus::Ok | WriteStatus::AlreadyPresent => installed += 1,
+            other => log::warn!(
+                "[cowork] heal: install into {} not successful: {other:?}",
+                ws.display()
+            ),
+        }
+        if heal_outcome_is_terminal(&status) {
+            terminal.push(ws.clone());
+        }
+    }
+
+    // Record only terminal outcomes — transient failures stay retryable.
+    if !terminal.is_empty() {
+        let mut attempted = HEAL_ATTEMPTED.lock().unwrap_or_else(|p| p.into_inner());
+        attempted.extend(terminal);
+    }
+
+    if installed > 0 {
+        if let Err(e) = cowork_meta::update(|m| {
+            m.workspaces_last_scanned_at = Some(iso_now());
+        }) {
+            log::warn!("[cowork] heal: failed to persist meta: {e}");
+        }
+    }
+
+    Ok(installed)
+}
+
 /// Get the current Cowork integration status.
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn cowork_get_status() -> Result<serde_json::Value, String> {
-    use cowork_workspace_scan::find_cowork_workspaces;
+    use cowork_workspace_scan::{claude_desktop_detected, find_cowork_workspaces_with_stats};
 
     let meta = cowork_meta::load().map_err(|e| e.to_string())?;
-    let workspace_paths = find_cowork_workspaces();
+    let (workspace_paths, scan_stats) = find_cowork_workspaces_with_stats();
     let cowork_detected = !workspace_paths.is_empty();
+    // Claude Desktop install signal, independent of workspace existence —
+    // lets the UI distinguish "no Claude at all" from "Claude present, Cowork
+    // never run yet" and from "sessions found but blocked by the path guard"
+    // (redirected/synced AppData). Existence checks only; read-only.
+    let claude_detected = claude_desktop_detected();
 
     // Build a workspace status array compatible with the TypeScript WorkspaceStatus[]
     // type declared in PR f.  This is a read-only status check — no writes, no ACL
@@ -2285,20 +2507,8 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
                 .unwrap_or_default();
 
             // Read-only check: does installed_plugins.json contain a tandem entry?
-            let plugins_file = ws_path.join("cowork_plugins").join("installed_plugins.json");
-            let installed_status = if plugins_file.exists() {
-                match std::fs::read_to_string(&plugins_file)
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                {
-                    Some(json) if json.get("mcpServers")
-                        .and_then(|s| s.get("tandem"))
-                        .is_some() =>
-                    {
-                        "ok"
-                    }
-                    _ => "failed",
-                }
+            let installed_status = if cowork_installer::workspace_has_tandem_entry(ws_path) {
+                "ok"
             } else {
                 "failed"
             };
@@ -2352,6 +2562,8 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
         "uacDeclinedAt": meta.uac_declined_at,
         "workspaces": workspaces,
         "coworkDetected": cowork_detected,
+        "claudeDesktopDetected": claude_detected,
+        "workspacesBlocked": scan_stats.rejected_by_guard,
         "osSupported": true,
     }))
 }
@@ -2362,6 +2574,8 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
         "osSupported": false,
         "enabled": false,
         "coworkDetected": false,
+        "claudeDesktopDetected": false,
+        "workspacesBlocked": 0,
         "workspaces": [],
         "vethernetCidr": null,
         "lanIpFallback": null,
@@ -2814,11 +3028,14 @@ async fn perform_install(
     update: tauri_plugin_updater::Update,
     version: &str,
 ) {
-    // Kill sidecar BEFORE install — on Windows, the NSIS installer runs during
+    // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
     // download_and_install() and needs to replace node-sidecar.exe on disk.
     // If the process is still running, the file is locked and install fails.
-    kill_sidecar(app);
+    // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
+    // the session before the app restarts into the new version; hard kill is
+    // the fallback on POST failure or timeout.
     let client = app.state::<reqwest::Client>().inner().clone();
+    stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS).await;
 
     // Wait for port release and (on Windows) file-lock release concurrently.
     // Port-down alone isn't sufficient on Windows: TerminateProcess returns

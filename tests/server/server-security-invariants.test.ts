@@ -10,30 +10,14 @@
  * so the Express routing and middleware are tested exactly as deployed.
  */
 
-import { createServer, type Server } from "node:http";
+import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isLoopback } from "../../src/server/auth/middleware.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
+import { allocPort } from "../helpers/alloc-port.js";
 
 let httpServer: Server;
 let port: number;
-
-/** Pre-allocate an ephemeral port by listening briefly, then free it. */
-async function allocPort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const addr = probe.address();
-      if (!addr || typeof addr === "string") {
-        probe.close();
-        reject(new Error("unexpected address"));
-        return;
-      }
-      const p = addr.port;
-      probe.close(() => resolve(p));
-    });
-  });
-}
 
 beforeEach(async () => {
   // Pre-allocate a real port so startMcpServerHttp receives the actual port number

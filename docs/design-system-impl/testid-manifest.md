@@ -119,6 +119,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `margin-leaders-{*}`
 - Batch + bulk: `batch-promote-{bar,count,clear,confirm}`,
   `bulk-{confirm,cancel,accept,dismiss}-btn`
+- Sort: `annotation-sort-toggle` (position ↔ chronological, #1056)
 - Filters: `filter-bar-toggle`, `clear-filters-btn`; chip groups (#798 A15,
   `ChipGroup`) — roots `filter-{type,author,status}`; per-chip
   `filter-type-{all,highlight,comment,note,with-replacement}`,

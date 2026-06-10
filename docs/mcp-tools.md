@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem exposes 31 tools via MCP HTTP (28 active, 3 deprecated stubs that return structured errors). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 31 tools via MCP HTTP (28 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -17,6 +17,19 @@ All tools return responses in a standard envelope:
 ```json
 { "error": true, "code": "ERROR_CODE", "message": "Human-readable description" }
 ```
+
+### Structured Output (`outputSchema` / `structuredContent`)
+
+Six data-returning tools additionally advertise an MCP `outputSchema` and emit `structuredContent` so typed clients can validate responses end-to-end:
+
+- `tandem_status`
+- `tandem_getTextContent`
+- `tandem_getAnnotations`
+- `tandem_checkInbox`
+- `tandem_listDocuments`
+- `tandem_search`
+
+For these tools, `structuredContent` carries the exact same object as the text envelope's `data` field — the text content is unchanged for backward compatibility. Error responses from these tools are marked with the MCP-level `isError: true` flag (and carry no `structuredContent`); the text content still holds the `{ "error": true, ... }` JSON envelope above. Schemas live in `src/server/mcp/output-schemas.ts`. Per ADR-027, the annotation schemas deliberately omit `type: "note"` — user-private notes can never appear in structured payloads.
 
 ### Error Codes
 
@@ -135,7 +148,7 @@ tandem_scratchpad({ content: "# Test plan\n\n- Step one\n- Step two" })
 
 ### tandem_getTextContent
 
-Read document as plain text. ~60% fewer tokens than `getContent`.
+Read document as plain text whose offsets match the annotation coordinate system.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -281,7 +294,9 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 { "saved": true, "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
 ```
 
-**Notes:** Read-only documents (.docx) save their session only (annotations persist), not the source file.
+**Notes:**
+- Read-only documents save their session only (annotations persist), not the source file.
+- Writable `.docx` documents save on **explicit save only** (never auto-save). The save writes the document body **plus pending `comment`-type annotations as Word comments** (`comments.xml` + range markers), anchored to their current ranges (#1068). `note` and `highlight` annotations are never written to the file (ADR-027), so un-promoted imported Word comments — which live as private notes until batch-promoted — are dropped from the saved file. Accepted/dismissed comments are dropped too (Word has no resolved-state channel we can write). Threaded replies flatten into the comment body with attribution lines; private replies (including imported Word reply threads) are never written.
 
 **Errors:** `FILE_LOCKED` (file open in another program)
 
@@ -493,14 +508,14 @@ tandem_comment({
 
 ### tandem_getAnnotations
 
-Read all annotations, optionally filtered. For checking new user actions, prefer `tandem_checkInbox`.
+Read annotations, optionally filtered by author/type/status. For checking new user actions, prefer `tandem_checkInbox`.
 
-By default, results exclude `note`-type annotations (user-private). Pass `type: "note"` to read user-authored notes addressed to Claude. Imported `.docx` reviewer comments surface as `author: "import"`, `type: "comment"` and are included by default — filter via `author: "import"` if you want to scope to them.
+User notes are **always excluded** — they are private to the user (ADR-027) and cannot be requested via any filter. Imported `.docx` reviewer comments land as private notes (`author: "import"`, `type: "note"`) and stay excluded until the user batch-promotes them via the side rail, at which point they surface as `author: "user"`, `type: "comment"`. The `notesExcluded` response field reports how many notes were filtered out (including not-yet-promoted imports). Each returned annotation includes a `replies` array (comment parents only; user-private replies are stripped).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `author` | enum | no | `user`, `claude`, or `import` |
-| `type` | enum | no | `highlight`, `comment`, `note` |
+| `type` | enum | no | `highlight`, `comment` |
 | `status` | enum | no | `pending`, `accepted`, `dismissed` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 
@@ -511,20 +526,22 @@ By default, results exclude `note`-type annotations (user-private). Pass `type: 
     {
       "id": "ann_1710936000000_a1b2c3",
       "author": "claude",
-      "type": "highlight",
+      "type": "comment",
       "range": { "from": 42, "to": 67 },
       "content": "This figure doesn't match the invoice",
       "status": "pending",
       "timestamp": 1710936000000,
-      "color": "yellow"
+      "audience": "outbound",
+      "textSnapshot": "the $42,500 figure",
+      "replies": []
     }
   ],
   "count": 1,
-  "notesExcluded": 0
+  "notesExcluded": 2
 }
 ```
 
-`notesExcluded` reports how many `note`-type annotations were filtered out (only present when > 0). If you need user notes, re-call with `type: "note"`.
+`notesExcluded` reports how many `note`-type annotations were filtered out (only present when > 0). Notes cannot be read via MCP — they are user-private (ADR-027).
 
 ---
 
@@ -695,22 +712,38 @@ tandem_applyChanges({ author: "Claude Review" })
 
 ### tandem_restoreBackup
 
-Restore a `.docx` file from its backup created by `tandem_applyChanges`.
+Restore a document from a backup. Two backup families, selected by the document's format:
+
+- **`.docx`** — restores the `{name}.backup.docx` sidecar created by `tandem_applyChanges`.
+- **`.md`/`.txt`** — restores a pre-overwrite snapshot. Tandem copies a text document's on-disk bytes to `{APP_DATA}/doc-backups/` before its first overwrite each server run (up to 3 snapshots per document). Call without `backup` to list the available snapshots (newest first), then call again with `backup` set to a snapshot name to restore it.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `backup` | string | no | Snapshot filename to restore (`.md`/`.txt` only). Omit to list available snapshots. |
 
-**Returns:**
+**Returns (list mode — `.md`/`.txt` without `backup`):**
 ```json
-{ "restored": true, "backupPath": "C:\\Users\\bkolb\\docs\\report.backup.docx", "outputPath": "C:\\Users\\bkolb\\docs\\report.docx" }
+{
+  "filePath": "/home/user/docs/thesis.md",
+  "backups": [
+    { "name": "thesis-20260609-141500-ab12cd34.md", "timestamp": "2026-06-09T14:15:00.000Z", "size": 18234 }
+  ],
+  "message": "Snapshots listed newest first. Call tandem_restoreBackup again with `backup` set to one of these names to restore it."
+}
 ```
 
-**Errors:** Error if no backup file exists for the document.
+**Returns (restore mode):**
+```json
+{ "message": "Restored thesis.md from backup thesis-20260609-141500-ab12cd34.md.", "restoredFrom": "…/doc-backups/<hash>/thesis-20260609-141500-ab12cd34.md", "filePath": "/home/user/docs/thesis.md" }
+```
+
+**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for upload-source documents or when `backup` is passed for a `.docx`; `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard.
 
 **Notes:**
-- Copies the backup file back over the modified `.docx`, undoing `tandem_applyChanges`.
-- The backup file is not deleted after restore — you can restore multiple times.
+- `.docx`: copies the sidecar back over the modified file, undoing `tandem_applyChanges`. The sidecar is not deleted after restore — you can restore multiple times.
+- `.md`/`.txt`: the restore routes through the file-watcher reload lifecycle — the open document reloads in place, annotations are preserved and re-anchored, and Tandem's own write is not misread as an external edit. The pre-restore on-disk bytes are snapshotted first (when the once-per-run gate allows), so a restore is itself reversible.
+- The command palette action "Restore a backup of this document…" is a thin client of the same machinery (`GET /api/backups` + `POST /api/backups/restore`); it restores the most recent snapshot.
 
 ---
 
@@ -810,7 +843,7 @@ Check if the user is actively editing and where their cursor is.
 
 ### tandem_checkInbox
 
-Check for user actions you haven't seen yet -- new highlights, comments, and responses to your annotations. Low token cost. Call this after completing any task, between steps, and whenever you pause.
+Check for user actions you haven't seen yet -- new comments, chat messages, and responses to your annotations. Low token cost. Call this after completing any task, between steps, and whenever you pause.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -819,24 +852,27 @@ Check for user actions you haven't seen yet -- new highlights, comments, and res
 **Returns:**
 ```json
 {
-  "summary": "2 new: 1 comment, 1 comment (for Claude). 1 accepted.",
+  "summary": "1 new: 1 comment. 1 accepted. 1 new chat message.",
   "hasNew": true,
+  "mode": "tandem",
+  "storeReadOnly": false,
   "userActions": [ { ...annotation, "textSnippet": "..." } ],
   "userResponses": [ { ...annotation, "textSnippet": "..." } ],
+  "chatMessages": [ { "id": "msg_...", "text": "...", "timestamp": 1710936000000 } ],
   "activity": {
     "isTyping": false,
     "cursor": 142,
     "lastEdit": 1710936000000,
     "selectedText": null
-  },
-  "mode": "tandem"
+  }
 }
 ```
 
 **Notes:**
-- Each annotation is surfaced only once -- subsequent calls return only new items.
-- `userActions`: annotations created by the user (highlights, comments, flags).
+- Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
+- `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
+- **Channel-less clients degrade gracefully:** items already pushed in real time via the SSE channel shim are deduplicated out of this response; for a generic MCP client with no channel attached, nothing is ever deduplicated and every action surfaces here through polling.
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 
@@ -911,6 +947,29 @@ Returns app metadata for the client's About panel and version indicator. All fie
 | `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent or unreadable |
 
 **Errors:** `403 FORBIDDEN` (Host header is not `127.0.0.1` or `tauri.localhost` — DNS-rebinding protection, narrowed in PR #637)
+
+---
+
+### GET /api/diagnostics
+
+Runs the embedded `tandem doctor` collector and returns the report plus environment metadata. Backs the client's **Settings → About → Copy Diagnostics** button.
+
+**Loopback-only, unconditionally** — non-loopback callers get `403` regardless of auth, because the report embeds absolute paths (which include the username) and PIDs. It never contains token material or document content. The two dev-repo-only checks (`node-modules`, `mcp-json`) are filtered out of the report with `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop/npm-global install. Concurrent requests share one in-flight collector run (single-flight).
+
+**Response (200):**
+```json
+{
+  "report": { "ok": true, "crashed": false, "failures": 0, "warnings": 0, "summary": "All checks passed. Tandem is ready.", "error": null, "results": [ { "check": "node-version", "status": "pass", "message": "Node.js v22.0.0 (>= 22 required)" } ] },
+  "version": "0.13.6",
+  "transport": "http",
+  "platform": "win32",
+  "arch": "x64",
+  "nodeVersion": "v22.0.0",
+  "tauriSidecar": true
+}
+```
+
+**Errors:** `403 FORBIDDEN` (non-loopback caller, or disallowed Host header), `500 diagnostics failed` (collector crash — detail goes to the server log, never the wire)
 
 ---
 

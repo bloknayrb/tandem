@@ -6,7 +6,7 @@ import {
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_DOCUMENT_META,
-  Y_MAP_GENERATION_ID,
+  Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
@@ -29,6 +29,7 @@ import {
 } from "../documents/dirty.js";
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
+import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
@@ -36,6 +37,7 @@ import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
+import { resolveAppDataDir } from "../platform.js";
 import {
   deleteSession,
   listSessionFilePaths,
@@ -45,7 +47,7 @@ import {
   saveSession,
   stopAutoSave,
 } from "../session/manager.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
+import { getOrCreateDocument, setGenerationTokenSource } from "../yjs/provider.js";
 
 // --- Multi-document state (ADR-033: moved to src/server/documents/registry.ts) ---
 //
@@ -143,7 +145,12 @@ export async function saveDocumentToDisk(
   docId: string,
   source: "auto-save" | "manual" | "mcp" = "auto-save",
 ): Promise<SaveResult> {
-  const docState = openDocs.get(docId);
+  // path.basename eliminates directory components so CodeQL does not trace
+  // user input through Map.get(id) to docState.filePath FS sinks
+  // (js/path-injection). Valid IDs are 64-char hex / upload_* — no separators,
+  // so this is a no-op at runtime.
+  const safeDocId = path.basename(docId);
+  const docState = openDocs.get(safeDocId);
   if (!docState) return { status: "skipped", reason: "Document not open" };
 
   // Exclude non-saveable documents
@@ -227,14 +234,30 @@ export async function saveDocumentToDisk(
       fidelityWarnings = warnings.length > 0 ? warnings : undefined;
     } else {
       const output = adapter.save!(doc);
+      // Pre-overwrite snapshot of the on-disk original (first write per path
+      // per run). Never throws; a snapshot failure must not block the save.
+      await snapshotBeforeFirstWrite(docState.filePath, {
+        appDataDir: resolveAppDataDir(),
+        documentId: docId,
+      });
       suppressNextChange(docState.filePath);
       await atomicWrite(docState.filePath, output);
     }
-    await saveSession(docState.filePath, docState.format, doc);
+    // `dirty` records whether a body edit landed DURING the async write (the
+    // saved bytes already match the session state otherwise) — consumed by the
+    // .docx restore-vs-reload prompt on reopen (#1069).
+    await saveSession(docState.filePath, docState.format, doc, {
+      dirty: snapshotDirtyVersion(docId) !== dirtySnapshot,
+    });
 
     // Mark document clean
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    withMcp(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
+    withMcp(doc, () => {
+      meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+      // A successful save wrote the in-memory edits to disk — any pending
+      // external-conflict flag (#1069) is resolved. No-op when absent.
+      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+    });
     markCleanIfUnchanged(docId, dirtySnapshot);
 
     return { status: "saved", fidelityWarnings };
@@ -412,9 +435,15 @@ export async function saveDocumentAsToDisk(
     const output = adapter.save(doc);
 
     // The file shouldn't exist yet (we're saving as new), but if it does,
-    // pre-arm the watcher suppress so its first change event after we write
-    // doesn't bounce back as an external-edit reload. Safe no-op if the path
-    // isn't being watched.
+    // this save OVERWRITES content Tandem never produced — snapshot the
+    // victim's bytes first (no-op when the target doesn't exist). Then
+    // pre-arm the watcher suppress so the write's first change event doesn't
+    // bounce back as an external-edit reload. Safe no-op if the path isn't
+    // being watched.
+    await snapshotBeforeFirstWrite(resolved, {
+      appDataDir: resolveAppDataDir(),
+      documentId: docId,
+    });
     suppressNextChange(resolved);
     await atomicWrite(resolved, output);
 
@@ -824,7 +853,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       try {
         clearFileSyncContext(docId);
         await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
-        if (format !== "docx") wireFileWatcher(docId, oldPath, format);
+        wireFileWatcher(docId, oldPath, format);
       } catch (rollbackErr) {
         console.error(
           "[Rename] rollback after failed rename also failed for %s:",
@@ -985,7 +1014,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // Move the session: write the new one BEFORE deleting the old so a crash
     // leaves the durable copy. saveSession stats newPath for its mtime baseline.
     try {
-      await saveSession(newPath, format, doc);
+      await saveSession(newPath, format, doc, { dirty: isDirty(docId) });
       await deleteSession(oldPath);
     } catch (err) {
       console.error("[Rename] session move failed for %s:", docId, err);
@@ -997,12 +1026,13 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // bears the new name) and revert the tab label against on-disk reality.
     const fileName = path.basename(newPath);
     try {
-      // Re-target the file watcher (skip .docx — binary, no live reload). No
+      // Re-target the file watcher (.docx included since #1069 — clean docs
+      // reload, dirty docs get the external-conflict flag). No
       // suppressNextChange here: fs.rename already happened before the new watch
       // started (so it emits no change event to suppress), and nothing writes
       // newPath afterward — an armed latch would only swallow a genuine external
       // edit arriving within the TTL.
-      if (format !== "docx") wireFileWatcher(docId, newPath, format);
+      wireFileWatcher(docId, newPath, format);
 
       // Update the registry entry: same id/room, new path. addDoc overwrites by id.
       addDoc(docId, { id: docId, filePath: newPath, format, readOnly: false, source: "file" });
@@ -1059,7 +1089,12 @@ export async function closeDocumentById(
   | { success: true; closedPath: string; activeDocumentId: string | null }
   | { success: false; error: string }
 > {
-  const docState = openDocs.get(id);
+  // path.basename eliminates directory components so CodeQL does not trace
+  // user input through Map.get(id) to docState.filePath FS sinks
+  // (js/path-injection). Valid IDs are 64-char hex — no separators, so this
+  // is a no-op at runtime.
+  const safeId = path.basename(id);
+  const docState = openDocs.get(safeId);
   if (!docState) {
     return { success: false, error: `Document ${id} not found.` };
   }
@@ -1120,7 +1155,10 @@ export async function closeDocumentById(
 export async function saveCurrentSession(): Promise<void> {
   for (const [id, state] of openDocs) {
     const doc = getOrCreateDocument(id);
-    await saveSession(state.filePath, state.format, doc);
+    // `dirty` matters most here (#1069): shutdown's autoSaveAllToDisk flush
+    // skips binary formats, so a dirty .docx session at shutdown is the only
+    // copy of its unsaved edits — the flag drives the reopen prompt.
+    await saveSession(state.filePath, state.format, doc, { dirty: isDirty(id) });
   }
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   await saveCtrlSession(ctrlDoc);
@@ -1151,13 +1189,32 @@ export async function restoreCtrlSession(): Promise<string | null> {
   return previousActiveDocId;
 }
 
-/** Write a unique generationId to the ctrl doc so clients can detect server restarts. */
+/**
+ * This process's generation id — the source of truth the Hocuspocus
+ * `onAuthenticate` gate compares client tokens against. Deliberately module
+ * state distributed over HTTP (GET /api/info), never broadcast via the ctrl
+ * Y.Map: a CRDT-carried value can be clobbered by a stale reconnecting client
+ * (concurrent YMap set resolves by clientID — a coin flip), which is exactly
+ * the corruption the gate exists to prevent.
+ */
+let currentGenerationId: string | null = null;
+
+/** The generation id for this server run, or null before writeGenerationId(). */
+export function getGenerationId(): string | null {
+  return currentGenerationId;
+}
+
+/**
+ * Mint a unique generationId for this server run. Clients receive it via
+ * GET /api/info and present it as their Hocuspocus auth token.
+ */
 export function writeGenerationId(): void {
-  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  const meta = ctrlDoc.getMap(Y_MAP_DOCUMENT_META);
-  const generationId = randomUUID();
-  withInternal(ctrlDoc, () => meta.set(Y_MAP_GENERATION_ID, generationId));
-  console.error(`[Tandem] Server generationId: ${generationId}`);
+  currentGenerationId = randomUUID();
+  // Arm the Hocuspocus onAuthenticate gate (callback registration — provider
+  // must not import document-service back). Runs before Hocuspocus binds in
+  // both transports (index.ts boot order), so no connection ever races it.
+  setGenerationTokenSource(getGenerationId);
+  console.error(`[Tandem] Server generationId: ${currentGenerationId}`);
 }
 
 /**

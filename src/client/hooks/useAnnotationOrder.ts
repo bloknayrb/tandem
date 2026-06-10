@@ -1,12 +1,46 @@
 import type { Annotation } from "../../shared/types";
 
+/** Side-panel annotation ordering: by document anchor position or by creation time. */
+export type AnnotationSortMode = "position" | "chronological";
+
+/** Deterministic id tie-break shared by both sort modes. */
+function compareIds(a: Annotation, b: Annotation): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 /** Stable order: by `range.from` ASC; ties broken by `id` (string compare) for determinism. */
 export function sortAnnotationsByPosition(anns: ReadonlyArray<Annotation>): Annotation[] {
   return [...anns].sort((a, b) => {
-    const da = a.range.from - b.range.from;
-    if (da !== 0) return da;
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    // Defensive: malformed records missing position data sort to the end.
+    const fa = Number.isFinite(a.range?.from) ? a.range.from : Number.POSITIVE_INFINITY;
+    const fb = Number.isFinite(b.range?.from) ? b.range.from : Number.POSITIVE_INFINITY;
+    // Compare without subtraction: Infinity - Infinity is NaN, which would
+    // silently bypass the id tie-break for two malformed records.
+    if (fa !== fb) return fa < fb ? -1 : 1;
+    return compareIds(a, b);
   });
+}
+
+/** Stable order: by `timestamp` ASC (oldest first); ties broken by `id` for determinism. */
+export function sortAnnotationsByTimestamp(anns: ReadonlyArray<Annotation>): Annotation[] {
+  return [...anns].sort((a, b) => {
+    // Defensive: records missing a timestamp sort first (treated as oldest).
+    const ta = Number.isFinite(a.timestamp) ? a.timestamp : 0;
+    const tb = Number.isFinite(b.timestamp) ? b.timestamp : 0;
+    const dt = ta - tb;
+    if (dt !== 0) return dt;
+    return compareIds(a, b);
+  });
+}
+
+/** Sort by the given mode. `"position"` is the panel default (issue #1056). */
+export function sortAnnotations(
+  anns: ReadonlyArray<Annotation>,
+  mode: AnnotationSortMode,
+): Annotation[] {
+  return mode === "chronological"
+    ? sortAnnotationsByTimestamp(anns)
+    : sortAnnotationsByPosition(anns);
 }
 
 /** Index of `currentId` in `sorted`; -1 if not present (or `currentId` is null). */

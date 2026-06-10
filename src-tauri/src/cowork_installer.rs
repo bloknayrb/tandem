@@ -91,8 +91,17 @@ pub struct ReconcileReport {
 /// Heuristic ACL check for a workspace path.
 ///
 /// Returns `CoworkError::InsecureAcl` when the path's canonical form is
-/// outside `%LOCALAPPDATA%` (indicating a redirected or OneDrive-synced path
-/// that could be world-readable).
+/// outside every allowed root (indicating a redirected or OneDrive-synced
+/// path that could be world-readable). Allowed roots:
+///
+/// 1. `%LOCALAPPDATA%` — covers the MSIX `Packages\…\LocalCache\Roaming`
+///    layout (historical behavior).
+/// 2. `<config_dir>\Claude\local-agent-mode-sessions` — the direct-installer
+///    Cowork sessions dir, and ONLY that subtree, NOT all of Roaming.
+///    Token-confidentiality note: Tandem already writes the same bearer token
+///    into Roaming via `claude_desktop_config.json` (integration wizard), so
+///    this allowance adds no new exposure class; roaming-profile sync of the
+///    token is pre-existing, documented behavior. See `warn_if_roaming`.
 ///
 /// TODO(v0.8.1): Replace with full DACL inspection via
 /// `GetFileSecurityW` / `GetEffectiveRightsFromAcl` from `windows-sys`.
@@ -114,44 +123,68 @@ fn check_acl(path: &Path) -> Result<(), CoworkError> {
         }
     }
 
-    let local_app_data = match dirs::data_local_dir() {
-        Some(d) => d,
-        None => return Ok(()), // Can't determine — allow optimistically
-    };
+    // Allowed root candidates (see doc comment).
+    let allowed_roots: Vec<PathBuf> = [
+        dirs::data_local_dir(),
+        dirs::config_dir().map(|c| c.join("Claude").join("local-agent-mode-sessions")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
-    // Canonicalize both for comparison.
-    // Only fail-open for NotFound (path doesn't exist yet — that's fine for
-    // new workspace directories). All other I/O errors propagate as IoError
-    // (not InsecureAcl) so callers can distinguish a security rejection from
-    // a transient I/O failure.
+    check_acl_against(path, &allowed_roots)
+}
+
+/// Core ACL containment check against an explicit allowed-root set.
+///
+/// Split out of [`check_acl`] so tests inject `TempDir` roots instead of
+/// mutating the developer's real `%APPDATA%\Claude` tree.
+///
+/// Fails closed: a candidate that is not a strict child of any *resolvable*
+/// allowed root is rejected with `InsecureAcl`. The single fail-open is a
+/// candidate that does not exist on disk yet (`NotFound` — a brand-new
+/// workspace dir is legitimately fine to allow); all other candidate-side I/O
+/// errors propagate as `IoError` so callers can distinguish a security
+/// rejection from a transient failure.
+///
+/// Safety of the fail-closed change: every production caller runs
+/// `cowork_workspace_scan::revalidate_resolved_path` *before* this, which
+/// already canonicalizes the candidate's ancestor chain (including
+/// `%LOCALAPPDATA%`). The only way *every* allowed root fails to canonicalize
+/// is if `%LOCALAPPDATA%` itself is unresolvable — in which case a token write
+/// there is impossible anyway. So the dropped optimistic allow cannot reject a
+/// legitimate workspace.
+fn check_acl_against(path: &Path, allowed_roots: &[PathBuf]) -> Result<(), CoworkError> {
     let canonical_path = match std::fs::canonicalize(path) {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.into()),
     };
-    let canonical_lad = match std::fs::canonicalize(&local_app_data) {
-        Ok(p) => p,
-        Err(_) => return Ok(()),
-    };
 
-    // Check that the path starts with %LOCALAPPDATA%.
-    let path_components: Vec<_> = canonical_path.components().collect();
-    let lad_components: Vec<_> = canonical_lad.components().collect();
-
-    let is_under_lad = lad_components.iter().zip(path_components.iter()).all(|(l, p)| l == p)
-        && path_components.len() > lad_components.len();
-
-    if !is_under_lad {
-        log::warn!(
-            "[cowork-install] InsecureAcl: {} is outside %LOCALAPPDATA%",
-            path.display()
-        );
-        return Err(CoworkError::InsecureAcl {
-            path: path.to_path_buf(),
-        });
+    for root in allowed_roots {
+        if let Ok(canonical_root) = std::fs::canonicalize(root) {
+            if is_strict_component_child(&canonical_path, &canonical_root) {
+                return Ok(());
+            }
+        }
     }
 
-    Ok(())
+    log::warn!(
+        "[cowork-install] InsecureAcl: {} is outside all allowed roots (%LOCALAPPDATA% + Roaming Claude sessions dir)",
+        path.display()
+    );
+    Err(CoworkError::InsecureAcl {
+        path: path.to_path_buf(),
+    })
+}
+
+/// Component-wise "child is strictly under root" check (string-prefix checks
+/// are banned — they break on sibling names sharing a prefix).
+fn is_strict_component_child(child: &Path, root: &Path) -> bool {
+    let root_components: Vec<_> = root.components().collect();
+    let child_components: Vec<_> = child.components().collect();
+    child_components.len() > root_components.len()
+        && root_components.iter().zip(child_components.iter()).all(|(r, c)| r == c)
 }
 
 /// Check whether the canonical path contains "OneDrive" and log a one-time warning.
@@ -164,6 +197,88 @@ fn warn_if_onedrive(path: &Path) {
             path.display()
         );
     }
+}
+
+/// Warn when the workspace sits under Roaming AppData: roaming user profiles
+/// sync `%APPDATA%` to the domain file server at logoff, so the auth token in
+/// `installed_plugins.json` may leave the machine. Mirrors `warn_if_onedrive`;
+/// same exposure class as the wizard's `claude_desktop_config.json` write.
+fn warn_if_roaming(path: &Path) {
+    if let Some(config) = dirs::config_dir() {
+        if let (Ok(canonical_path), Ok(canonical_config)) =
+            (std::fs::canonicalize(path), std::fs::canonicalize(&config))
+        {
+            if is_strict_component_child(&canonical_path, &canonical_config) {
+                log::warn!(
+                    "[cowork-install] note: workspace path {} is under Roaming AppData; \
+                     roaming user profiles will sync the auth token to the profile server.",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registry inspection / heal-pass support
+// ---------------------------------------------------------------------------
+
+/// Read-only check: does this workspace's `installed_plugins.json` already
+/// contain the Tandem entry? Shared by `cowork_get_status` and the heal pass.
+///
+/// Three on-disk states are distinguished by logging (the file holds the bearer
+/// token, so only the PATH and the error are ever logged — never the contents):
+/// - absent (`NotFound`) → `false`, silent (the expected "not configured yet").
+/// - present-but-unreadable / malformed → `false`, logged at WARN so a
+///   debugging session sees the breadcrumb instead of a silent "no entry".
+/// - present with the entry → `true`.
+///
+/// Token-safety: `serde_json::Error`'s Display is `"... at line L column C"` and
+/// does NOT embed the source snippet (unlike V8's `JSON.parse`), so logging the
+/// error is wire-safe.
+pub(crate) fn workspace_has_tandem_entry(ws_path: &Path) -> bool {
+    let path = ws_path.join("cowork_plugins").join("installed_plugins.json");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(e) => {
+            log::warn!(
+                "[cowork] could not read {} ({e}) — treating as not configured",
+                path.display()
+            );
+            return false;
+        }
+    };
+    match serde_json::from_str::<Value>(&content) {
+        Ok(json) => json
+            .get("mcpServers")
+            .and_then(|s| s.get(TANDEM_PLUGIN_ID))
+            .is_some(),
+        Err(e) => {
+            log::warn!(
+                "[cowork] malformed JSON in {} ({e}) — treating as not configured",
+                path.display()
+            );
+            false
+        }
+    }
+}
+
+/// Whether a heal-pass install outcome is *terminal* — i.e. the background heal
+/// pass should NOT retry this workspace on the next tick.
+///
+/// Terminal: `Ok` / `AlreadyPresent` (success) and `InsecureAcl` (a structurally
+/// redirected/synced path that will never become a safe write target). Retryable
+/// (NOT terminal): `Locked` / `SchemaDrift` / `Failed` and any error — these are
+/// usually transient (lock contention, momentary I/O), so leaving them out of the
+/// attempted set lets a later tick self-heal. A genuinely persistent non-ACL
+/// failure re-attempts every interval and logs each time; this is low-harm
+/// (idempotent write, 5-min cadence) and keeps a real problem visible.
+pub(crate) fn heal_outcome_is_terminal(status: &WriteStatus) -> bool {
+    matches!(
+        status,
+        WriteStatus::Ok | WriteStatus::AlreadyPresent | WriteStatus::InsecureAcl
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +300,28 @@ pub fn install_tandem_plugin_into_workspace(
     let workspace_id = parent_component(ws_path);
     let vm_id = leaf_component(ws_path);
 
+    // Write-time revalidation (#433 defense, applied to ALL write paths — not
+    // just the handle-based install): re-run the four-layer path guard
+    // immediately before any file I/O so a directory swapped for a junction
+    // after the scan cannot receive the token.
+    let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
+        Ok(p) => p,
+        Err(reason) => {
+            log::warn!("[cowork-install] write-time revalidation failed: {reason}");
+            let failed = WriteStatus::Failed(format!("revalidation failed: {reason}"));
+            return Ok(WorkspaceWriteReport {
+                workspace_id,
+                vm_id,
+                installed_plugins: failed.clone(),
+                known_marketplaces: failed.clone(),
+                cowork_settings: failed,
+            });
+        }
+    };
+    let ws_path = ws_path.as_path();
+
     warn_if_onedrive(ws_path);
+    warn_if_roaming(ws_path);
 
     // ACL check before any write.
     let acl_result = check_acl(ws_path);
@@ -262,6 +398,24 @@ pub fn uninstall_tandem_plugin_from_workspace(
     let workspace_id = parent_component(ws_path);
     let vm_id = leaf_component(ws_path);
 
+    // Write-time revalidation — same #433 defense as install (uninstall also
+    // rewrites the three registry JSON files).
+    let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
+        Ok(p) => p,
+        Err(reason) => {
+            log::warn!("[cowork-install] write-time revalidation failed: {reason}");
+            let failed = WriteStatus::Failed(format!("revalidation failed: {reason}"));
+            return Ok(WorkspaceWriteReport {
+                workspace_id,
+                vm_id,
+                installed_plugins: failed.clone(),
+                known_marketplaces: failed.clone(),
+                cowork_settings: failed,
+            });
+        }
+    };
+    let ws_path = ws_path.as_path();
+
     let plugins_dir = ws_path.join("cowork_plugins");
 
     let installed_status = {
@@ -323,6 +477,25 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
         .map(|ws_path| {
             let workspace_id = parent_component(ws_path);
             let vm_id = leaf_component(ws_path);
+
+            // Write-time revalidation (#433): re-run the four-layer path guard
+            // immediately before the token rewrite so a dir swapped for a
+            // junction after the scan cannot receive the rotated token.
+            let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
+                Ok(p) => p,
+                Err(reason) => {
+                    log::warn!("[cowork-install] apply_token: revalidation failed: {reason}");
+                    return WorkspaceWriteReport {
+                        workspace_id,
+                        vm_id,
+                        installed_plugins: WriteStatus::Failed(format!(
+                            "revalidation failed: {reason}"
+                        )),
+                        known_marketplaces: WriteStatus::AlreadyPresent,
+                        cowork_settings: WriteStatus::AlreadyPresent,
+                    };
+                }
+            };
             let plugins_dir = ws_path.join("cowork_plugins");
             let path = plugins_dir.join("installed_plugins.json");
 
@@ -389,6 +562,19 @@ pub fn reconcile_orphans(workspaces: &[PathBuf], current_token: &str) -> Reconci
 
     let mut rewritten = Vec::new();
     for ws_path in workspaces {
+        // Write-time revalidation (#433): re-run the four-layer path guard
+        // before the per-workspace token rewrite. Only the token rewrite is
+        // gated here — the orphan firewall-rule cleanup above already ran.
+        let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
+            Ok(p) => p,
+            Err(reason) => {
+                log::warn!(
+                    "[cowork-install] reconcile: revalidation failed for {} ({reason}) — skipping",
+                    ws_path.display()
+                );
+                continue;
+            }
+        };
         let plugins_dir = ws_path.join("cowork_plugins");
         let path = plugins_dir.join("installed_plugins.json");
         if !path.exists() {
@@ -850,31 +1036,170 @@ mod tests {
     }
 
     #[test]
-    fn test_check_acl_rejects_path_outside_override_and_lad() {
+    fn test_check_acl_against_accepts_child_rejects_outside() {
+        // Hermetic: inject TempDir roots instead of mutating the dev's real
+        // %APPDATA%\Claude tree (the old tests touched a live Claude install).
+        let root_dir = TempDir::new().unwrap();
+        let other_dir = TempDir::new().unwrap();
+        let allowed = vec![root_dir.path().to_path_buf()];
+
+        // A path strictly under the allowed root passes.
+        let inside = root_dir.path().join("ws").join("vm");
+        fs::create_dir_all(&inside).unwrap();
+        assert!(
+            check_acl_against(&inside, &allowed).is_ok(),
+            "child of allowed root must pass"
+        );
+
+        // A path outside every allowed root is rejected (fail-closed).
+        let outside = other_dir.path().join("ws").join("vm");
+        fs::create_dir_all(&outside).unwrap();
+        assert!(
+            matches!(
+                check_acl_against(&outside, &allowed),
+                Err(CoworkError::InsecureAcl { .. })
+            ),
+            "path outside all roots must be InsecureAcl"
+        );
+    }
+
+    #[test]
+    fn test_check_acl_against_rejects_prefix_sibling() {
+        // The reason `is_strict_component_child` exists: a sibling whose name
+        // shares a string prefix with the allowed root must NOT count as a child.
+        let base = TempDir::new().unwrap();
+        let root = base.path().join("sessions");
+        let sibling = base.path().join("sessions-evil").join("vm");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        let allowed = vec![root];
+        assert!(
+            matches!(
+                check_acl_against(&sibling, &allowed),
+                Err(CoworkError::InsecureAcl { .. })
+            ),
+            "prefix-sibling must be rejected, not treated as a child"
+        );
+    }
+
+    #[test]
+    fn test_check_acl_against_nonexistent_candidate_fails_open() {
+        // A candidate that doesn't exist yet (new workspace dir) is allowed —
+        // the only fail-open in the fail-closed core.
+        let base = TempDir::new().unwrap();
+        let allowed = vec![base.path().to_path_buf()];
+        let ghost = base.path().join("does-not-exist-yet").join("vm");
+        assert!(check_acl_against(&ghost, &allowed).is_ok());
+    }
+
+    #[test]
+    fn test_is_strict_component_child() {
+        let root = Path::new("/a/b/sessions");
+        assert!(is_strict_component_child(
+            Path::new("/a/b/sessions/x/y"),
+            root
+        ));
+        // Equal path is NOT a strict child.
+        assert!(!is_strict_component_child(root, root));
+        // Prefix-sibling is NOT a child (component-wise, not string-prefix).
+        assert!(!is_strict_component_child(
+            Path::new("/a/b/sessions-evil/x"),
+            root
+        ));
+        // Disjoint path.
+        assert!(!is_strict_component_child(Path::new("/a/c/x"), root));
+    }
+
+    #[test]
+    fn test_install_rejects_unscanned_path() {
+        // Write-time revalidation: a path outside every Cowork root must be
+        // rejected before any file I/O (the #433 defense on the non-handle
+        // write path).
         let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
         std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
 
-        // Use %APPDATA% (Roaming) — a sibling of %LOCALAPPDATA% (Local), not a
-        // child. TempDir::new() uses %TEMP% which IS inside %LOCALAPPDATA% on
-        // Windows, so it cannot be used here.
-        let appdata = match std::env::var("APPDATA") {
-            Ok(v) => std::path::PathBuf::from(v),
-            Err(_) => return, // no APPDATA (non-Windows CI) — skip
-        };
-        let test_dir = appdata.join("tandem-test-acl-reject");
-        let ws = test_dir.join("ws").join("vm");
-        if fs::create_dir_all(&ws).is_err() {
-            return; // can't create test dir — skip
-        }
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path().join("ws").join("vm");
+        fs::create_dir_all(&ws).unwrap();
 
-        let result = check_acl(&ws);
-        let _ = fs::remove_dir_all(&test_dir);
-
+        let report =
+            install_tandem_plugin_into_workspace(&ws, "tok", DEFAULT_TANDEM_URL).unwrap();
         assert!(
-            matches!(result, Err(CoworkError::InsecureAcl { .. })),
-            "expected InsecureAcl for path outside %%LOCALAPPDATA%%, got: {:?}",
-            result
+            matches!(report.installed_plugins, WriteStatus::Failed(_)),
+            "expected revalidation failure, got {report:?}"
         );
+        // Nothing may be written on rejection.
+        assert!(
+            !ws.join("cowork_plugins").exists(),
+            "rejected install must not create cowork_plugins"
+        );
+    }
+
+    #[test]
+    fn test_uninstall_rejects_unscanned_path() {
+        // Symmetric to install: uninstall's write-time revalidation must reject
+        // a path outside every Cowork root, leaving existing files untouched.
+        let _guard = crate::COWORK_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path().join("ws").join("vm");
+        let plugins_dir = ws.join("cowork_plugins");
+        fs::create_dir_all(&plugins_dir).unwrap();
+        // Pre-existing registry file the rejected uninstall must NOT mutate.
+        fs::write(
+            plugins_dir.join("installed_plugins.json"),
+            r#"{"mcpServers":{"tandem":{}}}"#,
+        )
+        .unwrap();
+
+        let report = uninstall_tandem_plugin_from_workspace(&ws).unwrap();
+        assert!(
+            matches!(report.installed_plugins, WriteStatus::Failed(_)),
+            "expected revalidation failure, got {report:?}"
+        );
+        // The tandem entry is still present — nothing was removed.
+        let content = fs::read_to_string(plugins_dir.join("installed_plugins.json")).unwrap();
+        assert!(
+            content.contains("tandem"),
+            "rejected uninstall must not rewrite the file"
+        );
+    }
+
+    #[test]
+    fn test_heal_outcome_is_terminal_classification() {
+        // Terminal: success + InsecureAcl (a path that won't become safe).
+        assert!(heal_outcome_is_terminal(&WriteStatus::Ok));
+        assert!(heal_outcome_is_terminal(&WriteStatus::AlreadyPresent));
+        assert!(heal_outcome_is_terminal(&WriteStatus::InsecureAcl));
+        // Retryable (transient) — must NOT be terminal, so the next tick retries.
+        assert!(!heal_outcome_is_terminal(&WriteStatus::Locked));
+        assert!(!heal_outcome_is_terminal(&WriteStatus::SchemaDrift));
+        assert!(!heal_outcome_is_terminal(&WriteStatus::Failed("io".into())));
+    }
+
+    #[test]
+    fn test_workspace_has_tandem_entry_states() {
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path();
+        let plugins = ws.join("cowork_plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        let file = plugins.join("installed_plugins.json");
+
+        // Absent file → false (the expected "not configured yet").
+        assert!(!workspace_has_tandem_entry(ws));
+
+        // Present with the entry → true.
+        fs::write(&file, r#"{"mcpServers":{"tandem":{"type":"stdio"}}}"#).unwrap();
+        assert!(workspace_has_tandem_entry(ws));
+
+        // Valid JSON without the tandem key → false.
+        fs::write(&file, r#"{"mcpServers":{"context7":{}}}"#).unwrap();
+        assert!(!workspace_has_tandem_entry(ws));
+
+        // Malformed JSON → false (logged, never panics, never logs contents).
+        fs::write(&file, "{ not json").unwrap();
+        assert!(!workspace_has_tandem_entry(ws));
     }
 
     #[test]

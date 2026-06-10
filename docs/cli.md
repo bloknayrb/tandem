@@ -16,20 +16,41 @@ The server stays attached to the terminal. Press `Ctrl+C` to stop.
 
 ### `tandem setup`
 
-Registers Tandem's MCP entries with the integrations Tandem detects (Claude Code and Claude Desktop today). Also installs the Claude Code skill at `~/.claude/skills/tandem/SKILL.md` (idempotent — refreshed on every run). Re-run after upgrading.
+Bare `tandem setup` prints setup guidance and points at the in-app integration wizard (the recommended path). `tandem setup --apply` writes Tandem's MCP entries to the integrations it detects (Claude Code and Claude Desktop) non-interactively, and installs the Claude Code skill at `~/.claude/skills/tandem/SKILL.md` (idempotent — refreshed on every run).
 
 ```bash
-tandem setup
+tandem setup            # guidance only
+tandem setup --apply    # write config non-interactively
 ```
 
-**Flags:**
+**Flags (with `--apply`):**
 
 | Flag | Effect |
 |---|---|
 | `--force` | Write entries to default paths regardless of auto-detection. Useful if your AI client config lives at a non-standard location. |
+| `--target=claude-code\|claude-desktop` | Restrict the apply to specific client(s). Repeatable. |
 | `--with-channel-shim` | Also register the `tandem-channel` stdio entry, which powers Claude Code's `--dangerously-load-development-channels` real-time push. |
 
-> `tandem setup` is the transitional CLI command for v0.12.x. Once the integration setup wizard (#477 PR 3c-ii) ships, `tandem setup` becomes a TTY wrapper that prompts for the same answers the GUI wizard collects, instead of writing silently. The end state is identical. See [ADR-038 §2b](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration).
+### `tandem doctor`
+
+Diagnoses setup issues: Node version, `.mcp.json` / `~/.claude.json` registration, ports, `/health`, the SSE event stream, and annotation-store health. Exits `1` when any check fails. `--json` emits a single machine-readable report on stdout instead of the human-readable list.
+
+```bash
+tandem doctor
+tandem doctor --json
+```
+
+The desktop app's **Settings → About → Copy Diagnostics** button runs the same checks (minus the two source-checkout-only items). See [troubleshooting.md → Sharing diagnostics](troubleshooting.md#sharing-diagnostics).
+
+### `tandem --uninstall-scrub`
+
+Removes every reference Tandem wrote into other programs' config: `mcpServers.tandem` / `mcpServers["tandem-channel"]` from `~/.claude.json` and any detected Claude Desktop config, the bundled skill at `~/.claude/skills/tandem/`, and (Windows) Cowork plugin registration plus the `Tandem Cowork*` firewall rules. The Windows uninstaller runs it automatically; on macOS/Linux/npm, run it yourself **before** removing the app:
+
+```bash
+tandem --uninstall-scrub
+```
+
+It never deletes your data (sessions, annotations, document backups, keychain entries) — see [data-locations.md](data-locations.md) for what stays and how to remove it manually.
 
 ### `tandem rotate-token`
 

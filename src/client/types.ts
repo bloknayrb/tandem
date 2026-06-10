@@ -62,6 +62,18 @@ export interface WorkspaceStatus {
 export interface CoworkStatus {
   osSupported: boolean;
   coworkDetected: boolean;
+  /**
+   * Claude Desktop install signal independent of workspace existence — lets
+   * the UI distinguish "no Claude at all" from "Claude present, Cowork never
+   * run". Optional: a stale (pre-field) Rust sidecar during update overlap
+   * omits it; helpers default to false.
+   */
+  claudeDesktopDetected?: boolean;
+  /**
+   * Count of session dirs found but rejected by the path security guard
+   * (network-redirected or cloud-synced AppData). Optional, defaults to 0.
+   */
+  workspacesBlocked?: number;
   enabled: boolean;
   vethernetCidr: string | null;
   lanIpFallback: string | null;

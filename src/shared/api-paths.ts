@@ -18,6 +18,9 @@ export const API_LAUNCH_CLAUDE = "/api/launch-claude";
 // --- Mode / metadata --------------------------------------------------------
 export const API_MODE = "/api/mode";
 export const API_INFO = "/api/info";
+// Embedded `tandem doctor` report for the client's "Copy diagnostics" button.
+// Loopback-only (the report embeds absolute paths / PIDs).
+export const API_DIAGNOSTICS = "/api/diagnostics";
 // Diagnostic health endpoint. Loopback callers additionally receive
 // `hasSession: boolean` — whether an MCP client transport is currently open
 // (an agent is connected, regardless of whether the auto-launcher spawned it).
@@ -36,10 +39,20 @@ export const API_APPLY_CHANGES = "/api/apply-changes";
 // markdown; POST replaces the Y.Doc content from a user-supplied markdown string.
 export const API_DOCUMENT_RAW = "/api/document/raw";
 export const API_DOCUMENT_RELOAD = "/api/document/reload";
+// Pre-overwrite document backups (#1086). GET lists a document's restorable
+// snapshots; POST restores one through the reload lifecycle.
+export const API_BACKUPS = "/api/backups";
+export const API_BACKUPS_RESTORE = "/api/backups/restore";
+// Resolve a `.docx` external-conflict prompt (#1069): keep the in-memory
+// unsaved edits (re-baseline) or reload fresh from the on-disk file.
+export const API_DOCX_CONFLICT_RESOLVE = "/api/docx-conflict/resolve";
 
 // --- Annotations ------------------------------------------------------------
 export const API_ANNOTATION_REPLY = "/api/annotation-reply";
 export const API_REMOVE_ANNOTATION = "/api/remove-annotation";
+// Self-healing stale store.lock reclaim (#1077) — wired to the
+// store-readonly banner's Reclaim button.
+export const API_STORE_RECLAIM_LOCK = "/api/store/reclaim-lock";
 
 // --- Chat -------------------------------------------------------------------
 export const API_CHAT = "/api/chat";
@@ -48,6 +61,12 @@ export const API_CHAT = "/api/chat";
 export const API_SESSIONS = "/api/sessions";
 export const API_SESSIONS_DELETE = "/api/sessions/delete";
 export const API_SESSIONS_CLEAR = "/api/sessions/clear";
+
+// --- Process lifecycle (#1088) ----------------------------------------------
+// Graceful shutdown trigger. The Tauri shell POSTs here before falling back to
+// a hard kill so the Node shutdown sequence (dirty-doc flush + session save)
+// runs on restart/update. Loopback-only; HTTP mode only.
+export const API_SHUTDOWN = "/api/shutdown";
 
 // --- Auth -------------------------------------------------------------------
 // NOTE: the legacy `/api/setup` route was removed in #477 PR 3c-ii-c; setup is

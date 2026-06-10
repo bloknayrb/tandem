@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expect, type Page } from "@playwright/test";
@@ -6,6 +5,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import { docHash } from "../../src/server/annotations/doc-hash.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import type { ToolResponse } from "../../src/shared/types.js";
 
@@ -24,16 +24,6 @@ const E2E_ANNOTATIONS_DIR = path.join(
   process.env.TANDEM_APP_DATA_DIR ?? "/tmp/tandem-e2e-data",
   "annotations",
 );
-
-/**
- * Compute the server's docHash for an absolute file path. Must stay in sync
- * with `src/server/annotations/doc-hash.ts#docHash`.
- */
-function fixtureDocHash(filePath: string): string {
-  let normalized = path.resolve(filePath);
-  if (process.platform === "win32") normalized = normalized.toLowerCase();
-  return crypto.createHash("sha256").update(normalized).digest("hex");
-}
 
 /**
  * MCP test client using the SDK's built-in Client + StreamableHTTPClientTransport.
@@ -118,7 +108,7 @@ export function cleanupFixtureDir(dir: string): void {
       if (!entry.isFile()) continue;
       const abs = path.join(dir, entry.name);
       try {
-        fs.rmSync(path.join(E2E_ANNOTATIONS_DIR, `${fixtureDocHash(abs)}.json`), { force: true });
+        fs.rmSync(path.join(E2E_ANNOTATIONS_DIR, `${docHash(abs)}.json`), { force: true });
       } catch {
         /* best effort */
       }

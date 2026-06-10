@@ -32,6 +32,7 @@ import {
   coworkSettingsVariant,
   formatCoworkError,
   isTauriRuntime,
+  undetectedDetail,
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
 import { createClaudeCliStatus } from "../hooks/useClaudeCliStatus.svelte.js";
@@ -137,7 +138,20 @@ async function enableCowork(): Promise<void> {
 const coworkRowDetail = $derived.by(() => {
   if (coworkVariant === "loading") return "Checking…";
   if (coworkVariant === "unsupported") return "Coming soon to macOS & Linux";
-  if (coworkVariant === "undetected") return "Not detected on this computer";
+  if (coworkVariant === "undetected") {
+    // Three honest sub-states (see undetectedDetail): no Claude Desktop at
+    // all, Claude present but Cowork never run, or sessions found in a
+    // location the path guard rejects (network-redirected / synced AppData).
+    const s = coworkStatus.status;
+    const detail = s ? undetectedDetail(s) : "noClaude";
+    if (detail === "blocked") {
+      return "Found in a network-redirected or synced location Tandem can't safely configure";
+    }
+    if (detail === "noWorkspacesYet") {
+      return "Claude Desktop detected — run a Cowork session once, then set up here";
+    }
+    return "Not detected on this computer";
+  }
   const s = coworkStatus.status;
   if (s?.enabled) return "Connected — token provisioned";
   if (s?.uacDeclined) return "Admin permission declined — set up to retry";
@@ -176,6 +190,9 @@ function retryDetection(): void {
   secretInputs = {};
   void wizard.begin();
   void cliStatus.refetch();
+  // The Cowork poller only refreshes every 30s — "Check again" must reflect a
+  // Cowork session the user just started without the wait.
+  void coworkStatus.refetch();
 }
 
 /** One-click install from the empty state. Branch on the RETURNED presence
@@ -576,6 +593,15 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                 </details>
               {/if}
             {/if}
+            <!-- First-run dismissal is persisted per server version, so the
+                 wizard never auto-reopens. Tell the user where the way back is
+                 before they close it (#1022). -->
+            <p
+              class="iw-hint-text iw-reopen-hint"
+              data-testid="integration-wizard-reopen-hint"
+            >
+              Not now? You can reopen this wizard anytime from Settings → AI Assistant.
+            </p>
           </section>
         {:else if wizard.step === "applying"}
           <section class="iw-step iw-center" data-testid="integration-wizard-step-applying">
@@ -1027,6 +1053,12 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
     line-height: 1.5;
     color: var(--tandem-fg-muted);
     margin: 0;
+  }
+
+  /* The parent .iw-step flex gap provides the spacing; only the tone differs
+     from a regular hint (it's an aside, not step guidance). */
+  .iw-reopen-hint {
+    color: var(--tandem-fg-subtle);
   }
 
   .iw-code {

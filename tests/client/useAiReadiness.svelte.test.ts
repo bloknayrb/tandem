@@ -200,6 +200,132 @@ describe("createAiReadiness", () => {
     expect(h.get().chip).toBeNull();
   });
 
+  // --- probeSession (#1083): fresh moment-of-send check -----------------
+
+  it("#1083: probeSession sees a session the stale poll missed, returns true, and clears the chip", async () => {
+    // First /health read (the boot poll): no session yet. Subsequent reads
+    // (the probe): an agent has since connected.
+    let healthCall = 0;
+    globalThis.fetch = (async (input: string) => {
+      const url = String(input);
+      if (url.includes(API_LAUNCHER_STATUS)) {
+        return mkResponse({ available: false, reason: "stdio-mode" }) as unknown as Response;
+      }
+      healthCall += 1;
+      return mkResponse({
+        status: "ok",
+        hasSession: healthCall > 1,
+      }) as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const h = mount();
+    await settle();
+    // Stale view: launcher unavailable, no session → the false-toast state.
+    expect(h.get().state).toBe("unconfigured");
+    expect(h.get().chip).toBe("connect");
+
+    await expect(h.get().probeSession()).resolves.toBe(true);
+    await tick();
+    // The fresh read also folds into polled state — chip clears immediately.
+    expect(h.get().state).toBe("ready");
+    expect(h.get().chip).toBeNull();
+  });
+
+  it("probeSession returns false when a fresh read confirms no session", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: true, running: false }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().chip).toBe("restart");
+
+    await expect(h.get().probeSession()).resolves.toBe(false);
+    await tick();
+    expect(h.get().chip).toBe("restart");
+  });
+
+  it("probeSession falls back to the last-known polled value when the fresh read fails", async () => {
+    // Poll established hasSession: true; the probe then blips. The probe must
+    // answer true (never demote a connected agent on a hiccup).
+    let healthCall = 0;
+    globalThis.fetch = (async (input: string) => {
+      const url = String(input);
+      if (url.includes(API_LAUNCHER_STATUS)) {
+        return mkResponse({ available: true, running: false }) as unknown as Response;
+      }
+      healthCall += 1;
+      if (healthCall === 1) {
+        return mkResponse({ status: "ok", hasSession: true }) as unknown as Response;
+      }
+      throw new Error("health blip");
+    }) as unknown as typeof fetch;
+
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready");
+
+    await expect(h.get().probeSession()).resolves.toBe(true);
+    expect(h.get().state).toBe("ready");
+  });
+
+  it("probeSession treats a redacted body (no hasSession) as unknown and keeps last-known false", async () => {
+    let healthCall = 0;
+    globalThis.fetch = (async (input: string) => {
+      const url = String(input);
+      if (url.includes(API_LAUNCHER_STATUS)) {
+        return mkResponse({ available: true, running: false }) as unknown as Response;
+      }
+      healthCall += 1;
+      if (healthCall === 1) {
+        return mkResponse({ status: "ok", hasSession: false }) as unknown as Response;
+      }
+      return mkResponse({ status: "ok" }) as unknown as Response; // redacted
+    }) as unknown as typeof fetch;
+
+    const h = mount();
+    await settle();
+    expect(h.get().chip).toBe("restart");
+
+    await expect(h.get().probeSession()).resolves.toBe(false);
+    await tick();
+    expect(h.get().chip).toBe("restart");
+  });
+
+  it("a slow poll response cannot clobber a fresher probe result (last-issued-wins)", async () => {
+    // The boot poll's /health read hangs; the probe's read resolves first with
+    // a live session. When the stale poll response finally arrives ("no
+    // session", sampled before the agent connected), it must not demote.
+    let resolveFirst!: (r: Response) => void;
+    let healthCall = 0;
+    globalThis.fetch = (async (input: string) => {
+      const url = String(input);
+      if (url.includes(API_LAUNCHER_STATUS)) {
+        return mkResponse({ available: true, running: false }) as unknown as Response;
+      }
+      healthCall += 1;
+      if (healthCall === 1) {
+        return new Promise<Response>((r) => {
+          resolveFirst = r;
+        });
+      }
+      return mkResponse({ status: "ok", hasSession: true }) as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const h = mount();
+    await settle(); // launcher settled; health read 1 still in flight
+    expect(h.get().state).toBe("stopped");
+
+    await expect(h.get().probeSession()).resolves.toBe(true);
+    await tick();
+    expect(h.get().state).toBe("ready");
+
+    resolveFirst(mkResponse({ status: "ok", hasSession: false }) as unknown as Response);
+    await settle();
+    expect(h.get().state).toBe("ready");
+    expect(h.get().chip).toBeNull();
+  });
+
   it("is booting until the launcher status settles, regardless of /health", async () => {
     globalThis.fetch = routedFetch({
       launcher: mkResponse({}, false, 500), // launcher never settles

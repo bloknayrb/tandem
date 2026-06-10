@@ -162,6 +162,11 @@ test("settings dialog surfaces default mode and persists it", async ({ page }) =
 
 test("settings dialog sections and About panel reflect the redesign closeout", async ({ page }) => {
   await page.route("**/api/info", async (route) => {
+    // The client bootstraps its collaboration layer from this route too: it
+    // pins the REAL server's generationId as the Hocuspocus auth token, so
+    // the mock must pass that through — a fixture-only body would leave the
+    // app polling forever (no tabs, no editor). Only display fields are faked.
+    const real = await (await route.fetch()).json();
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -173,6 +178,7 @@ test("settings dialog sections and About panel reflect the redesign closeout", a
         storagePath: "C:\\Users\\test\\AppData\\Local\\tandem\\Data\\sessions",
         tokenRotatedAt: 1_700_000_000_000,
         changelogPath: "C:\\repo\\CHANGELOG.md",
+        generationId: real.generationId,
       }),
     });
   });

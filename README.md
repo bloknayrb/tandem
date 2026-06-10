@@ -8,6 +8,8 @@
 
 Tandem is a document editor that lets you and an AI work on the same file together. You highlight a passage. The AI sees what you highlighted and can ask about it, comment on it, or propose changes that appear as cards beside your document. You decide what to keep.
 
+One thing to know up front: the AI side requires an MCP-capable AI client — [Claude Code](https://claude.com/claude-code) is the default — and the subscription behind it (for Claude, a paid Anthropic plan). Without one connected, Tandem is a capable local document editor and nothing more.
+
 Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md](CHANGELOG.md) for what is in the latest release.
 
 ## Contents
@@ -59,7 +61,7 @@ Tandem is built to work with Anthropic's Claude out of the box. Other AI tools c
 - When a colleague hands you a document to mark up.
 - When the AI wrote a draft and you need to decide what to keep.
 
-Tandem is built for individuals working on their own documents. The example document types above are just that — examples; the workflow is the same whatever you are writing or reviewing.
+Tandem is built for individuals working on their own documents. The example document types above are just that — examples; the workflow is the same whatever you are writing or reviewing. The interface is English-only for now.
 
 ## Getting started
 
@@ -75,7 +77,7 @@ The desktop app bundles the editor, the server it talks to, and storage for the 
 
 ### What you get
 
-- Multiple documents open in tabs, with `.md`, `.txt`, `.html`, and `.docx` support (Word files open in review-only mode).
+- Multiple documents open in tabs, with `.md`, `.txt`, `.html`, and `.docx` support (Word files are editable; the original is only written when you explicitly save).
 - A scratchpad (`Ctrl+N`) for drafts you do not want to save to disk.
 - A command palette (`Ctrl+Shift+P`) for quick actions.
 - Find and replace, including across all open tabs.
@@ -120,6 +122,7 @@ Tandem is on the way to a v1.0 release. Recent releases added support for multip
 - [docs/user-guide.md](docs/user-guide.md) for a longer walkthrough of the editor.
 - [docs/workflows.md](docs/workflows.md) for daily usage patterns.
 - [docs/troubleshooting.md](docs/troubleshooting.md) for when something goes wrong.
+- [docs/data-locations.md](docs/data-locations.md) for where Tandem stores data and how to uninstall cleanly.
 - [docs/positioning.md](docs/positioning.md) for the longer story of why Tandem exists.
 - [docs/decisions.md](docs/decisions.md) for design decisions (ADRs).
 - [docs/roadmap.md](docs/roadmap.md) for what is coming.
@@ -148,7 +151,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open s
 
 The integration policy is set by [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration):
 
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 27 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 28 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
 > **Integration setup** runs through the integration setup wizard (#477 PR 3). The earlier transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — was **removed in #477 PR 3c-ii-c**. Every integration (Claude included) is now configured via the wizard, never silently; `tandem setup --apply` is the scriptable non-interactive equivalent.
 
@@ -164,7 +167,7 @@ Client compatibility:
 
 ### MCP tools at a glance
 
-27 active tools across five capability areas. Full reference: [docs/mcp-tools.md](docs/mcp-tools.md).
+28 active tools across five capability areas. Full reference: [docs/mcp-tools.md](docs/mcp-tools.md).
 
 - **Document.** Open, switch, list, close, and convert documents; read text content and outlines; save back to disk.
 - **Annotation.** Create, resolve, remove, and edit annotations; query the annotation list; export a review report.

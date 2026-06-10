@@ -20,7 +20,11 @@ import {
   type NotificationsState,
 } from "../../src/client/hooks/useNotifications.svelte";
 import NotificationsHarness from "../../src/client/svelte-harness/NotificationsHarness.svelte";
-import { ACTIVITY_HISTORY_CAP, TOAST_DISMISS_MS } from "../../src/shared/constants.js";
+import {
+  ACTIVITY_HISTORY_CAP,
+  ACTIVITY_INFO_TTL_MS,
+  TOAST_DISMISS_MS,
+} from "../../src/shared/constants.js";
 import type { TandemNotification } from "../../src/shared/types.js";
 
 // happy-dom has no EventSource; capture instances so a test can drive onmessage.
@@ -163,6 +167,23 @@ describe("activity center — info-TTL timer lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it("tray info outlives its toast — TTLs are decoupled", async () => {
+    const api = await mountStore();
+    api.push(note({ id: "copied", severity: "info", message: "Diagnostics copied to clipboard" }));
+    await tick();
+
+    // Past the toast's lifetime: the pop is gone, the tray entry is not.
+    vi.advanceTimersByTime(TOAST_DISMISS_MS.info + 1_000);
+    await tick();
+    expect(api.toasts.map((t) => t.id)).not.toContain("copied");
+    expect(api.activity.map((a) => a.id)).toContain("copied");
+
+    // Past the tray TTL: now it expires.
+    vi.advanceTimersByTime(ACTIVITY_INFO_TTL_MS);
+    await tick();
+    expect(api.activity.map((a) => a.id)).not.toContain("copied");
+  });
+
   it("a dedup severity upgrade (info→error) cancels the stale info-expiry timer", async () => {
     const api = await mountStore();
     api.push(note({ id: "i", dedupKey: "net", severity: "info", message: "Reconnecting…" }));
@@ -174,7 +195,7 @@ describe("activity center — info-TTL timer lifecycle", () => {
     expect(row?.id).toBe("i"); // first id preserved by coalesce
 
     // The original info timer must NOT fire and delete the upgraded error.
-    vi.advanceTimersByTime(TOAST_DISMISS_MS.info + 1_000);
+    vi.advanceTimersByTime(ACTIVITY_INFO_TTL_MS + 1_000);
     await tick();
     expect(api.activity.some((a) => a.dedupKey === "net")).toBe(true);
   });
@@ -198,7 +219,7 @@ describe("activity center — info-TTL timer lifecycle", () => {
       const api = await mountStore({ persist: true, storageKey: KEY });
       expect(api.activity.map((a) => a.id)).toContain("fresh");
 
-      vi.advanceTimersByTime(TOAST_DISMISS_MS.info + 1_000);
+      vi.advanceTimersByTime(ACTIVITY_INFO_TTL_MS + 1_000);
       await tick();
       expect(api.activity.map((a) => a.id)).not.toContain("fresh");
     } finally {
@@ -268,7 +289,7 @@ describe("loadActivity — rehydrate/prune", () => {
   });
 
   it("prunes info older than its TTL but keeps warn/error and fresh info", () => {
-    const old = Date.now() - 60_000; // well past info TTL
+    const old = Date.now() - (ACTIVITY_INFO_TTL_MS + 60_000); // well past info TTL
     const now = Date.now();
     localStorage.setItem(
       KEY,

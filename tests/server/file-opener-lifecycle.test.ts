@@ -171,10 +171,11 @@ describe("file-watcher — .md", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 6: File-watcher NOT wired for .docx
+// Test 6: File-watcher wired for .docx (#1069 — previously skipped; clean docs
+// reload like .md, dirty docs get the external-conflict flag instead)
 // ---------------------------------------------------------------------------
-describe("file-watcher — .docx skip", () => {
-  it("does not call watchFile for a .docx file and loads its content", async () => {
+describe("file-watcher — .docx", () => {
+  it("calls watchFile for a .docx file and loads its content", async () => {
     // Copy a real minimal docx from mammoth's test fixtures (ships with node_modules)
     const sourceDocx = path.resolve("node_modules/mammoth/test/test-data/single-paragraph.docx");
     const filePath = path.join(tmpDir, "watch-docx.docx");
@@ -183,7 +184,8 @@ describe("file-watcher — .docx skip", () => {
     const result = await openFileByPath(filePath);
 
     const mockWatchFile = vi.mocked(watchFile);
-    expect(mockWatchFile).not.toHaveBeenCalled();
+    expect(mockWatchFile).toHaveBeenCalled();
+    expect(mockWatchFile.mock.calls[0][0]).toBe(fsSync.realpathSync(filePath));
 
     // Content assertion — docx goes through the Buffer adapter branch; a
     // non-empty fragment proves that path works end-to-end. If the branch

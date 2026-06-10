@@ -7,6 +7,7 @@ import {
   formatCoworkError,
   makeDebouncer,
   type StatusTokenFamily,
+  undetectedDetail,
   workspaceFileStatusFamily,
   workspaceFileStatusLabel,
 } from "../cowork/cowork-helpers";
@@ -120,8 +121,17 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
       #317.
     </div>
   {:else if variant === "undetected"}
-    <div class="cs-info-banner" data-testid="cowork-settings-undetected">
-      Cowork not detected on this system.{" "}
+    {@const detail = coworkState.status ? undetectedDetail(coworkState.status) : "noClaude"}
+    <div class="cs-info-banner" data-testid="cowork-settings-undetected" data-detail={detail}>
+      {#if detail === "blocked"}
+        Cowork sessions were found in a network-redirected or cloud-synced location that Tandem
+        can't safely configure.{" "}
+      {:else if detail === "noWorkspacesYet"}
+        Claude Desktop detected. Run a Cowork session once, then enable the integration here —
+        Tandem keeps newly created workspaces configured automatically.{" "}
+      {:else}
+        Cowork not detected on this system.{" "}
+      {/if}
       <a class="cs-link" href={`${TANDEM_REPO_URL}#cowork`} target="_blank" rel="noreferrer">
         Learn more
       </a>

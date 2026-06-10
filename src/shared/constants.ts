@@ -117,9 +117,15 @@ export const Y_MAP_CLAUDE = "claude";
 export const Y_MAP_OPEN_DOCUMENTS = "openDocuments";
 export const Y_MAP_ACTIVE_DOCUMENT_ID = "activeDocumentId";
 export const Y_MAP_ACTIVE_DOCUMENT_EPOCH = "activeDocumentEpoch";
-export const Y_MAP_GENERATION_ID = "generationId";
 export const Y_MAP_READ_ONLY = "readOnly";
 export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
+/**
+ * Per-document external-conflict state (#1069, `.docx` only). Holds an
+ * `ExternalConflictState` (see shared/types.ts) while the document's unsaved
+ * Y.Doc edits diverge from the on-disk source; absent otherwise. Written via
+ * `withInternal` (server metadata); cleared on resolve / reload / explicit save.
+ */
+export const Y_MAP_EXTERNAL_CONFLICT = "externalConflict";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 /**
@@ -149,6 +155,12 @@ export const NOTIFICATION_BUFFER_SIZE = 50;
 // Y.Map sub-key above. This is a localStorage key for the client-side tray history.
 export const ACTIVITY_HISTORY_KEY = "tandem:activityHistory";
 export const ACTIVITY_HISTORY_CAP = 50;
+// Tray-side TTL for info-severity items. Deliberately decoupled from
+// TOAST_DISMISS_MS.info: tied together, an info item left the tray the moment
+// its toast vanished, so the tray never answered "I missed the toast — what
+// just happened?". Warnings/errors persist until dismissed; coalescing + the
+// cap keep ambient SSE info from flooding the tray in the meantime.
+export const ACTIVITY_INFO_TTL_MS = 5 * 60_000;
 
 // Onboarding tutorial
 export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";

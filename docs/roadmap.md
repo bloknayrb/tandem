@@ -32,7 +32,7 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 
 ## Integration Policy (ADR-038)
 
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 27 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 28 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
 > **Integration setup** runs through the integration setup wizard (#477 PR 3). Silent auto-configuration of Claude's MCP config on startup was removed in #477 PR 3c-ii-c; setup is now wizard-driven and explicit.
 
@@ -363,9 +363,9 @@ Window hide-on-close (tray "Quit" is the exit path). Tray menu: Open Editor, Set
 GitHub Actions workflow (`.github/workflows/tauri-release.yml`) — builds on Windows/macOS/Linux, signs with `tauri-action`, publishes installers + `latest.json` to GitHub Releases. Cross-platform basename fix and CodeQL security hardening applied post-merge.
 
 Future hardening (not blocking release):
-- Verify end-to-end update flow (download → install → restart) on all three platforms
-- Code-sign macOS `.app` + notarization (#428) — requires Apple Developer certificate; without it, Gatekeeper shows "damaged" error on download. v1.0 gate.
-- Windows MSIX / NSIS installer smoke test
+- Verify end-to-end update flow (download → install → restart) on all three platforms — procedure documented in [release-smoke-checklist.md](release-smoke-checklist.md)
+- Code-sign macOS `.app` + notarization (#428) — requires Apple Developer certificate; without it, Gatekeeper shows "damaged" error on download. v1.0 gate. Per-release hardware verification lives in [release-smoke-checklist.md](release-smoke-checklist.md).
+- Windows installer smoke test — NSIS covered per-release by [release-smoke-checklist.md](release-smoke-checklist.md); the MSI artifact (`targets: "all"` also builds one) is not covered
 - Node.js 20 → 24 GitHub Actions migration (CI-wide, all workflow files) — deadline June 2, 2026
 
 ### Future Tauri Enhancements

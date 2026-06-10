@@ -410,7 +410,7 @@ describe("injectCommentsAsAnnotations", () => {
     expect(ann.audience).toBe("private");
     expect(ann.status).toBe("pending");
     expect(ann.content).toBe("Good point");
-    expect(ann.importSource).toEqual({ author: "Alice", file: "review.docx" });
+    expect(ann.importSource).toEqual({ author: "Alice", file: "review.docx", commentId: "1" });
     expect(ann.range).toEqual({ from: 0, to: 5 });
     expect(ann.timestamp).toBe(new Date("2026-01-15T10:30:00Z").getTime());
   });
@@ -431,7 +431,7 @@ describe("injectCommentsAsAnnotations", () => {
     const map = doc.getMap(Y_MAP_ANNOTATIONS);
     const ann = Array.from(map.values())[0] as Record<string, unknown>;
     expect(ann.content).toBe("Just a note");
-    expect(ann.importSource).toEqual({ author: "Unknown", file: "unknown" });
+    expect(ann.importSource).toEqual({ author: "Unknown", file: "unknown", commentId: "2" });
   });
 
   it("returns 0 for empty comments array", () => {
@@ -550,7 +550,32 @@ describe("injectCommentsAsAnnotations", () => {
     expect(after.type).toBe("note");
     expect(after.audience).toBe("private");
     expect(after.content).toBe("Original body");
-    expect(after.importSource).toEqual({ author: "Carol", file: "new.docx" });
+    expect(after.importSource).toEqual({ author: "Carol", file: "new.docx", commentId: "legacy" });
+  });
+
+  it("backfills importSource.commentId on pre-#1068 import notes (one-shot)", () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const comments: DocxComment[] = [
+      { commentId: "9", authorName: "Dana", bodyText: "Old note", from: 0, to: 5 },
+    ];
+    injectCommentsAsAnnotations(doc, comments, "rev.docx");
+    const id = Array.from(map.keys())[0];
+
+    // Simulate a pre-#1068 record: note-shaped but without commentId.
+    const record = map.get(id) as Record<string, unknown>;
+    map.set(id, {
+      ...record,
+      importSource: { author: "Dana", file: "rev.docx" },
+    } as never);
+
+    injectCommentsAsAnnotations(doc, comments, "rev.docx");
+    const healed = map.get(id) as Record<string, unknown>;
+    expect(healed.importSource).toEqual({ author: "Dana", file: "rev.docx", commentId: "9" });
+
+    // One-shot: a further re-import must not bump rev again.
+    const revAfterHeal = healed.rev;
+    injectCommentsAsAnnotations(doc, comments, "rev.docx");
+    expect((map.get(id) as Record<string, unknown>).rev).toBe(revAfterHeal);
   });
 });
 

@@ -1,15 +1,24 @@
 /**
  * Tandem `--uninstall-scrub` subcommand.
  *
- * Invoked by the Tauri NSIS installer hook during uninstall. Walks every
- * Cowork workspace under `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\
- * Roaming\Claude\local-agent-mode-sessions\` and removes the Tandem plugin
- * entry from:
- *   - `installed_plugins.json` (remove `mcpServers.tandem`)
- *   - `known_marketplaces.json` (remove `marketplaces.tandem`)
- *   - `cowork_settings.json` (remove `tandem@tandem` from `enabledPlugins`)
+ * Invoked by the Tauri NSIS installer hook during uninstall on Windows, and
+ * manually invocable on every platform (run it *before* deleting the app /
+ * `npm uninstall -g` — see docs/data-locations.md). Removes every reference
+ * Tandem wrote into other programs' config:
+ *   - Cowork workspaces (Windows): `installed_plugins.json`
+ *     (`mcpServers.tandem`), `known_marketplaces.json`
+ *     (`marketplaces.tandem`), `cowork_settings.json` (`tandem@tandem` in
+ *     `enabledPlugins`)
+ *   - MCP configs (all platforms): `mcpServers.tandem` /
+ *     `mcpServers["tandem-channel"]` from `~/.claude.json` and every
+ *     detected Claude Desktop config (incl. Windows MSIX)
+ *   - The bundled skill dir `~/.claude/skills/tandem/` (only when it
+ *     contains nothing Tandem didn't install)
+ *   - `Tandem Cowork*` Windows Firewall rules via `netsh`
  *
- * Then removes the `Tandem Cowork*` Windows Firewall rules via `netsh`.
+ * Deliberately does NOT touch app data (sessions, annotations, doc-backups,
+ * keychain) — the scrub removes references to a binary about to disappear;
+ * user data stays unless the user deletes it (docs/data-locations.md).
  *
  * **Security invariant §10 (ADR):** this runs INSIDE the already-signed
  * `tandem.exe` binary — NOT as a separate `uninstall_scrub.exe`. That
@@ -18,16 +27,28 @@
  * **Failure policy:** logs every error, exits 0 on clean-or-not-installed,
  * non-zero only on unrecoverable I/O failures. NSIS logs the exit code but
  * does NOT block uninstall — Tandem must always uninstall even if a
- * workspace scrub partially fails.
+ * workspace scrub partially fails. Each step is isolated: a failure in one
+ * never skips the rest.
  *
  * **Token safety:** this scrub READS JSON to find Tandem entries but the
- * removed-entry contents (including the auth token) are NEVER logged.
+ * removed-entry contents (including the auth token) are NEVER logged, and
+ * parse-error detail is never interpolated into log lines (V8 SyntaxError
+ * messages embed source snippets; these files hold bearer tokens).
  */
 
 import { execFile } from "node:child_process";
-import { promises as fsPromises } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { type Dirent, promises as fsPromises } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  assertPathSafe,
+  type DetectedTarget,
+  detectTargets,
+  PathRejectedError,
+  removeConfigEntries,
+} from "../server/integrations/apply.js";
 import { assertSafeWorkspacePath } from "./win-path-guard.js";
 
 const execFileAsync = promisify(execFile);
@@ -202,8 +223,11 @@ export async function rewriteJson(
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
-  } catch (err) {
-    logger.warn(`invalid JSON in ${filePath}: ${(err as Error).message}`);
+  } catch {
+    // Path only, never the parse error — V8 SyntaxError messages embed a
+    // source snippet, and these files can hold bearer tokens that would
+    // land in uninstall.log.
+    logger.warn(`invalid JSON in ${filePath} — skipping`);
     return false;
   }
 
@@ -218,8 +242,9 @@ export async function rewriteJson(
   }
 
   const dir = path.dirname(filePath);
-  const tmpName = `.tandem-scrub-tmp-${Math.random().toString(36).slice(2, 10)}`;
-  const tmpPath = path.join(dir, tmpName);
+  // randomUUID, not Math.random: same path-prediction rationale as
+  // apply.ts#atomicWrite — these files can hold bearer tokens.
+  const tmpPath = path.join(dir, `.tandem-scrub-tmp-${randomUUID()}`);
 
   try {
     await fsPromises.writeFile(tmpPath, JSON.stringify(parsed, null, 2), "utf8");
@@ -285,6 +310,106 @@ export function removeCoworkSettings(obj: Record<string, unknown>): boolean {
 }
 
 /**
+ * Remove `mcpServers.tandem` / `mcpServers["tandem-channel"]` from every
+ * detected Claude config (`~/.claude.json` + Claude Desktop incl. MSIX).
+ * Runs on every platform. Returns the failure count; each target is
+ * isolated so one failure never skips the rest.
+ *
+ * `detect` is injectable for tests only.
+ */
+export async function scrubMcpConfigs(
+  logger: ScrubLogger,
+  detect: () => DetectedTarget[] = detectTargets,
+): Promise<number> {
+  let failures = 0;
+  let targets: DetectedTarget[];
+  try {
+    targets = detect();
+  } catch (err) {
+    logger.error(`cannot detect MCP config targets: ${(err as Error).message}`);
+    return 1;
+  }
+
+  for (const target of targets) {
+    try {
+      const result = await removeConfigEntries(target.configPath, ["tandem", "tandem-channel"]);
+      switch (result.status) {
+        case "removed":
+          logger.info(`removed ${result.removed.join(", ")} from ${target.configPath}`);
+          break;
+        case "no-op":
+          logger.info(`no Tandem MCP entries in ${target.configPath}`);
+          break;
+        case "missing":
+          break;
+        case "skipped":
+          logger.warn(`left ${target.configPath} untouched (${result.reason})`);
+          break;
+      }
+    } catch (err) {
+      const detail =
+        err instanceof PathRejectedError ? `path rejected (${err.reason})` : (err as Error).message;
+      logger.error(`MCP scrub failed for ${target.configPath}: ${detail}`);
+      failures++;
+    }
+  }
+  return failures;
+}
+
+const SKILL_DIR_ALLOWLIST = [/^SKILL\.md$/, /^\.tandem-setup-[0-9a-f-]+\.tmp$/];
+
+/**
+ * Remove the bundled skill dir `~/.claude/skills/tandem/` — but only when
+ * every entry is a regular file Tandem itself installs (`SKILL.md`, plus
+ * orphaned `atomicWrite` temps from a crashed install). Anything else means
+ * the user put files there; leave the whole dir intact. A dangling skill is
+ * harmless to Claude Code but keeps advertising tandem_* tools that no
+ * longer exist; if the install survives and runs again, `refreshSkillIfStale`
+ * recreates it.
+ *
+ * `homeOverride` is for tests only.
+ */
+export async function removeSkillDir(logger: ScrubLogger, homeOverride?: string): Promise<number> {
+  const skillDir = path.join(homeOverride ?? homedir(), ".claude", "skills", "tandem");
+
+  // Symmetric with installSkill: if install would refuse a symlinked
+  // ~/.claude, uninstall refuses too.
+  try {
+    assertPathSafe(skillDir, { allowedRoots: homeOverride ? [homeOverride] : undefined });
+  } catch (err) {
+    const reason = err instanceof PathRejectedError ? err.reason : (err as Error).message;
+    logger.warn(`leaving ${skillDir} — path rejected (${reason})`);
+    return 0;
+  }
+
+  let entries: Dirent[];
+  try {
+    entries = await fsPromises.readdir(skillDir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    logger.warn(`cannot read skill dir ${skillDir}: ${(err as Error).message}`);
+    return 0;
+  }
+
+  const unexpected = entries.filter(
+    (e) => !e.isFile() || !SKILL_DIR_ALLOWLIST.some((re) => re.test(e.name)),
+  );
+  if (unexpected.length > 0) {
+    logger.info(`leaving ${skillDir} — contains entries Tandem didn't install`);
+    return 0;
+  }
+
+  try {
+    await fsPromises.rm(skillDir, { recursive: true, force: true });
+    logger.info(`removed skill dir ${skillDir}`);
+    return 0;
+  } catch (err) {
+    logger.error(`failed to remove skill dir ${skillDir}: ${(err as Error).message}`);
+    return 1;
+  }
+}
+
+/**
  * Delete a Windows Firewall rule by name. Non-existent rules are not an error.
  */
 async function deleteFirewallRule(name: string, logger: ScrubLogger): Promise<void> {
@@ -307,51 +432,58 @@ async function deleteFirewallRule(name: string, logger: ScrubLogger): Promise<vo
 }
 
 /**
- * Main entry — Windows-only.
+ * Main entry. Cowork + firewall steps are Windows-only; the MCP config and
+ * skill-dir steps run everywhere. Each step is isolated so a failure in one
+ * never skips the rest (the firewall rules in particular must always be
+ * attempted).
  */
 export async function runUninstallScrub(): Promise<number> {
   const logger = await openLogger();
 
   logger.info("Tandem uninstall scrub starting");
 
-  if (process.platform !== "win32") {
-    logger.info(`platform ${process.platform} is not win32 — skipping Cowork scrub`);
-    await logger.close();
-    return 0;
-  }
-
+  const isWindows = process.platform === "win32";
   let failures = 0;
 
   try {
-    const workspaces = await findCoworkWorkspaces(logger);
-    for (const ws of workspaces) {
-      const pluginsDir = path.join(ws, "cowork_plugins");
-      try {
-        await rewriteJson(
-          path.join(pluginsDir, "installed_plugins.json"),
-          removeInstalledPlugins,
-          logger,
-        );
-        await rewriteJson(
-          path.join(pluginsDir, "known_marketplaces.json"),
-          removeKnownMarketplaces,
-          logger,
-        );
-        await rewriteJson(
-          path.join(pluginsDir, "cowork_settings.json"),
-          removeCoworkSettings,
-          logger,
-        );
-      } catch (err) {
-        logger.error(`scrub failed for ${ws}: ${(err as Error).message}`);
-        failures++;
+    if (isWindows) {
+      const workspaces = await findCoworkWorkspaces(logger);
+      for (const ws of workspaces) {
+        const pluginsDir = path.join(ws, "cowork_plugins");
+        try {
+          await rewriteJson(
+            path.join(pluginsDir, "installed_plugins.json"),
+            removeInstalledPlugins,
+            logger,
+          );
+          await rewriteJson(
+            path.join(pluginsDir, "known_marketplaces.json"),
+            removeKnownMarketplaces,
+            logger,
+          );
+          await rewriteJson(
+            path.join(pluginsDir, "cowork_settings.json"),
+            removeCoworkSettings,
+            logger,
+          );
+        } catch (err) {
+          logger.error(`scrub failed for ${ws}: ${(err as Error).message}`);
+          failures++;
+        }
       }
+    } else {
+      logger.info(`platform ${process.platform}: Cowork + firewall scrub is Windows-only`);
     }
 
-    await deleteFirewallRule(FIREWALL_ALLOW_RULE, logger);
-    await deleteFirewallRule(FIREWALL_DENY_RULE, logger);
+    failures += await scrubMcpConfigs(logger);
+    failures += await removeSkillDir(logger);
 
-    logger.info(`scrub complete: ${workspaces.length} workspace(s), ${failures} failure(s)`);
+    if (isWindows) {
+      await deleteFirewallRule(FIREWALL_ALLOW_RULE, logger);
+      await deleteFirewallRule(FIREWALL_DENY_RULE, logger);
+    }
+
+    logger.info(`scrub complete: ${failures} failure(s)`);
   } catch (err) {
     logger.error(`scrub fatal error: ${(err as Error).message}`);
     failures++;

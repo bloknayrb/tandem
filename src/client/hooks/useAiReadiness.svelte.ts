@@ -73,6 +73,21 @@ export interface AiReadiness {
   readonly chip: AiChip;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
+  /**
+   * Fresh, awaitable MCP-session check for moment-of-send decisions (#1083).
+   *
+   * The polled `chip` can be up to POLL_MS stale: an agent whose MCP
+   * `initialize` landed after the last background poll still reads as absent,
+   * so the "no AI is connected" send notice would fire while the agent is
+   * live. Callers about to alarm on `chip !== null` should confirm with this
+   * probe first.
+   *
+   * Returns `true` only when a fresh `/health` read confirms an open MCP
+   * transport. On fetch failure or a redacted body (no `hasSession` field) it
+   * returns the last-known polled value — mirroring the poll's "keep prior
+   * value on a blip" fail-safe in both directions.
+   */
+  probeSession: () => Promise<boolean>;
 }
 
 const POLL_MS = 8_000;
@@ -94,11 +109,17 @@ export function createAiReadiness(deps: {
   // surface a false CTA.
   let settledOnce = $state(false);
 
-  // Drop stale async resolves (a poll that resolves after the component is
-  // gone, or after a newer poll superseded it). Mirrors useFirstRunNeeded's gen.
-  // Shared by both fetches so a single generation bump invalidates all in-flight
-  // requests from a superseded poll.
+  // Drop stale async resolves for LAUNCHER reads (a poll that resolves after
+  // the component is gone, or after a newer poll superseded it). Mirrors
+  // useFirstRunNeeded's gen. `/health` reads use their own ordering (see
+  // `healthSeq`) because `probeSession` issues out-of-band reads that must
+  // never cancel — nor be clobbered by — an in-flight background poll.
   let gen = 0;
+  // Ticket counter for `/health` reads, shared by the background poll and
+  // `probeSession`: only the most recently ISSUED read may write state, so an
+  // older response resolving late can never overwrite a fresher one.
+  let healthSeq = 0;
+  let destroyed = false;
 
   async function pollLauncherStatus(mine: number): Promise<void> {
     let res: Response;
@@ -117,37 +138,63 @@ export function createAiReadiness(deps: {
     }
   }
 
-  async function pollHealth(mine: number): Promise<void> {
+  /** One `/health` read. `null` means "unknown" (network blip, non-OK,
+   *  malformed body, or the loopback-only `hasSession` field is absent) —
+   *  callers keep their prior value rather than demote to false. */
+  async function fetchHasSession(): Promise<boolean | null> {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}${API_HEALTH}`);
     } catch {
-      return; // network blip — keep prior hasSession (fail-safe)
+      return null; // network blip
     }
-    if (mine !== gen) return;
-    if (!res.ok) return; // transient server error — keep prior hasSession
+    if (!res.ok) return null; // transient server error
     try {
       const body = (await res.json()) as HealthResponse;
-      // Only update when the field is present (loopback). Absence is "unknown",
-      // not "no session" — keep the prior value rather than demote to false.
-      if (typeof body.hasSession === "boolean") {
-        mcpSessionActive = body.hasSession;
-      }
+      // Only trust the field when present (loopback). Absence is "unknown",
+      // not "no session".
+      return typeof body.hasSession === "boolean" ? body.hasSession : null;
     } catch {
-      // malformed body — keep prior hasSession
+      return null; // malformed body
     }
+  }
+
+  /** One ordered `/health` read (shared by the background poll and
+   *  `probeSession`). Writes `mcpSessionActive` only when this is still the
+   *  most recently issued read — last-issued-wins, so a slow older response
+   *  can never clobber a fresher one (e.g. a poll that sampled "no session"
+   *  just before the agent's initialize, resolving after the probe that saw
+   *  it). A dropped write is recovered by the next interval poll. Returns the
+   *  fetched value either way so callers can act on their own read. */
+  async function readHasSession(): Promise<boolean | null> {
+    const mine = ++healthSeq;
+    const fresh = await fetchHasSession();
+    if (fresh !== null && mine === healthSeq && !destroyed) {
+      mcpSessionActive = fresh;
+    }
+    return fresh;
+  }
+
+  /** See `AiReadiness.probeSession`. Issues a fresh `/health` read (which also
+   *  folds into polled state, clearing the titlebar chip immediately instead
+   *  of waiting out the poll interval) and answers with the freshest data it
+   *  has — falling back to the last-known polled value when the read fails. */
+  async function probeSession(): Promise<boolean> {
+    const fresh = await readHasSession();
+    return fresh ?? mcpSessionActive;
   }
 
   function poll(): void {
     const mine = ++gen;
     void pollLauncherStatus(mine);
-    void pollHealth(mine);
+    void readHasSession();
   }
 
   poll();
   const interval = setInterval(() => poll(), POLL_MS);
   onDestroy(() => {
     gen++;
+    destroyed = true;
     clearInterval(interval);
   });
 
@@ -185,5 +232,6 @@ export function createAiReadiness(deps: {
       return chip;
     },
     refresh: () => poll(),
+    probeSession,
   };
 }
