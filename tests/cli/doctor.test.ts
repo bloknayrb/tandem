@@ -128,6 +128,35 @@ describe("runDoctor", () => {
       .map((r) => r.message);
     expect(messages.some((m) => m.includes("unparseable"))).toBe(true);
   });
+
+  it('reports a dead PID (not "unparseable") for a JSON lock pointing at no live process', async () => {
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    // 2147483646 (INT32_MAX-1) is not a live PID on any realistic system.
+    const deadPid = 2_147_483_646;
+    writeFileSync(join(annDir, "store.lock"), JSON.stringify({ pid: deadPid, app: "tandem" }));
+
+    const report = await runDoctor();
+    const messages = report.results
+      .filter((r) => r.check === "annotation-store")
+      .map((r) => r.message);
+    expect(messages.some((m) => m.includes("unparseable"))).toBe(false);
+    expect(messages.some((m) => m.includes(`dead PID ${deadPid}`))).toBe(true);
+  });
+
+  it("treats a non-positive PID (pid:0) as invalid, not a live holder", async () => {
+    const annDir = join(dataDir, "annotations");
+    mkdirSync(annDir, { recursive: true });
+    writeFileSync(join(annDir, "store.lock"), JSON.stringify({ pid: 0, app: "tandem" }));
+
+    const report = await runDoctor();
+    const messages = report.results
+      .filter((r) => r.check === "annotation-store")
+      .map((r) => r.message);
+    // PID 0 isn't a real process — must not resolve to "held by live PID".
+    expect(messages.some((m) => m.includes("live PID 0"))).toBe(false);
+    expect(messages.some((m) => m.includes("unparseable"))).toBe(true);
+  });
 });
 
 describe("runDoctorCli --json printer", () => {

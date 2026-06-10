@@ -56,7 +56,7 @@
     "doctor": "tsx scripts/doctor.mjs",
     "build:reaper": "node scripts/build-reaper.mjs",
     "dev:tauri": "node scripts/download-node-sidecar.mjs && node scripts/build-reaper.mjs && cargo tauri dev",
-    "build:tauri": "cargo tauri build",
+    "build:tauri": "node scripts/download-node-sidecar.mjs && node scripts/build-reaper.mjs && cargo tauri build",
     "check:tokens": "tsx scripts/check-semantic-tokens.ts",
     "audit:dead-code": "knip",
     "audit:origins": "tsx scripts/audit-origins.ts",

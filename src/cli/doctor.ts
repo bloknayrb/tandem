@@ -553,25 +553,28 @@ function errMsg(err: unknown): string {
 }
 
 /**
- * Extract the holder PID from a `store.lock` body, tolerating both formats the
- * writer has used: a bare integer (`"28572"`) and a JSON object
- * (`{"pid":28572,...}`). Returns the finite PID, or `null` when neither yields
- * one — only then does the caller warn "unparseable".
+ * Extract the holder PID from a `store.lock` body. Tolerates a bare integer
+ * (`"28572"` — the current writer's format, `annotations/store.ts`) and,
+ * defensively, a `{"pid":28572,...}` JSON object a future writer might use.
+ * Returns the PID, or `null` when neither yields a valid one — only then does
+ * the caller warn "unparseable".
  */
 function parseLockPid(raw: string): number | null {
+  // A holder PID must be finite and positive — mirrors the guard in the store's
+  // own authoritative lock reader so doctor doesn't accept 0/negative/NaN.
+  const asValidPid = (n: number): number | null => (Number.isFinite(n) && n > 0 ? n : null);
   try {
     const parsed: unknown = JSON.parse(raw);
     // Reject the bare-number case (`JSON.parse("28572")` → 28572) so it falls
     // through to parseInt; only an object carries a `pid` field.
     if (typeof parsed === "object" && parsed !== null) {
       const pid = (parsed as { pid?: unknown }).pid;
-      if (typeof pid === "number" && Number.isFinite(pid)) return pid;
+      if (typeof pid === "number") return asValidPid(pid);
     }
   } catch {
     // Not JSON (e.g. a bare PID) — fall through to the integer parse.
   }
-  const pid = Number.parseInt(raw, 10);
-  return Number.isFinite(pid) ? pid : null;
+  return asValidPid(Number.parseInt(raw, 10));
 }
 
 // ── Pure collector ──────────────────────────────────────────────────

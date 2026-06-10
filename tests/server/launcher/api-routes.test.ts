@@ -337,6 +337,14 @@ describe("POST /api/launcher/relaunch", () => {
     expect(body.message.length).toBeLessThanOrEqual(301); // 300 + ellipsis
     expect(body.message.endsWith("…")).toBe(true);
   });
+
+  it("falls back to the route label when the error carries no message", async () => {
+    const res = await relaunchThatThrows(new Error(""));
+    expect(res.status).toBe(500);
+    // Empty detail → the `truncated || label` fallback supplies the handler's
+    // label so the toast is never a bare "Relaunch failed:".
+    expect((res.body as { message: string }).message).toBe("relaunch failed");
+  });
 });
 
 describe("POST /api/launcher/start-fresh", () => {
@@ -359,6 +367,24 @@ describe("POST /api/launcher/start-fresh", () => {
     const res = await request(app, "POST", "/api/launcher/start-fresh", { nonce: nonce.nonce });
     expect(res.status).toBe(200);
     expect(calledWith).toBeUndefined();
+  });
+
+  // start-fresh shares sendUnexpected with relaunch but passes its own label —
+  // confirm it surfaces the real reason and maps the missing-reaper marker too
+  // (start-fresh also spawns through the reaper).
+  it("surfaces the real reason and maps REAPER_NOT_FOUND on failure", async () => {
+    const sup = makeFakeSupervisor({
+      startFreshHook: async () => {
+        throw new Error("tandem-reaper binary not found (checked /opt/tandem-reaper)");
+      },
+    });
+    const { app } = makeApp(baseDeps(sup));
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const res = await request(app, "POST", "/api/launcher/start-fresh", { nonce: nonce.nonce });
+    expect(res.status).toBe(500);
+    const body = res.body as { code: string; message: string };
+    expect(body.code).toBe(LAUNCHER_ERROR_REAPER_NOT_FOUND);
+    expect(body.message).not.toBe("start-fresh failed");
   });
 });
 
