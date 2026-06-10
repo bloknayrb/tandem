@@ -23,6 +23,7 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_NO_SAMPLE` | unset | Set to `1` to skip auto-opening `sample/welcome.md` on first run. |
 | `TANDEM_CLAUDE_CMD` | `claude` | The Claude Code executable name, used by `tandem setup` to detect Claude Code on `PATH`. Set if you have Claude Code installed under a non-standard name. |
 | `TANDEM_DISABLE_LAUNCHER` | unset | Set to `1` to disable the auto-launcher, which otherwise spawns and supervises Claude Code as a managed child process (HTTP mode only, when a `claude-code` integration is configured). Useful for running the server in isolation. |
+| `TANDEM_DISABLE_FIRST_RUN_WIZARD` | unset | Set to `1` to suppress the integration setup wizard's first-run auto-open. Useful for scripted/CI setups where the wizard would otherwise appear on a fresh profile. |
 | `TANDEM_OPEN_FILE` | unset | Absolute path to a file the server should open on startup. Set by the Tauri runtime when Tandem is launched via an OS file association; not intended for manual use. |
 | `TANDEM_TAURI_SIDECAR` | unset | Set to `1` by the Tauri runtime when the server is running as a sidecar process. Suppresses noisy stderr logs in production builds. Not intended for manual use. |
 
