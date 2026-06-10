@@ -1298,6 +1298,11 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     // external-modification guard (safe, conservative). Stat-after-read would
     // invert that — a baseline newer than the loaded content masks the
     // interleaved write and lets a save overwrite it.
+    // Safe FS sinks (CodeQL js/path-injection): `filePath` is the registry's
+    // server-managed path — reloadFromDisk is only ever called with
+    // `docState.filePath` (set by openFileByPath / resolveAndValidatePath /
+    // a validated rename), never raw user input. Alerts here are false
+    // positives; dismiss per issue #1042.
     const diskStat = await fs.stat(filePath).catch(() => null);
     const fileContent =
       format === "docx" ? await fs.readFile(filePath) : await fs.readFile(filePath, "utf-8");
@@ -1507,6 +1512,11 @@ export async function resolveExternalConflict(
   if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === undefined) return;
 
   if (choice === "keep") {
+    // Safe FS sink (CodeQL js/path-injection): `existing.filePath` is the
+    // registry's server-managed path (only ever set by openFileByPath /
+    // resolveAndValidatePath / a validated rename) — the route supplies only
+    // the document id, which is a map key, not a path. An alert here is a
+    // false positive; dismiss per issue #1042.
     const stat = await fs.stat(existing.filePath).catch(() => null);
     withInternal(doc, () => {
       meta.delete(Y_MAP_EXTERNAL_CONFLICT);
