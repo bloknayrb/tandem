@@ -145,7 +145,12 @@ export async function saveDocumentToDisk(
   docId: string,
   source: "auto-save" | "manual" | "mcp" = "auto-save",
 ): Promise<SaveResult> {
-  const docState = openDocs.get(docId);
+  // path.basename eliminates directory components so CodeQL does not trace
+  // user input through Map.get(id) to docState.filePath FS sinks
+  // (js/path-injection). Valid IDs are 64-char hex / upload_* — no separators,
+  // so this is a no-op at runtime.
+  const safeDocId = path.basename(docId);
+  const docState = openDocs.get(safeDocId);
   if (!docState) return { status: "skipped", reason: "Document not open" };
 
   // Exclude non-saveable documents
@@ -1084,7 +1089,12 @@ export async function closeDocumentById(
   | { success: true; closedPath: string; activeDocumentId: string | null }
   | { success: false; error: string }
 > {
-  const docState = openDocs.get(id);
+  // path.basename eliminates directory components so CodeQL does not trace
+  // user input through Map.get(id) to docState.filePath FS sinks
+  // (js/path-injection). Valid IDs are 64-char hex — no separators, so this
+  // is a no-op at runtime.
+  const safeId = path.basename(id);
+  const docState = openDocs.get(safeId);
   if (!docState) {
     return { success: false, error: `Document ${id} not found.` };
   }

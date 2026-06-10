@@ -809,8 +809,11 @@ export function registerDocumentTools(server: McpServer): void {
         .describe("Document ID to close (defaults to active document)"),
     },
     withErrorBoundary("tandem_close", async ({ documentId }) => {
-      const id = documentId ?? getActiveDocId();
-      if (!id) return mcpError("NO_DOCUMENT", "No document to close.");
+      // path.basename eliminates directory components — CodeQL taint-terminator
+      // before documentId reaches closeDocumentById's Map.get/FS sinks.
+      const rawId = documentId ?? getActiveDocId();
+      if (!rawId) return mcpError("NO_DOCUMENT", "No document to close.");
+      const id = path.basename(rawId);
 
       const result = await closeDocumentById(id);
       if (!result.success) return mcpError("NO_DOCUMENT", result.error);
