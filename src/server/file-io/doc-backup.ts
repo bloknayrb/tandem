@@ -60,8 +60,10 @@ const SWEEP_AGE_MS = 30 * 24 * 60 * 60 * 1000;
  * Matches a snapshot filename's `-YYYYMMDD-HHMMSS-<uuid8>` tail. The anchored
  * tail (not the variable stem) is the deletion boundary: `source.txt` and any
  * stray file can never match, so prune/sweep only ever touch files this module
- * wrote. Lexicographic sort on the full name is newest-first-safe because the
- * stem is constant within a subdir and the timestamp segment is monotonic.
+ * wrote. Lexicographic sort on the full name is approximately newest-first
+ * (constant stem + timestamp segment) but ties within the same second fall to
+ * the random uuid8 — callers that need true recency order re-sort by mtime
+ * (`listDocBackups`); prune avoids the tie by construction.
  */
 const SNAPSHOT_TAIL_RE = /-\d{8}-\d{6}-[0-9a-f]{8}(\.[^.]*)?$/;
 
@@ -205,6 +207,12 @@ export interface DocBackupSnapshot {
 /**
  * List the restorable snapshots for `filePath`, newest first, with timestamps
  * and sizes. Returns an empty array when the path has no backup subdir.
+ *
+ * Ordered by mtime, NOT filename: the name's timestamp segment is
+ * second-granular, so two snapshots taken in the same second (e.g. a restore's
+ * pre-overwrite snapshot landing right after the original) tie lexicographically
+ * and fall to the random uuid8 — which can rank the older file "newest". mtime
+ * carries millisecond resolution; the name is only the deterministic tiebreak.
  */
 export async function listDocBackups(
   filePath: string,
@@ -212,16 +220,22 @@ export async function listDocBackups(
 ): Promise<DocBackupSnapshot[]> {
   const subdir = path.join(docBackupsRoot(appDataDir), docHash(filePath));
   const names = await listSnapshots(subdir);
-  const out: DocBackupSnapshot[] = [];
+  const out: Array<DocBackupSnapshot & { mtimeMs: number }> = [];
   for (const name of names) {
     try {
       const st = await fs.stat(path.join(subdir, name));
-      out.push({ name, timestamp: new Date(st.mtimeMs).toISOString(), size: st.size });
+      out.push({
+        name,
+        timestamp: new Date(st.mtimeMs).toISOString(),
+        size: st.size,
+        mtimeMs: st.mtimeMs,
+      });
     } catch {
       // Raced away (concurrent prune/sweep) — skip the entry.
     }
   }
-  return out;
+  out.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+  return out.map(({ name, timestamp, size }) => ({ name, timestamp, size }));
 }
 
 /**

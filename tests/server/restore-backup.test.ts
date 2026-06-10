@@ -145,18 +145,51 @@ describe("listDocBackups", () => {
     expect(Number.isNaN(new Date(backups[0].timestamp).getTime())).toBe(false);
   });
 
-  it("orders snapshots newest first (lexicographic on the timestamped name)", async () => {
+  it("orders snapshots newest first by mtime", async () => {
     const filePath = path.join(tmpDir, "doc.md");
     const subdir = path.join(docBackupsRoot(resolveAppDataDir()), docHash(filePath));
     await fs.mkdir(subdir, { recursive: true });
-    await fs.writeFile(path.join(subdir, "doc-20260101-100000-aaaaaaaa.md"), "older\n");
-    await fs.writeFile(path.join(subdir, "doc-20260102-100000-bbbbbbbb.md"), "newer\n");
+    const older = path.join(subdir, "doc-20260101-100000-aaaaaaaa.md");
+    const newer = path.join(subdir, "doc-20260102-100000-bbbbbbbb.md");
+    await fs.writeFile(older, "older\n");
+    await fs.writeFile(newer, "newer\n");
     await fs.writeFile(path.join(subdir, "source.txt"), `${filePath}\n`);
+    await fs.utimes(older, new Date("2026-01-01T10:00:00Z"), new Date("2026-01-01T10:00:00Z"));
+    await fs.utimes(newer, new Date("2026-01-02T10:00:00Z"), new Date("2026-01-02T10:00:00Z"));
 
     const backups = await listDocBackups(filePath, resolveAppDataDir());
     expect(backups.map((b) => b.name)).toEqual([
       "doc-20260102-100000-bbbbbbbb.md",
       "doc-20260101-100000-aaaaaaaa.md",
+    ]);
+  });
+
+  it("breaks same-second name ties by mtime, not by the random uuid8 (CI regression)", async () => {
+    // Two snapshots within the same second share the name's timestamp segment,
+    // so lexicographic order falls to the random uuid8 — here deliberately
+    // contradicting recency: the lexicographically-LARGER name is the OLDER file.
+    const filePath = path.join(tmpDir, "doc.md");
+    const subdir = path.join(docBackupsRoot(resolveAppDataDir()), docHash(filePath));
+    await fs.mkdir(subdir, { recursive: true });
+    const newerByMtime = path.join(subdir, "doc-20260101-100000-aaaaaaaa.md");
+    const olderByMtime = path.join(subdir, "doc-20260101-100000-ffffffff.md");
+    await fs.writeFile(newerByMtime, "newest bytes\n");
+    await fs.writeFile(olderByMtime, "older bytes\n");
+    await fs.utimes(
+      olderByMtime,
+      new Date("2026-01-01T10:00:00.100Z"),
+      new Date("2026-01-01T10:00:00.100Z"),
+    );
+    await fs.utimes(
+      newerByMtime,
+      new Date("2026-01-01T10:00:00.900Z"),
+      new Date("2026-01-01T10:00:00.900Z"),
+    );
+
+    const backups = await listDocBackups(filePath, resolveAppDataDir());
+    expect(backups.map((b) => b.name)).toEqual([
+      "doc-20260101-100000-aaaaaaaa.md",
+      "doc-20260101-100000-ffffffff.md",
     ]);
   });
 });
