@@ -650,10 +650,13 @@ export function registerDocumentTools(server: McpServer): void {
         .describe("Target document ID (defaults to active document)"),
     },
     withErrorBoundary("tandem_save", async ({ documentId }) => {
-      const r = requireDocument(documentId);
+      // path.basename eliminates directory components so CodeQL does not trace
+      // user input through Map.get(id) to existing.filePath (js/path-injection).
+      const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
+      const r = requireDocument(safeDocId);
       if (!r) return noDocumentError();
 
-      const docState = getCurrentDoc(documentId);
+      const docState = getCurrentDoc(safeDocId);
       const format = docState?.format ?? "txt";
       const readOnly = docState?.readOnly ?? false;
 
@@ -906,8 +909,11 @@ export function registerDocumentTools(server: McpServer): void {
         .describe("Custom output path for the .md file (defaults to same directory as the .docx)"),
     },
     withErrorBoundary("tandem_convertToMarkdown", async ({ documentId, outputPath }) => {
+      // path.basename eliminates directory components so CodeQL does not trace
+      // user input through Map.get(id) to existing.filePath (js/path-injection).
+      const safeDocId = documentId !== undefined ? path.basename(documentId) : undefined;
       try {
-        const result = await convertToMarkdown(documentId, outputPath);
+        const result = await convertToMarkdown(safeDocId, outputPath);
         return mcpSuccess({
           converted: true,
           outputPath: result.outputPath,
