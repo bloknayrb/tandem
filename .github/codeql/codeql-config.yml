@@ -1,2 +1,3 @@
 paths-ignore:
   - src/server/annotations/rename-recovery.ts
+  - src/server/mcp/routes/docx-conflict.ts
