@@ -7,15 +7,18 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
+import { listDocBackups } from "../file-io/doc-backup.js";
 import {
   type AcceptedSuggestion,
   applyTrackedChanges,
   atomicWriteBuffer,
 } from "../file-io/index.js";
+import { resolveAppDataDir } from "../platform.js";
 import { relPosToFlatOffset } from "../positions.js";
 import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
+import { restoreDocumentFromBackup } from "./file-opener.js";
 import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 
 // ---------------------------------------------------------------------------
@@ -226,40 +229,100 @@ export function registerApplyTools(server: McpServer): void {
 
   server.tool(
     "tandem_restoreBackup",
-    "Restore a .docx file from its backup ({name}.backup.docx). " +
-      "Use after tandem_applyChanges if the result is unsatisfactory.",
+    "Restore a document from a backup. For .docx: restores the {name}.backup.docx sidecar " +
+      "created by tandem_applyChanges. For .md/.txt: Tandem snapshots the on-disk file before " +
+      "its first overwrite each server run; call without `backup` to list available snapshots " +
+      "(newest first), then call again with `backup` set to a snapshot name to restore it. " +
+      "Restoring reloads the open document in place — annotations are preserved and re-anchored.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
+      backup: z
+        .string()
+        .optional()
+        .describe(
+          "Snapshot filename to restore (.md/.txt only). Omit to list available snapshots.",
+        ),
     },
     withErrorBoundary("tandem_restoreBackup", async (args) => {
-      const r = requireDocument(args.documentId);
-      if (!r) return noDocumentError();
+      const docState = getCurrentDoc(args.documentId);
+      if (!docState) return noDocumentError();
 
-      const { filePath } = r;
-      const backupPath = filePath.replace(/\.docx$/i, ".backup.docx");
+      const { filePath } = docState;
 
-      try {
-        await fs.access(backupPath);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          return mcpError("FILE_NOT_FOUND", `No backup file found at ${backupPath}`);
+      // .docx keeps the original sidecar semantics ({name}.backup.docx written
+      // by tandem_applyChanges) — unchanged behavior.
+      if (docState.format === "docx") {
+        if (args.backup !== undefined) {
+          return mcpError(
+            "FORMAT_ERROR",
+            ".docx documents restore from their {name}.backup.docx sidecar — omit the `backup` parameter.",
+          );
         }
+        const backupPath = filePath.replace(/\.docx$/i, ".backup.docx");
+
+        try {
+          await fs.access(backupPath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            return mcpError("FILE_NOT_FOUND", `No backup file found at ${backupPath}`);
+          }
+          throw err;
+        }
+
+        await fs.copyFile(backupPath, filePath);
+        // Verify restored file matches backup size
+        const [backupStat, restoredStat] = await Promise.all([
+          fs.stat(backupPath),
+          fs.stat(filePath),
+        ]);
+        if (backupStat.size !== restoredStat.size) {
+          throw new Error("Restore verification failed: file sizes do not match.");
+        }
+        return mcpSuccess({
+          message: `Restored ${path.basename(filePath)} from backup.`,
+          restoredFrom: backupPath,
+        });
+      }
+
+      // Text documents (.md/.txt): pre-overwrite snapshots under
+      // {APP_DATA}/doc-backups (#1086). No `backup` arg = list mode.
+      try {
+        if (args.backup === undefined) {
+          if (docState.source !== "file") {
+            return mcpError(
+              "FORMAT_ERROR",
+              "Uploaded documents and scratchpads have no on-disk backups.",
+            );
+          }
+          const backups = await listDocBackups(filePath, resolveAppDataDir());
+          if (backups.length === 0) {
+            return mcpError(
+              "FILE_NOT_FOUND",
+              `No backups found for ${path.basename(filePath)}. Tandem snapshots a text ` +
+                "document's on-disk bytes before its first overwrite each server run.",
+            );
+          }
+          return mcpSuccess({
+            filePath,
+            backups,
+            message:
+              "Snapshots listed newest first. Call tandem_restoreBackup again with `backup` " +
+              "set to one of these names to restore it.",
+          });
+        }
+        const result = await restoreDocumentFromBackup(docState.id, args.backup);
+        return mcpSuccess(result);
+      } catch (err) {
+        const e = err as Error & { code?: string };
+        if (e.code === "NO_DOCUMENT") return noDocumentError();
+        if (e.code === "FILE_NOT_FOUND") return mcpError("FILE_NOT_FOUND", e.message);
+        if (e.code === "INVALID_PATH" || e.code === "UNSUPPORTED_FORMAT") {
+          return mcpError("FORMAT_ERROR", e.message);
+        }
+        if (e.code === "READ_ONLY") return mcpError("READ_ONLY", e.message);
+        if (e.code === "RELOAD_IN_PROGRESS") return mcpError("RELOAD_IN_PROGRESS", e.message);
         throw err;
       }
-
-      await fs.copyFile(backupPath, filePath);
-      // Verify restored file matches backup size
-      const [backupStat, restoredStat] = await Promise.all([
-        fs.stat(backupPath),
-        fs.stat(filePath),
-      ]);
-      if (backupStat.size !== restoredStat.size) {
-        throw new Error("Restore verification failed: file sizes do not match.");
-      }
-      return mcpSuccess({
-        message: `Restored ${path.basename(filePath)} from backup.`,
-        restoredFrom: backupPath,
-      });
     }),
   );
 }

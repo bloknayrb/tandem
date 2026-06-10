@@ -192,6 +192,55 @@ async function totalTreeBytes(root: string): Promise<number> {
   return total;
 }
 
+/** One restorable snapshot, as surfaced to the restore tool / API (#1086). */
+export interface DocBackupSnapshot {
+  /** Snapshot filename inside the per-path subdir — pass back to restore it. */
+  name: string;
+  /** Snapshot file mtime as ISO 8601 (when the snapshot was taken). */
+  timestamp: string;
+  /** Snapshot size in bytes. */
+  size: number;
+}
+
+/**
+ * List the restorable snapshots for `filePath`, newest first, with timestamps
+ * and sizes. Returns an empty array when the path has no backup subdir.
+ */
+export async function listDocBackups(
+  filePath: string,
+  appDataDir: string,
+): Promise<DocBackupSnapshot[]> {
+  const subdir = path.join(docBackupsRoot(appDataDir), docHash(filePath));
+  const names = await listSnapshots(subdir);
+  const out: DocBackupSnapshot[] = [];
+  for (const name of names) {
+    try {
+      const st = await fs.stat(path.join(subdir, name));
+      out.push({ name, timestamp: new Date(st.mtimeMs).toISOString(), size: st.size });
+    } catch {
+      // Raced away (concurrent prune/sweep) — skip the entry.
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve a caller-supplied snapshot name to its absolute path under
+ * `filePath`'s backup subdir, or null when the name is not a plausible
+ * snapshot filename. The bare-basename + tail-regex check is the traversal
+ * boundary: separators, `..`, `source.txt`, and arbitrary names can never
+ * resolve, so the returned path always points inside the per-path subdir at
+ * a file this module wrote.
+ */
+export function docBackupSnapshotPath(
+  filePath: string,
+  appDataDir: string,
+  name: string,
+): string | null {
+  if (name !== path.basename(name) || !SNAPSHOT_TAIL_RE.test(name)) return null;
+  return path.join(docBackupsRoot(appDataDir), docHash(filePath), name);
+}
+
 export type SnapshotOutcome =
   | "written"
   | "skipped-already-this-run"
