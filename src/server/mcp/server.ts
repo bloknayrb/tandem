@@ -232,6 +232,11 @@ export async function startMcpServerHttp(
    * itself "not running". index.ts resolves it once; tests can omit it.
    */
   wsPort: number = DEFAULT_WS_PORT,
+  /**
+   * Graceful-shutdown wiring for POST /api/shutdown (#1088). Provided by the
+   * entry point in HTTP mode; omitted in tests → route not registered.
+   */
+  shutdownWiring?: import("./routes/shutdown.js").ShutdownRouteDeps,
 ): Promise<Server> {
   mcpServer = createMcpServer();
   // Snapshot tool count now — all registrations are unconditional in createMcpServer(),
@@ -405,6 +410,7 @@ export async function startMcpServerHttp(
       wsPort,
       mcpPort: port,
     },
+    shutdownWiring,
   );
 
   // --- Channel support endpoints ---
