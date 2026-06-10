@@ -2,13 +2,13 @@
 
 A complete guide to using Tandem — from first launch to advanced workflows.
 
-> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same 27 tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
+> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same 28 tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
 
 > **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [README → Connecting other MCP clients](../README.md#connecting-other-mcp-clients) for the generic MCP path.
 
 ## Overview
 
-Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, flag issues, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
+Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
 
 Tandem runs as a local server with two surfaces: an **editor** where you read and edit documents, and an **MCP client** (Claude Code by default) where the AI connects via MCP tools. Changes sync instantly between them through Yjs CRDT collaboration.
 
@@ -16,11 +16,11 @@ Tandem is available as a [desktop app](https://github.com/bloknayrb/tandem/relea
 
 ## First Launch
 
-On first run, Tandem opens `sample/welcome.md` automatically. Three tutorial annotations appear in the document — a highlight, a comment, and a comment with replacement text — so you have something to interact with immediately.
+On first run, Tandem opens `sample/welcome.md` automatically. Four tutorial annotations appear in the document — a highlight, a comment, a comment with replacement text, and a private note — so you have something to interact with immediately.
 
 A floating tutorial card appears at the bottom-left of the editor with three steps:
 
-1. **Review an annotation** — Accept or dismiss one of the tutorial annotations from the side panel, or press `Ctrl+Shift+R` to enter Review Mode and use `Y`/`N` keys.
+1. **Review an annotation** — Accept or dismiss one of the tutorial annotations from the side panel, or turn on the margin view to see them beside the text.
 2. **Ask Claude a question** — Select text, click Annotate, and send your question to your AI assistant. Or type in the Chat panel.
 3. **Try editing** — Click in the document and type something.
 
@@ -50,17 +50,16 @@ Open documents appear as tabs along the top. Each tab shows the file name and a 
 
 Select text to reveal formatting buttons: **Bold**, **Italic**, **Headings** (H1/H2/H3), **Bullet List**, **Ordered List**, **Blockquote**, **Code**, **Link** (`Ctrl+K`), **Horizontal Rule**, and **Code Block**. Standard keyboard shortcuts also work (`Ctrl+B`, `Ctrl+I`, etc.). The toolbar wraps to a second row on narrow windows.
 
-### Annotation Toolbar
+### Selection Popup
 
-When text is selected, annotation buttons appear alongside the formatting toolbar:
+When text is selected, a floating popup appears with two parts:
 
-- **Highlight** — Mark text with a colored background. A dropdown lets you pick from 4 colors: yellow, green, blue, or pink. An explicit ✕ button closes the color picker.
-- **Comment** — Attach a note to the selected text. Two optional toggles appear:
-  - **Replace** — Propose replacement text. A text input appears for the new wording. Accepting the annotation applies the replacement automatically.
-  - **@Claude** — Direct the comment to Claude as a question. Claude sees the selected text and your comment, and can respond with annotations, chat messages, or both.
-- **Flag** — Mark text for urgent attention.
+- **Highlight swatches** — One-click highlighting in 4 colors (yellow, green, blue, pink), plus a "no highlight" swatch that clears an existing highlight.
+- **Annotate** — Opens a small composer anchored to the selection. Type your text, then choose the audience:
+  - **Note to self** (`Alt+Enter`) — A private note. Never sent to the AI.
+  - **Send to Claude** (`Ctrl+Enter`) — An outbound comment. Claude sees the selected passage and your text, and can respond with annotations, chat messages, or both.
 
-When no text is selected, annotation buttons show a "Select text first" tooltip explaining why they're disabled.
+The popup also includes a toggle to show or hide the formatting bar.
 
 ### Side Panel
 
@@ -79,10 +78,10 @@ The bottom bar shows:
 - **Connection state** — Green when connected, with reconnect attempt count and elapsed time during disconnects. A prominent banner appears after 30 seconds of continuous disconnect.
 - **Document count** — How many documents are currently open.
 - **Display name** — Your name as it appears to Claude. Click to change it (stored in localStorage).
-- **Review Only badge** — Appears when the active document is read-only (e.g. an imported `.docx`).
+- **Review Only badge** — Appears when the active document is read-only (e.g. an uploaded file, or the changelog opened via View Changelog).
 - **Claude's activity** — What Claude is doing ("Working on Cost Summary...", idle, etc.).
 
-Claude collaboration mode (**Solo** / **Tandem**) lives in the toolbar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
+Claude collaboration mode (**Solo** / **Tandem**) lives in the title bar at the top of the window, not the status bar. See [Solo / Tandem Mode](#solo--tandem-mode).
 
 ### Toast Notifications
 
@@ -109,7 +108,7 @@ There are three ways to open a file:
 ### Supported Formats
 
 - **Markdown** (`.md`) — Full read-write support with lossless round-trip formatting.
-- **Word** (`.docx`) — Opens in review-only mode. A banner explains that edits aren't saved back to the original `.docx`. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". A **Convert to Markdown** button is available to create an editable copy.
+- **Word** (`.docx`) — Read-write. Saving writes your edits back to the `.docx` body, and pending comments are written back as real Word comments. Existing Word comments (`<w:comment>` elements) are imported as annotations with author "import". External edits (e.g. from Word) are detected: a clean document reloads in place, while a document with unsaved edits shows a keep-vs-reload banner instead of losing anything. A **Convert to Markdown** option is also available if you prefer working in Markdown.
 - **Plain text** (`.txt`) — Full read-write support.
 - **HTML** (`.html`, `.htm`) — Read support.
 
@@ -123,35 +122,29 @@ Press `Ctrl+S` to save the active document to disk. Claude can also save via `ta
 
 ## Annotations
 
-Annotations are how Claude's feedback shows up in the document. There are three types, each with distinct visual styling:
+Annotations are how feedback — yours and Claude's — shows up in the document. There are three types, each with distinct visual styling:
 
 ### Highlight
 
-Colored background on the annotated text. Choose from 4 colors (yellow, green, blue, pink) via the toolbar's color picker dropdown. Use highlights to mark notable passages — green for good, yellow for problems, pink for style/tone.
+Colored background on the annotated text. User-only — Claude never creates highlights. Choose from 4 colors (yellow, green, blue, pink) via the selection popup's swatches. Use highlights to mark notable passages — green for good, yellow for problems, pink for style/tone.
 
 ### Comment
 
-Dashed underline on the annotated text. Attach observations, questions, or notes. The comment text appears in the side panel card.
+Dashed underline on the annotated text. Comments are the shared channel: you create them to send observations or questions to Claude, and Claude creates them to give feedback on your text. The comment text appears in the side panel card.
 
-Comments support two optional behaviors:
+Claude's comments may carry a **replacement suggestion** (`suggestedText`) — a proposed text change. The side panel card shows a diff view: the original text in red with strikethrough, an arrow, and the replacement text in green. When a reason is provided, it appears below the diff. Accepting the comment applies the text change automatically. Suggestions are Claude-only — your own comments are plain text; if you want a rewrite, ask for one in the comment and Claude responds with a suggestion you can accept.
 
-- **Replacement suggestions** — A comment with a `suggestedText` field proposes a text replacement. The side panel card shows a diff view: the original text in red with strikethrough, an arrow, and the replacement text in green. When a reason is provided, it appears below the diff. Accepting the comment applies the text change automatically.
-- **Questions directed at Claude** — A comment with `directedAt: "claude"` sends the comment to Claude as a question about the selected text. Claude sees the annotated passage and your comment, and can respond with annotations, chat messages, or both. These comments render with an indigo border and light tint.
+### Note
 
-### Flag
-
-Marks text for urgent attention. Use flags for items that need immediate action rather than just review.
+A private note to yourself. Notes are never sent to Claude — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide Claude should see it (imported Word comments arrive as notes too, and can be batch-promoted).
 
 ### Creating Annotations
 
-Select text in the editor to reveal the annotation toolbar. Click the desired type. For highlights, pick a color from the dropdown. For comments, type your note — then optionally toggle "Replace" to propose replacement text, or "@Claude" to direct the comment to Claude as a question. For flags, type your note.
+Select text in the editor to reveal the selection popup. Click a highlight swatch for a highlight, or click **Annotate**, type your text, and choose **Note to self** (private) or **Send to Claude** (comment).
 
 ### Editing Annotations
 
-Click the **✎ Edit** button on any pending annotation card to edit it:
-
-- **Highlights and flags** — A textarea appears with the current note.
-- **Comments** — A textarea appears for the comment text. If the comment has replacement text, a second textarea appears for the proposed replacement.
+Click the **✎ Edit** button on any pending annotation card to edit its text. For a comment with replacement text, a second textarea appears for the proposed replacement.
 
 Click **Save** to apply or **Cancel** to discard. Edited cards show "(edited)" with a timestamp. Only pending annotations can be edited — accepted or dismissed annotations are immutable.
 
@@ -163,35 +156,29 @@ Each annotation card in the side panel has **Accept** and **Dismiss** buttons. A
 
 ### Undo
 
-After accepting or dismissing, a 10-second undo window opens. An "Undo" link appears on the card with a shrinking progress bar showing the remaining time. In review mode, press `Z`. For accepted comments with replacement text, undo atomically reverts both the text change and the annotation status.
+After accepting or dismissing, the resolved card briefly offers an **Undo** action. For accepted comments with replacement text, undo atomically reverts both the text change and the annotation status.
 
-### Review Mode
+### Keyboard Review
 
-![Review mode with dimmed editor and active annotation highlighted](screenshots/05-review-mode.png)
-
-Press `Ctrl+Shift+R` or click "Review" to enter review mode. Shortcut hints (`Y / N / ↑↓ / Z`) appear below the button. The editor dims non-annotated text so annotations stand out. The side panel tracks your position ("Reviewing 3 / 15").
+Annotations can be reviewed without leaving the keyboard:
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Jump to next pending annotation |
-| `Shift+Tab` | Jump to previous annotation |
-| `Y` | Accept current annotation |
-| `N` | Dismiss current annotation |
-| `E` | Examine — scroll to annotation and exit review mode |
-| `Z` | Undo last accept/dismiss (within 10-second window) |
-| `Escape` | Exit review mode |
+| `Alt+]` | Jump to next annotation |
+| `Alt+[` | Jump to previous annotation |
+| `Ctrl+Enter` | Accept the selected annotation (or the first pending one if none is selected) |
+| `Ctrl+Shift+Enter` | Dismiss the selected annotation (or the first pending one) |
+| `Escape` | Deselect the current annotation |
+
+You can also enable the **margin view** (decorations menu) to see annotation cards beside the text they reference instead of in the side panel list.
 
 ### Bulk Actions
 
 **Accept All** and **Dismiss All** buttons appear in the side panel header when multiple annotations are pending. A confirmation step is required before executing. When filters are active, bulk actions only affect the filtered annotations (e.g., "Accept 3 of 12 pending?").
 
-### Review Summary
-
-When all annotations are resolved, a summary overlay appears showing: total reviewed, accepted count, dismissed count, and accept rate.
-
 ### Solo / Tandem Mode
 
-The toolbar includes a **Solo / Tandem** toggle that controls whether Claude's annotations appear as they arrive.
+The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`) that controls whether Claude's annotations appear as they arrive.
 
 - **Tandem** (default) — Claude's annotations appear immediately as they arrive.
 - **Solo** — Claude's pending annotations are held back. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
@@ -222,7 +209,7 @@ An unread badge appears on the Chat tab when Claude replies while you're viewing
 
 ## Keyboard Shortcuts
 
-Press `?` to open the in-app shortcuts reference at any time.
+Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Most app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the defaults are listed below.
 
 ### Editor
 
@@ -232,6 +219,9 @@ Press `?` to open the in-app shortcuts reference at any time.
 | `Ctrl+I` | Italic |
 | `Ctrl+K` | Insert/remove link |
 | `Ctrl+S` | Save document |
+| `Ctrl+Shift+S` | Save As (e.g. promote a scratchpad to a file) |
+| `Ctrl+F` | Find / replace |
+| `Alt+L` | Select containing block |
 
 > **Note:** Undo/redo is not yet available in collaborative mode (tracked as a future enhancement).
 
@@ -239,27 +229,35 @@ Press `?` to open the in-app shortcuts reference at any time.
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+Shift+R` | Toggle review mode |
-| `Tab` | Next annotation (review mode) |
-| `Shift+Tab` | Previous annotation (review mode) |
-| `Y` | Accept annotation (review mode) |
-| `N` | Dismiss annotation (review mode) |
-| `E` | Examine — scroll to annotation and exit (review mode) |
-| `Z` | Undo last accept/dismiss (review mode) |
-| `Escape` | Exit review mode |
+| `Ctrl+Enter` | Accept selected (or first pending) annotation |
+| `Ctrl+Shift+Enter` | Dismiss selected (or first pending) annotation |
+| `Alt+]` | Next annotation |
+| `Alt+[` | Previous annotation |
+| `Ctrl+Alt+M` | Comment on current selection |
+| `Ctrl+Alt+A` | Toggle authorship colors |
+| `Escape` | Deselect annotation / close overlays |
 
 ### Navigation & General
 
 | Shortcut | Action |
 |----------|--------|
-| `Alt+Left` | Previous tab |
-| `Alt+Right` | Next tab |
+| `Ctrl+Shift+P` | Command palette |
+| `Ctrl+N` | New scratchpad |
+| `Ctrl+O` | Open file |
+| `Ctrl+T` | New-tab menu (recent files / browse) |
+| `Ctrl+W` | Close tab |
+| `Ctrl+Alt+T` | Reopen closed tab |
+| `Ctrl+1`–`Ctrl+9` | Jump to tab 1–9 |
+| `Alt+Left` / `Alt+Right` | Reorder the focused tab |
+| `Alt+Shift+Left` / `Alt+Shift+Right` | Toggle left / right panel |
+| `Ctrl+Shift+M` | Toggle Solo / Tandem mode |
+| `Ctrl+Shift+,` | Settings |
 | `Enter` | Send message (chat panel) |
 | `?` | Show/hide keyboard shortcuts |
 
 ## Working with Claude Code
 
-Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 30 tools (27 active, 3 deprecated stubs) for reading documents, creating annotations, searching text, managing files, and communicating with you.
+Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 31 tools (28 active, 3 deprecated stubs) for reading documents, creating annotations, searching text, managing files, and communicating with you.
 
 ### Connection
 

@@ -42,6 +42,13 @@ test-results/
 # then allow-list the real tracked skills. New tracked skills need a new
 # allow-list line here.
 .claude/skills/*
+!.claude/skills/changelog/
 !.claude/skills/dev-server/
 !.claude/skills/e2e/
+!.claude/skills/e2e-debug/
 !.claude/skills/screenshots/
+
+# Developer-local Claude project memory (per its own header: "Gitignored.
+# Local-only context"). Was accidentally committed in 76949f8; untracked in
+# the documentation audit.
+CLAUDE.local.md
