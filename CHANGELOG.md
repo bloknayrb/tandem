@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`tandem doctor` no longer flags a valid lockfile as "unparseable content"** — the annotation store-lock check still parsed the lock as a bare PID (`parseInt`), but locks have been v2 JSON (`{pid, startedAtMs, app}`) since #1077. A healthy lock therefore reported a spurious warning ("unparseable content: `{…}`"). The doctor now reuses the store's `parseLockfile` (which reads both v2 JSON and legacy raw-PID formats) so a live lock reports the holder PID and liveness correctly. The pure lock format/parsing moved to `src/server/annotations/lockfile.ts` so the CLI doctor can read a lock without pulling in the store's file-io/notifications/platform dependency graph; `store.ts` re-exports it unchanged.
+
 ## [0.14.0] - 2026-06-10
 
 ### Added
