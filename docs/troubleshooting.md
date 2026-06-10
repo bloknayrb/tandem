@@ -9,13 +9,13 @@ If you're running from a source checkout, `npm run doctor` checks the most commo
 - Node.js ≥ 22 installed
 - `node_modules/` present
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
-- Claude Code's `mcp_settings.json` registered (when present)
+- `~/.claude.json` MCP registration (when present)
 - Ports `3478` (Hocuspocus WebSocket) and `3479` (MCP HTTP) listening
 - `/health` endpoint responds
 - `/api/events` SSE endpoint responds with `text/event-stream`
 - Annotation store readable; schema version, corruption state, lock status
 
-For desktop-app installs, use **Settings → About → Copy Diagnostics** to run the same checks in-app (see [Sharing diagnostics](#sharing-diagnostics)), or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
+For desktop-app installs, use **Settings → About → Copy Diagnostics** to run the same checks in-app, minus the two source-checkout-only items (`node_modules/`, `.mcp.json`) — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
 
 ## Windows SmartScreen warning
 

@@ -111,6 +111,32 @@ describe("GET /api/info — loopback (full response)", () => {
   });
 });
 
+describe("GET /api/diagnostics — live-server wiring smoke", () => {
+  // The route's behavior is unit-tested in diagnostics-route.test.ts against
+  // the handler directly; what nothing else proves is that the deps actually
+  // thread through startMcpServerHttp → registerApiRoutes and the route is
+  // MOUNTED. This runs the real runDoctor (self-probes are timeout-bounded;
+  // the mcp probe hits this very test server's live port).
+  it("is mounted and returns the filtered report shape for loopback callers", async () => {
+    const { status, body } = await rawGet(port, "/api/diagnostics", `127.0.0.1:${port}`);
+    const b = body as Record<string, unknown>;
+
+    expect(status).toBe(200);
+    expect(typeof b.version).toBe("string");
+    expect(b.transport).toBe("http");
+    expect(typeof b.nodeVersion).toBe("string");
+
+    const report = b.report as { results: Array<{ check: string }> };
+    expect(Array.isArray(report.results)).toBe(true);
+    // Dev-repo-only checks must be filtered even though this IS a dev repo
+    // (where they would pass — filtering is unconditional, not status-based).
+    const checks = report.results.map((r) => r.check);
+    expect(checks).not.toContain("node-modules");
+    expect(checks).not.toContain("mcp-json");
+    expect(checks).toContain("node-version");
+  });
+});
+
 describe("GET /api/info — DNS rebinding protection", () => {
   it("returns 403 when Host header is not localhost", async () => {
     // rawGet uses http.request so the custom Host header is actually sent.

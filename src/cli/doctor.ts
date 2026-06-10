@@ -155,8 +155,11 @@ function checkMcpJson(r: Recorder): void {
   };
   try {
     config = JSON.parse(raw);
-  } catch (err) {
-    r.fail(`.mcp.json is not valid JSON: ${errMsg(err)}`);
+  } catch {
+    // Deliberately no parse detail: V8 SyntaxErrors embed a snippet of the
+    // source text, and this file carries auth-token headers. Doctor output
+    // gets pasted into public issues.
+    r.fail(".mcp.json is not valid JSON", "Restore it from git: git checkout .mcp.json");
     return;
   }
 
@@ -225,8 +228,12 @@ function checkUserMcpConfig(r: Recorder): void {
   let config: { mcpServers?: Record<string, unknown> };
   try {
     config = JSON.parse(readFileSync(claudeCodePath, "utf-8"));
-  } catch (err) {
-    r.warn(`~/.claude.json is malformed JSON: ${errMsg(err)}`, "Run: tandem setup to rewrite it");
+  } catch {
+    // Deliberately no parse detail: V8 SyntaxErrors embed a snippet of the
+    // source text, and ~/.claude.json carries bearer tokens / API keys. This
+    // check survives the /api/diagnostics filter, so its message reaches the
+    // Copy Diagnostics clipboard — destined for public issues.
+    r.warn("~/.claude.json is malformed JSON", "Run: tandem setup to rewrite it");
     return;
   }
 

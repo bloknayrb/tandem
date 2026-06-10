@@ -22,18 +22,31 @@ let diagLoading = $state(false);
 
 async function handleCopyDiagnostics(): Promise<void> {
   diagLoading = true;
-  let payload: DiagnosticsPayload;
+  let text: string;
   try {
-    const res = await fetch(`${API_BASE}${API_DIAGNOSTICS}`);
-    if (!res.ok) throw new Error(`status ${res.status}`);
-    payload = await res.json();
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${API_DIAGNOSTICS}`);
+    } catch {
+      ctx.notify("error", "Couldn't reach the server — is it running?");
+      return;
+    }
+    if (!res.ok) {
+      // The server WAS reached — an "is it running?" message would misdirect.
+      ctx.notify("error", "Diagnostics failed on the server — try `tandem doctor` in a terminal");
+      return;
+    }
+    // Format before entering the clipboard try, so a malformed payload isn't
+    // misreported as a clipboard-permission problem.
+    text = formatDiagnostics((await res.json()) as DiagnosticsPayload);
   } catch {
-    ctx.notify("error", "Couldn't reach the server — is it running?");
-    diagLoading = false;
+    ctx.notify("error", "Diagnostics failed on the server — try `tandem doctor` in a terminal");
     return;
+  } finally {
+    diagLoading = false;
   }
   try {
-    await navigator.clipboard.writeText(formatDiagnostics(payload));
+    await navigator.clipboard.writeText(text);
     ctx.notify("info", "Diagnostics copied to clipboard");
   } catch {
     // Clipboard access denied (permissions policy / non-secure context).
@@ -41,8 +54,6 @@ async function handleCopyDiagnostics(): Promise<void> {
       "error",
       "Couldn't access the clipboard — run `tandem doctor` in a terminal instead",
     );
-  } finally {
-    diagLoading = false;
   }
 }
 

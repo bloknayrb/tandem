@@ -129,8 +129,7 @@ export const apiMiddleware: Handler = createApiMiddleware();
  *   rather than from the request body.
  * @param infoHandlerDeps - Dependencies for GET /api/info (version, toolCount, etc.).
  * @param diagnosticsHandlerDeps - Dependencies for GET /api/diagnostics (live ports,
- *   version, transport). Optional: tests that don't exercise diagnostics may omit it,
- *   in which case the route is not registered.
+ *   version, transport).
  */
 export function registerApiRoutes(
   app: Express,
@@ -143,16 +142,14 @@ export function registerApiRoutes(
   setCurrentToken: (t: string) => void,
   getCurrentToken: () => string | null,
   infoHandlerDeps: Parameters<typeof makeInfoHandler>[0],
-  diagnosticsHandlerDeps?: Parameters<typeof makeDiagnosticsHandler>[0],
+  diagnosticsHandlerDeps: Parameters<typeof makeDiagnosticsHandler>[0],
 ): void {
   // App metadata endpoint — consumed by the client's About panel
   app.get(API_INFO, mw, makeInfoHandler(infoHandlerDeps));
 
   // Embedded doctor report for the About panel's "Copy diagnostics" button.
   // The handler additionally gates on loopback (the report embeds local paths).
-  if (diagnosticsHandlerDeps) {
-    app.get(API_DIAGNOSTICS, mw, makeDiagnosticsHandler(diagnosticsHandlerDeps));
-  }
+  app.get(API_DIAGNOSTICS, mw, makeDiagnosticsHandler(diagnosticsHandlerDeps));
 
   // SSE notification stream for browser toasts
   app.get(API_NOTIFY_STREAM, mw, handleNotifyStream);

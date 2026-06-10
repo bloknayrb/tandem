@@ -15,8 +15,9 @@ const DEV_REPO_CHECKS = new Set(["node-modules", "mcp-json"]);
 export interface DiagnosticsHandlerDeps {
   /** Running app version string (APP_VERSION from server.ts). */
   version: string;
-  /** Active MCP transport mode. */
-  transport: "http" | "stdio";
+  /** Always "http" today — only startMcpServerHttp registers this route
+   *  (stdio mode mounts no REST API). */
+  transport: "http";
   /** Live Hocuspocus port (TANDEM_PORT-aware), threaded into the self-probe. */
   wsPort: number;
   /** Live MCP HTTP port (TANDEM_MCP_PORT-aware), threaded into the self-probe. */
@@ -45,11 +46,14 @@ export function filterDevRepoChecks(report: DoctorReport): DoctorReport {
  * GET /api/diagnostics — embedded `tandem doctor` for the client's
  * "Copy diagnostics" button.
  *
- * Loopback-only, unconditionally: the report embeds absolute paths (username),
- * PIDs, and MCP config URLs. This is deliberately stricter than /api/info's
+ * Loopback-only, unconditionally: the report embeds absolute paths (which
+ * include the username) and PIDs — and the unfiltered collector additionally
+ * sees MCP config URLs. This is deliberately stricter than /api/info's
  * per-field stripping — there is no useful LAN subset of this report. Note
  * `assertLoopbackForMutation` would NOT work here: it is a no-op outside the
- * unauthenticated-LAN opt-in.
+ * unauthenticated-LAN opt-in. "Loopback-only" still includes every web origin
+ * served from this machine (any 127.0.0.1:* page passes the socket check and
+ * the CORS allowlist) — same accepted posture as /api/info, richer payload.
  *
  * Single-flight: concurrent requests share one in-flight collector run. The
  * collector self-probes the server's own ports (with timeouts), so without
@@ -82,8 +86,9 @@ export function makeDiagnosticsHandler(deps: DiagnosticsHandlerDeps): Handler {
         tauriSidecar: process.env.TANDEM_TAURI_SIDECAR === "1",
       });
     } catch (err) {
-      // Recorder.check rethrows collector crashes. Keep the wire generic;
-      // the real error goes to the server log.
+      // Check crashes propagate out of runDoctor (only runDoctorCli converts
+      // them to a crashed report). Keep the wire generic; the real error goes
+      // to the server log.
       console.error("[Tandem] /api/diagnostics failed:", err);
       res.status(500).json({ error: "diagnostics failed" });
     }

@@ -76,4 +76,23 @@ describe("formatDiagnostics", () => {
     const lines = formatDiagnostics(payload).split("\n");
     expect(lines[lines.length - 1]).toBe("2 issue(s) found.");
   });
+
+  it("strips control characters from messages (terminal-escape hardening)", () => {
+    // A few doctor messages interpolate raw file content (e.g. unparseable
+    // store.lock bytes); the clipboard text gets pasted into terminals.
+    const payload = makePayload();
+    payload.report.results = [
+      {
+        check: "annotation-store",
+        status: "warn",
+        message: 'lock has unparseable content: "\x1b]0;spoofed\x07\x1b[31mboo"',
+        fix: "delete \x1b[2Jit",
+      },
+    ];
+    const text = formatDiagnostics(payload);
+    expect(text).toContain('lock has unparseable content: "]0;spoofed[31mboo"');
+    expect(text).toContain("fix: delete [2Jit");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting their absence
+    expect(text).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f]/);
+  });
 });

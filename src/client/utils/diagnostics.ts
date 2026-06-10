@@ -20,6 +20,16 @@ const STATUS_TAG: Record<DoctorStatus, string> = {
 };
 
 /**
+ * A few check messages interpolate raw file content (e.g. an unparseable
+ * `store.lock`). The clipboard text gets pasted into terminals, so strip
+ * control characters that could carry ANSI/OSC escape sequences.
+ */
+function stripControlChars(s: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
+  return s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+}
+
+/**
  * Format a diagnostics payload as plain text for the clipboard. Pure — the
  * "Copy diagnostics" button is thin glue over this (extract-over-mount).
  */
@@ -31,12 +41,12 @@ export function formatDiagnostics(payload: DiagnosticsPayload): string {
   ];
 
   for (const res of payload.report.results) {
-    lines.push(`${STATUS_TAG[res.status]} ${res.check} — ${res.message}`);
+    lines.push(`${STATUS_TAG[res.status]} ${res.check} — ${stripControlChars(res.message)}`);
     if (res.status !== "pass" && res.fix) {
-      lines.push(`       fix: ${res.fix}`);
+      lines.push(`       fix: ${stripControlChars(res.fix)}`);
     }
   }
 
-  lines.push("", payload.report.summary);
+  lines.push("", stripControlChars(payload.report.summary));
   return lines.join("\n");
 }

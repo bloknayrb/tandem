@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runDoctor, runDoctorCli } from "../../src/cli/doctor.js";
+import { runDoctor, runDoctorCli, summarizeDoctorResults } from "../../src/cli/doctor.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
 // Doctor reads the annotation store from TANDEM_APP_DATA_DIR (env override in
@@ -107,6 +107,25 @@ describe("runDoctor", () => {
     expect(portsResult?.message).toContain(String(wsPort));
     expect(portsResult?.message).toContain(String(mcpPort));
     expect(portsResult?.data).toMatchObject({ ws: false, mcp: false });
+  });
+});
+
+describe("summarizeDoctorResults", () => {
+  // Shared by the CLI summary AND /api/diagnostics' filtered recomputation —
+  // the equivalence class that matters is failures-AND-warnings: failures must
+  // win, or a broken report ends "Tandem should work".
+  it.each([
+    { failures: 2, warnings: 0, expected: "2 issue(s) found.", why: "failures only" },
+    {
+      failures: 0,
+      warnings: 3,
+      expected: "3 warning(s) — Tandem should work, but check the items above.",
+      why: "warnings only",
+    },
+    { failures: 1, warnings: 5, expected: "1 issue(s) found.", why: "failures outrank warnings" },
+    { failures: 0, warnings: 0, expected: "All checks passed. Tandem is ready.", why: "all clear" },
+  ])("$why → $expected", ({ failures, warnings, expected }) => {
+    expect(summarizeDoctorResults(failures, warnings)).toBe(expected);
   });
 });
 
