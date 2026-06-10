@@ -50,7 +50,7 @@ end state (#428 closed with exactly this residual).
 ## 4. npm path (any platform)
 
 - [ ] `npm install -g tandem-editor@<new version>` → `tandem` starts the server (a browser-deprecation notice is expected — the desktop app is the primary form factor); the editor loads at `http://127.0.0.1:3479`.
-- [ ] `tandem doctor` — exits 1 with exactly two `[FAIL]` lines, for `node_modules/` and `.mcp.json` (expected: those check the current working directory, which is never the source repo for a global install). Everything else green.
+- [ ] `tandem doctor` — run in a **second terminal while the server from the previous step is still running** (otherwise the ports check adds a third failure). Exits 1 with exactly two `[FAIL]` lines, for `node_modules/` and `.mcp.json` (expected: those check the current working directory, which is never the source repo for a global install). Everything else `[PASS]` or `[WARN]` (warnings acceptable, as in section 1).
 
 ## Recording the result
 
