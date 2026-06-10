@@ -363,9 +363,9 @@ Window hide-on-close (tray "Quit" is the exit path). Tray menu: Open Editor, Set
 GitHub Actions workflow (`.github/workflows/tauri-release.yml`) — builds on Windows/macOS/Linux, signs with `tauri-action`, publishes installers + `latest.json` to GitHub Releases. Cross-platform basename fix and CodeQL security hardening applied post-merge.
 
 Future hardening (not blocking release):
-- Verify end-to-end update flow (download → install → restart) on all three platforms
-- Code-sign macOS `.app` + notarization (#428) — requires Apple Developer certificate; without it, Gatekeeper shows "damaged" error on download. v1.0 gate.
-- Windows MSIX / NSIS installer smoke test
+- Verify end-to-end update flow (download → install → restart) on all three platforms — procedure documented in [release-smoke-checklist.md](release-smoke-checklist.md)
+- Code-sign macOS `.app` + notarization (#428) — requires Apple Developer certificate; without it, Gatekeeper shows "damaged" error on download. v1.0 gate. Per-release hardware verification lives in [release-smoke-checklist.md](release-smoke-checklist.md).
+- Windows MSIX / NSIS installer smoke test — covered per-release by [release-smoke-checklist.md](release-smoke-checklist.md)
 - Node.js 20 → 24 GitHub Actions migration (CI-wide, all workflow files) — deadline June 2, 2026
 
 ### Future Tauri Enhancements
