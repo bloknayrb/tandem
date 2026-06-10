@@ -7,11 +7,18 @@ name: Tauri WebDriver E2E
 # Runs on Linux only: tauri-driver supports Linux (webkit2gtk-driver) and
 # Windows, but not macOS. Linux-under-xvfb is the cheapest reliable target.
 
-# Manual-dispatch only. tauri-driver needs the full desktop binary + a real
-# WebView under xvfb, which the standard PR runners can't reliably provide, so
-# this is opt-in (run from the Actions tab) rather than gating every PR. See
-# #560 / batch scope-down decision.
+# Runs on release tags + manual dispatch. tauri-driver needs the full desktop
+# binary + a real WebView under xvfb — too heavy to gate every PR (see #560 /
+# batch scope-down decision), but cheap insurance on the handful of tag pushes:
+# it exercises webview-level key interception that the Playwright suite (real
+# browser, not the Tauri WebView) structurally cannot. Deliberately a separate
+# workflow from tauri-release.yml: a failure here is a signal to investigate
+# before announcing the release, not a gate that blocks artifact publishing —
+# see docs/release-smoke-checklist.md for how it slots into the release pass.
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch: {}
 
 # Minimal token scope (CodeQL actions/missing-workflow-permissions).

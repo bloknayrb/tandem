@@ -59,7 +59,6 @@ Key files for navigation:
 - `src/cli/setup.ts` -- `tandem setup` orchestration; bare invocation prints wizard-driven guidance, `tandem setup --apply [--force] [--target=<kind>] [--with-channel-shim]` writes config non-interactively (#477 PR 3c-ii-c). Config helpers (`detectTargets`, `applyConfig`, `installSkill`, `buildMcpEntries`, `applyConfigWithToken`) live in `src/server/integrations/apply.ts` since #477 PR 3c-ii-a
 - `src/cli/start.ts` -- `tandem start`: spawn server (browser distribution deprecated in #477 PR 2; Tauri sidecar sets `TANDEM_TAURI_SIDECAR=1`)
 - `src/server/index.ts` -- Entry point, port binding, console redirect
-- `src/server/open-browser.ts` -- Cross-platform browser launcher for npm-install path (execFile-based)
 - `src/server/mcp/` -- Tool definitions, `api-routes.ts`, `channel-routes.ts`, `file-opener.ts`, `document-service.ts`, `routes/info.ts`
 - `src/server/positions.ts` -- Server coordinate conversions (`validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`)
 - `src/server/events/` -- Channel event infrastructure (Y.Map observers, SSE)
