@@ -20,6 +20,7 @@ import {
   API_SESSIONS,
   API_SESSIONS_CLEAR,
   API_SESSIONS_DELETE,
+  API_STORE_RECLAIM_LOCK,
   API_UPLOAD,
 } from "../../shared/api-paths.js";
 import { TAURI_HOSTNAME } from "../../shared/constants.js";
@@ -41,6 +42,7 @@ import { makeRotateTokenHandler } from "./routes/rotate-token.js";
 import { handleSave } from "./routes/save.js";
 import { handleScratchpad } from "./routes/scratchpad.js";
 import { handleClearSessions, handleDeleteSession, handleListSessions } from "./routes/sessions.js";
+import { handleStoreReclaimLock } from "./routes/store-reclaim.js";
 import { handleUpload } from "./routes/upload.js";
 
 export type { Handler } from "./routes/_shared.js";
@@ -198,6 +200,12 @@ export function registerApiRoutes(
 
   app.options(API_REMOVE_ANNOTATION, mw);
   app.post(API_REMOVE_ANNOTATION, mw, largeBody, handleRemoveAnnotation);
+
+  // Stale store.lock reclaim (#1077). Mutating: the handler gates on origin
+  // allowlist + loopback before touching the lockfile (same posture as the
+  // session-management mutations).
+  app.options(API_STORE_RECLAIM_LOCK, mw);
+  app.post(API_STORE_RECLAIM_LOCK, mw, handleStoreReclaimLock);
 
   // Persisted-session management UI (#103): list (read-only), delete one, clear all.
   // The mutating routes gate on origin + loopback inside their handlers.

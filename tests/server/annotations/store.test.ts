@@ -28,6 +28,9 @@ import {
   closeStore,
   createStore,
   getAnnotationsDir,
+  isStoreReadOnly,
+  parseLockfile,
+  reclaimStoreLock,
   releaseStoreLock,
   resetForTesting,
 } from "../../../src/server/annotations/store.js";
@@ -275,10 +278,201 @@ describe("lock held by dead PID", () => {
     const result = await acquireStoreLock();
     expect(result).toBe("locked");
 
-    // Lock file should now contain our PID.
+    // Lock file should now contain our PID in v2 JSON format.
     const lockContents = await fs.readFile(path.join(annotationsDir, "store.lock"), "utf-8");
-    expect(lockContents.trim()).toBe(String(process.pid));
+    expect(JSON.parse(lockContents)).toMatchObject({ pid: process.pid, app: "tandem" });
 
+    await releaseStoreLock();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #10 lockfile format v2 (#1077)
+// ---------------------------------------------------------------------------
+
+describe("lockfile v2 format", () => {
+  it("round-trips: acquire writes v2 JSON, parseLockfile reads it back", async () => {
+    const before = Date.now();
+    expect(await acquireStoreLock()).toBe("locked");
+
+    const raw = await fs.readFile(path.join(getAnnotationsDir(), "store.lock"), "utf-8");
+    const parsed = parseLockfile(raw);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.pid).toBe(process.pid);
+    expect(parsed?.app).toBe("tandem");
+    expect(parsed?.startedAtMs).toBeGreaterThanOrEqual(before);
+    expect(parsed?.startedAtMs).toBeLessThanOrEqual(Date.now());
+
+    // releaseStoreLock must recognize its own v2 lockfile and unlink it.
+    await releaseStoreLock();
+    await expect(fs.access(path.join(getAnnotationsDir(), "store.lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("parses legacy raw-PID lockfiles", () => {
+    expect(parseLockfile("1234")).toEqual({ pid: 1234 });
+    expect(parseLockfile("  1234\n")).toEqual({ pid: 1234 });
+  });
+
+  it("returns null for garbage content", () => {
+    expect(parseLockfile("")).toBeNull();
+    expect(parseLockfile("not-a-pid")).toBeNull();
+    expect(parseLockfile("-5")).toBeNull();
+    expect(parseLockfile("{")).toBeNull();
+    expect(parseLockfile('{"pid":"1234"}')).toBeNull();
+    expect(parseLockfile('{"pid":-1}')).toBeNull();
+    expect(parseLockfile('{"app":"tandem"}')).toBeNull();
+  });
+
+  it("parses v2 JSON without optional fields", () => {
+    expect(parseLockfile('{"pid":42}')).toEqual({
+      pid: 42,
+      startedAtMs: undefined,
+      app: undefined,
+    });
+  });
+
+  it("acquire treats a live-PID legacy lockfile as held (backward compat)", async () => {
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    await fs.writeFile(path.join(annotationsDir, "store.lock"), String(process.pid));
+
+    expect(await acquireStoreLock()).toBe("readonly");
+    await releaseStoreLock();
+  });
+
+  it("acquire treats a live-PID v2 lockfile as held", async () => {
+    const annotationsDir = getAnnotationsDir();
+    await fs.mkdir(annotationsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(annotationsDir, "store.lock"),
+      JSON.stringify({ pid: process.pid, startedAtMs: Date.now(), app: "tandem" }),
+    );
+
+    expect(await acquireStoreLock()).toBe("readonly");
+    await releaseStoreLock();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #11 reclaimStoreLock decision matrix (#1077)
+// ---------------------------------------------------------------------------
+
+describe("reclaimStoreLock", () => {
+  const lockPath = () => path.join(getAnnotationsDir(), "store.lock");
+
+  /** Force the module into readOnly by acquiring against a live-PID lock. */
+  async function enterReadOnly(lockContents: string): Promise<void> {
+    await fs.mkdir(getAnnotationsDir(), { recursive: true });
+    await fs.writeFile(lockPath(), lockContents);
+    expect(await acquireStoreLock()).toBe("readonly");
+    expect(isStoreReadOnly()).toBe(true);
+  }
+
+  it("is a no-op when the store is already writable", async () => {
+    expect(await acquireStoreLock()).toBe("locked");
+    const probe = vi.fn();
+    const result = await reclaimStoreLock(probe);
+    expect(result).toEqual({ ok: true, reclaimed: false });
+    expect(probe).not.toHaveBeenCalled();
+    await releaseStoreLock();
+  });
+
+  it("is a no-op when the feature is disabled", async () => {
+    process.env.TANDEM_ANNOTATION_STORE = "off";
+    const result = await reclaimStoreLock(vi.fn());
+    expect(result).toEqual({ ok: true, reclaimed: false });
+  });
+
+  it("reclaims when the lock PID is dead (no identity probe needed)", async () => {
+    await enterReadOnly(String(process.pid));
+    // Simulate the holder dying after startup: swap in a dead PID.
+    await fs.writeFile(lockPath(), "999999999");
+
+    const probe = vi.fn();
+    const result = await reclaimStoreLock(probe);
+    expect(result).toEqual({ ok: true, reclaimed: true });
+    expect(probe).not.toHaveBeenCalled();
+    expect(isStoreReadOnly()).toBe(false);
+    expect(JSON.parse(await fs.readFile(lockPath(), "utf-8")).pid).toBe(process.pid);
+    await releaseStoreLock();
+  });
+
+  it("reclaims when the lockfile vanished", async () => {
+    await enterReadOnly(String(process.pid));
+    await fs.unlink(lockPath());
+
+    const result = await reclaimStoreLock(vi.fn());
+    expect(result).toEqual({ ok: true, reclaimed: true });
+    expect(isStoreReadOnly()).toBe(false);
+    await releaseStoreLock();
+  });
+
+  it("reclaims when the live PID belongs to a clearly non-Tandem process (PID reuse)", async () => {
+    await enterReadOnly(String(process.pid));
+
+    const probe = vi.fn().mockResolvedValue({ kind: "name", name: "chrome.exe" });
+    const result = await reclaimStoreLock(probe);
+    expect(result).toEqual({ ok: true, reclaimed: true });
+    expect(probe).toHaveBeenCalledWith(process.pid);
+    expect(isStoreReadOnly()).toBe(false);
+    await releaseStoreLock();
+  });
+
+  it("reclaims a live-PID v2 lockfile when identity is non-Tandem", async () => {
+    await enterReadOnly(JSON.stringify({ pid: process.pid, startedAtMs: 1, app: "tandem" }));
+
+    const probe = vi.fn().mockResolvedValue({ kind: "name", name: "explorer.exe" });
+    const result = await reclaimStoreLock(probe);
+    expect(result).toEqual({ ok: true, reclaimed: true });
+    expect(isStoreReadOnly()).toBe(false);
+    await releaseStoreLock();
+  });
+
+  it("refuses when the live PID looks like a Tandem/node process", async () => {
+    await enterReadOnly(String(process.pid));
+
+    const probe = vi.fn().mockResolvedValue({ kind: "name", name: "node" });
+    const result = await reclaimStoreLock(probe);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain("node");
+    expect(isStoreReadOnly()).toBe(true);
+    // Lockfile untouched — we did not steal it.
+    expect((await fs.readFile(lockPath(), "utf-8")).trim()).toBe(String(process.pid));
+  });
+
+  it("refuses when the live PID identity is indeterminate (fail safe)", async () => {
+    await enterReadOnly(String(process.pid));
+
+    const probe = vi.fn().mockResolvedValue({ kind: "indeterminate" });
+    const result = await reclaimStoreLock(probe);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain(String(process.pid));
+    expect(isStoreReadOnly()).toBe(true);
+  });
+
+  it("serializes concurrent reclaim requests onto one attempt", async () => {
+    await enterReadOnly(String(process.pid));
+
+    let resolveProbe: ((v: { kind: "name"; name: string }) => void) | undefined;
+    const probe = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveProbe = resolve;
+        }),
+    );
+
+    const first = reclaimStoreLock(probe);
+    const second = reclaimStoreLock(probe);
+    // The probe is reached after an async lockfile read — wait for it before
+    // resolving, otherwise resolveProbe is still undefined here.
+    await vi.waitFor(() => expect(probe).toHaveBeenCalled());
+    resolveProbe?.({ kind: "name", name: "chrome.exe" });
+
+    expect(await first).toEqual({ ok: true, reclaimed: true });
+    expect(await second).toEqual({ ok: true, reclaimed: true });
+    expect(probe).toHaveBeenCalledTimes(1);
     await releaseStoreLock();
   });
 });

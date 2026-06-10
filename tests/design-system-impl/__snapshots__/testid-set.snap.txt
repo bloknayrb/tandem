@@ -338,6 +338,8 @@ source-view-textarea
 status-word-count
 store-readonly-banner
 store-readonly-dismiss
+store-readonly-reclaim
+store-readonly-reclaim-error
 suggestion-diff-{*}
 tab-name-{*}
 tab-scroll-container

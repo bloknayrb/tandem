@@ -2,6 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
 import * as Y from "yjs";
+import { API_STORE_RECLAIM_LOCK } from "../../shared/api-paths";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../shared/constants";
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
@@ -12,6 +13,7 @@ import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { type AnnotationSortMode, sortAnnotations } from "../hooks/useAnnotationOrder.js";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { warningStateColors } from "../utils/colors";
+import { API_BASE } from "../utils/fileUpload";
 import AnnotationCard from "./AnnotationCard.svelte";
 import {
   editAnnotation,
@@ -101,6 +103,7 @@ let storeReadOnlyDismissed = $state(readStoreReadOnlyDismissed());
 $effect(() => {
   if (!storeReadOnly) {
     storeReadOnlyDismissed = false;
+    storeReclaimError = null;
     try {
       localStorage.removeItem(STORE_READ_ONLY_DISMISS_KEY);
     } catch {
@@ -140,6 +143,35 @@ function toggleSortMode() {
     localStorage.setItem(ANNOTATION_SORT_MODE_KEY, sortMode);
   } catch {
     // storage unavailable — in-memory only for this session
+  }
+}
+
+// Reclaim button state (#1077). On success the server broadcasts
+// storeReadOnly=false via the ctrl Y.Map, which clears the banner (and this
+// error, via the effect above) reactively — no local success handling needed.
+let storeReclaiming = $state(false);
+let storeReclaimError = $state<string | null>(null);
+
+async function handleStoreReclaim() {
+  if (storeReclaiming) return;
+  storeReclaiming = true;
+  storeReclaimError = null;
+  try {
+    const res = await fetch(`${API_BASE}${API_STORE_RECLAIM_LOCK}`, { method: "POST" });
+    if (!res.ok) {
+      let message = "Could not reclaim the annotation store lock.";
+      try {
+        const body = (await res.json()) as { message?: unknown };
+        if (typeof body?.message === "string" && body.message) message = body.message;
+      } catch {
+        // Non-JSON error body — keep the generic message.
+      }
+      storeReclaimError = message;
+    }
+  } catch {
+    storeReclaimError = "Could not reach the Tandem server.";
+  } finally {
+    storeReclaiming = false;
   }
 }
 
@@ -509,19 +541,41 @@ function handleRailBackgroundClick(e: MouseEvent) {
   {#if storeReadOnly && !storeReadOnlyDismissed}
     <div
       data-testid="store-readonly-banner"
-      style="padding: 10px 14px; margin: 10px 14px 0; background: {warningStateColors.background}; border: 1px solid {warningStateColors.border}; border-radius: var(--tandem-r-4); font-size: var(--tandem-text-xs); color: {warningStateColors.color}; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;"
+      style="padding: 10px 14px; margin: 10px 14px 0; background: {warningStateColors.background}; border: 1px solid {warningStateColors.border}; border-radius: var(--tandem-r-4); font-size: var(--tandem-text-xs); color: {warningStateColors.color}; display: flex; flex-direction: column; gap: var(--tandem-space-2);"
     >
-      <span>
-        Annotation store is read-only — another Tandem instance holds the lock. Annotations
-        won't be saved. Close the other instance and restart.
-      </span>
-      <button
-        data-testid="store-readonly-dismiss"
-        onclick={handleStoreReadOnlyDismiss}
-        style="flex-shrink: 0; font-size: var(--tandem-text-xs); padding: 2px 8px; border: none; border-radius: var(--tandem-r-2); background: none; color: {warningStateColors.color}; cursor: pointer; font-weight: 500;"
-      >
-        Dismiss
-      </button>
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+        <span>
+          Annotation store is read-only — another Tandem instance holds the lock. Annotations
+          won't be saved. Close the other instance, or reclaim the lock if no other instance is
+          running.
+        </span>
+        <div style="display: flex; flex-shrink: 0; gap: var(--tandem-space-1);">
+          <button
+            data-testid="store-readonly-reclaim"
+            onclick={handleStoreReclaim}
+            disabled={storeReclaiming}
+            style="flex-shrink: 0; font-size: var(--tandem-text-xs); padding: 2px 8px; border: 1px solid {warningStateColors.border}; border-radius: var(--tandem-r-2); background: none; color: {warningStateColors.color}; cursor: {storeReclaiming ? 'wait' : 'pointer'}; font-weight: 500;"
+          >
+            {storeReclaiming ? "Reclaiming…" : "Reclaim"}
+          </button>
+          <button
+            data-testid="store-readonly-dismiss"
+            onclick={handleStoreReadOnlyDismiss}
+            style="flex-shrink: 0; font-size: var(--tandem-text-xs); padding: 2px 8px; border: none; border-radius: var(--tandem-r-2); background: none; color: {warningStateColors.color}; cursor: pointer; font-weight: 500;"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+      {#if storeReclaimError}
+        <div
+          data-testid="store-readonly-reclaim-error"
+          role="alert"
+          style="font-size: var(--tandem-text-2xs); color: var(--tandem-error-fg);"
+        >
+          {storeReclaimError}
+        </div>
+      {/if}
     </div>
   {/if}
 

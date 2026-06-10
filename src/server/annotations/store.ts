@@ -8,7 +8,10 @@
  *     not at mutation time, so a 50-mutation burst only pays for one
  *     serialization. The last-queued thunk wins (last-writer-wins coalescing).
  *   - `store.lock` PID lockfile is a belt-and-braces fallback on top of the
- *     port 3479 bind, which is the primary concurrent-writer lock.
+ *     port 3479 bind, which is the primary concurrent-writer lock. Written as
+ *     JSON `{pid, startedAtMs, app}` since #1077 (v2); legacy raw-PID files
+ *     remain readable. A stuck read-only state is user-recoverable via
+ *     `reclaimStoreLock` (POST /api/store/reclaim-lock).
  *   - After `DISABLE_AFTER_FAILURES` consecutive write failures for a doc,
  *     that doc's writes are disabled in-memory until process restart. Toasts
  *     are throttled per-doc (`NOTIFY_THROTTLE_MS`) so a failing-disk burst
@@ -22,6 +25,11 @@ import path from "node:path";
 import { atomicWrite } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
+import {
+  isTandemLikeProcessName,
+  type ProcessIdentity,
+  probeProcessIdentity,
+} from "./process-identity.js";
 import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -118,6 +126,67 @@ async function ensureDirReady(): Promise<void> {
 // Lockfile (concurrent-writer guard)
 // ---------------------------------------------------------------------------
 
+/** App identifier stamped into v2 lockfiles. */
+const LOCK_APP_ID = "tandem";
+
+/** Parsed contents of `store.lock` (v2 JSON or legacy raw-PID). */
+export interface LockfileContents {
+  pid: number;
+  /** v2 only — epoch ms when the holder took the lock. */
+  startedAtMs?: number;
+  /** v2 only — always `"tandem"` when written by Tandem. */
+  app?: string;
+}
+
+/** Serialize the v2 lockfile payload for the current process. */
+function lockfilePayload(): string {
+  return JSON.stringify({ pid: process.pid, startedAtMs: Date.now(), app: LOCK_APP_ID });
+}
+
+/**
+ * Parse `store.lock` contents. Two formats:
+ *   - v2 (#1077): JSON `{pid, startedAtMs?, app}` — written by current versions.
+ *   - legacy: a bare PID string — written by older versions; must stay readable.
+ *
+ * Returns `null` for garbage content (callers treat that as a stale lock).
+ * Exported for testing.
+ */
+export function parseLockfile(raw: string): LockfileContents | null {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      const pid = parsed.pid;
+      if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return null;
+      return {
+        pid,
+        startedAtMs: typeof parsed.startedAtMs === "number" ? parsed.startedAtMs : undefined,
+        app: typeof parsed.app === "string" ? parsed.app : undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+  // Legacy raw-PID format. parseInt (not Number()) preserves the historical
+  // tolerance for trailing junk after the digits.
+  const pid = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  return { pid };
+}
+
+/**
+ * Signal-0 liveness check. ESRCH = no such process; EPERM = exists but we
+ * can't signal it (still alive).
+ */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /**
  * Take the per-install store lock. The port 3479 bind is the primary lock;
  * this is the belt-and-braces fallback for ports-bind races and edge cases.
@@ -144,7 +213,7 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
       // Exclusive create — fails with EEXIST if the file already exists.
       const handle = await fs.open(lockPath, "wx");
       try {
-        await handle.writeFile(String(process.pid), "utf-8");
+        await handle.writeFile(lockfilePayload(), "utf-8");
       } finally {
         await handle.close();
       }
@@ -195,8 +264,8 @@ async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
     return false;
   }
 
-  const pid = Number.parseInt(rawPid, 10);
-  if (!Number.isFinite(pid) || pid <= 0) {
+  const lock = parseLockfile(rawPid);
+  if (lock === null) {
     // Garbage content — treat as stale and clear it.
     await fs.unlink(lockPath).catch(() => {});
     return true;
@@ -209,21 +278,107 @@ async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
   // only one PID that's guaranteed live in the current OS — ours). Falling
   // through to the liveness check gives that test the `readonly` outcome it
   // expects.
-  let alive: boolean;
-  try {
-    // Signal 0 = existence check without sending a signal.
-    process.kill(pid, 0);
-    alive = true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    // ESRCH = no such process. EPERM = process exists but we can't signal it.
-    alive = code === "EPERM";
-  }
-
-  if (alive) return false;
+  if (isPidAlive(lock.pid)) return false;
 
   await fs.unlink(lockPath).catch(() => {});
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// User-initiated reclaim (#1077)
+// ---------------------------------------------------------------------------
+
+/** Outcome of `reclaimStoreLock`. */
+export type ReclaimLockResult =
+  /** The store is writable. `reclaimed` is false when it already was (no-op). */
+  | { ok: true; reclaimed: boolean }
+  /** The lock is genuinely (or possibly) held — `message` is user-facing. */
+  | { ok: false; message: string };
+
+/** Shared in-flight promise so concurrent reclaim requests can't race the lockfile. */
+let reclaimInFlight: Promise<ReclaimLockResult> | null = null;
+
+/**
+ * User-initiated stale-lock reclaim (#1077). Unlike the startup path
+ * (`tryReclaimStaleLock`), a *live* lock PID is not automatically fatal:
+ * Windows recycles PIDs aggressively, so a crash-orphaned lockfile can name a
+ * PID now owned by an unrelated process. This path adds a best-effort
+ * process-identity probe:
+ *
+ *   - PID dead (or lockfile garbage / vanished) → stale → reclaim.
+ *   - PID alive, identity clearly NOT a Tandem/node process → PID reuse →
+ *     stale → reclaim.
+ *   - PID alive, identity Tandem/node-like OR indeterminate → refuse with a
+ *     user-facing message. Data safety first: when in doubt, do not grab a
+ *     lock that a live writer might hold.
+ *
+ * Callers are responsible for re-persisting open-doc state and broadcasting
+ * the new read-only flag after a successful reclaim (the HTTP route does both).
+ *
+ * @param probe injectable for tests — defaults to the real OS probe.
+ */
+export async function reclaimStoreLock(
+  probe: (pid: number) => Promise<ProcessIdentity> = probeProcessIdentity,
+): Promise<ReclaimLockResult> {
+  if (isFeatureDisabled()) return { ok: true, reclaimed: false };
+  if (!readOnly) return { ok: true, reclaimed: false };
+
+  // Serialize concurrent requests: two interleaved reclaims could both unlink
+  // and re-acquire, with the loser's EEXIST path flipping `readOnly` back on.
+  if (reclaimInFlight) return reclaimInFlight;
+  reclaimInFlight = doReclaim(probe).finally(() => {
+    reclaimInFlight = null;
+  });
+  return reclaimInFlight;
+}
+
+async function doReclaim(
+  probe: (pid: number) => Promise<ProcessIdentity>,
+): Promise<ReclaimLockResult> {
+  const lockPath = path.join(getAnnotationsDir(), LOCK_FILE);
+
+  let raw: string | null = null;
+  try {
+    raw = await fs.readFile(lockPath, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      return { ok: false, message: `Could not read the lock file: ${(err as Error).message}` };
+    }
+    // Lock vanished — fall through to a plain acquire.
+  }
+
+  if (raw !== null) {
+    const lock = parseLockfile(raw);
+    if (lock !== null && isPidAlive(lock.pid)) {
+      const identity = await probe(lock.pid);
+      if (identity.kind === "indeterminate") {
+        return {
+          ok: false,
+          message: `The lock is held by a live process (PID ${lock.pid}) that could not be identified. Close any other Tandem instance and try again.`,
+        };
+      }
+      if (isTandemLikeProcessName(identity.name)) {
+        return {
+          ok: false,
+          message: `The lock is held by a running process ("${identity.name}", PID ${lock.pid}) that looks like another Tandem instance. Close it and try again.`,
+        };
+      }
+      // Live PID, but clearly an unrelated process — the OS recycled the PID
+      // after a Tandem crash. The lock is stale; fall through and reclaim.
+      console.error(
+        `[ANNOTATION-STORE] Reclaiming store.lock: PID ${lock.pid} is now "${identity.name}" (not Tandem) — treating as recycled.`,
+      );
+    }
+    await fs.unlink(lockPath).catch(() => {});
+  }
+
+  const result = await acquireStoreLock();
+  if (result === "locked") return { ok: true, reclaimed: true };
+  return {
+    ok: false,
+    message: "Another process took the lock while reclaiming. Try again.",
+  };
 }
 
 /** Returns true while another process holds the store lock and writes are disabled. */
@@ -246,8 +401,8 @@ export async function releaseStoreLock(): Promise<void> {
   if (isFeatureDisabled()) return;
   const lockPath = path.join(getAnnotationsDir(), LOCK_FILE);
   try {
-    const raw = (await fs.readFile(lockPath, "utf-8")).trim();
-    if (Number.parseInt(raw, 10) === process.pid) {
+    const raw = await fs.readFile(lockPath, "utf-8");
+    if (parseLockfile(raw)?.pid === process.pid) {
       await fs.unlink(lockPath);
     }
   } catch {
@@ -615,4 +770,5 @@ export function resetForTesting(): void {
   failureState.clear();
   annotationsDirReady = false;
   readOnly = false;
+  reclaimInFlight = null;
 }

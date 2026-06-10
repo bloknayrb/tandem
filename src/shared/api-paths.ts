@@ -43,6 +43,9 @@ export const API_DOCUMENT_RELOAD = "/api/document/reload";
 // --- Annotations ------------------------------------------------------------
 export const API_ANNOTATION_REPLY = "/api/annotation-reply";
 export const API_REMOVE_ANNOTATION = "/api/remove-annotation";
+// Self-healing stale store.lock reclaim (#1077) — wired to the
+// store-readonly banner's Reclaim button.
+export const API_STORE_RECLAIM_LOCK = "/api/store/reclaim-lock";
 
 // --- Chat -------------------------------------------------------------------
 export const API_CHAT = "/api/chat";
