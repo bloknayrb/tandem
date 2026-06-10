@@ -9,13 +9,13 @@ If you're running from a source checkout, `npm run doctor` checks the most commo
 - Node.js ≥ 22 installed
 - `node_modules/` present
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
-- Claude Code's `mcp_settings.json` registered (when present)
+- `~/.claude.json` MCP registration (when present)
 - Ports `3478` (Hocuspocus WebSocket) and `3479` (MCP HTTP) listening
 - `/health` endpoint responds
 - `/api/events` SSE endpoint responds with `text/event-stream`
 - Annotation store readable; schema version, corruption state, lock status
 
-For desktop-app installs, `npm run doctor` isn't available — use `curl http://127.0.0.1:3479/health` instead. A `{"status":"ok",...}` response means the server is up.
+For desktop-app installs, use **Settings → About → Copy Diagnostics** to run the same checks in-app, minus the two source-checkout-only items (`node_modules/`, `.mcp.json`) — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
 
 ## Windows SmartScreen warning
 
@@ -121,11 +121,20 @@ Tandem writes all log output to **stderr**, never stdout. This is intentional: w
 
 When troubleshooting:
 
-- Desktop app: logs appear in the system console (`Console.app` on macOS, Event Viewer on Windows, `journalctl --user` on Linux, depending on how the sidecar was launched).
-- npm install: stderr prints to the terminal where you ran `tandem`. Redirect to a file with `tandem 2> tandem.log`.
+- Desktop app: logs are written to a rotating `tandem.log` file — **Settings → About → Open Log Folder** opens it directly. On disk it lives under the bundle identifier: `%LOCALAPPDATA%\com.tandem.editor\logs\` (Windows), `~/Library/Logs/com.tandem.editor/` (macOS), `~/.local/share/com.tandem.editor/logs/` (Linux).
+- npm install: stderr prints to the terminal where you ran `tandem`. Redirect to a file with `tandem 2> tandem.log`. (No log file exists in this mode, so the Open Log Folder button doesn't appear.)
 - Source checkout: `npm run dev:server` prints to the terminal.
 
 If you ever see what looks like a normal log line on stdout, that's a bug — file it.
+
+## Sharing diagnostics
+
+When [filing an issue](https://github.com/bloknayrb/tandem/issues), attach a diagnostics report:
+
+- **In the app:** **Settings → About → Copy Diagnostics** puts a plain-text report on the clipboard — version, platform, and the result of every health check (ports, `/health`, SSE, annotation store). The endpoint behind it only answers loopback callers.
+- **From a terminal:** `tandem doctor` prints the same checks (plus two dev-repo-only checks the button omits); `tandem doctor --json` emits a machine-readable report.
+
+> **Privacy note:** the copied text contains local absolute paths (which include your username) and process IDs. Skim it before pasting into a public issue. It never contains auth tokens or document content.
 
 ## Auth rejection on LAN bind
 

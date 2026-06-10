@@ -5,6 +5,7 @@ import {
   API_APPLY_CHANGES,
   API_CLOSE,
   API_CONVERT,
+  API_DIAGNOSTICS,
   API_DOCUMENT_RAW,
   API_DOCUMENT_RELOAD,
   API_INFO,
@@ -27,6 +28,7 @@ import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
 import { handleClose } from "./routes/close.js";
 import { handleConvert } from "./routes/convert.js";
+import { makeDiagnosticsHandler } from "./routes/diagnostics.js";
 import { handleGetDocumentRaw } from "./routes/document-raw.js";
 import { handleReloadFromMarkdown } from "./routes/document-reload.js";
 import { makeInfoHandler } from "./routes/info.js";
@@ -126,6 +128,8 @@ export const apiMiddleware: Handler = createApiMiddleware();
  *   before rotation; used to register the grace-window slot from a trusted source
  *   rather than from the request body.
  * @param infoHandlerDeps - Dependencies for GET /api/info (version, toolCount, etc.).
+ * @param diagnosticsHandlerDeps - Dependencies for GET /api/diagnostics (live ports,
+ *   version, transport).
  */
 export function registerApiRoutes(
   app: Express,
@@ -138,9 +142,14 @@ export function registerApiRoutes(
   setCurrentToken: (t: string) => void,
   getCurrentToken: () => string | null,
   infoHandlerDeps: Parameters<typeof makeInfoHandler>[0],
+  diagnosticsHandlerDeps: Parameters<typeof makeDiagnosticsHandler>[0],
 ): void {
   // App metadata endpoint — consumed by the client's About panel
   app.get(API_INFO, mw, makeInfoHandler(infoHandlerDeps));
+
+  // Embedded doctor report for the About panel's "Copy diagnostics" button.
+  // The handler additionally gates on loopback (the report embeds local paths).
+  app.get(API_DIAGNOSTICS, mw, makeDiagnosticsHandler(diagnosticsHandlerDeps));
 
   // SSE notification stream for browser toasts
   app.get(API_NOTIFY_STREAM, mw, handleNotifyStream);

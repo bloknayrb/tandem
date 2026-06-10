@@ -532,10 +532,17 @@ async function main() {
     }
 
     const [srv] = await Promise.all([
-      startMcpServerHttp(mcpPort, bindHost, authToken, resolvedLanIP, {
-        getSupervisor: () => launcherSupervisor,
-        unavailableReason: () => launcherUnavailableReason,
-      }),
+      startMcpServerHttp(
+        mcpPort,
+        bindHost,
+        authToken,
+        resolvedLanIP,
+        {
+          getSupervisor: () => launcherSupervisor,
+          unavailableReason: () => launcherUnavailableReason,
+        },
+        wsPort,
+      ),
       startHocuspocus(wsPort).then(() => {
         console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);
       }),

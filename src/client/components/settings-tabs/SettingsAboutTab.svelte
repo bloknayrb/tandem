@@ -1,6 +1,11 @@
 <script lang="ts">
+import { API_DIAGNOSTICS } from "../../../shared/api-paths";
+import { isTauriRuntime } from "../../cowork/cowork-helpers";
+import { loadInvoke } from "../../cowork/cowork-invoke";
 import { createAppInfo } from "../../hooks/useAppInfo.svelte";
 import { isCrashReportingEnabled } from "../../sentry";
+import { type DiagnosticsPayload, formatDiagnostics } from "../../utils/diagnostics";
+import { API_BASE } from "../../utils/fileUpload";
 import { openServerPath } from "../../utils/server-paths";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -13,6 +18,61 @@ let ctx: SettingsTabContext = $props();
 const appInfo = createAppInfo(() => ctx.open);
 let docsLoading = $state(false);
 let docsError = $state<string | null>(null);
+let diagLoading = $state(false);
+
+async function handleCopyDiagnostics(): Promise<void> {
+  diagLoading = true;
+  let text: string;
+  try {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${API_DIAGNOSTICS}`);
+    } catch {
+      ctx.notify("error", "Couldn't reach the server — is it running?");
+      return;
+    }
+    if (!res.ok) {
+      // The server WAS reached — an "is it running?" message would misdirect.
+      ctx.notify("error", "Diagnostics failed on the server — try `tandem doctor` in a terminal");
+      return;
+    }
+    // Format before entering the clipboard try, so a malformed payload isn't
+    // misreported as a clipboard-permission problem.
+    text = formatDiagnostics((await res.json()) as DiagnosticsPayload);
+  } catch {
+    ctx.notify("error", "Diagnostics failed on the server — try `tandem doctor` in a terminal");
+    return;
+  } finally {
+    diagLoading = false;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    ctx.notify("info", "Diagnostics copied to clipboard");
+  } catch {
+    // Clipboard access denied (permissions policy / non-secure context).
+    ctx.notify(
+      "error",
+      "Couldn't access the clipboard — run `tandem doctor` in a terminal instead",
+    );
+  }
+}
+
+async function handleOpenLogFolder(): Promise<void> {
+  try {
+    const [{ appLogDir }, invoke] = await Promise.all([
+      import("@tauri-apps/api/path"),
+      loadInvoke(),
+    ]);
+    const path = await appLogDir();
+    await invoke("show_in_file_manager", { path });
+  } catch {
+    ctx.notify("error", "Couldn't open the log folder");
+  }
+}
+
+/** Shared chrome for the full-width About-tab action buttons. */
+const actionBtnStyle =
+  "flex: 1; padding: var(--tandem-space-2); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface-muted); color: var(--tandem-fg);";
 
 async function handleViewDocumentation(): Promise<void> {
   const filePath = appInfo.info?.workflowsPath;
@@ -90,6 +150,28 @@ const aboutRows = $derived.by(() => {
     <div style="margin-top: 6px; font-size: 11px; color: var(--tandem-error-fg);">
       {docsError}
     </div>
+  {/if}
+</div>
+
+<div style="display: flex; gap: var(--tandem-space-2);">
+  <button
+    type="button"
+    data-testid="settings-modal-copy-diagnostics-btn"
+    onclick={() => void handleCopyDiagnostics()}
+    disabled={diagLoading}
+    style="{actionBtnStyle} cursor: {diagLoading ? 'not-allowed' : 'pointer'}; opacity: {diagLoading ? 0.6 : 1};"
+  >
+    {diagLoading ? "Collecting…" : "Copy Diagnostics"}
+  </button>
+  {#if isTauriRuntime()}
+    <button
+      type="button"
+      data-testid="settings-modal-open-log-folder-btn"
+      onclick={() => void handleOpenLogFolder()}
+      style="{actionBtnStyle} cursor: pointer;"
+    >
+      Open Log Folder
+    </button>
   {/if}
 </div>
 
