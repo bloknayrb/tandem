@@ -8,6 +8,8 @@
 
 Tandem is a document editor that lets you and an AI work on the same file together. You highlight a passage. The AI sees what you highlighted and can ask about it, comment on it, or propose changes that appear as cards beside your document. You decide what to keep.
 
+One thing to know up front: the AI side requires an MCP-capable AI client — [Claude Code](https://claude.com/claude-code) is the default — and the subscription behind it (for Claude, a paid Anthropic plan). Without one connected, Tandem is a capable local document editor and nothing more.
+
 Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md](CHANGELOG.md) for what is in the latest release.
 
 ## Contents
@@ -59,7 +61,7 @@ Tandem is built to work with Anthropic's Claude out of the box. Other AI tools c
 - When a colleague hands you a document to mark up.
 - When the AI wrote a draft and you need to decide what to keep.
 
-Tandem is built for individuals working on their own documents. The example document types above are just that — examples; the workflow is the same whatever you are writing or reviewing.
+Tandem is built for individuals working on their own documents. The example document types above are just that — examples; the workflow is the same whatever you are writing or reviewing. The interface is English-only for now.
 
 ## Getting started
 
@@ -75,7 +77,7 @@ The desktop app bundles the editor, the server it talks to, and storage for the 
 
 ### What you get
 
-- Multiple documents open in tabs, with `.md`, `.txt`, `.html`, and `.docx` support (Word files open in review-only mode).
+- Multiple documents open in tabs, with `.md`, `.txt`, `.html`, and `.docx` support (Word files are editable; the original is only written when you explicitly save).
 - A scratchpad (`Ctrl+N`) for drafts you do not want to save to disk.
 - A command palette (`Ctrl+Shift+P`) for quick actions.
 - Find and replace, including across all open tabs.
@@ -120,6 +122,7 @@ Tandem is on the way to a v1.0 release. Recent releases added support for multip
 - [docs/user-guide.md](docs/user-guide.md) for a longer walkthrough of the editor.
 - [docs/workflows.md](docs/workflows.md) for daily usage patterns.
 - [docs/troubleshooting.md](docs/troubleshooting.md) for when something goes wrong.
+- [docs/data-locations.md](docs/data-locations.md) for where Tandem stores data and how to uninstall cleanly.
 - [docs/positioning.md](docs/positioning.md) for the longer story of why Tandem exists.
 - [docs/decisions.md](docs/decisions.md) for design decisions (ADRs).
 - [docs/roadmap.md](docs/roadmap.md) for what is coming.
