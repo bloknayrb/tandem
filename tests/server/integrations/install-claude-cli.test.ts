@@ -308,4 +308,57 @@ describe("fetchInstallerScript — scheme/host pinning (F2)", () => {
       FAKE_SCRIPT,
     );
   });
+
+  // The REAL official installer 302s install.{sh,ps1} → downloads.claude.ai —
+  // a different subdomain. An exact-apex pin would reject it (caught only by a
+  // live fetch; the mocks above all stayed same-host). Lock in that *.claude.ai
+  // subdomains are followed.
+  it("follows the real cross-subdomain redirect to downloads.claude.ai", async () => {
+    const httpsGet = fakeGet({
+      "https://claude.ai/install.sh": {
+        statusCode: 302,
+        headers: { location: "https://downloads.claude.ai/claude-code-releases/bootstrap.sh" },
+      },
+      "https://downloads.claude.ai/claude-code-releases/bootstrap.sh": {
+        statusCode: 200,
+        body: FAKE_SCRIPT,
+      },
+    });
+    await expect(fetchInstallerScript("https://claude.ai/install.sh", { httpsGet })).resolves.toBe(
+      FAKE_SCRIPT,
+    );
+  });
+
+  it.each([
+    ["lookalike apex (no dot boundary)", "https://evilclaude.ai/install.sh"],
+    ["suffixed attacker domain", "https://claude.ai.evil.com/install.sh"],
+    ["embedded-credential host", "https://claude.ai@evil.com/install.sh"],
+  ])("rejects a redirect to %s", async (_why, location) => {
+    const httpsGet = fakeGet({
+      "https://claude.ai/install.sh": { statusCode: 302, headers: { location } },
+    });
+    await expect(
+      fetchInstallerScript("https://claude.ai/install.sh", { httpsGet }),
+    ).rejects.toThrow(/must be https/i);
+  });
+
+  // The pin operates on the WHATWG-normalized `parsed.hostname` (lowercased),
+  // NOT the raw Location string — locks that assumption so a future refactor
+  // can't regress to comparing the header verbatim.
+  it("accepts an uppercase-host redirect via hostname normalization", async () => {
+    const httpsGet = fakeGet({
+      "https://claude.ai/install.sh": {
+        statusCode: 302,
+        headers: { location: "https://DOWNLOADS.CLAUDE.AI/claude-code-releases/bootstrap.sh" },
+      },
+      // The runner rebuilds pinnedUrl from the lowercased parsed.host.
+      "https://downloads.claude.ai/claude-code-releases/bootstrap.sh": {
+        statusCode: 200,
+        body: FAKE_SCRIPT,
+      },
+    });
+    await expect(fetchInstallerScript("https://claude.ai/install.sh", { httpsGet })).resolves.toBe(
+      FAKE_SCRIPT,
+    );
+  });
 });
