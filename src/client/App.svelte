@@ -445,10 +445,16 @@ function restartClaude(): void {
 // imperatively at event time (no reactive dependency, no loop). Notes/
 // highlights never dispatch this (ADR-027 — they're private, never sent to AI).
 $effect(() => {
-  const onAddressedAi = (e: Event) => {
+  const onAddressedAi = async (e: Event) => {
     const via = (e as CustomEvent<{ via?: string }>).detail?.via;
-    const chip = aiReadiness.chip;
-    if (chip === null) return; // ready / booting / Solo — nothing to nudge
+    if (aiReadiness.chip === null) return; // ready / booting / Solo — nothing to nudge
+    // The polled chip can be up to 8s stale: an agent whose MCP initialize
+    // landed after the last background poll still reads as absent, firing a
+    // false "no AI is connected" notice while the agent is live (#1083).
+    // Confirm with a fresh /health probe before alarming.
+    if (await aiReadiness.probeSession()) return;
+    const chip = aiReadiness.chip; // re-read — state may have settled while probing
+    if (chip === null) return;
     const noun = via === "comment" ? "Comment" : "Message";
     notifications.push(
       {
