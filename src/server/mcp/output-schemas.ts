@@ -65,7 +65,11 @@ const annotationBaseShape = {
   audience: z.enum(["private", "outbound"]),
   promotedFrom: z.literal("note").optional(),
   importSource: z
-    .object({ author: z.string(), file: z.string() })
+    .object({
+      author: z.string(),
+      file: z.string(),
+      commentId: z.string().optional().describe("Word comment id (round-trip identity on save)"),
+    })
     .optional()
     .describe("Original Word author/file for imported .docx comments"),
   color: HighlightColorSchema.optional().describe("Highlight annotations only"),

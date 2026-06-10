@@ -220,6 +220,22 @@ describe("tandem_getAnnotations structured output", () => {
     })) as ToolResult;
     expect(textEnvelope(replyResult).error).toBe(false);
 
+    // Promoted Word-import comment — its importSource carries commentId
+    // (round-trip identity), which the schema must declare or strict clients
+    // strip it.
+    const promotedImport: Annotation = {
+      id: "import-promoted-1",
+      author: "user",
+      type: "comment",
+      audience: "outbound",
+      range: { from: toFlatOffset(8), to: toFlatOffset(13) },
+      content: "From Word review",
+      status: "pending",
+      timestamp: Date.now(),
+      importSource: { author: "Reviewer A", file: "draft.docx", commentId: "w-cmt-7" },
+    };
+    withInternal(ydoc, () => map.set(promotedImport.id, promotedImport));
+
     // User-private note — must never surface (ADR-027)
     const note: Annotation = {
       id: "note-private-1",
@@ -239,14 +255,18 @@ describe("tandem_getAnnotations structured output", () => {
     })) as ToolResult;
     const sc = expectStructuredMatch(result, getAnnotationsOutputShape);
 
-    expect(sc.count).toBe(1);
+    expect(sc.count).toBe(2);
     expect(sc.notesExcluded).toBe(1);
     const anns = sc.annotations as Array<Record<string, unknown>>;
-    expect(anns).toHaveLength(1);
-    expect(anns[0].id).toBe(annId);
-    expect(anns[0].type).toBe("comment");
-    expect(anns[0].suggestedText).toBe("Hi");
-    expect((anns[0].replies as unknown[]).length).toBe(1);
+    expect(anns).toHaveLength(2);
+    const claudeAnn = anns.find((a) => a.id === annId);
+    expect(claudeAnn?.type).toBe("comment");
+    expect(claudeAnn?.suggestedText).toBe("Hi");
+    expect((claudeAnn?.replies as unknown[]).length).toBe(1);
+    // commentId survives schema validation (expectStructuredMatch already
+    // proved parsed ≡ emitted; this pins the field itself)
+    const imported = anns.find((a) => a.id === "import-promoted-1");
+    expect((imported?.importSource as Record<string, unknown>).commentId).toBe("w-cmt-7");
     // The serialized payload must never contain the note's content
     expect(JSON.stringify(sc)).not.toContain("my private thought");
     // directedAt is deprecated and stripped on read — never re-introduced
