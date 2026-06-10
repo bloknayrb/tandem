@@ -396,6 +396,10 @@ function handleKeyDown(e: KeyboardEvent) {
       opacity: 0.7;
     }
   }
+  :global(body.tandem-reduce-motion) .tandem-claude-typing-dot {
+    animation: none;
+    opacity: 0.7;
+  }
   @media (forced-colors: active) {
     .tandem-claude-typing-dot {
       outline: 1px solid ButtonText;
