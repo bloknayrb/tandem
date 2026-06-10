@@ -321,7 +321,7 @@ export async function snapshotBeforeFirstWrite(
     for (const name of all.slice(MAX_DOC_BACKUPS)) {
       await fs
         .rm(path.join(subdir, name), { force: true })
-        .catch((err) => console.error(`[DocBackup] prune failed for ${name}:`, err));
+        .catch((err) => console.error("[DocBackup] prune failed for %s:", name, err));
     }
 
     snapshottedPaths.add(pathKey);
@@ -335,7 +335,7 @@ export async function snapshotBeforeFirstWrite(
     // every retry; the user-facing notification only once per path until a
     // snapshot succeeds (a 60s autosave would otherwise re-toast each minute).
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[DocBackup] Snapshot failed for ${filePath} (save proceeds):`, err);
+    console.error("[DocBackup] Snapshot failed for %s (save proceeds):", filePath, err);
     if (!failureNotifiedPaths.has(pathKey)) {
       failureNotifiedPaths.add(pathKey);
       pushNotification({
