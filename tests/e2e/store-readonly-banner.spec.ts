@@ -20,7 +20,7 @@ test("store-readonly banner is visible when storeReadOnly is true", async ({ pag
       banner.setAttribute("data-testid", "store-readonly-banner");
       banner.style.cssText = "padding:10px 14px; display:flex; justify-content:space-between; align-items:flex-start; gap:10px;";
       const span = document.createElement("span");
-      span.textContent = "Annotation store is read-only — another Tandem instance holds the lock. Annotations won't be saved. Close the other instance and restart.";
+      span.textContent = "Annotation store is read-only — another Tandem instance holds the lock. Annotations won't be saved. Close the other instance, or reclaim the lock if no other instance is running.";
       banner.appendChild(span);
       const btn = document.createElement("button");
       btn.setAttribute("data-testid", "store-readonly-dismiss");
@@ -34,7 +34,7 @@ test("store-readonly banner is visible when storeReadOnly is true", async ({ pag
   const banner = page.locator("[data-testid='store-readonly-banner']");
   await expect(banner).toBeVisible({ timeout: 5_000 });
   await expect(banner).toContainText("Annotation store is read-only");
-  await expect(banner).toContainText("Close the other instance and restart");
+  await expect(banner).toContainText("Close the other instance");
 });
 
 test("store-readonly banner is hidden when already dismissed", async ({ page }) => {
