@@ -18,19 +18,27 @@
 // The remaining argv is run under this same Node binary.
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
+import path from "node:path";
 
+// Refuse to recursively delete anything that isn't the E2E-scoped dir —
+// this script only ever runs via playwright.config.ts, which sets the var.
+// Resolve before checking so `..` segments or a coincidental substring
+// elsewhere in the path can't smuggle the wipe outside its scope.
 const dir = process.env.TANDEM_APP_DATA_DIR;
-if (!dir || !dir.includes("tandem-e2e")) {
-  // Refuse to recursively delete anything that isn't an obviously E2E-scoped
-  // path — this script only ever runs via playwright.config.ts, which sets it.
+const resolved = dir ? path.resolve(dir) : null;
+if (!resolved || path.basename(resolved) !== "tandem-e2e-data") {
   console.error(
     `[e2e-server] refusing to wipe unexpected TANDEM_APP_DATA_DIR: ${dir ?? "(unset)"}`,
   );
   process.exit(1);
 }
-rmSync(dir, { recursive: true, force: true });
+rmSync(resolved, { recursive: true, force: true });
 
 const child = spawn(process.execPath, process.argv.slice(2), { stdio: "inherit" });
+child.on("error", (err) => {
+  console.error("[e2e-server] failed to spawn server:", err);
+  process.exit(1);
+});
 child.on("exit", (code, signal) => {
   process.exit(code ?? (signal ? 1 : 0));
 });

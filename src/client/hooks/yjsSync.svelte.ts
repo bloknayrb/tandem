@@ -17,6 +17,7 @@ import {
 import { sanitizeAnnotation } from "../../shared/sanitize";
 import type { Annotation, ClaudeAwareness } from "../../shared/types";
 import type { DocListEntry, OpenTab } from "../types";
+import { createRebuildScheduler } from "./rebuild-scheduler.js";
 import { resolveActiveTabId } from "./tab-reconcile.js";
 import { deduplicateDocList } from "./useYjsSync";
 
@@ -108,8 +109,6 @@ export function createYjsSync(): YjsSyncState {
    * state can merge back.
    */
   let generationId: string | null = null;
-  /** Single-flight guard for the authenticationFailed → rebuild path. */
-  let rebuildInFlight = false;
   // Last activation epoch applied from the server. Lets handleDocumentList tell a
   // genuine (re)activation (epoch advanced) from a stale re-broadcast of an
   // unchanged active id (epoch same), so the latter never clobbers a local tab
@@ -206,9 +205,9 @@ export function createYjsSync(): YjsSyncState {
   /** Destroy every per-tab provider/ydoc (active, kept, and pending) and clear
    *  tab state. Deliberately does NOT null `activeTabIdState`: the #842
    *  auto-scratchpad gate (`shouldAutoOpenScratchpad`) requires a null active
-   *  id, so keeping the stale id closed prevents a stray scratchpad from
-   *  spawning during a >400ms resync window — and the post-rebuild doc
-   *  broadcast re-resolves the active tab anyway. */
+   *  id, so keeping the stale id holds that gate closed and prevents a stray
+   *  scratchpad from spawning during a >400ms resync window — and the
+   *  post-rebuild doc broadcast re-resolves the active tab anyway. */
   const teardownAllTabs = () => {
     for (const obs of observers.values()) obs.cleanup();
     observers.clear();
@@ -232,56 +231,41 @@ export function createYjsSync(): YjsSyncState {
    * i.e. the server restarted and this client's Y.Docs are stale. Re-fetch the
    * generation and rebuild everything (ctrl + tabs) from scratch — fresh empty
    * Y.Docs sync cleanly from the server instead of CRDT-merging stale content
-   * back into it. Deferred to a microtask so no Y.Doc is destroyed while an
-   * observer or provider event is mid-dispatch.
+   * back into it. Orchestration (single-flight, microtask deferral, poll loop)
+   * lives in createRebuildScheduler so the branches are unit-testable.
    *
    * Note the rejected provider's websocket stays "connected" while denied (the
    * server holds it until a 30s idle close) — provider status events are NOT a
    * health signal here; this event is the only reliable trigger.
    */
-  const scheduleRebuild = () => {
-    if (destroyed || rebuildInFlight) return;
-    rebuildInFlight = true;
-    queueMicrotask(async () => {
-      try {
-        while (!destroyed) {
-          const gen = await fetchGenerationId();
-          if (destroyed) return;
-          if (gen && gen === generationId) {
-            // Rejected without a generation change — near-unreachable
-            // (/api/info and the gate disagreeing). Nothing to rebuild, but
-            // don't wait out the server's ~30s idle close (the socket reports
-            // "connected" while denied, so the user would see a frozen doc
-            // with a green indicator): cycle every socket to re-auth NOW.
-            console.warn("[Tandem] Provider auth failed without a generation change");
-            bootstrapProviderRef?.disconnect();
-            bootstrapProviderRef?.connect();
-            for (const t of tabsState) {
-              t.provider.disconnect();
-              t.provider.connect();
-            }
-            return;
-          }
-          if (gen) {
-            console.warn("[Tandem] Server restarted — resyncing documents");
-            teardownAllTabs();
-            bootstrapCleanup?.();
-            // Banner state set AFTER cleanup (bootstrapCleanup clears restartTimer).
-            serverRestarted = true;
-            lastAppliedActiveEpoch = null;
-            restartTimer = setTimeout(() => {
-              serverRestarted = false;
-            }, 5000);
-            startBootstrap(gen);
-            return;
-          }
-          await sleep(1000); // server still down — poll until it's back
-        }
-      } finally {
-        rebuildInFlight = false;
-      }
-    });
-  };
+  const scheduleRebuild = createRebuildScheduler({
+    isDestroyed: () => destroyed,
+    fetchGenerationId,
+    getPinnedGeneration: () => generationId,
+    onGenerationUnchanged: () => {
+      // Near-unreachable (/api/info and the gate disagreeing). Nothing to
+      // rebuild — and deliberately NO socket cycling here: in
+      // @hocuspocus/provider 3.x, disconnect() latches shouldConnect=false
+      // and an immediate connect() early-returns while the denied socket
+      // still reports "connected", leaving the socket permanently down.
+      // Left alone, the server's ~30s idle close fires, the provider
+      // auto-reconnects and re-sends Auth — the state self-heals.
+      console.warn("[Tandem] Provider auth failed without a generation change");
+    },
+    rebuild: (gen) => {
+      console.warn("[Tandem] Server restarted — resyncing documents");
+      teardownAllTabs();
+      bootstrapCleanup?.();
+      // Banner state set AFTER cleanup (bootstrapCleanup clears restartTimer).
+      serverRestarted = true;
+      lastAppliedActiveEpoch = null;
+      restartTimer = setTimeout(() => {
+        serverRestarted = false;
+      }, 5000);
+      startBootstrap(gen);
+    },
+    sleep,
+  });
 
   // ---------- handleDocumentList: reconcile tabs from server-broadcast list ----------
   const handleDocumentList = (

@@ -36,6 +36,13 @@ class LoopbackOriginWebSocket extends WebSocket {
   }
 }
 
+/** ws subclass presenting a disallowed Origin — simulates a DNS-rebinding page. */
+class EvilOriginWebSocket extends WebSocket {
+  constructor(url: string | URL) {
+    super(url, [], { headers: { Origin: "http://evil.example.com" } });
+  }
+}
+
 /** OS-assigned free port — avoids Windows' reserved 49152–49251 collisions. */
 function freeEphemeralPort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -171,6 +178,35 @@ describe("stale-tab generation gate", () => {
     clients.push(tokenless);
     await waitForEvent(tokenless, "authenticationFailed");
     expect(tokenless.isAuthenticated).toBe(false);
+  });
+
+  it("rejects a disallowed origin even with a valid generation token", async () => {
+    // Pins the origin check that runs inside onAuthenticate (the authoritative
+    // DNS-rebinding copy — onConnect's copy races queued message processing).
+    // The token is VALID so only the origin can be what rejects this client.
+    populateServerDoc("room-evil-origin", "server content");
+    const evil = new HocuspocusProvider({
+      url: `ws://127.0.0.1:${port}`,
+      name: "room-evil-origin",
+      document: makeDoc("evil content"),
+      token: "gen-current",
+      WebSocketPolyfill: EvilOriginWebSocket as unknown as typeof globalThis.WebSocket,
+    });
+    clients.push(evil);
+
+    // Either gate may win the race (onAuthenticate → authenticationFailed,
+    // onConnect → socket close); the invariant is that sync NEVER happens.
+    const outcome = await Promise.race([
+      waitForEvent(evil, "synced").then(() => "synced"),
+      waitForEvent(evil, "authenticationFailed").then(() => "rejected"),
+      waitForEvent(evil, "disconnect").then(() => "rejected"),
+    ]);
+    expect(outcome).toBe("rejected");
+    await sleep(300);
+    const serverContent =
+      getDocument("room-evil-origin")?.getXmlFragment("default").toString() ?? "";
+    expect(serverContent).toContain("server content");
+    expect(serverContent).not.toContain("evil content");
   });
 
   it("fails closed when no generation exists yet", async () => {

@@ -201,6 +201,7 @@ const BASE_DEPS = {
   storagePath: "/tmp/sessions",
   getTokenFilePath: () => `/tmp/token-file-${Date.now()}`,
   changelogPath: "/tmp/CHANGELOG.md",
+  getGenerationId: () => "gen-test",
 };
 
 describe("GET /api/info — non-loopback branch (unit)", () => {
@@ -223,9 +224,45 @@ describe("GET /api/info — non-loopback branch (unit)", () => {
     // Public fields must still be present
     expect(body.version).toBe("0.0.0-test");
     expect(body.transport).toBe("http");
-    // Sensitive fields must be absent
+    // Sensitive fields must be absent — generationId included: it's the
+    // Hocuspocus auth token clients pin, scoped loopback-only to match its
+    // consumer's reach (Hocuspocus binds 127.0.0.1).
     expect("storagePath" in body).toBe(false);
     expect("tokenRotatedAt" in body).toBe(false);
+    expect("generationId" in body).toBe(false);
+  });
+});
+
+describe("GET /api/info — generationId field (unit)", () => {
+  it("includes the generation id for loopback callers", async () => {
+    const handler = makeInfoHandler(BASE_DEPS);
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect(body.generationId).toBe("gen-test");
+  });
+
+  it("returns null before writeGenerationId() has run (dep absent)", async () => {
+    const handler = makeInfoHandler({ ...BASE_DEPS, getGenerationId: undefined });
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect("generationId" in body).toBe(true);
+    expect(body.generationId).toBeNull();
   });
 });
 

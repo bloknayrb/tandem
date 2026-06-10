@@ -79,7 +79,16 @@ function assertAllowedOrigin(origin: string | undefined): void {
     console.error("[Hocuspocus] Rejected connection: missing Origin header");
     throw new Error("Connection rejected: missing origin header");
   }
-  const url = new URL(origin);
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    // e.g. the literal "null" Origin from sandboxed/opaque contexts. Hocuspocus
+    // catches a bare URL TypeError too (still fail-closed), but without this
+    // log the rejection would be the only origin-deny path with no trace.
+    console.error("[Hocuspocus] Rejected connection: unparseable origin: %s", origin);
+    throw new Error("Connection rejected: invalid origin");
+  }
   if (url.hostname !== "127.0.0.1" && url.hostname !== TAURI_HOSTNAME) {
     console.error(`[Hocuspocus] Rejected connection from origin: ${origin}`);
     throw new Error("Connection rejected: invalid origin");
@@ -112,7 +121,9 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     // presents the previous run's id and is rejected before its stale Y.Doc
     // state can CRDT-merge into (and corrupt) the freshly-loaded document.
     // CTRL_ROOM is deliberately NOT exempt: a stale ctrl client merging back
-    // can clobber the broadcast generation id / openDocuments list itself.
+    // can clobber the broadcast openDocuments list itself (and in the old
+    // design could clobber a map-broadcast generation id — which is why the
+    // id now lives in module state and travels over HTTP only).
     async onAuthenticate({ token, documentName, requestHeaders }) {
       assertAllowedOrigin(requestHeaders?.origin);
       const expected = getExpectedGenerationToken?.() ?? null;
