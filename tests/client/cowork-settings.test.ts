@@ -6,6 +6,7 @@ import {
   formatCoworkError,
   isTauriRuntime,
   makeDebouncer,
+  undetectedDetail,
   workspaceFileStatusFamily,
   workspaceFileStatusLabel,
 } from "../../src/client/cowork/cowork-helpers.js";
@@ -65,6 +66,54 @@ describe("coworkSettingsVariant", () => {
     expect(coworkSettingsVariant(makeStatus({ osSupported: false, coworkDetected: false }))).toBe(
       "unsupported",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// undetectedDetail
+// ---------------------------------------------------------------------------
+
+describe("undetectedDetail", () => {
+  it("returns 'noClaude' when Claude Desktop is not detected", () => {
+    expect(
+      undetectedDetail(makeStatus({ coworkDetected: false, claudeDesktopDetected: false })),
+    ).toBe("noClaude");
+  });
+
+  it("returns 'noClaude' when the field is absent (stale pre-field sidecar)", () => {
+    const status = makeStatus({ coworkDetected: false });
+    delete (status as Record<string, unknown>).claudeDesktopDetected;
+    expect(undetectedDetail(status)).toBe("noClaude");
+  });
+
+  it("returns 'noWorkspacesYet' when Claude is present but Cowork never ran", () => {
+    expect(
+      undetectedDetail(
+        makeStatus({ coworkDetected: false, claudeDesktopDetected: true, workspacesBlocked: 0 }),
+      ),
+    ).toBe("noWorkspacesYet");
+  });
+
+  it("returns 'noWorkspacesYet' when workspacesBlocked is absent (stale sidecar)", () => {
+    const status = makeStatus({ coworkDetected: false, claudeDesktopDetected: true });
+    delete (status as Record<string, unknown>).workspacesBlocked;
+    expect(undetectedDetail(status)).toBe("noWorkspacesYet");
+  });
+
+  it("returns 'blocked' when sessions exist but every one was guard-rejected", () => {
+    expect(
+      undetectedDetail(
+        makeStatus({ coworkDetected: false, claudeDesktopDetected: true, workspacesBlocked: 3 }),
+      ),
+    ).toBe("blocked");
+  });
+
+  it("'noClaude' wins over 'blocked' (no Claude install signal at all)", () => {
+    expect(
+      undetectedDetail(
+        makeStatus({ coworkDetected: false, claudeDesktopDetected: false, workspacesBlocked: 3 }),
+      ),
+    ).toBe("noClaude");
   });
 });
 
