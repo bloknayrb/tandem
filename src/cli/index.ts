@@ -11,7 +11,20 @@
  *   tandem --version     Show version
  */
 
-import updateNotifier from "update-notifier";
+import { nodeVersionError } from "./node-version.js";
+
+// Must run before any Tandem code — npm's `engines` field only warns at
+// install time, so an old-Node user otherwise reaches a cryptic runtime
+// failure deep in the server. update-notifier is imported dynamically below
+// so it can't evaluate ahead of this guard. (In the bundled CLI, tsup's
+// splitting:false inlines the subcommand modules and hoists their external
+// deps — zod, the MCP SDK, env-paths — above this guard; those all load
+// cleanly on Node 18/20, so the guard still fires before anything breaks.)
+const versionError = nodeVersionError(process.version);
+if (versionError) {
+  console.error(versionError);
+  process.exit(1);
+}
 
 process.once("uncaughtException", (err: unknown) => {
   const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -33,14 +46,6 @@ declare const __TANDEM_VERSION__: string;
 const version = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : "0.0.0-dev";
 
 const args = process.argv.slice(2);
-
-// Skip the update notifier for stdio subcommands — the output is machine-consumed
-// by Claude Desktop's plugin loader, and any incidental write risks corrupting
-// the MCP wire or producing log noise no human will ever read.
-const isStdioMode = args[0] === "mcp-stdio" || args[0] === "channel";
-if (!isStdioMode) {
-  updateNotifier({ pkg: { name: "tandem-editor", version } }).notify();
-}
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`tandem v${version}
@@ -72,6 +77,16 @@ Usage:
 if (args.includes("--version") || args.includes("-v")) {
   console.log(version);
   process.exit(0);
+}
+
+// --help/--version exit above without paying the import. Skipped for stdio
+// subcommands — the output is machine-consumed by Claude Desktop's plugin
+// loader, and any incidental write risks corrupting the MCP wire or producing
+// log noise no human will ever read.
+const isStdioMode = args[0] === "mcp-stdio" || args[0] === "channel";
+if (!isStdioMode) {
+  const { default: updateNotifier } = await import("update-notifier");
+  updateNotifier({ pkg: { name: "tandem-editor", version } }).notify();
 }
 
 try {
