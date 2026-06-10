@@ -35,6 +35,17 @@ The server must be running before Claude Code probes the MCP URL. Start it first
 
 If you restart the server while Claude Code is open, run `/mcp` inside Claude Code to reconnect.
 
+## MCP shows connected but Tandem tools fail
+
+`/mcp` showing `tandem ✔ connected` proves the config entry resolved at session start — a tool call is the first *real* round-trip, so it's the call that surfaces a dead or stale server. In likelihood order:
+
+1. **The server isn't running anymore.** The connection state is cached from session start. Launch Tandem (or `tandem` in a terminal), then `/mcp` to reconnect.
+2. **Stale URL or port.** If you've set `TANDEM_MCP_PORT` (or an old install used a different port), `~/.claude.json`'s `mcpServers.tandem.url` points at the wrong place. Re-run the in-app integration wizard or `tandem setup --apply`.
+3. **Stale auth token.** A rotated token with an old `Authorization` header in a non-Claude client config rejects every call (Claude configs are updated automatically by `tandem rotate-token`).
+4. **Orphaned entry from an old install.** You uninstalled (or reinstalled differently) and the old `mcpServers.tandem` entry survived. Re-run the wizard, or remove the entry — see [data-locations.md](data-locations.md) for every place Tandem writes config and the `tandem --uninstall-scrub` command that cleans them.
+
+`tandem doctor` (or **Settings → About → Copy Diagnostics**) distinguishes 1 from 2–4: if the health checks pass but tool calls still fail, the problem is on the config side.
+
 ## Port already in use
 
 Tandem kills stale processes on `:3478` / `:3479` at startup. If another application owns those ports and won't yield, set alternate ports:

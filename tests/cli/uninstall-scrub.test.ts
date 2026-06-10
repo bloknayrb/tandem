@@ -156,6 +156,24 @@ describe("rewriteJson", () => {
     expect(_writeFileSpy).not.toHaveBeenCalled();
   });
 
+  it("logs malformed JSON without the parse-error detail (token-bearing files)", async () => {
+    // V8 SyntaxError messages embed a source snippet; if that snippet held a
+    // bearer token it would land in uninstall.log. The warn line must carry
+    // the path only.
+    _readFileSpy.mockResolvedValue('{"mcpServers": {"tandem": {"env": {"SECRET_TOKEN_VALUE"');
+
+    const { rewriteJson } = await import("../../src/cli/uninstall-scrub.js");
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), close: async () => {} };
+    const result = await rewriteJson("/fake/installed_plugins.json", () => true, logger);
+    expect(result).toBe(false);
+    expect(_writeFileSpy).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledOnce();
+    const line = logger.warn.mock.calls[0][0] as string;
+    expect(line).toContain("/fake/installed_plugins.json");
+    expect(line).not.toContain("SECRET_TOKEN_VALUE");
+    expect(line).not.toContain("Unexpected");
+  });
+
   it("writes and renames when mutate returns true", async () => {
     const initial = JSON.stringify({ mcpServers: { tandem: {} } });
     _readFileSpy.mockResolvedValue(initial);
