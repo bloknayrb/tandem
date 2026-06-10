@@ -78,8 +78,11 @@ jobs:
       # `beforeBuildCommand: npm run build` produces the dist/client + dist/server
       # bundles (the build resources tauri_build::build() checks) as part of the
       # build below, so an explicit `npm run build` here would just build twice.
+      # `--debug` and `--no-bundle` are `tauri build` flags, so they must NOT sit
+      # behind `--` (which forwards args to the underlying `cargo build`, where
+      # `--debug` is rejected: it is cargo's default, not an accepted flag).
       - name: Build Tauri debug binary
-        run: cargo tauri build -- --debug --no-bundle
+        run: cargo tauri build --debug --no-bundle
 
       - name: Install harness dependencies
         working-directory: tests/tauri-driver
