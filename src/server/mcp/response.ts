@@ -5,12 +5,49 @@
 
 type McpToolResult = {
   content: Array<{ type: "text"; text: string }>;
+  /** MCP structured content — present on tools that declare an outputSchema. */
+  structuredContent?: Record<string, unknown>;
+  /** MCP-level error marker. Set for error envelopes returned by tools that
+   *  declare an outputSchema (the SDK skips output validation for isError
+   *  results, so error envelopes don't need structuredContent). */
+  isError?: boolean;
 };
 
 /** Wrap a successful response in the MCP content envelope */
 export function mcpSuccess<T>(data: T): McpToolResult {
   return {
     content: [{ type: "text" as const, text: JSON.stringify({ error: false, data }) }],
+  };
+}
+
+/**
+ * Like `mcpSuccess`, but additionally exposes `data` as MCP `structuredContent`
+ * for tools that declare an `outputSchema` (typed non-Claude clients validate
+ * responses against it). The text envelope is unchanged — `structuredContent`
+ * is additive, and both carry the exact same payload.
+ */
+export function mcpStructured<T extends Record<string, unknown>>(data: T): McpToolResult {
+  return {
+    ...mcpSuccess(data),
+    structuredContent: data as Record<string, unknown>,
+  };
+}
+
+/**
+ * Wrap a handler for a tool that declares an `outputSchema`. Any result
+ * lacking `structuredContent` (i.e. an `mcpError` envelope, including the
+ * `withErrorBoundary` INTERNAL_ERROR fallback) is marked `isError: true` so
+ * the SDK's output validation — which requires structuredContent on every
+ * non-error result — skips it. The text envelope still carries the
+ * `{ error: true, code, message }` JSON that existing clients parse.
+ */
+export function withStructuredErrors<TArgs extends Record<string, unknown>>(
+  handler: (args: TArgs) => Promise<McpToolResult>,
+): (args: TArgs) => Promise<McpToolResult> {
+  return async (args: TArgs) => {
+    const result = await handler(args);
+    if (result.structuredContent === undefined) return { ...result, isError: true };
+    return result;
   };
 }
 

@@ -52,11 +52,18 @@ import {
 } from "./document-service.js";
 import { openFileByPath, openScratchpad } from "./file-opener.js";
 import {
+  getTextContentOutputShape,
+  listDocumentsOutputShape,
+  statusOutputShape,
+} from "./output-schemas.js";
+import {
   getErrorMessage,
   mcpError,
+  mcpStructured,
   mcpSuccess,
   noDocumentError,
   withErrorBoundary,
+  withStructuredErrors,
 } from "./response.js";
 import { withTypingPresence } from "./typing-presence.js";
 
@@ -266,7 +273,7 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_open",
-    "Open a file in the Tandem editor. Returns a documentId for multi-document workflows. Auto-opens editor. Pass force=true to reload from disk if the file changed externally.",
+    "Open a file in the Tandem editor; returns a documentId. Auto-opens the editor. force=true reloads from disk if the file changed externally.",
     {
       filePath: z.string().describe("Absolute path to the file to open"),
       force: z
@@ -277,7 +284,7 @@ export function registerDocumentTools(server: McpServer): void {
         .literal("claude")
         .optional()
         .describe(
-          "Pass 'claude' when you authored this document wholesale (wrote the file, then opened it) to attribute its text to Claude. Stamps Claude authorship across the loaded content. Idempotent — safe to re-pass on re-open.",
+          "Pass 'claude' when you wrote this file wholesale before opening, to stamp Claude authorship across its content. Idempotent.",
         ),
     },
     withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }) => {
@@ -334,13 +341,13 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_scratchpad",
-    "Create and open a new Scratchpad tab, optionally seeded with markdown content. Scratchpads are ephemeral — content is lost when the tab is closed. Useful for drafting, brainstorming, or working on throwaway content without touching the filesystem.",
+    "Open a new ephemeral Scratchpad tab for drafting — never touches the filesystem; content is lost when the tab closes. Optionally seed with markdown.",
     {
       content: z
         .string()
         .optional()
         .describe(
-          "Optional initial markdown content. Block structure — headings, lists, blank-line-separated paragraphs — is parsed into real blocks.",
+          "Initial markdown. Block structure (headings, lists, blank-line-separated paragraphs) is parsed into real blocks.",
         ),
     },
     withErrorBoundary("tandem_scratchpad", async ({ content }) => {
@@ -353,35 +360,41 @@ export function registerDocumentTools(server: McpServer): void {
     }),
   );
 
-  server.tool(
+  server.registerTool(
     "tandem_getTextContent",
-    "Read document as plain text. ~60% fewer tokens than getContent().",
     {
-      section: z.string().optional().describe("Optional heading text to read only that section"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID (defaults to active document)"),
+      description:
+        "Read document as plain text whose offsets match the annotation coordinate system.",
+      inputSchema: {
+        section: z.string().optional().describe("Optional heading text to read only that section"),
+        documentId: z
+          .string()
+          .optional()
+          .describe("Target document ID (defaults to active document)"),
+      },
+      outputSchema: getTextContentOutputShape,
     },
-    withErrorBoundary("tandem_getTextContent", async ({ section, documentId }) => {
-      const r = requireDocument(documentId);
-      if (!r) return noDocumentError();
+    withStructuredErrors(
+      withErrorBoundary("tandem_getTextContent", async ({ section, documentId }) => {
+        const r = requireDocument(documentId);
+        if (!r) return noDocumentError();
 
-      if (section) {
-        const fragment = r.doc.getXmlFragment("default");
-        const result = getSection(fragment, section);
-        if (!result.found) {
-          return mcpError("INVALID_RANGE", `Section "${section}" not found in document.`);
+        if (section) {
+          const fragment = r.doc.getXmlFragment("default");
+          const result = getSection(fragment, section);
+          if (!result.found) {
+            return mcpError("INVALID_RANGE", `Section "${section}" not found in document.`);
+          }
+          return mcpStructured({ text: result.text, filePath: r.filePath, section });
         }
-        return mcpSuccess({ text: result.text, filePath: r.filePath, section });
-      }
 
-      // Always use extractText — its offsets match validateRange/anchoredRange.
-      // extractMarkdown adds markdown syntax (e.g. `> ` for blockquotes) that
-      // shifts offsets, causing RANGE_MOVED errors in annotation tools.
-      const text = extractText(r.doc);
-      return mcpSuccess({ text, filePath: r.filePath, documentId: r.docId });
-    }),
+        // Always use extractText — its offsets match validateRange/anchoredRange.
+        // extractMarkdown adds markdown syntax (e.g. `> ` for blockquotes) that
+        // shifts offsets, causing RANGE_MOVED errors in annotation tools.
+        const text = extractText(r.doc);
+        return mcpStructured({ text, filePath: r.filePath, documentId: r.docId });
+      }),
+    ),
   );
 
   server.tool(
@@ -581,13 +594,11 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_appendContent",
-    "Append structured markdown to the END of the document. Unlike tandem_edit (single-paragraph, literal newlines), this parses headings, lists, and blank-line-separated paragraphs into real blocks. Non-destructive — existing content and annotations are untouched. Also seeds an empty document. Markdown documents only.",
+    "Append markdown to the END of the document, parsing headings/lists/paragraphs into real blocks (unlike tandem_edit, which is single-paragraph with literal newlines). Non-destructive; also seeds an empty document. Markdown documents only.",
     {
       content: z
         .string()
-        .describe(
-          "Markdown to append to the end of the document. Block structure — headings, lists, blank-line-separated paragraphs — is parsed into real blocks.",
-        ),
+        .describe("Markdown to append. Block structure is parsed into real blocks."),
       documentId: z
         .string()
         .optional()
@@ -713,81 +724,87 @@ export function registerDocumentTools(server: McpServer): void {
     }),
   );
 
-  server.tool(
+  server.registerTool(
     "tandem_status",
-    "Check editor status (no params), or set your visible status text (pass text). The connected AI client's status appears in the editor's status bar.",
     {
-      text: z.string().optional().describe("Status text to display — omit for read-only"),
-      focusParagraph: z
-        .number()
-        .optional()
-        .describe("Index of paragraph the AI is focusing on (write mode only)"),
-      focusOffset: z
-        .number()
-        .optional()
-        .describe("Flat character offset for precise cursor positioning (write mode only)"),
-      documentId: z
-        .string()
-        .optional()
-        .describe("Target document ID for status write (defaults to active document)"),
-    },
-    withErrorBoundary(
-      "tandem_status",
-      async ({ text, focusParagraph, focusOffset, documentId }) => {
-        // Write mode — update Claude's status shown in the editor
-        if (text !== undefined) {
-          const current = getCurrentDoc(documentId);
-          if (!current) {
-            return mcpSuccess({
-              status: text,
-              warning: "No document open — status not broadcast to editor.",
-            });
-          }
-          const doc = getOrCreateDocument(current.docName);
-          const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
-          withMcp(doc, () => {
-            // #651: preserve the in-flight `working` marker so a status
-            // update during a wrapped tool call (tandem_comment / _edit /
-            // _reply / _annotationReply) doesn't wipe the typing indicator.
-            const prev = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
-            awarenessMap.set(Y_MAP_CLAUDE, {
-              status: text,
-              timestamp: Date.now(),
-              active: true,
-              focusParagraph: focusParagraph ?? null,
-              focusOffset: focusOffset ?? null,
-              ...(prev?.working ? { working: prev.working } : {}),
-            });
-          });
-          return mcpSuccess({ status: text });
-        }
-
-        // Read mode — return editor status summary
-        const activeId = getActiveDocId();
-        const active = activeId ? openDocs.get(activeId) : null;
-
-        const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-        const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-        const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(
-          ctrlAwareness.get(Y_MAP_MODE),
-        );
-
-        return mcpSuccess({
-          running: true,
-          mode,
-          storeReadOnly: isStoreReadOnly(),
-          activeDocument: active
-            ? { documentId: active.id, filePath: active.filePath, format: active.format }
-            : null,
-          openDocuments: Array.from(openDocs.values()).map((d) => ({
-            documentId: d.id,
-            filePath: d.filePath,
-            format: d.format,
-            readOnly: d.readOnly,
-          })),
-          documentCount: docCount(),
-        });
+      description:
+        "Read editor status (no params) or set your visible status text (pass text), shown in the editor's status bar.",
+      inputSchema: {
+        text: z.string().optional().describe("Status text to display — omit for read-only"),
+        focusParagraph: z
+          .number()
+          .optional()
+          .describe("Index of paragraph the AI is focusing on (write mode only)"),
+        focusOffset: z
+          .number()
+          .optional()
+          .describe("Flat character offset for precise cursor positioning (write mode only)"),
+        documentId: z
+          .string()
+          .optional()
+          .describe("Target document ID for status write (defaults to active document)"),
       },
+      outputSchema: statusOutputShape,
+    },
+    withStructuredErrors(
+      withErrorBoundary(
+        "tandem_status",
+        async ({ text, focusParagraph, focusOffset, documentId }) => {
+          // Write mode — update Claude's status shown in the editor
+          if (text !== undefined) {
+            const current = getCurrentDoc(documentId);
+            if (!current) {
+              return mcpStructured({
+                status: text,
+                warning: "No document open — status not broadcast to editor.",
+              });
+            }
+            const doc = getOrCreateDocument(current.docName);
+            const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
+            withMcp(doc, () => {
+              // #651: preserve the in-flight `working` marker so a status
+              // update during a wrapped tool call (tandem_comment / _edit /
+              // _reply / _annotationReply) doesn't wipe the typing indicator.
+              const prev = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
+              awarenessMap.set(Y_MAP_CLAUDE, {
+                status: text,
+                timestamp: Date.now(),
+                active: true,
+                focusParagraph: focusParagraph ?? null,
+                focusOffset: focusOffset ?? null,
+                ...(prev?.working ? { working: prev.working } : {}),
+              });
+            });
+            return mcpStructured({ status: text });
+          }
+
+          // Read mode — return editor status summary
+          const activeId = getActiveDocId();
+          const active = activeId ? openDocs.get(activeId) : null;
+
+          const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+          const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
+          const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(
+            ctrlAwareness.get(Y_MAP_MODE),
+          );
+
+          return mcpStructured({
+            running: true,
+            mode,
+            storeReadOnly: isStoreReadOnly(),
+            activeDocument: active
+              ? { documentId: active.id, filePath: active.filePath, format: active.format }
+              : null,
+            openDocuments: Array.from(openDocs.values()).map((d) => ({
+              documentId: d.id,
+              filePath: d.filePath,
+              format: d.format,
+              readOnly: d.readOnly,
+            })),
+            documentCount: docCount(),
+          });
+        },
+      ),
     ),
   );
 
@@ -817,7 +834,7 @@ export function registerDocumentTools(server: McpServer): void {
 
   server.tool(
     "tandem_rename",
-    "Rename an open on-disk document's file (same directory, same extension). Keeps the document open and its annotations intact. Renames the active document if no documentId is given. Not for scratchpads/uploads or read-only files.",
+    "Rename an open on-disk file (same directory, same extension); document stays open with annotations intact. Not for scratchpads/uploads or read-only files.",
     {
       newName: z
         .string()
@@ -852,20 +869,25 @@ export function registerDocumentTools(server: McpServer): void {
     }),
   );
 
-  server.tool(
+  server.registerTool(
     "tandem_listDocuments",
-    "List all open documents with their IDs, file paths, and formats.",
-    {},
-    withErrorBoundary("tandem_listDocuments", async () => {
-      return mcpSuccess({
-        documents: Array.from(openDocs.values()).map((d) => ({
-          ...toDocListEntry(d),
-          isActive: d.id === getActiveDocId(),
-        })),
-        activeDocumentId: getActiveDocId(),
-        count: docCount(),
-      });
-    }),
+    {
+      description: "List all open documents with their IDs, file paths, and formats.",
+      inputSchema: {},
+      outputSchema: listDocumentsOutputShape,
+    },
+    withStructuredErrors(
+      withErrorBoundary("tandem_listDocuments", async () => {
+        return mcpStructured({
+          documents: Array.from(openDocs.values()).map((d) => ({
+            ...toDocListEntry(d),
+            isActive: d.id === getActiveDocId(),
+          })),
+          activeDocumentId: getActiveDocId(),
+          count: docCount(),
+        });
+      }),
+    ),
   );
 
   server.tool(
