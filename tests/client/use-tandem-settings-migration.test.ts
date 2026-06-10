@@ -457,6 +457,28 @@ describe("loadSettings — migration chain", () => {
     expect(s.formattingBarVisible).toBe(expected);
   });
 
+  // v14→v15: introduce railHoverReveal (default true). Pure bump — a pre-v15
+  // blob with no railHoverReveal defaults to true (new hover-to-float behavior).
+  // (Renumbered from v13→v14 when #993's systemLightVariant claimed v14.)
+  it("v14→v15: railHoverReveal defaults true when absent", () => {
+    writeRaw({ schemaVersion: 14, theme: "dark" });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.railHoverReveal).toBe(true);
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it.each([
+    { why: "explicit false survives the bump", val: false, expected: false },
+    { why: "explicit true survives the bump", val: true, expected: true },
+  ])("v14→v15: railHoverReveal=$val — $why", ({ val, expected }) => {
+    writeRaw({ schemaVersion: 14, railHoverReveal: val });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.railHoverReveal).toBe(expected);
+  });
+
   it("v8 blob migrates to current with customShortcuts defaulting to {}", () => {
     writeRaw({ schemaVersion: 8, leftPanelVisible: true });
     const s = loadSettings();

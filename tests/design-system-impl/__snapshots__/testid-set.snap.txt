@@ -19,6 +19,7 @@ annotation-sort-toggle
 annotations-tab
 app-info-footer
 appearance-formatting-bar
+appearance-rail-hover-reveal
 appearance-show-raw-markdown
 appearance-system-light-warm
 apply-changes-btn
@@ -250,6 +251,8 @@ popup-highlight-none
 popup-highlight-{*}
 popup-note-submit
 popup-show-formatbar-btn
+railFloat.left ? "rail-float-left" : undefined
+railFloat.right ? "rail-float-right" : undefined
 recent-file-{*}
 recent-files-list
 reduce-motion-toggle

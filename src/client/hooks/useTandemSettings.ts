@@ -159,6 +159,11 @@ export interface TandemSettings {
   // always-full selection popup mirrors every bar control, so formatting stays
   // reachable while hidden (and Ctrl+Z/Y still drive undo/redo). Default true.
   formattingBarVisible: boolean;
+  // When true, hovering a closed rail floats its panel over the editor (without
+  // reflowing it); clicking the edge/peek zone while floating pins it. When
+  // false, the rails only reveal on click (the classic 14→28px peek-grow on
+  // hover returns). Default true.
+  railHoverReveal: boolean;
   soloRailHidden: boolean;
   degradedBannerDelayMs: number;
   // TODO(v0.11.0): wire to yjsSync reconnect strategy
@@ -228,7 +233,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 14,
+  schemaVersion: 15,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -248,6 +253,7 @@ const DEFAULTS: TandemSettings = {
   annotationPatterns: false,
   selectionToolbar: true,
   formattingBarVisible: true,
+  railHoverReveal: true,
   soloRailHidden: true,
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
@@ -446,8 +452,14 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   pure version bump; `normalizeKnownFields` defaults a missing field to
  *   `"light"` (preserving prior behavior: system-light always resolved to the
  *   neutral `light` theme) and preserves an explicit `"warm"`.
+ * v14→v15: introduce `railHoverReveal: true` (hover-reveal floating rails).
+ *   Cross-branch fold-in — the rail feature branched while v14 was the head and
+ *   independently reused v14; renumbered to v15 to keep the chain monotonic now
+ *   that #993's `systemLightVariant` owns v14. Pure version bump —
+ *   `normalizeKnownFields` defaults a missing field to true, preserving the new
+ *   hover-to-float behavior for existing users.
  */
-export const CURRENT_SCHEMA_VERSION = 14;
+export const CURRENT_SCHEMA_VERSION = 15;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -531,6 +543,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
     formattingBarVisible:
       parsed.formattingBarVisible === false ? false : DEFAULTS.formattingBarVisible,
+    railHoverReveal: parsed.railHoverReveal === false ? false : DEFAULTS.railHoverReveal,
     soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
     degradedBannerDelayMs:
       typeof parsed.degradedBannerDelayMs === "number" &&
@@ -738,6 +751,13 @@ export function loadSettings(): TandemSettings {
         // "warm"). normalizeKnownFields defaults a missing field to "light"
         // (preserving prior behavior) and preserves an explicit "warm".
         parsed = { ...parsed, schemaVersion: 14 };
+      }
+      if (parsed.schemaVersion === 14) {
+        // v14→v15: introduce `railHoverReveal` (hover-reveal floating rails).
+        // Pure version bump — do NOT set the field here (that would clobber an
+        // explicit `false`). normalizeKnownFields defaults a missing field to
+        // true and preserves an explicit false.
+        parsed = { ...parsed, schemaVersion: 15 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
