@@ -281,7 +281,9 @@ Save the current document back to disk. Uses atomic write (temp file + rename).
 { "saved": true, "filePath": "C:\\Users\\bkolb\\docs\\report.md" }
 ```
 
-**Notes:** Read-only documents (.docx) save their session only (annotations persist), not the source file.
+**Notes:**
+- Read-only documents save their session only (annotations persist), not the source file.
+- Writable `.docx` documents save on **explicit save only** (never auto-save). The save writes the document body **plus pending `comment`-type annotations as Word comments** (`comments.xml` + range markers), anchored to their current ranges (#1068). `note` and `highlight` annotations are never written to the file (ADR-027), so un-promoted imported Word comments — which live as private notes until batch-promoted — are dropped from the saved file. Accepted/dismissed comments are dropped too (Word has no resolved-state channel we can write). Threaded replies flatten into the comment body with attribution lines; private replies (including imported Word reply threads) are never written.
 
 **Errors:** `FILE_LOCKED` (file open in another program)
 

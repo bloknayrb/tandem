@@ -57,7 +57,8 @@ const plaintextAdapter: FormatAdapter = {
  * in the Y.Doc and serializes to a `.docx` buffer on EXPLICIT save only. This
  * supersedes ADR-004's read-only default; the protective layer is now "never
  * overwrite without an explicit save" rather than `contenteditable=false`.
- * Body export only — Word comments + tracked changes stay v1.1.
+ * Exports body + Word comments (#1068; `comment`-type annotations only, per
+ * the ADR-027 gate in `docx-comment-export.ts`) — tracked changes stay deferred.
  *
  *   - `parse` runs `loadDocxWithWarnings` + `extractDocxComments` in parallel.
  *     mammoth import-fidelity warnings land as a `LoadIssue { kind: "other" }`
@@ -68,8 +69,9 @@ const plaintextAdapter: FormatAdapter = {
  *     synchronously inside the caller's transact. The snapshot/undo dance
  *     around inject lives here because Yjs doesn't roll back inner-transact
  *     writes when a callback throws.
- *   - `saveBinary` serializes the current Y.Doc body to a `.docx` buffer via
- *     `exportYDocToDocx` (trust-boundary-gated). NOT wired into auto-save.
+ *   - `saveBinary` serializes the current Y.Doc body + pending comment
+ *     annotations to a `.docx` buffer via `exportYDocToDocx`
+ *     (trust-boundary-gated). NOT wired into auto-save.
  */
 const docxAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
