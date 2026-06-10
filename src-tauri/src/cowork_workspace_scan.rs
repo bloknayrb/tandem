@@ -511,9 +511,11 @@ fn roots_under(packages_dir: Option<&Path>, roaming_config_dir: Option<&Path>) -
 /// inside its own container and receive Tandem's plugin-registry writes —
 /// including the auth token — across the app-sandbox boundary.
 ///
-/// [Unverified] the exact Store family name for Claude Desktop; if it differs,
-/// Store installs stay undetected (no regression vs the old `Claude_*` glob)
-/// and the fix is a one-line prefix addition here.
+/// Verified 2026-06: the real Store package family name is
+/// `Claude_pzs8sxrjxfjjc` (the app is registered as bare "Claude"), so
+/// `Claude_*` matches today's Store installs. The `AnthropicPBC.Claude`
+/// prefix is future-proofing in case the package is ever re-published under
+/// a publisher-qualified name.
 fn is_claude_package_name(name: &str) -> bool {
     name.starts_with("Claude_") || name.starts_with("AnthropicPBC.Claude")
 }
