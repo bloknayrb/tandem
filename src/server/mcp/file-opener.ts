@@ -1515,7 +1515,11 @@ export async function resolveExternalConflict(
     const stat = await fs.stat(resolvedFilePath).catch(() => null);
     withInternal(doc, () => {
       meta.delete(Y_MAP_EXTERNAL_CONFLICT);
-      if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
+      // Date.now() fallback when the file is transiently unreadable (e.g. a
+      // Word read-lock): clearing the flag without re-baselining would hide
+      // the banner while the external-modification guard kept blocking every
+      // subsequent save until the document was closed and reopened.
+      meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
     });
     return;
   }

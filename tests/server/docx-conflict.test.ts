@@ -244,6 +244,22 @@ describe("resolveExternalConflict", () => {
     expect(savedAt).toBe(stat.mtimeMs); // explicit save unblocked
   });
 
+  it('"keep" re-baselines via Date.now() when the file is unreadable, so saves stay unblocked', async () => {
+    const { filePath, id, doc } = await flaggedSetup();
+    const baselineBefore = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION) as number;
+    // Make fs.stat fail (transient lock / ENOENT). Without the fallback the
+    // banner clears but the stale baseline blocks every subsequent save.
+    await fs.rm(filePath);
+    const before = Date.now();
+
+    await resolveExternalConflict(id, "keep");
+
+    expect(conflictOf(doc)).toBeUndefined();
+    const savedAt = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION) as number;
+    expect(savedAt).toBeGreaterThanOrEqual(before);
+    expect(savedAt).toBeGreaterThan(baselineBefore);
+  });
+
   it('"reload" discards edits and loads the on-disk content', async () => {
     const { id, doc } = await flaggedSetup();
 
