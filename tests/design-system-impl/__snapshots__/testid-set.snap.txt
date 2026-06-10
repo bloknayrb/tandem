@@ -177,6 +177,7 @@ integration-wizard-install-success
 integration-wizard-keychain-fallback
 integration-wizard-more
 integration-wizard-pick-{*}
+integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
 integration-wizard-secret-submit-{*}
 integration-wizard-step-applying
@@ -285,6 +286,8 @@ settings-modal
 settings-modal-app-info-footer
 settings-modal-changelog-error
 settings-modal-close-btn
+settings-modal-connect-ai-btn
+settings-modal-connect-ai-callout
 settings-modal-content
 settings-modal-cowork-suspense-fallback
 settings-modal-default-mode-solo-btn

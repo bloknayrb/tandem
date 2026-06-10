@@ -576,6 +576,15 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                 </details>
               {/if}
             {/if}
+            <!-- First-run dismissal is persisted per server version, so the
+                 wizard never auto-reopens. Tell the user where the way back is
+                 before they close it (#1022). -->
+            <p
+              class="iw-hint-text iw-reopen-hint"
+              data-testid="integration-wizard-reopen-hint"
+            >
+              Not now? You can reopen this wizard anytime from Settings → AI Assistant.
+            </p>
           </section>
         {:else if wizard.step === "applying"}
           <section class="iw-step iw-center" data-testid="integration-wizard-step-applying">
@@ -1027,6 +1036,12 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
     line-height: 1.5;
     color: var(--tandem-fg-muted);
     margin: 0;
+  }
+
+  /* The parent .iw-step flex gap provides the spacing; only the tone differs
+     from a regular hint (it's an aside, not step guidance). */
+  .iw-reopen-hint {
+    color: var(--tandem-fg-subtle);
   }
 
   .iw-code {
