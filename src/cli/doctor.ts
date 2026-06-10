@@ -28,6 +28,7 @@ import { request } from "node:http";
 import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { parseLockfile } from "../server/annotations/lockfile.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
@@ -529,8 +530,10 @@ function checkAnnotationStore(r: Recorder): void {
 
   try {
     const raw = readFileSync(lockPath, "utf-8").trim();
-    const pid = Number.parseInt(raw, 10);
-    if (!Number.isFinite(pid)) {
+    // Current locks are v2 JSON (`{pid, startedAtMs, app}`, #1077); older ones
+    // are a bare PID. parseLockfile reads both and returns null for true garbage.
+    const lock = parseLockfile(raw);
+    if (lock === null) {
       r.warn(
         `Annotation store lock at ${lockPath} has unparseable content: "${raw}"`,
         "Restart Tandem or delete the lock file if no server is running.",
@@ -538,6 +541,7 @@ function checkAnnotationStore(r: Recorder): void {
       );
       return;
     }
+    const { pid } = lock;
     if (isPidLive(pid)) {
       r.pass(`Annotation store lock held by live PID ${pid}`, undefined, {
         lockHeld: true,

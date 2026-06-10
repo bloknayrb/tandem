@@ -25,6 +25,7 @@ import path from "node:path";
 import { atomicWrite } from "../file-io/index.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
+import { type LockfileContents, lockfilePayload, parseLockfile } from "./lockfile.js";
 import {
   isTandemLikeProcessName,
   type ProcessIdentity,
@@ -126,53 +127,10 @@ async function ensureDirReady(): Promise<void> {
 // Lockfile (concurrent-writer guard)
 // ---------------------------------------------------------------------------
 
-/** App identifier stamped into v2 lockfiles. */
-const LOCK_APP_ID = "tandem";
-
-/** Parsed contents of `store.lock` (v2 JSON or legacy raw-PID). */
-export interface LockfileContents {
-  pid: number;
-  /** v2 only — epoch ms when the holder took the lock. */
-  startedAtMs?: number;
-  /** v2 only — always `"tandem"` when written by Tandem. */
-  app?: string;
-}
-
-/** Serialize the v2 lockfile payload for the current process. */
-function lockfilePayload(): string {
-  return JSON.stringify({ pid: process.pid, startedAtMs: Date.now(), app: LOCK_APP_ID });
-}
-
-/**
- * Parse `store.lock` contents. Two formats:
- *   - v2 (#1077): JSON `{pid, startedAtMs?, app}` — written by current versions.
- *   - legacy: a bare PID string — written by older versions; must stay readable.
- *
- * Returns `null` for garbage content (callers treat that as a stale lock).
- * Exported for testing.
- */
-export function parseLockfile(raw: string): LockfileContents | null {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      const pid = parsed.pid;
-      if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return null;
-      return {
-        pid,
-        startedAtMs: typeof parsed.startedAtMs === "number" ? parsed.startedAtMs : undefined,
-        app: typeof parsed.app === "string" ? parsed.app : undefined,
-      };
-    } catch {
-      return null;
-    }
-  }
-  // Legacy raw-PID format. parseInt (not Number()) preserves the historical
-  // tolerance for trailing junk after the digits.
-  const pid = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(pid) || pid <= 0) return null;
-  return { pid };
-}
+// Lockfile format + parsing live in ./lockfile.ts so the `tandem doctor` CLI can
+// read a lock without pulling in this module's file-io/notifications/platform
+// deps (imported above). Re-exported here for existing importers (tests, callers).
+export { type LockfileContents, parseLockfile };
 
 /**
  * Signal-0 liveness check. ESRCH = no such process; EPERM = exists but we
