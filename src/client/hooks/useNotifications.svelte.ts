@@ -3,6 +3,7 @@ import { API_NOTIFY_STREAM } from "../../shared/api-paths.js";
 import {
   ACTIVITY_HISTORY_CAP,
   ACTIVITY_HISTORY_KEY,
+  ACTIVITY_INFO_TTL_MS,
   DEFAULT_MCP_PORT,
   MAX_VISIBLE_TOASTS,
   TOAST_DISMISS_MS,
@@ -64,7 +65,7 @@ interface CreateOpts {
   storageKey?: string;
 }
 
-const INFO_TTL = TOAST_DISMISS_MS.info;
+const INFO_TTL = ACTIVITY_INFO_TTL_MS;
 const SAVE_DEBOUNCE_MS = 250;
 
 function isInfoExpired(item: TandemNotification, now: number): boolean {
