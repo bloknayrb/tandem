@@ -353,6 +353,10 @@ function cycleWordMode() {
       opacity: 0.7;
     }
   }
+  :global(body.tandem-reduce-motion) .claude-working-dot {
+    animation: none;
+    opacity: 0.7;
+  }
   @media (forced-colors: active) {
     .claude-working-dot {
       outline: 1px solid ButtonText;
