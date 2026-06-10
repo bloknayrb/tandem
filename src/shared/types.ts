@@ -293,6 +293,34 @@ export interface SessionData {
   ydocState: string; // Base64-encoded Y.encodeStateAsUpdate()
   sourceFileMtime: number; // Source file mtime at save — detect external changes on resume
   lastAccessed: number;
+  /**
+   * True when the Y.Doc held unsaved (not-written-to-disk) body edits at
+   * session-save time (#1069). Drives the `.docx` restore-vs-reload prompt:
+   * a dirty `.docx` session is the ONLY copy of those edits (binary formats
+   * never auto-save to disk), so restore keeps it even when the source file
+   * changed, and the user is prompted to keep or reload. Absent/false on
+   * sessions written before this field existed — treated as clean.
+   */
+  dirty?: boolean;
+}
+
+/**
+ * Per-document external-conflict state (#1069, `.docx` only). Stored in
+ * Y_MAP_DOCUMENT_META under Y_MAP_EXTERNAL_CONFLICT while the document's
+ * unsaved edits diverge from the on-disk source.
+ */
+export interface ExternalConflictState {
+  /**
+   * - "external-edit": the source file changed on disk while the open document
+   *   holds unsaved edits (file-watcher detection). Explicit save is blocked by
+   *   the external-modification guard until resolved.
+   * - "unsaved-restore": a session carrying unsaved edits was restored on
+   *   reopen/restart; the in-memory document diverges from the on-disk file.
+   */
+  kind: "external-edit" | "unsaved-restore";
+  /** True when the on-disk mtime diverged from the session/save baseline. Always true for "external-edit". */
+  diskChanged: boolean;
+  detectedAt: number;
 }
 
 /** Text selection snapshot captured when opening chat, attached to the next outgoing ChatMessage as its anchor. */
@@ -322,6 +350,7 @@ export interface TandemNotification {
     | "general-error"
     | "file-reloaded"
     | "review-pending"
+    | "external-conflict"
     | "launcher";
   severity: "info" | "warning" | "error";
   message: string;

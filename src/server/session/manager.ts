@@ -19,8 +19,21 @@ export function sessionKey(filePath: string): string {
   return encodeURIComponent(filePath.replace(/\\/g, "/"));
 }
 
-/** Save Y.Doc state + metadata as a session file */
-export async function saveSession(filePath: string, format: string, doc: Y.Doc): Promise<void> {
+/**
+ * Save Y.Doc state + metadata as a session file.
+ *
+ * `opts.dirty` (#1069): pass true when the doc holds body edits not yet written
+ * to disk (callers that know the docId pass `isDirty(docId)`). Consumed on
+ * reopen by the `.docx` restore-vs-reload prompt — a dirty `.docx` session is
+ * the only copy of those edits, so it restores even over a changed source file.
+ * Omitted (falsy) → field absent, matching pre-#1069 sessions.
+ */
+export async function saveSession(
+  filePath: string,
+  format: string,
+  doc: Y.Doc,
+  opts?: { dirty?: boolean },
+): Promise<void> {
   const key = sessionKey(filePath);
   let sourceFileMtime = 0;
   // Upload paths have no disk file — skip stat
@@ -42,6 +55,7 @@ export async function saveSession(filePath: string, format: string, doc: Y.Doc):
     ydocState,
     sourceFileMtime,
     lastAccessed: Date.now(),
+    ...(opts?.dirty ? { dirty: true } : {}),
   };
 
   if (!sessionDirReady) {

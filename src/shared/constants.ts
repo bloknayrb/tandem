@@ -119,6 +119,13 @@ export const Y_MAP_ACTIVE_DOCUMENT_ID = "activeDocumentId";
 export const Y_MAP_ACTIVE_DOCUMENT_EPOCH = "activeDocumentEpoch";
 export const Y_MAP_READ_ONLY = "readOnly";
 export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
+/**
+ * Per-document external-conflict state (#1069, `.docx` only). Holds an
+ * `ExternalConflictState` (see shared/types.ts) while the document's unsaved
+ * Y.Doc edits diverge from the on-disk source; absent otherwise. Written via
+ * `withInternal` (server metadata); cleared on resolve / reload / explicit save.
+ */
+export const Y_MAP_EXTERNAL_CONFLICT = "externalConflict";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 /**
