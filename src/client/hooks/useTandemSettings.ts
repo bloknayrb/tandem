@@ -137,6 +137,11 @@ export interface TandemSettings {
   // always-full selection popup mirrors every bar control, so formatting stays
   // reachable while hidden (and Ctrl+Z/Y still drive undo/redo). Default true.
   formattingBarVisible: boolean;
+  // When true, hovering a closed rail floats its panel over the editor (without
+  // reflowing it); clicking the edge/peek zone while floating pins it. When
+  // false, the rails only reveal on click (the classic 14→28px peek-grow on
+  // hover returns). Default true.
+  railHoverReveal: boolean;
   soloRailHidden: boolean;
   degradedBannerDelayMs: number;
   // TODO(v0.11.0): wire to yjsSync reconnect strategy
@@ -202,7 +207,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 13,
+  schemaVersion: 14,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -220,6 +225,7 @@ const DEFAULTS: TandemSettings = {
   annotationPatterns: false,
   selectionToolbar: true,
   formattingBarVisible: true,
+  railHoverReveal: true,
   soloRailHidden: true,
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
@@ -413,8 +419,11 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   safe regardless of the version step. Empty default preserves fresh-install
  *   behavior: with no override, `resolveFont` falls back to the global
  *   `editorFont`.
+ * v13→v14: introduce `railHoverReveal: true` (hover-reveal floating rails).
+ *   Pure version bump like v9→v10 — `normalizeKnownFields` defaults a missing
+ *   field to true, preserving the new hover-to-float behavior for existing users.
  */
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -491,6 +500,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     selectionToolbar: parsed.selectionToolbar === false ? false : DEFAULTS.selectionToolbar,
     formattingBarVisible:
       parsed.formattingBarVisible === false ? false : DEFAULTS.formattingBarVisible,
+    railHoverReveal: parsed.railHoverReveal === false ? false : DEFAULTS.railHoverReveal,
     soloRailHidden: parsed.soloRailHidden === false ? false : DEFAULTS.soloRailHidden,
     degradedBannerDelayMs:
       typeof parsed.degradedBannerDelayMs === "number" &&
@@ -690,6 +700,13 @@ export function loadSettings(): TandemSettings {
         // `parseFontByExtension`. Empty default keeps fresh-install behavior
         // intact (resolution falls back to defaults).
         parsed = { ...parsed, schemaVersion: 13 };
+      }
+      if (parsed.schemaVersion === 13) {
+        // v13→v14: introduce `railHoverReveal` (hover-reveal floating rails).
+        // Pure version bump — do NOT set the field here (that would clobber an
+        // explicit `false`). normalizeKnownFields defaults a missing field to
+        // true and preserves an explicit false.
+        parsed = { ...parsed, schemaVersion: 14 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`

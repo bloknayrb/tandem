@@ -196,11 +196,15 @@
         /* Directional rail shadows — cast inward toward the editor only. The
            rails sit flush to the window edge; an isotropic shadow would be
            clipped on the outer side. Light theme. Dark-theme override below. */
-        --tandem-rail-shadow-left: 4px 0 16px -8px rgba(0, 0, 0, 0.18),
-          1px 0 1px rgba(0, 0, 0, 0.03);
-        --tandem-rail-shadow-right: -4px 0 16px -8px rgba(0, 0, 0, 0.18),
-          -1px 0 1px rgba(0, 0, 0, 0.03);
+        --tandem-rail-shadow-left: 6px 0 20px -7px rgba(0, 0, 0, 0.24),
+          1px 0 1px rgba(0, 0, 0, 0.05);
+        --tandem-rail-shadow-right: -6px 0 20px -7px rgba(0, 0, 0, 0.24),
+          -1px 0 1px rgba(0, 0, 0, 0.05);
         --tandem-z-base: 1;
+        /* Hover-revealed floating rail: above the editor body + the right
+           rail's at-rest z-index:1, but below dropdown so an in-panel menu
+           rendered inside the float still escapes. */
+        --tandem-z-rail-float: 5;
         --tandem-z-dropdown: 10;
         --tandem-z-sticky: 100;
         --tandem-z-overlay: 900;
@@ -491,10 +495,10 @@
         --tandem-page-bg: #2a2a2a;
         --tandem-page-paper: #1a1a1a;
         --tandem-page-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
-        --tandem-rail-shadow-left: 4px 0 18px -6px rgba(0, 0, 0, 0.55),
-          1px 0 1px rgba(0, 0, 0, 0.25);
-        --tandem-rail-shadow-right: -4px 0 18px -6px rgba(0, 0, 0, 0.55),
-          -1px 0 1px rgba(0, 0, 0, 0.25);
+        --tandem-rail-shadow-left: 6px 0 22px -5px rgba(0, 0, 0, 0.62),
+          1px 0 1px rgba(0, 0, 0, 0.3);
+        --tandem-rail-shadow-right: -6px 0 22px -5px rgba(0, 0, 0, 0.62),
+          -1px 0 1px rgba(0, 0, 0, 0.3);
       }
 
       /* Warm canvas theme — v7 floating chrome. OKLCH values come straight

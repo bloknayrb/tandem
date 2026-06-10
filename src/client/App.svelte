@@ -621,6 +621,17 @@ $effect(() => {
   return () => document.body.classList.remove("tandem-reduce-motion");
 });
 
+// When hover-reveal is on, the collapsed-rail `:hover → 28px` peek-grow is
+// suppressed (CSS gates on this class) so hovering floats the full panel
+// instead of nudging the editor 14px. Off → the classic peek-grow returns.
+$effect(() => {
+  document.body.classList.toggle(
+    "tandem-rail-hover-reveal",
+    settingsState.settings.railHoverReveal,
+  );
+  return () => document.body.classList.remove("tandem-rail-hover-reveal");
+});
+
 createTheme(() => settingsState.settings.theme);
 createAccentHue(() => settingsState.settings.accentHue);
 // #811: resolve the font from the ACTIVE tab's format so a tab switch
@@ -697,20 +708,141 @@ function focusToggleTarget(side: "left" | "right", nextVisible: boolean) {
   });
 }
 const toggleLeftPanel = () => {
+  // Clear the transient float BEFORE the visibility commit so there is never a
+  // frame with both `.collapsed.floating` and an expanded inline width (Svelte
+  // batches both writes into one DOM update).
+  railFloat.left = false;
   const nextVisible = !layoutModel.leftVisible;
   layoutModel.toggleLeft();
   focusToggleTarget("left", nextVisible);
 };
 const toggleRightPanel = () => {
+  railFloat.right = false;
   const nextVisible = !layoutModel.rightVisible;
   layoutModel.toggleRight();
   focusToggleTarget("right", nextVisible);
 };
 
-// Rail collapse is a snap: the always-mounted dual-layer shells below
-// display-toggle their full/peek layers. The width-slide + opacity crossfade
-// between the two layers is deferred to motion #798 (bundle `app.css`
-// `.c7-rail` 360ms easeOutQuint width + `.rail-full`/`.rail-peek` crossfade).
+// ── Rail motion (#798) + hover-reveal floating mode ───────────────────────
+// Two independent behaviours layered on the always-mounted dual-layer shells:
+//   1. A width/box-shadow transition on collapse/expand. `display:none` can't
+//      transition, so on COLLAPSE we keep `.rail-full` displayed via a per-side
+//      `animating` flag until the width transition ends, then drop it — at rest
+//      the display:none guarantee (scroll-pop kill + Tab-order drop) holds.
+//   2. Hover a CLOSED, non-pinned rail to float its full panel OVER the editor
+//      (the 14px collapsed shell stays in flow, so the editor never reflows).
+//      Click the edge/peek zone while floating to PIN (toggle*Panel). Float is
+//      transient: it auto-hides when neither the pointer nor focus is inside.
+type RailSide = "left" | "right";
+const railAnimating = $state({ left: false, right: false });
+const railFloat = $state({ left: false, right: false });
+
+// Plain (non-$state) refs: hover/animation timer handles + pointer/focus
+// presence. Never rendered, so $state would only churn reactivity. Each
+// handler clears its own side's timer before scheduling a new one; a single
+// unmount-only $effect (below) clears them on teardown.
+const HOVER_ENTER_MS = 120;
+const HOVER_LEAVE_MS = 180;
+const RAIL_ANIM_FALLBACK_MS = 400;
+const hoverTimer: Record<RailSide, ReturnType<typeof setTimeout> | undefined> = {
+  left: undefined,
+  right: undefined,
+};
+const animTimer: Record<RailSide, ReturnType<typeof setTimeout> | undefined> = {
+  left: undefined,
+  right: undefined,
+};
+const pointerInside: Record<RailSide, boolean> = { left: false, right: false };
+const focusInside: Record<RailSide, boolean> = { left: false, right: false };
+
+const railVisible = (side: RailSide) =>
+  side === "left" ? effectiveLeftVisible : effectiveRightVisible;
+
+function onRailShellEnter(side: RailSide) {
+  pointerInside[side] = true;
+  if (railVisible(side) || !settingsState.settings.railHoverReveal) return;
+  clearTimeout(hoverTimer[side]);
+  hoverTimer[side] = setTimeout(() => {
+    railFloat[side] = true;
+  }, HOVER_ENTER_MS);
+}
+
+function maybeHideFloat(side: RailSide) {
+  // Float stays open while EITHER the pointer or focus is inside the shell.
+  if (pointerInside[side] || focusInside[side]) return;
+  railFloat[side] = false;
+}
+
+function onRailShellLeave(side: RailSide) {
+  pointerInside[side] = false;
+  clearTimeout(hoverTimer[side]);
+  hoverTimer[side] = setTimeout(() => maybeHideFloat(side), HOVER_LEAVE_MS);
+}
+
+function onRailShellFocusIn(side: RailSide) {
+  focusInside[side] = true;
+}
+
+// Closes the focus-sticky hole: if focus leaves the shell entirely (e.g. the
+// outline `jumpTo` moves focus into the editor) the mouseleave timer may never
+// re-fire, so hide here instead — unless the pointer is still hovering.
+function onRailShellFocusOut(side: RailSide, e: FocusEvent) {
+  const shell = e.currentTarget as HTMLElement;
+  const next = e.relatedTarget as Node | null;
+  if (next && shell.contains(next)) return; // focus moved within the shell
+  focusInside[side] = false;
+  maybeHideFloat(side);
+}
+
+function onRailShellTransitionEnd(side: RailSide, e: TransitionEvent) {
+  // Only the shell's OWN width transition clears the flag — `.rail-full.floating`
+  // bubbles transform/opacity transitionends, and a future descendant width
+  // transition would otherwise re-pop the content mid-collapse.
+  if (e.propertyName !== "width" || e.target !== e.currentTarget) return;
+  railAnimating[side] = false;
+  clearTimeout(animTimer[side]);
+}
+
+// Drive the collapse `animating` flag off visibility changes. Read both derives
+// to track them; mutate inside untrack so reduceMotion / prev-state reads don't
+// add spurious deps.
+// Seed with the mount-time visibility (untrack: this is a one-time snapshot the
+// $effect below diffs against, not a reactive reference).
+const prevRailVisible: Record<RailSide, boolean> = untrack(() => ({
+  left: effectiveLeftVisible,
+  right: effectiveRightVisible,
+}));
+$effect(() => {
+  const lv = effectiveLeftVisible;
+  const rv = effectiveRightVisible;
+  untrack(() => {
+    handleRailVisChange("left", lv);
+    handleRailVisChange("right", rv);
+  });
+});
+function handleRailVisChange(side: RailSide, visible: boolean) {
+  if (visible === prevRailVisible[side]) return;
+  const collapsing = prevRailVisible[side] && !visible;
+  prevRailVisible[side] = visible;
+  // Under reduced motion the width snaps (no transition → no transitionend), so
+  // never set the flag: `.rail-full` drops to display:none synchronously.
+  if (!collapsing || settingsState.settings.reduceMotion) return;
+  railAnimating[side] = true;
+  clearTimeout(animTimer[side]);
+  animTimer[side] = setTimeout(() => {
+    railAnimating[side] = false;
+  }, RAIL_ANIM_FALLBACK_MS);
+}
+
+$effect(() => {
+  // Unmount-only cleanup (no deps): clear every outstanding timer.
+  return () => {
+    clearTimeout(hoverTimer.left);
+    clearTimeout(hoverTimer.right);
+    clearTimeout(animTimer.left);
+    clearTimeout(animTimer.right);
+  };
+});
 
 const viewport = createViewportWidth();
 
@@ -1308,13 +1440,26 @@ const tutorial = createTutorial(
            instance + scroll position persist, but it has no layout box, so its
            scroll effects can't pop the editor and its children leave the Tab
            order. The peek layer previews the outline as tick-marks. The shell
-           owns the chrome (bg, radius, shadow) + hover-grow; the outermost 8px
-           of the full layer is the edge-click collapse zone. Opacity-crossfade
-           + width-slide deferred to motion #798. -->
+           owns the chrome (bg, radius, shadow) + hover-grow + the width/shadow
+           transition (#798); the outermost 8px of the full layer is the
+           edge-click collapse zone. `.floating` lets a hover-revealed panel
+           paint over the editor (the 14px shell stays in flow). -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- The mouse/focus handlers are a pointer-only reveal enhancement; the
+           real controls (peek strip, edge-collapse, panel contents) are
+           focusable buttons, and keyboard users pin via Alt+Shift+Arrow. -->
       <div
         class="rail-shell rail-shell-left"
         class:collapsed={!effectiveLeftVisible}
+        class:animating={railAnimating.left}
+        class:floating={railFloat.left}
+        data-testid={railFloat.left ? "rail-float-left" : undefined}
         style={effectiveLeftVisible ? `width: ${dragResizeLeft.width}px;` : ""}
+        onmouseenter={() => onRailShellEnter("left")}
+        onmouseleave={() => onRailShellLeave("left")}
+        onfocusin={() => onRailShellFocusIn("left")}
+        onfocusout={(e) => onRailShellFocusOut("left", e)}
+        ontransitionend={(e) => onRailShellTransitionEnd("left", e)}
       >
         <div
           data-testid="left-outline-rail"
@@ -1344,10 +1489,19 @@ const tutorial = createTutorial(
            The `.rail-full` layer (tabs + chat/annotations panels) display:none's
            when collapsed; the peek layer previews annotations as colored dots.
            See the left rail for the display-toggle rationale. -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="rail-shell rail-shell-right"
         class:collapsed={!effectiveRightVisible}
+        class:animating={railAnimating.right}
+        class:floating={railFloat.right}
+        data-testid={railFloat.right ? "rail-float-right" : undefined}
         style={effectiveRightVisible ? `width: ${dragResizeRight.width}px;` : ""}
+        onmouseenter={() => onRailShellEnter("right")}
+        onmouseleave={() => onRailShellLeave("right")}
+        onfocusin={() => onRailShellFocusIn("right")}
+        onfocusout={(e) => onRailShellFocusOut("right", e)}
+        ontransitionend={(e) => onRailShellTransitionEnd("right", e)}
       >
         <div
           class="rail-full rail-full-right"
@@ -1802,6 +1956,25 @@ const tutorial = createTutorial(
     margin-top: var(--tandem-rail-top-clearance, 0);
     margin-bottom: var(--tandem-status-clearance-total, 60px);
     background: var(--tandem-surface-muted);
+    /* #798: ease the open/close width + the side shadow. The collapse-side
+       display:none of `.rail-full` is deferred by the `.animating` flag (JS)
+       so the content clips away with the width instead of popping. */
+    transition:
+      width 360ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  /* Reduce motion: snap (the JS path likewise skips the `animating` flag so
+     `.rail-full` drops to display:none synchronously). The :global body class
+     mirrors the OS query but also honours the in-app reduceMotion setting; the
+     media-query rule wins by SOURCE ORDER (equal specificity to the base), the
+     body-class rule by added specificity — both override the base transition. */
+  @media (prefers-reduced-motion: reduce) {
+    .rail-shell {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .rail-shell {
+    transition: none;
   }
   .rail-shell-left {
     border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
@@ -1822,8 +1995,10 @@ const tutorial = createTutorial(
      position). Per #859 that restoration focus must be visually inert; a
      :focus-within widen would silently expand the sliver 14→28px on collapse
      with no user hover — the exact bug #859 fixed. The PeekStrip's own
-     affordances (chevron/label/tick reveal) are likewise scoped to :hover. */
-  .rail-shell.collapsed:hover {
+     affordances (chevron/label/tick reveal) are likewise scoped to :hover.
+     Gated off when hover-reveal is on: there, hovering floats the full panel
+     instead, and a 14→28px in-flow grow would nudge the editor first. */
+  :global(body:not(.tandem-rail-hover-reveal)) .rail-shell.collapsed:hover {
     width: 28px;
   }
   /* The full layer fills the shell, anchored to the shell's inside edge (left
@@ -1846,6 +2021,61 @@ const tutorial = createTutorial(
   }
   .rail-shell.collapsed .rail-full {
     display: none;
+  }
+  /* Collapse animation: keep `.rail-full` displayed while the width transition
+     runs so it clips away smoothly; the JS clears `animating` on transitionend,
+     restoring the at-rest display:none. (0,4,0) beats the display:none above. */
+  .rail-shell.collapsed.animating .rail-full {
+    display: flex;
+  }
+  /* Hover-reveal float: the shell stays 14px in flow (editor unmoved), but it
+     stops clipping so its `.rail-full` paints OVER the editor at the real drag
+     width. The anchor flips to the window edge and the panel extends inward. */
+  .rail-shell.floating {
+    overflow: visible;
+    z-index: var(--tandem-z-rail-float);
+  }
+  /* `display: flex` here has the SAME specificity as the `.collapsed .rail-full`
+     display:none above and wins by SOURCE ORDER — this rule must stay AFTER it.
+     (The `.collapsed.animating` rule outranks both on specificity.) */
+  .rail-shell.floating .rail-full {
+    display: flex;
+    animation: tandem-rail-float-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .rail-shell-left.floating .rail-full-left {
+    right: auto;
+    left: 0;
+    --rail-float-from: -12px;
+    box-shadow: var(--tandem-rail-shadow-left);
+  }
+  .rail-shell-right.floating .rail-full-right {
+    left: auto;
+    right: 0;
+    --rail-float-from: 12px;
+    box-shadow: var(--tandem-rail-shadow-right);
+  }
+  /* The 14px peek sliver would otherwise poke through the floating panel's
+     inside edge (PeekStrip paints after `.rail-full` in DOM). */
+  .rail-shell.floating :global(.peek-strip) {
+    display: none;
+  }
+  @keyframes tandem-rail-float-in {
+    from {
+      opacity: 0;
+      transform: translateX(var(--rail-float-from, 0));
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rail-shell.floating .rail-full {
+      animation: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .rail-shell.floating .rail-full {
+    animation: none;
   }
   .rail-tabs-row {
     display: flex;

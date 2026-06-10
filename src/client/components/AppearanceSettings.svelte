@@ -392,3 +392,23 @@ for (const row of FONT_FORMAT_ROWS) {
     in the selection popup, and Ctrl+Z / Ctrl+Y still undo and redo.
   </div>
 </div>
+
+<!-- Rail hover-reveal (#798 motion / floating rails) -->
+<div>
+  <label
+    data-testid="appearance-rail-hover-reveal"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+  >
+    <input
+      type="checkbox"
+      checked={settings.railHoverReveal}
+      onchange={(e) => onUpdate({ railHoverReveal: (e.target as HTMLInputElement).checked })}
+      style="accent-color: var(--tandem-accent);"
+    />
+    <span>Reveal rails on hover</span>
+  </label>
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+    Hover a closed outline or annotations rail to float it over the document without
+    resizing it; click its edge to pin it open. When off, rails reveal only on click.
+  </div>
+</div>
