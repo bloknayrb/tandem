@@ -2286,22 +2286,6 @@ fn cowork_rescan() -> Result<String, String> {
     Err(WINDOWS_ONLY_ERR.into())
 }
 
-/// Read-only check: does this workspace's `installed_plugins.json` already
-/// contain a tandem entry? Shared by `cowork_get_status` and the heal pass.
-#[cfg(target_os = "windows")]
-fn workspace_has_tandem_entry(ws_path: &std::path::Path) -> bool {
-    let path = ws_path.join("cowork_plugins").join("installed_plugins.json");
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .map(|json| {
-            json.get("mcpServers")
-                .and_then(|s| s.get("tandem"))
-                .is_some()
-        })
-        .unwrap_or(false)
-}
-
 /// One self-heal pass: when the Cowork integration is enabled, install the
 /// plugin entry into any workspace that lacks one. Runs from a background
 /// interval task (see `setup`) so a workspace created AFTER enable — e.g. the
@@ -2313,8 +2297,11 @@ fn workspace_has_tandem_entry(ws_path: &std::path::Path) -> bool {
 ///   firewall work, no UAC, ever).
 /// - Read-only precheck first — zero writes when every workspace already has
 ///   its entry (the steady state).
-/// - Once-per-process attempt set: a persistently failing workspace (e.g.
-///   InsecureAcl) is attempted once per app run, not every tick. New paths
+/// - Attempt set keyed on *terminal* outcomes only: a workspace is recorded
+///   (and not retried this run) once its install succeeds OR fails terminally
+///   (`InsecureAcl` — a redirected/synced path that will never become safe).
+///   A *transient* failure (`Locked` / `SchemaDrift` / `Failed` / error) is left
+///   OUT of the set so the next tick self-heals a momentary glitch. New paths
 ///   are attempted as they appear. The manual "Re-scan workspaces" button
 ///   deliberately bypasses this guard (it force-reinstalls everything).
 ///
@@ -2323,7 +2310,10 @@ fn workspace_has_tandem_entry(ws_path: &std::path::Path) -> bool {
 fn cowork_heal_pass() -> Result<usize, String> {
     use std::collections::BTreeSet;
 
-    use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url};
+    use cowork_installer::{
+        heal_outcome_is_terminal, install_tandem_plugin_into_workspace, resolve_tandem_url,
+        workspace_has_tandem_entry, WriteStatus,
+    };
     use cowork_workspace_scan::find_cowork_workspaces;
 
     static HEAL_ATTEMPTED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
@@ -2342,12 +2332,14 @@ fn cowork_heal_pass() -> Result<usize, String> {
         return Ok(0);
     }
 
-    // Once-per-process guard. `insert` returning true == not yet attempted.
+    // Skip workspaces already terminally attempted this run (read-only snapshot;
+    // the heal pass is a single serialized interval task, so no concurrent pass
+    // races this — and manual rescan never touches HEAL_ATTEMPTED).
     let to_attempt: Vec<PathBuf> = {
-        let mut attempted = HEAL_ATTEMPTED.lock().unwrap_or_else(|p| p.into_inner());
+        let attempted = HEAL_ATTEMPTED.lock().unwrap_or_else(|p| p.into_inner());
         missing
             .into_iter()
-            .filter(|ws| attempted.insert(ws.clone()))
+            .filter(|ws| !attempted.contains(ws))
             .collect()
     };
     if to_attempt.is_empty() {
@@ -2358,29 +2350,32 @@ fn cowork_heal_pass() -> Result<usize, String> {
     let tandem_url = resolve_tandem_url(&meta);
 
     let mut installed = 0usize;
+    let mut terminal: Vec<PathBuf> = Vec::new();
     for ws in &to_attempt {
-        match install_tandem_plugin_into_workspace(ws, &token, &tandem_url) {
-            Ok(report)
-                if matches!(
-                    report.installed_plugins,
-                    cowork_installer::WriteStatus::Ok
-                        | cowork_installer::WriteStatus::AlreadyPresent
-                ) =>
-            {
-                installed += 1;
-            }
-            Ok(report) => {
-                log::warn!(
-                    "[cowork] heal: install into {}/{} not successful: {:?}",
-                    report.workspace_id,
-                    report.vm_id,
-                    report.installed_plugins
-                );
-            }
+        let status = match install_tandem_plugin_into_workspace(ws, &token, &tandem_url) {
+            Ok(report) => report.installed_plugins,
             Err(e) => {
-                log::warn!("[cowork] heal: install into {} failed: {e}", ws.display());
+                log::warn!("[cowork] heal: install into {} errored: {e}", ws.display());
+                // Treat an error as a transient Failed so it retries next tick.
+                WriteStatus::Failed(e.to_string())
             }
+        };
+        match &status {
+            WriteStatus::Ok | WriteStatus::AlreadyPresent => installed += 1,
+            other => log::warn!(
+                "[cowork] heal: install into {} not successful: {other:?}",
+                ws.display()
+            ),
         }
+        if heal_outcome_is_terminal(&status) {
+            terminal.push(ws.clone());
+        }
+    }
+
+    // Record only terminal outcomes — transient failures stay retryable.
+    if !terminal.is_empty() {
+        let mut attempted = HEAL_ATTEMPTED.lock().unwrap_or_else(|p| p.into_inner());
+        attempted.extend(terminal);
     }
 
     if installed > 0 {
@@ -2427,7 +2422,7 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
                 .unwrap_or_default();
 
             // Read-only check: does installed_plugins.json contain a tandem entry?
-            let installed_status = if workspace_has_tandem_entry(ws_path) {
+            let installed_status = if cowork_installer::workspace_has_tandem_entry(ws_path) {
                 "ok"
             } else {
                 "failed"

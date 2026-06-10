@@ -489,7 +489,15 @@ fn roots_under(packages_dir: Option<&Path>, roaming_config_dir: Option<&Path>) -
     // Dedup by canonical path — exact aliases only (see doc comment).
     let mut seen: Vec<PathBuf> = Vec::new();
     roots.retain(|r| {
-        let canon = std::fs::canonicalize(r).unwrap_or_else(|_| r.clone());
+        let canon = std::fs::canonicalize(r).unwrap_or_else(|_| {
+            // Degraded dedup: fall back to the raw path as the dedup key. Logged
+            // so a "duplicate workspace rows" investigation has a breadcrumb.
+            log::debug!(
+                "[cowork-scan] dedup: canonicalize failed for {} — using raw path as key",
+                r.display()
+            );
+            r.clone()
+        });
         if seen.contains(&canon) {
             false
         } else {
@@ -540,8 +548,21 @@ pub fn claude_desktop_detected() -> bool {
         }
     }
 
+    let packages_dir = dirs::data_local_dir().map(|d| d.join("Packages"));
     let roaming_config_dir = dirs::config_dir();
-    if let Some(config) = &roaming_config_dir {
+    claude_desktop_detected_under(packages_dir.as_deref(), roaming_config_dir.as_deref())
+}
+
+/// Three-signal OR for a detectable Claude Desktop install, against injectable
+/// base directories (mirrors [`roots_under`] so tests exercise each signal
+/// against temp dirs without env vars). `packages_dir` must already include the
+/// `Packages` suffix — the caller passes `data_local_dir().join("Packages")`.
+fn claude_desktop_detected_under(
+    packages_dir: Option<&Path>,
+    roaming_config_dir: Option<&Path>,
+) -> bool {
+    // Signal 1: direct-installer roaming config.
+    if let Some(config) = roaming_config_dir {
         if config
             .join("Claude")
             .join("claude_desktop_config.json")
@@ -551,8 +572,8 @@ pub fn claude_desktop_detected() -> bool {
         }
     }
 
-    let packages_dir = dirs::data_local_dir().map(|d| d.join("Packages"));
-    if let Some(packages) = &packages_dir {
+    // Signal 2: MSIX-virtualized config under a publisher-anchored package.
+    if let Some(packages) = packages_dir {
         if let Ok(entries) = std::fs::read_dir(packages) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
@@ -573,7 +594,8 @@ pub fn claude_desktop_detected() -> bool {
         }
     }
 
-    !roots_under(packages_dir.as_deref(), roaming_config_dir.as_deref()).is_empty()
+    // Signal 3: any session root.
+    !roots_under(packages_dir, roaming_config_dir).is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +846,63 @@ mod tests {
         let roots = roots_under(Some(&base.join("Packages")), Some(&base.join("Roaming")));
         let _ = fs::remove_dir_all(&base);
         assert!(roots.is_empty(), "{roots:?}");
+    }
+
+    #[test]
+    fn test_claude_desktop_detected_under_signals() {
+        // Pure fn — no env vars, no lock; unique temp dir for parallel safety.
+        let base = std::env::temp_dir().join("tandem_cdd_under_test");
+        let _ = fs::remove_dir_all(&base);
+        let packages = base.join("Packages");
+        let roaming = base.join("Roaming");
+        fs::create_dir_all(&packages).unwrap();
+        fs::create_dir_all(&roaming).unwrap();
+
+        // Nothing present → false.
+        assert!(!claude_desktop_detected_under(Some(&packages), Some(&roaming)));
+
+        // Signal 1: direct-installer roaming config.
+        let roaming_claude = roaming.join("Claude");
+        fs::create_dir_all(&roaming_claude).unwrap();
+        let cfg = roaming_claude.join("claude_desktop_config.json");
+        fs::write(&cfg, "{}").unwrap();
+        assert!(claude_desktop_detected_under(Some(&packages), Some(&roaming)));
+        fs::remove_file(&cfg).unwrap();
+        assert!(!claude_desktop_detected_under(Some(&packages), Some(&roaming)));
+
+        // Signal 2: MSIX-virtualized config under a publisher-anchored package.
+        let msix_claude = packages
+            .join("AnthropicPBC.Claude_8wekyb3d8bbwe")
+            .join("LocalCache")
+            .join("Roaming")
+            .join("Claude");
+        fs::create_dir_all(&msix_claude).unwrap();
+        fs::write(msix_claude.join("claude_desktop_config.json"), "{}").unwrap();
+        assert!(claude_desktop_detected_under(Some(&packages), Some(&roaming)));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_claude_desktop_detected_under_ignores_foreign_package() {
+        let base = std::env::temp_dir().join("tandem_cdd_foreign_test");
+        let _ = fs::remove_dir_all(&base);
+        let packages = base.join("Packages");
+        // A foreign package staging the inner config layout must NOT signal
+        // detection (publisher anchor, not contains("Claude")).
+        let foreign = packages
+            .join("EvilCorp.TotallyClaude_x")
+            .join("LocalCache")
+            .join("Roaming")
+            .join("Claude");
+        fs::create_dir_all(&foreign).unwrap();
+        fs::write(foreign.join("claude_desktop_config.json"), "{}").unwrap();
+        let roaming = base.join("Roaming");
+        fs::create_dir_all(&roaming).unwrap();
+
+        let detected = claude_desktop_detected_under(Some(&packages), Some(&roaming));
+        let _ = fs::remove_dir_all(&base);
+        assert!(!detected, "foreign package must not signal Claude detected");
     }
 
     #[test]
