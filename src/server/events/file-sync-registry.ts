@@ -91,6 +91,16 @@ export function clearFileSyncContext(
 }
 
 /**
+ * Snapshot of every registered durable-annotation sync context. Used by the
+ * store-lock reclaim route (#1077) to re-persist the live Y.Map state of all
+ * open documents after the store transitions read-only → writable (writes
+ * queued while read-only were dropped, so the on-disk envelopes are behind).
+ */
+export function getAllFileSyncContexts(): SyncContext[] {
+  return Array.from(fileSyncContexts.values(), (entry) => entry.ctx);
+}
+
+/**
  * Reattach the file-sync annotation observer to a new Y.Doc after a Hocuspocus
  * doc swap. Disposes the prior cleanup via safeCleanup (swap phase), then
  * re-registers against the new doc. Called from queue.ts:reattachObservers.

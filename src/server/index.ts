@@ -532,10 +532,23 @@ async function main() {
     }
 
     const [srv] = await Promise.all([
-      startMcpServerHttp(mcpPort, bindHost, authToken, resolvedLanIP, {
-        getSupervisor: () => launcherSupervisor,
-        unavailableReason: () => launcherUnavailableReason,
-      }),
+      startMcpServerHttp(
+        mcpPort,
+        bindHost,
+        authToken,
+        resolvedLanIP,
+        {
+          getSupervisor: () => launcherSupervisor,
+          unavailableReason: () => launcherUnavailableReason,
+        },
+        wsPort,
+        {
+          // POST /api/shutdown (#1088): runs the exact same sequence as
+          // SIGTERM/SIGINT — the Tauri shell calls this before restart/update
+          // so dirty docs flush and the session snapshot stays in sync.
+          requestShutdown: (reason) => void shutdown(reason),
+        },
+      ),
       startHocuspocus(wsPort).then(() => {
         console.error(`[Tandem] Hocuspocus WebSocket server running on ws://127.0.0.1:${wsPort}`);
       }),

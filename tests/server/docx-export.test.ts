@@ -104,6 +104,17 @@ describe("exportYDocToDocx — body round-trips through load → export → relo
     back.destroy();
   });
 
+  it("hardBreaks survive in order (#1068 fix: <w:br/> emitted after the preceding text)", async () => {
+    const source = docFromHtml("<p>alpha<br/>beta</p>");
+    expect(allText(source)).toBe("alpha\nbeta");
+    const buffer = await exportYDocToDocx(source);
+    const back = await reimport(buffer);
+    // Pre-#1068, TextRun({ text, break: 1 }) rendered the break BEFORE its
+    // text, exporting "\nalphabeta" instead of "alpha\nbeta".
+    expect(allText(back)).toBe("alpha\nbeta");
+    back.destroy();
+  });
+
   it("bullet and ordered lists survive as lists", async () => {
     const source = docFromHtml(
       "<ul><li><p>one</p></li><li><p>two</p></li></ul><ol><li><p>first</p></li></ol>",

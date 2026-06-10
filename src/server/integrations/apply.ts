@@ -499,7 +499,10 @@ export function detectClaudeCli(opts: DetectClaudeCliOptions = {}): ClaudeCliPre
  */
 async function atomicWrite(content: string, dest: string): Promise<void> {
   const tmp = join(dirname(dest), `.tandem-setup-${randomUUID()}.tmp`);
-  await writeFile(tmp, content, "utf-8");
+  // mode at create, not chmod-after: on POSIX a plain writeFile lands at
+  // 0o666 & ~umask, leaving sibling vendors' tokens world-readable until the
+  // tighten below. Windows ignores mode (the ACL step is the protection).
+  await writeFile(tmp, content, { encoding: "utf-8", mode: 0o600 });
 
   try {
     if (process.platform === "win32") {
@@ -756,6 +759,69 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
 
   await mkdir(dirname(configPath), { recursive: true });
   await atomicWrite(JSON.stringify(updated, null, 2) + "\n", configPath);
+}
+
+export type RemoveEntriesResult =
+  | { status: "removed"; removed: RemovableEntry[] }
+  | { status: "no-op" }
+  | { status: "missing" }
+  | { status: "skipped"; reason: "malformed-json" | "not-an-object" | "oversize" };
+
+/**
+ * Remove Tandem's `mcpServers` keys from a client config — the uninstall
+ * counterpart of `applyConfig`, sharing the same gates (`assertPathSafe`,
+ * size cap, BOM strip) and the same `atomicWrite` 0o600/ACL hardening, but
+ * with scrub semantics `applyConfig` deliberately does NOT have:
+ * - never creates the file (`applyConfig` starts fresh on ENOENT);
+ * - never replaces malformed JSON (`applyConfig` backs it up and rewrites —
+ *   on an uninstall path that would wipe the user's whole config);
+ * - never rewrites when nothing matched (no churn of a file other vendors'
+ *   tokens live in).
+ *
+ * `skipped` reasons are fixed strings — parse-error detail must never reach
+ * the caller's log (V8 SyntaxError messages embed source snippets, and this
+ * file holds bearer tokens).
+ */
+export async function removeConfigEntries(
+  configPath: string,
+  keys: RemovableEntry[],
+): Promise<RemoveEntriesResult> {
+  assertPathSafe(configPath);
+
+  let raw: string;
+  try {
+    const { size } = statSync(configPath);
+    if (size > MAX_CONFIG_BYTES) return { status: "skipped", reason: "oversize" };
+    raw = readFileSync(configPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
+    throw err;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "skipped", reason: "malformed-json" };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { status: "skipped", reason: "not-an-object" };
+  }
+
+  const servers = (parsed as Record<string, unknown>).mcpServers;
+  if (servers === null || typeof servers !== "object" || Array.isArray(servers)) {
+    return { status: "no-op" };
+  }
+  const map = servers as Record<string, unknown>;
+  const removed = keys.filter((key) => key in map);
+  if (removed.length === 0) return { status: "no-op" };
+  for (const key of removed) {
+    delete map[key];
+  }
+
+  await atomicWrite(JSON.stringify(parsed, null, 2) + "\n", configPath);
+  return { status: "removed", removed };
 }
 
 /**

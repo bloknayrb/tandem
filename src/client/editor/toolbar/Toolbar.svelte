@@ -916,7 +916,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
       <div class="morph-block-inner">
       <!-- Annotate popover. Keybindings: Alt+Enter = Note to self (private),
            Ctrl/Cmd+Enter = Send to Claude (outbound), plain Enter = newline. -->
-      <div style="display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; min-width: 260px; max-width: 360px;">
+      <div class="composer-card">
         <textarea
           bind:this={textareaEl}
           data-testid="popup-annotation-input"
@@ -925,32 +925,32 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           onkeydown={handleTextareaKeyDown}
           placeholder="Write a note or instruction..."
           rows={1}
-          style="width: 100%; box-sizing: border-box; field-sizing: content; min-height: 28px; max-height: 120px; overflow-y: auto; resize: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); font-size: 12px; padding: 4px 6px; outline: none; font-family: inherit;"
+          class="composer-input"
         ></textarea>
-        <div style="display: flex; justify-content: space-between; gap: 6px;">
+        <div class="composer-actions">
           <button
             type="button"
+            class="composer-btn composer-btn-note"
             data-testid="popup-note-submit"
             aria-label="Note to self (Alt+Enter)"
             title="Note to self — private, not sent to {agentLabel.family} (Alt+Enter)"
             disabled={!annotationTextTrimmed}
             onclick={submitAsNote}
-            style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
           >
             Note to self
-            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-fg-subtle);">{noteHintKbd}</kbd>
+            <kbd class="composer-kbd">{noteHintKbd}</kbd>
           </button>
           <button
             type="button"
+            class="composer-btn composer-btn-send"
             data-testid="popup-comment-submit"
             aria-label="Send to {agentLabel.family} (Ctrl+Enter)"
             title="Send to {agentLabel.family} — outbound comment (Ctrl/Cmd+Enter)"
             disabled={!annotationTextTrimmed}
             onclick={submitAsComment}
-            style="flex: 1; height: 28px; padding: 0 10px; border: 1px solid var(--tandem-author-user); background: transparent; color: var(--tandem-author-user); border-radius: var(--tandem-r-2); font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;"
           >
             Send to {agentLabel.family}
-            <kbd style="font-family: var(--tandem-font-mono); font-size: 10px; color: var(--tandem-author-user);">{sendHintKbd}</kbd>
+            <kbd class="composer-kbd">{sendHintKbd}</kbd>
           </button>
         </div>
       </div>
@@ -1084,5 +1084,122 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
   }
   .selection-popup.is-below .morph-format {
     order: 1;
+  }
+
+  /* #1006: annotate composer in the A8 design language. The card shell chrome
+     (pill body --tandem-surface, hairline --tandem-border, --c7-pill-shadow)
+     is already applied by .selection-popup.is-annotate above; these rules
+     cover the composer internals. Controls follow A8's format-button sizing
+     (28px height, --tandem-r-3 radius). The Send button adopts A8's coral
+     comment treatment — tinted coral keyed to the annotation action, NOT a
+     filled brand-color CTA ("tinted, not shouting") — via the author-claude
+     family tokens, whose WCAG ratios are documented at their definitions in
+     index.html. Note to self stays ghost/monochrome per A8's "bubble menus
+     stay monochrome" principle. ADR-027 structure (Note = private, Send =
+     outbound) and keybindings are unchanged. */
+  .composer-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+    padding: var(--tandem-space-2);
+    min-width: 260px;
+    max-width: 360px;
+  }
+  .composer-input {
+    width: 100%;
+    box-sizing: border-box;
+    field-sizing: content;
+    min-height: 28px;
+    max-height: 120px;
+    overflow-y: auto;
+    resize: none;
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+    font-size: var(--tandem-text-sm);
+    font-family: inherit;
+    padding: var(--tandem-space-1) var(--tandem-space-2);
+  }
+  .composer-input::placeholder {
+    color: var(--tandem-fg-subtle);
+  }
+  /* Coral-keyed focus treatment (A8: chrome keyed to the annotation action).
+     The default outline is replaced by a visible composite indicator: the
+     border swaps to the 3:1 coral border-grade plus a soft 10%-alpha tint
+     ring. Previously the textarea had `outline: none` with no replacement.
+     The outline is transparent rather than `none` so Windows forced-colors
+     mode (which strips box-shadows and forces border colors) still paints a
+     visible system-color focus ring. */
+  .composer-input:focus {
+    outline: 2px solid transparent;
+    outline-offset: 1px;
+    border-color: var(--tandem-author-claude-border);
+    box-shadow: 0 0 0 2px var(--tandem-claude-focus-bg);
+  }
+  .composer-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--tandem-space-2);
+  }
+  .composer-btn {
+    flex: 1;
+    height: 28px;
+    padding: 0 var(--tandem-space-3);
+    border-radius: var(--tandem-r-3);
+    font-size: var(--tandem-text-sm);
+    font-family: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--tandem-space-2);
+    transition:
+      background 120ms,
+      color 120ms;
+  }
+  .composer-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+  .composer-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+  .composer-btn-note {
+    border: 1px solid var(--tandem-border);
+    background: transparent;
+    color: var(--tandem-fg-muted);
+    font-weight: 500;
+  }
+  .composer-btn-note:hover:not(:disabled) {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .composer-btn-send {
+    border: 1px solid var(--tandem-author-claude-border);
+    background: var(--tandem-author-claude-bg);
+    color: var(--tandem-author-claude-fg-strong);
+    font-weight: 600;
+  }
+  /* Hover deepens the tint from the same seed in both themes (light: 12%
+     more coral over the near-white tint; dark: a warmer lift of #4d2419).
+     fg-strong holds ≥4.5:1 against both hover composites. */
+  .composer-btn-send:hover:not(:disabled) {
+    background: color-mix(
+      in srgb,
+      var(--tandem-author-claude) 12%,
+      var(--tandem-author-claude-bg)
+    );
+  }
+  .composer-kbd {
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+  }
+  .composer-btn-note .composer-kbd {
+    color: var(--tandem-fg-subtle);
+  }
+  .composer-btn-send .composer-kbd {
+    color: inherit;
   }
 </style>

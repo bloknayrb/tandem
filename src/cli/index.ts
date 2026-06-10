@@ -11,7 +11,20 @@
  *   tandem --version     Show version
  */
 
-import updateNotifier from "update-notifier";
+import { nodeVersionError } from "./node-version.js";
+
+// Must run before any Tandem code — npm's `engines` field only warns at
+// install time, so an old-Node user otherwise reaches a cryptic runtime
+// failure deep in the server. update-notifier is imported dynamically below
+// so it can't evaluate ahead of this guard. (In the bundled CLI, tsup's
+// splitting:false inlines the subcommand modules and hoists their external
+// deps — zod, the MCP SDK, env-paths — above this guard; those all load
+// cleanly on Node 18/20, so the guard still fires before anything breaks.)
+const versionError = nodeVersionError(process.version);
+if (versionError) {
+  console.error(versionError);
+  process.exit(1);
+}
 
 process.once("uncaughtException", (err: unknown) => {
   const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -34,14 +47,6 @@ const version = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ :
 
 const args = process.argv.slice(2);
 
-// Skip the update notifier for stdio subcommands — the output is machine-consumed
-// by Claude Desktop's plugin loader, and any incidental write risks corrupting
-// the MCP wire or producing log noise no human will ever read.
-const isStdioMode = args[0] === "mcp-stdio" || args[0] === "channel";
-if (!isStdioMode) {
-  updateNotifier({ pkg: { name: "tandem-editor", version } }).notify();
-}
-
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`tandem v${version}
 
@@ -58,6 +63,9 @@ Usage:
                                     ports, server health, annotation store)
   tandem doctor --json              Same checks, emit a single JSON report on stdout
   tandem rotate-token               Rotate the auth token with a 60-second grace window
+  tandem --uninstall-scrub          Remove Tandem's MCP entries, skill, and Cowork
+                                    registration from Claude configs (run before
+                                    uninstalling; the Windows uninstaller runs it)
   tandem mcp-stdio                  Run as a stdio MCP server proxying to local HTTP
                                     (used by the plugin's Cowork bridge; requires
                                     tandem server running on the host)
@@ -74,12 +82,23 @@ if (args.includes("--version") || args.includes("-v")) {
   process.exit(0);
 }
 
+// --help/--version exit above without paying the import. Skipped for stdio
+// subcommands — the output is machine-consumed by Claude Desktop's plugin
+// loader, and any incidental write risks corrupting the MCP wire or producing
+// log noise no human will ever read.
+const isStdioMode = args[0] === "mcp-stdio" || args[0] === "channel";
+if (!isStdioMode) {
+  const { default: updateNotifier } = await import("update-notifier");
+  updateNotifier({ pkg: { name: "tandem-editor", version } }).notify();
+}
+
 try {
   if (args[0] === "--uninstall-scrub") {
-    // Hidden subcommand invoked by the Tauri NSIS uninstaller hook. Walks
-    // Cowork workspaces and removes Tandem plugin entries + firewall rules.
-    // Runs inside the already-signed tandem.exe (security invariant §10 —
-    // prevents binary-planting during uninstall).
+    // Invoked by the Tauri NSIS uninstaller hook on Windows, and manually on
+    // any platform before removing the app. Removes Tandem's MCP config
+    // entries + bundled skill everywhere; Cowork plugin entries + firewall
+    // rules on Windows. Runs inside the already-signed tandem.exe (security
+    // invariant §10 — prevents binary-planting during uninstall).
     const { runUninstallScrub } = await import("./uninstall-scrub.js");
     const exitCode = await runUninstallScrub();
     process.exit(exitCode);

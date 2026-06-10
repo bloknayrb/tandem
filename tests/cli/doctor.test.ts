@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runDoctor, runDoctorCli } from "../../src/cli/doctor.js";
+import { runDoctor, runDoctorCli, summarizeDoctorResults } from "../../src/cli/doctor.js";
+import { allocPort } from "../helpers/alloc-port.js";
 
 // Doctor reads the annotation store from TANDEM_APP_DATA_DIR (env override in
 // resolveAppDataDir). Point it at a temp dir so the annotation-store check is
@@ -91,6 +92,40 @@ describe("runDoctor", () => {
     const withData = storeResults.find((r) => r.data && "docCount" in r.data);
     expect(withData?.data?.docCount).toBe(0);
     expect(withData?.data?.exists).toBe(false);
+  });
+
+  it("probes the ports passed via opts, not the defaults", async () => {
+    // /api/diagnostics threads the server's live (possibly TANDEM_PORT-
+    // overridden) ports through here. OS-assigned free ports that we
+    // immediately close are guaranteed NOT listening, so the check must
+    // report exactly those numbers as down.
+    const [wsPort, mcpPort] = await Promise.all([allocPort(), allocPort()]);
+
+    const report = await runDoctor({ wsPort, mcpPort });
+    const portsResult = report.results.find((r) => r.check === "ports");
+    expect(portsResult).toBeDefined();
+    expect(portsResult?.message).toContain(String(wsPort));
+    expect(portsResult?.message).toContain(String(mcpPort));
+    expect(portsResult?.data).toMatchObject({ ws: false, mcp: false });
+  });
+});
+
+describe("summarizeDoctorResults", () => {
+  // Shared by the CLI summary AND /api/diagnostics' filtered recomputation —
+  // the equivalence class that matters is failures-AND-warnings: failures must
+  // win, or a broken report ends "Tandem should work".
+  it.each([
+    { failures: 2, warnings: 0, expected: "2 issue(s) found.", why: "failures only" },
+    {
+      failures: 0,
+      warnings: 3,
+      expected: "3 warning(s) — Tandem should work, but check the items above.",
+      why: "warnings only",
+    },
+    { failures: 1, warnings: 5, expected: "1 issue(s) found.", why: "failures outrank warnings" },
+    { failures: 0, warnings: 0, expected: "All checks passed. Tandem is ready.", why: "all clear" },
+  ])("$why → $expected", ({ failures, warnings, expected }) => {
+    expect(summarizeDoctorResults(failures, warnings)).toBe(expected);
   });
 });
 

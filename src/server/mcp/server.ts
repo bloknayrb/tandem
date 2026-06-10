@@ -11,7 +11,7 @@ import type { Server } from "http";
 import { createRequire } from "module";
 
 import { API_HEALTH } from "../../shared/api-paths.js";
-import { DEFAULT_BIND_HOST, TAURI_HOSTNAME } from "../../shared/constants.js";
+import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
 import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
@@ -226,6 +226,17 @@ export async function startMcpServerHttp(
   resolvedLanIP?: string,
   /** Launcher route wiring. Omitted in tests; routes simply not registered. */
   launcher?: LauncherWiring,
+  /**
+   * Hocuspocus' live (TANDEM_PORT-resolved) port — threaded into the
+   * /api/diagnostics self-probe so an overridden instance doesn't report
+   * itself "not running". index.ts resolves it once; tests can omit it.
+   */
+  wsPort: number = DEFAULT_WS_PORT,
+  /**
+   * Graceful-shutdown wiring for POST /api/shutdown (#1088). Provided by the
+   * entry point in HTTP mode; omitted in tests → route not registered.
+   */
+  shutdownWiring?: import("./routes/shutdown.js").ShutdownRouteDeps,
 ): Promise<Server> {
   mcpServer = createMcpServer();
   // Snapshot tool count now — all registrations are unconditional in createMcpServer(),
@@ -393,6 +404,13 @@ export async function startMcpServerHttp(
       bindPort: port,
       getGenerationId,
     },
+    {
+      version: APP_VERSION,
+      transport: "http",
+      wsPort,
+      mcpPort: port,
+    },
+    shutdownWiring,
   );
 
   // --- Channel support endpoints ---

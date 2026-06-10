@@ -65,6 +65,18 @@ let hasIntegration = $state(false);
  */
 let lastLoadError = $state<string | null>(null);
 
+/**
+ * #1022 discoverability: a user with Claude credentials but no configured
+ * integration used to land on this tab and find only a buried "Reopen
+ * integration wizard…" button — nothing said AI wasn't set up or that no API
+ * key is needed. Show a prominent "Connect AI" callout once the integrations
+ * load has settled and found no claude-code entry. Suppressed while loading
+ * and on load failure (the error banner below owns that state — we don't
+ * know whether an integration exists, so claiming "no AI connected" would
+ * be a guess).
+ */
+const showConnectCallout = $derived(wdLoaded && !hasIntegration && !lastLoadError);
+
 // Mounted-guard for async fetch — matches the pattern in TitleBar.svelte
 // (search "mounted = true" / "if (!mounted) return"). Without it,
 // `loadWorkingDirectory` writes to `$state` after the component unmounts,
@@ -181,6 +193,29 @@ function handleReset() {
   void persistWorkingDirectory(null);
 }
 </script>
+
+{#if showConnectCallout}
+  <div
+    data-testid="settings-modal-connect-ai-callout"
+    style="display: flex; flex-direction: column; align-items: flex-start; gap: var(--tandem-space-2); padding: var(--tandem-space-3); background: var(--tandem-info-bg); border: 1px solid var(--tandem-info-border); border-radius: var(--tandem-r-3); margin-bottom: var(--tandem-space-3);"
+  >
+    <div style="font-size: 13px; font-weight: 600; color: var(--tandem-info-fg-strong);">
+      No AI connected yet
+    </div>
+    <div style="font-size: 12px; line-height: 1.5; color: var(--tandem-info-fg);">
+      Tandem's AI works through Claude Code or Claude Desktop using your existing Claude
+      sign-in — no API key needed. The setup wizard connects it in one step.
+    </div>
+    <button
+      type="button"
+      onclick={openWizard}
+      data-testid="settings-modal-connect-ai-btn"
+      style="font-size: 12px; font-weight: 500; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-accent); background: var(--tandem-accent); color: var(--tandem-accent-fg); cursor: pointer;"
+    >
+      Connect AI…
+    </button>
+  </div>
+{/if}
 
 <p
   style="font-size: 12px; line-height: 1.5; color: var(--tandem-fg-muted); margin: 0 0 var(--tandem-space-3);"
@@ -319,7 +354,12 @@ function handleReset() {
   data-testid="settings-modal-open-integration-wizard"
   style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); color: var(--tandem-fg); cursor: pointer; align-self: flex-start;"
 >
-  Reopen integration wizard…
+  <!-- "Reopen" reads as a power-user re-entry; for an unconfigured user this
+       is the setup entry point, so the label adapts (#1022). Keyed off the
+       load-settled callout state (not `hasIntegration` directly) so configured
+       users keep the historical "Reopen…" label during the brief integrations
+       fetch instead of seeing it flicker. -->
+  {showConnectCallout ? "Open integration wizard…" : "Reopen integration wizard…"}
 </button>
 
 {#if isTauriRuntime()}

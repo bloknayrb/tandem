@@ -11,10 +11,11 @@
  * predictable in assertions.
  */
 
-import { createServer, type Server } from "node:http";
+import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPreviousToken, getPreviousToken } from "../../src/server/auth/middleware.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
+import { allocPort } from "../helpers/alloc-port.js";
 
 // ── Module-level stub (vi.hoisted so it's available inside the hoisted vi.mock factory) ─────
 
@@ -34,22 +35,6 @@ vi.mock("../../src/server/auth/token-store.js", async (importOriginal) => {
 
 const KNOWN_TOKEN = "oldtoken_oldtoken_oldtoken_oldtoken"; // seeded into tokenRef.current
 const NEW_TOKEN = "newtoken_newtoken_newtoken_newtoken"; // returned by mocked readTokenFromFile
-
-async function allocPort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const addr = probe.address();
-      if (!addr || typeof addr === "string") {
-        probe.close();
-        reject(new Error("unexpected address"));
-        return;
-      }
-      const p = addr.port;
-      probe.close(() => resolve(p));
-    });
-  });
-}
 
 // ── Test lifecycle ────────────────────────────────────────────────────────────
 

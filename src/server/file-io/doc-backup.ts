@@ -60,8 +60,10 @@ const SWEEP_AGE_MS = 30 * 24 * 60 * 60 * 1000;
  * Matches a snapshot filename's `-YYYYMMDD-HHMMSS-<uuid8>` tail. The anchored
  * tail (not the variable stem) is the deletion boundary: `source.txt` and any
  * stray file can never match, so prune/sweep only ever touch files this module
- * wrote. Lexicographic sort on the full name is newest-first-safe because the
- * stem is constant within a subdir and the timestamp segment is monotonic.
+ * wrote. Lexicographic sort on the full name is approximately newest-first
+ * (constant stem + timestamp segment) but ties within the same second fall to
+ * the random uuid8 — callers that need true recency order re-sort by mtime
+ * (`listDocBackups`); prune avoids the tie by construction.
  */
 const SNAPSHOT_TAIL_RE = /-\d{8}-\d{6}-[0-9a-f]{8}(\.[^.]*)?$/;
 
@@ -190,6 +192,67 @@ async function totalTreeBytes(root: string): Promise<number> {
     }
   }
   return total;
+}
+
+/** One restorable snapshot, as surfaced to the restore tool / API (#1086). */
+export interface DocBackupSnapshot {
+  /** Snapshot filename inside the per-path subdir — pass back to restore it. */
+  name: string;
+  /** Snapshot file mtime as ISO 8601 (when the snapshot was taken). */
+  timestamp: string;
+  /** Snapshot size in bytes. */
+  size: number;
+}
+
+/**
+ * List the restorable snapshots for `filePath`, newest first, with timestamps
+ * and sizes. Returns an empty array when the path has no backup subdir.
+ *
+ * Ordered by mtime, NOT filename: the name's timestamp segment is
+ * second-granular, so two snapshots taken in the same second (e.g. a restore's
+ * pre-overwrite snapshot landing right after the original) tie lexicographically
+ * and fall to the random uuid8 — which can rank the older file "newest". mtime
+ * carries millisecond resolution; the name is only the deterministic tiebreak.
+ */
+export async function listDocBackups(
+  filePath: string,
+  appDataDir: string,
+): Promise<DocBackupSnapshot[]> {
+  const subdir = path.join(docBackupsRoot(appDataDir), docHash(filePath));
+  const names = await listSnapshots(subdir);
+  const out: Array<DocBackupSnapshot & { mtimeMs: number }> = [];
+  for (const name of names) {
+    try {
+      const st = await fs.stat(path.join(subdir, name));
+      out.push({
+        name,
+        timestamp: new Date(st.mtimeMs).toISOString(),
+        size: st.size,
+        mtimeMs: st.mtimeMs,
+      });
+    } catch {
+      // Raced away (concurrent prune/sweep) — skip the entry.
+    }
+  }
+  out.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+  return out.map(({ name, timestamp, size }) => ({ name, timestamp, size }));
+}
+
+/**
+ * Resolve a caller-supplied snapshot name to its absolute path under
+ * `filePath`'s backup subdir, or null when the name is not a plausible
+ * snapshot filename. The bare-basename + tail-regex check is the traversal
+ * boundary: separators, `..`, `source.txt`, and arbitrary names can never
+ * resolve, so the returned path always points inside the per-path subdir at
+ * a file this module wrote.
+ */
+export function docBackupSnapshotPath(
+  filePath: string,
+  appDataDir: string,
+  name: string,
+): string | null {
+  if (name !== path.basename(name) || !SNAPSHOT_TAIL_RE.test(name)) return null;
+  return path.join(docBackupsRoot(appDataDir), docHash(filePath), name);
 }
 
 export type SnapshotOutcome =

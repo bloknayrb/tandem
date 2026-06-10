@@ -15,6 +15,7 @@ annotation-patterns-toggle
 annotation-private-pill
 annotation-select-checkbox-{*}
 annotation-snippet-{*}
+annotation-sort-toggle
 annotations-tab
 app-info-footer
 appearance-formatting-bar
@@ -177,6 +178,7 @@ integration-wizard-install-success
 integration-wizard-keychain-fallback
 integration-wizard-more
 integration-wizard-pick-{*}
+integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
 integration-wizard-secret-submit-{*}
 integration-wizard-step-applying
@@ -285,7 +287,10 @@ settings-modal
 settings-modal-app-info-footer
 settings-modal-changelog-error
 settings-modal-close-btn
+settings-modal-connect-ai-btn
+settings-modal-connect-ai-callout
 settings-modal-content
+settings-modal-copy-diagnostics-btn
 settings-modal-cowork-suspense-fallback
 settings-modal-default-mode-solo-btn
 settings-modal-default-mode-tandem-btn
@@ -296,6 +301,7 @@ settings-modal-margin-view-toggle
 settings-modal-mcp-status
 settings-modal-narrow-hamburger
 settings-modal-open-integration-wizard
+settings-modal-open-log-folder-btn
 settings-modal-report-bug-link
 settings-modal-scrim
 settings-modal-selection-toolbar-toggle
@@ -332,6 +338,8 @@ source-view-textarea
 status-word-count
 store-readonly-banner
 store-readonly-dismiss
+store-readonly-reclaim
+store-readonly-reclaim-error
 suggestion-diff-{*}
 tab-name-{*}
 tab-scroll-container

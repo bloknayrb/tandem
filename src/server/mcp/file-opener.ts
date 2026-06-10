@@ -28,9 +28,11 @@ import { annotationFileExists, createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
 import { markClean, registerDirtyObserver } from "../documents/dirty.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
-import { getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
-import { watchFile } from "../file-watcher.js";
+import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
+import { atomicWrite, getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
+import { suppressNextChange, watchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
+import { resolveAppDataDir } from "../platform.js";
 import { anchoredRange, refreshAllRanges, validateRange } from "../positions.js";
 import {
   deleteSession,
@@ -392,6 +394,139 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
   } finally {
     reloadInProgress.delete(id);
   }
+}
+
+/** Formats restorable from pre-overwrite doc-backups (the snapshot module only
+ *  ever covers the text `atomicWrite` save path, so this mirrors its scope). */
+const TEXT_RESTORE_FORMATS = new Set(["md", "txt"]);
+
+export interface RestoreBackupResult {
+  message: string;
+  /** Absolute path of the snapshot file the content was restored from. */
+  restoredFrom: string;
+  /** Absolute path of the document that was restored. */
+  filePath: string;
+}
+
+/**
+ * Restore an open text document (.md/.txt) from a pre-overwrite snapshot
+ * (#1086 — snapshots written by `snapshotBeforeFirstWrite`, see
+ * `file-io/doc-backup.ts`).
+ *
+ * Routes through the file-watcher reload lifecycle (`reloadFromDisk`) rather
+ * than writing bytes under an open document: annotations survive and re-anchor
+ * (withReload-tagged clear+repopulate + range refresh + textSnapshot
+ * relocation), event-queue observers reattach, and the doc is marked clean.
+ * The disk write itself is wrapped in `suppressNextChange` so the watcher
+ * doesn't misread Tandem's own restore write as an external edit (which would
+ * double-reload and toast "File changed on disk").
+ *
+ * Throws coded errors the callers map to MCP / HTTP responses:
+ *  - NO_DOCUMENT         — not currently open
+ *  - INVALID_PATH        — upload:// / scratchpad source (no on-disk backups)
+ *  - UNSUPPORTED_FORMAT  — not a .md/.txt document
+ *  - READ_ONLY           — read-only docs must not be overwritten
+ *  - RELOAD_IN_PROGRESS  — a concurrent reload holds the per-doc guard
+ *  - FILE_NOT_FOUND      — `backupName` is not an existing snapshot for this doc
+ */
+export async function restoreDocumentFromBackup(
+  id: string,
+  backupName: string,
+): Promise<RestoreBackupResult> {
+  const existing = getOpenDocs().get(id);
+  if (!existing) {
+    throw Object.assign(new Error("Document is not open."), { code: "NO_DOCUMENT" });
+  }
+  if (existing.source !== "file") {
+    throw Object.assign(new Error("Uploaded documents and scratchpads have no on-disk backups."), {
+      code: "INVALID_PATH",
+    });
+  }
+  if (!TEXT_RESTORE_FORMATS.has(existing.format)) {
+    throw Object.assign(
+      new Error(`Backup snapshots exist only for .md/.txt documents (this is ${existing.format}).`),
+      { code: "UNSUPPORTED_FORMAT" },
+    );
+  }
+  if (existing.readOnly) {
+    throw Object.assign(new Error("Document is read-only."), { code: "READ_ONLY" });
+  }
+  // Check the guard BEFORE writing to disk — if a file-watcher reload is
+  // mid-flight, reloadFromDisk below would silently skip and leave the Y.Doc
+  // holding pre-restore content while disk holds the snapshot bytes.
+  if (reloadInProgress.has(id)) {
+    throw Object.assign(new Error("A reload is already in progress for this document."), {
+      code: "RELOAD_IN_PROGRESS",
+    });
+  }
+
+  const appDataDir = resolveAppDataDir();
+  const snapshotPath = docBackupSnapshotPath(existing.filePath, appDataDir, backupName);
+  if (!snapshotPath) {
+    throw Object.assign(new Error(`"${backupName}" is not a valid backup snapshot name.`), {
+      code: "FILE_NOT_FOUND",
+    });
+  }
+  let content: string;
+  try {
+    content = await fs.readFile(snapshotPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw Object.assign(
+        new Error(
+          `Backup "${backupName}" not found for ${path.basename(existing.filePath)}. ` +
+            "Call tandem_restoreBackup without `backup` to list available snapshots.",
+        ),
+        { code: "FILE_NOT_FOUND" },
+      );
+    }
+    throw err;
+  }
+
+  // Preserve the CURRENT on-disk bytes before overwriting them, so a restore
+  // is itself reversible (first overwrite per path per run; never throws — a
+  // skip or snapshot failure must not block the restore).
+  await snapshotBeforeFirstWrite(existing.filePath, { appDataDir, documentId: id });
+
+  suppressNextChange(existing.filePath);
+  await atomicWrite(existing.filePath, content);
+  // The early reloadInProgress check above closes the common case, but a
+  // watcher reload can still start during the awaits since that check. A
+  // silent skip here would report success while the Y.Doc still holds
+  // pre-restore content — surface it as the same coded error instead.
+  const reloaded = await reloadFromDisk(id, existing.filePath, existing.format);
+  if (!reloaded) {
+    throw Object.assign(
+      new Error(
+        "A concurrent reload interrupted the restore. The backup bytes are on disk — retry to reload the document.",
+      ),
+      { code: "RELOAD_IN_PROGRESS" },
+    );
+  }
+
+  // The restored bytes are the new saved baseline. Without this, the autosave
+  // external-modification guard (file mtime > savedAtVersion) would treat the
+  // restore write as a foreign edit and skip every subsequent autosave. Same
+  // withInternal-tagged metadata write as initSavedBaseline.
+  const doc = getOrCreateDocument(id);
+  const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+  withInternal(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
+
+  pushNotification({
+    id: generateNotificationId(),
+    type: "file-reloaded",
+    severity: "info",
+    message: `Restored ${path.basename(existing.filePath)} from backup.`,
+    documentId: id,
+    dedupKey: `restore-backup:${id}`,
+    timestamp: Date.now(),
+  });
+
+  return {
+    message: `Restored ${path.basename(existing.filePath)} from backup ${backupName}.`,
+    restoredFrom: snapshotPath,
+    filePath: existing.filePath,
+  };
 }
 
 // --- Extracted helpers for openFileByPath ---
@@ -1055,11 +1190,17 @@ function buildResult(
  * 3. After transaction: refreshAllRanges to re-anchor annotation CRDT positions
  * 4. Second pass: textSnapshot-based relocation for still-stale annotations
  * 5. Reattach event queue observers
+ *
+ * Returns `true` when the reload ran, `false` when it was skipped because a
+ * concurrent reload holds the per-doc guard. The file-watcher caller ignores
+ * the result (the in-flight reload reads the same disk state); the
+ * backup-restore caller turns a skip into RELOAD_IN_PROGRESS so it never
+ * reports success while the Y.Doc still holds pre-restore content.
  */
-async function reloadFromDisk(id: string, filePath: string, format: string): Promise<void> {
+async function reloadFromDisk(id: string, filePath: string, format: string): Promise<boolean> {
   if (reloadInProgress.has(id)) {
     console.error("[FileWatcher] reload already in progress for %s, skipping", id);
-    return;
+    return false;
   }
   reloadInProgress.add(id);
   try {
@@ -1151,6 +1292,7 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     markClean(id);
 
     console.error("[FileWatcher] reloadFromDisk: complete for %s", id);
+    return true;
   } finally {
     reloadInProgress.delete(id);
   }

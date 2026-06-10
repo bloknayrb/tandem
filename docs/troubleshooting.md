@@ -9,13 +9,13 @@ If you're running from a source checkout, `npm run doctor` checks the most commo
 - Node.js ≥ 22 installed
 - `node_modules/` present
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
-- Claude Code's `mcp_settings.json` registered (when present)
+- `~/.claude.json` MCP registration (when present)
 - Ports `3478` (Hocuspocus WebSocket) and `3479` (MCP HTTP) listening
 - `/health` endpoint responds
 - `/api/events` SSE endpoint responds with `text/event-stream`
 - Annotation store readable; schema version, corruption state, lock status
 
-For desktop-app installs, `npm run doctor` isn't available — use `curl http://127.0.0.1:3479/health` instead. A `{"status":"ok",...}` response means the server is up.
+For desktop-app installs, use **Settings → About → Copy Diagnostics** to run the same checks in-app, minus the two source-checkout-only items (`node_modules/`, `.mcp.json`) — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
 
 ## Windows SmartScreen warning
 
@@ -34,6 +34,17 @@ The server must be running before Claude Code probes the MCP URL. Start it first
 - From source: run `npm run dev:standalone`.
 
 If you restart the server while Claude Code is open, run `/mcp` inside Claude Code to reconnect.
+
+## MCP shows connected but Tandem tools fail
+
+`/mcp` showing `tandem ✔ connected` proves the config entry resolved at session start — a tool call is the first *real* round-trip, so it's the call that surfaces a dead or stale server. In likelihood order:
+
+1. **The server isn't running anymore.** The connection state is cached from session start. Launch Tandem (or `tandem` in a terminal), then `/mcp` to reconnect.
+2. **Stale URL or port.** If you've set `TANDEM_MCP_PORT` (or an old install used a different port), `~/.claude.json`'s `mcpServers.tandem.url` points at the wrong place. Re-run the in-app integration wizard or `tandem setup --apply`.
+3. **Stale auth token.** A rotated token with an old `Authorization` header in a non-Claude client config rejects every call (Claude configs are updated automatically by `tandem rotate-token`).
+4. **Orphaned entry from an old install.** You uninstalled (or reinstalled differently) and the old `mcpServers.tandem` entry survived. Re-run the wizard, or remove the entry — see [data-locations.md](data-locations.md) for every place Tandem writes config and the `tandem --uninstall-scrub` command that cleans them.
+
+`tandem doctor` (or **Settings → About → Copy Diagnostics**) distinguishes 1 from 2–4: if the health checks pass but tool calls still fail, the problem is on the config side.
 
 ## Port already in use
 
@@ -100,14 +111,18 @@ Durable annotations live in a separate `annotations/` directory alongside `sessi
 
 ## Recovering a previous version of a document
 
-Before Tandem's **first** write to a `.md`/`.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file (or you just want yesterday's version back), you can restore from there with any file manager — no Tandem needed.
+Before Tandem's **first** write to a `.md`/`.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file (or you just want yesterday's version back), there are three ways to restore:
+
+- **In the app:** open the command palette (Ctrl+Shift+P) and run "Restore a backup of this document…" — it lists the available snapshots and restores the most recent one. The document reloads in place; annotations are preserved.
+- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a text document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach.
+- **By hand:** with any file manager, no Tandem needed — see below.
 
 Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same per-OS table as above). Each document gets a subfolder named by a hash of its path, containing:
 
 - up to 3 timestamped copies, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), and
 - a `source.txt` recording the original file's full path.
 
-To restore: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content.
+To restore by hand: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content. (The in-product paths above handle this for you: they reload the open document from the restored bytes, so no quit is needed.)
 
 Notes:
 
@@ -121,11 +136,20 @@ Tandem writes all log output to **stderr**, never stdout. This is intentional: w
 
 When troubleshooting:
 
-- Desktop app: logs appear in the system console (`Console.app` on macOS, Event Viewer on Windows, `journalctl --user` on Linux, depending on how the sidecar was launched).
-- npm install: stderr prints to the terminal where you ran `tandem`. Redirect to a file with `tandem 2> tandem.log`.
+- Desktop app: logs are written to a rotating `tandem.log` file — **Settings → About → Open Log Folder** opens it directly. On disk it lives under the bundle identifier: `%LOCALAPPDATA%\com.tandem.editor\logs\` (Windows), `~/Library/Logs/com.tandem.editor/` (macOS), `~/.local/share/com.tandem.editor/logs/` (Linux).
+- npm install: stderr prints to the terminal where you ran `tandem`. Redirect to a file with `tandem 2> tandem.log`. (No log file exists in this mode, so the Open Log Folder button doesn't appear.)
 - Source checkout: `npm run dev:server` prints to the terminal.
 
 If you ever see what looks like a normal log line on stdout, that's a bug — file it.
+
+## Sharing diagnostics
+
+When [filing an issue](https://github.com/bloknayrb/tandem/issues), attach a diagnostics report:
+
+- **In the app:** **Settings → About → Copy Diagnostics** puts a plain-text report on the clipboard — version, platform, and the result of every health check (ports, `/health`, SSE, annotation store). The endpoint behind it only answers loopback callers.
+- **From a terminal:** `tandem doctor` prints the same checks (plus two dev-repo-only checks the button omits); `tandem doctor --json` emits a machine-readable report.
+
+> **Privacy note:** the copied text contains local absolute paths (which include your username) and process IDs. Skim it before pasting into a public issue. It never contains auth tokens or document content.
 
 ## Auth rejection on LAN bind
 
