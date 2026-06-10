@@ -9,6 +9,7 @@ import { scrollFade } from "../actions/scrollFade.svelte.js";
 import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { type AnnotationSortMode, sortAnnotations } from "../hooks/useAnnotationOrder.js";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { warningStateColors } from "../utils/colors";
 import AnnotationCard from "./AnnotationCard.svelte";
@@ -117,6 +118,31 @@ function handleStoreReadOnlyDismiss() {
   storeReadOnlyDismissed = true;
 }
 
+// Sort mode (#1056): default is document-anchor position; "chronological"
+// (oldest first) is the opt-in alternative. Persisted like the other panel
+// UI state (localStorage, try-catch for incognito/storage-disabled browsers).
+const ANNOTATION_SORT_MODE_KEY = "tandem:annotationSortMode";
+
+function readSortMode(): AnnotationSortMode {
+  try {
+    const saved = localStorage.getItem(ANNOTATION_SORT_MODE_KEY);
+    return saved === "chronological" ? "chronological" : "position";
+  } catch {
+    return "position";
+  }
+}
+
+let sortMode = $state<AnnotationSortMode>(readSortMode());
+
+function toggleSortMode() {
+  sortMode = sortMode === "position" ? "chronological" : "position";
+  try {
+    localStorage.setItem(ANNOTATION_SORT_MODE_KEY, sortMode);
+  } catch {
+    // storage unavailable — in-memory only for this session
+  }
+}
+
 // Filter state
 let filterType = $state<FilterType>("all");
 let filterAuthor = $state<FilterAuthor>("all");
@@ -197,9 +223,18 @@ const filteredData = $derived.by(() => {
     if (matchType && matchAuthor && matchStatus) filtered.push(a);
   }
 
-  const pending = filtered.filter((a) => a.status === "pending");
+  // Rendered lists are sorted by the user's chosen mode (#1056); default is
+  // document-anchor position. The review/bulk lists keep arrival order — only
+  // their counts and membership matter, not their sequence.
+  const pending = sortAnnotations(
+    filtered.filter((a) => a.status === "pending"),
+    sortMode,
+  );
   const reviewPending = filtered.filter(isPendingReviewTarget);
-  const resolved = filtered.filter((a) => a.status !== "pending");
+  const resolved = sortAnnotations(
+    filtered.filter((a) => a.status !== "pending"),
+    sortMode,
+  );
   const reviewAllPending = annotations.filter(isPendingReviewTarget);
 
   return { filtered, pending, reviewPending, resolved, allPending, reviewAllPending };
@@ -511,15 +546,31 @@ function handleRailBackgroundClick(e: MouseEvent) {
           ? "s"
           : ""}
       </span>
-      <button
-        data-testid="filter-bar-toggle"
-        onclick={() => (filterBarOpen = !filterBarOpen)}
-        style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); padding: 3px 10px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); cursor: pointer; white-space: nowrap;"
-      >
-        <span>{filterLabel} {filteredData.filtered.length}</span>
-        <span style="font-size: 9px; opacity: 0.7;">▾</span>
-        <span>Filter</span>
-      </button>
+      <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
+        <button
+          data-testid="annotation-sort-toggle"
+          onclick={toggleSortMode}
+          title={sortMode === "position"
+            ? "Sorted by position in document. Click to sort oldest first."
+            : "Sorted oldest first. Click to sort by position in document."}
+          aria-label={sortMode === "position"
+            ? "Annotations sorted by position in document. Switch to oldest first."
+            : "Annotations sorted oldest first. Switch to position in document."}
+          style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); padding: 3px 10px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); cursor: pointer; white-space: nowrap;"
+        >
+          <span style="font-size: 9px; opacity: 0.7;" aria-hidden="true">⇅</span>
+          <span>{sortMode === "position" ? "Position" : "Oldest"}</span>
+        </button>
+        <button
+          data-testid="filter-bar-toggle"
+          onclick={() => (filterBarOpen = !filterBarOpen)}
+          style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-pill); padding: 3px 10px; font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle); cursor: pointer; white-space: nowrap;"
+        >
+          <span>{filterLabel} {filteredData.filtered.length}</span>
+          <span style="font-size: 9px; opacity: 0.7;">▾</span>
+          <span>Filter</span>
+        </button>
+      </div>
     </div>
   </div>
 
