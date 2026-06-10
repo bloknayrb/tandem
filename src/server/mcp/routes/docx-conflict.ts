@@ -19,13 +19,20 @@ import { sendApiError } from "./_shared.js";
  * null), so no separate loopback gate is needed. Idempotent: resolving with no
  * pending conflict is a no-op success (double-click / stale-banner race).
  */
+// Document IDs are 64-char SHA-256 hex hashes or upload_<alphanumeric> strings.
+// Validating the shape before use breaks CodeQL's js/path-injection taint chain
+// (the string cannot reach any FS path if it doesn't match this safe pattern)
+// and also rejects obviously-malformed inputs as a security improvement.
+const VALID_DOC_ID_RE = /^(?:[a-f0-9]{64}|upload_[\w-]+)$/;
+
 export async function handleResolveDocxConflict(req: Request, res: Response): Promise<void> {
   const { documentId, choice } = (req.body ?? {}) as Record<string, unknown>;
   if (choice !== "keep" && choice !== "reload") {
     res.status(400).json({ error: "BAD_REQUEST", message: 'choice must be "keep" or "reload".' });
     return;
   }
-  const docId = (typeof documentId === "string" ? documentId : null) ?? getActiveDocId();
+  const rawId = typeof documentId === "string" ? documentId : null;
+  const docId = (rawId !== null && VALID_DOC_ID_RE.test(rawId) ? rawId : null) ?? getActiveDocId();
   if (!docId) {
     res.status(400).json({ error: "BAD_REQUEST", message: "No active document." });
     return;
