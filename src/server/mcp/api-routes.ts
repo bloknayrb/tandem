@@ -22,6 +22,7 @@ import {
   API_SESSIONS,
   API_SESSIONS_CLEAR,
   API_SESSIONS_DELETE,
+  API_SHUTDOWN,
   API_STORE_RECLAIM_LOCK,
   API_UPLOAD,
 } from "../../shared/api-paths.js";
@@ -45,6 +46,7 @@ import { makeRotateTokenHandler } from "./routes/rotate-token.js";
 import { handleSave } from "./routes/save.js";
 import { handleScratchpad } from "./routes/scratchpad.js";
 import { handleClearSessions, handleDeleteSession, handleListSessions } from "./routes/sessions.js";
+import { makeShutdownHandler, type ShutdownRouteDeps } from "./routes/shutdown.js";
 import { handleStoreReclaimLock } from "./routes/store-reclaim.js";
 import { handleUpload } from "./routes/upload.js";
 
@@ -135,6 +137,9 @@ export const apiMiddleware: Handler = createApiMiddleware();
  * @param infoHandlerDeps - Dependencies for GET /api/info (version, toolCount, etc.).
  * @param diagnosticsHandlerDeps - Dependencies for GET /api/diagnostics (live ports,
  *   version, transport).
+ * @param shutdownDeps - Graceful-shutdown wiring for POST /api/shutdown (#1088).
+ *   Provided by the entry point in HTTP mode; when omitted (tests), the route
+ *   is not registered and callers get a 404.
  */
 export function registerApiRoutes(
   app: Express,
@@ -148,6 +153,7 @@ export function registerApiRoutes(
   getCurrentToken: () => string | null,
   infoHandlerDeps: Parameters<typeof makeInfoHandler>[0],
   diagnosticsHandlerDeps: Parameters<typeof makeDiagnosticsHandler>[0],
+  shutdownDeps?: ShutdownRouteDeps,
 ): void {
   // App metadata endpoint — consumed by the client's About panel
   app.get(API_INFO, mw, makeInfoHandler(infoHandlerDeps));
@@ -238,4 +244,14 @@ export function registerApiRoutes(
     largeBody,
     makeRotateTokenHandler({ setCurrentToken, getCurrentToken }),
   );
+
+  // Graceful shutdown (#1088): the Tauri shell POSTs here before falling back
+  // to a hard kill, so the Node shutdown sequence (dirty-doc flush + session
+  // save) runs on restart/update. No body parser — the route takes no request
+  // body. Gating (unconditional loopback + Origin allowlist when present)
+  // lives inside the handler.
+  if (shutdownDeps) {
+    app.options(API_SHUTDOWN, mw);
+    app.post(API_SHUTDOWN, mw, makeShutdownHandler(shutdownDeps));
+  }
 }

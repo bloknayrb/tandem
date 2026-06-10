@@ -59,6 +59,12 @@ export const API_SESSIONS = "/api/sessions";
 export const API_SESSIONS_DELETE = "/api/sessions/delete";
 export const API_SESSIONS_CLEAR = "/api/sessions/clear";
 
+// --- Process lifecycle (#1088) ----------------------------------------------
+// Graceful shutdown trigger. The Tauri shell POSTs here before falling back to
+// a hard kill so the Node shutdown sequence (dirty-doc flush + session save)
+// runs on restart/update. Loopback-only; HTTP mode only.
+export const API_SHUTDOWN = "/api/shutdown";
+
 // --- Auth -------------------------------------------------------------------
 // NOTE: the legacy `/api/setup` route was removed in #477 PR 3c-ii-c; setup is
 // now wizard-driven (`POST /api/integrations/apply`) or scriptable via

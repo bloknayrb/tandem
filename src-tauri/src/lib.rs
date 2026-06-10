@@ -47,9 +47,18 @@ use tauri_plugin_updater::UpdaterExt;
 /// request returns 403 Forbidden and the supervisor's health-poll times out.
 const HEALTH_URL: &str = "http://127.0.0.1:3479/health";
 const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
+/// Graceful-shutdown endpoint on the sidecar (#1088). POSTing here triggers
+/// the Node shutdown sequence (dirty-doc flush + session save) before exit.
+/// Keep in sync with API_SHUTDOWN in src/shared/api-paths.ts.
+const SHUTDOWN_URL: &str = "http://127.0.0.1:3479/api/shutdown";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long to wait for the sidecar to exit after POST /api/shutdown before
+/// hard-killing it. The Node shutdown's disk flush is 5s-bounded
+/// (src/server/index.ts), so 6s covers the flush plus the session save in the
+/// common case while keeping the restart button responsive (#1088).
+const GRACEFUL_SHUTDOWN_DEADLINE_SECS: u64 = 6;
 const MAX_RESTARTS: u32 = 3;
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 
@@ -1028,14 +1037,30 @@ pub fn run() {
         });
 }
 
-/// Kill the sidecar process and spawn it again.
+/// Guards against concurrent `restart_sidecar` invocations. The command
+/// returns immediately (stop + respawn run on the async runtime), so the
+/// WebView's restart button re-enables while a restart is still in flight; a
+/// second click used to race two stop/start tasks (two spawned children, one
+/// orphaned out of `SidecarState`). The graceful-stop wait (#1088) widens
+/// that window to ~6s, so gate it explicitly: while a restart is in flight,
+/// further requests are logged no-ops.
+static RESTART_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Gracefully stop the sidecar (flush dirty docs + save session, #1088),
+/// hard-kill as fallback, then spawn it again.
 #[tauri::command]
 fn restart_sidecar(app: tauri::AppHandle) {
-    kill_sidecar(&app);
-    // Reset healthy flag so any RunEvent::Opened arriving mid-restart queues
-    // instead of POSTing to a dying server. Must clear under the PendingOpens
-    // mutex (see clear_healthy_under_lock) — a bare atomic store here would
-    // race a concurrent producer that read flag=true a moment ago.
+    if RESTART_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        log::warn!("restart_sidecar ignored — a restart is already in flight");
+        return;
+    }
+    // Reset healthy flag FIRST so any RunEvent::Opened arriving mid-restart
+    // queues instead of POSTing to a dying server. Must clear under the
+    // PendingOpens mutex (see clear_healthy_under_lock) — a bare atomic store
+    // here would race a concurrent producer that read flag=true a moment ago.
     // `start_sidecar` will set it back to true after the next successful
     // `wait_for_health`.
     let pending: tauri::State<'_, PendingOpens> = app.state();
@@ -1047,6 +1072,12 @@ fn restart_sidecar(app: tauri::AppHandle) {
     let client = app.state::<reqwest::Client>().inner().clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Graceful stop before the hard kill (#1088): POST /api/shutdown so
+        // the Node shutdown sequence flushes up to ~60s of unsaved edits and
+        // persists the session, then wait up to 6s for exit. A bare kill()
+        // here discarded those edits and made server/WebView histories
+        // diverge on every restart.
+        stop_sidecar_gracefully(&handle, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS).await;
         // Restart never re-injects the cold-start file: the original `setup()`
         // invocation already opened it and registered it in `openDocuments`.
         if let Err(e) = start_sidecar(&handle, &client, None).await {
@@ -1062,6 +1093,9 @@ fn restart_sidecar(app: tauri::AppHandle) {
                 log::error!("[restart_sidecar] failed to emit failure event: {emit_err}");
             }
         }
+        // Release the gate on success AND failure — a failed restart must
+        // leave the button usable for another attempt.
+        RESTART_IN_PROGRESS.store(false, Ordering::Release);
     });
 }
 
@@ -1412,6 +1446,57 @@ fn forward_context_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEv
             log::warn!("Failed to emit context-menu action {id}: {e}");
         }
     }
+}
+
+/// Graceful-then-hard sidecar stop (#1088).
+///
+/// When we own a sidecar child, POST `/api/shutdown` so the Node shutdown
+/// sequence runs (unwatchAll → stopAutoSave → autoSaveAllToDisk (5s-bounded)
+/// → saveCurrentSession) and wait up to `deadline_secs` for the port to
+/// release. Always finishes with `kill_sidecar`: on a graceful exit that just
+/// clears the stored child handle (killing an already-exited child is a
+/// logged no-op); on POST failure or timeout it is the hard-kill fallback —
+/// the old behavior.
+///
+/// When no child is owned (debug builds running against an external
+/// `dev:standalone` server) this never POSTs — we must not shut down a server
+/// we did not spawn.
+async fn stop_sidecar_gracefully(
+    handle: &tauri::AppHandle,
+    client: &reqwest::Client,
+    deadline_secs: u64,
+) {
+    let state: tauri::State<'_, SidecarState> = handle.state();
+    let owns_child = match state.0.lock() {
+        Ok(guard) => guard.is_some(),
+        Err(poisoned) => poisoned.into_inner().is_some(),
+    };
+    if owns_child {
+        let posted = match client.post(SHUTDOWN_URL).send().await {
+            Ok(resp) if resp.status().is_success() => true,
+            Ok(resp) => {
+                log::warn!(
+                    "Graceful shutdown POST returned HTTP {} — falling back to hard kill",
+                    resp.status()
+                );
+                false
+            }
+            Err(e) => {
+                log::warn!("Graceful shutdown POST failed ({e}) — falling back to hard kill");
+                false
+            }
+        };
+        if posted {
+            if wait_for_port_release(client, deadline_secs).await {
+                log::info!("Sidecar exited gracefully after /api/shutdown");
+            } else {
+                log::warn!(
+                    "Sidecar still up {deadline_secs}s after /api/shutdown — falling back to hard kill"
+                );
+            }
+        }
+    }
+    kill_sidecar(handle);
 }
 
 /// Kill the sidecar process if one is running.
@@ -2814,11 +2899,14 @@ async fn perform_install(
     update: tauri_plugin_updater::Update,
     version: &str,
 ) {
-    // Kill sidecar BEFORE install — on Windows, the NSIS installer runs during
+    // Stop sidecar BEFORE install — on Windows, the NSIS installer runs during
     // download_and_install() and needs to replace node-sidecar.exe on disk.
     // If the process is still running, the file is locked and install fails.
-    kill_sidecar(app);
+    // Graceful first (#1088): POST /api/shutdown flushes dirty docs + saves
+    // the session before the app restarts into the new version; hard kill is
+    // the fallback on POST failure or timeout.
     let client = app.state::<reqwest::Client>().inner().clone();
+    stop_sidecar_gracefully(app, &client, GRACEFUL_SHUTDOWN_DEADLINE_SECS).await;
 
     // Wait for port release and (on Windows) file-lock release concurrently.
     // Port-down alone isn't sufficient on Windows: TerminateProcess returns
