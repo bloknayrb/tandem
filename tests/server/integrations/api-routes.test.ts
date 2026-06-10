@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import express, { type Express } from "express";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   _resetApplyGateForTests,
@@ -14,6 +14,7 @@ import {
   type IntegrationsRoutesDeps,
   registerIntegrationsRoutes,
 } from "../../../src/server/integrations/api-routes.js";
+import { CHANNEL_DIST } from "../../../src/server/integrations/apply.js";
 import type { ExistingMcpInstall } from "../../../src/server/integrations/existing-config.js";
 import {
   createKeychain,
@@ -39,6 +40,19 @@ import {
   ERROR_CODE_SECRET_MISSING,
 } from "../../../src/shared/integrations/contract.js";
 import { useEnvOverride, withEnvOverride } from "../../helpers/env-override.js";
+
+// The HTTP apply route calls `shouldRegisterChannelShim(kind, CHANNEL_DIST)` with
+// no override, so the real decision hangs on `existsSync(dist/channel/index.js)`.
+// That makes any test touching channel registration environment-dependent: CI runs
+// `npm test` BEFORE `npm run build` (the artifact is absent there), while a local
+// dev build leaves it present. Partial-mock the one decision function so the two
+// channel tests below can drive both branches deterministically. Default `false`
+// mirrors the CI-historical state, preserving every other apply test's behavior.
+const channelShim = vi.hoisted(() => ({ value: false }));
+vi.mock("../../../src/server/integrations/apply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/server/integrations/apply.js")>();
+  return { ...actual, shouldRegisterChannelShim: () => channelShim.value };
+});
 
 /** No-op pass-through used for the `mw` parameter (DNS-rebinding middleware is not in scope). */
 const passthrough: IntegrationsRoutesDeps["store"] extends infer _T
@@ -146,6 +160,7 @@ describe("integrations API routes", () => {
   let backend: ReturnType<typeof memoryBackend>;
 
   beforeEach(async () => {
+    channelShim.value = false; // CI-historical default; channel tests opt in explicitly.
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-int-api-"));
     backend = memoryBackend();
     deps = {
@@ -690,7 +705,12 @@ describe("integrations API routes", () => {
     });
 
     describe("apply: with stubbed detectTargets (real applyConfig)", () => {
-      it("removes tandem-channel from the target config when listed in removals", async () => {
+      /**
+       * Writes a `.claude.json` with a pre-existing `tandem-channel` entry, registers a
+       * `cc-1` claude-code integration pointing at it, and applies with that entry listed
+       * in `removals`. Returns the route response plus the resulting config.
+       */
+      async function applyWithChannelRemoval() {
         const tmpClaudeJson = path.join(tmpDir, ".claude.json");
         fs.writeFileSync(
           tmpClaudeJson,
@@ -733,10 +753,33 @@ describe("integrations API routes", () => {
           },
           TAURI_ORIGIN,
         );
-        expect(res.status).toBe(200);
         const body = res.body as { results: Array<{ status: string }>; nextNonce: string };
-        expect(body.results[0]?.status).toBe("applied");
         const after = JSON.parse(fs.readFileSync(tmpClaudeJson, "utf-8"));
+        return { res, body, after, nonce };
+      }
+
+      it("create-wins: keeps tandem-channel at the canonical path even when listed in removals (#985)", async () => {
+        // Channel shim default-on (build artifact present). The fresh registration
+        // wins over the user-confirmed removal, and the entry is rewritten to the
+        // canonical CHANNEL_DIST path (not the stale /path/to/shim.js it had before).
+        channelShim.value = true;
+        const { res, body, after, nonce } = await applyWithChannelRemoval();
+        expect(res.status).toBe(200);
+        expect(body.results[0]?.status).toBe("applied");
+        expect(after.mcpServers["tandem-channel"]).toBeDefined();
+        expect(after.mcpServers["tandem-channel"].args).toEqual([CHANNEL_DIST]);
+        expect(after.mcpServers.tandem).toBeDefined();
+        // The nonce rotated because a write occurred.
+        expect(body.nextNonce).not.toBe(nonce);
+      });
+
+      it("removes tandem-channel from the target config when listed in removals (no shim artifact)", async () => {
+        // Channel shim default-off (running from source without a build): nothing
+        // re-creates the entry, so the confirmed removal is honored.
+        channelShim.value = false;
+        const { res, body, after, nonce } = await applyWithChannelRemoval();
+        expect(res.status).toBe(200);
+        expect(body.results[0]?.status).toBe("applied");
         expect(after.mcpServers["tandem-channel"]).toBeUndefined();
         expect(after.mcpServers.tandem).toBeDefined();
         // The nonce rotated because a write occurred.
