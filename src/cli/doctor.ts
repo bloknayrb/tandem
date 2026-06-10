@@ -30,9 +30,6 @@ import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 
-const WS_PORT = DEFAULT_WS_PORT;
-const MCP_PORT = DEFAULT_MCP_PORT;
-
 export type DoctorStatus = "pass" | "warn" | "fail";
 
 export interface DoctorResult {
@@ -269,20 +266,24 @@ function probePort(port: number, timeoutMs = 2000): Promise<boolean> {
   });
 }
 
-async function checkPorts(r: Recorder): Promise<{ ws: boolean; mcp: boolean }> {
-  const [ws, mcp] = await Promise.all([probePort(WS_PORT), probePort(MCP_PORT)]);
+async function checkPorts(
+  r: Recorder,
+  wsPort: number,
+  mcpPort: number,
+): Promise<{ ws: boolean; mcp: boolean }> {
+  const [ws, mcp] = await Promise.all([probePort(wsPort), probePort(mcpPort)]);
 
   if (ws && mcp) {
-    r.pass(`Ports ${WS_PORT} (WebSocket) + ${MCP_PORT} (MCP HTTP) in use`, undefined, { ws, mcp });
+    r.pass(`Ports ${wsPort} (WebSocket) + ${mcpPort} (MCP HTTP) in use`, undefined, { ws, mcp });
   } else if (!ws && !mcp) {
     r.fail(
-      `Ports ${WS_PORT} + ${MCP_PORT} not listening — server not running`,
+      `Ports ${wsPort} + ${mcpPort} not listening — server not running`,
       "npm run dev:standalone",
       { ws, mcp },
     );
   } else {
     r.warn(
-      `Partial: port ${WS_PORT} ${ws ? "up" : "down"}, port ${MCP_PORT} ${mcp ? "up" : "down"}`,
+      `Partial: port ${wsPort} ${ws ? "up" : "down"}, port ${mcpPort} ${mcp ? "up" : "down"}`,
       "Server may be starting up or partially crashed",
       { ws, mcp },
     );
@@ -323,17 +324,17 @@ function httpGet(url: string, timeoutMs = 3000): Promise<HttpGetResult | null> {
   });
 }
 
-async function checkHealth(r: Recorder): Promise<boolean> {
-  const result = await httpGet(`http://127.0.0.1:${MCP_PORT}/health`);
+async function checkHealth(r: Recorder, mcpPort: number): Promise<boolean> {
+  const result = await httpGet(`http://127.0.0.1:${mcpPort}/health`);
 
   if (!result) {
-    r.fail(`Server not responding on 127.0.0.1:${MCP_PORT}`, "npm run dev:standalone");
+    r.fail(`Server not responding on 127.0.0.1:${mcpPort}`, "npm run dev:standalone");
     return false;
   }
 
   if (result.error) {
     r.fail(
-      `Server not responding on 127.0.0.1:${MCP_PORT} (${result.error})`,
+      `Server not responding on 127.0.0.1:${mcpPort} (${result.error})`,
       "npm run dev:standalone",
     );
     return false;
@@ -363,9 +364,9 @@ async function checkHealth(r: Recorder): Promise<boolean> {
 
 // ── Check: SSE event stream ─────────────────────────────────────────
 
-function checkSseEndpoint(r: Recorder): Promise<void> {
+function checkSseEndpoint(r: Recorder, mcpPort: number): Promise<void> {
   return new Promise((resolve) => {
-    const req = request(`http://127.0.0.1:${MCP_PORT}/api/events`, { timeout: 2000 }, (res) => {
+    const req = request(`http://127.0.0.1:${mcpPort}/api/events`, { timeout: 2000 }, (res) => {
       // SSE endpoint responds with 200 and text/event-stream
       req.destroy(); // don't hold the connection open
       const ct = res.headers["content-type"] || "";
@@ -555,11 +556,33 @@ function errMsg(err: unknown): string {
 // ── Pure collector ──────────────────────────────────────────────────
 
 /**
+ * Three-tier summary line shared by `runDoctor` and the `/api/diagnostics`
+ * route's filtered recomputation — keep wording in one place.
+ */
+export function summarizeDoctorResults(failures: number, warnings: number): string {
+  if (failures > 0) return `${failures} issue(s) found.`;
+  if (warnings > 0)
+    return `${warnings} warning(s) — Tandem should work, but check the items above.`;
+  return "All checks passed. Tandem is ready.";
+}
+
+export interface RunDoctorOptions {
+  /** WebSocket (Hocuspocus) port to probe. Defaults to {@link DEFAULT_WS_PORT}. */
+  wsPort?: number;
+  /** MCP HTTP port to probe. Defaults to {@link DEFAULT_MCP_PORT}. */
+  mcpPort?: number;
+}
+
+/**
  * Run every diagnostic check and return a structured report. Performs NO
  * `process.argv` reads and NEVER calls `process.exit`. Safe to call from tests
- * and from both CLI entry points.
+ * and from both CLI entry points. Embedders that know their live ports (the
+ * `/api/diagnostics` route on a `TANDEM_PORT`-overridden server) pass them via
+ * `opts` so the self-probe doesn't report "server not running".
  */
-export async function runDoctor(): Promise<DoctorReport> {
+export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorReport> {
+  const wsPort = opts.wsPort ?? DEFAULT_WS_PORT;
+  const mcpPort = opts.mcpPort ?? DEFAULT_MCP_PORT;
   const r = new Recorder();
 
   await r.check("node-version", () => checkNodeVersion(r));
@@ -568,28 +591,21 @@ export async function runDoctor(): Promise<DoctorReport> {
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
 
-  const { mcp } = await r.check("ports", () => checkPorts(r));
+  const { mcp } = await r.check("ports", () => checkPorts(r, wsPort, mcpPort));
 
   if (mcp) {
-    const healthy = await r.check("health", () => checkHealth(r));
+    const healthy = await r.check("health", () => checkHealth(r, mcpPort));
     if (healthy) {
-      await r.check("sse", () => checkSseEndpoint(r));
+      await r.check("sse", () => checkSseEndpoint(r, mcpPort));
     }
   }
-
-  const summary =
-    r.failures > 0
-      ? `${r.failures} issue(s) found.`
-      : r.warnings > 0
-        ? `${r.warnings} warning(s) — Tandem should work, but check the items above.`
-        : "All checks passed. Tandem is ready.";
 
   return {
     ok: r.failures === 0,
     crashed: false,
     failures: r.failures,
     warnings: r.warnings,
-    summary,
+    summary: summarizeDoctorResults(r.failures, r.warnings),
     error: null,
     results: r.results,
   };

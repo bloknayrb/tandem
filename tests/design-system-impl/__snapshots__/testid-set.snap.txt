@@ -286,6 +286,7 @@ settings-modal-app-info-footer
 settings-modal-changelog-error
 settings-modal-close-btn
 settings-modal-content
+settings-modal-copy-diagnostics-btn
 settings-modal-cowork-suspense-fallback
 settings-modal-default-mode-solo-btn
 settings-modal-default-mode-tandem-btn
@@ -296,6 +297,7 @@ settings-modal-margin-view-toggle
 settings-modal-mcp-status
 settings-modal-narrow-hamburger
 settings-modal-open-integration-wizard
+settings-modal-open-log-folder-btn
 settings-modal-report-bug-link
 settings-modal-scrim
 settings-modal-selection-toolbar-toggle

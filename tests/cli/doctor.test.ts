@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runDoctor, runDoctorCli } from "../../src/cli/doctor.js";
+import { allocPort } from "../helpers/alloc-port.js";
 
 // Doctor reads the annotation store from TANDEM_APP_DATA_DIR (env override in
 // resolveAppDataDir). Point it at a temp dir so the annotation-store check is
@@ -91,6 +92,21 @@ describe("runDoctor", () => {
     const withData = storeResults.find((r) => r.data && "docCount" in r.data);
     expect(withData?.data?.docCount).toBe(0);
     expect(withData?.data?.exists).toBe(false);
+  });
+
+  it("probes the ports passed via opts, not the defaults", async () => {
+    // /api/diagnostics threads the server's live (possibly TANDEM_PORT-
+    // overridden) ports through here. OS-assigned free ports that we
+    // immediately close are guaranteed NOT listening, so the check must
+    // report exactly those numbers as down.
+    const [wsPort, mcpPort] = await Promise.all([allocPort(), allocPort()]);
+
+    const report = await runDoctor({ wsPort, mcpPort });
+    const portsResult = report.results.find((r) => r.check === "ports");
+    expect(portsResult).toBeDefined();
+    expect(portsResult?.message).toContain(String(wsPort));
+    expect(portsResult?.message).toContain(String(mcpPort));
+    expect(portsResult?.data).toMatchObject({ ws: false, mcp: false });
   });
 });
 

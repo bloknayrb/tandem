@@ -15,28 +15,13 @@
  * server-security-invariants.test.ts (Invariant 7).
  */
 
-import { createServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
+import { request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeInfoHandler } from "../../src/server/mcp/routes/info.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
+import { allocPort } from "../helpers/alloc-port.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-async function allocPort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const addr = probe.address();
-      if (!addr || typeof addr === "string") {
-        probe.close();
-        reject(new Error("unexpected address"));
-        return;
-      }
-      const p = addr.port;
-      probe.close(() => resolve(p));
-    });
-  });
-}
 
 function closeServer(s: Server): Promise<void> {
   return new Promise<void>((resolve) => {

@@ -18,6 +18,9 @@ export const API_LAUNCH_CLAUDE = "/api/launch-claude";
 // --- Mode / metadata --------------------------------------------------------
 export const API_MODE = "/api/mode";
 export const API_INFO = "/api/info";
+// Embedded `tandem doctor` report for the client's "Copy diagnostics" button.
+// Loopback-only (the report embeds absolute paths / PIDs).
+export const API_DIAGNOSTICS = "/api/diagnostics";
 // Diagnostic health endpoint. Loopback callers additionally receive
 // `hasSession: boolean` — whether an MCP client transport is currently open
 // (an agent is connected, regardless of whether the auto-launcher spawned it).

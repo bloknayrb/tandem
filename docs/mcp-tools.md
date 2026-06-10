@@ -914,6 +914,29 @@ Returns app metadata for the client's About panel and version indicator. All fie
 
 ---
 
+### GET /api/diagnostics
+
+Runs the embedded `tandem doctor` collector and returns the report plus environment metadata. Backs the client's **Settings → About → Copy Diagnostics** button.
+
+**Loopback-only, unconditionally** — non-loopback callers get `403` regardless of auth, because the report embeds absolute paths (which include the username) and PIDs. It never contains token material or document content. The two dev-repo-only checks (`node-modules`, `mcp-json`) are filtered out of the report with `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop/npm-global install. Concurrent requests share one in-flight collector run (single-flight).
+
+**Response (200):**
+```json
+{
+  "report": { "ok": true, "crashed": false, "failures": 0, "warnings": 0, "summary": "All checks passed. Tandem is ready.", "error": null, "results": [ { "check": "node-version", "status": "pass", "message": "Node.js v22.0.0 (>= 22 required)" } ] },
+  "version": "0.13.6",
+  "transport": "http",
+  "platform": "win32",
+  "arch": "x64",
+  "nodeVersion": "v22.0.0",
+  "tauriSidecar": true
+}
+```
+
+**Errors:** `403 FORBIDDEN` (non-loopback caller, or disallowed Host header), `500 diagnostics failed` (collector crash — detail goes to the server log, never the wire)
+
+---
+
 ### POST /api/open
 
 Open a file by its absolute path on disk. Equivalent to `tandem_open` but callable from the editor UI.
