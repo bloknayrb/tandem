@@ -125,8 +125,13 @@ interface AnnotationBase {
   audience?: "private" | "outbound";
   /** Set when this annotation was promoted from a note via "Send to Claude". */
   promotedFrom?: "note";
-  /** For import-author annotations: original Word author and source file. */
-  importSource?: { author: string; file: string };
+  /**
+   * For import-author annotations: original Word author and source file.
+   * `commentId` is the original Word `w:id` from `comments.xml` (#1068) —
+   * reused on .docx export so a promoted Word comment keeps its identity
+   * across save → re-open (deterministic `importAnnotationId` dedup).
+   */
+  importSource?: { author: string; file: string; commentId?: string };
 }
 
 /**
