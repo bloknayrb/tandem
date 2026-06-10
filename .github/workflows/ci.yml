@@ -36,6 +36,8 @@ jobs:
           TRIPLE="$(rustc -Vv | grep '^host' | cut -d' ' -f2)"
           touch "src-tauri/binaries/node-sidecar-${TRIPLE}"
           touch "src-tauri/binaries/node-sidecar-${TRIPLE}.exe"
+          touch "src-tauri/binaries/tandem-reaper-${TRIPLE}"
+          touch "src-tauri/binaries/tandem-reaper-${TRIPLE}.exe"
 
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml

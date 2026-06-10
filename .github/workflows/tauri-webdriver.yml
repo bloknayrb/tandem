@@ -67,6 +67,11 @@ jobs:
       - name: Download Node sidecar
         run: node scripts/download-node-sidecar.mjs
 
+      # The reaper is an externalBin — `cargo tauri build` below fails its
+      # existence check without it. Native host build (no --target).
+      - name: Build reaper
+        run: node scripts/build-reaper.mjs
+
       # `cargo tauri build` needs the Tauri CLI (cargo-tauri) — it is NOT a
       # built-in cargo subcommand and the repo doesn't vendor @tauri-apps/cli,
       # so install it explicitly (tauri-release.yml sidesteps this via
