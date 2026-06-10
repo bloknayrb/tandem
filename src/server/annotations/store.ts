@@ -206,7 +206,6 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
 
   await ensureDirReady();
   const lockPath = path.join(getAnnotationsDir(), LOCK_FILE);
-  readOnly = false;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -217,6 +216,11 @@ export async function acquireStoreLock(): Promise<"locked" | "readonly"> {
       } finally {
         await handle.close();
       }
+      // Only flip readOnly after the lock is physically on disk — avoids a
+      // brief false-read window when called from doReclaim on the re-acquire
+      // path (the old early assignment at function entry let a concurrent
+      // scheduleWrite or isStoreReadOnly() call see false before we owned it).
+      readOnly = false;
       return "locked";
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
