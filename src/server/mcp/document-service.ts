@@ -6,6 +6,7 @@ import {
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_DOCUMENT_META,
+  Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
@@ -237,11 +238,21 @@ export async function saveDocumentToDisk(
       suppressNextChange(docState.filePath);
       await atomicWrite(docState.filePath, output);
     }
-    await saveSession(docState.filePath, docState.format, doc);
+    // `dirty` records whether a body edit landed DURING the async write (the
+    // saved bytes already match the session state otherwise) — consumed by the
+    // .docx restore-vs-reload prompt on reopen (#1069).
+    await saveSession(docState.filePath, docState.format, doc, {
+      dirty: snapshotDirtyVersion(docId) !== dirtySnapshot,
+    });
 
     // Mark document clean
     const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-    withMcp(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, Date.now()));
+    withMcp(doc, () => {
+      meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+      // A successful save wrote the in-memory edits to disk — any pending
+      // external-conflict flag (#1069) is resolved. No-op when absent.
+      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+    });
     markCleanIfUnchanged(docId, dirtySnapshot);
 
     return { status: "saved", fidelityWarnings };
@@ -837,7 +848,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
       try {
         clearFileSyncContext(docId);
         await wireAnnotationStore(docId, doc, oldPath, { allowRecovery: false });
-        if (format !== "docx") wireFileWatcher(docId, oldPath, format);
+        wireFileWatcher(docId, oldPath, format);
       } catch (rollbackErr) {
         console.error(
           "[Rename] rollback after failed rename also failed for %s:",
@@ -998,7 +1009,7 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // Move the session: write the new one BEFORE deleting the old so a crash
     // leaves the durable copy. saveSession stats newPath for its mtime baseline.
     try {
-      await saveSession(newPath, format, doc);
+      await saveSession(newPath, format, doc, { dirty: isDirty(docId) });
       await deleteSession(oldPath);
     } catch (err) {
       console.error("[Rename] session move failed for %s:", docId, err);
@@ -1010,12 +1021,13 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // bears the new name) and revert the tab label against on-disk reality.
     const fileName = path.basename(newPath);
     try {
-      // Re-target the file watcher (skip .docx — binary, no live reload). No
+      // Re-target the file watcher (.docx included since #1069 — clean docs
+      // reload, dirty docs get the external-conflict flag). No
       // suppressNextChange here: fs.rename already happened before the new watch
       // started (so it emits no change event to suppress), and nothing writes
       // newPath afterward — an armed latch would only swallow a genuine external
       // edit arriving within the TTL.
-      if (format !== "docx") wireFileWatcher(docId, newPath, format);
+      wireFileWatcher(docId, newPath, format);
 
       // Update the registry entry: same id/room, new path. addDoc overwrites by id.
       addDoc(docId, { id: docId, filePath: newPath, format, readOnly: false, source: "file" });
@@ -1133,7 +1145,10 @@ export async function closeDocumentById(
 export async function saveCurrentSession(): Promise<void> {
   for (const [id, state] of openDocs) {
     const doc = getOrCreateDocument(id);
-    await saveSession(state.filePath, state.format, doc);
+    // `dirty` matters most here (#1069): shutdown's autoSaveAllToDisk flush
+    // skips binary formats, so a dirty .docx session at shutdown is the only
+    // copy of its unsaved edits — the flag drives the reopen prompt.
+    await saveSession(state.filePath, state.format, doc, { dirty: isDirty(id) });
   }
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   await saveCtrlSession(ctrlDoc);

@@ -18,6 +18,7 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { isDirty } from "../documents/dirty.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
 // Position system
@@ -696,8 +697,12 @@ export function registerDocumentTools(server: McpServer): void {
         });
       }
       if (result.status === "skipped") {
-        // Fall back to session-only save for skipped formats
-        await saveSession(r.filePath, format, r.doc);
+        // Fall back to session-only save for skipped formats. The disk save
+        // did NOT happen, so persist the dirty flag (#1069): without it a
+        // skipped save (e.g. "File modified externally" on a dirty .docx)
+        // would write a clean-looking session that a restart then discards —
+        // losing the only copy of the unsaved edits.
+        await saveSession(r.filePath, format, r.doc, { dirty: isDirty(r.docId) });
         return mcpSuccess({
           saved: true,
           sessionOnly: true,

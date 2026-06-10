@@ -25,6 +25,7 @@ import { resolveActivityAction } from "./components/activityActions.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
+import DocxConflictBanner from "./components/DocxConflictBanner.svelte";
 import EmptyState from "./components/EmptyState.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import HelpModal from "./components/HelpModal.svelte";
@@ -2034,6 +2035,13 @@ const tutorial = createTutorial(
       visible={isReadOnly && activeTab?.format === "docx"}
       documentId={activeTab?.id}
     />
+    {#if activeTab && activeTab.format === "docx"}
+      <DocxConflictBanner
+        ydoc={activeTab.ydoc}
+        documentId={activeTab.id}
+        fileName={activeTab.fileName}
+      />
+    {/if}
     {#snippet editorContent()}
       <Editor
         ydoc={activeTab!.ydoc}

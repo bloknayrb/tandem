@@ -13,20 +13,21 @@ import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
+  Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_READ_ONLY,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
-import type { Annotation } from "../../shared/types.js";
+import type { Annotation, ExternalConflictState } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
 import { recoverRenamedEnvelope } from "../annotations/rename-recovery.js";
 import { annotationFileExists, createStore } from "../annotations/store.js";
 import { loadAndMerge } from "../annotations/sync.js";
-import { markClean, registerDirtyObserver } from "../documents/dirty.js";
+import { isDirty, markClean, markDirty, registerDirtyObserver } from "../documents/dirty.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { atomicWrite, getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
@@ -144,7 +145,9 @@ export async function openFileByPath(
       const doc = getDocument(existingId) ?? getOrCreateDocument(existingId);
       const reloadBuffer =
         format === "docx" ? await fs.readFile(resolved) : await fs.readFile(resolved, "utf-8");
-      await clearAndReload(existingId, doc, resolved, format, existing, reloadBuffer);
+      await clearAndReload(existingId, doc, resolved, format, existing, reloadBuffer, {
+        readOnly,
+      });
       addDoc(existingId, { id: existingId, filePath: resolved, format, readOnly, source: "file" });
       setActiveDocId(existingId);
       await wireAnnotationStore(existingId, doc, resolved);
@@ -176,11 +179,45 @@ export async function openFileByPath(
 
   // Normal open
   const doc = getOrCreateDocument(id);
-  const restoredFromSession = await maybeRestoreSession(resolved, doc, fileName);
+  const restore = await maybeRestoreSession(resolved, doc, fileName, format);
+  const restoredFromSession = restore.restored;
   if (!restoredFromSession) {
     await loadContentIntoDoc(doc, format, resolved, id);
   }
   await finalizeDocOpen(id, doc, resolved, fileName, format, readOnly);
+
+  // A restored session that carried unsaved edits re-arms the module-state
+  // dirty flag (#1069) — it was lost with the previous process. Must run AFTER
+  // finalizeDocOpen's registerDirtyObserver. Without this, autosave would skip
+  // the restored-but-unpersisted edits, and the .docx watcher would treat the
+  // doc as clean and auto-reload over the only copy of them.
+  if (restore.sessionDirty) {
+    markDirty(id);
+  }
+
+  // Restore-vs-reload prompt (#1069): a restored `.docx` session carrying
+  // unsaved edits diverges from the on-disk file (binary formats never
+  // auto-save). Flag it AFTER finalizeDocOpen so writeDocMeta's stale-flag
+  // tombstone runs first and this fresh detection wins.
+  if (restore.unsavedDocxRestore) {
+    const { diskChanged, sessionMtime } = restore.unsavedDocxRestore;
+    if (diskChanged && sessionMtime > 0) {
+      // The disk file changed UNDER the restored unsaved edits. Hold the save
+      // baseline at the SESSION's mtime (overriding initSavedBaseline's
+      // current-mtime value) so the explicit-save external-modification guard
+      // blocks until the user resolves the banner — "keep" re-baselines to the
+      // current mtime, "reload" takes the disk content. Otherwise a habitual
+      // Ctrl+S would silently overwrite the external changes (no pre-overwrite
+      // backup exists for binary formats).
+      const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      withInternal(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, sessionMtime));
+    }
+    flagExternalConflict(id, doc, resolved, {
+      kind: "unsaved-restore",
+      diskChanged,
+      detectedAt: Date.now(),
+    });
+  }
 
   // Inject tutorial annotations whenever the sample welcome document is opened,
   // regardless of whether TANDEM_NO_SAMPLE skipped the server startup auto-open.
@@ -628,32 +665,65 @@ function handleAlreadyOpen(
   };
 }
 
+/** Result of maybeRestoreSession (#1069).
+ *  - `sessionDirty`: the restored session carried unsaved edits — the caller
+ *    re-arms the module-state dirty flag (lost across restarts) so autosave
+ *    and the .docx watcher's dirty check see the truth.
+ *  - `unsavedDocxRestore`: set only for a dirty `.docx` session — the caller
+ *    surfaces the restore-vs-reload prompt. `sessionMtime` is the on-disk
+ *    mtime recorded when the session was saved (0 if it couldn't be stat'd). */
+interface RestoreResult {
+  restored: boolean;
+  sessionDirty?: boolean;
+  unsavedDocxRestore?: { diskChanged: boolean; sessionMtime: number };
+}
+
 /**
  * Attempt to restore a Y.Doc from a saved session.
- * Returns true ONLY if the session was restored AND the fragment is non-empty.
- * Returns false if no session exists, the source file has changed, or the
- * restored fragment is empty (falls back to loading from source file).
+ * `restored` is true ONLY if the session was restored AND the fragment is
+ * non-empty. Returns `restored: false` if no session exists, the source file
+ * has changed, or the restored fragment is empty (falls back to loading from
+ * source file).
+ *
+ * Exception (#1069): a `.docx` session flagged `dirty` restores EVEN IF the
+ * source file changed on disk. Binary formats never auto-save, so that session
+ * is the only copy of the user's unsaved edits — dropping it for the disk copy
+ * (the `.md` behavior) would be silent data loss. The caller flags the
+ * divergence so the user can choose keep-vs-reload explicitly.
  */
 async function maybeRestoreSession(
   resolved: string,
   doc: Y.Doc,
   fileName: string,
-): Promise<boolean> {
+  format: string,
+): Promise<RestoreResult> {
   const session = await loadSession(resolved);
   if (session) {
     const changed = await sourceFileChanged(session);
-    if (!changed) {
+    const dirtyDocx = format === "docx" && session.dirty === true;
+    if (!changed || dirtyDocx) {
       restoreYDoc(doc, session);
       const fragment = doc.getXmlFragment("default");
       if (fragment.length > 0) {
-        return true;
+        return {
+          restored: true,
+          sessionDirty: session.dirty === true,
+          ...(dirtyDocx
+            ? {
+                unsavedDocxRestore: {
+                  diskChanged: changed,
+                  sessionMtime: session.sourceFileMtime,
+                },
+              }
+            : {}),
+        };
       }
       console.error(
         `[Tandem] Session restore yielded empty doc for ${fileName}, falling back to source file`,
       );
     }
   }
-  return false;
+  return { restored: false };
 }
 
 /**
@@ -907,10 +977,10 @@ async function finalizeDocOpen(
   broadcastOpenDocs();
   ensureAutoSave();
 
-  // Watch for external file changes (skip .docx — binary format, no live reload)
-  if (format !== "docx") {
-    wireFileWatcher(id, resolved, format);
-  }
+  // Watch for external file changes. `.docx` is watched too (#1069): clean
+  // docs reload like .md; docs with unsaved edits get a conflict flag instead
+  // of an auto-reload (see wireFileWatcher's dirty-docx branch).
+  wireFileWatcher(id, resolved, format);
 }
 
 // --- Private helpers ---
@@ -1026,6 +1096,10 @@ export async function wireAnnotationStore(
  * (#1021) repopulates from a user-edited markdown STRING that does NOT match
  * disk yet, so it passes `false` to keep the doc dirty — its caller then writes
  * the new content to disk explicitly.
+ *
+ * `opts.readOnly` (default false): the authoritative readOnly for the rewritten
+ * metadata. Previously hardcoded `isDocx` — a #576 leftover from when .docx
+ * opened read-only; .docx is writable now, so the caller's value is the truth.
  */
 async function clearAndReload(
   id: string,
@@ -1034,7 +1108,7 @@ async function clearAndReload(
   format: string,
   existing: OpenDoc,
   source: string | Buffer,
-  opts?: { markCleanAfter?: boolean },
+  opts?: { markCleanAfter?: boolean; readOnly?: boolean },
 ): Promise<void> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
@@ -1061,7 +1135,6 @@ async function clearAndReload(
     dedupSource: resolved,
   };
   const prepared = await prepareContent(format, source);
-  const isDocx = format === "docx";
 
   // 2. Single transaction: clear all state + repopulate + rewrite metadata.
   //    Clients see one atomic Y.js update — no intermediate states. The
@@ -1075,11 +1148,14 @@ async function clearAndReload(
       // Rewrite metadata + dirty-tracking baseline
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       meta.delete(Y_MAP_READ_ONLY);
-      meta.set(Y_MAP_READ_ONLY, isDocx);
+      meta.set(Y_MAP_READ_ONLY, opts?.readOnly ?? false);
       meta.set("format", format);
       meta.set("documentId", id);
       meta.set("fileName", path.basename(resolved));
       meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
+      // Content was rebuilt from the caller's source — any pending external-
+      // conflict flag (#1069) is moot. Y.Map.delete on a missing key is a no-op.
+      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
     });
 
     // 3. Reattach event queue observers (idempotent — detaches existing first)
@@ -1147,6 +1223,10 @@ function writeDocMeta(
     meta.set("format", format);
     meta.set("documentId", id);
     meta.set("fileName", fileName);
+    // A conflict flag persisted inside a restored session is stale detection
+    // state — clear it here; openFileByPath re-flags freshly when the current
+    // open actually warrants it (#1069).
+    meta.delete(Y_MAP_EXTERNAL_CONFLICT);
   });
 }
 
@@ -1211,8 +1291,16 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     // 1. Read new content outside the transaction (async I/O). Pre-parse
     //    through the adapter so we use the same code path as opens
     //    (ADR-036 + PR #707 review — single source of truth). For md/txt
-    //    `parse` is essentially a no-op wrap.
-    const fileContent = await fs.readFile(filePath, "utf-8");
+    //    `parse` is essentially a no-op wrap; .docx needs the raw Buffer
+    //    (a utf-8 decode would corrupt the ZIP before mammoth sees it).
+    // Stat BEFORE the read: if another write lands in between, the loaded
+    // content is NEWER than the recorded baseline, so the next save trips the
+    // external-modification guard (safe, conservative). Stat-after-read would
+    // invert that — a baseline newer than the loaded content masks the
+    // interleaved write and lets a save overwrite it.
+    const diskStat = await fs.stat(filePath).catch(() => null);
+    const fileContent =
+      format === "docx" ? await fs.readFile(filePath) : await fs.readFile(filePath, "utf-8");
     const reloadAdapter = getAdapter(format);
     const reloadPrepared = await reloadAdapter.parse(fileContent);
 
@@ -1232,6 +1320,15 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       // every file-watcher reload would be noisy. The original surface in
       // openFileByPath catches inject failures during the initial open.
       reloadAdapter.apply(doc, reloadPrepared, { fileName: path.basename(filePath) });
+
+      // The body now mirrors the externally-written disk content. Refresh the
+      // savedAt baseline to the file's mtime so the external-modification save
+      // guard (stat.mtimeMs > lastSavedAt + 1000) doesn't permanently block
+      // future saves against the pre-reload baseline, and clear any external-
+      // conflict flag (#1069) — a completed reload IS the resolution.
+      const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+      meta.set(Y_MAP_SAVED_AT_VERSION, diskStat?.mtimeMs ?? Date.now());
+      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
     });
 
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
@@ -1301,11 +1398,30 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
 /**
  * Wire up the file watcher for a document. Calls reloadFromDisk on
  * external changes and pushes a browser notification.
+ *
+ * `.docx` (#1069): a clean doc reloads exactly like .md (the binary branch in
+ * reloadFromDisk reads a Buffer; comment injection is idempotent). A doc with
+ * UNSAVED edits is NEVER auto-reloaded — a binary repopulation would clobber
+ * the only copy of those edits — it gets an external-conflict flag the client
+ * surfaces as a keep-vs-reload banner instead. Tandem's own `.docx` save never
+ * reaches this callback: the binary save branch arms `suppressNextChange`
+ * before `atomicWriteBuffer`, and suppression is consumed at fs.watch event
+ * ARRIVAL (see file-watcher.ts), not at debounce delivery.
  */
 export function wireFileWatcher(id: string, filePath: string, format: string): void {
   try {
     watchFile(filePath, async () => {
       try {
+        if (format === "docx" && isDirty(id)) {
+          const doc = getDocument(id);
+          if (!doc) return; // closed between arrival and delivery
+          flagExternalConflict(id, doc, filePath, {
+            kind: "external-edit",
+            diskChanged: true,
+            detectedAt: Date.now(),
+          });
+          return;
+        }
         await reloadFromDisk(id, filePath, format);
         pushNotification({
           id: generateNotificationId(),
@@ -1334,13 +1450,92 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
   }
 }
 
+/**
+ * Record an external-conflict on a document (#1069, `.docx` only): write the
+ * state into Y_MAP_DOCUMENT_META (CRDT-broadcast, so connected clients render
+ * the keep-vs-reload banner and late-joining clients still see it) and push a
+ * toast. `withInternal` per ADR-031 — server-detected metadata, not user
+ * intent; both the channel queue and durable-sync skip it.
+ */
+function flagExternalConflict(
+  id: string,
+  doc: Y.Doc,
+  filePath: string,
+  conflict: ExternalConflictState,
+): void {
+  const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+  withInternal(doc, () => meta.set(Y_MAP_EXTERNAL_CONFLICT, conflict));
+  pushNotification({
+    id: generateNotificationId(),
+    type: "external-conflict",
+    severity: "warning",
+    message:
+      conflict.kind === "external-edit"
+        ? `${path.basename(filePath)} changed on disk while you have unsaved edits. Choose to keep your edits or reload from the file.`
+        : `Unsaved edits for ${path.basename(filePath)} were restored from your last session${conflict.diskChanged ? ", but the file also changed on disk" : ""}. Choose to keep them or reload from the file.`,
+    documentId: id,
+    dedupKey: `docx-conflict:${id}`,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Resolve a pending external-conflict (#1069). Invoked by
+ * POST /api/docx-conflict/resolve from the client banner.
+ *
+ * - "keep": keep the in-memory unsaved edits. Clears the flag and re-baselines
+ *   Y_MAP_SAVED_AT_VERSION to the CURRENT disk mtime so the explicit-save
+ *   external-modification guard unblocks — the user has explicitly accepted
+ *   that their next save overwrites the external/disk version.
+ * - "reload": discard the unsaved edits and reload from disk through the
+ *   existing file-watcher reload lifecycle (annotations preserved +
+ *   re-anchored; reloadFromDisk clears the flag and refreshes the baseline).
+ *
+ * No-op success when no conflict is pending (double-click / stale banner race).
+ * Throws coded errors the route maps to HTTP status (NO_DOCUMENT).
+ */
+export async function resolveExternalConflict(
+  id: string,
+  choice: "keep" | "reload",
+): Promise<void> {
+  const existing = getOpenDocs().get(id);
+  if (!existing) {
+    throw Object.assign(new Error("Document is not open."), { code: "NO_DOCUMENT" });
+  }
+  const doc = getDocument(id) ?? getOrCreateDocument(id);
+  const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+  if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === undefined) return;
+
+  if (choice === "keep") {
+    const stat = await fs.stat(existing.filePath).catch(() => null);
+    withInternal(doc, () => {
+      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
+    });
+    return;
+  }
+
+  await reloadFromDisk(id, existing.filePath, existing.format);
+  pushNotification({
+    id: generateNotificationId(),
+    type: "file-reloaded",
+    severity: "info",
+    message: `Reloaded from disk: ${path.basename(existing.filePath)}`,
+    documentId: id,
+    dedupKey: `reload:${id}`,
+    timestamp: Date.now(),
+  });
+}
+
 function ensureAutoSave(): void {
   if (isAutoSaveRunning()) return;
   startAutoSave(async () => {
-    // Session saves (all documents — preserves CRDT state for restart recovery)
+    // Session saves (all documents — preserves CRDT state for restart recovery).
+    // `dirty` rides along (#1069) so reopen can tell whether the session holds
+    // unsaved edits — the .docx restore-vs-reload prompt keys off it.
     for (const [docId, state] of getOpenDocs()) {
       const d = getOrCreateDocument(docId);
-      await saveSession(state.filePath, state.format, d);
+      await saveSession(state.filePath, state.format, d, { dirty: isDirty(docId) });
     }
     // Disk saves (eligible .md/.txt documents only)
     await autoSaveAllToDisk();
