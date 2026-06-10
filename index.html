@@ -94,6 +94,16 @@
         --tandem-author-claude-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, var(--tandem-surface));
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* #1006 A8 composer — text- and border-grade coral for controls keyed
+           to the Claude/annotation action (the annotate composer's Send
+           button). Hand-picked hex rather than color-mix because they must
+           hold WCAG ratios against the tinted --tandem-author-claude-bg:
+           fg-strong ≥4.5:1 (5.52 here, 6.79 dark; warm inherits light at
+           5.16), border ≥3:1 vs both the tint and the card surface (3.73/4.14
+           here, 3.24/3.68 dark, 3.84 warm). --tandem-author-claude itself
+           fails both as text (2.81:1) — never use it for text on the tint. */
+        --tandem-author-claude-fg-strong: #9c4a2a;
+        --tandem-author-claude-border: #c2613e;
         /* File-type pip colors for the new-tab launcher recents list. These are
            6px decorative dots (non-text → WCAG text-contrast does not gate).
            .md/.docx reuse the author tokens; .txt/.html get their own identity
@@ -458,6 +468,9 @@
         --tandem-author-claude-bg: #4d2419;
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* #1006 dark coral grades — see the :root counterparts for ratios. */
+        --tandem-author-claude-fg-strong: #f0a988;
+        --tandem-author-claude-border: #b56a4b;
         /* Dark file-type pips — light seeds lifted by the author-user light→dark
            delta (+0.17 L, -0.01 C, hue fixed) so they stay legible on the dark
            recents surface. See the light :root block for the rationale. */
@@ -588,6 +601,8 @@
           --tandem-accent-fg-strong: HighlightText;
           --tandem-author-user: CanvasText;
           --tandem-author-claude: CanvasText;
+          --tandem-author-claude-fg-strong: CanvasText;
+          --tandem-author-claude-border: ButtonText;
           --tandem-author-user-bg: Canvas;
           --tandem-author-claude-bg: Canvas;
           --tandem-claude-focus-bg: Canvas;
