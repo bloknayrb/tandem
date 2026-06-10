@@ -252,6 +252,12 @@ export function registerApplyTools(server: McpServer): void {
       // .docx keeps the original sidecar semantics ({name}.backup.docx written
       // by tandem_applyChanges) — unchanged behavior.
       if (docState.format === "docx") {
+        if (docState.source !== "file") {
+          return mcpError(
+            "FORMAT_ERROR",
+            "Uploaded documents and scratchpads have no on-disk backup file.",
+          );
+        }
         if (args.backup !== undefined) {
           return mcpError(
             "FORMAT_ERROR",
