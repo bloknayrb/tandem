@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-10
+
 ### Added
 
 - **Structured output for typed MCP clients (#1080)** — six data-returning tools (`tandem_status`, `tandem_getTextContent`, `tandem_getAnnotations`, `tandem_checkInbox`, `tandem_listDocuments`, `tandem_search`) now advertise an MCP `outputSchema` and emit `structuredContent` alongside the unchanged text envelope, so non-Claude clients can validate responses end-to-end. Error responses from these tools carry the MCP-level `isError: true` flag. Per ADR-027 the annotation schemas structurally exclude `type: "note"` — user-private notes cannot appear in structured payloads. Tool descriptions across the catalog were also tightened (~5% smaller model-visible catalog), and stale `tandem_getAnnotations` documentation claiming notes were readable via `type: "note"` was corrected.
