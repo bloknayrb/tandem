@@ -63,19 +63,15 @@ export interface ExportComment {
   bodyParagraphs: string[];
 }
 
-/** Word `w:id` is an OOXML decimal; stay comfortably inside int32. */
-const MAX_WORD_COMMENT_ID = 0x7ffffff0;
-
 /**
  * Returns the original Word comment id as a number when it can be reused
- * verbatim (canonical non-negative decimal, no leading zeros, in range), else
- * null. Reusing the original id keeps `importAnnotationId` stable across a
- * promote → save → re-open cycle.
+ * verbatim (canonical non-negative decimal — the 9-digit cap keeps it well
+ * inside OOXML's int32 `w:id` range), else null. Reusing the original id
+ * keeps `importAnnotationId` stable across a promote → save → re-open cycle.
  */
 function reusableCommentId(raw: string | undefined): number | null {
   if (!raw || !/^\d{1,9}$/.test(raw)) return null;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0 || n > MAX_WORD_COMMENT_ID) return null;
   // Reject non-canonical forms ("01") — the re-imported id would be the
   // emitted canonical string and the hash would differ anyway.
   if (String(n) !== raw) return null;
@@ -134,6 +130,7 @@ function exportableReplies(repliesMap: Y.Map<unknown>, annotationId: string): An
     // never leave Tandem. Treat anything not explicitly public-shaped as
     // private (fail closed).
     if (reply.private === true) return;
+    if (typeof reply.id !== "string") return;
     if (typeof reply.text !== "string" || reply.text.length === 0) return;
     out.push(reply);
   });

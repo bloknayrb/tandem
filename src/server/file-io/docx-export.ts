@@ -65,8 +65,11 @@ import {
   WidthType,
 } from "docx";
 import * as Y from "yjs";
-import { headingPrefixLength } from "../../shared/offsets.js";
-import { extractText, getElementTextLength } from "../mcp/document-model.js";
+import {
+  extractText,
+  getElementTextLength,
+  getHeadingPrefixLength,
+} from "../mcp/document-model.js";
 import { type ExportComment, prepareExportComments } from "./docx-comment-export.js";
 
 // -- Trust-boundary helpers ---------------------------------------------------
@@ -374,7 +377,9 @@ function blockToDocx(el: Y.XmlElement, ctx: BlockCtx, emit: EmitCtx): Array<Para
       // Markers can't render inside the virtual prefix; any event there
       // flushes at the heading text start (the import walker also counts the
       // prefix before the first run, so a clamp is the closest valid anchor).
-      emit.pos += headingPrefixLength(level >= 1 && level <= 6 ? level : 1);
+      // getHeadingPrefixLength is the SAME function the coordinate system
+      // uses (extractText/resolveToElement) — keep the cursor consistent.
+      emit.pos += getHeadingPrefixLength(el);
       return [new Paragraph({ heading, children: inlineChildren(el, emit) })];
     }
     case "paragraph": {
