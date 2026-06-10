@@ -17,6 +17,7 @@ annotation-snippet-{*}
 annotations-tab
 app-info-footer
 appearance-formatting-bar
+appearance-rail-hover-reveal
 apply-changes-btn
 archive-btn-{*}
 batch-promote-bar
@@ -230,6 +231,8 @@ popup-highlight-none
 popup-highlight-{*}
 popup-note-submit
 popup-show-formatbar-btn
+railFloat.left ? "rail-float-left" : undefined
+railFloat.right ? "rail-float-right" : undefined
 recent-file-{*}
 recent-files-list
 reduce-motion-toggle
