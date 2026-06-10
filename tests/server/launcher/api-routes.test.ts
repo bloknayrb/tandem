@@ -386,6 +386,24 @@ describe("POST /api/launcher/start-fresh", () => {
     expect(body.code).toBe(LAUNCHER_ERROR_REAPER_NOT_FOUND);
     expect(body.message).not.toBe("start-fresh failed");
   });
+
+  // Parity with relaunch: a NON-reaper failure must surface its real detail
+  // (not the static "start-fresh failed" label) — guards against start-fresh
+  // ever diverging from relaunch's sendUnexpected contract.
+  it("surfaces a real non-reaper error message verbatim", async () => {
+    const sup = makeFakeSupervisor({
+      startFreshHook: async () => {
+        throw new Error("some start-fresh detail");
+      },
+    });
+    const { app } = makeApp(baseDeps(sup));
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const res = await request(app, "POST", "/api/launcher/start-fresh", { nonce: nonce.nonce });
+    expect(res.status).toBe(500);
+    const body = res.body as { code: string; message: string };
+    expect(body.code).toBe("INTERNAL_ERROR");
+    expect(body.message).toBe("some start-fresh detail");
+  });
 });
 
 describe("POST /api/launcher/working-directory", () => {

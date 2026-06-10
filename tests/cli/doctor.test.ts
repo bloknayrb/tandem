@@ -159,6 +159,31 @@ describe("runDoctor", () => {
     expect(messages.some((m) => m.includes("unparseable"))).toBe(true);
   });
 
+  // Malformed-but-valid-JSON locks: an object whose `pid` is the wrong type, or
+  // an object with no `pid` at all. parseLockfile's JSON branch requires a
+  // positive-integer `pid` and returns null otherwise (it does NOT fall back to
+  // the legacy raw-PID parse for `{`-prefixed content), so doctor must report
+  // "unparseable" rather than crash or mis-read the string as a PID.
+  const malformedJsonCases: Array<[string, string]> = [
+    ["string-typed pid", JSON.stringify({ pid: "28572", app: "tandem" })],
+    ["object with no pid field", JSON.stringify({ app: "tandem", startedAtMs: 123 })],
+  ];
+  for (const [label, content] of malformedJsonCases) {
+    it(`warns "unparseable" for a JSON lock with ${label}`, async () => {
+      const annDir = join(dataDir, "annotations");
+      mkdirSync(annDir, { recursive: true });
+      writeFileSync(join(annDir, "store.lock"), content);
+
+      const report = await runDoctor();
+      const messages = report.results
+        .filter((r) => r.check === "annotation-store")
+        .map((r) => r.message);
+      expect(messages.some((m) => m.includes("unparseable"))).toBe(true);
+      // Must not mis-read the string "28572" as a live/dead PID.
+      expect(messages.some((m) => m.includes("live PID") || m.includes("dead PID"))).toBe(false);
+    });
+  }
+
   it("probes the ports passed via opts, not the defaults", async () => {
     // /api/diagnostics threads the server's live (possibly TANDEM_PORT-
     // overridden) ports through here. OS-assigned free ports that we
