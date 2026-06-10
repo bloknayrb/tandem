@@ -1303,9 +1303,9 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     // `docState.filePath` (set by openFileByPath / resolveAndValidatePath /
     // a validated rename), never raw user input. Alerts here are false
     // positives; dismiss per issue #1042.
-    const diskStat = await fs.stat(filePath).catch(() => null);
+    const diskStat = await fs.stat(filePath).catch(() => null); // lgtm[js/path-injection]
     const fileContent =
-      format === "docx" ? await fs.readFile(filePath) : await fs.readFile(filePath, "utf-8");
+      format === "docx" ? await fs.readFile(filePath) : await fs.readFile(filePath, "utf-8"); // lgtm[js/path-injection]
     const reloadAdapter = getAdapter(format);
     const reloadPrepared = await reloadAdapter.parse(fileContent);
 
@@ -1517,7 +1517,7 @@ export async function resolveExternalConflict(
     // resolveAndValidatePath / a validated rename) — the route supplies only
     // the document id, which is a map key, not a path. An alert here is a
     // false positive; dismiss per issue #1042.
-    const stat = await fs.stat(existing.filePath).catch(() => null);
+    const stat = await fs.stat(existing.filePath).catch(() => null); // lgtm[js/path-injection]
     withInternal(doc, () => {
       meta.delete(Y_MAP_EXTERNAL_CONFLICT);
       if (stat) meta.set(Y_MAP_SAVED_AT_VERSION, stat.mtimeMs);
