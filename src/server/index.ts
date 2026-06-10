@@ -26,6 +26,7 @@ import {
   reattachCtrlObservers,
   reattachObservers,
 } from "./events/queue.js";
+import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
 import {
@@ -34,7 +35,12 @@ import {
   saveCurrentSession,
   writeGenerationId,
 } from "./mcp/document.js";
-import { broadcastStoreReadOnly, docCount, getOpenDocs } from "./mcp/document-service.js";
+import {
+  autoSaveAllToDisk,
+  broadcastStoreReadOnly,
+  docCount,
+  getOpenDocs,
+} from "./mcp/document-service.js";
 import { openFileByPath } from "./mcp/file-opener.js";
 import {
   APP_VERSION,
@@ -43,7 +49,13 @@ import {
   startMcpServerStdio,
 } from "./mcp/server.js";
 import { pushNotification } from "./notifications.js";
-import { freePort, LAST_SEEN_VERSION_FILE, SESSION_DIR, waitForPort } from "./platform.js";
+import {
+  freePort,
+  LAST_SEEN_VERSION_FILE,
+  resolveAppDataDir,
+  SESSION_DIR,
+  waitForPort,
+} from "./platform.js";
 import { captureFatal, initSidecarCrashReporting } from "./sentry.js";
 import {
   cleanupOrphanedAnnotationFiles,
@@ -139,8 +151,27 @@ async function shutdown(signal: string) {
   console.error(`[Tandem] ${signal} received, saving session...`);
   try {
     unwatchAll();
-    await saveCurrentSession();
+    // Stop the timer BEFORE the flush so it can't fire concurrently with it
+    // (the savingDocs lock would make that safe per-doc, but redundant saves
+    // during teardown are pure noise).
     stopAutoSave();
+    // Flush dirty docs to disk before the session snapshot, so (a) the disk
+    // converges with the session instead of lagging up to 60s of edits a user
+    // would see opening the file elsewhere, and (b) the session captures the
+    // post-save Y_MAP_SAVED_AT_VERSION. Bounded: a hung disk write must not
+    // stall SIGTERM past the Tauri shell's 5s health-poll patience. Saves are
+    // sequential, so many large dirty docs may not all flush in time — the
+    // session save below remains the recovery path, same as before.
+    const flushed = await Promise.race([
+      autoSaveAllToDisk().then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
+    ]);
+    if (!flushed) {
+      console.error(
+        "[Tandem] Shutdown disk flush timed out after 5s — session saved with a stale saved-at version; unflushed edits recover from the session on next launch",
+      );
+    }
+    await saveCurrentSession();
   } catch (err) {
     console.error("[Tandem] Session save on shutdown failed:", err);
   }
@@ -298,6 +329,19 @@ async function main() {
       .catch((err) =>
         console.error(
           `[Tandem] Orphaned-temp reaper failed: ${err instanceof Error ? err.message : err}`,
+        ),
+      );
+
+    // Age-sweep pre-overwrite document snapshots (30 days), same fire-and-
+    // forget + read-only-gate discipline as the reaper above.
+    sweepDocBackups(resolveAppDataDir())
+      .then(({ cleaned, failed }) => {
+        if (cleaned > 0) console.error(`[Tandem] Swept ${cleaned} expired document backup(s)`);
+        if (failed > 0) console.error(`[Tandem] Failed to sweep ${failed} document backup(s)`);
+      })
+      .catch((err) =>
+        console.error(
+          `[Tandem] Document-backup sweep failed: ${err instanceof Error ? err.message : err}`,
         ),
       );
   }

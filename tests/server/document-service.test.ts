@@ -76,6 +76,17 @@ vi.mock("../../src/server/notifications.js", async (importOriginal) => {
   };
 });
 
+// Mock pre-overwrite snapshots — the real impl would write into the actual
+// app-data dir as a save side effect. The spy also lets the save test assert
+// the call-site contract (path + documentId).
+vi.mock("../../src/server/file-io/doc-backup.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    snapshotBeforeFirstWrite: vi.fn().mockResolvedValue("written"),
+  };
+});
+
 // Mock fs/promises for stat checks
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -497,6 +508,7 @@ describe("saveDocumentToDisk", () => {
   it("saves eligible .md documents to disk", async () => {
     const { atomicWrite } = await import("../../src/server/file-io/index.js");
     const { suppressNextChange } = await import("../../src/server/file-watcher.js");
+    const { snapshotBeforeFirstWrite } = await import("../../src/server/file-io/doc-backup.js");
 
     addDoc("md-doc", makeOpenDoc("md-doc", "/tmp/test.md"));
 
@@ -516,6 +528,11 @@ describe("saveDocumentToDisk", () => {
     expect(result.status).toBe("saved");
     expect(atomicWrite).toHaveBeenCalled();
     expect(suppressNextChange).toHaveBeenCalledWith("/tmp/test.md");
+    // Pre-overwrite snapshot runs before the write, keyed by path + doc id.
+    expect(snapshotBeforeFirstWrite).toHaveBeenCalledWith(
+      "/tmp/test.md",
+      expect.objectContaining({ documentId: "md-doc" }),
+    );
   });
 
   it("saves eligible .txt documents to disk", async () => {

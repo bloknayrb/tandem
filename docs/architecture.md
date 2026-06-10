@@ -744,6 +744,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-watcher.ts` -- File change detection: `fs.watch` wrapper with 500ms debounce, self-write suppression (`suppressNextChange`), per-path watcher lifecycle (`watchFile`/`unwatchFile`/`unwatchAll`)
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
+- `file-io/doc-backup.ts` -- Pre-overwrite snapshots of user text documents: first write per path per run copies the on-disk bytes to `{APP_DATA}/doc-backups/<path-hash>/` (3 per path, 30-day boot sweep, 500 MB cap)
 - `file-io/docx-walker.ts` -- Shared offset-tracking walker for document.xml (used by comment extraction and suggestion apply)
 - `file-io/docx-apply.ts` -- Core logic for applying suggestions as tracked changes via JSZip XML manipulation
 - `platform.ts` -- Cross-platform helpers: `SESSION_DIR`, `LAST_SEEN_VERSION_FILE`, `freePort()`, `waitForPort()` (TCP port availability polling)

@@ -62,9 +62,9 @@ export function backupDir(appDataDir: string): string {
 /**
  * Format a timestamp as `YYYYMMDD-HHMMSS` in the local timezone. Local
  * time is what the user sees in their file manager — useful for
- * forensics.
+ * forensics. Exported for `file-io/doc-backup.ts`'s snapshot filenames.
  */
-function formatTimestamp(d: Date): string {
+export function formatTimestamp(d: Date): string {
   const pad = (n: number): string => String(n).padStart(2, "0");
   return (
     `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +

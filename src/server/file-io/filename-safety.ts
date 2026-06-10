@@ -17,8 +17,9 @@
 
 import path from "path";
 
-/** Windows reserved device names (case-insensitive). `CON.md` / `con.tar.md` all map here. */
-const WIN_RESERVED_NAMES = new Set<string>([
+/** Windows reserved device names (case-insensitive). `CON.md` / `con.tar.md` all map here.
+ *  Exported for `doc-backup.ts`'s sanitize-don't-reject variant of the same rules. */
+export const WIN_RESERVED_NAMES = new Set<string>([
   "con",
   "prn",
   "aux",

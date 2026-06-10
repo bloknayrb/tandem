@@ -98,6 +98,23 @@ To reset only chat history without losing per-document state, delete just `CTRL_
 
 Durable annotations live in a separate `annotations/` directory alongside `sessions/`. Corrupted annotation files are quarantined automatically (renamed to `.corrupt.json`) instead of being deleted, so you can recover them by hand if needed.
 
+## Recovering a previous version of a document
+
+Before Tandem's **first** write to a `.md`/`.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file (or you just want yesterday's version back), you can restore from there with any file manager — no Tandem needed.
+
+Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same per-OS table as above). Each document gets a subfolder named by a hash of its path, containing:
+
+- up to 3 timestamped copies, e.g. `thesis-20260609-141500-ab12cd34.md` (newest wins), and
+- a `source.txt` recording the original file's full path.
+
+To restore: find the right subfolder (check `source.txt`, or sort by date and look at the filenames), then copy the snapshot over your document. Quit Tandem first — or close the document's tab — so the restored bytes aren't overwritten by an autosave of the old in-memory content.
+
+Notes:
+
+- Backups are taken once per document per server run, and skipped when nothing changed since the newest backup — so the folder stays small.
+- Snapshots older than 30 days are cleaned up automatically at startup, and the whole folder is capped at 500 MB (backups pause with a notification if it fills).
+- `.docx` files are protected differently: they are never auto-saved, and `tandem_applyChanges` writes a `.backup.docx` next to the original (restorable via `tandem_restoreBackup`).
+
 ## Reading server logs
 
 Tandem writes all log output to **stderr**, never stdout. This is intentional: when the server runs in stdio MCP mode, stdout carries the MCP wire protocol — any extra writes corrupt the connection.
