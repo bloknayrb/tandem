@@ -15,6 +15,21 @@ const SENTINEL = "__tandem_prevent_default_sentinel__";
 
 /** Stamp a fresh sentinel value on `window` and return it. */
 async function stampSentinel(): Promise<number> {
+  // Self-gate: these specs only discriminate on the live Tandem app. The
+  // WebDriver session starts on about:blank (the `before` diagnostic captures
+  // that), and a reload shortcut fired at a static blank page trivially leaves
+  // any sentinel intact — a vacuous pass that would survive even a dropped
+  // `with_flags(...)`. The "renders the editor shell" spec already waits for the
+  // app to mount, but that is an ordering dependency between sibling specs;
+  // assert the precondition here so each sentinel spec is self-sufficient and
+  // can't silently no-op if the specs are reordered or that anchor is weakened.
+  const onRealApp = await browser.execute(
+    () =>
+      location.href !== "about:blank" &&
+      !!document.querySelector('[data-testid="title-bar"]'),
+  );
+  expect(onRealApp).toBe(true);
+
   const value = Date.now();
   await browser.execute(
     (key: string, v: number) => {
@@ -43,10 +58,13 @@ describe("prevent-default reload interception", () => {
       { timeout: 30_000, timeoutMsg: "WebView never reached readyState=complete" },
     );
 
-    // Diagnostic snapshot: this harness has never run green, so make it explain
-    // itself. Capture what the WebView actually rendered (did the Svelte app
-    // mount? is the title-bar present?) before any assertion. Synchronous DOM
-    // read — no network — so it returns even if the app is busy reconnecting.
+    // Diagnostic snapshot for failure triage: dump the WebView's DOM state at
+    // the top of the hook. NOTE: this fires PRE-navigation — readyState reaches
+    // "complete" on the initial about:blank before the Tandem frontend loads, so
+    // the snapshot typically shows url:about:blank / testidCount:0. It is NOT
+    // proof the app mounted (the "renders the editor shell" spec's title-bar
+    // waitForExist is); it just makes a failed run explain what the session saw.
+    // Synchronous DOM read — no network — so it returns even mid-reconnect.
     try {
       const snapshot = await browser.execute(() => {
         const ids = Array.from(document.querySelectorAll("[data-testid]"))
