@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { getGenerationId, writeGenerationId } from "../../src/server/mcp/document-service.js";
 import {
+  assertAllowedOrigin,
   getDocument,
   getOrCreateDocument,
   removeDocument,
   setShouldKeepDocument,
 } from "../../src/server/yjs/provider.js";
-import { CTRL_ROOM } from "../../src/shared/constants.js";
+import { CTRL_ROOM, TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../src/shared/constants.js";
 
 describe("Y.Doc lifecycle (provider)", () => {
   it("getOrCreateDocument creates a new doc if none exists", () => {
@@ -80,6 +81,40 @@ describe("shouldKeepDocument guard", () => {
     expect(predicate(CTRL_ROOM)).toBe(true);
     expect(predicate("doc-abc")).toBe(true);
     expect(predicate("unknown-room")).toBe(false);
+  });
+});
+
+describe("assertAllowedOrigin (WebSocket origin gate)", () => {
+  // This is the origin gate the Linux desktop actually hits on the Hocuspocus
+  // WebSocket. Its correctness rests on the early `=== TAURI_LINUX_ORIGIN`
+  // return running BEFORE `new URL()` — because `new URL("tauri://localhost")`
+  // has hostname "localhost", which the 127.0.0.1/tauri.localhost check rejects.
+  // A regression that reordered or dropped that early return would break Linux
+  // sync silently (CI green), so these cases pin it.
+  it("accepts the Linux Tauri origin tauri://localhost", () => {
+    expect(() => assertAllowedOrigin(TAURI_LINUX_ORIGIN)).not.toThrow();
+  });
+
+  it("accepts the existing loopback + Windows origins", () => {
+    expect(() => assertAllowedOrigin("http://127.0.0.1:5173")).not.toThrow();
+    expect(() => assertAllowedOrigin("http://127.0.0.1:3479")).not.toThrow();
+    expect(() => assertAllowedOrigin(`http://${TAURI_HOSTNAME}`)).not.toThrow();
+  });
+
+  it.each([
+    ["a port suffix", "tauri://localhost:1234"],
+    ["a trailing slash (must match the exact wire form)", "tauri://localhost/"],
+    ["a hostname suffix", "tauri://localhost.evil"],
+    ["a replaced host", "tauri://evil.example"],
+    ["a different scheme to the same host", "https://localhost"],
+    ["a bare localhost http origin (narrowed out in #477 PR 2)", "http://localhost:5173"],
+  ])("rejects %s (%s)", (_why, origin) => {
+    expect(() => assertAllowedOrigin(origin)).toThrow();
+  });
+
+  it("rejects a missing / empty origin", () => {
+    expect(() => assertAllowedOrigin(undefined)).toThrow();
+    expect(() => assertAllowedOrigin("")).toThrow();
   });
 });
 

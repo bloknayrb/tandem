@@ -699,7 +699,7 @@ The sidecar kill before restart is required to prevent a port conflict when the 
 
 ### Origin Handling
 
-Production WebView requests use the `tauri://localhost` origin (Windows: `https://tauri.localhost`). The Tandem server's CORS and DNS-rebinding middleware accept this origin alongside `http://127.0.0.1:*` only — bare `http://localhost:*` was narrowed out in PR #637 to harden against DNS-rebinding. This is handled in `createMcpExpressApp` and `apiMiddleware`.
+Production WebView requests use the `tauri://localhost` origin on Linux (Windows: `http://tauri.localhost`). The Tandem server's CORS and DNS-rebinding middleware accept these origins alongside `http://127.0.0.1:*` only — bare `http://localhost:*` was narrowed out in PR #637 to harden against DNS-rebinding. This is handled in `createMcpExpressApp` and `apiMiddleware`.
 
 ### Windows Path Prefix
 
