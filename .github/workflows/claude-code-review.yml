@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15 # cost guard: cap a hung/runaway LLM run (default is 360)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1 # bundled /code-review skill uses `gh pr diff`; no history needed
 
