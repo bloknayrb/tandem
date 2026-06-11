@@ -165,12 +165,15 @@ describe("prevent-default reload interception", () => {
     expect(probe.prevented).toBe(true);
   });
 
-  it("does NOT intercept an ordinary key (interception is reload-specific, not over-broad)", async () => {
-    // A real discrimination control: "a" is not a registered shortcut, so the
-    // plugin must leave it alone. `fired:true` re-proves key delivery; an
-    // over-broad flag bag that swallowed everything would set prevented:true and
-    // fail this — the asymmetry vs. the Ctrl+R/F5 specs is what proves the
-    // interception is scoped to reload shortcuts, not blanket key-swallowing.
+  it("does NOT intercept an ordinary key (not blanket key-swallowing)", async () => {
+    // Control with a deliberately SCOPED claim: "a" is in no `Flags` variant's
+    // accelerator set, so this guards only against a degenerate handler that
+    // preventDefaults *every* key — `prevented:true` here would mean blanket
+    // swallowing. It does NOT detect flag-set WIDENING (e.g. RELOAD →
+    // RELOAD|CONTEXT_MENU): those add accelerators that still aren't "a". That
+    // direction is covered by the Rust test (`src-tauri/tests/prevent_default.rs`
+    // asserts the flag bag is exactly `Flags::RELOAD`), so this spec doesn't
+    // duplicate it. `fired:true` also re-proves key delivery on a benign key.
     const probe = await probeKey(["a"], "a", false);
     expect(probe.fired).toBe(true);
     expect(probe.prevented).toBe(false);

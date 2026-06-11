@@ -33,7 +33,7 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(dirname, "..", "..");
 
 // The built debug binary. The Cargo package is `tandem-desktop`
-// (src-tauri/Cargo.toml) and `cargo tauri build -- --no-bundle` skips the
+// (src-tauri/Cargo.toml) and `cargo tauri build --no-bundle` skips the
 // bundler's rename step, so the artifact is the raw cargo binary
 // `tandem-desktop` (`tandem-desktop.exe` on Windows) — NOT the `productName`
 // "Tandem", which only names the bundled installer. (The release workflow
