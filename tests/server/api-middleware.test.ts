@@ -70,6 +70,20 @@ describe("isLocalhostOrigin (CORS validation)", () => {
     expect(isLocalhostOrigin("http://tauri.localhost:3479")).toBe(true);
   });
 
+  it("accepts the Linux Tauri custom-scheme origin tauri://localhost", () => {
+    // On Linux the WebView serves from the `tauri://` scheme (Windows uses
+    // http://tauri.localhost). Unforgeable by remote content → trusted.
+    expect(isLocalhostOrigin("tauri://localhost")).toBe(true);
+  });
+
+  it("rejects tauri:// variants that are not the exact Linux origin", () => {
+    // Exact-string match only — no `tauri://*` wildcard. A port, suffix, or
+    // different host must all fail so a forged custom-scheme origin can't slip in.
+    expect(isLocalhostOrigin("tauri://localhost:1234")).toBe(false);
+    expect(isLocalhostOrigin("tauri://localhost.evil")).toBe(false);
+    expect(isLocalhostOrigin("tauri://evil.example")).toBe(false);
+  });
+
   it("rejects external origins", () => {
     expect(isLocalhostOrigin("http://evil.com:5173")).toBe(false);
     expect(isLocalhostOrigin("http://attacker.localhost:5173")).toBe(false);

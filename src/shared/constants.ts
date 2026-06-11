@@ -221,6 +221,16 @@ export const TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV = "TANDEM_DISABLE_FIRST_RUN_WIZ
 /** Tauri WebView origin hostname — must be accepted alongside localhost. */
 export const TAURI_HOSTNAME = "tauri.localhost";
 
+/**
+ * Linux Tauri WebView origin. On Linux the WebView serves content from the
+ * custom `tauri://` scheme (origin `tauri://localhost`), not `http://tauri.localhost`
+ * as on Windows. The `tauri://` scheme is non-network and served only by the
+ * Tauri runtime's own WebView, so no remote page can forge this origin — it is
+ * the unforgeable Linux analog of the trusted Windows origin. Match the exact
+ * string only (never a `tauri://*` wildcard).
+ */
+export const TAURI_LINUX_ORIGIN = "tauri://localhost";
+
 // Zoom persistence (Tauri desktop)
 export const ZOOM_STORAGE_KEY = "tandem:zoomLevel";
 export const ZOOM_MIN = 0.5;

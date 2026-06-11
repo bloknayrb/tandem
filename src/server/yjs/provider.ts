@@ -1,7 +1,7 @@
 import { Hocuspocus } from "@hocuspocus/server";
 import * as Y from "yjs";
 
-import { TAURI_HOSTNAME } from "../../shared/constants.js";
+import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
 
 let hocuspocusInstance: Hocuspocus | null = null;
 const documents = new Map<string, Y.Doc>();
@@ -70,15 +70,22 @@ export function removeDocument(name: string): boolean {
 }
 
 /**
- * Reject WebSocket upgrades whose Origin is not 127.0.0.1 / tauri.localhost.
- * Narrowed in #477 PR 2: bare `localhost` is no longer accepted. Mirrors
- * `isHostAllowed` / CORS in api-routes.ts.
+ * Reject WebSocket upgrades whose Origin is not 127.0.0.1 / tauri.localhost /
+ * the Linux `tauri://localhost`. Narrowed in #477 PR 2: bare `localhost` is no
+ * longer accepted. Mirrors `isHostAllowed` / CORS in api-routes.ts. Exported for
+ * direct unit coverage — the early exact-match return (before `new URL()`) is
+ * the load-bearing correctness detail and must stay pinned.
  */
-function assertAllowedOrigin(origin: string | undefined): void {
+export function assertAllowedOrigin(origin: string | undefined): void {
   if (!origin) {
     console.error("[Hocuspocus] Rejected connection: missing Origin header");
     throw new Error("Connection rejected: missing origin header");
   }
+  // Linux Tauri WebView uses the custom `tauri://` scheme (unforgeable by remote
+  // content). Exact-match it before the URL parse — `new URL("tauri://localhost")`
+  // yields hostname "localhost", which the 127.0.0.1/tauri.localhost check below
+  // would reject. Windows' http://tauri.localhost is handled by that check.
+  if (origin === TAURI_LINUX_ORIGIN) return;
   let url: URL;
   try {
     url = new URL(origin);
