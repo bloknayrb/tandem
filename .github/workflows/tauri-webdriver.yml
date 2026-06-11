@@ -122,6 +122,15 @@ jobs:
         env:
           # Binary already built above; don't rebuild inside onPrepare.
           TAURI_SKIP_BUILD: "1"
+          # WebKitGTK defaults to GPU-accelerated compositing AND the DMA-BUF
+          # renderer; both fail with no GPU under xvfb (see the libEGL DRI3
+          # warnings) and crash the WebContent process — the editor shell never
+          # renders and the WebDriver session collapses. Force software rendering
+          # at both the WebKit layer (these two) and the GL stack (LIBGL_*, which
+          # is what emits the DRI3 probe failure). Standard headless-CI fix.
+          WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
         run: xvfb-run --auto-servernum npm test
 
       # Surface both backends' logs on every outcome so a failure is diagnosable
