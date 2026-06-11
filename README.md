@@ -115,7 +115,7 @@ See [docs/security.md](docs/security.md) for the full security model.
 
 ## Where Tandem is headed
 
-Tandem is on the way to a v1.0 release. Recent releases added support for multiple AI providers and in-app configuration for connections and models. Work still in progress covers improvements to how Word documents round-trip through the editor, turnkey setup on macOS and Linux, and final polish. Tandem is free during the public beta; at v1.0 it moves to a one-time paid license, and beta users are grandfathered with a free license. The full plan lives in [docs/roadmap.md](docs/roadmap.md).
+Tandem is on the way to a v1.0 release. Today the supported AI integration is Claude (Claude Code / Claude Desktop) over MCP, set up with a one-click in-app wizard; additional providers (OpenAI, Gemini, local models) are planned for v1.1. Recent releases added Word document write-back (edit a `.docx` and save it back as a real Word file — comments you've sent to your AI are written back as native Word comments) and pre-overwrite backups with in-product restore. Work still in progress covers turnkey setup on macOS and Linux, licensing, and final polish. Tandem is free during the public beta; at v1.0 it moves to a one-time paid license, and beta users are grandfathered with a free license. The full plan lives in [docs/roadmap.md](docs/roadmap.md).
 
 ## Documentation
 
@@ -163,7 +163,7 @@ Client compatibility:
 | **Claude Desktop** (local app) | Supported via the Cowork bridge. Channel push N/A. |
 | **claude.ai web chat** | Not supported. Would require exposing the local server publicly via a tunnel, which is outside scope. |
 | **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) | Best-effort, MCP-contract-compatible, not validated. |
-| **Non-MCP AIs** (ChatGPT direct, Gemini direct, etc.) | Not supported today. Multi-provider support is in progress via the Agent SDK adapter ([ADR-038 §3](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)); not yet shippable. |
+| **Non-MCP AIs** (ChatGPT direct, Gemini direct, etc.) | Not supported today. Multi-provider support arrives via the Agent SDK adapter ([ADR-038 §3](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), targeted for v1.1. |
 
 ### MCP tools at a glance
 

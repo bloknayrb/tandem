@@ -97,7 +97,7 @@ This is intentionally *not* implemented here: it is Rust-only, unbuildable in th
 - [x] Both references read; CrabNebula + rfdonnelly key takeaways summarized (§4).
 - [x] One of (a)/(b)/(c) selected with rationale → **(c)** for v1, with the in-process-only slice of (a) sketched as a follow-up (§5–§6).
 - [x] (c) rationale documented (this doc + ADR pointer below).
-- [ ] Follow-up implementation issue for the §6 persisted-marker slice — **to be filed by maintainer** (optional; not v1-blocking). Title suggestion: *"Updater: persisted pending-update marker + 'update may have failed' banner (#925 follow-up)"*.
+- [x] Follow-up implementation issue for the §6 persisted-marker slice — **filed as #1118** (2026-06-11; optional, not v1-blocking).
 
 **ADR:** Captured as a short decision note in `docs/decisions.md` (ADR-043) so the "no rollback, no in-updater post-restart probe for v1" stance is discoverable from the canonical decisions log.
 

@@ -52,6 +52,29 @@ end state (#428 closed with exactly this residual).
 - [ ] `npm install -g tandem-editor@<new version>` → `tandem` starts the server (a browser-deprecation notice is expected — the desktop app is the primary form factor); the editor loads at `http://127.0.0.1:3479`.
 - [ ] `tandem doctor` — run in a **second terminal while the server from the previous step is still running** (otherwise the ports check adds a third failure). Exits 1 with exactly two `[FAIL]` lines, for `node_modules/` and `.mcp.json` (expected: those check the current working directory, which is never the source repo for a global install). Everything else `[PASS]` or `[WARN]` (warnings acceptable, as in section 1).
 
+## 5. Release-candidate extras (RC tags toward v1.0 only)
+
+The per-release sections above test updating **to** this release from the
+previous one. The RC pass also has to prove this release can update **forward**
+— the seam users actually hit after launch — and exercise the license gate
+before it meets a paying user.
+
+- [ ] **Forward-update**: verify the just-built RC updates to a *next* version.
+      Mechanic: the updater's `.sig` signs the artifact bytes and the
+      `latest.json` `version` field is independent of the signature — so
+      re-serve the **current RC's own signed artifact** under a bumped version
+      number in a staged `latest.json`, point the updater endpoint override at
+      it, and confirm: update dot appears → install → restart → app healthy.
+      (Added 2026-06-11; once the updater authenticates against the
+      license-checked endpoint — #1116 L3 — run this against the staging
+      endpoint so the entitlement check is in the loop.)
+- [ ] **License gate ON** (#1116; Windows + macOS minimum): on a gate-enabled
+      build — trial banner appears → simulate trial expiry (clock or test hook)
+      → hard gate engages → activate with a **real signed license** (issued by
+      the L1 script) → app runs → updater entitlement check succeeds. This is
+      the most user-hostile path the product ships; it must not run for the
+      first time on launch day.
+
 ## Recording the result
 
 Note the outcome (platforms covered, anything skipped, anything found) in a
