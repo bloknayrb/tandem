@@ -27,7 +27,7 @@ import {
   API_STORE_RECLAIM_LOCK,
   API_UPLOAD,
 } from "../../shared/api-paths.js";
-import { TAURI_HOSTNAME } from "../../shared/constants.js";
+import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
 import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
@@ -90,7 +90,11 @@ export const LOCALHOST_ORIGIN_RE = new RegExp(
   `^https?://(127\\.0\\.0\\.1|${escapeRegExp(TAURI_HOSTNAME)})(:\\d+)?$`,
 );
 export function isLocalhostOrigin(origin: string | undefined): boolean {
-  return LOCALHOST_ORIGIN_RE.test(origin ?? "");
+  // The Linux Tauri WebView origin is the custom scheme `tauri://localhost`
+  // (Windows uses `http://tauri.localhost`, matched by the regex above). It is
+  // unforgeable by remote content, so an exact-string match is the precise
+  // Linux analog — never a `tauri://*` wildcard.
+  return origin === TAURI_LINUX_ORIGIN || LOCALHOST_ORIGIN_RE.test(origin ?? "");
 }
 
 /**
