@@ -10,8 +10,10 @@
 //
 // Platform support: `tauri-driver` works on Linux (webkit2gtk-driver) and
 // Windows (Edge WebDriver). macOS has no WKWebView WebDriver and is
-// unsupported — the harness is skipped there. CI runs it on Linux under xvfb
-// (see `.github/workflows/tauri-webdriver.yml`).
+// unsupported — the harness is skipped there. CI runs it on Windows/WebView2
+// (see `.github/workflows/tauri-webdriver.yml`): WebKitGTK's WebDriver wedges
+// on native element/key commands under headless xvfb, whereas Chromium-backed
+// WebView2 drives them reliably.
 //
 // This file is intentionally NOT wired into `npm run typecheck` (the project
 // tsconfigs scope to `src/`) because the WebdriverIO type packages are only
@@ -62,13 +64,21 @@ export const config: WebdriverIO.Config = {
   capabilities: [
     {
       // `tauri:options` is consumed by tauri-driver, which forwards the rest of
-      // the session to the platform's native WebView driver (WebKitWebDriver on
-      // Linux). Per the official Tauri v2 WebdriverIO example, the client sets NO
-      // `browserName`: WebKitWebDriver offers no browser named "wry", so supplying
-      // it fails W3C capability matching ("Failed to match capabilities"). tauri-
-      // driver reports the browser as "wry" itself once the session is created.
+      // the session to the platform's native WebView driver (Microsoft Edge
+      // WebDriver / msedgedriver on Windows). Per the official Tauri v2
+      // WebdriverIO example, the client sets NO `browserName`: the native driver
+      // offers no browser named "wry", so supplying it fails W3C capability
+      // matching; tauri-driver reports the browser as "wry" itself after the
+      // session is created. If a "session not created: Failed to match
+      // capabilities" error ever appears, the documented fix is to add
+      // `browserName: "wry"` here.
+      //
+      // `webviewOptions: {}` is required by the working Windows WebView2 example
+      // for capability matching. `application` is an absolute path (below) to
+      // avoid the "no msedge binary at <path>" cwd-resolution bug on Windows.
       "tauri:options": {
         application,
+        webviewOptions: {},
       },
     } as WebdriverIO.Capabilities,
   ],
@@ -89,12 +99,15 @@ export const config: WebdriverIO.Config = {
       if (!existsSync(application)) {
         throw new Error(
           `TAURI_SKIP_BUILD=1 but the debug binary is missing at ${application}. ` +
-            `Build it first with: cargo tauri build -- --debug --no-bundle`,
+            `Build it first with: cargo tauri build --debug --no-bundle`,
         );
       }
       return;
     }
-    const result = spawnSync("cargo", ["tauri", "build", "--", "--debug", "--no-bundle"], {
+    // `--debug`/`--no-bundle` are `tauri build` flags — they must NOT go behind
+    // `--` (which forwards to `cargo build`, where `--debug` is rejected). Matches
+    // the CI workflow's invocation.
+    const result = spawnSync("cargo", ["tauri", "build", "--debug", "--no-bundle"], {
       cwd: repoRoot,
       stdio: "inherit",
     });

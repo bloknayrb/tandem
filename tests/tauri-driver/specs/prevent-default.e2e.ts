@@ -69,11 +69,18 @@ describe("prevent-default reload interception", () => {
     }
     // NOTE: an earlier async `fetch('/api/info')` probe here destabilized the
     // session — the async executeScript round-trip collapsed the WebDriver
-    // connection (UND_ERR_SOCKET) and timed out the hook. The sync snapshot
-    // above already shows whether the shell mounted; the app's own
-    // "Disconnected" banner (Linux WebView origin `tauri://localhost` is not in
-    // the server CORS allowlist) is a separate, non-blocking finding. The
-    // reload-interception specs need only the live WebView, not the backend.
+    // connection and timed out the hook. The sync snapshot above is a pure DOM
+    // read (no await, no network), so it stays. The reload-interception specs
+    // need only the live WebView, not the backend: the prevent-default plugin
+    // enforces RELOAD via a platform-agnostic injected JS keydown listener
+    // (tauri-plugin-prevent-default `assets/script.js`) that calls
+    // `preventDefault()` — Tandem declares the plugin with no `platform-windows`
+    // feature, so there is no native interception path and the behavior is
+    // identical across WebView2 and WebKitGTK. There is no app-level Ctrl+R/F5
+    // handler in the client, so the plugin's listener is the only thing standing
+    // between a native reload shortcut and an actual document reload — which is
+    // exactly what makes the sentinel assertions below discriminate a dropped
+    // `with_flags(...)`.
   });
 
   it("renders the editor shell in the WebView", async () => {
