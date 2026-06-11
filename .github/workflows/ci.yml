@@ -42,6 +42,30 @@ jobs:
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  # Compile the standalone reaper crate on every platform. Its per-OS reaping
+  # path (reaper/src/{linux,macos,windows}.rs) is cfg-gated, so macos.rs only
+  # ever compiled on the tag-triggered Tauri Release matrix — a nix-0.29 API
+  # break in it shipped undetected until release time. This job builds the
+  # reaper for each host so a platform-specific source error fails a PR, not a
+  # release tag. Cheap (~tiny crate); separate from rust-test, which stubs the
+  # reaper binary and never builds the crate.
+  reaper-build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: reaper
+
+      - name: Build reaper (compiles the host's reaping path)
+        run: cargo build --release --manifest-path reaper/Cargo.toml
+
   check:
     runs-on: ubuntu-latest
     steps:
