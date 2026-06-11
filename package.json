@@ -72,17 +72,17 @@
   "lint-staged": {
     "**/*.{ts,tsx}": [
       "eslint --fix",
-      "biome check --write"
+      "biome check --write --no-errors-on-unmatched"
     ],
     "src/**/*.{svelte,css,html}": [
-      "biome check --write"
+      "biome check --write --no-errors-on-unmatched"
     ],
     "**/*.mjs": [
       "eslint --fix",
-      "biome check --write"
+      "biome check --write --no-errors-on-unmatched"
     ],
     "**/*.json !package-lock.json": [
-      "biome check --write"
+      "biome check --write --no-errors-on-unmatched"
     ],
     "src/client/**/*.{ts,tsx,svelte,css,html}": [
       "tsx scripts/check-semantic-tokens.ts"
