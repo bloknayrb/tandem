@@ -67,26 +67,13 @@ describe("prevent-default reload interception", () => {
     } catch (e) {
       console.log("[harness-diag] snapshot failed:", String(e));
     }
-
-    // Probe whether the Node sidecar (:3479) the desktop app is supposed to
-    // spawn is actually reachable from the WebView origin. If this fails, the
-    // app can't connect and will sit reconnecting — the likely cause of a
-    // missing/late editor shell.
-    try {
-      const probe = await browser.execute(async () => {
-        try {
-          const r = await fetch("http://127.0.0.1:3479/api/info", {
-            signal: AbortSignal.timeout(3000),
-          });
-          return { ok: r.ok, status: r.status };
-        } catch (err) {
-          return { error: String(err) };
-        }
-      });
-      console.log("[harness-diag] /api/info probe:", JSON.stringify(probe));
-    } catch (e) {
-      console.log("[harness-diag] probe failed:", String(e));
-    }
+    // NOTE: an earlier async `fetch('/api/info')` probe here destabilized the
+    // session — the async executeScript round-trip collapsed the WebDriver
+    // connection (UND_ERR_SOCKET) and timed out the hook. The sync snapshot
+    // above already shows whether the shell mounted; the app's own
+    // "Disconnected" banner (Linux WebView origin `tauri://localhost` is not in
+    // the server CORS allowlist) is a separate, non-blocking finding. The
+    // reload-interception specs need only the live WebView, not the backend.
   });
 
   it("renders the editor shell in the WebView", async () => {
