@@ -2,13 +2,22 @@ name: Tauri WebDriver E2E
 
 # Webview-level key-interception coverage via tauri-driver (#560). Kept in a
 # separate workflow from ci.yml because it builds the full desktop binary and
-# runs a real WebView under xvfb — slower and heavier than the Playwright suite.
+# drives a real WebView — slower and heavier than the Playwright suite.
 #
-# Runs on Linux only: tauri-driver supports Linux (webkit2gtk-driver) and
-# Windows, but not macOS. Linux-under-xvfb is the cheapest reliable target.
+# Runs on WINDOWS (WebView2 + Microsoft Edge WebDriver). tauri-driver supports
+# Linux (WebKitGTK) and Windows (Edge), but NOT macOS. We deliberately target
+# Windows/WebView2 rather than Linux/WebKitGTK: WebKitGTK's WebDriver wedges on
+# native element/interaction commands (findElement, Actions/key injection) under
+# xvfb software rendering for a non-trivial app — `execute` works but
+# `findElement` hangs to the Mocha timeout and the session dies with
+# `hyper::Error(IncompleteMessage)`. Tauri's own maintainers call WebKitGTK
+# WebDriver "totally unstable". WebView2 is Chromium-backed, so native findElement
+# + key Actions are reliable — and the prevent-default plugin under test enforces
+# RELOAD via a platform-agnostic injected JS script (tauri-plugin-prevent-default
+# `assets/script.js`), so Windows coverage is equally valid (Tandem declares the
+# plugin with NO `platform-windows` feature, so there is no native-path divergence).
 
-# Runs on release tags + manual dispatch. tauri-driver needs the full desktop
-# binary + a real WebView under xvfb — too heavy to gate every PR (see #560 /
+# Runs on release tags + manual dispatch. Too heavy to gate every PR (see #560 /
 # batch scope-down decision), but cheap insurance on the handful of tag pushes:
 # it exercises webview-level key interception that the Playwright suite (real
 # browser, not the Tauri WebView) structurally cannot. Deliberately a separate
@@ -27,25 +36,17 @@ permissions:
 
 jobs:
   webdriver:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    # The auto-launcher runs inside the Node server process; it tries to spawn
+    # Claude and is irrelevant to webview key-interception coverage. Disable it
+    # job-wide so neither the harness-started server nor any app-spawned sidecar
+    # runs it under CI.
+    env:
+      TANDEM_DISABLE_LAUNCHER: "1"
     steps:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          # webkit2gtk-driver + xvfb are the WebDriver-specific additions on top
-          # of the standard Tauri build deps used elsewhere in CI.
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libxdo-dev \
-            webkit2gtk-driver \
-            xvfb
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -79,13 +80,60 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
-      # No separate frontend build step: tauri.conf.json's
-      # `beforeBuildCommand: npm run build` produces the dist/client + dist/server
-      # bundles (the build resources tauri_build::build() checks) as part of the
-      # build below, so an explicit `npm run build` here would just build twice.
+      # WebView2 apps are driven by the Edge WebDriver matching the WebView2
+      # *Runtime* version — which on GitHub runners differs from the preinstalled
+      # Edge *browser* (and the runner's preinstalled msedgedriver matches the
+      # browser). A mismatch makes the WebDriver session HANG on connect (Tauri
+      # docs warn this). So: read the WebView2 Runtime version from the registry,
+      # resolve the matching Edge WebDriver for that major line, download it, and
+      # put it on PATH (tauri-driver auto-finds msedgedriver.exe on PATH — no
+      # --native-driver arg needed). Fail loudly at every step; never silently
+      # fall back to the browser-matched driver (that reintroduces the hang).
+      - name: Set up Edge WebDriver matching the WebView2 runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # WebView2 Runtime version: HKLM (machine-wide, the runner default),
+          # falling back to HKCU (per-user install) before failing.
+          $guid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $pv = $null
+          foreach ($root in @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients',
+            'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients'
+          )) {
+            try { $pv = (Get-ItemProperty "$root\$guid" -ErrorAction Stop).pv } catch {}
+            if ($pv) { break }
+          }
+          if (-not $pv) { throw 'Could not read WebView2 Runtime version from the registry' }
+          $major = $pv.Split('.')[0]
+          Write-Host "WebView2 Runtime: $pv (major $major)"
+
+          # Resolve the Edge WebDriver version for this major line. The
+          # LATEST_RELEASE_<major> file is a UTF-16 version string; strip BOM/CR
+          # by keeping only version characters. Edge/Chromium driver compat is
+          # by major version, so the latest in-major driver matches the runtime.
+          $relFile = "$env:RUNNER_TEMP\edge_latest_release"
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/LATEST_RELEASE_$major" -OutFile $relFile -UseBasicParsing
+          $driverVersion = ([System.IO.File]::ReadAllText($relFile, [System.Text.Encoding]::Unicode) -replace '[^0-9.]', '')
+          if (-not $driverVersion) { throw "No Edge WebDriver published for major $major" }
+          Write-Host "Edge WebDriver: $driverVersion"
+
+          # Download + unzip; fail if the archive didn't yield the binary.
+          $zip = "$env:RUNNER_TEMP\edgedriver.zip"
+          $dir = "$env:RUNNER_TEMP\edgedriver"
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$driverVersion/edgedriver_win64.zip" -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          if (-not (Test-Path "$dir\msedgedriver.exe")) { throw "msedgedriver.exe missing after unzip" }
+
+          # Visible to SUBSEQUENT steps (the wdio run, where tauri-driver spawns).
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          & "$dir\msedgedriver.exe" --version
+
       # `--debug` and `--no-bundle` are `tauri build` flags, so they must NOT sit
       # behind `--` (which forwards args to the underlying `cargo build`, where
-      # `--debug` is rejected: it is cargo's default, not an accepted flag).
+      # `--debug` is rejected: it is cargo's default, not an accepted flag). The
+      # beforeBuildCommand (`npm run build`) produces dist/client + dist/server.
+      # Output: src-tauri/target/debug/tandem-desktop.exe.
       - name: Build Tauri debug binary
         run: cargo tauri build --debug --no-bundle
 
@@ -93,9 +141,78 @@ jobs:
         working-directory: tests/tauri-driver
         run: npm install
 
-      - name: Run tauri-driver E2E (under xvfb)
-        working-directory: tests/tauri-driver
+      # A `--no-bundle` debug binary can't resolve `dist/server` (the `resources`
+      # aren't staged next to it), so it can't spawn its own Node sidecar and
+      # :3479 never comes up — the WebView then thrashes reconnecting and the
+      # WebDriver session destabilizes. So pre-start the server: the app's
+      # debug-only health-gate (src-tauri/src/lib.rs ~1569, platform-neutral) sees
+      # :3479 healthy and skips its spawn, so the WebView connects to this one.
+      #
+      # The server is started INSIDE this step (not a prior one): a detached node
+      # spawned in an earlier step is reaped by the runner's per-step process-tree
+      # cleanup before the test runs — the first Windows run proved it (clean
+      # startup banner, went healthy, then vanished with no crash/shutdown trace).
+      # Started here it lives for exactly the test's lifetime; the `finally` stops
+      # it and runner cleanup reaps it when the step ends. The step runs from the
+      # repo root (no `working-directory`) so node resolves `dist/server/index.js`
+      # + `dist/client` against the right cwd; `npm test` runs under Push-Location.
+      # stdout/stderr go to separate files (Start-Process can't share one) that the
+      # always() "Dump logs" step surfaces.
+      - name: Run tauri-driver E2E (server started in-step so it survives to the test)
+        shell: pwsh
         env:
           # Binary already built above; don't rebuild inside onPrepare.
           TAURI_SKIP_BUILD: "1"
-        run: xvfb-run --auto-servernum npm test
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $serverOut = "$env:RUNNER_TEMP\tandem-server.out.log"
+          $serverErr = "$env:RUNNER_TEMP\tandem-server.err.log"
+          $server = Start-Process node -ArgumentList 'dist/server/index.js' `
+            -RedirectStandardOutput $serverOut `
+            -RedirectStandardError  $serverErr `
+            -WindowStyle Hidden -PassThru
+          $code = 1
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            $healthy = $false
+            while ((Get-Date) -lt $deadline) {
+              try {
+                if ((Invoke-WebRequest 'http://127.0.0.1:3479/health' -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) {
+                  $healthy = $true; break
+                }
+              } catch {}
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $healthy) {
+              Write-Host 'server did not become healthy within 30s'
+              Get-Content $serverErr -ErrorAction SilentlyContinue
+            } else {
+              Write-Host 'server up'
+              Push-Location tests/tauri-driver
+              npm test
+              $code = $LASTEXITCODE
+              Pop-Location
+            }
+          } finally {
+            if ($server -and -not $server.HasExited) {
+              Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+          exit $code
+
+      # Surface all logs on every outcome so a failure is diagnosable without
+      # another blind ~10-min round. Any may be absent on an early crash
+      # (SilentlyContinue keeps the always() step green); an empty app log is NOT
+      # proof the app was healthy.
+      - name: Dump logs
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host '=== server stdout ==='
+          Get-Content "$env:RUNNER_TEMP\tandem-server.out.log" -ErrorAction SilentlyContinue
+          Write-Host '=== server stderr ==='
+          Get-Content "$env:RUNNER_TEMP\tandem-server.err.log" -ErrorAction SilentlyContinue
+          # Windows app_log_dir() = %LOCALAPPDATA%\<bundle-id>\logs; file_name
+          # "tandem" -> tandem.log (bundle id com.tandem.editor).
+          Write-Host '=== app log ==='
+          Get-Content "$env:LOCALAPPDATA\com.tandem.editor\logs\tandem.log" -ErrorAction SilentlyContinue

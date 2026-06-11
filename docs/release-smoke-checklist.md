@@ -13,7 +13,7 @@ matrix across OS versions, observer soak, accessibility) live in
 ## 0. CI signal (before touching hardware)
 
 - [ ] `tauri-release.yml` — every matrix build green, `release-check` summary green, artifacts + `latest.json` on the GitHub Release.
-- [ ] `tauri-webdriver.yml` — the tag-triggered run is green (webview-level key-interception E2E on Linux). A failure here doesn't block artifact publishing — it's a signal to investigate **before announcing** the release.
+- [ ] `tauri-webdriver.yml` — the tag-triggered run is green (webview-level key-interception E2E on Windows/WebView2). A failure here doesn't block artifact publishing — it's a signal to investigate **before announcing** the release.
 - [ ] CHANGELOG section for the version is final (the in-app View Changelog button serves this file).
 
 ## 1. Windows (10 22H2 or 11)
