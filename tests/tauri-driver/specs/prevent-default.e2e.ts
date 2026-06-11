@@ -42,6 +42,51 @@ describe("prevent-default reload interception", () => {
       async () => (await browser.execute(() => document.readyState)) === "complete",
       { timeout: 30_000, timeoutMsg: "WebView never reached readyState=complete" },
     );
+
+    // Diagnostic snapshot: this harness has never run green, so make it explain
+    // itself. Capture what the WebView actually rendered (did the Svelte app
+    // mount? is the title-bar present?) before any assertion. Synchronous DOM
+    // read — no network — so it returns even if the app is busy reconnecting.
+    try {
+      const snapshot = await browser.execute(() => {
+        const ids = Array.from(document.querySelectorAll("[data-testid]"))
+          .map((el) => el.getAttribute("data-testid"))
+          .slice(0, 40);
+        return {
+          title: document.title,
+          url: location.href,
+          hasTauriInternals:
+            typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !==
+            "undefined",
+          testidCount: document.querySelectorAll("[data-testid]").length,
+          testids: ids,
+          bodyTextHead: (document.body?.innerText ?? "").slice(0, 400),
+        };
+      });
+      console.log("[harness-diag] WebView snapshot:", JSON.stringify(snapshot));
+    } catch (e) {
+      console.log("[harness-diag] snapshot failed:", String(e));
+    }
+
+    // Probe whether the Node sidecar (:3479) the desktop app is supposed to
+    // spawn is actually reachable from the WebView origin. If this fails, the
+    // app can't connect and will sit reconnecting — the likely cause of a
+    // missing/late editor shell.
+    try {
+      const probe = await browser.execute(async () => {
+        try {
+          const r = await fetch("http://127.0.0.1:3479/api/info", {
+            signal: AbortSignal.timeout(3000),
+          });
+          return { ok: r.ok, status: r.status };
+        } catch (err) {
+          return { error: String(err) };
+        }
+      });
+      console.log("[harness-diag] /api/info probe:", JSON.stringify(probe));
+    } catch (e) {
+      console.log("[harness-diag] probe failed:", String(e));
+    }
   });
 
   it("renders the editor shell in the WebView", async () => {
