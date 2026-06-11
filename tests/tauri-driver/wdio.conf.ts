@@ -21,9 +21,12 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-// Repo root is two levels up from tests/tauri-driver/.
-const repoRoot = path.resolve(__dirname, "..", "..");
+// Repo root is two levels up from tests/tauri-driver/. `__dirname` does not
+// exist in ESM (package.json sets "type": "module"); derive it from import.meta.
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(dirname, "..", "..");
 
 // The built debug binary. The Cargo package is `tandem-desktop`
 // (src-tauri/Cargo.toml) and `cargo tauri build -- --no-bundle` skips the
