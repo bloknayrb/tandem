@@ -62,11 +62,14 @@ export const config: WebdriverIO.Config = {
   capabilities: [
     {
       // `tauri:options` is consumed by tauri-driver, which forwards the rest of
-      // the session to the platform's native WebView driver.
+      // the session to the platform's native WebView driver (WebKitWebDriver on
+      // Linux). Per the official Tauri v2 WebdriverIO example, the client sets NO
+      // `browserName`: WebKitWebDriver offers no browser named "wry", so supplying
+      // it fails W3C capability matching ("Failed to match capabilities"). tauri-
+      // driver reports the browser as "wry" itself once the session is created.
       "tauri:options": {
         application,
       },
-      browserName: "wry",
     } as WebdriverIO.Capabilities,
   ],
 
