@@ -91,10 +91,18 @@ if (!existsSync(sourcePath)) {
   process.exit(1);
 }
 
-mkdirSync(BINARIES_DIR, { recursive: true });
 const outputPath = join(BINARIES_DIR, `tandem-reaper-${targetTriple}${exeSuffix}`);
-copyFileSync(sourcePath, outputPath);
-if (!isWindows) chmodSync(outputPath, 0o755);
+// Wrap the filesystem ops so a failure prints a friendly message + exits 1,
+// matching the explicit treatment of the other failure modes above (raw
+// throws would non-zero-exit too, but with an unhelpful stack).
+try {
+  mkdirSync(BINARIES_DIR, { recursive: true });
+  copyFileSync(sourcePath, outputPath);
+  if (!isWindows) chmodSync(outputPath, 0o755);
+} catch (err) {
+  console.error(`Failed to place reaper binary at ${outputPath}: ${err.message}`);
+  process.exit(1);
+}
 
 const size = statSync(outputPath).size;
 if (size === 0) {

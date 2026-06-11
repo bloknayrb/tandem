@@ -304,6 +304,51 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
       scheduleRestart();
     });
+
+    // Await the immediate spawn outcome so an exec failure reaches the caller
+    // (relaunch/startFresh) instead of resolving `{ ok: true }` while the error
+    // lands only on stderr. `spawn()` reports exec failures ASYNCHRONOUSLY via
+    // "error" — without this race the route's try/catch never sees them.
+    // Resolve on "spawn" (the process actually started; later errors/exits then
+    // flow through the long-lived handlers above). Reject on an "error" that
+    // beats "spawn". The "exit" guard only fires in the pathological
+    // exit-without-spawn case — without it that case would hang this await
+    // *while holding withLock*, permanently wedging the supervisor.
+    // Bind to the captured `spawned` ref, not the module-level `child` (the
+    // long-lived error handler nulls `child`, which would defuse cleanup).
+    const spawned = child;
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        spawned.off("spawn", onSpawn);
+        spawned.off("error", onEarlyError);
+        spawned.off("exit", onEarlyExit);
+      };
+      const onSpawn = () => {
+        cleanup();
+        resolve();
+      };
+      const onEarlyError = (err: NodeJS.ErrnoException) => {
+        cleanup();
+        // The long-lived child.on("error") handler (registered earlier) has
+        // already cleared state (and, for ENOENT, tripped the breaker); we
+        // only translate the error for the caller here.
+        if (err.code === "ENOENT" || err.code === "EACCES" || err.code === "EISDIR") {
+          // The reaper binary is present-but-unrunnable → same user-actionable
+          // class as "not found". Reuse the shared marker so api-routes maps it
+          // to LAUNCHER_ERROR_REAPER_NOT_FOUND + the "reinstall Tandem" hint.
+          reject(new Error(`${REAPER_NOT_FOUND_MARKER} (spawn ${err.code}: ${err.message})`));
+        } else {
+          reject(err);
+        }
+      };
+      const onEarlyExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        cleanup();
+        reject(new Error(`reaper exited before spawn (code=${code} signal=${signal})`));
+      };
+      spawned.once("spawn", onSpawn);
+      spawned.once("error", onEarlyError);
+      spawned.once("exit", onEarlyExit);
+    });
   }
 
   function scheduleRestart(): void {

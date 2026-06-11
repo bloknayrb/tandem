@@ -12,6 +12,7 @@ import {
   resolveRouteCwd,
   resolveSafeCwd,
 } from "../../../src/server/launcher/supervisor.js";
+import { REAPER_NOT_FOUND_MARKER } from "../../../src/shared/launcher/contract.js";
 
 let tmpDir: string;
 
@@ -269,6 +270,87 @@ describe("supervisor — concurrent operation safety (security I4)", () => {
     ]);
     for (const r of results) {
       expect(r.status).toBe("fulfilled");
+    }
+  });
+});
+
+describe("supervisor — early spawn-failure surfacing (Fix A)", () => {
+  // A reaper that exists at check time but cannot be exec'd must surface a
+  // REAPER_NOT_FOUND-marked rejection to the caller (relaunch/startFresh)
+  // instead of resolving silently — `spawn()` reports exec failures
+  // asynchronously, so before this fix the route returned `{ ok: true }`.
+  //
+  // os.tmpdir() is a directory: it passes the `existsSync` gate in
+  // reaperPath() but cannot be executed. spawning it yields ENOENT on Windows
+  // (verified on Node 24) and EACCES on POSIX — BOTH are in the wrapped set
+  // {ENOENT, EACCES, EISDIR}, so the marker assertion is deterministic
+  // cross-platform regardless of which code the OS reports.
+  const savedEnv: Record<string, string | undefined> = {};
+  const ENV_KEYS = ["TANDEM_REAPER_PATH", "TANDEM_TAURI_SIDECAR", "NODE_ENV", "TANDEM_CLAUDE_CMD"];
+
+  beforeEach(() => {
+    for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
+    // Dev-override gate in reaperPath() requires NODE_ENV !== "production" AND
+    // TANDEM_TAURI_SIDECAR !== "1" before it honors TANDEM_REAPER_PATH.
+    process.env.NODE_ENV = "test";
+    delete process.env.TANDEM_TAURI_SIDECAR;
+    process.env.TANDEM_REAPER_PATH = os.tmpdir(); // exists, not executable
+  });
+
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  async function makeRunnableSupervisor(): Promise<ReturnType<typeof createSupervisor>> {
+    // apply !== "skip" so readIntegration() returns it and buildPlan() yields a
+    // plan, driving execution into spawnOnce().
+    const file: IntegrationsFile = {
+      schemaVersion: 3,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "active",
+          label: "Active Claude",
+          configPath:
+            process.platform === "win32"
+              ? "C:\\Users\\test\\.claude.json"
+              : "/home/test/.claude.json",
+          transport: "http",
+          url: "http://127.0.0.1:3479/mcp",
+          apply: "create",
+        },
+      ],
+    };
+    await writeIntegrations(file);
+    return createSupervisor({ integrationsBase: tmpDir });
+  }
+
+  it("relaunch() rejects with the REAPER_NOT_FOUND marker when the reaper is unrunnable", async () => {
+    const sup = await makeRunnableSupervisor();
+    try {
+      await expect(sup.relaunch(fs.realpathSync(os.homedir()))).rejects.toThrow(
+        REAPER_NOT_FOUND_MARKER,
+      );
+    } finally {
+      // stop() clears any restart timer the long-lived error handler scheduled
+      // (EACCES path on POSIX) so no timer leaks past the test.
+      await sup.stop();
+    }
+  });
+
+  it("startFresh() also rejects with the REAPER_NOT_FOUND marker (sendUnexpected parity)", async () => {
+    // breakerTripped is reset at the top of startFresh(), so a fresh supervisor
+    // is not strictly required — but using one keeps the assertion isolated.
+    const sup = await makeRunnableSupervisor();
+    try {
+      await expect(sup.startFresh(fs.realpathSync(os.homedir()))).rejects.toThrow(
+        REAPER_NOT_FOUND_MARKER,
+      );
+    } finally {
+      await sup.stop();
     }
   });
 });
