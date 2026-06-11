@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // The reaper build script forwards `--target` to cargo, but only after the
