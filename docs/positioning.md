@@ -44,7 +44,7 @@ This maps directly to how a huge amount of real document work actually happens: 
 
 ## The Market
 
-Tandem is for **individuals** who write and review prose-heavy documents and want to do that work alongside an AI — not for institutions buying seats. The near-term reachable audience is bounded by who already runs an MCP-capable LLM (see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §1); we grow that audience by lowering setup friction, not by adding a hosted backend.
+Tandem is for **individuals** who write and review prose-heavy documents and want to do that work alongside an AI — not for institutions buying seats. The near-term reachable audience is who already runs an MCP-capable LLM **or a local model** (the 2026-06-11 [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11) decision brings Ollama/LM Studio into v1.0 via Tandem's own loop — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §1 note); we grow that audience by lowering setup friction, not by adding a hosted backend.
 
 ### Who this is
 
@@ -84,11 +84,11 @@ Near-zero outside legal contracts and e-discovery. The Gartner 2024 Hype Cycle p
 
 **Resolved at the architectural level by [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) (2026-05-17).** Tandem's integration contract is MCP, not Claude Code specifically. Claude remains the default integration because that's the deepest-supported path (channel push, cowork, plugin monitor, auto-launcher), but the architecture is no longer Claude-locked.
 
-The remaining distribution-friction risk is **downstream**: multi-provider parity (Anthropic + OpenAI + Gemini + local LLMs via the Agent SDK adapter, per ADR-038 §3) is **resolved to v1.1** (2026-06-11 D4 amendment — the registry UI exists but is flag-gated off until the adapter lands), so v1.0's reachable audience is users with a Claude subscription; the desktop app's integration setup wizard (#477 PR 3, shipped) makes that install path tractable for non-developers. Accepted consequence, stated in the roadmap D4 amendment: v1.0 charges (ADR-040) while the audience is Claude-gated; breadth arrives in v1.1.
+The remaining distribution-friction risk is **downstream**, and was resolved in two same-day amendments (2026-06-11, canonical record in [ADR-039](decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11)): **local models (Ollama / LM Studio) ship in v1.0** (#1123 — a tool-use loop driving OpenAI-compatible local endpoints; gated on the M0 capability spike), while cloud BYO keys (OpenAI/Gemini API) arrive in v1.1. v1.0's reachable audience is therefore Claude users **plus anyone who can run a local model** — the zero-subscription stack (free local LLM + one-time license) that ADR-040 §2 leans on. The license applies identically with local models (no free tier implied). The desktop app's integration setup wizard (#477 PR 3, shipped) keeps the install path tractable for non-developers.
 
 ### Platform risk (medium)
 
-Microsoft could add equivalent annotation features to Word Copilot within 12-18 months, and in-place AI editing with accept/reject is **already shipped** by ChatGPT Canvas, Claude artifacts (now MCP-connected), and `docx-mcp`. So in-place editing itself is no longer the differentiator. What survives is the durable wedge: a **persistent, addressable, queryable, exportable review record** that lives in your own files, runs **local-first with no cloud account**, and works with **whatever MCP-capable AI you bring** rather than one vendor's cloud. Canvas, artifacts, and docx-mcp do the editing; none of them give you that record. Invest there, not in raw editing (see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §2).
+Microsoft could add equivalent annotation features to Word Copilot within 12-18 months, and in-place AI editing with accept/reject is **already shipped** by ChatGPT Canvas, Claude artifacts (now MCP-connected), and `docx-mcp`. So in-place editing itself is no longer the differentiator. What survives is the durable wedge: a **persistent, addressable, queryable, exportable review record** that lives in your own files, runs **local-first with no cloud account**, and works with **whatever AI you bring** — an MCP-capable client like Claude, or (v1.0, #1123) a local model via Tandem's built-in loop — rather than one vendor's cloud. Canvas, artifacts, and docx-mcp do the editing; none of them give you that record. Invest there, not in raw editing (see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §2).
 
 ### MCP adoption (medium)
 
@@ -107,7 +107,7 @@ The revenue question is now settled in [ADR-040](decisions.md#adr-040-audience-a
 **Don't say:** "AI writing assistant" (crowded, undifferentiated)
 
 **Do say:** "Work on documents with your AI — no more copy-paste"
-**Do say:** "Your full Claude — or any MCP-capable AI you bring — just now it can see and edit your document too"
+**Do say:** "Your full Claude — or any MCP-capable AI you bring, or a local model — just now it can see and edit your document too"
 **Do say:** "Point at text, the AI sees it, iterate together"
 
 The narrower and more specific the positioning, the stronger it is. The broadest defensible claim: **Tandem is the first tool that connects your full AI to your document via MCP, so you iterate on text together without copy-paste — and the AI's suggestions are first-class, addressable, persistent objects you can accept, dismiss, and converse about.**
