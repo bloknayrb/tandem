@@ -17,18 +17,17 @@
 //!    child died from a signal during normal operation).
 
 use crate::common::{ReaperOpts, GRACE_PERIOD_SECS};
-use nix::sys::event::{kevent, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
+use nix::sys::event::{EventFilter, EventFlag, FilterFlag, KEvent, Kqueue};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{execvp, fork, getppid, ForkResult, Pid};
 use std::ffi::CString;
-use std::os::fd::AsRawFd;
 use std::thread;
 use std::time::{Duration, Instant};
 
 pub fn run(opts: ReaperOpts) -> i32 {
     // 1. Create kqueue.
-    let kq = match kqueue() {
+    let kq = match Kqueue::new() {
         Ok(fd) => fd,
         Err(e) => {
             eprintln!("tandem-reaper: kqueue() failed: {}", e);
@@ -45,7 +44,7 @@ pub fn run(opts: ReaperOpts) -> i32 {
         0,
         0,
     );
-    if let Err(e) = kevent(kq.as_raw_fd(), &[kev], &mut [], 0) {
+    if let Err(e) = kq.kevent(&[kev], &mut [], None) {
         eprintln!(
             "tandem-reaper: kevent register on ppid {} failed: {}",
             opts.parent_pid, e
@@ -99,7 +98,7 @@ pub fn run(opts: ReaperOpts) -> i32 {
         0,
         0,
     );
-    if let Err(e) = kevent(kq.as_raw_fd(), &[child_kev], &mut [], 0) {
+    if let Err(e) = kq.kevent(&[child_kev], &mut [], None) {
         eprintln!("tandem-reaper: kevent register on child failed: {}", e);
         // Child likely exited between fork() and EV_ADD (ESRCH). Drain it.
         if let Ok(WaitStatus::Exited(_, code)) =
@@ -136,7 +135,7 @@ pub fn run(opts: ReaperOpts) -> i32 {
     )];
 
     loop {
-        match kevent(kq.as_raw_fd(), &[], &mut events, 0) {
+        match kq.kevent(&[], &mut events, None) {
             Ok(n) if n > 0 => break,
             Ok(_) => continue,
             Err(nix::errno::Errno::EINTR) => continue,
