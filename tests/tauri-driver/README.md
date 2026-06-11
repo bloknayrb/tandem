@@ -14,10 +14,31 @@ context menu accessible.
 
 The Rust regression test `src-tauri/tests/prevent_default.rs` asserts the
 **flag value** but cannot prove the plugin actually intercepts keystrokes in a
-live WebView — its own comment documents the limitation. In particular, dropping
-`.with_flags(prevent_default_flags())` from the builder in `lib.rs` would still
-pass the Rust test. This harness closes that gap: it drives the real built
-binary and asserts that a reload shortcut does **not** reload the WebView.
+live WebView — its own comment documents the limitation. This harness closes
+that gap: it drives the real built binary and verifies the plugin's keydown
+listener actually fires `preventDefault()` on a reload shortcut.
+
+**How it discriminates (the non-obvious part).** The intuitive test — fire
+Ctrl+R, assert the page did not reload — is a **tautology** under WebDriver: a
+`browser.keys` Ctrl+R reaches page DOM listeners but does **not** drive WebView2's
+browser-chrome reload accelerator, so the page never reloads whether or not the
+plugin intercepts (proven on CI: a "did it reload?" sentinel test passed even
+with interception forced off). So the harness observes the **cause**, not the
+effect: it installs its own bubble-phase `window` keydown listener *after* the
+plugin's and reads `event.defaultPrevented`. With `Flags::RELOAD`, Ctrl+R/F5 come
+back `prevented: true`; force `.with_flags(Flags::empty())` and they flip to
+`prevented: false` and the specs go red — empirically verified both directions. A
+`fired` flag guards that the synthetic key reached the page at all, so a spec
+fails loudly instead of passing vacuously.
+
+**What it does and doesn't catch.** It catches reload interception being
+*disabled* — `prevent_default_flags()` losing `RELOAD`, the plugin being removed,
+or an explicit `Flags::empty()`. Note it does **not** flag merely dropping
+`.with_flags(prevent_default_flags())`: the builder falls back to
+`Flags::default() == Flags::all()`, which still contains `RELOAD` (it would
+instead over-block DevTools / context menu — a different regression). The
+reload-specific "does NOT intercept an ordinary key" control guards that
+direction.
 
 ## Platform support
 

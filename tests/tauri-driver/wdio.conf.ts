@@ -4,9 +4,11 @@
 // `src-tauri/tests/prevent_default.rs` asserts the *flag bag* returned by
 // `prevent_default_flags()` but cannot prove the plugin actually intercepts
 // keystrokes inside the live Tauri WebView. This harness drives the real
-// built desktop binary through `tauri-driver` so reload-shortcut interception
-// is covered end-to-end, and so a regression that removes `with_flags(...)`
-// from the builder (which the Rust test cannot catch) is caught here.
+// built desktop binary through `tauri-driver` and verifies the plugin's keydown
+// listener fires `preventDefault()` on a reload shortcut — so a regression that
+// disables reload interception (e.g. `prevent_default_flags()` losing `RELOAD`,
+// or the plugin being dropped) is caught here. See specs/prevent-default.e2e.ts
+// for why it observes `defaultPrevented` rather than an actual page reload.
 //
 // Platform support: `tauri-driver` works on Linux (webkit2gtk-driver) and
 // Windows (Edge WebDriver). macOS has no WKWebView WebDriver and is
