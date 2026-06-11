@@ -28,6 +28,12 @@ permissions:
 jobs:
   webdriver:
     runs-on: ubuntu-latest
+    # The auto-launcher runs inside the Node server process; it tries to spawn
+    # Claude and is irrelevant to webview key-interception coverage. Disable it
+    # job-wide so neither the harness-started server nor any app-spawned sidecar
+    # runs it under CI.
+    env:
+      TANDEM_DISABLE_LAUNCHER: "1"
     steps:
       - uses: actions/checkout@v6
 
@@ -89,6 +95,24 @@ jobs:
       - name: Build Tauri debug binary
         run: cargo tauri build --debug --no-bundle
 
+      # A `--no-bundle` debug binary can't resolve `dist/server` (the `resources`
+      # aren't staged next to it), so it can't spawn its own Node sidecar and
+      # :3479 never comes up — the WebView then thrashes reconnecting and the
+      # WebDriver session destabilizes. Pre-start the server: the app's debug-only
+      # health-gate (src-tauri/src/lib.rs) sees :3479 healthy and skips its spawn,
+      # so the WebView connects to this one. `setsid` detaches it so it survives
+      # into the E2E step; output goes to a file we surface on failure.
+      - name: Start Tandem server (debug build reuses it via the health-gate)
+        run: |
+          setsid node dist/server/index.js > "$RUNNER_TEMP/tandem-server.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3479/health >/dev/null && { echo "server up"; exit 0; }
+            sleep 0.5
+          done
+          echo "server did not become healthy within 30s" >&2
+          cat "$RUNNER_TEMP/tandem-server.log" >&2
+          exit 1
+
       - name: Install harness dependencies
         working-directory: tests/tauri-driver
         run: npm install
@@ -99,3 +123,17 @@ jobs:
           # Binary already built above; don't rebuild inside onPrepare.
           TAURI_SKIP_BUILD: "1"
         run: xvfb-run --auto-servernum npm test
+
+      # Surface both backends' logs on every outcome so a failure is diagnosable
+      # without another blind ~10-min round. Both may be absent on an early crash
+      # (|| true keeps the always() steps green); an empty app log is NOT proof
+      # the app was healthy.
+      - name: Tandem server log
+        if: always()
+        run: cat "$RUNNER_TEMP/tandem-server.log" || true
+
+      - name: Tandem app log
+        if: always()
+        # Linux app_log_dir() = $HOME/.local/share/<bundle-id>/logs; file_name
+        # "tandem" → tandem.log (bundle id com.tandem.editor).
+        run: cat "$HOME/.local/share/com.tandem.editor/logs/tandem.log" || true
