@@ -84,7 +84,7 @@ Near-zero outside legal contracts and e-discovery. The Gartner 2024 Hype Cycle p
 
 **Resolved at the architectural level by [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) (2026-05-17).** Tandem's integration contract is MCP, not Claude Code specifically. Claude remains the default integration because that's the deepest-supported path (channel push, cowork, plugin monitor, auto-launcher), but the architecture is no longer Claude-locked.
 
-The remaining distribution-friction risk is **downstream**: whether multi-provider parity (Anthropic + OpenAI + Gemini + local LLMs via the Agent SDK adapter, per ADR-038 §3) ships in time for v1.0 and whether the desktop app's integration setup wizard (#477 PR 3) makes the install path tractable for non-developers. Both are tracked items, not architectural unknowns.
+The remaining distribution-friction risk is **downstream**: multi-provider parity (Anthropic + OpenAI + Gemini + local LLMs via the Agent SDK adapter, per ADR-038 §3) is **resolved to v1.1** (2026-06-11 D4 amendment — the registry UI exists but is flag-gated off until the adapter lands), so v1.0's reachable audience is users with a Claude subscription; the desktop app's integration setup wizard (#477 PR 3, shipped) makes that install path tractable for non-developers. Accepted consequence, stated in the roadmap D4 amendment: v1.0 charges (ADR-040) while the audience is Claude-gated; breadth arrives in v1.1.
 
 ### Platform risk (medium)
 

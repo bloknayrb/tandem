@@ -43,7 +43,7 @@ Tandem is built for keyboard-first work:
 - **Outline panel** — navigate by heading and collapse whole sections to focus.
 - **Keyboard shortcuts** (Ctrl+Shift+,) — customize any shortcut, or press ? to see them all.
 
-You can connect more than one model, too: open the Models settings to add providers and pick a default, or use the first-run picker when you start out.
+Want to connect your AI? Open Settings → AI Assistant and use the setup wizard — one click connects Claude Code, no API key needed. (Support for additional model providers is on the way.)
 
 ## Sample Content
 

@@ -75,3 +75,11 @@ Implementing L1–L4 or the ADR-039 adapter; running the performance measurement
 - `workflow` token scope may block pushing W4 → early push fails fast, W4 splits out.
 - Performance gate unvalidated until RC → recorded in the gate text itself.
 - Issue closes reversible; comments carry full rationale.
+
+## Rev 3 — post-implementation review fixes (2026-06-11)
+
+The W5 diff review (4 finder agents over the committed diff) produced 16 accepted findings, applied in a follow-up commit. Deviations from rev 2 worth recording:
+
+- **W1.3 issue numbers:** filed as #1116 (licensing), #1117 (commercial infra), #1118 (boot marker); security sweep findings filed as #1121. ADR-043 and the updater spike checklist now cite #1118 (rev-2 left them saying "to be filed").
+- **v1.0.0 cadence row** was rewritten (gates + flag flip), not "unchanged" as W3 stated — intentional consequence of DD2's exit-criteria additions.
+- **Beyond plan, from review:** `sample/welcome.md` + `tests/fixtures/welcome-snapshot.md` still told new users to open the flag-hidden Models settings (in-product counterpart of F2) — copy replaced in lockstep, AR6 anchor tests green. README "comments included" softened to the ADR-027-accurate claim. positioning.md multi-provider question resolved to v1.1. Stale roadmap #576/#428 rows fixed. Keychain store→read round-trip added to the wizard exit criterion (the struck D4 criterion was the only release-time real-keychain check). Duplicated D4/licensing rationale compressed to single-owner + pointers (drift control).
