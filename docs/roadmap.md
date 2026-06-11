@@ -17,18 +17,19 @@ The v0.12.0 prep batch (8 parallel units, PRs #634–#641) shipped 2026-05-14. W
 
 | Wave | Focus | Notes |
 |------|-------|-------|
-| 0 | Apple Developer cert procurement (Bryan-led calendar gate); §1H verification audit (done, zero hits) | In flight |
+| 0 | Apple Developer cert procurement (Bryan-led calendar gate); §1H verification audit (done, zero hits) | Done — #428 closed; per-release hardware verification lives in [release-smoke-checklist.md](release-smoke-checklist.md) |
 | 1 | Stability bug-bash + redesign chrome + editor surfaces (shipped 2026-05-15; released in v0.13.0) | #631 #616 #244 done; SettingsModal, status-bar held-count, ConnectionBanner polish, updater banner+dot, slash menu, paged docx, ReplyThreadOverlay, margin view PR1+PR2 shipped via #662–#674, #679. D11 bundled fonts reverted (#678) — see #680 |
 | 1b | Wave-1 follow-ups (released in v0.13.0) | **#680** re-land D11 fonts with BubbleMenu positioning fix; **#681** retrofit `/api/open` callers to `openServerPath`; **#682** strict `SettingsTabContext` registry typing; **#683** #649 margin view PR 3 of 3 (rail-collapse + narrow viewport) |
 | 2 | Settings → Network panel + multi-provider models registry (D4) — released in v0.13.0 | Two-tier UX (Connection visible + Advanced collapsed); models registry CRUDs Anthropic + #477 local + others |
-| 3 | Annotation migration (single coordinated release) | **Mostly shipped:** #313 content-hash identity (v0.13.5); AR5 Word-import batch-promote (v0.13.0, #756); AR6 tutorial annotations (v0.13.0). Wave-3 residual is the v0.14.0 **hardening pass** (test coverage for the promote path + channel emit + import→promote integration; AR6 live-anchor freshness guard). The user-visible upgrade-toast and the ADR-034 lifecycle-module refactor remain deferred (not in the hardening tier). |
-| 4 | #477 remainder + #576 | #477 mostly shipped **default-on in v0.13.0** (PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b; no feature-flag soak). The Wave-4 remainder is **PR 3c-ii-c** (auto-config removal). #576 docx body export (kill date 2026-05-28; LibreOffice fallback ready). The non-MCP-provider adapter (unshipped half of PR 5) is Wave 6 / v1.0, not Wave 4. |
+| 3 | Annotation migration (single coordinated release) | **Shipped:** #313 content-hash identity (v0.13.5); AR5 Word-import batch-promote (v0.13.0, #756); AR6 tutorial annotations (v0.13.0); the **hardening pass** (promote-path + channel-emit + import→promote test coverage; AR6 live-anchor freshness guard) landed early, in **v0.13.6** (not v0.14.0 as planned). The user-visible upgrade-toast and the ADR-034 lifecycle-module refactor remain deferred (not in the hardening tier). |
+| 4 | #477 remainder + #576 | **Shipped in v0.14.0:** PR 3c-ii-c (auto-config removal) + #576 docx body export (plus #1069 conflict detection and #1068 comment writeback beyond plan). #477 PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b had shipped default-on in v0.13.0. The non-MCP-provider adapter (unshipped half of PR 5) moved to **v1.1** per the D4 amendment (2026-06-11, below). |
 | 5 | Cross-platform install + #316 Cowork macOS/Linux + #428 cert | Notarization, install matrix, observer soak, accessibility gate |
-| 6 | Final | Version bump, CHANGELOG `[1.0.0]`, npm publish, Tauri release |
+| 5L | Licensing (#1116, ADR-040 §3/§4/§6) — releases as v0.16.0 | License-to-run (Ed25519 offline activation) + trial gate (dark behind build flag) + license-checked update endpoint + grandfathering. Parallelizable with Wave 5 (which is hardware-bound). Commercial infra runs alongside as a Bryan-led calendar gate (#1117). |
+| 6 | Final | Gate-flag flip (requires Commercial-readiness criterion), version bump, CHANGELOG `[1.0.0]`, npm publish, Tauri release |
 
-**v1.0 Core scope** (full table in §"v1.0 Release Plan" below): #477 + #576 + #316 are all Core (was Defer); #313 + #244 + #616 promoted; new surfaces from D-decisions: full-screen first-run modal (D4), multi-provider models registry (D4), settings-icon update-dot (D6).
+**v1.0 Core scope** (full table in §"v1.0 Release Plan" below): #477 + #576 + #316 are all Core (was Defer); #313 + #244 + #616 promoted; new surfaces from D-decisions: full-screen first-run modal (D4), ~~multi-provider models registry (D4)~~ (→ v1.1 per the 2026-06-11 D4 amendment), settings-icon update-dot (D6). Licensing (ADR-040, #1116/#1117) added to Core 2026-06-11 as Wave 5L.
 
-**Out of scope for v1.0:** authorship gutter (D2 picked per-character only), annotation thread reactions (D5), inline diff hunk-staging UI (D3 surface deferred — option B locked for v1.1 revisit), mobile/responsive (D7), author chip/avatar (D8), compact density (D9), most §1D refactors except #313.
+**Out of scope for v1.0:** authorship gutter (D2 picked per-character only), annotation thread reactions (D5), inline diff hunk-staging UI (D3 surface deferred — option B locked for v1.1 revisit), mobile/responsive (D7), author chip/avatar (D8), compact density (D9), most §1D refactors except #313, **BYO-models registry UI + ADR-039 Agent SDK adapter (D4 amended 2026-06-11 — v1.1; UI stays behind `BYO_MODELS_ENABLED=false` until the outbound LLM client exists)**.
 
 ## Integration Policy (ADR-038)
 
@@ -366,7 +367,7 @@ Future hardening (not blocking release):
 - Verify end-to-end update flow (download → install → restart) on all three platforms — procedure documented in [release-smoke-checklist.md](release-smoke-checklist.md)
 - Code-sign macOS `.app` + notarization (#428) — requires Apple Developer certificate; without it, Gatekeeper shows "damaged" error on download. v1.0 gate. Per-release hardware verification lives in [release-smoke-checklist.md](release-smoke-checklist.md).
 - Windows installer smoke test — NSIS covered per-release by [release-smoke-checklist.md](release-smoke-checklist.md); the MSI artifact (`targets: "all"` also builds one) is not covered
-- Node.js 20 → 24 GitHub Actions migration (CI-wide, all workflow files) — deadline June 2, 2026
+- ~~Node.js 20 → 24 GitHub Actions migration (CI-wide, all workflow files) — deadline June 2, 2026~~ **Done 2026-06-11.** This was about the GitHub Actions *runtime* (JS actions), not the project's Node: GitHub forced the node24 default on 2026-06-02 and removes node20 entirely 2026-09-16. First-party actions bumped to node24 majors (`checkout@v6`, `setup-node@v6`, `upload-artifact@v7`) across all five workflow files; `node-version: 22` is unchanged and correct (matches `engines` + the bundled sidecar Node).
 
 ### Future Tauri Enhancements
 
@@ -448,7 +449,7 @@ All three Phase 0 spikes shipped. The two CLI integration spikes resolved 2026-0
 | 3c-tauri-keychain | `src-tauri/src/keychain.rs` exposes `keychain_get` / `keychain_set` / `keychain_delete` Tauri commands backed by the `keyring` crate (already in `Cargo.toml`). Client-side `ClientKeychainBackend` abstraction picks Tauri commands when `isTauriRuntime()` is true and HTTP loopback otherwise — secrets never traverse the loopback HTTP boundary on the desktop app. **SHIPPED** PR #732 (2026-05-17). | PR 3c-i | v1.0 wave 6 |
 | Phase-3-docs | MCP-first reframe of marketing surfaces per ADR-038: README audience-tier restructure (Just want to use it / Power-user setup / Connecting other MCP clients); `docs/positioning.md` policy quote + distribution-risk resolution; `docs/architecture.md` Integration Compatibility section + four-term glossary + "Claude-default" prefixes on channel-specific sections; framing sentences on `docs/mcp-tools.md` / `docs/user-guide.md` / `docs/workflows.md`; scope note on `docs/lessons-learned.md` and `skills/tandem/SKILL.md`. Pure docs sweep — no code risk. **Post-merge manual task:** update the GitHub repo description and "About" sidebar (set via `gh repo edit` outside the source tree) to match the new framing — neither is in the source tree so this PR cannot do it automatically. **SHIPPED** PR #734 (2026-05-17). | PR 3c-i | v0.13.0 |
 | 4 | Auto-launch + supervisor — spawn Claude Code CLI with correct flags, hook point after `Promise.all([startMcpServerHttp, startHocuspocus])`. **PR-4 quartet (#642–#645) hardens:** atomic `O_EXCL` temp+rename, mandatory `.claude.json` backup, schema validation, "backup-or-prompt" UX. **Claude-specific by design** per ADR-038 §2 — other providers in the registry are user-driven startup for v1.0; per-provider auto-launchers are future work. | PR 1 + #642–#645 quartet | v0.13.0 (shipped; default-on, opt-out via `TANDEM_DISABLE_LAUNCHER=1`) |
-| 5 | Multi-provider model registry (D4) — Anthropic + local LLM (#477) + OpenAI / Gemini / others; CRUD with per-model config; new Settings → Models page beyond the wizard. Non-MCP providers (OpenAI, Gemini) integrate via Tandem's Agent SDK adapter per ADR-038 §3, not as direct MCP clients — adapter design owned by a future ADR (likely ADR-039); whether the adapter ships in v1.0 wave 6 or slips to v1.1 is open. | PR 4 | v1.0 wave 6 |
+| 5 | Multi-provider model registry (D4) — Anthropic + local LLM (#477) + OpenAI / Gemini / others; CRUD with per-model config; new Settings → Models page beyond the wizard. Non-MCP providers (OpenAI, Gemini) integrate via Tandem's Agent SDK adapter per ADR-038 §3, not as direct MCP clients — adapter design owned by a future ADR (likely ADR-039); ~~whether the adapter ships in v1.0 wave 6 or slips to v1.1 is open~~ **resolved 2026-06-11 (D4 amendment): the adapter and the registry UI ship in v1.1.** The registry's CRUD + keychain layer shipped in v0.13.0 but was flag-gated off in v0.14.0 (`BYO_MODELS_ENABLED=false`, #1018/#1022) because no server-side LLM client consumes the keys — re-enables when the adapter lands. | PR 4 | **v1.1** |
 
 ### Key Decisions (locked)
 
@@ -459,7 +460,7 @@ All three Phase 0 spikes shipped. The two CLI integration spikes resolved 2026-0
 - ~~Plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`~~ **Overridden by Spike B (PR #712, 2026-05-17) and grounded in [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §extras (auto-launcher is Claude-specific by design).** `--plugin-dir` does not activate `experimental.monitors[]` in Claude Code v2.1.143; the dev-channels flag remains functional. PR 4 keeps `--dangerously-load-development-channels server:tandem-channel` for v1.0. Revisit when Claude Code surfaces monitor activation via `--plugin-dir` or another zero-marketplace path (see `docs/spikes/plugin-monitor-viability-spike.md` "Follow-up issues", including F5 — the GitHub-marketplace install path validation promoted from a deferred item to a v1.0-blocking spike by the docs reframe).
 - Layout coupling server-side via extended `/api/info`; no client-side race
 - Existing users detected via `last-seen-version` file; wizard pre-selects based on existing MCP config
-- **D4 (2026-05-14):** first-run wizard is option (a) full-screen modal **with multi-provider model registry**. Anthropic + #477 local + OpenAI/Gemini/etc.; user CRUDs models with per-model config; the registry lives at Settings → Models, beyond the wizard. Per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2, the wizard explicitly surfaces the auto-launch asymmetry — Claude auto-launches in v1.0; other providers require user-driven startup. Per ADR-038 §2b, the wizard *replaces* today's silent auto-configuration of Claude; auto-config code is removed in PR 3.
+- **D4 (2026-05-14):** first-run wizard is option (a) full-screen modal **with multi-provider model registry**. Anthropic + #477 local + OpenAI/Gemini/etc.; user CRUDs models with per-model config; the registry lives at Settings → Models, beyond the wizard. Per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2, the wizard explicitly surfaces the auto-launch asymmetry — Claude auto-launches in v1.0; other providers require user-driven startup. Per ADR-038 §2b, the wizard *replaces* today's silent auto-configuration of Claude; auto-config code is removed in PR 3. **Amended 2026-06-11:** the multi-provider registry half of D4 moves to **v1.1**. The registry UI shipped in v0.13.0 but was deliberately hidden in v0.14.0 (`BYO_MODELS_ENABLED=false`, #1018/#1022) because no server-side LLM client consumes the stored keys — configuring a model did nothing and users concluded the app was broken. This resolves the question the PR-5 row left open ("whether the adapter ships in v1.0 wave 6 or slips to v1.1 is open"). The wizard half of D4 (one-click Claude Code connect) is v1.0 and shipped. **Stated consequence: v1.0 charges (ADR-040) while the reachable audience is Claude-Code users; the multi-provider breadth mechanism of ADR-040 §1 arrives in v1.1.**
 
 ### Deferred milestones (post-reframe)
 
@@ -487,7 +488,7 @@ Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave pl
 | D1  | Density × textSize collision                   | Density controls **interface chrome only**; font-size controls **editor body only**. Verified 2026-05-14 — `useDensity.ts` writes only `[data-density]` (→ `--tandem-space-*`); `App.svelte` writes only `--tandem-editor-font-size`. No collision. |
 | D2  | Authorship visual                              | **Per-character only**. Gutter and hybrid rejected. Defers the §1G gutter row in `docs/v10-triage.md`.                                    |
 | D3  | Diff/Apply-edit hunk staging                   | Option **B (modal-based)** locked for the v1.1 revisit; the surface itself defers from v1.0.                                              |
-| D4  | First-run wizard                               | Option **(a) full-screen modal** + **multi-provider model registry** (Anthropic + #477 local + OpenAI/Gemini/etc.). Settings → Models page beyond the wizard. Per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2/§2b: wizard replaces silent auto-configuration of Claude; Claude is the only provider auto-launched in v1.0; non-MCP providers via Agent SDK adapter (ADR-039 TBD). |
+| D4  | First-run wizard                               | Option **(a) full-screen modal** + ~~**multi-provider model registry**~~ (Anthropic + #477 local + OpenAI/Gemini/etc.). Settings → Models page beyond the wizard. Per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2/§2b: wizard replaces silent auto-configuration of Claude; Claude is the only provider auto-launched in v1.0; non-MCP providers via Agent SDK adapter (ADR-039 TBD). **Amended 2026-06-11: registry half → v1.1** (UI flag-gated off since v0.14.0, `BYO_MODELS_ENABLED=false` — no outbound LLM client exists; see Key Decisions bullet above for full rationale). Wizard half shipped v0.13.0–v0.14.0. |
 | D5  | Annotation reply thread                        | **Expanded thread, no reactions.**                                                                                                        |
 | D6  | Updater UX                                     | **Banner (#561) + small colored dot badge** on titlebar settings gear.                                                                    |
 | D7  | Mobile / narrow-window                         | **Defer.**                                                                                                                                |
@@ -502,7 +503,7 @@ Triage source of truth: `docs/v10-triage.md` (per-row Core/Defer marks). Wave pl
 Full per-row table is in `docs/v10-triage.md`. Highlights:
 
 **Strategic (all Core; were TBD in original plan):**
-- **#477 Local LLM** — PR-2 + all three Phase 0 spikes (A/B/C) merged; PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b shipped **default-on in v0.13.0** (no feature-flag soak). PR 3c-ii-c (auto-config removal) landed v0.14.0; the non-MCP-provider adapter (PR 5) targets v1.0. Spike B's NO-GO means PR 4 retains `--dangerously-load-development-channels server:tandem-channel`.
+- **#477 Local LLM** — PR-2 + all three Phase 0 spikes (A/B/C) merged; PRs 1/3a/3b/3c-i/3c-ii-a/3c-ii-b + auto-launcher 4a/4b shipped **default-on in v0.13.0** (no feature-flag soak). PR 3c-ii-c (auto-config removal) landed v0.14.0; the non-MCP-provider adapter (PR 5) targets **v1.1** (D4 amendment 2026-06-11). Spike B's NO-GO means PR 4 retains `--dangerously-load-development-channels server:tandem-channel`.
 - **#576 .docx write-back (body export only)** — comment round-trip stays v1.1. HIGH risk; kill date 2026-05-28; LibreOffice fallback ready.
 - **#316 Cowork macOS/Linux auto-setup** — Core (was Defer). Couples to #428 cert work.
 
@@ -513,6 +514,14 @@ Full per-row table is in `docs/v10-triage.md`. Highlights:
 **Redesign Core surfaces (§1G in `docs/v10-triage.md`):** selection mini-toolbar (#653 — BubbleMenu in PR #656 awaiting review), slash command menu, editor body fonts (D11 bundle locally), paged .docx layout, annotation reply thread expansion, solo-mode held-count badge → status bar, `SettingsModal.svelte` sibling (sibling-component pattern), Settings → Network panel (two-tier: Connection visible + Advanced collapsed), Settings → Models registry (D4 multi-provider), AR5 Word-import batch-promote (shipped v0.13.0; v0.14.0 hardening pass), AR6 tutorial annotations (shipped v0.13.0; v0.14.0 hardening pass), connection-degradation banner polish, first-run wizard (D4), shortcuts modal (⌘/), settings-icon update-dot (D6 sub-piece), empty-state with slash menu.
 
 **Cross-platform Core:** Apple Developer cert + macOS notarization (calendar gate; start NOW), full-parity install matrix (D12), updater banner (#561 — D6 banner direction locked; supersedes PR #647).
+
+### v1.0 Licensing (ADR-040) — Wave 5L / v0.16.0
+
+[ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §3/§4/§6 (Accepted) commit v1.0 to license-to-run: the public build self-trials, requires a valid offline Ed25519-signed license past the trial, and auto-updates from a license-checked endpoint. Previously this work was decided but untracked (the #394 row sat in the Deferred table while declaring itself v1.0 work). Now tracked:
+
+- **#1116** — engineering tracker (PR sequence L1 license format/verify → L2 trial gate + activation UX, dark behind a build flag → L3 license-checked update endpoint → L4 grandfathering + docs). Ships as **v0.16.0**, parallel to Wave 5 hardware work; the v0.16.0→v1.0.0 hop then exercises the updater's endpoint transition once for real before launch.
+- **#1117** — commercial infra, Bryan-led calendar gate (MoR checkout, issuance webhook, LLC + accountant, **ADR-040 §5 BUSL re-scope by counsel — still Proposed; prerequisite for charging**). Mirrors the Wave-0 Apple-cert pattern: external parties own the timeline, so it starts now.
+- The gate flag flips at the v1.0.0 tag **only if** the Commercial-readiness exit criterion (below) passes. §5 counsel gates charging, not landing the gate code dark.
 
 ### Release Cadence
 
@@ -537,11 +546,13 @@ v1.0 series (concrete waves; see "Active — Toward v1.0" for the wave-structure
 | ---------- | ------------------------------------------------------------------------------------------------ | ------------------- |
 | v0.13.0    | Stability bug-bash + redesign chrome + editor surfaces + Settings (Network + Models registry)    | Released 2026-05-25 |
 | v0.13.5    | Design-system re-skin umbrella (`feat/design-system-impl` #939) + customizable keyboard shortcuts (ADR-041) + annotation GC/content-hash rename recovery (#313/#318) | Released 2026-05-29 |
-| v0.14.0    | Annotation migration **hardening** (AR5/AR6 already shipped in v0.13.0/v0.13.5; v0.14.0 adds promote-path + channel-emit + import→promote test coverage and the AR6 live-anchor freshness guard) + #477 PR 3c-ii-c (auto-config removal) + #576 docx body export | Planned       |
+| v0.13.6    | Motion language (#798 Ph 1–4) + native context menus (#923) + markdown fidelity (#981) + inline images (#153) + `tandem_appendContent` (#979) + Word reply threads (#1000) + `tandem doctor` (#319-partial, incl. `--json`) + **AR5/AR6 annotation-migration hardening (landed here, ahead of the v0.14.0 plan)** | Released 2026-06-04 |
+| v0.14.0    | #477 PR 3c-ii-c (auto-config removal) + #576 docx body export (+ #1069 conflict detection, #1068 comment writeback) + MCP structured output (#1080) + backup restore (#1086) + uninstall scrub + Copy Diagnostics + generation gate + BYO-models flag-off (#1018/#1022) | Released 2026-06-10 |
 | v0.15.0    | Cross-platform install matrix + #316 Cowork macOS/Linux + #428 macOS cert/notarization           | Planned             |
-| v1.0.0     | Final verification, observer soak, accessibility gate, version bump                              | Planned             |
+| v0.16.0    | Licensing (#1116, ADR-040): license-to-run + trial gate (dark) + license-checked update endpoint + grandfathering; commercial infra (#1117) in parallel | Planned             |
+| v1.0.0     | Final verification, observer soak, security + performance + commercial-readiness gates, accessibility gate, gate-flag flip, version bump | Planned             |
 
-The wave-structure table (top of "Active — Toward v1.0") owns wave numbering and membership; this cadence table maps versions to concerns. Waves recombine across versions based on review bandwidth and merge cadence — v0.14.0 bundles Waves 3–4, v0.15.0 is Wave 5, v1.0.0 is Wave 6. The soft v1.0 target is ~2026-06-10. Source of truth for wave membership remains the wave plan in `~/.claude/plans/it-occurs-to-rustling-newt.md` (Bryan-local; not in repo).
+The wave-structure table (top of "Active — Toward v1.0") owns wave numbering and membership; this cadence table maps versions to concerns. Waves recombine across versions based on review bandwidth and merge cadence — Waves 3–4 landed across v0.13.6/v0.14.0, v0.15.0 is Wave 5, v0.16.0 is Wave 5L (licensing), v1.0.0 is Wave 6. The original soft v1.0 target (~2026-06-10) has passed by design — the date floats per the thesis (quality > speed); no new date is set. Source of truth for wave membership remains the wave plan in `~/.claude/plans/it-occurs-to-rustling-newt.md` (Bryan-local; not in repo — **note: the 5L/v0.16.0 insertion (2026-06-11) is not yet reflected there**).
 
 ### v1.0.0 Exit Criteria
 
@@ -557,13 +568,31 @@ The wave-structure table (top of "Active — Toward v1.0") owns wave numbering a
 - Tauri update flow: download → install → restart verified on all three platforms; sidecar restart succeeds; no data loss
 - Tutorial: completes end-to-end on `sample/welcome.md`; tutorial annotation anchors hold (anchor-drift regression test)
 - Dark/light toggle: works in both desktop and browser
-- Multi-provider models registry (D4): user can add/remove/edit Anthropic + #477 local + at least one third-party provider
+- ~~Multi-provider models registry (D4): user can add/remove/edit Anthropic + #477 local + at least one third-party provider~~ **Replaced per D4 amendment (2026-06-11):** first-run wizard one-click Claude Code connect works on all three platforms (detect → connect → `/mcp` shows Tandem tools); BYO-models surfaces remain hidden while `BYO_MODELS_ENABLED` is off
 - Updater: banner appears; settings-icon dot badge clears on settings open or update install
 
 **Soak gates:**
 - Observer soak: 6 docs open, rapid tab switching, Y.Doc swap (load + close), network drop + reconnect — zero leaks, zero broken observers; 1-hour session: 50+ annotations, 20+ tab opens/closes, 5+ network blips
 - Annotation upgrade soak: fresh install of v0.11.2, create 50 annotations across 6 docs, close, upgrade to v1.0 RC, reopen — zero loss, no migration error toasts; AR5 batch-promote tested end-to-end with .docx file containing legacy Word reviewer comments
 - `.claude.json` shapes corpus (PR-4): empty, named-pipe transport, `tandem-channel` block, non-Tandem MCP servers, multiple workspace entries, concurrent Claude Desktop write, 5MB+ size
+
+**Security gate (added 2026-06-11):**
+- `security-reviewer` agent sweep over **all HTTP routes added since v0.13.0**, enumerated at RC time by diffing route registrations in `src/shared/api-paths.ts` / `src/server/mcp/api-routes.ts` / `src/server/mcp/routes/` / `src/server/integrations/api-routes.ts` — the enumerated diff is the floor, not a fixed list. Initial floor (v0.13.6–v0.14.0): store/reclaim-lock, diagnostics, backups + backups/restore, rename, document/raw, document/reload, docx-conflict/resolve, integrations/install-claude-code, integrations/claude-cli-status, sessions + sessions/delete + sessions/clear, shutdown, plus the `/api/info` generationId and `/health` hasSession fields.
+- Method: the three-surface audit pattern from lessons-learned (CORS allowlist × Host-header validation × loopback-vs-LAN exposure), plus path validation on filesystem-touching routes.
+- Threshold: **zero unresolved HIGH findings**; findings recorded as linked issues. Self-graded by the security-reviewer agent — accepted at two-person scale.
+- **First run 2026-06-11: PASS** — zero HIGH/MEDIUM; two LOW consistency findings + one INFO filed as #1121 (loopback-gate uniformity on four document-mutation routes; path disclosure to token-authenticated LAN on `GET /api/sessions`). Close #1121 before the RC re-run.
+
+**Performance gate (added 2026-06-11):**
+- Fixture: a ~50-page markdown document produced by a checked-in generator script (to be added with the gate's first run; until then, generate ad hoc and note the seed).
+- Pass conditions on the smoke-checklist machines (the same hardware set as §1–§3 of [release-smoke-checklist.md](release-smoke-checklist.md)): open-to-interactive < 3s; annotation create/accept reflects in the editor < 500ms; no frame stall > 100ms during a scripted top-to-bottom scroll (DevTools performance trace).
+- Existing partial coverage acknowledged: annotation-store perf is pinned by `tests/server/annotations/perf.test.ts` (#335) and the #609 atomic-update freeze fix has a regression pin — this gate covers the *render/scroll/interaction* path those don't.
+- Risk, stated: this gate is **unvalidated until RC** (no measurement has been run against it yet); if the fixture fails today, that is a finding to fix, not a reason to relax the numbers. Verifies the "~50 pages" Known-Limitations envelope.
+
+**Commercial readiness (added 2026-06-11; gates the license flag flip — see #1116/#1117):**
+- ADR-040 §5 (BUSL re-scope) **Accepted** — counsel-drafted text landed in `LICENSE` + `docs/decisions.md`
+- MoR checkout live end-to-end: test purchase → issuance webhook → signed license delivered → activates a gate-ON build
+- Grandfather licenses issued to known beta users
+- If any of these are not ready at code-complete: the date floats (per thesis); **the gate flag does NOT ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
 
 **Accessibility:**
 - Windows Narrator full editor walkthrough
@@ -623,7 +652,7 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 | Annotation thread emoji reactions | D5 — explicit cut, not just defer. |
 | Diff/Apply-edit hunk staging surface | D3 option B locked for v1.1 revisit; surface defers from v1.0. |
 | #316/#317 firewall scoping (#317 only) | #316 is now Core; #317 paired-defer. |
-| #394 Monetization | **Decided — see [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license).** Free beta → one-time paid license at v1.0; offline signed-license activation; beta users grandfathered. In-app license verification + server-side trial gate + license-checked updater are v1.0 features, planned in their own PR. The *strategic* decision is settled; the *engineering* work lands as scheduled v1.0 tasks. |
+| ~~#394 Monetization~~ | **Moved out of this table 2026-06-11 — it was never post-v1.0 work.** This row's own text said "in-app license verification + server-side trial gate + license-checked updater are v1.0 features" while sitting in the deferred table, leaving the work decided ([ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license)) but untracked. Now scheduled as Wave 5L / v0.16.0 — see §"v1.0 Licensing (ADR-040)" above; tracked in #1116 (engineering) + #1117 (commercial infra, Bryan-led). |
 | Desktop UI Tier 3 remainder (§3.2 tray, §3.3 context menus) | Polish. |
 | Desktop UI deferred (frameless window, vibrancy, multi-window, file explorer sidebar) | Out of scope per HANDOFF. |
 | Smaller follow-ups (#283, #284, #287, #292, #300) | Rolling maintenance; not blocking v1.0 quality. |
@@ -648,7 +677,7 @@ These are intentional scope boundaries, not bugs:
 ## Future Extensions (v2+)
 
 - **Progressive Web App (PWA)** — Lower priority now that the desktop app ships. Would still be useful as a lighter-weight alternative for users who prefer not to install a native app.
-- **Additional model providers** — beyond the multi-provider registry shipping in v1.0 (Anthropic + #477 local + OpenAI + Gemini), v2 adds providers as needed via the same registry surface.
+- **Additional model providers** — beyond the multi-provider registry (Anthropic + #477 local + OpenAI + Gemini, **v1.1** per the D4 amendment 2026-06-11 — registry UI exists but is flag-gated off until the ADR-039 adapter lands), v2 adds providers as needed via the same registry surface.
 - Spreadsheet component (Handsontable/AG Grid)
 - Claude Desktop support (MCP server already exists)
 - Drawing/freeform annotation layer
