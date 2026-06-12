@@ -712,6 +712,8 @@ const toggleLeftPanel = () => {
   // frame with both `.collapsed.floating` and an expanded inline width (Svelte
   // batches both writes into one DOM update).
   pinFromFloat("left");
+  clearTimeout(closeTimer.left);
+  railFloatClosing.left = false;
   railFloat.left = false;
   const nextVisible = !layoutModel.leftVisible;
   layoutModel.toggleLeft();
@@ -719,6 +721,8 @@ const toggleLeftPanel = () => {
 };
 const toggleRightPanel = () => {
   pinFromFloat("right");
+  clearTimeout(closeTimer.right);
+  railFloatClosing.right = false;
   railFloat.right = false;
   const nextVisible = !layoutModel.rightVisible;
   layoutModel.toggleRight();
@@ -729,8 +733,9 @@ const toggleRightPanel = () => {
 // No-op when the rail isn't floating (a plain collapse/expand keeps its motion).
 function pinFromFloat(side: RailSide) {
   if (!railFloat[side]) return;
+  if (pinSnapRaf[side] !== undefined) cancelAnimationFrame(pinSnapRaf[side]);
   railPinSnap[side] = true;
-  requestAnimationFrame(() => {
+  pinSnapRaf[side] = requestAnimationFrame(() => {
     railPinSnap[side] = false;
   });
 }
@@ -786,6 +791,10 @@ const hoverTimer: Record<RailSide, ReturnType<typeof setTimeout> | undefined> = 
   right: undefined,
 };
 const closeTimer: Record<RailSide, ReturnType<typeof setTimeout> | undefined> = {
+  left: undefined,
+  right: undefined,
+};
+const pinSnapRaf: Record<RailSide, ReturnType<typeof requestAnimationFrame> | undefined> = {
   left: undefined,
   right: undefined,
 };
@@ -908,6 +917,8 @@ $effect(() => {
     clearTimeout(animTimer.right);
     clearTimeout(closeTimer.left);
     clearTimeout(closeTimer.right);
+    if (pinSnapRaf.left !== undefined) cancelAnimationFrame(pinSnapRaf.left);
+    if (pinSnapRaf.right !== undefined) cancelAnimationFrame(pinSnapRaf.right);
   };
 });
 
@@ -1522,7 +1533,7 @@ const tutorial = createTutorial(
         class:floating={railFloat.left}
         class:float-closing={railFloatClosing.left}
         class:pin-snap={railPinSnap.left}
-        data-testid={railFloat.left ? "rail-float-left" : undefined}
+        data-testid={(railFloat.left || railFloatClosing.left) ? "rail-float-left" : undefined}
         style={effectiveLeftVisible ? `width: ${dragResizeLeft.width}px;` : ""}
         onmouseenter={() => onRailShellEnter("left")}
         onmouseleave={() => onRailShellLeave("left")}
@@ -1573,7 +1584,7 @@ const tutorial = createTutorial(
         class:floating={railFloat.right}
         class:float-closing={railFloatClosing.right}
         class:pin-snap={railPinSnap.right}
-        data-testid={railFloat.right ? "rail-float-right" : undefined}
+        data-testid={(railFloat.right || railFloatClosing.right) ? "rail-float-right" : undefined}
         style={effectiveRightVisible ? `width: ${dragResizeRight.width}px;` : ""}
         onmouseenter={() => onRailShellEnter("right")}
         onmouseleave={() => onRailShellLeave("right")}
