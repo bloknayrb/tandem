@@ -2449,7 +2449,15 @@ const tutorial = createTutorial(
   :global(body.tandem-reduce-motion) .rail-shell {
     transition: none;
   }
+  /* z-index lifts the pinned rail above the editor column. Both rails are
+     z:auto flex items of the same row as the editor-scroll, and the editor is
+     later in DOM — so without this its opaque background paints OVER the rail's
+     outset side-shadow, clipping it dead at the panel's inside edge ("cut off
+     by the editor"). The floating state bumps to --tandem-z-rail-float (5); this
+     is the pinned/collapsed baseline. The right rail always had it; the left was
+     missing it, so only the left rail's pinned shadow was being occluded. */
   .rail-shell-left {
+    z-index: 1;
     border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
     box-shadow: var(--tandem-rail-shadow-left);
   }
