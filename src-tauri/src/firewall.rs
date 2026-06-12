@@ -241,10 +241,18 @@ pub fn add_cowork_allow_rule(cidr: &str) -> Result<(), FirewallError> {
     ])
 }
 
-/// Add an inbound deny rule — written when UAC elevation is refused so that
-/// port 3479 is definitively blocked from the VM, not in an ambiguous open state.
+/// Add an inbound deny rule — historically written when firewall elevation was
+/// refused so that port 3479 was definitively blocked from the VM.
+///
+/// Retired from the enable flow: it needs the same elevation the allow rule was
+/// just denied, so it always failed too, and the server binds 127.0.0.1 anyway —
+/// port 3479 is never network-exposed, so there is nothing to "fail closed" to.
+/// Kept (the disable path's `remove_cowork_rules` still cleans up any deny rule a
+/// past elevated run may have written) and pending the Cowork-transport matrix
+/// outcome; see the cowork-detection plan / forthcoming ADR-045.
 ///
 /// Rule: `dir=in, action=block, protocol=TCP, localport=3479, remoteip=<cidr>`.
+#[allow(dead_code)]
 pub fn add_cowork_deny_rule(cidr: &str) -> Result<(), FirewallError> {
     log::info!("[firewall] adding Cowork deny rule for CIDR {cidr}");
     run_netsh(&[

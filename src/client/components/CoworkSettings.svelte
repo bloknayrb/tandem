@@ -37,6 +37,11 @@ const STATUS_TOKENS: Record<StatusTokenFamily, { bg: string; fg: string; border:
     fg: "var(--tandem-error-fg-strong)",
     border: "var(--tandem-error-border)",
   },
+  neutral: {
+    bg: "var(--tandem-info-bg)",
+    fg: "var(--tandem-info-fg-strong)",
+    border: "var(--tandem-info-border)",
+  },
 };
 
 // Always active while mounted
@@ -157,7 +162,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
       />
       <span>Enable Cowork integration</span>
     </label>
-    <div class="cs-help">Token provisioned: {s.enabled ? "yes" : "no"}</div>
+    <div class="cs-help">Integration enabled: {s.enabled ? "yes" : "no"}</div>
 
     {#if confirming === "enable"}
       <div
@@ -167,8 +172,8 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
       >
         <div class="cs-confirm-heading">Confirm: Enable Cowork</div>
         <div class="cs-confirm-body">
-          Windows will prompt for admin permission to modify firewall rules. This is expected.
-          Tandem will write plugin entries to every detected Cowork workspace.
+          Tandem will write plugin entries to every detected Cowork workspace so Claude running in
+          Cowork can reach the documents you have open.
         </div>
         <div class="cs-actions">
           <button

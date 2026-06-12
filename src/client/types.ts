@@ -47,7 +47,10 @@ export type WorkspaceFileStatus =
   | "locked"
   | "schemaDrift"
   | "insecureAcl"
-  | "failed";
+  | "failed"
+  // Integration not yet enabled — the entry is absent because setup hasn't run,
+  // not because a write failed. Neutral, never shown as an error.
+  | "notConfigured";
 
 export interface WorkspaceStatus {
   workspaceId: string;

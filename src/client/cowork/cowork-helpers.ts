@@ -59,7 +59,7 @@ export function undetectedDetail(status: CoworkStatus): UndetectedDetail {
 export function firewallErrorHint(variant: FirewallErrorVariant): string {
   switch (variant.kind) {
     case "adminDeclined":
-      return "Admin permission was denied. Retry with admin, or disable Cowork integration.";
+      return "Tandem couldn't update Windows Firewall — that needs administrator rights, and Tandem doesn't run as admin. Nothing was changed, and your documents stay on this computer (the server is only reachable locally).";
     case "netshNotFound":
       return "Windows Firewall command (netsh) was not found on PATH. Confirm your Windows install is intact.";
     case "netshFailure":
@@ -123,6 +123,8 @@ export function workspaceFileStatusLabel(status: WorkspaceFileStatus): string {
       return "Insecure ACL";
     case "failed":
       return "Failed";
+    case "notConfigured":
+      return "Not configured";
   }
 }
 
@@ -130,7 +132,7 @@ export function workspaceFileStatusLabel(status: WorkspaceFileStatus): string {
  * Semantic token family driving the row background / icon color for a
  * per-file status. `success` = green, `warning` = amber, `error` = red.
  */
-export type StatusTokenFamily = "success" | "warning" | "error";
+export type StatusTokenFamily = "success" | "warning" | "error" | "neutral";
 
 export function workspaceFileStatusFamily(status: WorkspaceFileStatus): StatusTokenFamily {
   switch (status) {
@@ -143,6 +145,8 @@ export function workspaceFileStatusFamily(status: WorkspaceFileStatus): StatusTo
     case "insecureAcl":
     case "failed":
       return "error";
+    case "notConfigured":
+      return "neutral";
   }
 }
 
@@ -157,6 +161,7 @@ export function aggregateWorkspaceStatus(ws: WorkspaceStatus): WorkspaceFileStat
     "schemaDrift",
     "insecureAcl",
     "locked",
+    "notConfigured",
     "alreadyPresent",
     "ok",
   ];

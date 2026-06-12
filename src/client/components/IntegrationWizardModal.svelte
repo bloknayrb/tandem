@@ -433,17 +433,15 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
               <div class="iw-whats-next">
                 {@render checkIcon()}
                 <span>
-                  Cowork is enabled and a token is provisioned. Manage workspaces in
-                  Settings&nbsp;→&nbsp;Network.
+                  Cowork is enabled. Manage workspaces in Settings&nbsp;→&nbsp;Network.
                 </span>
               </div>
             {:else}
               <div class="iw-banner-warning">
                 {@render warningIcon()}
                 <span>
-                  Windows will ask for admin permission to update firewall rules — this is
-                  expected. Tandem writes plugin entries to every detected Cowork workspace so a
-                  teammate's Claude can reach the documents you have open.
+                  Tandem writes plugin entries to every detected Cowork workspace so Claude running
+                  in Cowork can reach the documents you have open.
                 </span>
               </div>
               {#if coworkStatus.status?.vethernetCidr}
@@ -454,7 +452,8 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
               {/if}
               {#if coworkStatus.status?.uacDeclined}
                 <p class="iw-hint-text">
-                  Admin permission was declined earlier — enabling will prompt again.
+                  A previous attempt couldn't update Windows Firewall (that needs administrator
+                  rights). Enabling writes the workspace plugin entries either way.
                 </p>
               {/if}
             {/if}

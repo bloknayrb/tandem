@@ -136,8 +136,11 @@ describe("firewallErrorHint", () => {
     for (const h of hints) expect(h.length).toBeGreaterThan(0);
   });
 
-  it("adminDeclined hint mentions retry", () => {
-    expect(firewallErrorHint({ kind: "adminDeclined" }).toLowerCase()).toContain("retry");
+  it("adminDeclined hint explains the admin-rights limitation without a false retry promise", () => {
+    const hint = firewallErrorHint({ kind: "adminDeclined" }).toLowerCase();
+    expect(hint).toContain("administrator");
+    // Tandem never self-elevates, so the hint must not promise a retry-with-admin flow.
+    expect(hint).not.toContain("retry");
   });
 
   it("netshFailure embeds the exit code and stderr tail", () => {
@@ -201,7 +204,7 @@ describe("formatCoworkError", () => {
 
   it("returns firewallErrorHint result for JSON with a known kind", () => {
     const json = JSON.stringify({ kind: "adminDeclined" });
-    expect(formatCoworkError(json).toLowerCase()).toContain("retry");
+    expect(formatCoworkError(json).toLowerCase()).toContain("administrator");
   });
 
   it("returns raw message for JSON without a kind field", () => {
@@ -231,6 +234,7 @@ describe("workspaceFileStatusLabel", () => {
       "schemaDrift",
       "insecureAcl",
       "failed",
+      "notConfigured",
     ] as const;
     for (const c of cases) {
       expect(workspaceFileStatusLabel(c).length).toBeGreaterThan(0);
@@ -250,6 +254,10 @@ describe("workspaceFileStatusLabel", () => {
     expect(workspaceFileStatusFamily("schemaDrift")).toBe("error");
     expect(workspaceFileStatusFamily("insecureAcl")).toBe("error");
     expect(workspaceFileStatusFamily("failed")).toBe("error");
+  });
+
+  it("maps 'notConfigured' to the neutral family (never an error)", () => {
+    expect(workspaceFileStatusFamily("notConfigured")).toBe("neutral");
   });
 });
 
@@ -291,6 +299,16 @@ describe("aggregateWorkspaceStatus", () => {
 
   it("'insecureAcl' wins over 'locked'", () => {
     expect(aggregateWorkspaceStatus(ws("insecureAcl", "locked", "ok"))).toBe("insecureAcl");
+  });
+
+  it("rolls a 'notConfigured' triple up to 'notConfigured'", () => {
+    expect(aggregateWorkspaceStatus(ws("notConfigured", "notConfigured", "notConfigured"))).toBe(
+      "notConfigured",
+    );
+  });
+
+  it("'failed' wins over 'notConfigured'", () => {
+    expect(aggregateWorkspaceStatus(ws("notConfigured", "failed", "notConfigured"))).toBe("failed");
   });
 });
 

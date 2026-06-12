@@ -68,7 +68,8 @@ function handleSkip(): void {
     <div class="cos-confirm-banner" data-testid="cowork-onboarding-confirm">
       <div class="cos-confirm-heading">Confirm: Enable Cowork</div>
       <div class="cos-confirm-body">
-        Windows will prompt for admin permission to modify firewall rules. This is expected.
+        Tandem will write plugin entries to every detected Cowork workspace so Claude running in
+        Cowork can reach the documents you have open.
       </div>
       <div class="cos-actions">
         <button

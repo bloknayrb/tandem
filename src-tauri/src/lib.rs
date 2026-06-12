@@ -2128,23 +2128,20 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             // Fail-closed: on UAC decline, write a deny rule and bail — do NOT
             // walk workspaces (invariant §4).
             if let firewall::FirewallError::AdminDeclined = e {
-                log::warn!("[cowork] UAC declined — writing deny rule and updating meta; no plugin entries written");
-                if let Err(deny_err) = firewall::add_cowork_deny_rule(&cidr) {
-                    // Deny rule failed to write — port 3479 has no rule at all.
-                    // Return a distinct error so the UI can show a recovery prompt.
-                    return Err(format!(
-                        "UAC declined and deny-rule could not be written: {deny_err}. \
-                         Port 3479 may be unprotected. Please add a deny rule manually \
-                         in Windows Defender Firewall."
-                    ));
-                }
+                // The firewall rule needs elevation Tandem does not have (it never
+                // runs elevated, so no UAC prompt ever appears). Do NOT attempt a
+                // deny rule — it needs the same elevation and always fails, and the
+                // server binds 127.0.0.1 so port 3479 was never network-exposed.
+                // Record the outcome and surface the structured error for the UI's
+                // honest copy. No plugin entries are written (invariant §4).
+                log::warn!("[cowork] firewall rule needs elevation (none available); no plugin entries written");
                 if let Err(meta_err) = cowork_meta::update(|m| {
                     m.uac_declined_last_attempt = true;
                     m.uac_declined_at = Some(iso_now());
                     m.vethernet_cidr_detected = Some(cidr.clone());
                     m.enabled = false;
                 }) {
-                    log::warn!("[cowork] failed to persist UAC-declined meta: {meta_err}");
+                    log::warn!("[cowork] failed to persist firewall-declined meta: {meta_err}");
                 }
                 return Err(serde_json::to_string(e).unwrap_or_else(|_| e.to_string()));
             }
@@ -2492,6 +2489,13 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
     // Build a workspace status array compatible with the TypeScript WorkspaceStatus[]
     // type declared in PR f.  This is a read-only status check — no writes, no ACL
     // checks, no firewall operations.
+    // When the integration is not enabled, an absent entry is the expected
+    // "not yet set up" state — not a failure. Reporting "failed" for writes that
+    // were never attempted is misleading (the enable flow aborts before any
+    // plugin write when the firewall step can't run). Only call a missing entry
+    // "failed" once the user has actually enabled the integration.
+    let absent_status = if meta.enabled { "failed" } else { "notConfigured" };
+
     let workspaces: Vec<serde_json::Value> = workspace_paths
         .iter()
         .map(|ws_path| {
@@ -2510,7 +2514,7 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
             let installed_status = if cowork_installer::workspace_has_tandem_entry(ws_path) {
                 "ok"
             } else {
-                "failed"
+                absent_status
             };
 
             // Read-only check: does known_marketplaces.json exist?
@@ -2524,7 +2528,7 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
                     _ => "failed",
                 }
             } else {
-                "failed"
+                absent_status
             };
 
             // Read-only check: does cowork_settings.json exist?
@@ -2538,7 +2542,7 @@ fn cowork_get_status() -> Result<serde_json::Value, String> {
                     _ => "failed",
                 }
             } else {
-                "failed"
+                absent_status
             };
 
             serde_json::json!({
