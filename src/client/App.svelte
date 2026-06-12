@@ -1480,6 +1480,13 @@ const tutorial = createTutorial(
         onfocusout={(e) => onRailShellFocusOut("left", e)}
         ontransitionend={(e) => onRailShellTransitionEnd("left", e)}
       >
+        {#if railFloat.left}
+          <div
+            class="rail-float-shadow rail-float-shadow-left"
+            style={`width: ${dragResizeLeft.width}px;`}
+            aria-hidden="true"
+          ></div>
+        {/if}
         <div
           data-testid="left-outline-rail"
           class="rail-full rail-full-left"
@@ -1523,6 +1530,13 @@ const tutorial = createTutorial(
         onfocusout={(e) => onRailShellFocusOut("right", e)}
         ontransitionend={(e) => onRailShellTransitionEnd("right", e)}
       >
+        {#if railFloat.right}
+          <div
+            class="rail-float-shadow rail-float-shadow-right"
+            style={`width: ${dragResizeRight.width}px;`}
+            aria-hidden="true"
+          ></div>
+        {/if}
         <div
           class="rail-full rail-full-right"
           style={`width: ${dragResizeRight.width}px;`}
@@ -2066,10 +2080,37 @@ const tutorial = createTutorial(
   /* The shell normally owns the panel background, but when floating it stays a
      14px sliver — so the full-width floating panel must paint its OWN opaque
      surface, or the 14px collapsed shell shows through as a minimized-rail strip
-     down the edge (and the editor shows behind the rest). Matches the shell bg. */
+     down the edge (and the editor shows behind the rest). Matches the shell bg.
+     overflow:hidden (inherited from the base `.rail-full`) is KEPT so panel
+     content clips to the rounded corner — the directional drop shadow is cast by
+     a separate `.rail-float-shadow` layer instead, because an outset box-shadow
+     on this element would be clipped by that same overflow on the rounded side. */
   .rail-shell.floating .rail-full {
     display: flex;
     background: var(--tandem-surface-muted);
+  }
+  /* Drop-shadow layer for the floating panel: an empty, transparent, content-free
+     sibling painted BEHIND `.rail-full` (earlier in DOM) at the same bounds. It
+     carries the directional box-shadow so the shadow renders unclipped (it has no
+     overflow:hidden of its own and nothing to clip), while `.rail-full` keeps its
+     overflow clip for the rounded content. Grows with the panel via the same
+     reveal keyframe; pointer-transparent so it never eats clicks. */
+  .rail-float-shadow {
+    position: absolute;
+    inset-block: 0;
+    pointer-events: none;
+  }
+  .rail-shell-left.floating .rail-float-shadow-left {
+    left: 0;
+    border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
+    box-shadow: var(--tandem-rail-shadow-left);
+    animation: tandem-rail-float-reveal-left 360ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .rail-shell-right.floating .rail-float-shadow-right {
+    right: 0;
+    border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
+    box-shadow: var(--tandem-rail-shadow-right);
+    animation: tandem-rail-float-reveal-right 360ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* Floating panels must read as the same rail, not a square overlay: match the
      extended shell's rounded inner corner and grow out from the window edge with
@@ -2079,14 +2120,12 @@ const tutorial = createTutorial(
     right: auto;
     left: 0;
     border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
-    box-shadow: var(--tandem-rail-shadow-left);
     animation: tandem-rail-float-reveal-left 360ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .rail-shell-right.floating .rail-full-right {
     left: auto;
     right: 0;
     border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
-    box-shadow: var(--tandem-rail-shadow-right);
     animation: tandem-rail-float-reveal-right 360ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* The 14px peek sliver would otherwise poke through the floating panel's
@@ -2127,11 +2166,13 @@ const tutorial = createTutorial(
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .rail-shell.floating .rail-full {
+    .rail-shell.floating .rail-full,
+    .rail-shell.floating .rail-float-shadow {
       animation: none;
     }
   }
-  :global(body.tandem-reduce-motion) .rail-shell.floating .rail-full {
+  :global(body.tandem-reduce-motion) .rail-shell.floating .rail-full,
+  :global(body.tandem-reduce-motion) .rail-shell.floating .rail-float-shadow {
     animation: none;
   }
   .rail-tabs-row {
