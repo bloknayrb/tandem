@@ -963,17 +963,29 @@ const toggleLeftPanel = () => {
   // Clear the transient float BEFORE the visibility commit so there is never a
   // frame with both `.collapsed.floating` and an expanded inline width (Svelte
   // batches both writes into one DOM update).
+  pinFromFloat("left");
   railFloat.left = false;
   const nextVisible = !layoutModel.leftVisible;
   layoutModel.toggleLeft();
   focusToggleTarget("left", nextVisible);
 };
 const toggleRightPanel = () => {
+  pinFromFloat("right");
   railFloat.right = false;
   const nextVisible = !layoutModel.rightVisible;
   layoutModel.toggleRight();
   focusToggleTarget("right", nextVisible);
 };
+// Pinning a floated rail: snap the shell to the float's width (no 14→full open
+// replay) for the single commit frame, then restore the transition next frame.
+// No-op when the rail isn't floating (a plain collapse/expand keeps its motion).
+function pinFromFloat(side: RailSide) {
+  if (!railFloat[side]) return;
+  railPinSnap[side] = true;
+  requestAnimationFrame(() => {
+    railPinSnap[side] = false;
+  });
+}
 
 // ── Rail motion (#798) + hover-reveal floating mode ───────────────────────
 // Two independent behaviours layered on the always-mounted dual-layer shells:
@@ -988,6 +1000,12 @@ const toggleRightPanel = () => {
 type RailSide = "left" | "right";
 const railAnimating = $state({ left: false, right: false });
 const railFloat = $state({ left: false, right: false });
+// Set for ONE frame when a hover-float is pinned: the floated panel is already
+// painted at full width over the editor, so the shell must snap to that width
+// (transition suppressed) instead of replaying the 14→full open from collapsed,
+// which would flash the panel away and regrow it. Cleared on the next rAF so
+// later collapses still animate.
+const railPinSnap = $state({ left: false, right: false });
 
 // Plain (non-$state) refs: hover/animation timer handles + pointer/focus
 // presence. Never rendered, so $state would only churn reactivity. Each
@@ -1841,6 +1859,7 @@ const tutorial = createTutorial(
         class:collapsed={!effectiveLeftVisible}
         class:animating={railAnimating.left}
         class:floating={railFloat.left}
+        class:pin-snap={railPinSnap.left}
         data-testid={railFloat.left ? "rail-float-left" : undefined}
         style={effectiveLeftVisible ? `width: ${dragResizeLeft.width}px;` : ""}
         onmouseenter={() => onRailShellEnter("left")}
@@ -1883,6 +1902,7 @@ const tutorial = createTutorial(
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
         class:floating={railFloat.right}
+        class:pin-snap={railPinSnap.right}
         data-testid={railFloat.right ? "rail-float-right" : undefined}
         style={effectiveRightVisible ? `width: ${dragResizeRight.width}px;` : ""}
         onmouseenter={() => onRailShellEnter("right")}
@@ -2428,6 +2448,11 @@ const tutorial = createTutorial(
     width: 14px;
     cursor: pointer;
   }
+  /* Float→pin: snap the shell to the floated width for the commit frame so the
+     panel stays put instead of replaying the 14→full open from collapsed. */
+  .rail-shell.pin-snap {
+    transition: none;
+  }
   /* Width-grow is :hover ONLY — never :focus-within. The peek strip is
      tabindex="-1", so its only focus path is the inert restoration focus that
      focusToggleTarget() applies after a keyboard collapse (preserving Tab
@@ -2477,35 +2502,67 @@ const tutorial = createTutorial(
   /* `display: flex` here has the SAME specificity as the `.collapsed .rail-full`
      display:none above and wins by SOURCE ORDER — this rule must stay AFTER it.
      (The `.collapsed.animating` rule outranks both on specificity.) */
+  /* The shell normally owns the panel background, but when floating it stays a
+     14px sliver — so the full-width floating panel must paint its OWN opaque
+     surface, or the 14px collapsed shell shows through as a minimized-rail strip
+     down the edge (and the editor shows behind the rest). Matches the shell bg. */
   .rail-shell.floating .rail-full {
     display: flex;
-    animation: tandem-rail-float-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
+    background: var(--tandem-surface-muted);
   }
+  /* Floating panels must read as the same rail, not a square overlay: match the
+     extended shell's rounded inner corner and grow out from the window edge with
+     the shell's open easing/duration (#798), per-side because each grows toward
+     the editor from its own edge. */
   .rail-shell-left.floating .rail-full-left {
     right: auto;
     left: 0;
-    --rail-float-from: -12px;
+    border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
     box-shadow: var(--tandem-rail-shadow-left);
+    animation: tandem-rail-float-reveal-left 360ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .rail-shell-right.floating .rail-full-right {
     left: auto;
     right: 0;
-    --rail-float-from: 12px;
+    border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
     box-shadow: var(--tandem-rail-shadow-right);
+    animation: tandem-rail-float-reveal-right 360ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* The 14px peek sliver would otherwise poke through the floating panel's
      inside edge (PeekStrip paints after `.rail-full` in DOM). */
   .rail-shell.floating :global(.peek-strip) {
     display: none;
   }
-  @keyframes tandem-rail-float-in {
+  /* Hide the edge-collapse grab handle while floating: its 1.5px accent bar
+     reads as a stray minimized-rail sliver against the editor, and "collapse"
+     is the wrong verb for a floated panel (clicking the zone PINS). The 12px
+     hit zone stays clickable — only the visual bar + hover tint are dropped. */
+  .rail-shell.floating .panel-edge-collapse::before {
+    display: none;
+  }
+  .rail-shell.floating .panel-edge-collapse:hover {
+    background: transparent;
+  }
+  /* Grow the floating panel out from the window edge, mirroring the regular
+     rail's width-open. The leading clip edge (right for the left rail, left for
+     the right rail) sweeps inward while the other three sides stay generously
+     inset so the directional drop shadow is never clipped — clip-path clips
+     box-shadow, unlike overflow:hidden, and a clipped shadow would pop in when
+     the animation releases the clip at rest. */
+  @keyframes tandem-rail-float-reveal-left {
     from {
-      opacity: 0;
-      transform: translateX(var(--rail-float-from, 0));
+      clip-path: inset(-50px 100% -50px -50px);
     }
     to {
-      opacity: 1;
-      transform: translateX(0);
+      clip-path: inset(-50px -50px -50px -50px);
+    }
+  }
+  @keyframes tandem-rail-float-reveal-right {
+    from {
+      clip-path: inset(-50px -50px -50px 100%);
+    }
+    to {
+      clip-path: inset(-50px -50px -50px -50px);
     }
   }
   @media (prefers-reduced-motion: reduce) {
