@@ -89,6 +89,7 @@ import {
   replyToAnnotation as marginReplyToAnnotation,
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
+import { motionOff } from "./panels/cardMotion";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
@@ -999,6 +1000,11 @@ function pinFromFloat(side: RailSide) {
 //      transient: it auto-hides when neither the pointer nor focus is inside.
 type RailSide = "left" | "right";
 const railAnimating = $state({ left: false, right: false });
+// Per-side hover-float lifecycle is a small state machine: idle → floating
+// (railFloat) → closing (railFloatClosing) → idle, the two phases mutually
+// exclusive. railPinSnap is an orthogonal one-frame modifier (the float→pin
+// exit), not a lifecycle phase. Kept as separate booleans because each maps 1:1
+// to a CSS class; promote to an explicit enum if a fourth phase ever lands.
 const railFloat = $state({ left: false, right: false });
 // Set for ONE frame when a hover-float is pinned: the floated panel is already
 // painted at full width over the editor, so the shell must snap to that width
@@ -1024,15 +1030,12 @@ const RAIL_ANIM_FALLBACK_MS = 400;
 // CSS so the `float-closing` flag drops exactly as the panel finishes tucking
 // away (the keyframe's `forwards` fill holds it off-screen until then).
 const FLOAT_CLOSE_MS = 300;
-// Reduced motion from EITHER source: the in-app setting OR the OS query. The
-// slide-in can ignore the OS query (under `animation: none` it just appears,
-// which is the correct reduced behaviour), but the retreat must check it — the
-// closing phase holds the panel for FLOAT_CLOSE_MS, so without this gate an
-// OS-reduce user (app setting off) would see it linger then vanish instead of
-// dropping instantly. Mirrors the CSS `@media (prefers-reduced-motion)` guard.
-const reduceMotionActive = () =>
-  settingsState.settings.reduceMotion ||
-  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+// The retreat path checks reduced motion (via `motionOff`, which OR-s the in-app
+// setting with the OS query): the slide-in can ignore it (under `animation: none`
+// the panel just appears, the correct reduced behaviour), but the closing phase
+// holds the panel for FLOAT_CLOSE_MS, so without this gate an OS-reduce user (app
+// setting off) would see it linger then vanish instead of dropping instantly.
+// Mirrors the CSS `@media (prefers-reduced-motion)` guard.
 const hoverTimer: Record<RailSide, ReturnType<typeof setTimeout> | undefined> = {
   left: undefined,
   right: undefined,
@@ -1077,7 +1080,7 @@ function maybeHideFloat(side: RailSide) {
   // No retreat slide when the rail is pinned (still visible via its non-collapsed
   // state — there's nothing to retreat) or under reduced motion: drop straight to
   // the minimized sliver. Only a collapsed hover-float slides back into the edge.
-  if (railVisible(side) || reduceMotionActive()) {
+  if (railVisible(side) || motionOff(settingsState.settings.reduceMotion)) {
     railFloatClosing[side] = false;
     return;
   }
@@ -1907,6 +1910,7 @@ const tutorial = createTutorial(
         class="rail-shell rail-shell-left"
         class:collapsed={!effectiveLeftVisible}
         class:animating={railAnimating.left}
+        class:rail-floating-chrome={railFloat.left || railFloatClosing.left}
         class:floating={railFloat.left}
         class:float-closing={railFloatClosing.left}
         class:pin-snap={railPinSnap.left}
@@ -1958,6 +1962,7 @@ const tutorial = createTutorial(
         class="rail-shell rail-shell-right"
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
+        class:rail-floating-chrome={railFloat.right || railFloatClosing.right}
         class:floating={railFloat.right}
         class:float-closing={railFloatClosing.right}
         class:pin-snap={railPinSnap.right}
@@ -2505,15 +2510,16 @@ const tutorial = createTutorial(
      later in DOM — so without this its opaque background paints OVER the rail's
      outset side-shadow, clipping it dead at the panel's inside edge ("cut off
      by the editor"). The floating state bumps to --tandem-z-rail-float (5); this
-     is the pinned/collapsed baseline. The right rail always had it; the left was
-     missing it, so only the left rail's pinned shadow was being occluded. */
-  .rail-shell-left {
+     is the pinned/collapsed baseline, shared by both rails. */
+  .rail-shell-left,
+  .rail-shell-right {
     z-index: 1;
+  }
+  .rail-shell-left {
     border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
     box-shadow: var(--tandem-rail-shadow-left);
   }
   .rail-shell-right {
-    z-index: 1;
     border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
     box-shadow: var(--tandem-rail-shadow-right);
   }
@@ -2568,10 +2574,11 @@ const tutorial = createTutorial(
   /* Hover-reveal float: the shell stays 14px in flow (editor unmoved), but it
      stops clipping so its `.rail-full` paints OVER the editor at the real drag
      width. The anchor flips to the window edge and the panel extends inward.
-     `.float-closing` is the retreat phase — same chrome, reverse slide — so it
-     shares every structural rule below; only the animation differs. */
-  .rail-shell.floating,
-  .rail-shell.float-closing {
+     `.rail-floating-chrome` is present for BOTH the open (`.floating`) and the
+     retreat (`.float-closing`) phases — same chrome, reverse slide — so every
+     structural rule below keys on it; only the animation rules distinguish the
+     two phases. */
+  .rail-shell.rail-floating-chrome {
     overflow: visible;
     z-index: var(--tandem-z-rail-float);
   }
@@ -2586,8 +2593,7 @@ const tutorial = createTutorial(
      content clips to the rounded corner — the directional drop shadow is cast by
      a separate `.rail-float-shadow` layer instead, because an outset box-shadow
      on this element would be clipped by that same overflow on the rounded side. */
-  .rail-shell.floating .rail-full,
-  .rail-shell.float-closing .rail-full {
+  .rail-shell.rail-floating-chrome .rail-full {
     display: flex;
     background: var(--tandem-surface-muted);
   }
@@ -2602,14 +2608,12 @@ const tutorial = createTutorial(
     inset-block: 0;
     pointer-events: none;
   }
-  .rail-shell-left.floating .rail-float-shadow-left,
-  .rail-shell-left.float-closing .rail-float-shadow-left {
+  .rail-shell-left.rail-floating-chrome .rail-float-shadow-left {
     left: 0;
     border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
     box-shadow: var(--tandem-rail-shadow-left);
   }
-  .rail-shell-right.floating .rail-float-shadow-right,
-  .rail-shell-right.float-closing .rail-float-shadow-right {
+  .rail-shell-right.rail-floating-chrome .rail-float-shadow-right {
     right: 0;
     border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
     box-shadow: var(--tandem-rail-shadow-right);
@@ -2618,14 +2622,12 @@ const tutorial = createTutorial(
      extended shell's rounded inner corner and slide out from the window edge with
      the shell's open easing/duration (#798), per-side because each slides toward
      the editor from its own edge. */
-  .rail-shell-left.floating .rail-full-left,
-  .rail-shell-left.float-closing .rail-full-left {
+  .rail-shell-left.rail-floating-chrome .rail-full-left {
     right: auto;
     left: 0;
     border-radius: 0 var(--tandem-rail-inner-radius, 14px) var(--tandem-rail-inner-radius, 14px) 0;
   }
-  .rail-shell-right.floating .rail-full-right,
-  .rail-shell-right.float-closing .rail-full-right {
+  .rail-shell-right.rail-floating-chrome .rail-full-right {
     left: auto;
     right: 0;
     border-radius: var(--tandem-rail-inner-radius, 14px) 0 0 var(--tandem-rail-inner-radius, 14px);
@@ -2652,20 +2654,17 @@ const tutorial = createTutorial(
   }
   /* The 14px peek sliver would otherwise poke through the floating panel's
      inside edge (PeekStrip paints after `.rail-full` in DOM). */
-  .rail-shell.floating :global(.peek-strip),
-  .rail-shell.float-closing :global(.peek-strip) {
+  .rail-shell.rail-floating-chrome :global(.peek-strip) {
     display: none;
   }
   /* Hide the edge-collapse grab handle while floating: its 1.5px accent bar
      reads as a stray minimized-rail sliver against the editor, and "collapse"
      is the wrong verb for a floated panel (clicking the zone PINS). The 12px
      hit zone stays clickable — only the visual bar + hover tint are dropped. */
-  .rail-shell.floating .panel-edge-collapse::before,
-  .rail-shell.float-closing .panel-edge-collapse::before {
+  .rail-shell.rail-floating-chrome .panel-edge-collapse::before {
     display: none;
   }
-  .rail-shell.floating .panel-edge-collapse:hover,
-  .rail-shell.float-closing .panel-edge-collapse:hover {
+  .rail-shell.rail-floating-chrome .panel-edge-collapse:hover {
     background: transparent;
   }
   /* Slide the floating panel out from the window edge, as if the collapsed
@@ -2713,17 +2712,13 @@ const tutorial = createTutorial(
      the in-app reduceMotion setting (it never enters `float-closing`); these
      cover the OS-level query independently as defense in depth. */
   @media (prefers-reduced-motion: reduce) {
-    .rail-shell.floating .rail-full,
-    .rail-shell.floating .rail-float-shadow,
-    .rail-shell.float-closing .rail-full,
-    .rail-shell.float-closing .rail-float-shadow {
+    .rail-shell.rail-floating-chrome .rail-full,
+    .rail-shell.rail-floating-chrome .rail-float-shadow {
       animation: none;
     }
   }
-  :global(body.tandem-reduce-motion) .rail-shell.floating .rail-full,
-  :global(body.tandem-reduce-motion) .rail-shell.floating .rail-float-shadow,
-  :global(body.tandem-reduce-motion) .rail-shell.float-closing .rail-full,
-  :global(body.tandem-reduce-motion) .rail-shell.float-closing .rail-float-shadow {
+  :global(body.tandem-reduce-motion) .rail-shell.rail-floating-chrome .rail-full,
+  :global(body.tandem-reduce-motion) .rail-shell.rail-floating-chrome .rail-float-shadow {
     animation: none;
   }
   .rail-tabs-row {
