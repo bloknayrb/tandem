@@ -18,6 +18,7 @@ import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
 import { readExistingTandemEntries } from "../integrations/existing-config.js";
 import { createKeychain, KEYCHAIN_SERVICE_MODELS } from "../integrations/keychain.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
+import { handleLicenseWebhook } from "../license/webhook.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { registerAnnotationTools } from "./annotations.js";
@@ -324,6 +325,9 @@ export async function startMcpServerHttp(
     await currentTransport.handleRequest(req, res, req.body);
     currentTransport = null;
   });
+
+  // Public webhook endpoint for Polar/Paddle license generation (auth-exempt)
+  app.post("/webhooks/license", express.json(), handleLicenseWebhook);
 
   // Auth middleware for /mcp and /api/* — AFTER apiMiddleware (DNS-rebinding)
   // but BEFORE route handlers. Loopback is always exempt (Claude Code zero-config).

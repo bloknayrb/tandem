@@ -521,7 +521,7 @@ Full per-row table is in `docs/v10-triage.md`. Highlights:
 [ADR-040](decisions.md#adr-040-audience-and-monetization-individuals-same-canvas-moat-free-beta-to-one-time-license) §3/§4/§6 (Accepted) commit v1.0 to license-to-run: the public build self-trials, requires a valid offline Ed25519-signed license past the trial, and auto-updates from a license-checked endpoint. Previously this work was decided but untracked (the #394 row sat in the Deferred table while declaring itself v1.0 work). Now tracked:
 
 - **#1116** — engineering tracker (PR sequence L1 license format/verify → L2 trial gate + activation UX, dark behind a build flag → L3 license-checked update endpoint → L4 grandfathering + docs). Ships as **v0.16.0**, parallel to Wave 5 hardware work; with v0.17.0 (local models) now between v0.16.0 and v1.0.0, the updater's license-checked endpoint transition gets exercised **twice** before launch (v0.16.0→v0.17.0, then v0.17.0→v1.0.0).
-- **#1117** — commercial infra, Bryan-led calendar gate (MoR checkout, issuance webhook, LLC + accountant, **ADR-040 §5 BUSL re-scope by counsel — still Proposed; prerequisite for charging**). Mirrors the Wave-0 Apple-cert pattern: external parties own the timeline, so it starts now.
+- **#1117** — commercial infra, Bryan-led calendar gate (MoR checkout, issuance webhook, LLC + accountant, **ADR-040 §5 BUSL re-scope by counsel — Accepted (2026-06-12)**). Mirrors the Wave-0 Apple-cert pattern: external parties own the timeline, so it starts now.
 - The flip rule is owned by the **Commercial-readiness exit criterion** (below) — see it for the conditions and the not-ready fallback. Landing the gate code dark in v0.16.0 needs nothing from §5 counsel.
 
 ### Release Cadence
