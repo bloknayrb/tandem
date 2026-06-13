@@ -3,9 +3,8 @@
 import { request as httpRequest } from "node:http";
 import crypto from "crypto";
 import type { Request, Response } from "express";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isGrandfathered } from "../../src/server/license/grandfather-list.js";
-import { verifyLicense } from "../../src/server/license/verifier.js";
 import {
   handleLicenseWebhook,
   verifyPaddleSignature,
@@ -62,6 +61,24 @@ describe("Webhook Licensing", () => {
   });
 
   describe("handleLicenseWebhook", () => {
+    let testPrivateKey: string;
+
+    beforeAll(() => {
+      const { privateKey } = crypto.generateKeyPairSync("ed25519", {
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      });
+      testPrivateKey = privateKey;
+    });
+
+    beforeEach(() => {
+      process.env.TANDEM_PRIVATE_KEY = testPrivateKey;
+    });
+
+    afterEach(() => {
+      delete process.env.TANDEM_PRIVATE_KEY;
+    });
+
     const mockResponse = () => {
       const res: Partial<Response> = {};
       res.status = vi.fn().mockReturnValue(res);
@@ -85,7 +102,6 @@ describe("Webhook Licensing", () => {
 
       const res = mockResponse();
 
-      // Force development mode in environment
       const oldEnv = process.env.NODE_ENV;
       process.env.NODE_ENV = "development";
 
@@ -98,12 +114,11 @@ describe("Webhook Licensing", () => {
       // metadata is not returned in the response (PII reduction)
       expect(jsonResponse.metadata).toBeUndefined();
 
-      // Verify the generated license string itself
-      const verified = verifyLicense(jsonResponse.license);
-      expect(verified.email).toBe("john@example.com");
-      expect(verified.type).toBe("personal");
+      // Decode the license blob directly — full crypto chain is tested in license.test.ts
+      const decoded = JSON.parse(Buffer.from(jsonResponse.license, "base64").toString("utf-8"));
+      expect(decoded.metadata.email).toBe("john@example.com");
+      expect(decoded.metadata.type).toBe("personal");
 
-      // Restore environment variables
       process.env.NODE_ENV = oldEnv;
     });
 
@@ -130,9 +145,9 @@ describe("Webhook Licensing", () => {
       expect(res.status).toHaveBeenCalledWith(200);
       const jsonResponse = (res.json as any).mock.calls[0][0];
       // Decode the license blob to check type and expiry — metadata not in response body
-      const decodedGf = verifyLicense(jsonResponse.license);
-      expect(decodedGf.type).toBe("grandfathered");
-      expect(decodedGf.expiresAt).toBeNull(); // Grandfathered never expires
+      const decoded = JSON.parse(Buffer.from(jsonResponse.license, "base64").toString("utf-8"));
+      expect(decoded.metadata.type).toBe("grandfathered");
+      expect(decoded.metadata.expiresAt).toBeNull(); // Grandfathered never expires
 
       process.env.NODE_ENV = oldEnv;
     });
@@ -150,6 +165,15 @@ describe("Webhook Licensing", () => {
   describe("Webhook Route Integration (HTTP Server)", () => {
     let serverInstance: any;
     let serverPort: number;
+    let testPrivateKey: string;
+
+    beforeAll(() => {
+      const { privateKey } = crypto.generateKeyPairSync("ed25519", {
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      });
+      testPrivateKey = privateKey;
+    });
 
     const rawPost = (
       p: number,
@@ -190,12 +214,14 @@ describe("Webhook Licensing", () => {
     };
 
     beforeEach(async () => {
+      process.env.TANDEM_PRIVATE_KEY = testPrivateKey;
       serverPort = await allocPort();
       // startMcpServerHttp(port, bindHost, authToken)
       serverInstance = await startMcpServerHttp(serverPort, "127.0.0.1", "test-token");
     });
 
     afterEach(async () => {
+      delete process.env.TANDEM_PRIVATE_KEY;
       await new Promise<void>((resolve) => {
         serverInstance.close(() => resolve());
       });
