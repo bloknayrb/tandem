@@ -6,10 +6,13 @@ Parameters
 Licensor:             Bryan Kolb
 Licensed Work:        Tandem (tandem-editor npm package).
                       The Licensed Work is (c) 2026 Bryan Kolb.
-Additional Use Grant: Personal use and individual self-hosting are permitted;
-                      commercial hosting or resale of the Licensed Work is not.
+Additional Use Grant: Personal use and individual self-hosting are permitted
+                      solely for evaluation purposes for up to 30 days; continued
+                      or production use requires a paid license from the Licensor.
+                      Commercial hosting or resale of the Licensed Work is not permitted.
 Change Date:          The earlier of 2029-06-10 or two years after the public
-                      general availability release of Tandem v1.0.
+                      general availability release of this specific version of the
+                      Licensed Work.
 Change License:       MIT License
 
 Notice
