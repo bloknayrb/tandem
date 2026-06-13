@@ -3,6 +3,7 @@ dist/
 .tandem/
 .worktrees/
 private/
+keys/
 scripts/design-baselines/.parts/
 *.log
 

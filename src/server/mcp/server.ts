@@ -18,6 +18,7 @@ import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
 import { readExistingTandemEntries } from "../integrations/existing-config.js";
 import { createKeychain, KEYCHAIN_SERVICE_MODELS } from "../integrations/keychain.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
+import { handleLicenseWebhook } from "../license/webhook.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { registerAnnotationTools } from "./annotations.js";
@@ -324,6 +325,24 @@ export async function startMcpServerHttp(
     await currentTransport.handleRequest(req, res, req.body);
     currentTransport = null;
   });
+
+  // Public webhook endpoint for Polar/Paddle license generation (auth-exempt).
+  // Intentionally placed before authMiddleware — this endpoint is called by external
+  // payment processors, not by local clients, so Bearer auth would block it.
+  // Security is provided by HMAC signature verification inside handleLicenseWebhook.
+  // The lanAwareApiMiddleware Host-header check is also intentionally omitted here:
+  // external webhook callers send their own Host headers, not localhost/tauri.localhost.
+  // The verify callback stashes the raw request bytes as req.rawBody so the handler
+  // can compute HMAC over the original wire bytes rather than re-serialized JSON.
+  app.post(
+    "/webhooks/license",
+    express.json({
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf.toString("utf8");
+      },
+    }),
+    handleLicenseWebhook,
+  );
 
   // Auth middleware for /mcp and /api/* — AFTER apiMiddleware (DNS-rebinding)
   // but BEFORE route handlers. Loopback is always exempt (Claude Code zero-config).
