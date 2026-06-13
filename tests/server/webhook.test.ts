@@ -70,14 +70,16 @@ describe("Webhook Licensing", () => {
     };
 
     it("should generate a valid personal license on Polar order.created in dev mode", async () => {
-      const req: Partial<Request> = {
-        body: {
-          event: "order.created",
-          data: {
-            customer: { name: "John Doe", email: "john@example.com" },
-            is_test: true,
-          },
+      const bodyPayload = {
+        event: "order.created",
+        data: {
+          customer: { name: "John Doe", email: "john@example.com" },
+          is_test: true,
         },
+      };
+      const req: Partial<Request> = {
+        // express.raw() passes req.body as a Buffer; mirror that in unit tests
+        body: Buffer.from(JSON.stringify(bodyPayload)),
         headers: {},
       };
 
@@ -106,14 +108,15 @@ describe("Webhook Licensing", () => {
     });
 
     it("should assign grandfathered type if email is in grandfather list", async () => {
-      const req: Partial<Request> = {
-        body: {
-          event: "order.created",
-          data: {
-            customer: { name: "Bryan Kolb", email: "bryan@tandem.chat" },
-            is_test: true,
-          },
+      const bodyPayload = {
+        event: "order.created",
+        data: {
+          customer: { name: "Bryan Kolb", email: "bryan@tandem.chat" },
+          is_test: true,
         },
+      };
+      const req: Partial<Request> = {
+        body: Buffer.from(JSON.stringify(bodyPayload)),
         headers: {},
       };
 

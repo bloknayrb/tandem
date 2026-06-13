@@ -100,10 +100,9 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
   const isDev = process.env.NODE_ENV === "development";
 
   try {
-    // Use the raw bytes captured by the express.json({ verify }) callback in server.ts.
-    // JSON.stringify(req.body) would re-serialize the parsed object and produce different
-    // bytes than the original request body that Polar/Paddle signed.
-    const rawBody = (req as any).rawBody ?? "";
+    // express.raw({ type: 'application/json' }) passes the original request bytes as a Buffer.
+    // This preserves the exact bytes that Polar/Paddle signed for HMAC verification.
+    const rawBody = Buffer.isBuffer(req.body) ? (req.body as Buffer).toString("utf8") : "";
     const polarSecret = process.env.POLAR_WEBHOOK_SECRET;
     const paddleSecret = process.env.PADDLE_WEBHOOK_SECRET;
 
@@ -130,7 +129,13 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
       return;
     }
 
-    const payload = req.body as any;
+    let payload: any;
+    try {
+      payload = rawBody ? JSON.parse(rawBody) : null;
+    } catch {
+      res.status(400).json({ error: "Invalid JSON body" });
+      return;
+    }
     if (!payload || !payload.event) {
       res.status(400).json({ error: "Invalid payload: missing event type" });
       return;

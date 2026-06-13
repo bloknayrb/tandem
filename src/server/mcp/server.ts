@@ -332,15 +332,12 @@ export async function startMcpServerHttp(
   // Security is provided by HMAC signature verification inside handleLicenseWebhook.
   // The lanAwareApiMiddleware Host-header check is also intentionally omitted here:
   // external webhook callers send their own Host headers, not localhost/tauri.localhost.
-  // The verify callback stashes the raw request bytes as req.rawBody so the handler
-  // can compute HMAC over the original wire bytes rather than re-serialized JSON.
+  // express.raw() passes the raw Buffer as req.body, preserving the exact bytes that
+  // Polar/Paddle signed for HMAC verification. The handler parses JSON from the Buffer.
+
   app.post(
     "/webhooks/license",
-    express.json({
-      verify: (req: any, _res, buf) => {
-        req.rawBody = buf.toString("utf8");
-      },
-    }),
+    (express as any).raw({ type: "application/json" }),
     handleLicenseWebhook,
   );
 
