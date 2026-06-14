@@ -1,6 +1,6 @@
 {
   "name": "tandem-editor",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "description": "Edit and iterate on documents with any MCP-capable AI (Claude by default). Real-time push via the channel shim.",
   "repository": {
     "type": "git",
