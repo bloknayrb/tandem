@@ -2105,9 +2105,9 @@ fn cowork_scan_workspaces() -> Result<Vec<String>, String> {
 /// Enable or disable the Cowork integration.
 ///
 /// On enable: fetches auth token, detects vEthernet subnet, adds allow firewall
-/// rule, walks workspaces, installs plugin entries. On UAC decline: fail-closed —
-/// writes a deny rule and does NOT write plugin entries (invariant §4).
-/// On disable: uninstalls plugin entries, removes firewall rules.
+/// rule, walks workspaces, installs plugin entries. When the firewall rule needs
+/// elevation Tandem doesn't have: fail-closed — does NOT write plugin entries
+/// (invariant §4). On disable: uninstalls plugin entries, removes firewall rules.
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
@@ -2125,7 +2125,7 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // Add allow firewall rule.
         let firewall_result = firewall::add_cowork_allow_rule(&cidr);
         if let Err(ref e) = firewall_result {
-            // Fail-closed: on UAC decline, write a deny rule and bail — do NOT
+            // Fail-closed: if the firewall rule can't be written, bail — do NOT
             // walk workspaces (invariant §4).
             if let firewall::FirewallError::AdminDeclined = e {
                 // The firewall rule needs elevation Tandem does not have (it never

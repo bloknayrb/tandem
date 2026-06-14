@@ -154,7 +154,7 @@ const coworkRowDetail = $derived.by(() => {
   }
   const s = coworkStatus.status;
   if (s?.enabled) return "Connected — token provisioned";
-  if (s?.uacDeclined) return "Admin permission declined — set up to retry";
+  if (s?.uacDeclined) return "Setup didn't complete last time — try again from here";
   return "Let a teammate's Claude join from the Cowork VM";
 });
 
