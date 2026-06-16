@@ -278,6 +278,10 @@ test("PR6: Network Advanced section ships collapsed and toggles open", async ({ 
   // the `value={settings.sidecarRetryStrategy}` binding after the onUpdate
   // round-trip.
   const retrySelect = page.locator("[data-testid='network-retry-strategy']");
+  // Exactly two strategies survive: the dead "Manual only" option was removed
+  // (#1135). selectOption would still pass with stray options, so assert the
+  // count to catch an accidental re-add of "manual" or any third option.
+  await expect(retrySelect.locator("option")).toHaveCount(2);
   await retrySelect.selectOption("constant-2s");
   await expect(retrySelect).toHaveValue("constant-2s");
 

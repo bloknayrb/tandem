@@ -378,6 +378,19 @@ describe("loadSettings — migration chain", () => {
     expect(s.theme).toBe("dark");
   });
 
+  // Co-located with the coercion case: the v15→v16 step only rewrites
+  // `sidecarRetryStrategy` when it is `"manual"`. A valid non-default value
+  // (`"constant-2s"`) must pass through untouched, not be reset to the default.
+  it("v15→v16: preserves a valid non-default sidecarRetryStrategy (constant-2s)", () => {
+    writeRaw({
+      schemaVersion: 15,
+      sidecarRetryStrategy: "constant-2s",
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.sidecarRetryStrategy).toBe("constant-2s");
+  });
+
   it("a full v2→current migration also strips holdAnnotationsWhileOffline + coerces manual", () => {
     writeRaw({
       schemaVersion: 2,
