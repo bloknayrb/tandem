@@ -44,7 +44,6 @@ function makeStubState(initialModels: ModelRegistryEntry[] = []): TandemSettings
     soloRailHidden: true,
     degradedBannerDelayMs: 30000,
     sidecarRetryStrategy: "exponential",
-    holdAnnotationsWhileOffline: true,
     marginView: false,
     models: initialModels,
     defaultModelId: null,

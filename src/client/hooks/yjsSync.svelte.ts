@@ -1,4 +1,8 @@
-import { HocuspocusProvider } from "@hocuspocus/provider";
+import {
+  type CompleteHocuspocusProviderWebsocketConfiguration,
+  HocuspocusProvider,
+  type HocuspocusProviderConfiguration,
+} from "@hocuspocus/provider";
 import * as Y from "yjs";
 import { API_CLOSE, API_INFO, API_RENAME } from "../../shared/api-paths.js";
 import {
@@ -19,9 +23,46 @@ import type { Annotation, ClaudeAwareness } from "../../shared/types";
 import type { DocListEntry, OpenTab } from "../types";
 import { createRebuildScheduler } from "./rebuild-scheduler.js";
 import { resolveActiveTabId } from "./tab-reconcile.js";
+import type { SidecarRetryStrategy } from "./useTandemSettings";
 import { deduplicateDocList } from "./useYjsSync";
 
 export type ConnectionStatus = "connected" | "connecting" | "disconnected";
+
+/**
+ * Map a user-chosen reconnect strategy onto @hocuspocus/provider's
+ * websocket backoff knobs. Both strategies keep `maxAttempts: 0` (unlimited) —
+ * auto-reconnect must NEVER be disabled, because the stale-tab generation-gate
+ * recovery depends on a rejected provider eventually reconnecting and re-sending
+ * Auth to trigger `authenticationFailed → scheduleRebuild`. The strategy only
+ * changes the backoff *timing*:
+ *   - "exponential": mirrors the provider defaults (1s → 30s, factor 2, jitter).
+ *   - "constant-2s": a flat 2s retry (factor 1, no jitter).
+ * These are forwarded via the provider's `url` branch — at runtime the provider
+ * passes its whole config to `new HocuspocusProviderWebsocket(configuration)`,
+ * so these keys take effect even though the provider's `url`-branch *type* only
+ * advertises `url`/`preserveTrailingSlash` (hence the cast at the call sites).
+ * NOTE: this assumes each provider owns its own socket (current design — a bare
+ * `url` per provider). If a shared `websocketProvider` is ever introduced, this
+ * per-construction config would be silently ignored.
+ */
+type ReconnectBackoff = Pick<
+  CompleteHocuspocusProviderWebsocketConfiguration,
+  "delay" | "factor" | "maxAttempts" | "minDelay" | "maxDelay" | "jitter"
+>;
+export function backoffOptionsFor(strategy: SidecarRetryStrategy): ReconnectBackoff {
+  if (strategy === "constant-2s") {
+    return {
+      delay: 2000,
+      factor: 1,
+      maxAttempts: 0,
+      minDelay: 2000,
+      maxDelay: 2000,
+      jitter: false,
+    };
+  }
+  // "exponential" (default): provider defaults — 1s base, ×2, capped at 30s.
+  return { delay: 1000, factor: 2, maxAttempts: 0, minDelay: 1000, maxDelay: 30000, jitter: true };
+}
 
 /**
  * Typing-presence snapshot derived from `ClaudeAwareness.working` (#651).
@@ -76,7 +117,27 @@ export interface YjsSyncState {
  *  - Every `ymap.observe(fn)` has a matching `ymap.unobserve(fn)` with named
  *    function references stored in cleanups.
  */
-export function createYjsSync(): YjsSyncState {
+export function createYjsSync(opts?: {
+  /**
+   * Live getter for the reconnect backoff strategy. Read lazily at each provider
+   * construction (post-bootstrap), so a setting change applies to subsequently
+   * built providers / the next rebuild — in-flight sockets are not re-wired.
+   * Lazy by design: the getter may close over state initialized AFTER this
+   * factory is called (e.g. App.svelte builds settings below createYjsSync), and
+   * it is only ever invoked after `await fetchGenerationId()`, so the closed-over
+   * binding is live by call time.
+   */
+  getRetryStrategy?: () => SidecarRetryStrategy;
+}): YjsSyncState {
+  // Merge the current reconnect-strategy backoff into a provider config. The cast
+  // is centralized here: the backoff keys forward to the internal websocket at
+  // runtime (the provider does `new HocuspocusProviderWebsocket(configuration)`),
+  // but the provider's `url`-branch type doesn't advertise them. See backoffOptionsFor.
+  const withBackoff = (base: HocuspocusProviderConfiguration): HocuspocusProviderConfiguration =>
+    ({
+      ...base,
+      ...backoffOptionsFor(opts?.getRetryStrategy?.() ?? "exponential"),
+    }) as HocuspocusProviderConfiguration;
   // ---------- Reactive UI state (mirrors React useState) ----------
   let tabsState = $state<OpenTab[]>([]);
   let activeTabIdState = $state<string | null>(null);
@@ -302,14 +363,16 @@ export function createYjsSync(): YjsSyncState {
       pendingIds.add(doc.id);
 
       const ydoc = new Y.Doc();
-      const provider = new HocuspocusProvider({
-        url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
-        name: doc.id,
-        document: ydoc,
-        // Pinned string, not a closure: if the generation changes after this
-        // provider is built, its ydoc is stale and must NOT re-authenticate.
-        token: generationId,
-      });
+      const provider = new HocuspocusProvider(
+        withBackoff({
+          url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
+          name: doc.id,
+          document: ydoc,
+          // Pinned string, not a closure: if the generation changes after this
+          // provider is built, its ydoc is stale and must NOT re-authenticate.
+          token: generationId,
+        }),
+      );
       provider.on("authenticationFailed", scheduleRebuild);
       pendingProviders.set(doc.id, { ydoc, provider });
 
@@ -418,13 +481,15 @@ export function createYjsSync(): YjsSyncState {
   function startBootstrap(gen: string) {
     generationId = gen;
     const ydoc = new Y.Doc();
-    const provider = new HocuspocusProvider({
-      url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
-      name: CTRL_ROOM,
-      document: ydoc,
-      // Pinned string — same provenance rule as tab providers.
-      token: gen,
-    });
+    const provider = new HocuspocusProvider(
+      withBackoff({
+        url: `ws://127.0.0.1:${DEFAULT_WS_PORT}`,
+        name: CTRL_ROOM,
+        document: ydoc,
+        // Pinned string — same provenance rule as tab providers.
+        token: gen,
+      }),
+    );
     bootstrapYdocState = ydoc;
     bootstrapProviderRef = provider;
 
