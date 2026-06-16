@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - License webhook (`/webhooks/license`) now requires a configured webhook secret in every environment. Removed the `NODE_ENV=development` signature-verification bypass — an auth-exempt, publicly reachable license-signing endpoint must never accept unsigned payloads, and a NODE_ENV-gated bypass is a production backdoor waiting for a misconfigured deploy. Missing secret now returns `503`; unsigned/forged requests return `401`. To test locally, configure `POLAR_WEBHOOK_SECRET`/`PADDLE_WEBHOOK_SECRET` and sign the payload.
 - Bumped `tsx` → `^4.22.4` and pinned `tsup`'s transitive `esbuild` to `^0.28.1` (npm `overrides`), clearing Dependabot GHSA-g7r4-m6w7-qqqr (esbuild dev-server arbitrary file read on Windows). esbuild is a build-time dependency only — it is never shipped in `dist/`. The remaining vite-transitive esbuild stays at `0.25.x` because no vite release (incl. 8.x) yet supports esbuild 0.28; GHSA-gv7w-rqvm-qjhr targets esbuild's Deno binary-download path, which Tandem's lockfile-pinned npm install never exercises.
+- Pinned `ws` to `^8.21.0` (npm `overrides`, forcing Hocuspocus's transitive copy), clearing GHSA-96hv-2xvq-fx4p (memory-exhaustion DoS from tiny WebSocket fragments) on the `:3478` collaboration transport.
+- Bumped `markdown-it` → `^14.2.0`, clearing GHSA-6v5v-wf23-fmfq (quadratic-complexity DoS in the smartquotes rule) on the runtime document parser.
 
 ## [0.14.2] - 2026-06-14
 
