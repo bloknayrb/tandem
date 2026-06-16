@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Settings → Network: the **Reconnect Strategy** control is now functional — "Exponential backoff" (1s→30s) and "Constant (2s)" thread through to the Hocuspocus provider backoff. Both keep auto-reconnect always on (the stale-tab restart recovery depends on it). Dropped the non-functional "Manual only" option (a saved `"manual"` migrates to "Exponential").
+
+### Removed
+
+- Settings → Network: removed the inert "Hold annotations while offline" toggle (offline annotation queuing was never built). Tracked for proper design in #1134.
+
 ## [0.14.2] - 2026-06-14
 
 ### Changed

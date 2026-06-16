@@ -755,9 +755,11 @@ export function loadSettings(): TandemSettings {
       if (parsed.schemaVersion === 15) {
         // v15→v16: remove `holdAnnotationsWhileOffline` (offline annotation
         // queuing was never built — the toggle was inert UI) and drop the
-        // `"manual"` reconnect strategy (it would have set maxAttempts:0 and
-        // disabled auto-reconnect, which the stale-tab generation-gate recovery
-        // relies on — see yjsSync `authenticationFailed → scheduleRebuild`).
+        // `"manual"` reconnect strategy (it would have had to disable
+        // auto-reconnect — a finite maxAttempts — which the stale-tab
+        // generation-gate recovery relies on staying ON; the wired strategies
+        // keep maxAttempts:0 = retry forever. See yjsSync
+        // `authenticationFailed → scheduleRebuild`).
         // The field strip + coercion are belt-and-suspenders: normalizeKnownFields
         // already drops the unknown key and no longer accepts `"manual"`, and
         // REMOVED_FIELDS blocks the forward-compat passthrough.
