@@ -361,6 +361,58 @@ describe("loadSettings — migration chain", () => {
     expect(s.showIntegrationWizard).toBeUndefined();
   });
 
+  // v15→v16: drop the inert `holdAnnotationsWhileOffline` toggle (offline
+  // queuing was never built) and the `"manual"` reconnect strategy (it would
+  // have disabled auto-reconnect, breaking the stale-tab restart recovery).
+  it("v15→v16: strips holdAnnotationsWhileOffline and coerces manual→exponential", () => {
+    writeRaw({
+      schemaVersion: 15,
+      holdAnnotationsWhileOffline: false,
+      sidecarRetryStrategy: "manual",
+      theme: "dark",
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.holdAnnotationsWhileOffline).toBeUndefined();
+    expect(s.sidecarRetryStrategy).toBe("exponential");
+    expect(s.theme).toBe("dark");
+  });
+
+  // Co-located with the coercion case: the v15→v16 step only rewrites
+  // `sidecarRetryStrategy` when it is `"manual"`. A valid non-default value
+  // (`"constant-2s"`) must pass through untouched, not be reset to the default.
+  it("v15→v16: preserves a valid non-default sidecarRetryStrategy (constant-2s)", () => {
+    writeRaw({
+      schemaVersion: 15,
+      sidecarRetryStrategy: "constant-2s",
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.sidecarRetryStrategy).toBe("constant-2s");
+  });
+
+  it("a full v2→current migration also strips holdAnnotationsWhileOffline + coerces manual", () => {
+    writeRaw({
+      schemaVersion: 2,
+      holdAnnotationsWhileOffline: true,
+      sidecarRetryStrategy: "manual",
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.holdAnnotationsWhileOffline).toBeUndefined();
+    expect(s.sidecarRetryStrategy).toBe("exponential");
+  });
+
+  it("forward-compat strips holdAnnotationsWhileOffline via REMOVED_FIELDS", () => {
+    writeRaw({
+      schemaVersion: 99,
+      holdAnnotationsWhileOffline: true,
+    });
+    const s = loadSettings() as Record<string, unknown>;
+    expect(s._readOnly).toBe(true);
+    expect(s.holdAnnotationsWhileOffline).toBeUndefined();
+  });
+
   it("v1 blob with showIntegrationWizard migrates fully stripping it", () => {
     writeRaw({
       schemaVersion: 1,
@@ -706,8 +758,7 @@ describe("loadSettings — migration chain", () => {
       formattingBarVisible: false,
       soloRailHidden: false,
       degradedBannerDelayMs: 60000,
-      sidecarRetryStrategy: "manual" as const,
-      holdAnnotationsWhileOffline: false,
+      sidecarRetryStrategy: "constant-2s" as const, // non-default (default exponential)
       marginView: true, // #649 — the canonical "resets on update" field
     };
     writeRaw(userBlob);
@@ -736,8 +787,7 @@ describe("loadSettings — migration chain", () => {
     expect(s.formattingBarVisible).toBe(false);
     expect(s.soloRailHidden).toBe(false);
     expect(s.degradedBannerDelayMs).toBe(60000);
-    expect(s.sidecarRetryStrategy).toBe("manual");
-    expect(s.holdAnnotationsWhileOffline).toBe(false);
+    expect(s.sidecarRetryStrategy).toBe("constant-2s");
     expect(s.marginView).toBe(true);
   });
 

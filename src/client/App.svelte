@@ -105,7 +105,11 @@ import { openFileForRuntime } from "./utils/browse-file";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
 
-const yjsSync = createYjsSync();
+// `getRetryStrategy` is read lazily inside yjsSync (only after bootstrap), so it
+// safely closes over `settingsState`, which is initialized further down.
+const yjsSync = createYjsSync({
+  getRetryStrategy: () => settingsState.settings.sidecarRetryStrategy,
+});
 onDestroy(() => yjsSync.destroy());
 
 // #864: persist unsaved scratchpad content for recovery + warn before losing

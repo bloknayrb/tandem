@@ -185,7 +185,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `narrow|comfortable|wide|full`, interpolated, so it lands as `editor-measure-{*}`
   in the snapshot. Replaced `editor-width-slider` when `editorWidthPercent` → `editorMeasure`.)
 - `high-contrast-toggle`, `annotation-patterns-toggle`
-- `network-{restart-sidecar,degraded-delay-slider,retry-strategy,hold-annotations-toggle}`
+- `network-{restart-sidecar,degraded-delay-slider,retry-strategy}`
 
 ### Settings — Models tab
 - `models-{empty-state,save-error,legacy-migration-banner,legacy-migrate-btn,legacy-migration-status}`

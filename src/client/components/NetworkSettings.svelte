@@ -32,13 +32,10 @@ async function handleRestartSidecar(): Promise<void> {
 const RETRY_OPTIONS: Array<{ value: SidecarRetryStrategy; label: string }> = [
   { value: "exponential", label: "Exponential backoff" },
   { value: "constant-2s", label: "Constant (2s)" },
-  { value: "manual", label: "Manual only" },
 ];
 
 const labelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
-const rowStyle =
-  "display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: 12px; color: var(--tandem-fg); min-height: 24px;";
 const subtextStyle =
   "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);";
 
@@ -104,7 +101,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
 </div>
 
 <!-- Advanced — collapsed by default. Holds the rarely-touched knobs: loopback
-     port, banner delay, retry strategy, hold-while-offline, token rotation.
+     port, banner delay, retry strategy, token rotation.
      Disclosure state is ephemeral by design (resets on each settings open).
      See PR 6 description for rationale. -->
 <CollapsibleSection label="Advanced" testid="network-advanced">
@@ -149,9 +146,9 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
     </div>
   </div>
 
-  <!-- Retry Strategy — TODO(v0.11.0): wire to yjsSync reconnect strategy -->
+  <!-- Reconnect Strategy — controls the provider backoff curve (wired via yjsSync). -->
   <div>
-    <div style={labelStyle}>Reconnect Strategy <span style="font-size: 10px; color: var(--tandem-fg-subtle);">(not yet active)</span></div>
+    <div style={labelStyle}>Reconnect Strategy</div>
     <select
       data-testid="network-retry-strategy"
       value={settings.sidecarRetryStrategy}
@@ -164,22 +161,6 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
         <option value={opt.value}>{opt.label}</option>
       {/each}
     </select>
-  </div>
-
-  <!-- Hold Annotations While Offline — TODO(v0.11.0): wire to offline annotation queuing -->
-  <label style={rowStyle}>
-    <input
-      type="checkbox"
-      data-testid="network-hold-annotations-toggle"
-      checked={settings.holdAnnotationsWhileOffline}
-      onchange={(e) =>
-        onUpdate({ holdAnnotationsWhileOffline: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent);"
-    />
-    <span>Hold annotations while offline <span style="font-size: 10px; color: var(--tandem-fg-subtle);">(not yet active)</span></span>
-  </label>
-  <div style={subtextStyle}>
-    When enabled, annotation events will queue locally and sync when the connection is restored.
   </div>
 
   <!-- Token Rotation -->

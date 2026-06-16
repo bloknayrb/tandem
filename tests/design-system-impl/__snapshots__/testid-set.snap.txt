@@ -221,7 +221,6 @@ models-legacy-migration-banner
 models-legacy-migration-status
 models-save-error
 network-degraded-delay-slider
-network-hold-annotations-toggle
 network-restart-sidecar
 network-retry-strategy
 new-tab-browse
