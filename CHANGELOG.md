@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- License webhook (`/webhooks/license`) now requires a configured webhook secret in every environment. Removed the `NODE_ENV=development` signature-verification bypass — an auth-exempt, publicly reachable license-signing endpoint must never accept unsigned payloads, and a NODE_ENV-gated bypass is a production backdoor waiting for a misconfigured deploy. Missing secret now returns `503`; unsigned/forged requests return `401`. To test locally, configure `POLAR_WEBHOOK_SECRET`/`PADDLE_WEBHOOK_SECRET` and sign the payload.
+
 ## [0.14.2] - 2026-06-14
 
 ### Changed

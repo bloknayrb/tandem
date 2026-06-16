@@ -97,8 +97,6 @@ export function verifyPaddleSignature(
  * Generates and delivers Ed25519-signed licenses upon successful checkout.
  */
 export async function handleLicenseWebhook(req: Request, res: Response): Promise<void> {
-  const isDev = process.env.NODE_ENV === "development";
-
   try {
     // express.raw({ type: 'application/json' }) passes the original request bytes as a Buffer.
     // This preserves the exact bytes that Polar/Paddle signed for HMAC verification.
@@ -111,6 +109,20 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
     let customerEmail = "";
     let isTestPurchase = false;
 
+    // A webhook secret is mandatory in every environment. There is deliberately
+    // no dev-mode bypass: this endpoint is auth-exempt and publicly reachable (it
+    // serves external payment processors), and signing licenses is the most
+    // sensitive operation the server performs. A NODE_ENV-gated bypass is a
+    // production backdoor waiting for a misconfigured deploy — to test locally,
+    // configure POLAR_WEBHOOK_SECRET/PADDLE_WEBHOOK_SECRET and sign the payload.
+    if (!polarSecret && !paddleSecret) {
+      console.error("Webhook Error: no webhook secret configured; cannot verify signatures.");
+      res
+        .status(503)
+        .json({ error: "Licensing server configuration error: webhook secret not configured" });
+      return;
+    }
+
     // 1. Signature Verification & Event Parsing
     const polarSig = req.headers["webhook-signature"] || req.headers["stripe-signature"];
     const paddleSig = req.headers["paddle-signature"];
@@ -119,9 +131,6 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
       isVerified = verifyPolarSignature(rawBody, polarSig as string, polarSecret);
     } else if (paddleSig && paddleSecret) {
       isVerified = verifyPaddleSignature(rawBody, paddleSig as string, paddleSecret);
-    } else if (isDev) {
-      // In development, signature checks are bypassed if webhook secrets are missing
-      isVerified = true;
     }
 
     if (!isVerified) {
@@ -154,13 +163,10 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
       customerName = transaction?.customer?.name || "Valued Customer";
       customerEmail = transaction?.customer?.email;
       isTestPurchase = transaction?.billing_details?.is_test || false;
-    } else if (isDev) {
-      // Allow custom test payload in development
-      customerName = payload.name || "Test User";
-      customerEmail = payload.email;
-      isTestPurchase = true;
     } else {
-      // Unhandled/ignored event types
+      // Unhandled/ignored event types. (Note: a signed payload reached this point,
+      // so a local dev test must send a real order.created/transaction.completed
+      // shape — there is no longer a dev-only custom-payload branch.)
       res.status(200).json({ status: "ignored", event: payload.event });
       return;
     }
