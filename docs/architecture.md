@@ -462,6 +462,7 @@ Each Y.Map has observers attached by different subsystems. Understanding who own
 | `userAwareness` | Server event queue | `queue.ts` → `attachObservers()` | Buffer selection for chat messages |
 | `documentMeta` | Client Svelte hook | `yjsSync.svelte.ts` → `handleDocumentListRef` | Sync tab list from server broadcasts (CTRL_ROOM) |
 | `documentMeta` (per-doc) | Client Svelte hook | `yjsSync.svelte.ts` → `setupTabObservers()` | Sync readOnly flag per tab |
+| `documentMeta` → `fidelityReport` (per-doc) | Client Svelte component | `src/client/components/FidelityReportBanner.svelte` | Render the `.docx` fidelity notice (#1145). **No server-side observer** — server write-only (open/reload/save), client read-only. |
 
 **Force-reload (`force: true`)** clears all Y.Maps and repopulates content in a single `doc.transact()` (see `clearAndReload` in `file-opener.ts`). The Y.Doc instance, Hocuspocus room, and client connections survive. Client-side observers survive because they reference the same Y.Doc/Y.Map instances. Server event queue observers are defensively re-attached via `attachObservers()` (idempotent -- detaches existing first).
 

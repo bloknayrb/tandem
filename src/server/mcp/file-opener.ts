@@ -14,13 +14,14 @@ import {
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
+  Y_MAP_FIDELITY_REPORT,
   Y_MAP_READ_ONLY,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
-import type { Annotation, ExternalConflictState } from "../../shared/types.js";
+import type { Annotation, ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
@@ -790,6 +791,31 @@ function applyPreparedContent(doc: Y.Doc, prepared: Prepared, ctx: PopulateConte
   const applyIssues = adapter.apply(doc, prepared, { fileName: ctx.displayName });
   for (const issue of prepared.issues) notifyIssue(issue, ctx);
   for (const issue of applyIssues) notifyIssue(issue, ctx);
+  writeImportLossReport(doc, prepared);
+}
+
+/**
+ * Write/refresh the docx fidelity report's import-loss half (#1145, the
+ * "honesty layer" / phase 0f). MUST run inside the caller's origin-tagged
+ * transaction — `applyPreparedContent` is always wrapped in `withInternal`
+ * (open + force-reload). docx-only; resets `exportDowngrades` because a
+ * re-import makes any prior save's downgrades stale. Always writes for docx so
+ * a re-import with no losses clears a prior report (the client hides the banner
+ * when both lists are empty). The write is inert for the channel + durable-sync
+ * subsystems regardless of origin (no observer on per-doc documentMeta).
+ */
+function writeImportLossReport(doc: Y.Doc, prepared: Prepared): void {
+  if (prepared.format !== "docx") return;
+  let importLosses: string[] = [];
+  for (const issue of prepared.issues) {
+    if (issue.kind === "other" && issue.importLosses) importLosses = issue.importLosses;
+  }
+  const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+  meta.set(Y_MAP_FIDELITY_REPORT, {
+    importLosses,
+    exportDowngrades: [],
+    updatedAt: Date.now(),
+  } satisfies FidelityReport);
 }
 
 /** Translate a single LoadIssue to a user-facing notification. */
@@ -1355,6 +1381,12 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       meta.set(Y_MAP_SAVED_AT_VERSION, diskStat?.mtimeMs ?? Date.now());
       meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      // Refresh the import-loss half of the fidelity report (#1145): this path
+      // re-imports the doc but deliberately drops `reloadPrepared.issues` for
+      // toast purposes (above), so without this the persistent banner would
+      // show the PRE-reload losses — a stale, lying notice. docx-only; resets
+      // exportDowngrades since the re-import invalidates a prior save's set.
+      writeImportLossReport(doc, reloadPrepared);
     });
 
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)

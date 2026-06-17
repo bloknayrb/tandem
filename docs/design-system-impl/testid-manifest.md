@@ -139,6 +139,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `updater-banner`, `updater-banner-{install,dismiss,visible}`
 - `review-only-banner`, `review-only-dismiss`,
   `convert-to-markdown-btn`
+- `fidelity-report-banner`, `fidelity-report-details-toggle`,
+  `fidelity-report-details`, `fidelity-report-import-losses`,
+  `fidelity-report-export-downgrades` (#1145 — `.docx` honesty notice)
 
 ### Modals & dialogs
 - `help-modal`, `help-modal-close`

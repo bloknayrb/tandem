@@ -95,6 +95,9 @@ const docxAdapter: FormatAdapter = {
         message:
           "Some Word formatting couldn't be imported and won't be preserved on save: " +
           `${loaded.warnings.join("; ")}.`,
+        // Granular list for the persistent fidelity report (#1145); the joined
+        // `message` above drives the transient open-time toast.
+        importLosses: loaded.warnings,
       });
     }
     return { format: "docx", html: loaded.html, comments, issues };

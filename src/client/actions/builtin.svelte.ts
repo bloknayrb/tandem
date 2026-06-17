@@ -391,6 +391,22 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
         "[Tandem] Save failed:",
         (body as Record<string, string>).message ?? resp.statusText,
       );
+    } else {
+      // Surface export-fidelity downgrades (#1145, 0c). The server already
+      // returns these on a .docx save (SaveResult.fidelityWarnings) but the
+      // success body was previously dropped here. The persistent fidelity
+      // notice carries the specifics; this is the immediate "it happened" nudge.
+      // `deps?.` guards the pre-mount window (deps is wired in App.onMount).
+      const json = (await resp.json().catch(() => null)) as {
+        data?: { fidelityWarnings?: string[] };
+      } | null;
+      const downgraded = json?.data?.fidelityWarnings?.length ?? 0;
+      if (downgraded > 0) {
+        deps?.notify(
+          "warning",
+          `Saved — ${downgraded} Word feature${downgraded === 1 ? "" : "s"} were simplified on export; see the document notice for details.`,
+        );
+      }
     }
   } catch (err) {
     console.warn("[Tandem] Save request failed:", err);

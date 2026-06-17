@@ -323,6 +323,28 @@ export interface ExternalConflictState {
   detectedAt: number;
 }
 
+/**
+ * Per-document docx fidelity report (#1145, `.docx` only) — the "honesty layer".
+ * Tells the user what won't round-trip BEFORE they invest edits. Stored under
+ * Y_MAP_DOCUMENT_META at Y_MAP_FIDELITY_REPORT; server write-only, client reads
+ * it to render a calm, self-erasing notice (hidden while both lists are empty).
+ */
+export interface FidelityReport {
+  /**
+   * Word features mammoth dropped on import (footnotes, headers/footers,
+   * tracked changes, custom styles — the round-trip ceiling). Set at open and
+   * re-set on every re-import (force-reload, file-watcher reload).
+   */
+  importLosses: string[];
+  /**
+   * Content the export downgraded on the most recent save (unsupported blocks,
+   * non-`data:` images). Refreshed each binary save; reset by a re-import.
+   */
+  exportDowngrades: string[];
+  /** ms epoch of the last update. */
+  updatedAt: number;
+}
+
 /** Text selection snapshot captured when opening chat, attached to the next outgoing ChatMessage as its anchor. */
 export interface CapturedAnchor extends DocumentRange {
   textSnapshot: string;
