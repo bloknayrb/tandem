@@ -70,17 +70,23 @@ export function summarizeMammothMessages(
     if (msg.type !== "warning" && msg.type !== "error") continue;
     // Normalize "Unrecognised paragraph style: 'Foo' (Style ID: Bar)" and
     // similar to a single bucket so 200 runs collapse to one line.
-    // Redact every slot mammoth can put a user-authored style name in. Style
-    // names/IDs can be sensitive (client names, project codenames), and these
-    // strings now feed a PERSISTENT banner (#1145), so redaction must cover
-    // mammoth's actual message forms, not just the quoted one:
+    // Redact every slot mammoth can put user-authored text in. Style/font
+    // names can be sensitive (client names, project codenames, foundry-licensed
+    // brand fonts), and these strings now feed a PERSISTENT banner (#1145), so
+    // redaction must cover mammoth's actual message forms (enumerated from its
+    // warning() emitters), not just the quoted one:
     //   - "Unrecognised paragraph style: 'Name' (Style ID: ID)" → quotes + (…)
-    //   - "Paragraph style with ID ID was referenced but not defined…" → the
-    //     bare, UNQUOTED `with ID <token>` slot (caught in testing).
+    //   - "…style with ID ID was referenced but not defined…" → bare UNQUOTED
+    //     `with ID <token>` slot.
+    //   - "…w:sym… ignored: char F0A7 in font <Brand Font>" → the trailing
+    //     `in font <name>` slot (a name CAN contain spaces, so anchor to EOL).
+    // The MAX_WARNING_LINE_LENGTH clamp below is the forward backstop for any
+    // slot a future mammoth version introduces.
     const normalized = msg.message
       .replace(/['"][^'"]*['"]/g, "…")
       .replace(/\(Style ID:[^)]*\)/gi, "")
       .replace(/\bwith ID \S+/gi, "with ID …")
+      .replace(/\bin font \S.*$/i, "in font …")
       .replace(/\s+/g, " ")
       .trim();
     // Clamp per-line (defense-in-depth, see MAX_WARNING_LINE_LENGTH). Dedup on

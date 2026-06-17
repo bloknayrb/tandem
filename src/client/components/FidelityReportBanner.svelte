@@ -35,7 +35,18 @@ $effect(() => {
   // when the active tab's doc changes. Do not move this below a guard.
   const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
   const read = () => {
-    report = (meta.get(Y_MAP_FIDELITY_REPORT) as FidelityReport | undefined) ?? null;
+    // Normalize on read: the report is PERSISTED in the session and is never
+    // re-validated on a docx session-restore, so a stale or forward-version
+    // shape (missing an array) must not crash the `$derived` `.length` access.
+    // Mirrors the server save path's defensive `prev?.importLosses ?? []`.
+    const raw = meta.get(Y_MAP_FIDELITY_REPORT) as Partial<FidelityReport> | undefined;
+    report = raw
+      ? {
+          importLosses: Array.isArray(raw.importLosses) ? raw.importLosses : [],
+          exportDowngrades: Array.isArray(raw.exportDowngrades) ? raw.exportDowngrades : [],
+          updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
+        }
+      : null;
   };
   read(); // unconditional first read — also catches a session-restore "add"
   const observer = (event: Y.YMapEvent<unknown>) => {

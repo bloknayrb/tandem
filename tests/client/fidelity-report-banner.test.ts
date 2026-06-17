@@ -75,6 +75,16 @@ describe("FidelityReportBanner", () => {
     expect(container.querySelector("[data-testid='fidelity-report-banner']")).toBeTruthy();
   });
 
+  it("stays hidden (does not throw) on a malformed/forward-version report shape", async () => {
+    // A persisted report from another schema version could be missing an array.
+    // Normalize-on-read must keep the `$derived` `.length` access from throwing.
+    const ydoc = new Y.Doc();
+    ydoc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_FIDELITY_REPORT, { updatedAt: 1 } as never);
+    const { container } = render(FidelityReportBanner, baseProps(ydoc));
+    await tick();
+    expect(container.querySelector("[data-testid='fidelity-report-banner']")).toBeNull();
+  });
+
   it("collapses the disclosure when the active doc (ydoc) changes", async () => {
     const docA = new Y.Doc();
     setReport(docA, { importLosses: ["Loss A"], exportDowngrades: [], updatedAt: 1 });

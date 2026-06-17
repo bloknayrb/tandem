@@ -157,6 +157,21 @@ describe("summarizeMammothMessages — redaction + clamp", () => {
     expect(out[0]).toContain("with ID …");
   });
 
+  it("redacts the trailing 'in font <name>' slot mammoth emits for w:sym", () => {
+    // mammoth's w:sym message ends with a verbatim font attribute that can be a
+    // branded/foundry name containing spaces. Regression for the font leak.
+    const out = summarizeMammothMessages([
+      {
+        type: "warning",
+        message:
+          "A w:sym element with an unsupported character was ignored: char F0A7 in font AcmeCorp Confidential Display",
+      },
+    ]);
+    expect(out[0]).not.toContain("AcmeCorp");
+    expect(out[0]).not.toContain("Confidential");
+    expect(out[0]).toContain("in font …");
+  });
+
   it("clamps an unquoted long message to a bounded length (content-oracle backstop)", () => {
     const longSecret = "LEAK".repeat(100); // 400 chars, no quotes → not redaction-covered
     const out = summarizeMammothMessages([{ type: "warning", message: longSecret }]);
