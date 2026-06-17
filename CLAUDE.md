@@ -161,8 +161,10 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 
 ## Security
 - Server binds to 127.0.0.1 by default. LAN binding (`TANDEM_BIND_HOST`) requires an auth token; `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` is an explicit insecure opt-in for development only
+- `TANDEM_ALLOW_UNAUTHENTICATED_LAN` is a misnomer: `loadOrCreateToken()` always mints a token and `authMiddleware` enforces it for all non-loopback requests — the runtime is always token-gated even under this flag (#1121 F7)
 - DNS rebinding protection on all routes (`apiMiddleware` Host-header validation + `createMcpExpressApp`)
 - CORS allowlist is `http://127.0.0.1:*` and `http://tauri.localhost` only — bare `localhost` was narrowed out in PR #637 (DNS-rebinding hardening). Rejects UNC paths (Windows NTLM). Extension + 50MB size limits. Atomic saves
+- Mutating document routes (`rename`, `backups/restore`, `document/reload`, `docx-conflict/resolve`) gate on origin allowlist + loopback; `GET /api/sessions` and `GET /api/backups` strip absolute paths to basename for non-loopback callers; `GET /api/document/raw` is loopback-only (#1121)
 
 ## Status
 

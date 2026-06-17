@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { errorCodeToHttpStatus } from "../../src/server/mcp/routes/_shared.js";
+import { TAURI_HOSTNAME } from "../../src/shared/constants.js";
 
 // Mock the service so the route test exercises only the handler's contract:
 // param validation + error-code → HTTP-status mapping. The migration itself is
@@ -26,7 +27,14 @@ function mockRes(): Response & { _status: number; _json: unknown } {
   return res as unknown as Response & { _status: number; _json: unknown };
 }
 
-const reqWith = (body: unknown) => ({ body }) as Request;
+// Include an allowlisted Origin so the assertOriginAllowlisted gate passes
+// in direct-handler unit tests. The Origin gate itself is exercised by the
+// integration tests below (they use a real Express server).
+const reqWith = (body: unknown) =>
+  ({
+    body,
+    headers: { origin: `http://${TAURI_HOSTNAME}` },
+  }) as unknown as Request;
 
 beforeEach(() => renameDocument.mockReset());
 
@@ -145,5 +153,29 @@ describe("errorCodeToHttpStatus — rename codes", () => {
     ["RENAME_IN_PROGRESS", 409],
   ])("%s → %i", (code, status) => {
     expect(errorCodeToHttpStatus(code)).toBe(status);
+  });
+});
+
+describe("handleRename — origin gate (#1121 F6)", () => {
+  it("rejects a non-allowlisted Origin before calling renameDocument", async () => {
+    const res = mockRes();
+    const req = {
+      body: { documentId: "d1", newName: "b.md" },
+      headers: { origin: "http://attacker.example" },
+    } as unknown as Request;
+    await handleRename(req, res);
+    expect(res._status).toBe(403);
+    expect(renameDocument).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing Origin before calling renameDocument", async () => {
+    const res = mockRes();
+    const req = {
+      body: { documentId: "d1", newName: "b.md" },
+      headers: {},
+    } as unknown as Request;
+    await handleRename(req, res);
+    expect(res._status).toBe(403);
+    expect(renameDocument).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,11 @@
 import type { Request, Response } from "express";
 
+import { API_DOCUMENT_RELOAD } from "../../../shared/api-paths.js";
 import { getActiveDocId } from "../../documents/registry.js";
+import {
+  assertLoopbackForMutation,
+  assertOriginAllowlisted,
+} from "../../integrations/api-routes.js";
 import { reloadDocumentFromMarkdown } from "../file-opener.js";
 import { sendApiError } from "./_shared.js";
 
@@ -15,12 +20,8 @@ const MAX_RELOAD_MARKDOWN_BYTES = 1_000_000;
  * POST /api/document/reload — replace a document's content from a user-supplied
  * markdown string (raw-markdown source view/edit, #1021).
  *
- * State-mutating, but same middleware posture as POST /api/save and
- * POST /api/rename: the `mw` DNS-rebinding + CORS gate closes CSRF (a cross-
- * origin JSON POST triggers a preflight answered with Allow-Origin: null), so
- * no separate loopback gate is needed. The handler validates the markdown type
- * and size before the synchronous parse; `reloadDocumentFromMarkdown` enforces
- * the open / .md / not-read-only / not-already-reloading guards.
+ * Gated on origin allowlist + loopback (#1121 F6): replacing document content
+ * is destructive and must not be reachable by authenticated LAN peers.
  *
  * documentId is intentionally not accepted from the request body: the source
  * view is always rendered for the active document, so accepting a
@@ -28,6 +29,8 @@ const MAX_RELOAD_MARKDOWN_BYTES = 1_000_000;
  * input to FS operations with no functional benefit.
  */
 export async function handleReloadFromMarkdown(req: Request, res: Response): Promise<void> {
+  if (assertOriginAllowlisted(req, res, API_DOCUMENT_RELOAD)) return;
+  if (assertLoopbackForMutation(req, res)) return;
   const { markdown } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof markdown !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "markdown (string) is required." });

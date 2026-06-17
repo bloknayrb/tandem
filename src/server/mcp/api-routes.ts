@@ -183,11 +183,7 @@ export function registerApiRoutes(
   app.options(API_SAVE, mw);
   app.post(API_SAVE, mw, largeBody, handleSave);
 
-  // Rename inherits the same Host-header (DNS-rebinding) + CORS Origin posture
-  // as open/close/save via `mw`. There is no loopback gate here (and
-  // assertLoopbackForMutation is a no-op on the default loopback bind anyway);
-  // CSRF is closed because a cross-origin JSON POST triggers a preflight that
-  // `mw` answers with Allow-Origin: null. See #1017 security review.
+  // Rename is gated on origin allowlist + loopback inside the handler (#1121 F6).
   app.options(API_RENAME, mw);
   app.post(API_RENAME, mw, largeBody, handleRename);
 
@@ -203,20 +199,22 @@ export function registerApiRoutes(
   app.options(API_APPLY_CHANGES, mw);
   app.post(API_APPLY_CHANGES, mw, largeBody, handleApplyChanges);
 
-  // Raw-markdown source view/edit (#1021). GET is read-only (no loopback gate,
-  // like /api/mode); POST replaces document content from a user-supplied string.
+  // Raw-markdown source view/edit (#1021). GET is loopback-only (full doc
+  // content must not be disclosed to LAN peers, #1121 F5); POST is gated on
+  // origin allowlist + loopback inside the handler (#1121 F6).
   app.get(API_DOCUMENT_RAW, mw, handleGetDocumentRaw);
   app.options(API_DOCUMENT_RELOAD, mw);
   app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
 
-  // Pre-overwrite document backups (#1086). GET lists snapshots (read-only);
-  // POST restores one — same CSRF posture as /api/rename (see routes/backups.ts).
+  // Pre-overwrite document backups (#1086). GET strips absolute filePath to
+  // basename for non-loopback callers (#1121 F5); POST is gated on origin
+  // allowlist + loopback inside the handler (#1121 F6).
   app.get(API_BACKUPS, mw, handleListBackups);
   app.options(API_BACKUPS_RESTORE, mw);
   app.post(API_BACKUPS_RESTORE, mw, largeBody, handleRestoreBackup);
 
-  // .docx external-conflict resolution (#1069): keep unsaved edits or reload
-  // fresh from disk. Same CSRF posture as /api/document/reload (see handler).
+  // .docx external-conflict resolution (#1069). Gated on origin allowlist +
+  // loopback inside the handler (#1121 F6).
   app.options(API_DOCX_CONFLICT_RESOLVE, mw);
   app.post(API_DOCX_CONFLICT_RESOLVE, mw, largeBody, handleResolveDocxConflict);
 
@@ -233,8 +231,8 @@ export function registerApiRoutes(
   app.options(API_STORE_RECLAIM_LOCK, mw);
   app.post(API_STORE_RECLAIM_LOCK, mw, handleStoreReclaimLock);
 
-  // Persisted-session management UI (#103): list (read-only), delete one, clear all.
-  // The mutating routes gate on origin + loopback inside their handlers.
+  // Persisted-session management UI (#103): list (strips filePath to basename for
+  // non-loopback callers, #1121 F5); mutating routes gate on origin + loopback.
   app.get(API_SESSIONS, mw, handleListSessions);
 
   app.options(API_SESSIONS_DELETE, mw);

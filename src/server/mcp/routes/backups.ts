@@ -5,17 +5,21 @@
  * POST /api/backups/restore  — restore one snapshot through the reload lifecycle
  *
  * Both routes ride the standard `apiMiddleware` (Host-header DNS-rebinding
- * check + CORS Origin allowlist). Like /api/rename, the mutating POST has no
- * extra loopback gate: CSRF is closed because a cross-origin JSON POST
- * triggers a preflight that the middleware answers with Allow-Origin: null,
- * and the restore can only target an already-open document's own snapshots
- * (server-enumerated names — no caller-supplied paths reach the filesystem).
+ * check + CORS Origin allowlist). The GET strips the absolute filePath to a
+ * basename for non-loopback callers (#1121 F5). The mutating POST additionally
+ * gates on origin allowlist + loopback (#1121 F6).
  */
 
 import path from "node:path";
 
 import type { Request, Response } from "express";
+import { API_BACKUPS_RESTORE } from "../../../shared/api-paths.js";
+import { isLoopback } from "../../auth/middleware.js";
 import { listDocBackups } from "../../file-io/doc-backup.js";
+import {
+  assertLoopbackForMutation,
+  assertOriginAllowlisted,
+} from "../../integrations/api-routes.js";
 import { resolveAppDataDir } from "../../platform.js";
 import { getCurrentDoc } from "../document-service.js";
 import { restoreDocumentFromBackup } from "../file-opener.js";
@@ -37,15 +41,21 @@ export async function handleListBackups(req: Request, res: Response): Promise<vo
     res.json({ data: { filePath: null, backups: [] } });
     return;
   }
+  // Strip the absolute path to a basename for non-loopback callers (#1121 F5):
+  // the home-directory layout must not be disclosed across the network.
+  const loopback = isLoopback(req.socket.remoteAddress);
+  const filePath = loopback ? docState.filePath : path.basename(docState.filePath);
   try {
     const backups = await listDocBackups(docState.filePath, resolveAppDataDir());
-    res.json({ data: { filePath: docState.filePath, backups } });
+    res.json({ data: { filePath, backups } });
   } catch (err) {
     sendApiError(res, err);
   }
 }
 
 export async function handleRestoreBackup(req: Request, res: Response): Promise<void> {
+  if (assertOriginAllowlisted(req, res, API_BACKUPS_RESTORE)) return;
+  if (assertLoopbackForMutation(req, res)) return;
   const { backup } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof backup !== "string" || backup.length === 0) {
     res.status(400).json({ error: "BAD_REQUEST", message: "backup must be a non-empty string" });
