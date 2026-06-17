@@ -229,6 +229,16 @@ export async function saveDocumentToDisk(
       // (atomicWrite's UTF-8 encoding would corrupt the binary).
       const warnings = detectExportFidelityIssues(doc);
       const buffer = await adapter.saveBinary!(doc);
+      // Pre-overwrite snapshot of the on-disk original (first write per path per
+      // run), mirroring the text branch below. .docx is the highest-stakes case:
+      // a regenerated export can drop features mammoth never imported (footnotes,
+      // headers/footers, custom styles), so the verbatim on-disk bytes are the
+      // user's only recovery. snapshotBeforeFirstWrite is format-agnostic (raw
+      // byte copy) and never throws — a snapshot failure must not block the save.
+      await snapshotBeforeFirstWrite(docState.filePath, {
+        appDataDir: resolveAppDataDir(),
+        documentId: docId,
+      });
       suppressNextChange(docState.filePath);
       await atomicWriteBuffer(docState.filePath, buffer);
       fidelityWarnings = warnings.length > 0 ? warnings : undefined;

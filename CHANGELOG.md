@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`.docx` files now get a pre-overwrite backup, and you can restore it.** Before Tandem's first overwrite of a `.docx` each server run, it snapshots the original file's bytes verbatim to `{APP_DATA}/doc-backups/` — the same recovery mechanism `.md`/`.txt` already had, now extended to the binary save path. This matters most for `.docx`: exporting can drop Word features Tandem doesn't model (footnotes, headers/footers, custom styles), so the untouched original is the only faithful copy. Restore it from the command palette ("Restore a backup of this document…") or via `tandem_restoreBackup` — both restore the snapshot **byte-identical** (binary-safe, no ZIP corruption) and reload the open document in place, preserving and re-anchoring annotations and re-injecting imported Word comments. The `{name}.backup.docx` sidecar written by `tandem_applyChanges` remains a fallback when no snapshot exists yet. First step of the ".docx edit-with-confidence" initiative.
+
 ### Changed
 
 - Settings → Network: the **Reconnect Strategy** control is now functional — "Exponential backoff" (1s→30s) and "Constant (2s)" thread through to the Hocuspocus provider backoff. Both keep auto-reconnect always on (the stale-tab restart recovery depends on it). Dropped the non-functional "Manual only" option (a saved `"manual"` migrates to "Exponential").

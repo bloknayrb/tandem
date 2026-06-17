@@ -712,15 +712,14 @@ tandem_applyChanges({ author: "Claude Review" })
 
 ### tandem_restoreBackup
 
-Restore a document from a backup. Two backup families, selected by the document's format:
+Restore a document from a backup. Tandem copies a document's on-disk bytes to `{APP_DATA}/doc-backups/` before its first overwrite each server run (`.md`/`.txt` verbatim text, `.docx` verbatim binary — byte-identical), up to 3 snapshots per document. Call without `backup` to list the available snapshots (newest first), then call again with `backup` set to a snapshot name to restore it.
 
-- **`.docx`** — restores the `{name}.backup.docx` sidecar created by `tandem_applyChanges`.
-- **`.md`/`.txt`** — restores a pre-overwrite snapshot. Tandem copies a text document's on-disk bytes to `{APP_DATA}/doc-backups/` before its first overwrite each server run (up to 3 snapshots per document). Call without `backup` to list the available snapshots (newest first), then call again with `backup` set to a snapshot name to restore it.
+- **`.docx` fallback** — when no pre-overwrite snapshots exist yet, calling without `backup` restores the `{name}.backup.docx` sidecar written by `tandem_applyChanges`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `documentId` | string | no | Target document ID (defaults to active document) |
-| `backup` | string | no | Snapshot filename to restore (`.md`/`.txt` only). Omit to list available snapshots. |
+| `backup` | string | no | Snapshot filename to restore. Omit to list available snapshots. |
 
 **Returns (list mode — `.md`/`.txt` without `backup`):**
 ```json
@@ -738,7 +737,7 @@ Restore a document from a backup. Two backup families, selected by the document'
 { "message": "Restored thesis.md from backup thesis-20260609-141500-ab12cd34.md.", "restoredFrom": "…/doc-backups/<hash>/thesis-20260609-141500-ab12cd34.md", "filePath": "/home/user/docs/thesis.md" }
 ```
 
-**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for upload-source documents or when `backup` is passed for a `.docx`; `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard.
+**Errors:** `FILE_NOT_FOUND` if no backup exists for the document (or the named snapshot doesn't exist); `FORMAT_ERROR` for upload-source documents or unsupported formats; `READ_ONLY` for read-only documents; `RELOAD_IN_PROGRESS` when a concurrent reload holds the per-document guard.
 
 **Notes:**
 - `.docx`: copies the sidecar back over the modified file, undoing `tandem_applyChanges`. The sidecar is not deleted after restore — you can restore multiple times.

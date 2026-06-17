@@ -30,7 +30,13 @@ import { loadAndMerge } from "../annotations/sync.js";
 import { isDirty, markClean, markDirty, registerDirtyObserver } from "../documents/dirty.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
-import { atomicWrite, getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
+import {
+  atomicWrite,
+  atomicWriteBuffer,
+  getAdapter,
+  type LoadIssue,
+  type Prepared,
+} from "../file-io/index.js";
 import { suppressNextChange, watchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
@@ -433,9 +439,10 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
   }
 }
 
-/** Formats restorable from pre-overwrite doc-backups (the snapshot module only
- *  ever covers the text `atomicWrite` save path, so this mirrors its scope). */
-const TEXT_RESTORE_FORMATS = new Set(["md", "txt"]);
+/** Formats restorable from pre-overwrite doc-backups. .docx joined .md/.txt once
+ *  the binary save path also snapshots before overwriting; the snapshot module
+ *  is format-agnostic (raw bytes), so a .docx snapshot restores byte-identical. */
+const RESTORE_FORMATS = new Set(["md", "txt", "docx"]);
 
 export interface RestoreBackupResult {
   message: string;
@@ -479,9 +486,11 @@ export async function restoreDocumentFromBackup(
       code: "INVALID_PATH",
     });
   }
-  if (!TEXT_RESTORE_FORMATS.has(existing.format)) {
+  if (!RESTORE_FORMATS.has(existing.format)) {
     throw Object.assign(
-      new Error(`Backup snapshots exist only for .md/.txt documents (this is ${existing.format}).`),
+      new Error(
+        `Backup snapshots exist only for .md/.txt/.docx documents (this is ${existing.format}).`,
+      ),
       { code: "UNSUPPORTED_FORMAT" },
     );
   }
@@ -504,9 +513,12 @@ export async function restoreDocumentFromBackup(
       code: "FILE_NOT_FOUND",
     });
   }
-  let content: string;
+  // .docx snapshots are raw ZIP bytes — a utf-8 round-trip would corrupt them,
+  // so read/write them as a Buffer (mirrors the binary branch in reloadFromDisk).
+  const isDocx = existing.format === "docx";
+  let content: string | Buffer;
   try {
-    content = await fs.readFile(snapshotPath, "utf-8");
+    content = isDocx ? await fs.readFile(snapshotPath) : await fs.readFile(snapshotPath, "utf-8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw Object.assign(
@@ -526,7 +538,13 @@ export async function restoreDocumentFromBackup(
   await snapshotBeforeFirstWrite(existing.filePath, { appDataDir, documentId: id });
 
   suppressNextChange(existing.filePath);
-  await atomicWrite(existing.filePath, content);
+  if (isDocx) {
+    // atomicWriteBuffer preserves the ZIP byte-for-byte; reloadFromDisk below
+    // re-parses it and re-injects Word comments idempotently via adapter.apply.
+    await atomicWriteBuffer(existing.filePath, content as Buffer);
+  } else {
+    await atomicWrite(existing.filePath, content as string);
+  }
   // The early reloadInProgress check above closes the common case, but a
   // watcher reload can still start during the awaits since that check. A
   // silent skip here would report success while the Y.Doc still holds

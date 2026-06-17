@@ -111,10 +111,10 @@ Durable annotations live in a separate `annotations/` directory alongside `sessi
 
 ## Recovering a previous version of a document
 
-Before Tandem's **first** write to a `.md`/`.txt` file in a server run, it copies the file's current on-disk bytes to a backup folder. If a save ever mangles your file (or you just want yesterday's version back), there are three ways to restore:
+Before Tandem's **first** write to a `.md`/`.txt`/`.docx` file in a server run, it copies the file's current on-disk bytes to a backup folder (for `.docx` this is a verbatim, byte-identical copy of the ZIP). If a save ever mangles your file — especially a `.docx`, where exporting can drop Word features Tandem doesn't model — or you just want yesterday's version back, there are three ways to restore:
 
 - **In the app:** open the command palette (Ctrl+Shift+P) and run "Restore a backup of this document…" — it lists the available snapshots and restores the most recent one. The document reloads in place; annotations are preserved.
-- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a text document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach.
+- **Ask Claude:** the `tandem_restoreBackup` MCP tool lists a document's snapshots (call it without `backup`) and restores any of them by name — including older snapshots the palette action doesn't reach.
 - **By hand:** with any file manager, no Tandem needed — see below.
 
 Backups live in `{APP_DATA_DIR}/doc-backups/` (sibling of `sessions/` — same per-OS table as above). Each document gets a subfolder named by a hash of its path, containing:
@@ -128,7 +128,7 @@ Notes:
 
 - Backups are taken once per document per server run, and skipped when nothing changed since the newest backup — so the folder stays small.
 - Snapshots older than 30 days are cleaned up automatically at startup, and the whole folder is capped at 500 MB (backups pause with a notification if it fills).
-- `.docx` files are protected differently: they are never auto-saved, and `tandem_applyChanges` writes a `.backup.docx` next to the original (restorable via `tandem_restoreBackup`).
+- `.docx` files get the same pre-overwrite snapshots as text (verbatim byte-identical copies of the ZIP) and are additionally never auto-saved — only explicit saves overwrite them. `tandem_applyChanges` also writes a `.backup.docx` sidecar next to the original, used as a fallback when no snapshot exists yet.
 
 ## Reading server logs
 
