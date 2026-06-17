@@ -126,6 +126,18 @@ export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
  * `withInternal` (server metadata); cleared on resolve / reload / explicit save.
  */
 export const Y_MAP_EXTERNAL_CONFLICT = "externalConflict";
+/**
+ * Per-document docx fidelity report (#1145, `.docx` only). Holds a
+ * `FidelityReport` (see shared/types.ts): Word features mammoth dropped on
+ * import (`importLosses`, set at open / force-reload / file-watcher reload) and
+ * what the export downgraded on the most recent save (`exportDowngrades`). The
+ * client renders a calm, self-erasing notice while either list is non-empty.
+ * No observer is attached to the per-document `documentMeta` map (durable-sync
+ * watches only annotations/replies; the only `documentMeta` channel observer is
+ * `ctrl-meta` on CTRL_ROOM), so the write is inert at any origin — server
+ * write-only, client read-only.
+ */
+export const Y_MAP_FIDELITY_REPORT = "fidelityReport";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 /**

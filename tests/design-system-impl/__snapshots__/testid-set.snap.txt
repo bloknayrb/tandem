@@ -120,6 +120,11 @@ empty-state-open-settings
 empty-state-retry
 error-boundary-recover-btn
 error-boundary-reload-btn
+fidelity-report-banner
+fidelity-report-details
+fidelity-report-details-toggle
+fidelity-report-export-downgrades
+fidelity-report-import-losses
 file-open-browse
 file-open-dialog
 file-open-error

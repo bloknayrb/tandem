@@ -7,11 +7,13 @@ import {
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
+  Y_MAP_FIDELITY_REPORT,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
+import type { FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { closeStore, createStore } from "../annotations/store.js";
@@ -269,6 +271,20 @@ export async function saveDocumentToDisk(
       // A successful save wrote the in-memory edits to disk — any pending
       // external-conflict flag (#1069) is resolved. No-op when absent.
       meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      // Refresh the export-downgrade half of the fidelity report (#1145, 0c),
+      // preserving the import-loss half set at open. docx-only — only the
+      // binary branch computes fidelityWarnings; `?? []` clears a prior save's
+      // downgrades on a now-clean save. Whole-object replacement is safe: the
+      // value is opaque (no field-level CRDT merge) and all writers are
+      // server-side + serialized, so this read-modify-write can't interleave.
+      if (isBinary) {
+        const prev = meta.get(Y_MAP_FIDELITY_REPORT) as FidelityReport | undefined;
+        meta.set(Y_MAP_FIDELITY_REPORT, {
+          importLosses: prev?.importLosses ?? [],
+          exportDowngrades: fidelityWarnings ?? [],
+          updatedAt: Date.now(),
+        } satisfies FidelityReport);
+      }
     });
     markCleanIfUnchanged(docId, dirtySnapshot);
 

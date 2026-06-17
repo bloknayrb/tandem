@@ -27,6 +27,7 @@ import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
 import DocxConflictBanner from "./components/DocxConflictBanner.svelte";
 import EmptyState from "./components/EmptyState.svelte";
+import FidelityReportBanner from "./components/FidelityReportBanner.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import HelpModal from "./components/HelpModal.svelte";
 import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
@@ -2285,6 +2286,11 @@ const tutorial = createTutorial(
     />
     {#if activeTab && activeTab.format === "docx"}
       <DocxConflictBanner
+        ydoc={activeTab.ydoc}
+        documentId={activeTab.id}
+        fileName={activeTab.fileName}
+      />
+      <FidelityReportBanner
         ydoc={activeTab.ydoc}
         documentId={activeTab.id}
         fileName={activeTab.fileName}

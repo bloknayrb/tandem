@@ -28,6 +28,12 @@ export type LoadIssue =
       kind: "other";
       error: unknown;
       message?: string;
+      /**
+       * Granular per-loss strings (the un-joined `message`), used to populate
+       * the persistent docx fidelity report (#1145). The docx adapter sets this
+       * from `summarizeMammothMessages`; the joined `message` drives the toast.
+       */
+      importLosses?: string[];
     };
 
 /**
