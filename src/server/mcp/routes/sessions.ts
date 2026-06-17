@@ -1,7 +1,10 @@
+import path from "node:path";
+
 import type { Request, Response } from "express";
 
 import { API_SESSIONS_CLEAR, API_SESSIONS_DELETE } from "../../../shared/api-paths.js";
 import { isStoreReadOnly } from "../../annotations/store.js";
+import { isLoopback } from "../../auth/middleware.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
@@ -11,13 +14,20 @@ import { sendApiError } from "./_shared.js";
 
 /**
  * GET /api/sessions — list persisted document sessions with metadata
- * (file path, last-accessed, live annotation count). Read-only; no loopback
- * gate (consistent with the other read-only GET routes).
+ * (file path, last-accessed, live annotation count). Read-only.
+ *
+ * Loopback callers (local UI, local Claude Code) receive the full absolute
+ * filePath. Non-loopback authenticated LAN callers receive only the basename
+ * so the home-directory layout is not disclosed across the network.
  */
-export async function handleListSessions(_req: Request, res: Response): Promise<void> {
+export async function handleListSessions(req: Request, res: Response): Promise<void> {
   try {
     const sessions = await listSessionsMetadata();
-    res.json({ data: { sessions } });
+    const loopback = isLoopback(req.socket.remoteAddress);
+    const data = loopback
+      ? sessions
+      : sessions.map((s) => ({ ...s, filePath: path.basename(s.filePath) }));
+    res.json({ data: { sessions: data } });
   } catch (err: unknown) {
     sendApiError(res, err);
   }
