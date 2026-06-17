@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`.docx` files now get a pre-overwrite backup, and you can restore it.** Before Tandem's first overwrite of a `.docx` each server run, it snapshots the original file's bytes verbatim to `{APP_DATA}/doc-backups/` — the same recovery mechanism `.md`/`.txt` already had, now extended to the binary save path. This matters most for `.docx`: exporting can drop Word features Tandem doesn't model (footnotes, headers/footers, custom styles), so the untouched original is the only faithful copy. Restore it from the command palette ("Restore a backup of this document…") or via `tandem_restoreBackup` — both restore the snapshot **byte-identical** (binary-safe, no ZIP corruption) and reload the open document in place, preserving and re-anchoring annotations and re-injecting imported Word comments. The `{name}.backup.docx` sidecar written by `tandem_applyChanges` remains a fallback when no snapshot exists yet. First step of the ".docx edit-with-confidence" initiative.
+
 ### Changed
 
 - Settings → Network: the **Reconnect Strategy** control is now functional — "Exponential backoff" (1s→30s) and "Constant (2s)" thread through to the Hocuspocus provider backoff. Both keep auto-reconnect always on (the stale-tab restart recovery depends on it). Dropped the non-functional "Manual only" option (a saved `"manual"` migrates to "Exponential").
@@ -14,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Settings → Network: removed the inert "Hold annotations while offline" toggle (offline annotation queuing was never built). Tracked for proper design in #1134.
+
+### Fixed
+
+- **Saving or restoring a file no longer triggers a spurious "File changed on disk — reloaded" notification (Windows).** A Windows/NTFS atomic rename fires ~2 filesystem `change` events per write, but the file watcher's suppression counter was armed once per write, so one event leaked through and the server reloaded the file it had just written — re-parsing the document and re-anchoring annotations needlessly (the activity tray showed it as "×2"). The watcher now has a second layer: after each of its own writes (save, save-as, restore), Tandem records a content fingerprint (size + SHA-256) of the exact bytes it wrote, and the delayed reload skips silently when the file on disk is byte-for-byte identical to what was just written. A content hash — not a size/timestamp check — is used deliberately so a genuine external edit (even one that keeps the byte count identical) is never mistaken for Tandem's own echo and silently dropped; the fingerprint is also short-lived, so a later external revert to identical bytes still reloads. Beyond the cosmetic toast, this removes up to three redundant reloads per save, each of which was an unnecessary annotation re-anchor pass.
 
 ### Security
 

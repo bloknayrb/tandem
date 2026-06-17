@@ -34,7 +34,7 @@ import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
-import { suppressNextChange, unwatchFile } from "../file-watcher.js";
+import { recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
@@ -229,8 +229,19 @@ export async function saveDocumentToDisk(
       // (atomicWrite's UTF-8 encoding would corrupt the binary).
       const warnings = detectExportFidelityIssues(doc);
       const buffer = await adapter.saveBinary!(doc);
+      // Pre-overwrite snapshot of the on-disk original (first write per path per
+      // run), mirroring the text branch below. .docx is the highest-stakes case:
+      // a regenerated export can drop features mammoth never imported (footnotes,
+      // headers/footers, custom styles), so the verbatim on-disk bytes are the
+      // user's only recovery. snapshotBeforeFirstWrite is format-agnostic (raw
+      // byte copy) and never throws — a snapshot failure must not block the save.
+      await snapshotBeforeFirstWrite(docState.filePath, {
+        appDataDir: resolveAppDataDir(),
+        documentId: docId,
+      });
       suppressNextChange(docState.filePath);
       await atomicWriteBuffer(docState.filePath, buffer);
+      recordSelfWrite(docState.filePath, buffer);
       fidelityWarnings = warnings.length > 0 ? warnings : undefined;
     } else {
       const output = adapter.save!(doc);
@@ -242,6 +253,7 @@ export async function saveDocumentToDisk(
       });
       suppressNextChange(docState.filePath);
       await atomicWrite(docState.filePath, output);
+      recordSelfWrite(docState.filePath, output);
     }
     // `dirty` records whether a body edit landed DURING the async write (the
     // saved bytes already match the session state otherwise) — consumed by the
@@ -446,6 +458,7 @@ export async function saveDocumentAsToDisk(
     });
     suppressNextChange(resolved);
     await atomicWrite(resolved, output);
+    recordSelfWrite(resolved, output);
 
     // Persist a session for the promoted path so a restart restores the
     // newly-saved doc rather than dropping content on the floor.
