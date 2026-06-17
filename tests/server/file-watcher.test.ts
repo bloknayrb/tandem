@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  recordSelfWrite,
   suppressNextChange,
   unwatchAll,
   unwatchFile,
@@ -229,6 +230,90 @@ describe("suppressNextChange", () => {
     watcher.changeHandler!("change");
     await vi.advanceTimersByTimeAsync(600);
     expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("recordSelfWrite / self-write echo guard", () => {
+  // Stays on the suite-wide fake timers: the delivery guard's
+  // `fs.promises.readFile` is mocked so the whole path resolves on the
+  // microtask queue (no real I/O, no wall-clock waits → no flake under load).
+  const file = "/tmp/echo.md";
+  let onChanged: ReturnType<typeof vi.fn>;
+  let watcher: MockWatcher;
+  let readFile: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    watcher = createMockWatcher();
+    mockWatch.mockImplementation((_path: string, cb: (eventType: string) => void) => {
+      watcher.changeHandler = cb;
+      return watcher;
+    });
+    onChanged = vi.fn().mockResolvedValue(undefined);
+    readFile = vi.spyOn(fs.promises, "readFile");
+  });
+
+  afterEach(() => {
+    readFile.mockRestore();
+  });
+
+  it("suppresses the echo of a self-write when disk bytes are identical", async () => {
+    const content = "hello world";
+    readFile.mockResolvedValue(Buffer.from(content));
+    watchFile(file, onChanged);
+    recordSelfWrite(file, content);
+
+    // Two leaked events (NTFS-style); no suppressNextChange here, so the content
+    // fingerprint is the only thing that can stop them reaching onChanged.
+    watcher.changeHandler!("change");
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("reloads when the file actually changed (different length)", async () => {
+    readFile.mockResolvedValue(Buffer.from("hello world — and then some more"));
+    watchFile(file, onChanged);
+    recordSelfWrite(file, "hello world");
+
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads an equal-length external edit (content hash, not size+mtime)", async () => {
+    // The case a size/mtime proxy would silently drop: a single-character swap
+    // that keeps the byte length identical. Must reload, not skip.
+    readFile.mockResolvedValue(Buffer.from("BBBB")); // same length as recorded, different bytes
+    watchFile(file, onChanged);
+    recordSelfWrite(file, "AAAA");
+
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads identical bytes once the echo window (TTL) has expired", async () => {
+    // The fingerprint is a short-lived echo detector, not a content oracle: a
+    // later external revert-to-identical-bytes must still reload.
+    const content = "hello world";
+    readFile.mockResolvedValue(Buffer.from(content));
+    watchFile(file, onChanged);
+    recordSelfWrite(file, content);
+
+    await vi.advanceTimersByTimeAsync(2100); // past SUPPRESS_TTL_MS (2000)
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("is inert when no fingerprint was recorded (does not skip, does not read)", async () => {
+    watchFile(file, onChanged);
+    // no recordSelfWrite — the guard must fall straight through to a reload
+    // without ever touching the disk.
+    watcher.changeHandler!("change");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(readFile).not.toHaveBeenCalled();
   });
 });
 

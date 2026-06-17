@@ -37,7 +37,7 @@ import {
   type LoadIssue,
   type Prepared,
 } from "../file-io/index.js";
-import { suppressNextChange, watchFile } from "../file-watcher.js";
+import { recordSelfWrite, suppressNextChange, watchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
 import { anchoredRange, refreshAllRanges, validateRange } from "../positions.js";
@@ -545,6 +545,11 @@ export async function restoreDocumentFromBackup(
   } else {
     await atomicWrite(existing.filePath, content as string);
   }
+  // Content backstop for the watcher: the restore write's own `change`-event
+  // echo can leak past the single suppressNextChange (NTFS fires ~2 events).
+  // The direct reloadFromDisk below does the intended re-anchor; this stops the
+  // leaked echo from triggering a SECOND, spurious reload + "file changed" toast.
+  recordSelfWrite(existing.filePath, content);
   // The early reloadInProgress check above closes the common case, but a
   // watcher reload can still start during the awaits since that check. A
   // silent skip here would report success while the Y.Doc still holds
@@ -1424,10 +1429,13 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
  * reloadFromDisk reads a Buffer; comment injection is idempotent). A doc with
  * UNSAVED edits is NEVER auto-reloaded — a binary repopulation would clobber
  * the only copy of those edits — it gets an external-conflict flag the client
- * surfaces as a keep-vs-reload banner instead. Tandem's own `.docx` save never
- * reaches this callback: the binary save branch arms `suppressNextChange`
- * before `atomicWriteBuffer`, and suppression is consumed at fs.watch event
- * ARRIVAL (see file-watcher.ts), not at debounce delivery.
+ * surfaces as a keep-vs-reload banner instead. Tandem's own saves are filtered
+ * out before this callback by the file-watcher's two-layer self-write defense:
+ * the arrival-time `suppressNextChange` counter swallows the rename events, and
+ * a delivery-time content fingerprint (`recordSelfWrite`) catches any event
+ * that leaks past it (NTFS fires ~2 events per atomic rename but the counter is
+ * armed once). A genuinely-changed file still reaches here — the fingerprint
+ * skips only bytes identical to what Tandem just wrote. See file-watcher.ts.
  */
 export function wireFileWatcher(id: string, filePath: string, format: string): void {
   try {

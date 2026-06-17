@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Settings → Network: removed the inert "Hold annotations while offline" toggle (offline annotation queuing was never built). Tracked for proper design in #1134.
 
+### Fixed
+
+- **Saving or restoring a file no longer triggers a spurious "File changed on disk — reloaded" notification (Windows).** A Windows/NTFS atomic rename fires ~2 filesystem `change` events per write, but the file watcher's suppression counter was armed once per write, so one event leaked through and the server reloaded the file it had just written — re-parsing the document and re-anchoring annotations needlessly (the activity tray showed it as "×2"). The watcher now has a second layer: after each of its own writes (save, save-as, restore), Tandem records a content fingerprint (size + SHA-256) of the exact bytes it wrote, and the delayed reload skips silently when the file on disk is byte-for-byte identical to what was just written. A content hash — not a size/timestamp check — is used deliberately so a genuine external edit (even one that keeps the byte count identical) is never mistaken for Tandem's own echo and silently dropped; the fingerprint is also short-lived, so a later external revert to identical bytes still reloads. Beyond the cosmetic toast, this removes up to three redundant reloads per save, each of which was an unnecessary annotation re-anchor pass.
+
 ### Security
 
 - License webhook (`/webhooks/license`) now requires a configured webhook secret in every environment. Removed the `NODE_ENV=development` signature-verification bypass — an auth-exempt, publicly reachable license-signing endpoint must never accept unsigned payloads, and a NODE_ENV-gated bypass is a production backdoor waiting for a misconfigured deploy. Missing secret now returns `503`; unsigned/forged requests return `401`. To test locally, configure `POLAR_WEBHOOK_SECRET`/`PADDLE_WEBHOOK_SECRET` and sign the payload.

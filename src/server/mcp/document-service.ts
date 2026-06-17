@@ -34,7 +34,7 @@ import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
-import { suppressNextChange, unwatchFile } from "../file-watcher.js";
+import { recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
@@ -241,6 +241,7 @@ export async function saveDocumentToDisk(
       });
       suppressNextChange(docState.filePath);
       await atomicWriteBuffer(docState.filePath, buffer);
+      recordSelfWrite(docState.filePath, buffer);
       fidelityWarnings = warnings.length > 0 ? warnings : undefined;
     } else {
       const output = adapter.save!(doc);
@@ -252,6 +253,7 @@ export async function saveDocumentToDisk(
       });
       suppressNextChange(docState.filePath);
       await atomicWrite(docState.filePath, output);
+      recordSelfWrite(docState.filePath, output);
     }
     // `dirty` records whether a body edit landed DURING the async write (the
     // saved bytes already match the session state otherwise) — consumed by the
@@ -456,6 +458,7 @@ export async function saveDocumentAsToDisk(
     });
     suppressNextChange(resolved);
     await atomicWrite(resolved, output);
+    recordSelfWrite(resolved, output);
 
     // Persist a session for the promoted path so a restart restores the
     // newly-saved doc rather than dropping content on the floor.
