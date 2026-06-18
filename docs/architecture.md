@@ -747,6 +747,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper
 - `file-io/doc-backup.ts` -- Pre-overwrite snapshots of user documents (`.md`/`.txt`/`.docx`): first write per path per run copies the on-disk bytes verbatim to `{APP_DATA}/doc-backups/<path-hash>/` (format-agnostic raw-byte copy, so `.docx` snapshots are byte-identical; 3 per path, 30-day boot sweep, 500 MB cap)
 - `file-io/docx-walker.ts` -- Shared offset-tracking walker for document.xml (used by comment extraction and suggestion apply)
+- `file-io/docx-footnotes.ts` -- Read-only footnote/endnote detection for the import honesty layer (#1123 Tier-A #3): counts real notes in `word/footnotes.xml`/`word/endnotes.xml` (excluding Word's structural separator notes) so the FidelityReport can honestly flag that mammoth flattens them. Emits count-only loss lines (no user content). PR 2 extends it to capture bodies for true reconstruction.
 - `file-io/docx-apply.ts` -- Core logic for applying suggestions as tracked changes via JSZip XML manipulation
 - `platform.ts` -- Cross-platform helpers: `SESSION_DIR`, `LAST_SEEN_VERSION_FILE`, `freePort()`, `waitForPort()` (TCP port availability polling)
 - `version-check.ts` -- `checkVersionChange()`: compares running version to stored last-seen version, returns `"first-install" | "upgraded" | "current"`

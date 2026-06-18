@@ -166,12 +166,30 @@ const CORPUS: Fixture[] = [
     build: corpus.buildFootnote,
     status: "degrades",
     reason:
-      "mammoth renders footnotes as a trailing ordered list — content kept, footnote semantic + anchor links lost",
+      "mammoth renders footnotes as a trailing ordered list — content kept, footnote semantic + anchor links lost (but the loss is now surfaced honestly on import)",
     check(rt) {
       expect(rt.gen1.flatText).toContain("The footnote body text.");
       expect(nodesOfType(rt.gen1, "orderedList").length).toBeGreaterThan(0);
       // inline ref survives as a superscript run
       expect(marksIn(rt.gen1).has("superscript")).toBe(true);
+      // Honesty layer (#1123 Tier-A #3 PR 1): mammoth emits no footnote warning,
+      // so detectDocxFootnotes adds an explicit import-loss line. This pins the
+      // wiring end-to-end through the real adapter (importWarnings = the
+      // kind:"other" issue's importLosses). When PR 2 reconstructs footnotes,
+      // this fixture flips degrades→survives and the assertion is promoted.
+      expect(rt.importWarnings.some((w) => /footnote/i.test(w))).toBe(true);
+    },
+  },
+  {
+    name: "endnote",
+    build: corpus.buildEndnote,
+    status: "degrades",
+    reason:
+      "endnotes degrade like footnotes (mammoth → trailing list); the loss is surfaced honestly on import",
+    check(rt) {
+      expect(rt.gen1.flatText).toContain("The endnote body text.");
+      // Same honesty wiring as footnotes, via the endnote branch of footnoteLossLines.
+      expect(rt.importWarnings.some((w) => /endnote/i.test(w))).toBe(true);
     },
   },
   {
