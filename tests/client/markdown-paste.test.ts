@@ -1,28 +1,23 @@
 import { Editor } from "@tiptap/core";
-import Highlight from "@tiptap/extension-highlight";
-import Link from "@tiptap/extension-link";
 import type { Schema } from "@tiptap/pm/model";
-import StarterKit from "@tiptap/starter-kit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import {
   createMarkdownParser,
   looksLikeMarkdown,
   markdownToSlice,
 } from "../../src/client/editor/utils/markdown-paste";
 
-// Build an editor whose schema mirrors the production editor (StarterKit +
-// Highlight + Link) so the parser is exercised against the real node/mark
-// names it must target (`bold`, `italic`, `bulletList`, `codeBlock`, ...).
+// Build an editor whose schema IS the production editor's schema — the exact same
+// `buildSchemaExtensions()` Editor.svelte uses — so the parser is exercised
+// against the real node/mark names it must target (`bold`, `italic`,
+// `bulletList`, `codeBlock`, ...) with no drift between test and production.
 function makeSchema(): { schema: Schema; editor: Editor; container: HTMLDivElement } {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const editor = new Editor({
     element: container,
-    extensions: [
-      StarterKit.configure({ history: false }),
-      Highlight.configure({ multicolor: true }),
-      Link.configure({ openOnClick: false }),
-    ],
+    extensions: buildSchemaExtensions(),
     content: "",
   });
   return { schema: editor.state.schema, editor, container };

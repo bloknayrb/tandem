@@ -3,18 +3,10 @@
 import type { ChildNode, Element, Text } from "domhandler";
 import * as htmlparser2 from "htmlparser2";
 import * as Y from "yjs";
+import { DOCX_INLINE_MARKS } from "../../shared/constants.js";
 
 /** All marks that can appear on inline text (superset of mdast-ydoc) */
-const ALL_MARKS = [
-  "bold",
-  "italic",
-  "strike",
-  "code",
-  "link",
-  "underline",
-  "superscript",
-  "subscript",
-] as const;
+const ALL_MARKS = DOCX_INLINE_MARKS;
 
 /** Map HTML tag names to the mark they apply */
 const INLINE_MARK_TAGS: Record<string, (el: Element) => Record<string, object>> = {

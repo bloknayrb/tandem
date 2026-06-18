@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { exportAnnotations, htmlToYDoc } from "../../src/server/file-io/docx.js";
+import { exportAnnotations, htmlToYDoc, loadDocx } from "../../src/server/file-io/docx.js";
 import { getElementText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { buildMarks } from "../helpers/docx-corpus.js";
 import { getFragment, makeAnnotation } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -335,6 +336,20 @@ describe("htmlToYDoc — two-pass text population", () => {
     expect(delta[1].insert).toBe("b");
     expect(delta[1].attributes?.bold).toEqual({});
     expect(delta[2].insert).toBe(" c");
+  });
+});
+
+// -- mammoth import (styleMap) --
+
+describe("loadDocx — mammoth styleMap", () => {
+  it("emits <u> for underlined runs (u => u styleMap), keeping other marks", async () => {
+    // mammoth ignores underline by default; the styleMap (second arg of
+    // convertToHtml — a single-object merge silently no-ops) maps it to <u>.
+    const html = await loadDocx(await buildMarks());
+    expect(html).toMatch(/<u[ >]/); // the " under" run survives as underline
+    expect(html).toContain("<strong>bold</strong>"); // defaults still apply (additive)
+    expect(html).toMatch(/<sup>/);
+    expect(html).toMatch(/<sub>/);
   });
 });
 

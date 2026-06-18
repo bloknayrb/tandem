@@ -58,17 +58,20 @@ const CORPUS: Fixture[] = [
   {
     name: "text marks",
     build: corpus.buildMarks,
-    status: "degrades",
-    reason: "bold/italic/strike/sup/sub survive; underline is dropped (mammoth omits <u>)",
+    status: "survives",
+    reason:
+      "bold/italic/strike/sup/sub AND underline all survive — underline via the `u => u` styleMap (docx.ts)",
     check(rt) {
       expectStable(rt);
       const marks = marksIn(rt.gen1);
-      for (const mark of ["bold", "italic", "strike", "superscript", "subscript"]) {
+      for (const mark of ["bold", "italic", "strike", "superscript", "subscript", "underline"]) {
         expect(marks.has(mark), `expected mark ${mark}`).toBe(true);
       }
-      // CURRENT LOSS — underline dropped at the mammoth layer. When mammoth is
-      // wired to emit <u> (Tier-A), this flips → promote this fixture to survives.
-      expect(marks.has("underline")).toBe(false);
+      // NOTE: this is a SERVER round-trip and cannot see the client. Underline
+      // (and sup/sub) reaching the live editor without silent loss is gated by the
+      // client schema registering them — asserted in
+      // tests/client/editor-schema-marks.test.ts. A green "survives" here is the
+      // server half; that test is the co-requisite client half.
     },
   },
   {
@@ -79,6 +82,21 @@ const CORPUS: Fixture[] = [
     check(rt) {
       expectStable(rt);
       expect(marksIn(rt.gen1).has("link")).toBe(true);
+    },
+  },
+  {
+    name: "underlined link",
+    build: corpus.buildUnderlinedLink,
+    status: "survives",
+    reason:
+      "a directly-underlined hyperlink keeps BOTH link and underline (faithful co-occurrence, not double-decoration)",
+    check(rt) {
+      expectStable(rt);
+      // Single marked run in the fixture, so set-membership of both marks means
+      // the same run carries link+underline.
+      const marks = marksIn(rt.gen1);
+      expect(marks.has("link")).toBe(true);
+      expect(marks.has("underline")).toBe(true);
     },
   },
   {
@@ -212,6 +230,24 @@ const CORPUS: Fixture[] = [
       // Claude visibility, not the .docx file round-trip.)
       expect(rt.gen2.annotations).toHaveLength(1);
       expect(rt.gen2.annotations[0].author).toBe("import");
+      expect(rt.gen2.annotations[0].anchorText).toBe("anchored text");
+    },
+  },
+  {
+    name: "underlined comment anchor",
+    build: corpus.buildUnderlinedComment,
+    status: "survives",
+    reason:
+      "underline (offset-neutral mark) doesn't shift the comment anchor — it still resolves to the underlined run",
+    check(rt) {
+      expectStable(rt);
+      // The anchored run is now underlined; the comment must still land on it,
+      // proving the two offset computations (raw-XML walker vs htmlToYDoc) agree
+      // when a <w:u> attribute is present.
+      expect(rt.gen1.annotations).toHaveLength(1);
+      expect(rt.gen1.annotations[0].anchorText).toBe("anchored text");
+      expect(marksIn(rt.gen1).has("underline")).toBe(true);
+      expect(rt.gen2.annotations).toHaveLength(1);
       expect(rt.gen2.annotations[0].anchorText).toBe("anchored text");
     },
   },

@@ -90,6 +90,27 @@ export const buildLink = (): Promise<Buffer> =>
     ]),
   );
 
+/** A hyperlink whose run carries a DIRECT underline (`underline: {}`), not just
+ * the inherited Hyperlink character style. mammoth's `u` matcher fires on direct
+ * `<w:u>` only, so this run gets BOTH the link and underline marks — a faithful
+ * round-trip (the author did direct-underline it), not double-decoration. Pins
+ * that link+underline co-occurrence survives import→export without corruption. */
+export const buildUnderlinedLink = (): Promise<Buffer> =>
+  pack(
+    singleSection([
+      new Paragraph({
+        children: [
+          new TextRun("See "),
+          new ExternalHyperlink({
+            children: [new TextRun({ text: "the site", underline: {} })],
+            link: "https://example.com/page",
+          }),
+          new TextRun("."),
+        ],
+      }),
+    ]),
+  );
+
 export const buildBulletList = (): Promise<Buffer> =>
   pack(
     singleSection([
@@ -272,6 +293,38 @@ export const buildComment = (): Promise<Buffer> =>
       `<w:r><w:t xml:space="preserve">Before </w:t></w:r>` +
       `<w:commentRangeStart w:id="0"/>` +
       `<w:r><w:t>anchored text</w:t></w:r>` +
+      `<w:commentRangeEnd w:id="0"/>` +
+      `<w:r><w:commentReference w:id="0"/></w:r>` +
+      `<w:r><w:t xml:space="preserve"> after.</w:t></w:r>` +
+      `</w:p>`,
+    overrides: [
+      `<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>`,
+    ],
+    documentRels: [
+      `<Relationship Id="rIdC1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>`,
+    ],
+    parts: {
+      "word/comments.xml":
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<w:comments xmlns:w="${WML}">` +
+        `<w:comment w:id="0" w:author="Reviewer" w:date="2020-01-01T00:00:00Z" w:initials="R">` +
+        `<w:p><w:r><w:t>A reviewer note.</w:t></w:r></w:p>` +
+        `</w:comment></w:comments>`,
+    },
+  });
+
+/** A comment anchored over an UNDERLINED run (direct `<w:u>`), FIXED date. Pins
+ * that underline (an offset-neutral mark) does not shift the comment-anchor
+ * offset: `walkDocumentBody` (raw XML, counts the run as text) and
+ * `extractText(htmlToYDoc(mammoth(...)))` (underline as a delta attribute) must
+ * still agree, so the comment resolves to the same "anchored text". */
+export const buildUnderlinedComment = (): Promise<Buffer> =>
+  rawDocx({
+    body:
+      `<w:p>` +
+      `<w:r><w:t xml:space="preserve">Before </w:t></w:r>` +
+      `<w:commentRangeStart w:id="0"/>` +
+      `<w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t>anchored text</w:t></w:r>` +
       `<w:commentRangeEnd w:id="0"/>` +
       `<w:r><w:commentReference w:id="0"/></w:r>` +
       `<w:r><w:t xml:space="preserve"> after.</w:t></w:r>` +
