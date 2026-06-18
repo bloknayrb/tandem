@@ -525,6 +525,18 @@ function blockToDocx(el: Y.XmlElement, ctx: BlockCtx, emit: EmitCtx): Array<Para
   }
 }
 
+/**
+ * Read a table-cell span attribute (`colspan`/`rowspan`) as a docx span count.
+ * Returns undefined for absent/≤1/non-integer values so the caller can omit the
+ * option entirely (a span of 1 is the default and must not be emitted).
+ */
+function readSpanAttr(cell: Y.XmlElement, attr: "colspan" | "rowspan"): number | undefined {
+  const raw = cell.getAttribute(attr);
+  if (raw == null) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 1 ? n : undefined;
+}
+
 function tableToDocx(tableEl: Y.XmlElement, emit: EmitCtx): Table {
   const rows: TableRow[] = [];
   let hasPriorRow = false;
@@ -574,7 +586,13 @@ function tableToDocx(tableEl: Y.XmlElement, emit: EmitCtx): Table {
         }
       }
       if (cellChildren.length === 0) cellChildren.push(new Paragraph({ children: [] }));
-      cells.push(new TableCell({ children: cellChildren }));
+      // Carry a horizontal merge through to Word. The import preserves `colspan`
+      // on the cell element; without `columnSpan` here the export silently
+      // un-merges the cell (the priority loss the 0d scoreboard pinned).
+      // `rowspan` is intentionally NOT carried yet — docx vertical merge needs
+      // continuation cells on the rows below, a separate change.
+      const columnSpan = readSpanAttr(cell, "colspan");
+      cells.push(new TableCell({ children: cellChildren, ...(columnSpan ? { columnSpan } : {}) }));
     }
     rows.push(new TableRow({ children: cells }));
   }

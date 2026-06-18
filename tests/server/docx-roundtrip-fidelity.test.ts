@@ -129,18 +129,17 @@ const CORPUS: Fixture[] = [
   {
     name: "merged-cell table",
     build: corpus.buildMergedTable,
-    status: "breaks",
-    reason:
-      "import preserves colspan; the exporter drops it (Tier-A: docx pkg supports columnSpan)",
+    status: "survives",
+    reason: "colspan round-trips — the exporter now emits columnSpan from the cell's colspan attr",
     check(rt) {
       // Import preserved the merge…
       expect(nodesOfType(rt.gen1, "tableCell").some((c) => Number(c.attrs.colspan) === 2)).toBe(
         true,
       );
-      // …but export drops it. CURRENT LOSS — when the exporter emits columnSpan,
-      // gen2 keeps the span → this flips → promote to survives.
+      // …and export now carries it through: gen2 keeps the colspan. (rowspan is
+      // not yet carried — a separate vertical-merge change.)
       expect(nodesOfType(rt.gen2, "tableCell").some((c) => Number(c.attrs.colspan) === 2)).toBe(
-        false,
+        true,
       );
     },
   },
