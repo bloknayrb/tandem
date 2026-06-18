@@ -52,7 +52,7 @@ Tandem is built to work with Anthropic's Claude out of the box. Other AI tools c
   <img src="docs/screenshots/03-side-panel.png" alt="A close-up of annotation cards beside the document, including a replacement card showing the original text in red strikethrough and the proposed text in green, with Accept and Reject buttons" width="500">
 </p>
 
-*Annotations from the AI. Comments and suggestions appear as cards. For a replacement, your current text and the proposed wording show together — accept the change, set it aside, or reply to ask for something different.*
+*Annotations from the AI. Comments and suggestions appear as cards. For a replacement, your current text and the proposed wording show together — accept the change, reject it, or reply to ask for something different.*
 
 <p align="center">
   <img src="docs/screenshots/02-chat-sidebar.png" alt="The chat panel showing a question from the user and a reply from the AI assistant about the document" width="460">
