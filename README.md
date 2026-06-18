@@ -36,23 +36,35 @@ Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md]
 
 Most people use AI on a document by copying a passage into a chat window, asking a question, and pasting the answer back. Tandem closes that loop. The AI sits beside the document you are editing and reads from it directly.
 
-When you highlight text, the AI sees the selection as you make it. You can ask it for a rewrite, a summary, a check on tone, or a second opinion. Its suggestions appear as cards next to the document. Accept them, set them aside, or reply to ask for something different.
+When you highlight text, the AI sees the selection as you make it. You can ask it for a rewrite, a summary, a check on tone, or a second opinion. Its suggestions appear as cards next to the document. Accept them, reject them, or reply to ask for something different.
 
 Tandem is built to work with Anthropic's Claude out of the box. Other AI tools can also connect. See [the developer section](#the-mcp-integration-policy) below for the details of which clients work and which are tested first.
 
 ## See it in action
 
 <p align="center">
-  <img src="docs/screenshots/01-editor-overview.png" alt="The Tandem editor with a document open on the left and a panel of AI suggestion cards on the right" width="800">
+  <img src="docs/screenshots/01-editor-overview.png" alt="The Tandem editor with a document open on the left and a panel of AI annotation cards on the right" width="800">
 </p>
 
-*The main view. Your document fills the left side. The chat panel and any suggestions from the AI sit on the right.*
+*The main view. Your document fills the left side. The side panel on the right holds the AI's annotations and the chat conversation.*
 
 <p align="center">
-  <img src="docs/screenshots/03-side-panel.png" alt="A close-up of suggestion cards beside the document, including a replacement card showing the original text in red strikethrough and the proposed text in green" width="500">
+  <img src="docs/screenshots/03-side-panel.png" alt="A close-up of annotation cards beside the document, including a replacement card showing the original text in red strikethrough and the proposed text in green, with Accept and Reject buttons" width="500">
 </p>
 
-*A suggestion from the AI. Your current text and the proposed replacement appear together. Buttons let you accept the change or set it aside.*
+*Annotations from the AI. Comments and suggestions appear as cards. For a replacement, your current text and the proposed wording show together — accept the change, reject it, or reply to ask for something different.*
+
+<p align="center">
+  <img src="docs/screenshots/02-chat-sidebar.png" alt="The chat panel showing a question from the user and a reply from the AI assistant about the document" width="460">
+</p>
+
+*The chat panel. Ask a question about the document and the AI answers in place — it can read the file directly, so there is nothing to copy and paste.*
+
+<p align="center">
+  <img src="docs/screenshots/04-toolbar-actions.png" alt="The top of the editor showing several documents open in tabs, the formatting toolbar, a text selection, and the Solo and Tandem mode toggle" width="800">
+</p>
+
+*Several documents open in tabs, with the formatting toolbar above the text. Highlight a passage and the AI sees the selection as you make it. The Solo / Tandem toggle on the right controls whether the AI's annotations appear live or wait until you are ready.*
 
 ## Who Tandem is for
 
@@ -83,7 +95,7 @@ The desktop app bundles the editor, the server it talks to, and storage for the 
 - Find and replace, including across all open tabs.
 - An outline panel for navigating long documents.
 - Light and dark themes.
-- Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to dismiss.
+- Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to reject.
 
 ### Other ways to install
 
