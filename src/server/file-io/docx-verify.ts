@@ -219,13 +219,13 @@ function diffContent(
 
   // Tier 1 — degenerate model → BLOCK.
   if (isDegenerate(liveVisible, reimportVisible, liveBlockCount, reimportBlockCount)) {
-    console.error(`[docx-verify ${ctx.docId}] degenerate reimport (blocking save):`, metrics);
+    console.error("[docx-verify %s] degenerate reimport (blocking save):", ctx.docId, metrics);
     return { kind: "blocked", reason: "degenerate-model", metrics };
   }
   // Tier 2 — gross content loss → BLOCK (protects in-session edits; the snapshot
   // is once-per-run = original-at-open, so writing over it could strand the user).
   if (retentionRatio < GROSS_RETENTION) {
-    console.error(`[docx-verify ${ctx.docId}] gross text loss (blocking save):`, metrics);
+    console.error("[docx-verify %s] gross text loss (blocking save):", ctx.docId, metrics);
     return { kind: "blocked", reason: "gross-text-loss", metrics };
   }
   // Tier 3 — soft signals → ADVISORY (write + warn; may be benign anchor drift).
@@ -234,14 +234,14 @@ function diffContent(
   if (footnoteIdsResolved < expectedFootnotes.length) reasons.push("footnote-loss");
   if (retentionRatio < SOFT_RETENTION) reasons.push("soft-text-loss");
   if (reasons.length > 0) {
-    console.error(`[docx-verify ${ctx.docId}] integrity advisory (allowing save):`, {
+    console.error("[docx-verify %s] integrity advisory (allowing save):", ctx.docId, {
       reasons,
       ...metrics,
     });
     return { kind: "advisory", reasons, metrics };
   }
   // Passing verify leaves a breadcrumb so "we verified this save" is provable.
-  console.warn(`[docx-verify ${ctx.docId}] ok:`, metrics);
+  console.warn("[docx-verify %s] ok:", ctx.docId, metrics);
   return { kind: "ok", metrics };
 }
 
@@ -270,7 +270,11 @@ export async function verifyDocxRoundtrips(
     live = captureModel(liveDoc);
     expectedComments = prepareExportComments(liveDoc);
   } catch (err) {
-    console.error(`[docx-verify ${ctx.docId}] live capture failed (allowing save):`, errLabel(err));
+    console.error(
+      "[docx-verify %s] live capture failed (allowing save):",
+      ctx.docId,
+      errLabel(err),
+    );
     return { kind: "advisory", reasons: ["verifier-error"], metrics: emptyMetrics(bufferBytes) };
   }
 
@@ -311,7 +315,7 @@ export async function verifyDocxRoundtrips(
     } catch (err) {
       // Confirmed-broken output: the bytes we'd write don't re-open. BLOCK — but
       // as a RETURNED value, so the outer catch can't downgrade it to advisory.
-      console.error(`[docx-verify ${ctx.docId}] reimport failed (blocking save):`, errLabel(err));
+      console.error("[docx-verify %s] reimport failed (blocking save):", ctx.docId, errLabel(err));
       return {
         kind: "blocked",
         reason: "reimport-failed",
@@ -323,7 +327,8 @@ export async function verifyDocxRoundtrips(
     // Verifier-internal error (a bug in the diff logic) → allow-with-warning. A
     // broken verifier must never deny a save.
     console.error(
-      `[docx-verify ${ctx.docId}] unexpected verification error (allowing save):`,
+      "[docx-verify %s] unexpected verification error (allowing save):",
+      ctx.docId,
       errLabel(err),
     );
     return {
@@ -342,7 +347,7 @@ export async function verifyDocxRoundtrips(
     try {
       reimportDoc.destroy();
     } catch (err) {
-      console.error(`[docx-verify ${ctx.docId}] reimport doc destroy failed:`, errLabel(err));
+      console.error("[docx-verify %s] reimport doc destroy failed:", ctx.docId, errLabel(err));
     }
   }
 }
