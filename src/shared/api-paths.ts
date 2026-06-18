@@ -73,6 +73,7 @@ export const API_SHUTDOWN = "/api/shutdown";
 // licensee name + opaque licenseId). POST activate (PR-C) gates on origin
 // allowlist + loopback inside the handler.
 export const API_LICENSE_STATUS = "/api/license/status";
+export const API_LICENSE_ACTIVATE = "/api/license/activate";
 
 // --- Auth -------------------------------------------------------------------
 // NOTE: the legacy `/api/setup` route was removed in #477 PR 3c-ii-c; setup is

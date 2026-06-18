@@ -12,6 +12,7 @@ import {
   API_DOCUMENT_RELOAD,
   API_DOCX_CONFLICT_RESOLVE,
   API_INFO,
+  API_LICENSE_ACTIVATE,
   API_LICENSE_STATUS,
   API_MODE,
   API_NOTIFY_STREAM,
@@ -40,7 +41,7 @@ import { handleGetDocumentRaw } from "./routes/document-raw.js";
 import { handleReloadFromMarkdown } from "./routes/document-reload.js";
 import { handleResolveDocxConflict } from "./routes/docx-conflict.js";
 import { makeInfoHandler } from "./routes/info.js";
-import { handleGetLicenseStatus } from "./routes/license.js";
+import { handleActivateLicense, handleGetLicenseStatus } from "./routes/license.js";
 import { handleMode } from "./routes/mode.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
 import { handleOpen } from "./routes/open.js";
@@ -179,6 +180,11 @@ export function registerApiRoutes(
   // License status (#1116). GET-only; loopback callers get the full state
   // (licensee name + licenseId), non-loopback gets a PII-scrubbed subset.
   app.get(API_LICENSE_STATUS, mw, handleGetLicenseStatus);
+
+  // License activate (#1116). Gated on origin allowlist + loopback inside the
+  // handler — a license is a credential, installable only by a local caller.
+  app.options(API_LICENSE_ACTIVATE, mw);
+  app.post(API_LICENSE_ACTIVATE, mw, largeBody, handleActivateLicense);
 
   app.options(API_OPEN, mw);
   app.post(API_OPEN, mw, largeBody, handleOpen);
