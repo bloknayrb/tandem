@@ -234,6 +234,20 @@ async function main() {
     );
   }
 
+  // Start the trial clock on first boot of a gate-active build (ADR-040 #1116).
+  // No-op when the gate is dark. Runs in BOTH http and stdio mode, before any
+  // transport bind, so the first /api/license/status read sees a started trial.
+  try {
+    const { ensureTrialStarted } = await import("./license/license-state.js");
+    const { GATE_ENABLED } = await import("./license/gate-flag.js");
+    const { resolveAppDataDir } = await import("./platform.js");
+    await ensureTrialStarted(resolveAppDataDir(), () => Date.now(), GATE_ENABLED);
+  } catch (err) {
+    console.error(
+      `[Tandem] Warning: trial-clock init failed: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
   // Take the durable-annotation store lock before accepting connections.
   // HTTP mode: retry up to 30s when a live PID holds the lock, logging every 5s.
   // Stdio mode: single attempt only — the MCP init timeout cannot survive a retry loop.
