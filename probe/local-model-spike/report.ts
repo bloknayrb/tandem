@@ -7,6 +7,11 @@
  * failure-mode histogram. Latency reported separately (non-gating).
  *
  * Usage: npx tsx probe/local-model-spike/report.ts
+ *
+ * NOTE: This script applies the autonomous-collaborator bar. No model cleared
+ * it; the script will output NO-GO or FALLBACK. The shipping decision is GO as
+ * opt-in/experimental — see docs/spikes/local-llm-capability-spike.md for the
+ * human-in-the-loop rationale.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";

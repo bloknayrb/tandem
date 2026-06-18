@@ -13,7 +13,7 @@
  *
  * Counts (medium fixtures): comment 12, replacement 12, chat 12, no-op 3,
  * sequence 6. Batch runs each × 2 seeds (>=20 trials/op). Envelope scenarios
- * live in scenarios.envelope.ts and are merged at load time.
+ * are embedded directly in this file (see the final section below).
  */
 
 export type Operation = "comment" | "replacement" | "chat" | "no-op" | "sequence";

@@ -9,6 +9,11 @@
  * FALLBACK-vs-NO-GO call — never assumed.
  *
  * Usage: npx tsx probe/local-model-spike/report-fallback.ts
+ *
+ * NOTE: This script applies the autonomous-collaborator bar (constrained
+ * single-shot variant). No model clears all three ops; the script outputs
+ * NO-GO. The shipping decision is GO as opt-in/experimental — see
+ * docs/spikes/local-llm-capability-spike.md for the human-in-the-loop rationale.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
