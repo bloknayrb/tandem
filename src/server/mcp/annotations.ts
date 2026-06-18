@@ -361,7 +361,7 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_highlight", async () => {
+    gatedTool("tandem_highlight", async () => {
       notifyDeprecatedTool("tandem_highlight");
       return mcpError(
         "DEPRECATED",
@@ -472,7 +472,7 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_flag", async () => {
+    gatedTool("tandem_flag", async () => {
       notifyDeprecatedTool("tandem_flag");
       return mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead.");
     }),
@@ -571,7 +571,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
+    gatedTool("tandem_removeAnnotation", async ({ id, documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
       const result = store.removeAnnotation(id);

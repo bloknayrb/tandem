@@ -44,6 +44,12 @@ const RESTRICTED: LicenseStatusResponse = {
   status: "restricted",
   updateWindowCurrent: false,
 };
+const LICENSED: LicenseStatusResponse = {
+  gateActive: true,
+  status: "licensed",
+  updateWindowCurrent: true,
+  license: { name: "Beta Tester", type: "grandfathered" },
+};
 
 /** Flush the microtask queue so an in-flight poll's awaited fetch settles. */
 async function flush(): Promise<void> {
@@ -92,30 +98,47 @@ describe("licenseStore (singleton lifecycle)", () => {
     expect(licenseStore.ui.editable).toBe(true);
   });
 
-  it("fires onRestricted only on the trial→restricted edge", async () => {
-    const onRestricted = vi.fn();
+  it("fires onTransition only on the trial→restricted edge", async () => {
+    const onTransition = vi.fn();
     fetchLicenseStatus.mockResolvedValueOnce(TRIAL(1)).mockResolvedValue(RESTRICTED);
 
-    licenseStore.start({ onRestricted });
-    await flush(); // poll 1: trial → no fire
-    expect(onRestricted).not.toHaveBeenCalled();
+    licenseStore.start({ onTransition });
+    await flush(); // poll 1: trial → no edge from the false baseline
+    expect(onTransition).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(60_000); // poll 2: restricted → fire once
     await flush();
-    expect(onRestricted).toHaveBeenCalledTimes(1);
+    expect(onTransition).toHaveBeenCalledTimes(1);
     expect(licenseStore.ui.showWall).toBe(true);
     expect(licenseStore.ui.editable).toBe(false);
 
     await vi.advanceTimersByTimeAsync(60_000); // poll 3: still restricted → no re-fire
     await flush();
-    expect(onRestricted).toHaveBeenCalledTimes(1);
+    expect(onTransition).toHaveBeenCalledTimes(1);
   });
 
-  it("a redundant start() does not null a live onRestricted (review #1)", async () => {
-    const onRestricted = vi.fn();
+  it("fires onTransition on the restricted→licensed edge via set() (activation)", async () => {
+    const onTransition = vi.fn();
+    fetchLicenseStatus.mockResolvedValue(RESTRICTED);
+
+    licenseStore.start({ onTransition });
+    await flush(); // poll establishes restricted (edge from false baseline)
+    expect(onTransition).toHaveBeenCalledTimes(1);
+    expect(licenseStore.ui.showWall).toBe(true);
+
+    // Activation applies the licensed state immediately — the release edge must
+    // also fire so the provider rebuild lifts Surface A's read-only.
+    licenseStore.set(LICENSED);
+    expect(onTransition).toHaveBeenCalledTimes(2);
+    expect(licenseStore.ui.showWall).toBe(false);
+    expect(licenseStore.ui.editable).toBe(true);
+  });
+
+  it("a redundant start() does not null a live onTransition (review #1)", async () => {
+    const onTransition = vi.fn();
     fetchLicenseStatus.mockResolvedValue(TRIAL(3));
 
-    licenseStore.start({ onRestricted });
+    licenseStore.start({ onTransition });
     await flush();
     expect(fetchLicenseStatus).toHaveBeenCalledTimes(1);
 
@@ -128,7 +151,7 @@ describe("licenseStore (singleton lifecycle)", () => {
     fetchLicenseStatus.mockResolvedValue(RESTRICTED);
     await vi.advanceTimersByTimeAsync(60_000);
     await flush();
-    expect(onRestricted).toHaveBeenCalledTimes(1);
+    expect(onTransition).toHaveBeenCalledTimes(1);
   });
 
   it("stop() then start() re-arms polling (review #2)", async () => {

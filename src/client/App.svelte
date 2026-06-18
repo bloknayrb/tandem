@@ -121,11 +121,14 @@ onDestroy(() => yjsSync.destroy());
 const scratchpadPersistence = createScratchpadPersistence(() => yjsSync.tabs);
 onDestroy(() => scratchpadPersistence.destroy());
 
-// #1116: license gate (ADR-040). Polls /api/license/status; on the
-// trial→restricted transition, reconnect so the server re-applies Surface A's
-// read-only mode via onAuthenticate. Dark builds (the default until v1.0) poll
-// once and go quiet — the store self-stops when gateActive is false.
-licenseStore.start({ onRestricted: () => yjsSync.reconnect() });
+// #1116: license gate (ADR-040). Polls /api/license/status; on any
+// restricted↔unrestricted transition, rebuild the doc-room providers so the
+// server re-applies Surface A's read-only mode via onAuthenticate (a bare
+// reconnect() can't — connect() no-ops on a live socket in hocuspocus-provider
+// 3.x). This clamps to read-only on trial→restricted and releases it on
+// restricted→licensed. Dark builds (the default until v1.0) poll once and go
+// quiet — the store self-stops when gateActive is false, so this never fires.
+licenseStore.start({ onTransition: () => yjsSync.rebuildForLicenseChange() });
 onDestroy(() => licenseStore.stop());
 
 // In-memory closed-tab history for Ctrl+Alt+T (reopen closed tab). Lifetime is

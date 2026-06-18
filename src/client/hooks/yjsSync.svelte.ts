@@ -98,6 +98,13 @@ export interface YjsSyncState {
   destroy: () => void;
   /** Force an immediate reconnect attempt on all providers. */
   reconnect: () => void;
+  /**
+   * Rebuild all providers to force re-authentication after a license-state
+   * change (#1116). Unlike `reconnect()`, this re-runs the server's
+   * `onAuthenticate` gate on a live socket so Surface A's read-only clamp is
+   * applied/released. See the method body for why a bare reconnect can't.
+   */
+  rebuildForLicenseChange: () => void;
 }
 
 /**
@@ -763,6 +770,33 @@ export function createYjsSync(opts?: {
       for (const t of tabsState) {
         t.provider.connect();
       }
+    },
+    /**
+     * Force every provider to re-authenticate after a license-state change
+     * (#1116, ADR-040 Surface A). `reconnect()` above is a no-op on a live
+     * socket — in @hocuspocus/provider 3.x `connect()` early-returns when the
+     * status is already Connected — so it cannot make the server re-run
+     * `onAuthenticate` and re-evaluate `connection.readOnly` for already-open
+     * documents. Tearing down and re-bootstrapping creates fresh sockets that
+     * re-send Auth, so the server's gate clamps document rooms to read-only on
+     * trial→restricted and releases them on restricted→licensed.
+     *
+     * Reuses the server-restart rebuild primitives (`teardownAllTabs` +
+     * `startBootstrap`) but with the CURRENT pinned generation (no generation
+     * change) and without the "server restarted" banner. It does NOT touch
+     * `disconnect()` — a sync disconnect()+connect() on a healthy socket
+     * latches `shouldConnect=false` and wedges it (see scheduleRebuild's
+     * onGenerationUnchanged note). Inert in dark builds: the only caller (the
+     * license store's onTransition) never fires unless the gate is active.
+     */
+    rebuildForLicenseChange() {
+      if (destroyed) return;
+      const gen = generationId;
+      if (gen === null) return; // not bootstrapped yet — nothing to re-auth
+      teardownAllTabs();
+      bootstrapCleanup?.();
+      lastAppliedActiveEpoch = null;
+      startBootstrap(gen);
     },
   };
 }

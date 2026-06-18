@@ -352,7 +352,7 @@ export function registerDocumentTools(server: McpServer): void {
           "Initial markdown. Block structure (headings, lists, blank-line-separated paragraphs) is parsed into real blocks.",
         ),
     },
-    withErrorBoundary("tandem_scratchpad", async ({ content }) => {
+    gatedTool("tandem_scratchpad", async ({ content }) => {
       const result = await openScratchpad(content);
       return mcpSuccess({
         documentId: result.documentId,

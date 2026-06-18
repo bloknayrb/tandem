@@ -232,13 +232,17 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
       });
     }
 
-    // 7. Deliver the license
-    console.error(`[license] generated for ${customerEmail} (ID: ${id})`);
+    // 7. Deliver the license. Log the license id ONLY, never the buyer email
+    // (§12 L1 / no-telemetry posture) — console.error is the persisted server
+    // log, and the id is the KV/blob join key, so the email adds nothing
+    // operationally. `customerEmail` remains the delivery recipient below.
+    console.error(`[license] generated (ID: ${id})`);
 
-    // In production we would integrate an email delivery service (like Resend)
+    // In production we would integrate an email delivery service (like Resend),
+    // sending base64License to customerEmail.
     if (process.env.RESEND_API_KEY) {
       // Mock Resend delivery (could be imported if npm package is added)
-      console.error(`[license] dispatching to ${customerEmail}`);
+      console.error(`[license] dispatching (ID: ${id})`);
     }
 
     // Return only the license blob and test flag — metadata fields (name, email)

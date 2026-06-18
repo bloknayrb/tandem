@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { connectionShouldBeReadOnly } from "../../src/server/license/connection-gate.js";
+import { CTRL_ROOM } from "../../src/shared/constants.js";
 
-const CTRL = "__tandem_ctrl__";
+// Use the real constant, not a hardcoded literal — a rename of CTRL_ROOM must
+// not silently desync this test from the gate it guards.
+const CTRL = CTRL_ROOM;
 
 describe("connectionShouldBeReadOnly (Surface A)", () => {
   it("read-only for a document room when restricted", () => {

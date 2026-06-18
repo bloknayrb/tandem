@@ -113,6 +113,21 @@ uses the public GitHub endpoint — no error.
 > Grandfathered entitlements store `updateWindowEnd: null` ⇒ the Worker treats
 > them as always-current.
 
+> **Monitor the write — it's customer-impacting when it fails.** The write is
+> deliberately non-fatal (the signed license blob is the source of truth and is
+> always delivered; a blocking KV call in the webhook hot path could trip the
+> processor's retry → a duplicate license). But a *configured-but-failing* write
+> means a paying customer's `licenseId` never lands in KV, so the Worker returns
+> a byte-identical no-update forever and they silently stop receiving updates
+> while running fine. The only signal is a webhook-server stderr line:
+> `[license] KV entitlement write failed (HTTP <code>) for license <id>` (or
+> `... skipped (KV not configured)`). **Alert on `KV entitlement write failed`.**
+> To recover, re-derive KV from your issued-license records: for each affected
+> `licenseId`, re-`PUT KV[licenseId] = { updateWindowEnd, status, version }`
+> (same shape the webhook writes) via the Cloudflare KV REST API or `wrangler kv
+> key put`. The id is the join key, so a missed write is always repairable from
+> the order/license log without re-issuing the license.
+
 ### 3c. Behavior
 
 - Updater asks `GET /api/license/status` (loopback). If `gateActive && licenseId && updateWindowCurrent`, it points at the Worker with an `X-Tandem-License-Id` header; otherwise it uses the public GitHub `latest.json`.

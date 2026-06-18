@@ -9,9 +9,17 @@ import { fetchLicenseStatus } from "./useLicense";
  * Polls `GET /api/license/status`. When the gate is dark (the default until
  * v1.0) the first poll returns `gateActive: false` and polling stops — so a
  * dark build does one cheap fetch and then goes quiet, with `ui` fully
- * permissive (no banner, no wall, editor editable). On the transition INTO
- * restricted it fires `onRestricted` so the app can force a provider reconnect
- * (the server re-applies `connection.readOnly` via `onAuthenticate`).
+ * permissive (no banner, no wall, editor editable).
+ *
+ * On any restricted↔unrestricted transition it fires `onTransition` so the app
+ * can force a provider rebuild (`yjsSync.rebuildForLicenseChange`). That re-runs
+ * the server's `onAuthenticate` gate (Surface A): clamping document rooms to
+ * read-only on trial→restricted and releasing them on restricted→licensed. A
+ * bare `provider.connect()` is NOT enough — in @hocuspocus/provider 3.x it
+ * early-returns on a live socket, so the gate would never re-evaluate. The
+ * callback deliberately does NOT fire on the FIRST poll: at boot the providers
+ * already authenticated against the current license state, so a cold start in
+ * restricted mode needs no rebuild.
  */
 
 const POLL_INTERVAL_MS = 60_000;
@@ -20,11 +28,19 @@ function createLicenseStore() {
   let status = $state<LicenseStatusResponse | null>(null);
   let started = false;
   let timer: ReturnType<typeof setInterval> | null = null;
-  let onRestricted: (() => void) | null = null;
-  let wasRestricted = false;
+  let onTransition: (() => void) | null = null;
+  // null = no baseline yet (don't fire on the first observation); boolean = the
+  // last observed restricted-ness, used to detect edges in either direction.
+  let wasRestricted: boolean | null = null;
 
   function isRestricted(s: LicenseStatusResponse): boolean {
     return s.gateActive && s.status === "restricted";
+  }
+
+  /** Update the baseline and fire `onTransition` only on a genuine edge. */
+  function reconcileTransition(nowRestricted: boolean): void {
+    if (wasRestricted !== null && nowRestricted !== wasRestricted) onTransition?.();
+    wasRestricted = nowRestricted;
   }
 
   function stop(): void {
@@ -34,18 +50,20 @@ function createLicenseStore() {
     }
     // Clear `started` so a later start() (App.svelte remount under HMR/tests,
     // or the dark-build self-stop below followed by a fresh mount) can re-arm
-    // the interval. Without this the singleton would stay permanently quiet
-    // after the first stop, since start() early-returns on `started`.
+    // the interval. Drop the callback + baseline too; the next start()/poll
+    // re-establishes them, and this keeps a stale callback from firing during a
+    // beforeEach reset. Without resetting `started` the singleton would stay
+    // permanently quiet after the first stop, since start() early-returns on it.
     started = false;
+    onTransition = null;
+    wasRestricted = null;
   }
 
   async function poll(): Promise<void> {
     try {
       const next = await fetchLicenseStatus();
       status = next;
-      const nowRestricted = isRestricted(next);
-      if (nowRestricted && !wasRestricted) onRestricted?.();
-      wasRestricted = nowRestricted;
+      reconcileTransition(isRestricted(next));
       // The build flag never flips at runtime — a dark build polls once, then rests.
       if (!next.gateActive) stop();
     } catch {
@@ -60,15 +78,15 @@ function createLicenseStore() {
     get ui(): LicenseUi {
       return deriveLicenseUi(status);
     },
-    /** Begin polling. Idempotent; wires the restricted-transition callback once. */
-    start(deps?: { onRestricted?: () => void }): void {
+    /** Begin polling. Idempotent; wires the transition callback once per cycle. */
+    start(deps?: { onTransition?: () => void }): void {
       // Guard BEFORE wiring the callback so a redundant start() (no deps) can't
-      // null out a live `onRestricted` while the timer keeps running. First
+      // null out a live `onTransition` while the timer keeps running. First
       // start per lifecycle wins; a stop() resets `started`, so a clean
       // stop→start cycle re-establishes the callback from the new deps.
       if (started) return;
       started = true;
-      onRestricted = deps?.onRestricted ?? null;
+      onTransition = deps?.onTransition ?? null;
       void poll();
       timer = setInterval(() => void poll(), POLL_INTERVAL_MS);
     },
@@ -77,10 +95,12 @@ function createLicenseStore() {
     refresh(): Promise<void> {
       return poll();
     },
-    /** Apply a freshly-activated state immediately (from the activate response). */
+    /** Apply a freshly-activated state immediately (from the activate response).
+     *  Fires `onTransition` on an edge so a restricted→licensed activation
+     *  triggers the same provider rebuild the poll path would. */
     set(next: LicenseStatusResponse): void {
       status = next;
-      wasRestricted = isRestricted(next);
+      reconcileTransition(isRestricted(next));
     },
   };
 }
