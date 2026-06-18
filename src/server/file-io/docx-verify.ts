@@ -332,7 +332,18 @@ export async function verifyDocxRoundtrips(
       metrics: { ...emptyMetrics(bufferBytes), liveBlockCount: live.tree.length },
     };
   } finally {
-    reimportDoc.destroy();
+    // Swallow a destroy() throw. A throw out of `finally` overrides the verdict
+    // already returned above and propagates as a save-error — inverting the
+    // asymmetry (a verifier-internal fault denying a save, the one direction
+    // that must never happen). The throwaway doc has no observers today
+    // (it never goes through attachObservers/Hocuspocus, where destroy
+    // listeners attach), so destroy() can't throw — this keeps the asymmetry
+    // UNCONDITIONAL rather than contingent on that remaining true.
+    try {
+      reimportDoc.destroy();
+    } catch (err) {
+      console.error(`[docx-verify ${ctx.docId}] reimport doc destroy failed:`, errLabel(err));
+    }
   }
 }
 
