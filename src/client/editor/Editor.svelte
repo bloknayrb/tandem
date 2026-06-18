@@ -1,31 +1,22 @@
 <script lang="ts">
 import { HocuspocusProvider } from "@hocuspocus/provider";
-import { mergeAttributes, Editor as TiptapEditor } from "@tiptap/core";
+import { Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
-import Highlight from "@tiptap/extension-highlight";
-import Image from "@tiptap/extension-image";
-import Link from "@tiptap/extension-link";
-import Placeholder from "@tiptap/extension-placeholder";
-import Table from "@tiptap/extension-table";
-import TableCell from "@tiptap/extension-table-cell";
-import TableHeader from "@tiptap/extension-table-header";
-import TableRow from "@tiptap/extension-table-row";
-import StarterKit from "@tiptap/starter-kit";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
 import { installContextMenu } from "./context-menu/install";
+// Schema-defining extensions (nodes + marks + static plugins) live in one shared
+// module so the editor and tests register the same schema — see editor-extensions.ts.
+import { buildSchemaExtensions } from "./editor-extensions";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AnnotationPingExtension } from "./extensions/annotationPing";
 import { AuthorshipExtension } from "./extensions/authorship";
 import { AwarenessExtension } from "./extensions/awareness";
 import { FindReplaceExtension } from "./extensions/find-replace";
 import { HeadingCollapseExtension } from "./extensions/heading-collapse";
-import { ListItemCheckbox } from "./extensions/list-item-checkbox";
-import { MarkdownHtmlExtension } from "./extensions/markdown-html";
-import { RawMarkdownMark } from "./extensions/raw-markdown";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
 import { markdownToSlice } from "./utils/markdown-paste";
@@ -37,35 +28,6 @@ import { SUPPORTED_EXTENSIONS } from "../../shared/constants.js";
 
 /** File extensions that open as new Tandem tabs when clicked as relative links. .docx excluded — not navigable as a link target. */
 const INTERNAL_LINK_EXTS = new Set([...SUPPORTED_EXTENSIONS].filter((e) => e !== ".docx"));
-
-// Link mark that surfaces the destination URL on hover via a native `title`
-// tooltip (issue #996). The base `@tiptap/extension-link` renderHTML emits the
-// `href` (plus our configured rel/target) but no title, so links give no hover
-// affordance for where they point. We delegate to the base renderHTML via
-// `this.parent()` — which keeps its `isAllowedUri` security branch (blanking
-// `javascript:`/`data:`/etc. hrefs to "") — and then post-process: mirror the
-// href into `title` only when the BASE output's href survived (non-empty) and no
-// explicit title already exists (e.g. a .docx-imported title attr wins). Reading
-// the base output rather than the raw HTMLAttributes means a disallowed scheme is
-// never given a title and never resurrected. Pointer-cursor styling lives in
-// editor.css (`.tandem-editor a[href]`).
-const LinkWithHoverTitle = Link.extend({
-  renderHTML(props) {
-    const out = this.parent?.(props) ?? [
-      "a",
-      mergeAttributes(this.options.HTMLAttributes, props.HTMLAttributes),
-      0,
-    ];
-    if (Array.isArray(out) && out.length >= 2 && out[1] && typeof out[1] === "object") {
-      const attrs = out[1] as Record<string, unknown>;
-      const href = attrs.href;
-      if (typeof href === "string" && href.length > 0 && attrs.title == null) {
-        (out as unknown[])[1] = { ...attrs, title: href };
-      }
-    }
-    return out;
-  },
-});
 
 // SAFE_EXTERNAL_PREFIXES + isSafeExternalHref hoisted to ./utils/url-safety.ts
 // so the click-time anchor intercept and the paste-time link sanitizer share
@@ -168,38 +130,14 @@ $effect(() => {
   const next = new TiptapEditor({
     element: editorRoot,
     extensions: [
-      // `listItem: false` disables StarterKit's stock ListItem so our
-      // ListItemCheckbox (same node name "listItem", + a `checked` tri-state
-      // attribute for GFM task lists, #982) owns the schema. history:false —
-      // Yjs handles undo/redo.
-      StarterKit.configure({ history: false, listItem: false }),
-      ListItemCheckbox,
-      Highlight.configure({ multicolor: true }),
-      LinkWithHoverTitle.configure({
-        openOnClick: false,
-        HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
-      }),
-      // Block-level image node (issue #153). Renders `![alt](url)` markdown
-      // (round-tripped through mdast-ydoc) and embedded .docx images (mammoth
-      // converts them to base64 data URIs). allowBase64 is required so those
-      // data-URI sources parse and render rather than being stripped. The
-      // schema name ("image") + attrs (src/alt/title) match the `image`
-      // Y.XmlElement that the server converters produce, so it binds via
-      // y-prosemirror with no schema mismatch. As a block leaf node it
-      // contributes 0 flat-text chars, preserving annotation offset alignment.
-      Image.configure({ allowBase64: true }),
-      Placeholder.configure({
-        placeholder: "Start typing…",
-      }),
-      Table.configure({ resizable: true }),
-      TableRow,
-      TableCell,
-      TableHeader,
-      MarkdownHtmlExtension,
-      // Inline mark for verbatim markdown source (footnote/reference refs,
-      // inline image/html). Name must match the server `rawMarkdown` delta key
-      // so it round-trips through y-prosemirror. See raw-markdown.ts / #981.
-      RawMarkdownMark,
+      // Schema-defining extensions (StarterKit, ListItemCheckbox, the
+      // underline/superscript/subscript marks, Highlight, Link, Image,
+      // Placeholder, Table family, MarkdownHtml, RawMarkdown). Fresh instances
+      // per rebuild; shared with the editor tests. See editor-extensions.ts.
+      // Runtime-param extensions are appended below — order preserved so
+      // ListItemCheckbox stays after StarterKit's listItem:false and
+      // HeadingCollapse stays after AnnotationExtension (#650).
+      ...buildSchemaExtensions(),
       Collaboration.configure({ document: ydoc }),
       CollaborationCursor.configure({
         provider,

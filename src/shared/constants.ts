@@ -20,6 +20,29 @@ export const BYO_MODELS_ENABLED = false;
 /** File extensions the server accepts for opening. */
 export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
 
+/**
+ * Inline marks the `.docx` import path (`docx-html.ts#htmlToYDoc`) can emit onto
+ * Y.XmlText. The client Tiptap schema MUST register a mark for every name here:
+ * y-prosemirror's sync (`createTextNodesFromYText`) calls `schema.mark(name)` for
+ * each delta attribute and, on an UNREGISTERED mark, its catch deletes the whole
+ * offending Y.XmlText and propagates the deletion to disk — silent content loss,
+ * not a crash. So this list is the contract the editor schema is tested against
+ * (`tests/client/editor-schema-marks.test.ts`). Lives in shared (not docx-html)
+ * so the client guard imports the real source rather than a drift-prone copy.
+ * The markdown path (`mdast-ydoc.ts`) emits a different set (its core + the
+ * `rawMarkdown` mark, already client-registered).
+ */
+export const DOCX_INLINE_MARKS = [
+  "bold",
+  "italic",
+  "strike",
+  "code",
+  "link",
+  "underline",
+  "superscript",
+  "subscript",
+] as const;
+
 // DEFAULT_FONT_BY_EXTENSION removed as a #887 follow-up: seeded defaults
 // silently overrode the user's global editor-font choice for un-customized
 // formats (changing Settings > Editor Font did nothing for .docx / .html /

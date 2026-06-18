@@ -34,7 +34,17 @@ export async function loadDocx(content: Buffer): Promise<string> {
 export async function loadDocxWithWarnings(
   content: Buffer,
 ): Promise<{ html: string; warnings: string[] }> {
-  const result = await mammoth.convertToHtml({ buffer: content });
+  // styleMap is the SECOND arg of convertToHtml(input, options) — merging it into
+  // the input object silently no-ops. mammoth IGNORES underline by default (its
+  // docs: underline "can be easily confused with hyperlinks in HTML"), so without
+  // this map a <w:u> run reaches htmlToYDoc as plain text and the underline mark
+  // is lost on round-trip. "u => u" emits a literal <u> (which docx-html.ts maps
+  // to the underline mark) — NOT "u => em", which would silently re-code underline
+  // as italic. Additive: includeDefaultStyleMap stays true, so headings/bold/lists
+  // still resolve via mammoth's defaults. (Underline style/color — double/dotted/
+  // wavy/colored — is flattened to a boolean by mammoth upstream, so it round-trips
+  // as a single black underline; an accepted import ceiling, undetectable to warn on.)
+  const result = await mammoth.convertToHtml({ buffer: content }, { styleMap: ["u => u"] });
 
   for (const msg of result.messages) {
     console.error(`[mammoth] ${msg.type}: ${msg.message}`);
