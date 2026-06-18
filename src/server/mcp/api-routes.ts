@@ -30,6 +30,7 @@ import {
   API_UPLOAD,
 } from "../../shared/api-paths.js";
 import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
+import { licenseGateMiddleware } from "./license-gate.js";
 import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
@@ -202,40 +203,54 @@ export function registerApiRoutes(
   app.options(API_UPLOAD, mw);
   app.post(API_UPLOAD, mw, largeBody, handleUpload);
 
+  // Scratchpad create / append content is a document mutation — license-gated
+  // (#1116 Surface B) so a restricted user can't author into a fresh doc.
   app.options(API_SCRATCHPAD, mw);
-  app.post(API_SCRATCHPAD, mw, handleScratchpad);
+  app.post(API_SCRATCHPAD, mw, licenseGateMiddleware, handleScratchpad);
 
   app.options(API_CONVERT, mw);
   app.post(API_CONVERT, mw, largeBody, handleConvert);
 
+  // Apply tracked changes mutates document content — license-gated (#1116).
   app.options(API_APPLY_CHANGES, mw);
-  app.post(API_APPLY_CHANGES, mw, largeBody, handleApplyChanges);
+  app.post(API_APPLY_CHANGES, mw, licenseGateMiddleware, largeBody, handleApplyChanges);
 
   // Raw-markdown source view/edit (#1021). GET is loopback-only (full doc
   // content must not be disclosed to LAN peers, #1121 F5); POST is gated on
   // origin allowlist + loopback inside the handler (#1121 F6).
   app.get(API_DOCUMENT_RAW, mw, handleGetDocumentRaw);
+  // Reload-from-disk overwrites in-memory content — license-gated (#1116).
   app.options(API_DOCUMENT_RELOAD, mw);
-  app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
+  app.post(API_DOCUMENT_RELOAD, mw, licenseGateMiddleware, largeBody, handleReloadFromMarkdown);
 
   // Pre-overwrite document backups (#1086). GET strips absolute filePath to
   // basename for non-loopback callers (#1121 F5); POST is gated on origin
   // allowlist + loopback inside the handler (#1121 F6).
   app.get(API_BACKUPS, mw, handleListBackups);
+  // Restore overwrites the document with a snapshot — license-gated (#1116).
   app.options(API_BACKUPS_RESTORE, mw);
-  app.post(API_BACKUPS_RESTORE, mw, largeBody, handleRestoreBackup);
+  app.post(API_BACKUPS_RESTORE, mw, licenseGateMiddleware, largeBody, handleRestoreBackup);
 
   // .docx external-conflict resolution (#1069). Gated on origin allowlist +
-  // loopback inside the handler (#1121 F6).
+  // loopback inside the handler (#1121 F6); also license-gated (#1116) — it
+  // writes a resolution to the document.
   app.options(API_DOCX_CONFLICT_RESOLVE, mw);
-  app.post(API_DOCX_CONFLICT_RESOLVE, mw, largeBody, handleResolveDocxConflict);
+  app.post(
+    API_DOCX_CONFLICT_RESOLVE,
+    mw,
+    licenseGateMiddleware,
+    largeBody,
+    handleResolveDocxConflict,
+  );
 
-  // Annotation reply: browser user posts a reply to an annotation thread
+  // Annotation reply: browser user posts a reply to an annotation thread.
+  // License-gated (#1116) — an annotation mutation.
   app.options(API_ANNOTATION_REPLY, mw);
-  app.post(API_ANNOTATION_REPLY, mw, largeBody, handleAnnotationReply);
+  app.post(API_ANNOTATION_REPLY, mw, licenseGateMiddleware, largeBody, handleAnnotationReply);
 
+  // Remove-annotation is an annotation mutation — license-gated (#1116).
   app.options(API_REMOVE_ANNOTATION, mw);
-  app.post(API_REMOVE_ANNOTATION, mw, largeBody, handleRemoveAnnotation);
+  app.post(API_REMOVE_ANNOTATION, mw, licenseGateMiddleware, largeBody, handleRemoveAnnotation);
 
   // Stale store.lock reclaim (#1077). Mutating: the handler gates on origin
   // allowlist + loopback before touching the lockfile (same posture as the

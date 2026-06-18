@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import type { Response } from "express";
+import { describe, expect, it, vi } from "vitest";
 import type { LicenseState } from "../../src/server/license/license-types.js";
-import { gatedTool, licenseGateResult } from "../../src/server/mcp/license-gate.js";
+import {
+  gatedTool,
+  licenseGateMiddleware,
+  licenseGateResult,
+  sendLicenseRequired,
+} from "../../src/server/mcp/license-gate.js";
 
 const RESTRICTED: LicenseState = {
   gateActive: true,
@@ -72,5 +78,39 @@ describe("gatedTool (registration wrapper)", () => {
     const env = envelope(result);
     expect(env.error).toBe(true);
     expect(env.code).toBe("INTERNAL_ERROR");
+  });
+});
+
+function fakeRes(): Response & { statusCode: number; body: unknown } {
+  const r = {
+    statusCode: 200,
+    body: undefined as unknown,
+    status(code: number) {
+      r.statusCode = code;
+      return r;
+    },
+    json(b: unknown) {
+      r.body = b;
+      return r;
+    },
+  };
+  return r as unknown as Response & { statusCode: number; body: unknown };
+}
+
+describe("licenseGateMiddleware (HTTP /api gate)", () => {
+  it("sends a 403 LICENSE_REQUIRED envelope via sendLicenseRequired", () => {
+    const res = fakeRes();
+    sendLicenseRequired(res);
+    expect(res.statusCode).toBe(403);
+    expect((res.body as { error: string }).error).toBe("LICENSE_REQUIRED");
+  });
+
+  it("calls next() and leaves the response untouched when the gate is dark", () => {
+    const res = fakeRes();
+    const next = vi.fn();
+    // GATE_ENABLED is false under vitest ⇒ never restricted ⇒ pass through.
+    licenseGateMiddleware({} as never, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.body).toBeUndefined();
   });
 });

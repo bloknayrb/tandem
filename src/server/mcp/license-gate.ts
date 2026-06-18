@@ -10,6 +10,7 @@
  * wrapped handler — and thus before any document write or typing-presence
  * broadcast — ever runs.
  */
+import type { NextFunction, Request, Response } from "express";
 import { GATE_ENABLED } from "../license/gate-flag.js";
 import { resolveLicenseState } from "../license/license-state.js";
 import type { LicenseState } from "../license/license-types.js";
@@ -17,6 +18,10 @@ import { resolveAppDataDir } from "../platform.js";
 import { mcpError, withErrorBoundary } from "./response.js";
 
 type McpToolResult = ReturnType<typeof mcpError>;
+
+/** Shared user-facing copy for both the MCP envelope and the HTTP 403 body. */
+export const RESTRICTED_MESSAGE =
+  "Your Tandem trial has ended. Activate a license to keep editing — your documents stay open for reading and export.";
 
 /**
  * Pure gate decision. Given a resolved license state, return an `mcpError`
@@ -28,10 +33,7 @@ type McpToolResult = ReturnType<typeof mcpError>;
 export function licenseGateResult(state: LicenseState): McpToolResult | null {
   if (!state.gateActive) return null;
   if (state.status === "restricted") {
-    return mcpError(
-      "LICENSE_REQUIRED",
-      "Your Tandem trial has ended. Activate a license to keep editing — your documents stay open for reading and export.",
-    );
+    return mcpError("LICENSE_REQUIRED", RESTRICTED_MESSAGE);
   }
   return null;
 }
@@ -66,4 +68,35 @@ export function gatedTool<TArgs extends Record<string, unknown>>(
     if (blocked) return blocked;
     return handler(args);
   });
+}
+
+/** Live "is the on-device state restricted?" check — re-resolves per call. */
+export function isRestrictedNow(): boolean {
+  return (
+    resolveLicenseState({
+      appDataDir: resolveAppDataDir(),
+      now: () => Date.now(),
+      gateEnabled: GATE_ENABLED,
+    }).status === "restricted"
+  );
+}
+
+/** Send the HTTP 403 LICENSE_REQUIRED envelope (same shape as other /api errors). */
+export function sendLicenseRequired(res: Response): void {
+  res.status(403).json({ error: "LICENSE_REQUIRED", message: RESTRICTED_MESSAGE });
+}
+
+/**
+ * Express middleware twin of `gatedTool` for the mutating `/api` routes that
+ * bypass Surface A (they write to the Y.Doc over HTTP, not the Hocuspocus
+ * socket). Place it AFTER the auth/CORS middleware and BEFORE the body parser
+ * so a restricted caller is rejected without parsing a payload. No-op unless
+ * restricted (and always a no-op when the gate is dark).
+ */
+export function licenseGateMiddleware(_req: Request, res: Response, next: NextFunction): void {
+  if (isRestrictedNow()) {
+    sendLicenseRequired(res);
+    return;
+  }
+  next();
 }

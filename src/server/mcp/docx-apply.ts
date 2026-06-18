@@ -20,7 +20,7 @@ import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
 import { restoreDocumentFromBackup } from "./file-opener.js";
 import { gatedTool } from "./license-gate.js";
-import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
+import { mcpError, mcpSuccess, noDocumentError } from "./response.js";
 
 // ---------------------------------------------------------------------------
 // Shared core logic (used by both MCP tool and API endpoint)
@@ -250,7 +250,7 @@ export function registerApplyTools(server: McpServer): void {
         .optional()
         .describe("Snapshot filename to restore. Omit to list available snapshots."),
     },
-    withErrorBoundary("tandem_restoreBackup", async (args) => {
+    gatedTool("tandem_restoreBackup", async (args) => {
       // path.basename on the ID strips any directory components so CodeQL
       // does not trace args.documentId through Map.get to existing.filePath.
       // Valid IDs (64-char hex / upload_*) have no separators, so this is a
