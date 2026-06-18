@@ -195,6 +195,14 @@ integration-wizard-step-detect
 integration-wizard-step-done
 integration-wizard-step-error
 left-outline-rail
+license-activate-error
+license-activate-input
+license-activate-submit
+license-settings-section
+license-status-pill
+license-trial-banner
+license-trial-days
+license-wall
 margin-anchor-dot
 margin-bubble-{*}
 margin-column-{*}
