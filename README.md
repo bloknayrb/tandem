@@ -36,7 +36,7 @@ Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md]
 
 Most people use AI on a document by copying a passage into a chat window, asking a question, and pasting the answer back. Tandem closes that loop. The AI sits beside the document you are editing and reads from it directly.
 
-When you highlight text, the AI sees the selection as you make it. You can ask it for a rewrite, a summary, a check on tone, or a second opinion. Its suggestions appear as cards next to the document. Accept them, set them aside, or reply to ask for something different.
+When you highlight text, the AI sees the selection as you make it. You can ask it for a rewrite, a summary, a check on tone, or a second opinion. Its suggestions appear as cards next to the document. Accept them, reject them, or reply to ask for something different.
 
 Tandem is built to work with Anthropic's Claude out of the box. Other AI tools can also connect. See [the developer section](#the-mcp-integration-policy) below for the details of which clients work and which are tested first.
 
@@ -95,7 +95,7 @@ The desktop app bundles the editor, the server it talks to, and storage for the 
 - Find and replace, including across all open tabs.
 - An outline panel for navigating long documents.
 - Light and dark themes.
-- Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to dismiss.
+- Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to reject.
 
 ### Other ways to install
 
