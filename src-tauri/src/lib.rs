@@ -51,6 +51,18 @@ const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
 /// the Node shutdown sequence (dirty-doc flush + session save) before exit.
 /// Keep in sync with API_SHUTDOWN in src/shared/api-paths.ts.
 const SHUTDOWN_URL: &str = "http://127.0.0.1:3479/api/shutdown";
+/// License status endpoint (loopback). The updater reads `licenseId` +
+/// `updateWindowCurrent` to decide whether to route update checks through the
+/// license-gated Worker (#1116, ADR-040 §7). Keep in sync with
+/// API_LICENSE_STATUS in src/shared/api-paths.ts.
+const LICENSE_STATUS_URL: &str = "http://127.0.0.1:3479/api/license/status";
+/// Deployed license-update Worker endpoint (owner-configured; see
+/// docs/licensing-operations.md §3). EMPTY until the Worker is deployed for
+/// v1.0 — while empty, update checks always use the default public endpoint
+/// from tauri.conf.json, so updater behavior is byte-identical to today. The
+/// `{{target}}`, `{{arch}}`, and `{{current_version}}` template vars are
+/// expanded by tauri-plugin-updater at check time.
+const LICENSE_UPDATE_ENDPOINT: &str = "";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -2939,8 +2951,67 @@ fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
 
 /// Check for updates and optionally prompt the user.
 /// `manual` controls whether the user gets feedback on "no update" / error.
+/// Subset of `GET /api/license/status` the updater needs. Keys are camelCase on
+/// the wire (see src/server/mcp/routes/license.ts); `#[serde(default)]` keeps a
+/// scrubbed/partial body from failing deserialization.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LicenseStatusResponse {
+    #[serde(default)]
+    gate_active: bool,
+    #[serde(default)]
+    license_id: Option<String>,
+    #[serde(default)]
+    update_window_current: bool,
+}
+
+/// Ask the sidecar (loopback) whether update checks should route through the
+/// license-gated Worker. Returns `Some(license_id)` ONLY when a Worker endpoint
+/// is configured AND the gate is active AND the license's update window is
+/// current. Every other case (no endpoint, gate dark, trial, restricted,
+/// expired window, sidecar unreachable, scrubbed body) falls back to `None` ⇒
+/// the default public endpoint. Never errors — update checks must not depend on
+/// the license probe succeeding.
+async fn entitled_license_id(app: &tauri::AppHandle) -> Option<String> {
+    if LICENSE_UPDATE_ENDPOINT.is_empty() {
+        return None;
+    }
+    let client = app.try_state::<reqwest::Client>()?.inner().clone();
+    let resp = client.get(LICENSE_STATUS_URL).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let status: LicenseStatusResponse = resp.json().await.ok()?;
+    if status.gate_active && status.update_window_current {
+        status.license_id
+    } else {
+        None
+    }
+}
+
+/// Build the updater, routing through the license-gated Worker (with the opaque
+/// license-id header) when the device is entitled, else the default public
+/// endpoint from `tauri.conf.json`. Both `check_for_update` and `install_update`
+/// go through this so check + install agree on the source (#1116, ADR-040 §7).
+async fn build_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    match entitled_license_id(app).await {
+        Some(lid) => {
+            let endpoint = Url::parse(LICENSE_UPDATE_ENDPOINT)
+                .map_err(|e| format!("Invalid license update endpoint: {e}"))?;
+            app.updater_builder()
+                .endpoints(vec![endpoint])
+                .map_err(|e| e.to_string())?
+                .header("X-Tandem-License-Id", lid)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())
+        }
+        None => app.updater().map_err(|e| e.to_string()),
+    }
+}
+
 async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
-    let updater = match app.updater() {
+    let updater = match build_updater(app).await {
         Ok(u) => u,
         Err(e) => {
             log::debug!("Updater unavailable: {e}");
@@ -3011,8 +3082,8 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
 /// release the server advertises) and dispatches the install flow.
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
-    let updater = app
-        .updater()
+    let updater = build_updater(&app)
+        .await
         .map_err(|e| format!("Updater not configured: {e}"))?;
     let update = updater
         .check()
