@@ -95,7 +95,14 @@ describe("editor schema ⊇ DOCX_INLINE_MARKS", () => {
     htmlToYDoc(ydoc, MARKED_HTML);
     const editor = mount([StarterKit.configure({ history: false })], ydoc);
 
-    // The underlined/sup/sub run's text node is gone (the whole XmlText is dropped).
-    expect(editor.getHTML()).not.toContain("under");
+    const html = editor.getHTML();
+    // The underlined run's text is gone...
+    expect(html).not.toContain("under");
+    // ...and the blast radius is the WHOLE paragraph XmlText, not just the
+    // offending run: htmlToYDoc packs the entire <p> into one Y.XmlText, so
+    // y-prosemirror's catch deletes all of it — even the StarterKit-known
+    // "bold"/"italic" runs vanish. This is why the failure is silent
+    // content loss, not a localized formatting drop.
+    expect(html).not.toContain("bold");
   });
 });
