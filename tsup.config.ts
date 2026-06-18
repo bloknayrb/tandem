@@ -14,6 +14,11 @@ const mcpSdkPkg = JSON.parse(readFileSync(join(sdkRoot, "package.json"), "utf8")
   version: string;
 };
 
+// License gate (ADR-040): ships DARK by default. Injected as __LICENSE_GATE_ENABLED__
+// into every bundle whose tree imports src/server/license/* (server + cli today).
+// Flip to `true` at v1.0 once commercial-readiness exit criteria are met.
+const LICENSE_GATE_ENABLED = false;
+
 // Node builtins must stay external — CJS deps that call require("fs") etc.
 // fail with "Dynamic require not supported" if bundled into ESM.
 const nodeBuiltins = builtinModules.flatMap((m) => [m, `node:${m}`]);
@@ -51,6 +56,7 @@ export default defineConfig([
     define: {
       __MCP_SDK_VERSION__: JSON.stringify(mcpSdkPkg.version),
       __APP_VERSION__: JSON.stringify(pkg.version),
+      __LICENSE_GATE_ENABLED__: JSON.stringify(LICENSE_GATE_ENABLED),
     },
   },
   {
@@ -92,6 +98,7 @@ export default defineConfig([
     },
     define: {
       __TANDEM_VERSION__: JSON.stringify(pkg.version),
+      __LICENSE_GATE_ENABLED__: JSON.stringify(LICENSE_GATE_ENABLED),
     },
   },
 ]);

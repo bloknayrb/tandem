@@ -27,10 +27,16 @@ export function canonicalize(obj: any): string {
 }
 
 /**
- * Verifies a base64-encoded signed license string against the embedded public key.
- * Throws an error if verification fails or the license has expired.
+ * Verifies the Ed25519 signature of a base64-encoded signed license against the
+ * embedded public key — signature ONLY, no expiry check.
+ *
+ * This is the correct check for the *run* gate (ADR-040 §3/§4): a paid license
+ * lets you run the current version **forever**; `expiresAt` governs only the
+ * update window, not the right to run. Callers that need the update-window
+ * decision read `metadata.expiresAt` themselves (see `license-state.ts`).
+ * Throws if the format is malformed or the signature is invalid.
  */
-export function verifyLicense(licenseString: string): LicenseMetadata {
+export function verifyLicenseSignature(licenseString: string): LicenseMetadata {
   // Bound the input before any allocation — license blobs are small (<2KB).
   if (licenseString.length > 10_000) {
     throw new Error("License verification failed: input exceeds maximum length");
@@ -54,14 +60,6 @@ export function verifyLicense(licenseString: string): LicenseMetadata {
       throw new Error("Signature verification failed");
     }
 
-    // 3. Check expiration
-    if (signedLicense.metadata.expiresAt) {
-      const expires = new Date(signedLicense.metadata.expiresAt);
-      if (expires.getTime() < Date.now()) {
-        throw new Error(`License expired on ${signedLicense.metadata.expiresAt}`);
-      }
-    }
-
     return signedLicense.metadata;
   } catch (error: any) {
     // Preserve already-wrapped messages to avoid double-wrapping.
@@ -70,4 +68,21 @@ export function verifyLicense(licenseString: string): LicenseMetadata {
     }
     throw new Error(`License verification failed: ${error.message}`, { cause: error });
   }
+}
+
+/**
+ * Verifies signature AND rejects an expired license. Stricter than the run
+ * gate needs — kept for callers that want a single "valid & unexpired now"
+ * check. The on-device run/update gate uses {@link verifyLicenseSignature}
+ * plus its own `expiresAt` reading instead.
+ */
+export function verifyLicense(licenseString: string): LicenseMetadata {
+  const metadata = verifyLicenseSignature(licenseString);
+  if (metadata.expiresAt) {
+    const expires = new Date(metadata.expiresAt);
+    if (expires.getTime() < Date.now()) {
+      throw new Error(`License expired on ${metadata.expiresAt}`);
+    }
+  }
+  return metadata;
 }
