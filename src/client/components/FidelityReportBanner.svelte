@@ -44,6 +44,8 @@ $effect(() => {
       ? {
           importLosses: Array.isArray(raw.importLosses) ? raw.importLosses : [],
           exportDowngrades: Array.isArray(raw.exportDowngrades) ? raw.exportDowngrades : [],
+          // Optional/forward-compat (#1123 0e): pre-0e reports lack this field.
+          integrityWarnings: Array.isArray(raw.integrityWarnings) ? raw.integrityWarnings : [],
           updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
         }
       : null;
@@ -63,21 +65,33 @@ $effect(() => {
   };
 });
 
+// Post-write verification advisories (#1123 0e) are LOUDER than announced
+// import/export losses — when present the banner elevates to warning severity
+// and leads with the integrity message + restore on-ramp. `?? []` for reports
+// persisted before 0e existed.
+const integrityWarnings = $derived(report?.integrityWarnings ?? []);
+const hasIntegrity = $derived(integrityWarnings.length > 0);
 const hasLosses = $derived(
-  !!report && (report.importLosses.length > 0 || report.exportDowngrades.length > 0),
+  !!report &&
+    (report.importLosses.length > 0 || report.exportDowngrades.length > 0 || hasIntegrity),
 );
 </script>
 
 {#if hasLosses && report}
   <div
-    class="tandem-banner tandem-banner--info"
-    role="status"
-    aria-live="polite"
+    class="tandem-banner {hasIntegrity ? 'tandem-banner--warning' : 'tandem-banner--info'}"
+    role={hasIntegrity ? "alert" : "status"}
+    aria-live={hasIntegrity ? "assertive" : "polite"}
     data-testid="fidelity-report-banner"
   >
     <span class="tandem-banner__message">
-      Some Word features in {fileName} aren't fully supported. Tandem imported the text and
-      structure, but the items below won't survive a save back to .docx.
+      {#if hasIntegrity}
+        This save of {fileName} may have changed more than expected — your original is backed up and
+        can be restored.
+      {:else}
+        Some Word features in {fileName} aren't fully supported. Tandem imported the text and
+        structure, but the items below won't survive a save back to .docx.
+      {/if}
     </span>
     <button
       type="button"
@@ -90,7 +104,23 @@ const hasLosses = $derived(
     </button>
   </div>
   {#if expanded}
-    <div class="fidelity-report-details" data-testid="fidelity-report-details">
+    <div
+      class="fidelity-report-details {hasIntegrity ? 'fidelity-report-details--warning' : ''}"
+      data-testid="fidelity-report-details"
+    >
+      {#if hasIntegrity}
+        <section data-testid="fidelity-report-integrity-warnings">
+          <h4>This save may not have preserved everything</h4>
+          <ul>
+            {#each integrityWarnings as warning}
+              <li>{warning}</li>
+            {/each}
+          </ul>
+          <p class="fidelity-report-restore-hint">
+            To recover, run "Restore a backup of this document…" from the command palette.
+          </p>
+        </section>
+      {/if}
       {#if report.importLosses.length > 0}
         <section data-testid="fidelity-report-import-losses">
           <h4>Not imported — lost if you save over the original</h4>
@@ -141,5 +171,18 @@ const hasLosses = $derived(
     display: flex;
     flex-direction: column;
     gap: var(--tandem-space-1);
+  }
+
+  /* Post-write verification advisory (#1123 0e) — warning severity, distinct
+     from the calm info treatment of announced import/export losses. */
+  .fidelity-report-details--warning {
+    background: var(--tandem-warning-bg);
+    border-color: var(--tandem-warning-border);
+    color: var(--tandem-warning-fg-strong);
+  }
+
+  .fidelity-report-restore-hint {
+    margin: var(--tandem-space-1) 0 0;
+    font-style: italic;
   }
 </style>
