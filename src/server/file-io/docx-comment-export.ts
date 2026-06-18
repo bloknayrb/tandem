@@ -24,17 +24,18 @@
 //           should not be dropped" — even an accepted/dismissed import round-trips
 //           (status is Tandem's review state, not the file's content). Only an
 //           explicit DELETE (removal from the annotation map) drops an import.
-//   - The import predicate keys on `author === "import"` AND `importSource`,
-//     never on `author` alone: the durable store's `.passthrough()` envelope
-//     leaves `author` its least-validated field, so a tampered/legacy record
-//     carrying `author:"import"` + user content must NOT be sufficient to leak
-//     into a shared file. A genuine import always populates `importSource`.
+//   - The import predicate (annotations AND replies) keys on `author ===
+//     "import"` AND a corroborating field (`importSource` / `importAuthor`),
+//     never on `author` alone: the `.passthrough()` durable envelope
+//     enum-validates `author` but does NOT cross-validate it against the import
+//     metadata, so `author:"import"` alone must not bypass the gate. A genuine
+//     import always populates the corroborating field.
 //   - User-authored `note`/`highlight` and user-authored `private` replies
 //     NEVER satisfy the import predicate, so they are never exported.
-//   - Replies: `private` replies are exported ONLY when `author === "import"`
-//     (imported Word reply threads round-trip back to the file); note-authored
-//     and other private replies never export. Privacy is a durable property of
-//     the reply.
+//   - Replies: `private` replies are exported ONLY when they are import replies
+//     (`author === "import"` AND a populated `importAuthor`) — imported Word
+//     reply threads round-trip back to the file; note-authored and other private
+//     replies never export. Privacy is a durable property of the reply.
 //
 // Range resolution mirrors the read paths: `refreshRange` resolves the CRDT
 // `relRange` first and falls back to flat offsets (read-only here — no Y.Map
@@ -84,12 +85,15 @@ export interface ExportComment {
  *
  * Keyed on `author === "import"` AND a populated `importSource.author`, never on
  * `author` alone. The durable store's `.passthrough()` envelope (annotations/
- * schema.ts) leaves `author` its least-validated field, so a tampered/legacy
- * `<hash>.json` record carrying only `author:"import"` + user content must not
- * be enough to bypass the privacy gate and leak into a shared file. A genuine
- * import always populates `importSource` (docx-comments.ts injection); requiring
- * it restores belt-and-suspenders alongside the (now import-bypassed) type and
- * audience gates. `importSource.commentId` is deliberately NOT required — it is
+ * schema.ts) enum-validates `author` but does NOT cross-validate it against
+ * `importSource`, so a tampered/legacy `<hash>.json` record carrying
+ * `author:"import"` + user content but no `importSource` must not be enough to
+ * bypass the privacy gate and leak into a shared file. A genuine import always
+ * populates `importSource` (docx-comments.ts injection); requiring it restores
+ * belt-and-suspenders alongside the (now import-bypassed) type and audience
+ * gates. (A determined local attacker who hand-edits the at-rest JSON can forge
+ * both fields — but that is not an escalation: they can already edit the target
+ * .docx directly.) `importSource.commentId` is deliberately NOT required — it is
  * about w:id stability, not provenance, and pre-#1068 import notes lack it.
  */
 function isImportRoundtrip(ann: Annotation): boolean {
@@ -97,6 +101,22 @@ function isImportRoundtrip(ann: Annotation): boolean {
     ann.author === "import" &&
     typeof ann.importSource?.author === "string" &&
     ann.importSource.author.length > 0
+  );
+}
+
+/**
+ * Reply analogue of `isImportRoundtrip`: an imported Word reply that round-trips
+ * back to its source file. Same corroboration rationale — `author === "import"`
+ * alone is insufficient under the `.passthrough()` envelope; require a populated
+ * `importAuthor`, which the genuine injection path always sets (reply author
+ * defaults to "Unknown", never empty — `parseCommentMetadata`). This keeps the
+ * reply gate symmetric with the annotation gate.
+ */
+function isImportReply(reply: AnnotationReply): boolean {
+  return (
+    reply.author === "import" &&
+    typeof reply.importAuthor === "string" &&
+    reply.importAuthor.length > 0
   );
 }
 
@@ -164,12 +184,12 @@ function exportableReplies(repliesMap: Y.Map<unknown>, annotationId: string): An
     const reply = value as AnnotationReply;
     if (reply.annotationId !== annotationId) return;
     // ADR-027/#1000: private replies never reach Claude. The .docx file
-    // round-trip is a separate boundary: an imported Word reply (author ===
-    // "import") is written back to the file it came from even though it's
-    // private. A user-authored private reply (note-authored, or a private reply
-    // on an imported comment) never exports. Anything not explicitly
-    // import-origin-and-private-ok stays excluded (fail closed).
-    if (reply.private === true && reply.author !== "import") return;
+    // round-trip is a separate boundary: an imported Word reply (isImportReply)
+    // is written back to the file it came from even though it's private. A
+    // user-authored private reply (note-authored, or a private reply on an
+    // imported comment) never exports, and an `author:"import"` reply lacking
+    // the corroborating `importAuthor` is treated as untrusted (fail closed).
+    if (reply.private === true && !isImportReply(reply)) return;
     if (typeof reply.id !== "string") return;
     if (typeof reply.text !== "string" || reply.text.length === 0) return;
     out.push(reply);

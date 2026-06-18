@@ -8,8 +8,11 @@
 //   3. An imported Word comment promoted to a Tandem comment round-trips with
 //      the SAME deterministic `importAnnotationId`, so the existing inject
 //      dedup + durable LWW merge converge instead of duplicating.
-// Plus the ADR-027 hard gate: note content must never appear in ANY generated
-// XML part.
+// Plus the privacy boundary: USER-authored note/highlight content and
+// user-private content must never appear in any generated XML part. Imported
+// Word comments (author:"import") are the exception — they round-trip back to
+// their OWN .docx (file preservation, not Claude exposure); see the
+// imported-comment-writeback tests below and ADR-027's 2026-06-17 revision.
 
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -413,6 +416,32 @@ describe("exportYDocToDocx — ADR-027 privacy gate", () => {
     const all = await allXmlText(await unzip(await exportYDocToDocx(d)));
     expect(all).toContain("ROOT-IMPORT-COMMENT");
     expect(all).toContain("IMPORTED-REPLY-BODY");
+  });
+
+  it("does NOT export an author:import reply lacking importAuthor (provenance corroboration)", async () => {
+    // Symmetric with the annotation gate: author:"import" alone is insufficient
+    // under the .passthrough() envelope. A private reply without the corroborating
+    // importAuthor is untrusted and stays out of the file, even though its root
+    // (a genuine import) round-trips.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    const id = addAnnotation(d, 0, 5, {
+      type: "note",
+      author: "import",
+      audience: "private",
+      content: "ROOT-IMPORT-OK",
+      importSource: { author: "Alice", file: "review.docx", commentId: "3" },
+    });
+    addReply(d, {
+      annotationId: id,
+      text: "UNCORROBORATED-REPLY",
+      author: "import",
+      private: true,
+      // importAuthor deliberately absent
+    });
+
+    const all = await allXmlText(await unzip(await exportYDocToDocx(d)));
+    expect(all).toContain("ROOT-IMPORT-OK");
+    expect(all).not.toContain("UNCORROBORATED-REPLY");
   });
 });
 
