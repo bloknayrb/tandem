@@ -25,7 +25,7 @@
 - [Agent Workflow](.claude/skills/issue-pipeline/SKILL.md) -- 10-step agent-driven issue pipeline (`/issue-pipeline`)
 - [Roadmap](docs/roadmap.md) -- Phase 2+ roadmap, future extensions
 - [Design Decisions](docs/decisions.md) -- ADRs (001-043)
-- [Lessons Learned](docs/lessons-learned.md) -- 81 lessons including E2E testing gotchas, CORS-allowlist three-surface audits, DOM-nested scroll sync for content-anchored overlays, schema-backed palette migrations, epoch-vs-value reconcile discrimination, boot-time reaping of crash-orphaned atomic-write temps, verifying shipped-state before planning, per-surface privacy gates, freshness guards that exercise the real operation, and background retry guards that classify outcomes before marking
+- [Lessons Learned](docs/lessons-learned.md) -- 82 lessons including E2E testing gotchas, CORS-allowlist three-surface audits, DOM-nested scroll sync for content-anchored overlays, schema-backed palette migrations, epoch-vs-value reconcile discrimination, boot-time reaping of crash-orphaned atomic-write temps, verifying shipped-state before planning, per-surface privacy gates, freshness guards that exercise the real operation, background retry guards that classify outcomes before marking, and measuring a transformation pipeline rather than reading it
 - [Knowledge Graph](.claude/knowledge-graph/README.md) -- **PILOT (review 2026-06-01).** 27 hand-curated concept/rule/ADR nodes with cross-edges. Query via `npm run kg neighbors <id>` / `npm run kg rules-for <id-or-file>`. Validate via `npm run kg:lint`. Kill if no surprising query in two weeks.
 
 ## Development Workflow
