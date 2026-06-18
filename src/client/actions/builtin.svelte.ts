@@ -398,8 +398,19 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
       // notice carries the specifics; this is the immediate "it happened" nudge.
       // `deps?.` guards the pre-mount window (deps is wired in App.onMount).
       const json = (await resp.json().catch(() => null)) as {
-        data?: { fidelityWarnings?: string[] };
+        data?: { fidelityWarnings?: string[]; integrityWarnings?: string[] };
       } | null;
+      // Post-write verification advisory (#1123 0e) — louder + distinct from an
+      // announced downgrade: the save may have lost content UNEXPECTEDLY. Point
+      // at the restore on-ramp; the persistent notice carries the specifics.
+      // Deliberately NOT folded into the "N features simplified" line below.
+      const integrity = json?.data?.integrityWarnings?.length ?? 0;
+      if (integrity > 0) {
+        deps?.notify(
+          "error",
+          'Saved, but some content may not have been preserved — your original is backed up. See the document notice, or run "Restore a backup of this document…" from the command palette.',
+        );
+      }
       const downgraded = json?.data?.fidelityWarnings?.length ?? 0;
       if (downgraded > 0) {
         deps?.notify(

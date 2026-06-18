@@ -339,8 +339,22 @@ export interface FidelityReport {
   /**
    * Content the export downgraded on the most recent save (unsupported blocks,
    * non-`data:` images). Refreshed each binary save; reset by a re-import.
+   * These are ANNOUNCED, expected downgrades — rendered as a calm/info notice.
    */
   exportDowngrades: string[];
+  /**
+   * Post-write verification advisories (#1123 Phase 0e). Distinct from
+   * `exportDowngrades`: these flag content the save may have lost UNEXPECTEDLY
+   * (a comment or footnote body that didn't survive a verify reimport, a
+   * gross-but-not-blocking text-retention shortfall) — a louder, warning-level
+   * signal with a restore affordance, never folded into the "N features
+   * simplified" count. CONTENT-FREE by construction: fixed strings + counts
+   * only, never document text (the advisory is also Claude-visible via the
+   * `tandem_save` MCP result). Optional for forward-compat: pre-0e reports lack
+   * it, so every reader uses `?? []`. Refreshed each binary save; reset by a
+   * re-import.
+   */
+  integrityWarnings?: string[];
   /** ms epoch of the last update. */
   updatedAt: number;
 }
