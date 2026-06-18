@@ -57,8 +57,10 @@ const plaintextAdapter: FormatAdapter = {
  * in the Y.Doc and serializes to a `.docx` buffer on EXPLICIT save only. This
  * supersedes ADR-004's read-only default; the protective layer is now "never
  * overwrite without an explicit save" rather than `contenteditable=false`.
- * Exports body + Word comments (#1068; `comment`-type annotations only, per
- * the ADR-027 gate in `docx-comment-export.ts`) — tracked changes stay deferred.
+ * Exports body + Word comments (#1068): user/Claude `comment`-type annotations
+ * AND imported Word comments written back to their source file (private notes
+ * that round-trip but stay Claude-invisible), per the gate in
+ * `docx-comment-export.ts` — tracked changes stay deferred.
  *
  *   - `parse` runs `loadDocxWithWarnings` + `extractDocxComments` in parallel.
  *     mammoth import-fidelity warnings land as a `LoadIssue { kind: "other" }`
