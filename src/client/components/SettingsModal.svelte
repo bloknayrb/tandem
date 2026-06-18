@@ -42,6 +42,7 @@ export const SETTINGS_TAB_IDS = {
   claudeCode: "claude-code",
   models: "models",
   shortcuts: "shortcuts",
+  license: "license",
   about: "about",
 } as const;
 export type SettingsTabId = (typeof SETTINGS_TAB_IDS)[keyof typeof SETTINGS_TAB_IDS];
@@ -84,6 +85,7 @@ import SettingsClaudeCodeTab from "./settings-tabs/SettingsClaudeCodeTab.svelte"
 import SettingsCollaborationTab from "./settings-tabs/SettingsCollaborationTab.svelte";
 import SettingsModelsTab from "./settings-tabs/SettingsModelsTab.svelte";
 import SettingsShortcutsTab from "./settings-tabs/SettingsShortcutsTab.svelte";
+import SettingsLicenseTab from "./settings-tabs/SettingsLicenseTab.svelte";
 import SettingsAboutTab from "./settings-tabs/SettingsAboutTab.svelte";
 
 const HEADING_ID = "tandem-settings-modal-heading";
@@ -151,6 +153,12 @@ export const DEFAULT_SETTINGS_TABS: SettingsTab[] = [
     label: "Shortcuts",
     icon: "M3 7h2v2H3V7Zm0 4h2v2H3v-2Zm0 4h2v2H3v-2Zm4-8h2v2H7V7Zm0 4h2v2H7v-2Zm0 4h10v2H7v-2Zm4-8h10v2H11V7Zm0 4h6v2h-6v-2Zm8 0h2v2h-2v-2Z",
     component: SettingsShortcutsTab,
+  },
+  {
+    id: "license",
+    label: "License",
+    icon: "M6 10h12v10H6V10Zm2 0V7a4 4 0 0 1 8 0v3",
+    component: SettingsLicenseTab,
   },
   {
     id: "about",
