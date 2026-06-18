@@ -14,6 +14,7 @@
 
 import {
   Document,
+  EndnoteReferenceRun,
   ExternalHyperlink,
   Footer,
   FootnoteReferenceRun,
@@ -190,6 +191,26 @@ export const buildFootnote = (): Promise<Buffer> =>
               children: [
                 new TextRun("A claim with a note"),
                 new FootnoteReferenceRun(1),
+                new TextRun("."),
+              ],
+            }),
+          ],
+        },
+      ],
+    }),
+  );
+
+export const buildEndnote = (): Promise<Buffer> =>
+  pack(
+    new Document({
+      endnotes: { 1: { children: [new Paragraph("The endnote body text.")] } },
+      sections: [
+        {
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun("A claim with an endnote"),
+                new EndnoteReferenceRun(1),
                 new TextRun("."),
               ],
             }),

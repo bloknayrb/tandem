@@ -10,6 +10,7 @@ import {
   injectCommentsAsAnnotations,
 } from "./docx-comments.js";
 import { exportYDocToDocx } from "./docx-export.js";
+import { detectDocxFootnotes, type FootnoteSummary, footnoteLossLines } from "./docx-footnotes.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -79,7 +80,7 @@ const docxAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
     const buffer = content as Buffer;
     const issues: LoadIssue[] = [];
-    const [loaded, comments] = await Promise.all([
+    const [loaded, comments, footnotes] = await Promise.all([
       loadDocxWithWarnings(buffer),
       extractDocxComments(buffer).catch((err) => {
         console.error(
@@ -89,17 +90,32 @@ const docxAdapter: FormatAdapter = {
         issues.push({ kind: "comments-failed", error: err });
         return [] as DocxComment[];
       }),
+      // Footnote/endnote honesty (#1123 Tier-A #3): mammoth flattens these to a
+      // trailing list and emits NO warning, so detect them directly from the ZIP
+      // and surface an honest loss line. detectDocxFootnotes never throws (it
+      // catches per-part + per-archive); this .catch is last-resort defense.
+      detectDocxFootnotes(buffer).catch((err) => {
+        console.error("[docx-footnotes] detection failed unexpectedly:", err);
+        return { footnotes: 0, endnotes: 0 } satisfies FootnoteSummary;
+      }),
     ]);
-    if (loaded.warnings.length > 0) {
+    // Footnote/endnote losses lead (the named, higher-impact loss). mammoth's
+    // per-occurrence warnings are already deduped + capped inside
+    // summarizeMammothMessages; the footnote lines are a bounded fixed set (≤2),
+    // so they ride on top of that cap without re-flooding — and crucially this
+    // guard fires when EITHER source is non-empty, because mammoth emits zero
+    // warnings for footnotes (the whole reason this detection exists).
+    const importLosses = [...footnoteLossLines(footnotes), ...loaded.warnings];
+    if (importLosses.length > 0) {
       issues.push({
         kind: "other",
         error: undefined,
         message:
           "Some Word formatting couldn't be imported and won't be preserved on save: " +
-          `${loaded.warnings.join("; ")}.`,
+          `${importLosses.join("; ")}.`,
         // Granular list for the persistent fidelity report (#1145); the joined
         // `message` above drives the transient open-time toast.
-        importLosses: loaded.warnings,
+        importLosses,
       });
     }
     return { format: "docx", html: loaded.html, comments, issues };
