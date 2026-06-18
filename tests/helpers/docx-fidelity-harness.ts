@@ -27,9 +27,13 @@ import * as Y from "yjs";
 import { getAdapter } from "../../src/server/file-io/index.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { anchoredRange } from "../../src/server/positions.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import {
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_FOOTNOTE_BODIES,
+} from "../../src/shared/constants.js";
 import { transactForTest } from "../../src/shared/origins.js";
-import type { Annotation } from "../../src/shared/types.js";
+import type { Annotation, FootnoteBody } from "../../src/shared/types.js";
 
 /**
  * Structural attributes worth comparing across a round-trip. A change in any of
@@ -92,6 +96,19 @@ export interface Capture {
    * (or lack of it) requires the import-authored set.
    */
   annotations: AnnotationSnapshot[];
+  /**
+   * Reconstructed footnote bodies (#1123 Tier-A #3 PR 2), keyed by OOXML id —
+   * read from Y_MAP_FOOTNOTE_BODIES. The `tree` deep-eq gate is BLIND to this
+   * off-fragment map (it would pass even if the body silently vanished), so the
+   * scoreboard asserts body survival into gen2 against THIS field directly.
+   */
+  footnoteBodies: Record<string, FootnoteBody>;
+  /**
+   * Inline footnote-reference markers (`{ id, text }`) in document order. Lets
+   * the scoreboard assert the mark's id value (M2) and the verbatim `[N]`
+   * bracket text (M1) survive a round-trip — `runs` only carries mark keys.
+   */
+  footnoteRefs: Array<{ id: string; text: string }>;
 }
 
 function structuralAttrs(el: Y.XmlElement): Record<string, unknown> {
@@ -137,6 +154,40 @@ function walk(el: Y.XmlElement, parentPath: string[], out: NodeSnapshot[]): void
   }
 }
 
+/**
+ * Footnote reference markers found in the tree, with their mark `id` and the
+ * verbatim `[N]` text. `runsOf` captures only mark KEYS, so this is the only
+ * place the scoreboard can pin the id value (M2) and the multi-digit bracket
+ * text (M1) across generations.
+ */
+function collectFootnoteRefs(doc: Y.Doc): Array<{ id: string; text: string }> {
+  const out: Array<{ id: string; text: string }> = [];
+  const fragment = doc.getXmlFragment("default");
+  const visit = (el: Y.XmlElement): void => {
+    for (let i = 0; i < el.length; i++) {
+      const child = el.get(i);
+      if (child instanceof Y.XmlText) {
+        for (const op of child.toDelta() as Array<{
+          insert?: unknown;
+          attributes?: Record<string, unknown>;
+        }>) {
+          const ref = op.attributes?.["footnote-ref"] as { id?: string } | undefined;
+          if (ref?.id && typeof op.insert === "string") {
+            out.push({ id: ref.id, text: op.insert });
+          }
+        }
+      } else if (child instanceof Y.XmlElement) {
+        visit(child);
+      }
+    }
+  };
+  for (let i = 0; i < fragment.length; i++) {
+    const node = fragment.get(i);
+    if (node instanceof Y.XmlElement) visit(node);
+  }
+  return out;
+}
+
 export function captureModel(doc: Y.Doc): Capture {
   const fragment = doc.getXmlFragment("default");
   const tree: NodeSnapshot[] = [];
@@ -180,7 +231,11 @@ export function captureModel(doc: Y.Doc): Capture {
   }
   annotations.sort((a, b) => a.from - b.from || a.to - b.to);
 
-  return { tree, flatText, annotations };
+  const rawBodies = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_FOOTNOTE_BODIES);
+  const footnoteBodies =
+    rawBodies && typeof rawBodies === "object" ? (rawBodies as Record<string, FootnoteBody>) : {};
+
+  return { tree, flatText, annotations, footnoteBodies, footnoteRefs: collectFootnoteRefs(doc) };
 }
 
 export interface RoundTrip {

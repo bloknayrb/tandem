@@ -1,16 +1,20 @@
 import * as crypto from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import {
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_FOOTNOTE_BODIES,
+} from "../../shared/constants.js";
 import { extractText, populateYDoc } from "../mcp/document-model.js";
-import { htmlToYDoc, loadDocxWithWarnings } from "./docx.js";
+import { htmlToYDoc, loadDocxWithWarnings, reconcileFootnoteIds } from "./docx.js";
 import {
   type DocxComment,
   extractDocxComments,
   injectCommentsAsAnnotations,
 } from "./docx-comments.js";
 import { exportYDocToDocx } from "./docx-export.js";
-import { detectDocxFootnotes, type FootnoteSummary, footnoteLossLines } from "./docx-footnotes.js";
+import { type DocxNotes, footnoteLossLines, parseDocxFootnotes } from "./docx-footnotes.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -80,7 +84,7 @@ const docxAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
     const buffer = content as Buffer;
     const issues: LoadIssue[] = [];
-    const [loaded, comments, footnotes] = await Promise.all([
+    const [loaded, comments, notes] = await Promise.all([
       loadDocxWithWarnings(buffer),
       extractDocxComments(buffer).catch((err) => {
         console.error(
@@ -90,22 +94,27 @@ const docxAdapter: FormatAdapter = {
         issues.push({ kind: "comments-failed", error: err });
         return [] as DocxComment[];
       }),
-      // Footnote/endnote honesty (#1123 Tier-A #3): mammoth flattens these to a
-      // trailing list and emits NO warning, so detect them directly from the ZIP
-      // and surface an honest loss line. detectDocxFootnotes never throws (it
+      // Footnote/endnote capture (#1123 Tier-A #3): mammoth flattens these to a
+      // trailing list and emits NO warning. Read the real notes directly from
+      // the ZIP so the import can BOTH surface an honest loss line AND capture
+      // footnote bodies for reconstruction. parseDocxFootnotes never throws (it
       // catches per-part + per-archive); this .catch is last-resort defense.
-      detectDocxFootnotes(buffer).catch((err) => {
-        console.error("[docx-footnotes] detection failed unexpectedly:", err);
-        return { footnotes: 0, endnotes: 0 } satisfies FootnoteSummary;
+      parseDocxFootnotes(buffer).catch((err) => {
+        console.error("[docx-footnotes] parse failed unexpectedly:", err);
+        return { footnotes: {}, endnotes: 0 } satisfies DocxNotes;
       }),
     ]);
-    // Footnote/endnote losses lead (the named, higher-impact loss). mammoth's
-    // per-occurrence warnings are already deduped + capped inside
-    // summarizeMammothMessages; the footnote lines are a bounded fixed set (≤2),
-    // so they ride on top of that cap without re-flooding — and crucially this
-    // guard fires when EITHER source is non-empty, because mammoth emits zero
-    // warnings for footnotes (the whole reason this detection exists).
-    const importLosses = [...footnoteLossLines(footnotes), ...loaded.warnings];
+    // Note losses lead (the named, higher-impact loss). mammoth's per-occurrence
+    // warnings are already deduped + capped inside summarizeMammothMessages; the
+    // note lines are a bounded fixed set (≤3), so they ride on top of that cap
+    // without re-flooding — and crucially this guard fires when EITHER source is
+    // non-empty, because mammoth emits zero warnings for notes. The honesty line
+    // is driven off the RECONCILED partition (same inputs `htmlToYDoc` reconciles
+    // in `apply` → identical result), so a footnote that won't reconstruct (an
+    // orphaned definition, or a mammoth-format drift) is reported as a loss, not
+    // silently claimed "preserved".
+    const reconciliation = reconcileFootnoteIds(loaded.html, notes.footnotes);
+    const importLosses = [...footnoteLossLines(notes, reconciliation), ...loaded.warnings];
     if (importLosses.length > 0) {
       issues.push({
         kind: "other",
@@ -118,14 +127,21 @@ const docxAdapter: FormatAdapter = {
         importLosses,
       });
     }
-    return { format: "docx", html: loaded.html, comments, issues };
+    return { format: "docx", html: loaded.html, comments, footnoteBodies: notes.footnotes, issues };
   },
   async saveBinary(doc): Promise<Buffer> {
     return exportYDocToDocx(doc);
   },
   apply(doc, prepared, ctx) {
     if (prepared.format !== "docx") return [];
-    htmlToYDoc(doc, prepared.html);
+    const reconciledFootnotes = htmlToYDoc(doc, prepared.html, prepared.footnoteBodies);
+    // Persist the reconstructed footnote bodies off-fragment so the exporter can
+    // re-emit real <w:footnote> parts (#1123 Tier-A #3 PR 2). WHOLE-VALUE replace
+    // (a reload with fewer footnotes must not leave stale ids). The caller's
+    // transact is already origin-tagged; this documentMeta key has no observer
+    // (server write-only, client/Claude-invisible) and sits OUTSIDE the comment-
+    // inject rollback zone below, which only deletes newly-added annotation keys.
+    doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_FOOTNOTE_BODIES, reconciledFootnotes);
     const out: LoadIssue[] = [];
     if (prepared.comments.length > 0) {
       // Snapshot-and-rollback: Yjs does NOT roll back inner-transact writes

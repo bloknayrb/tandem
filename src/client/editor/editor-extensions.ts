@@ -11,6 +11,7 @@ import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
 import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
+import { FootnoteRefMark } from "./extensions/footnote-ref";
 import { ListItemCheckbox } from "./extensions/list-item-checkbox";
 import { MarkdownHtmlExtension } from "./extensions/markdown-html";
 import { RawMarkdownMark } from "./extensions/raw-markdown";
@@ -83,6 +84,9 @@ export function buildSchemaExtensions(): AnyExtension[] {
     Underline,
     Superscript,
     Subscript,
+    // Footnote reference mark — REQUIRED client-side or y-prosemirror deletes the
+    // marked `[N]` text on sync (see DOCX_INLINE_MARKS / #1123 Tier-A #3 PR 2).
+    FootnoteRefMark,
     Highlight.configure({ multicolor: true }),
     LinkWithHoverTitle.configure({
       openOnClick: false,

@@ -23,13 +23,21 @@ import { DOCX_INLINE_MARKS } from "../../src/shared/constants";
  * the editor registered neither.
  */
 
-// One paragraph exercising every DOCX_INLINE_MARK. Produced by the REAL server
-// importer so the test is pinned to the exact delta-attribute shape production
-// emits (not a hand-rolled approximation that could drift).
+// One paragraph exercising every DOCX_INLINE_MARK, plus mammoth's real footnote
+// pattern (inline `[1]` ref + trailing back-linked <li>). Fed through the REAL
+// server importer so the test is pinned to the exact delta-attribute shape
+// production emits (not a hand-rolled approximation that could drift).
 const MARKED_HTML =
   "<p>plain <strong>bold</strong> <em>italic</em> <s>strike</s> " +
   '<code>code</code> <a href="https://example.com">link</a> ' +
-  "<u>under</u> <sup>sup</sup> <sub>sub</sub></p>";
+  "<u>under</u> <sup>sup</sup> <sub>sub</sub>" +
+  '<sup><a href="#footnote-1" id="footnote-ref-1">[1]</a></sup></p>' +
+  '<ol><li id="footnote-1"><p>fn body <a href="#footnote-ref-1">↑</a></p></li></ol>';
+
+// Footnote reconstruction needs the captured body so reconciliation approves the
+// id (mark target + trailing <li> + body must all agree). Without it the marker
+// stays plain superscript and this test wouldn't exercise the footnote-ref mark.
+const FOOTNOTE_BODIES = { "1": { text: "fn body", hadFormatting: false } };
 
 const mounted: Array<{ editor: Editor; container: HTMLDivElement }> = [];
 
@@ -61,7 +69,7 @@ describe("editor schema ⊇ DOCX_INLINE_MARKS", () => {
 
   it("survives a real Collaboration sync of every marked run without losing content", () => {
     const ydoc = new Y.Doc();
-    htmlToYDoc(ydoc, MARKED_HTML);
+    htmlToYDoc(ydoc, MARKED_HTML, FOOTNOTE_BODIES);
     const editor = mount(buildSchemaExtensions(), ydoc);
 
     const html = editor.getHTML();
@@ -83,8 +91,15 @@ describe("editor schema ⊇ DOCX_INLINE_MARKS", () => {
     expect(html).toMatch(/<u>/);
     expect(html).toMatch(/<sup>/);
     expect(html).toMatch(/<sub>/);
+    // Footnote reference marker survived WITH its id (MEDIUM-1): the id-bearing
+    // attribute must survive the Collaboration sync, else y-prosemirror's catch
+    // would have deleted the whole XmlText. A registered-but-attr-incompatible
+    // mark would throw here, so this is the real id-survival gate.
+    expect(html).toContain("[1]");
+    expect(html).toContain('data-footnote-id="1"');
     // The Y.Doc itself was not mutated by a sync-time deletion.
     expect(ydoc.getXmlFragment("default").toString()).toContain("under");
+    expect(ydoc.getXmlFragment("default").toString()).toContain("[1]");
   });
 
   it("CONTROL: a schema missing underline silently drops the marked text on sync", () => {
@@ -92,7 +107,7 @@ describe("editor schema ⊇ DOCX_INLINE_MARKS", () => {
     // Y.XmlText — proving the guard above detects the real failure mode rather
     // than passing vacuously.
     const ydoc = new Y.Doc();
-    htmlToYDoc(ydoc, MARKED_HTML);
+    htmlToYDoc(ydoc, MARKED_HTML, FOOTNOTE_BODIES);
     const editor = mount([StarterKit.configure({ history: false })], ydoc);
 
     const html = editor.getHTML();
