@@ -19,6 +19,7 @@ import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
 import { restoreDocumentFromBackup } from "./file-opener.js";
+import { gatedTool } from "./license-gate.js";
 import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
 
 // ---------------------------------------------------------------------------
@@ -218,7 +219,7 @@ export function registerApplyTools(server: McpServer): void {
         .optional()
         .describe("Custom backup path (default: {name}.backup.docx)"),
     },
-    withErrorBoundary("tandem_applyChanges", async (args) => {
+    gatedTool("tandem_applyChanges", async (args) => {
       try {
         const result = await applyChangesCore(args.documentId, args.author, args.backupPath);
         return mcpSuccess(result);

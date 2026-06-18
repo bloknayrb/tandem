@@ -1,0 +1,69 @@
+/**
+ * Surface B of the license gate (#1116, ADR-040): block Claude's document- and
+ * annotation-mutation MCP tools when the on-device license state is `restricted`
+ * (trial expired, no license). Read-only / inspection tools are never gated —
+ * the escape hatch is that you can always open, read, and export your work.
+ *
+ * The gate is a pure, synchronous pre-check with ZERO Y.Doc access: it re-reads
+ * license state from disk per dispatch (no cache, so an activation elsewhere
+ * takes effect on the next call) and returns an `mcpError` envelope before the
+ * wrapped handler — and thus before any document write or typing-presence
+ * broadcast — ever runs.
+ */
+import { GATE_ENABLED } from "../license/gate-flag.js";
+import { resolveLicenseState } from "../license/license-state.js";
+import type { LicenseState } from "../license/license-types.js";
+import { resolveAppDataDir } from "../platform.js";
+import { mcpError, withErrorBoundary } from "./response.js";
+
+type McpToolResult = ReturnType<typeof mcpError>;
+
+/**
+ * Pure gate decision. Given a resolved license state, return an `mcpError`
+ * envelope when a mutation must be blocked, or `null` when the call may proceed.
+ * `restricted` blocks; `trial` and `licensed` pass; an inactive gate (dark
+ * build, or no trial clock yet) is always a no-op. Exported for direct testing
+ * without touching the filesystem or the build-time flag.
+ */
+export function licenseGateResult(state: LicenseState): McpToolResult | null {
+  if (!state.gateActive) return null;
+  if (state.status === "restricted") {
+    return mcpError(
+      "LICENSE_REQUIRED",
+      "Your Tandem trial has ended. Activate a license to keep editing — your documents stay open for reading and export.",
+    );
+  }
+  return null;
+}
+
+/**
+ * Live gate check: re-resolve license state from disk and apply
+ * `licenseGateResult`. Synchronous — `resolveLicenseState` reads files with
+ * `readFileSync` and performs at most one Ed25519 verify.
+ */
+export function licenseGate(): McpToolResult | null {
+  const state = resolveLicenseState({
+    appDataDir: resolveAppDataDir(),
+    now: () => Date.now(),
+    gateEnabled: GATE_ENABLED,
+  });
+  return licenseGateResult(state);
+}
+
+/**
+ * Registration-time wrapper for Claude's mutation tools. Drop-in replacement for
+ * `withErrorBoundary` at a tool's `server.tool(...)` registration: it runs the
+ * license pre-check FIRST, then the same try/catch error boundary. Using this at
+ * the registration site (rather than a manual check inside each handler) means a
+ * gated tool can't ship with the check forgotten in one code path.
+ */
+export function gatedTool<TArgs extends Record<string, unknown>>(
+  toolName: string,
+  handler: (args: TArgs) => Promise<McpToolResult>,
+): (args: TArgs) => Promise<McpToolResult> {
+  return withErrorBoundary(toolName, async (args: TArgs) => {
+    const blocked = licenseGate();
+    if (blocked) return blocked;
+    return handler(args);
+  });
+}

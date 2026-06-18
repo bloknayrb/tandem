@@ -52,6 +52,7 @@ import {
   toDocListEntry,
 } from "./document-service.js";
 import { openFileByPath, openScratchpad } from "./file-opener.js";
+import { gatedTool } from "./license-gate.js";
 import {
   getTextContentOutputShape,
   listDocumentsOutputShape,
@@ -434,7 +435,7 @@ export function registerDocumentTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
-    withErrorBoundary(
+    gatedTool(
       "tandem_edit",
       async ({ from: rawFrom, to: rawTo, newText, documentId, textSnapshot }) => {
         // #651 presence: tandem_edit targets text (not an annotation), so the
@@ -605,7 +606,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_appendContent", async ({ content, documentId }) => {
+    gatedTool("tandem_appendContent", async ({ content, documentId }) => {
       return withTypingPresence({ tool: "tandem_appendContent", documentId }, async () => {
         const r = requireDocument(documentId);
         if (!r) return noDocumentError();
