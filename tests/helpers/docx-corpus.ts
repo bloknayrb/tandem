@@ -200,6 +200,21 @@ export const buildFootnote = (): Promise<Buffer> =>
     }),
   );
 
+/** A document with 11 footnotes so the round-trip exercises MULTI-DIGIT display
+ * markers (`[10]`, `[11]`) — pins that the export cursor advances by the marker's
+ * actual length (not a hard-coded 3) and that ids stay stable across generations. */
+export const buildMultiFootnote = (): Promise<Buffer> => {
+  const count = 11;
+  const footnotes: Record<number, { children: Paragraph[] }> = {};
+  const children: (TextRun | FootnoteReferenceRun)[] = [];
+  for (let id = 1; id <= count; id++) {
+    footnotes[id] = { children: [new Paragraph(`Body of footnote ${id}.`)] };
+    if (id > 1) children.push(new TextRun(" "));
+    children.push(new TextRun(`claim ${id}`), new FootnoteReferenceRun(id));
+  }
+  return pack(new Document({ footnotes, sections: [{ children: [new Paragraph({ children })] }] }));
+};
+
 export const buildEndnote = (): Promise<Buffer> =>
   pack(
     new Document({

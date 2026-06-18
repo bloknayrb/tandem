@@ -1,26 +1,31 @@
-// Footnote/endnote DETECTION for the import honesty layer (Tier-A #3, PR 1 of 2).
+// Footnote/endnote CAPTURE for the import honesty + reconstruction layers
+// (Tier-A #3). mammoth flattens Word footnotes/endnotes to a trailing <ol> and
+// emits NO warning, so the degradation is otherwise SILENT. This module reads
+// the real notes directly from the .docx ZIP (the same JSZip + htmlparser2 path
+// the comment importer uses) so the import path can BOTH surface an honest
+// FidelityReport line AND — for footnotes — capture the body text so the export
+// can re-emit a real `<w:footnote>` (PR 2 reconstruction).
 //
-// mammoth flattens Word footnotes/endnotes to a trailing <ol> and emits NO
-// warning, so the degradation is SILENT: the user sees a mystery trailing list
-// and, on save, loses the footnote semantic + reference links with no notice.
-// This module detects real footnotes/endnotes directly from the .docx ZIP (the
-// same JSZip + htmlparser2 path the comment importer uses) so the import path
-// can add an honest line to the FidelityReport. It only READS and COUNTS — no
-// rels, no external refs, no writes (security posture identical to the comment
-// path; ratified in the security review of
-// .claude/plans/docx-footnote-honesty.md).
-//
-// PR 2 (reconstruction) will extend this module to capture footnote BODIES and
-// inline reference positions; PR 1 lands detection only.
+// It only READS — no rels, no external refs, no writes (security posture
+// identical to the comment path; ratified in the security review of
+// .claude/plans/docx-footnote-honesty.md). Footnote BODY TEXT captured here is
+// document content and is threaded into the Y.Doc, but is NEVER routed into
+// `footnoteLossLines` (see the redaction note there).
 
+import type { ChildNode, Element } from "domhandler";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
-import { findAllByName, getAttr } from "./docx-walker.js";
+import type { FootnoteBody } from "../../shared/types.js";
+import { findAllByName, getAttr, getTextContent, isElement } from "./docx-walker.js";
 
-export interface FootnoteSummary {
-  /** Real footnotes (excludes Word's structural separator notes). */
-  footnotes: number;
-  /** Real endnotes (same exclusion). */
+/**
+ * Footnote bodies (keyed by OOXML footnote id — the same id mammoth puts in its
+ * `#footnote-N` href) plus the endnote count. Footnotes carry bodies (PR 2
+ * reconstructs them); endnotes are count-only (still degrade to a list, honestly
+ * reported — endnote reconstruction is a deferred fast-follow).
+ */
+export interface DocxNotes {
+  footnotes: Record<string, FootnoteBody>;
   endnotes: number;
 }
 
@@ -38,10 +43,23 @@ export interface FootnoteSummary {
 // flipping to an allowlist, which would risk silently dropping a real footnote.
 const STRUCTURAL_NOTE_TYPES = new Set(["separator", "continuationSeparator", "continuationNotice"]);
 
-/** Count real (non-structural) notes in one notes part, or 0 if the part is absent. */
-async function countRealNotes(zip: JSZip, partPath: string, elementName: string): Promise<number> {
+// Body-formatting markers we DROP on import (the body is flattened to plain
+// text in PR 2). Presence drives the count-only honesty line; rich-body
+// fidelity is a deferred fast-follow. `<w:rStyle>` (the footnote-number style)
+// is deliberately NOT here — it's structural, not body formatting.
+const FORMATTING_ELEMENTS = new Set(["w:b", "w:i", "w:u", "w:hyperlink"]);
+
+/**
+ * Collect real (non-structural) note Elements from one notes part, or [] if the
+ * part is absent/unreadable. Shared by footnote + endnote extraction.
+ */
+async function collectRealNotes(
+  zip: JSZip,
+  partPath: string,
+  elementName: string,
+): Promise<Element[]> {
   const file = zip.file(partPath);
-  if (!file) return 0; // Common clean case: a doc with no notes omits the part.
+  if (!file) return []; // Common clean case: a doc with no notes omits the part.
   try {
     const xml = await file.async("text");
     // xmlMode preserves the `w:` prefix on both element names and attributes
@@ -51,61 +69,115 @@ async function countRealNotes(zip: JSZip, partPath: string, elementName: string)
     return findAllByName(elementName, doc.children).filter((note) => {
       const type = getAttr(note, "w:type");
       return type === undefined || !STRUCTURAL_NOTE_TYPES.has(type);
-    }).length;
+    });
   } catch (err) {
-    // Present but unreadable. Degrade to 0 (never block import) but leave a
+    // Present but unreadable. Degrade to [] (never block import) but leave a
     // breadcrumb — an honesty feature must not silently conflate "couldn't read
     // the notes part" with "no notes". htmlparser2 is non-throwing, so this is
     // nearly unreachable (only a corrupt ZIP entry trips it) and the user still
     // sees the flattened content, so a user-facing line for this case is deferred.
     console.error(`[docx-footnotes] failed to analyze ${partPath}:`, err);
-    return 0;
+    return [];
   }
 }
 
+/** Whether a note subtree carries body formatting we flatten to plain text. */
+function noteHadFormatting(note: Element): boolean {
+  let paragraphs = 0;
+  let formatted = false;
+  const walk = (nodes: ChildNode[]): void => {
+    for (const node of nodes) {
+      if (!isElement(node)) continue;
+      if (node.name === "w:p") paragraphs++;
+      if (FORMATTING_ELEMENTS.has(node.name)) formatted = true;
+      walk(node.children);
+    }
+  };
+  walk(note.children);
+  return formatted || paragraphs > 1;
+}
+
 /**
- * Detect real footnotes/endnotes in an UNTRUSTED .docx buffer. Read-and-count
- * only. Never throws: a non-ZIP/corrupt buffer degrades to {0,0} (mammoth, run
- * in parallel, surfaces a genuinely-broken file — footnote honesty is moot when
- * the import itself fails).
+ * Parse real footnote bodies + count real endnotes from an UNTRUSTED .docx
+ * buffer. Never throws: a non-ZIP/corrupt buffer degrades to empty (mammoth, run
+ * in parallel, surfaces a genuinely-broken file — note honesty is moot when the
+ * import itself fails).
  */
-export async function detectDocxFootnotes(buffer: Buffer): Promise<FootnoteSummary> {
+export async function parseDocxFootnotes(buffer: Buffer): Promise<DocxNotes> {
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(buffer);
   } catch (err) {
     console.error("[docx-footnotes] could not open .docx archive:", err);
-    return { footnotes: 0, endnotes: 0 };
+    return { footnotes: {}, endnotes: 0 };
   }
-  const [footnotes, endnotes] = await Promise.all([
-    countRealNotes(zip, "word/footnotes.xml", "w:footnote"),
-    countRealNotes(zip, "word/endnotes.xml", "w:endnote"),
+  const [footnoteEls, endnoteEls] = await Promise.all([
+    collectRealNotes(zip, "word/footnotes.xml", "w:footnote"),
+    collectRealNotes(zip, "word/endnotes.xml", "w:endnote"),
   ]);
-  return { footnotes, endnotes };
+  const footnotes: Record<string, FootnoteBody> = {};
+  for (const note of footnoteEls) {
+    const id = getAttr(note, "w:id");
+    if (id === undefined) continue; // a real footnote always carries an id
+    footnotes[id] = { text: getTextContent(note), hadFormatting: noteHadFormatting(note) };
+  }
+  return { footnotes, endnotes: endnoteEls.length };
 }
 
 /**
- * Honest, user-facing FidelityReport lines for flattened notes.
- *
- * INPUTS ARE COUNTS ONLY — never thread parsed-XML or user text through here.
- * These lines bypass BOTH `summarizeMammothMessages`' redaction AND the
- * `MAX_WARNING_LINE_LENGTH` clamp (docx.ts), which is safe ONLY because every
- * line below is a fixed string plus an integer count. PR 2 reconstruction
- * threading footnote text through this function would reintroduce the
- * user-content-leak vector and would require summarizeMammothMessages-style
- * redaction.
+ * The reconstruction partition for the captured footnotes (from
+ * `reconcileFootnoteIds`): ids that WILL reconstruct as real footnotes vs ids
+ * that won't (an orphaned definition with no inline ref, or a mammoth-format
+ * drift). Drives an honest loss line per outcome.
  */
-export function footnoteLossLines(summary: FootnoteSummary): string[] {
+export interface FootnoteReconciliation {
+  reconstructed: string[];
+  dropped: string[];
+}
+
+/**
+ * Honest, user-facing FidelityReport lines for notes.
+ *
+ * INPUTS ARE COUNTS/FLAGS/IDS ONLY — never thread the captured footnote body
+ * text through here. These lines bypass BOTH `summarizeMammothMessages`'
+ * redaction AND the `MAX_WARNING_LINE_LENGTH` clamp (docx.ts), which is safe
+ * ONLY because every line below is a fixed string plus an integer count.
+ * Threading body text would reintroduce the user-content-leak vector.
+ *
+ * Post-PR-2 contract (HIGH-2): footnotes that RECONSTRUCT round-trip as real
+ * `<w:footnote>` parts, so they get NO structural-loss line — at most a
+ * count-only body-FORMATTING line (we store plain text). A footnote that fails
+ * reconciliation degrades (orphan → absent; drift → trailing list), so it gets
+ * an honest structural line rather than being silently claimed "preserved" — the
+ * partition is computed pre-`apply` from the same reconciliation `htmlToYDoc`
+ * runs. Endnotes always degrade to a trailing list (reconstruction deferred).
+ */
+export function footnoteLossLines(
+  notes: DocxNotes,
+  reconciliation: FootnoteReconciliation,
+): string[] {
   const lines: string[] = [];
-  if (summary.footnotes > 0) {
-    const n = summary.footnotes;
+  // Reconstructed footnotes whose body carried formatting we flattened.
+  const formattingFlattened = reconciliation.reconstructed.filter(
+    (id) => notes.footnotes[id]?.hadFormatting,
+  ).length;
+  if (formattingFlattened > 0) {
+    const n = formattingFlattened;
     lines.push(
-      `${n === 1 ? "1 footnote" : `${n} footnotes`} flattened to a trailing list — ` +
-        `footnote markers and links aren't preserved on save`,
+      `${n === 1 ? "1 footnote" : `${n} footnotes`} preserved, but body formatting ` +
+        `(bold/italic/links or multiple paragraphs) was simplified to plain text`,
     );
   }
-  if (summary.endnotes > 0) {
-    const n = summary.endnotes;
+  // Captured footnotes that won't reconstruct — degraded, NOT preserved.
+  if (reconciliation.dropped.length > 0) {
+    const n = reconciliation.dropped.length;
+    lines.push(
+      `${n === 1 ? "1 footnote" : `${n} footnotes`} couldn't be reconstructed and ` +
+        `won't be preserved as footnotes on save`,
+    );
+  }
+  if (notes.endnotes > 0) {
+    const n = notes.endnotes;
     lines.push(
       `${n === 1 ? "1 endnote" : `${n} endnotes`} flattened to a trailing list — ` +
         `endnote markers and links aren't preserved on save`,

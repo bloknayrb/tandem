@@ -164,20 +164,48 @@ const CORPUS: Fixture[] = [
   {
     name: "footnote",
     build: corpus.buildFootnote,
-    status: "degrades",
+    status: "survives",
     reason:
-      "mammoth renders footnotes as a trailing ordered list — content kept, footnote semantic + anchor links lost (but the loss is now surfaced honestly on import)",
+      "footnotes reconstruct — inline [N] carries a footnote-ref mark, body re-emits as a real <w:footnote>, no trailing list (#1123 Tier-A #3 PR 2)",
     check(rt) {
-      expect(rt.gen1.flatText).toContain("The footnote body text.");
-      expect(nodesOfType(rt.gen1, "orderedList").length).toBeGreaterThan(0);
-      // inline ref survives as a superscript run
-      expect(marksIn(rt.gen1).has("superscript")).toBe(true);
-      // Honesty layer (#1123 Tier-A #3 PR 1): mammoth emits no footnote warning,
-      // so detectDocxFootnotes adds an explicit import-loss line. This pins the
-      // wiring end-to-end through the real adapter (importWarnings = the
-      // kind:"other" issue's importLosses). When PR 2 reconstructs footnotes,
-      // this fixture flips degrades→survives and the assertion is promoted.
-      expect(rt.importWarnings.some((w) => /footnote/i.test(w))).toBe(true);
+      expectStable(rt);
+      // (ii) the inline marker carries the footnote-ref mark, with the right id
+      // and verbatim bracket text (runs only carry the mark KEY — footnoteRefs
+      // carries the value).
+      expect(marksIn(rt.gen1).has("footnote-ref")).toBe(true);
+      expect(rt.gen1.footnoteRefs).toEqual([{ id: "1", text: "[1]" }]);
+      // (v) the body no longer survives as a trailing list…
+      expect(nodesOfType(rt.gen1, "orderedList").length).toBe(0);
+      expect(rt.gen1.flatText).not.toContain("The footnote body text.");
+      // (iii) …it lives off-fragment AND survives into GEN2 specifically. The
+      // `tree` deep-eq is blind to this map (M3/HIGH-1), so assert it directly.
+      expect(rt.gen2.footnoteBodies["1"]?.text).toBe("The footnote body text.");
+      // (iv) the id is stable across the round-trip (M2).
+      expect(rt.gen2.footnoteRefs).toEqual(rt.gen1.footnoteRefs);
+      // A plain-bodied footnote round-trips with no loss → no honesty line.
+      expect(rt.importWarnings.some((w) => /footnote/i.test(w))).toBe(false);
+    },
+  },
+  {
+    name: "multiple footnotes (incl. multi-digit)",
+    build: corpus.buildMultiFootnote,
+    status: "survives",
+    reason: "11 footnotes round-trip; multi-digit [10]/[11] markers and ids stay stable (M1/M2)",
+    check(rt) {
+      expectStable(rt);
+      // Markers in document order, multi-digit brackets verbatim.
+      expect(rt.gen1.footnoteRefs.map((r) => r.text)).toEqual(
+        Array.from({ length: 11 }, (_, i) => `[${i + 1}]`),
+      );
+      expect(rt.gen1.footnoteRefs.map((r) => r.id)).toEqual(
+        Array.from({ length: 11 }, (_, i) => String(i + 1)),
+      );
+      // ids + bracket text stable into gen2; every body survives off-fragment.
+      expect(rt.gen2.footnoteRefs).toEqual(rt.gen1.footnoteRefs);
+      for (let id = 1; id <= 11; id++) {
+        expect(rt.gen2.footnoteBodies[String(id)]?.text).toBe(`Body of footnote ${id}.`);
+      }
+      expect(nodesOfType(rt.gen1, "orderedList").length).toBe(0);
     },
   },
   {

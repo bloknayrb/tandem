@@ -1,4 +1,5 @@
 import type * as Y from "yjs";
+import type { FootnoteBody } from "../../shared/types.js";
 import type { DocxComment } from "./docx-comments.js";
 
 /**
@@ -56,6 +57,14 @@ export type Prepared =
       format: "docx";
       html: string;
       comments: DocxComment[];
+      /**
+       * Reconstructed Word footnote bodies (#1123 Tier-A #3 PR 2), keyed by the
+       * OOXML footnote id. Captured from `word/footnotes.xml` in `parse`; the
+       * docx adapter's `apply` reconciles them against mammoth's HTML in
+       * `htmlToYDoc` and writes the surviving set off-fragment to
+       * Y_MAP_FOOTNOTE_BODIES. Empty for docs with no footnotes.
+       */
+      footnoteBodies: Record<string, FootnoteBody>;
       /** `comments-failed` if `extractDocxComments` rejected. */
       issues: LoadIssue[];
     }

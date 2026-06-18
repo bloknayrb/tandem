@@ -977,6 +977,15 @@ function evictPartialDocState(doc: Y.Doc, docId: string | undefined): void {
  * Clear the four document-state Y.Maps (annotations, replies, awareness,
  * user-awareness) in place. Caller wraps with the appropriate origin helper
  * and is responsible for the XmlFragment if it also needs clearing.
+ *
+ * NOT exhaustive by design: `documentMeta` keys owned by the docx adapter — the
+ * fidelity report (Y_MAP_FIDELITY_REPORT) and footnote bodies
+ * (Y_MAP_FOOTNOTE_BODIES) — are intentionally NOT cleared here. Each is rewritten
+ * as a whole-value replace on every (re)import (`writeImportLossReport` /
+ * `docxAdapter.apply`), so a reload of the same path can't strand a stale value,
+ * and a document's format is stable across reloads (Save-As to another format
+ * yields a new document/tab). Don't add them here assuming this is the canonical
+ * reset — the adapter owns their lifecycle.
  */
 function clearDocMaps(doc: Y.Doc): void {
   const maps = [

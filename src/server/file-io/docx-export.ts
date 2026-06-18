@@ -5,10 +5,15 @@
 // `docx` package's Paragraph / Table constructors, flattening Y.XmlText
 // deltas into TextRuns with marks.
 //
-// SCOPE: body content + Word comments. Tandem `comment`-type annotations are
-// emitted as Word comments (`comments.xml` + CommentRangeStart/End markers).
-// The privacy gate and range resolution live in `docx-comment-export.ts`
-// (ADR-027: notes and highlights are NEVER exported). NOT exported here:
+// SCOPE: body content + Word comments + footnotes. Tandem `comment`-type
+// annotations are emitted as Word comments (`comments.xml` +
+// CommentRangeStart/End markers). The privacy gate and range resolution live in
+// `docx-comment-export.ts` (ADR-027: notes and highlights are NEVER exported).
+// Footnotes captured on import (#1123 Tier-A #3) are re-emitted as real
+// `<w:footnote>` parts + `FootnoteReferenceRun`s from the off-fragment
+// Y_MAP_FOOTNOTE_BODIES map; body FORMATTING is flattened to plain text (honestly
+// reported on import), and a marked ref with no captured body falls back to a
+// plain `[N]` superscript (never a corrupt bodyless reference). NOT exported here:
 //   - Tracked changes — requires a Y.Doc authorship-diff layer (deferred).
 //   - Threaded comment replies — docx@9.x has no `commentsExtended.xml`
 //     support; exportable replies are flattened into the comment body.
@@ -51,6 +56,7 @@ import {
   CommentReference,
   Document,
   ExternalHyperlink,
+  FootnoteReferenceRun,
   HeadingLevel,
   type ICommentOptions,
   ImageRun,
@@ -65,6 +71,8 @@ import {
   WidthType,
 } from "docx";
 import * as Y from "yjs";
+import { Y_MAP_DOCUMENT_META, Y_MAP_FOOTNOTE_BODIES } from "../../shared/constants.js";
+import type { FootnoteBody } from "../../shared/types.js";
 import {
   extractText,
   getElementTextLength,
@@ -144,6 +152,11 @@ interface EmitCtx {
   pos: number;
   events: CommentEvent[];
   idx: number;
+  /** Reconstructed footnote bodies keyed by id (read-only input, #1123). */
+  footnoteBodies: Record<string, FootnoteBody>;
+  /** Accumulated footnotes map for the Document constructor, keyed by numeric
+   *  id (output — populated as `FootnoteReferenceRun`s are emitted). */
+  footnotesMap: Record<number, { children: Paragraph[] }>;
 }
 
 function buildCommentEvents(comments: ExportComment[]): CommentEvent[] {
@@ -184,6 +197,10 @@ interface MarkState {
   superscript?: boolean;
   subscript?: boolean;
   link?: { href: string; title?: string } | null;
+  /** Footnote reference marker (#1123 Tier-A #3 PR 2). Emitted atomically as a
+   *  `FootnoteReferenceRun`; mutually exclusive with other formatting in
+   *  practice (the import attaches it ALONE on the `[N]` text). */
+  footnoteRef?: { id: string; kind: "footnote" | "endnote" };
 }
 
 interface InlineRun {
@@ -213,6 +230,13 @@ function flattenXmlText(xt: Y.XmlText): InlineRun[] {
       const link = attrs.link as { href?: string; title?: string } | undefined;
       if (link?.href) {
         marks.link = { href: link.href, ...(link.title ? { title: link.title } : {}) };
+      }
+      const footnote = attrs["footnote-ref"] as { id?: string; kind?: string } | undefined;
+      if (footnote?.id) {
+        marks.footnoteRef = {
+          id: footnote.id,
+          kind: footnote.kind === "endnote" ? "endnote" : "footnote",
+        };
       }
       runs.push({ text: op.insert, marks });
     } else if (op.insert && typeof op.insert === "object") {
@@ -276,6 +300,38 @@ function emitTextSegments(
 }
 
 /**
+ * Emit a footnote reference marker (#1123 Tier-A #3 PR 2). A
+ * `FootnoteReferenceRun` is atomic OOXML and the cursor must advance by the
+ * marker's full flat length, so this is handled OUTSIDE the comment-split loop:
+ * markers due before the glyph flush first, the single reference run emits, the
+ * cursor advances by the marker text, then any marker that fell INSIDE the span
+ * snaps to AFTER it (Word can't anchor inside a footnote glyph).
+ */
+function emitFootnoteRef(r: InlineRun, emit: EmitCtx, out: ParagraphChild[]): void {
+  flushCommentEvents(emit, out);
+  // biome-ignore lint/style/noNonNullAssertion: caller guards r.marks.footnoteRef.
+  const ref = r.marks.footnoteRef!;
+  const body = ref.kind === "footnote" ? emit.footnoteBodies[ref.id] : undefined;
+  const numId = Number(ref.id);
+  if (body && Number.isInteger(numId) && numId > 0) {
+    // docx auto-prepends the footnote-number run; we supply only the body text.
+    emit.footnotesMap[numId] = { children: [new Paragraph(body.text)] };
+    out.push(new FootnoteReferenceRun(numId));
+  } else {
+    // CRITICAL-1: NEVER emit a bodyless FootnoteReferenceRun — it saves fine but
+    // corrupts on reopen. Fall back to the verbatim marker as a superscript run:
+    // offset-neutral, lossless, and re-importable as a plain `[N]`.
+    console.error(
+      `[docx-footnotes] footnote ref id=${ref.id} has no reconstructable body; ` +
+        "exporting the marker as plain superscript text.",
+    );
+    out.push(makeTextRun(r.text, { superscript: true }));
+  }
+  emit.pos += r.text.length;
+  flushCommentEvents(emit, out);
+}
+
+/**
  * Emit InlineRuns, honoring marks, hyperlinks, hardBreaks, and comment
  * markers. A hardBreak (`\n`) becomes a dedicated `<w:br/>` run AFTER the
  * preceding text — `TextRun({ text, break: 1 })` renders the break BEFORE its
@@ -283,6 +339,11 @@ function emitTextSegments(
  */
 function emitInlineRuns(runs: InlineRun[], emit: EmitCtx, out: ParagraphChild[]): void {
   for (const r of runs) {
+    // Footnote reference: emit atomically (never split by \n or comment markers).
+    if (r.marks.footnoteRef) {
+      emitFootnoteRef(r, emit, out);
+      continue;
+    }
     const parts = r.text.split("\n");
     parts.forEach((part, idx) => {
       if (idx > 0) {
@@ -650,6 +711,28 @@ export function detectExportFidelityIssues(doc: Y.Doc): string[] {
 
 // -- Public API ---------------------------------------------------------------
 
+/**
+ * Read the reconstructed footnote bodies the import wrote off-fragment to
+ * Y_MAP_FOOTNOTE_BODIES (#1123 Tier-A #3 PR 2). Defensive shape validation: the
+ * map is server-written but this read path stays robust to a malformed value
+ * (an unreconstructable id simply produces no footnote — the emitter's
+ * bodyless-ref fallback then keeps the marker as plain text).
+ */
+function readFootnoteBodies(doc: Y.Doc): Record<string, FootnoteBody> {
+  const raw = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_FOOTNOTE_BODIES);
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, FootnoteBody> = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value && typeof value === "object" && typeof (value as FootnoteBody).text === "string") {
+      out[id] = {
+        text: (value as FootnoteBody).text,
+        hadFormatting: Boolean((value as FootnoteBody).hadFormatting),
+      };
+    }
+  }
+  return out;
+}
+
 function toCommentOptions(c: ExportComment): ICommentOptions {
   return {
     id: c.id,
@@ -677,7 +760,13 @@ function toCommentOptions(c: ExportComment): ICommentOptions {
  */
 export async function exportYDocToDocx(doc: Y.Doc): Promise<Buffer> {
   const comments = prepareExportComments(doc);
-  const emit: EmitCtx = { pos: 0, events: buildCommentEvents(comments), idx: 0 };
+  const emit: EmitCtx = {
+    pos: 0,
+    events: buildCommentEvents(comments),
+    idx: 0,
+    footnoteBodies: readFootnoteBodies(doc),
+    footnotesMap: {},
+  };
 
   const fragment = doc.getXmlFragment("default");
   const children: Array<Paragraph | Table> = [];
@@ -727,6 +816,7 @@ export async function exportYDocToDocx(doc: Y.Doc): Promise<Buffer> {
   const document = new Document({
     creator: "Tandem",
     ...(comments.length > 0 ? { comments: { children: comments.map(toCommentOptions) } } : {}),
+    ...(Object.keys(emit.footnotesMap).length > 0 ? { footnotes: emit.footnotesMap } : {}),
     numbering: {
       config: [
         {

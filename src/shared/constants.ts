@@ -41,6 +41,12 @@ export const DOCX_INLINE_MARKS = [
   "underline",
   "superscript",
   "subscript",
+  // Footnote reference marker (#1123 Tier-A #3). Carries `{ id, kind }` on the
+  // verbatim `[N]` text mammoth renders, so export can emit a real
+  // `<w:footnoteReference>`. The literal "footnote-ref" MUST byte-match the
+  // delta-attribute key `docx-html.ts` writes AND the client `Mark.create`
+  // name (`footnote-ref.ts`) — a one-char drift is silent XmlText deletion.
+  "footnote-ref",
 ] as const;
 
 // DEFAULT_FONT_BY_EXTENSION removed as a #887 follow-up: seeded defaults
@@ -161,6 +167,17 @@ export const Y_MAP_EXTERNAL_CONFLICT = "externalConflict";
  * write-only, client read-only.
  */
 export const Y_MAP_FIDELITY_REPORT = "fidelityReport";
+/**
+ * Per-document reconstructed Word footnote bodies (#1123 Tier-A #3 PR 2, `.docx`
+ * only). Holds `Record<string, FootnoteBody>` (see shared/types.ts) keyed by the
+ * OOXML footnote id, written off-fragment under Y_MAP_DOCUMENT_META so the inline
+ * `[N]` marker stays offset-neutral (a footnote body is not document body text).
+ * Written as a WHOLE-VALUE replace at import (so a force-reload of a doc with
+ * fewer footnotes can't leave stale ids) and read by the exporter to emit real
+ * `<w:footnote>` parts. Same inertness as Y_MAP_FIDELITY_REPORT: no observer on
+ * per-document documentMeta, so the write is server-only, client/Claude-invisible.
+ */
+export const Y_MAP_FOOTNOTE_BODIES = "footnoteBodies";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 /**

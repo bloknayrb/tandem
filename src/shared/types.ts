@@ -345,6 +345,29 @@ export interface FidelityReport {
   updatedAt: number;
 }
 
+/**
+ * A reconstructed Word footnote body (#1123 Tier-A #3 PR 2). Captured from
+ * `word/footnotes.xml` on import, stored off-fragment under
+ * Y_MAP_DOCUMENT_META at Y_MAP_FOOTNOTE_BODIES (keyed by the OOXML footnote id,
+ * the same id mammoth puts in its `#footnote-N` href), and re-emitted as a real
+ * `<w:footnote>` on export. Server write-only, opaque to the client and Claude.
+ */
+export interface FootnoteBody {
+  /**
+   * Plain body text. Rich body formatting (bold/italic, multi-paragraph) is
+   * deliberately flattened to plain text in PR 2 and reported honestly via
+   * `hadFormatting`; rich-body fidelity is a deferred fast-follow.
+   */
+  text: string;
+  /**
+   * Whether the source OOXML body carried formatting we drop on import
+   * (`<w:b>`/`<w:i>`/`<w:u>`/`<w:hyperlink>` or >1 `<w:p>`). Drives a count-only
+   * honesty line — NEVER thread the body text through the loss-line path (it
+   * bypasses the mammoth-message redaction; see `footnoteLossLines`).
+   */
+  hadFormatting: boolean;
+}
+
 /** Text selection snapshot captured when opening chat, attached to the next outgoing ChatMessage as its anchor. */
 export interface CapturedAnchor extends DocumentRange {
   textSnapshot: string;

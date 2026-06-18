@@ -8,7 +8,7 @@ import type { Annotation } from "../../shared/types.js";
 import { getElementText } from "../mcp/document-model.js";
 
 // Re-export for backward compatibility — consumers can import from either module
-export { htmlToYDoc } from "./docx-html.js";
+export { htmlToYDoc, reconcileFootnoteIds } from "./docx-html.js";
 
 /**
  * Convert a .docx buffer to HTML via mammoth.js.
