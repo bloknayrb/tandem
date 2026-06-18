@@ -198,19 +198,22 @@ const CORPUS: Fixture[] = [
   {
     name: "Word comment",
     build: corpus.buildComment,
-    status: "breaks",
+    status: "survives",
     reason:
-      "ADR-027 imports Word comments as private notes; the export gate (type==='comment') drops them, so a plain open→save loses them",
+      "imported Word comments round-trip back to the file as private notes (writeback) — Claude-invisible, but not dropped on save",
     check(rt) {
       // Body text is stable — comment range markers aren't body content.
       expectStable(rt);
-      // Import preserved the comment as a private import-authored note.
+      // Import preserved the comment as a private import-authored note...
       expect(rt.gen1.annotations).toHaveLength(1);
       expect(rt.gen1.annotations[0].author).toBe("import");
       expect(rt.gen1.annotations[0].anchorText).toBe("anchored text");
-      // CURRENT LOSS — not written back on save. When imported-comment writeback
-      // lands, gen2 keeps the annotation → this flips → promote.
-      expect(rt.gen2.annotations).toHaveLength(0);
+      // ...and the writeback gate now round-trips it: gen2 keeps the import,
+      // anchored to the same text. (It stays a private note — ADR-027 governs
+      // Claude visibility, not the .docx file round-trip.)
+      expect(rt.gen2.annotations).toHaveLength(1);
+      expect(rt.gen2.annotations[0].author).toBe("import");
+      expect(rt.gen2.annotations[0].anchorText).toBe("anchored text");
     },
   },
   {

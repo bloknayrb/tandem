@@ -5,21 +5,37 @@
 // End markers + comments.xml) lives in `docx-export.ts`; this module is the
 // privacy and correctness boundary in front of it.
 //
-// ADR-027 HARD GATE (must be preserved by any future change):
-//   - ONLY `type === "comment"` annotations are exported. `note` annotations
-//     are user-private and must NEVER appear in any generated XML part — not
-//     their content, not their author, not their existence. `highlight`
-//     annotations are likewise private visual markers and are never exported.
-//   - `audience === "private"` records are excluded even if comment-typed
-//     (defense-in-depth; comments should always be outbound).
-//   - Replies marked `private` (note-authored replies and imported Word
-//     replies, #1000) are never exported. Privacy is a durable property of
-//     the reply, so a comment's exported body can only carry replies that
-//     were already Claude-visible.
-//   - Only `status === "pending"` comments are exported: accepting or
-//     dismissing a comment in Tandem resolves it, and Word has no public
-//     "resolved" channel in docx@9.x (no commentsExtended.xml support), so a
-//     resolved comment is dropped from the saved file rather than resurrected.
+// ADR-027 GATE (must be preserved by any future change):
+//   ADR-027 governs CLAUDE visibility, not the .docx file round-trip. Two kinds
+//   of annotation reach this file: (A) user/Claude comments destined for Claude,
+//   and (B) imports — Word comments that CAME FROM the source .docx, stored as
+//   private notes (Claude-invisible) but written back to the same file on save.
+//   Writing an import back to its own file is content preservation, NOT Claude
+//   exposure — the Claude-facing surfaces (`tandem_getAnnotations`,
+//   `tandem_exportAnnotations`, channel) are untouched by this module.
+//
+//   - An ANNOTATION is exported when EITHER:
+//       (A) `type === "comment"` AND `audience !== "private"` AND
+//           `status === "pending"`  (the user/Claude comment path), OR
+//       (B) it is an IMPORT ROUND-TRIP — `isImportRoundtrip(ann)`: `author ===
+//           "import"` AND a populated `importSource` (see the predicate). Imports
+//           bypass the type, audience, AND status gates: they are file content,
+//           not Claude-facing, and Bryan's directive is "imported comments
+//           should not be dropped" — even an accepted/dismissed import round-trips
+//           (status is Tandem's review state, not the file's content). Only an
+//           explicit DELETE (removal from the annotation map) drops an import.
+//   - The import predicate (annotations AND replies) keys on `author ===
+//     "import"` AND a corroborating field (`importSource` / `importAuthor`),
+//     never on `author` alone: the `.passthrough()` durable envelope
+//     enum-validates `author` but does NOT cross-validate it against the import
+//     metadata, so `author:"import"` alone must not bypass the gate. A genuine
+//     import always populates the corroborating field.
+//   - User-authored `note`/`highlight` and user-authored `private` replies
+//     NEVER satisfy the import predicate, so they are never exported.
+//   - Replies: `private` replies are exported ONLY when they are import replies
+//     (`author === "import"` AND a populated `importAuthor`) — imported Word
+//     reply threads round-trip back to the file; note-authored and other private
+//     replies never export. Privacy is a durable property of the reply.
 //
 // Range resolution mirrors the read paths: `refreshRange` resolves the CRDT
 // `relRange` first and falls back to flat offsets (read-only here — no Y.Map
@@ -61,6 +77,47 @@ export interface ExportComment {
    * append AFTER the content.
    */
   bodyParagraphs: string[];
+}
+
+/**
+ * Import round-trip predicate: an annotation that ORIGINATED from the source
+ * .docx (a Word comment) and must be written back to it on save.
+ *
+ * Keyed on `author === "import"` AND a populated `importSource.author`, never on
+ * `author` alone. The durable store's `.passthrough()` envelope (annotations/
+ * schema.ts) enum-validates `author` but does NOT cross-validate it against
+ * `importSource`, so a tampered/legacy `<hash>.json` record carrying
+ * `author:"import"` + user content but no `importSource` must not be enough to
+ * bypass the privacy gate and leak into a shared file. A genuine import always
+ * populates `importSource` (docx-comments.ts injection); requiring it restores
+ * belt-and-suspenders alongside the (now import-bypassed) type and audience
+ * gates. (A determined local attacker who hand-edits the at-rest JSON can forge
+ * both fields — but that is not an escalation: they can already edit the target
+ * .docx directly.) `importSource.commentId` is deliberately NOT required — it is
+ * about w:id stability, not provenance, and pre-#1068 import notes lack it.
+ */
+function isImportRoundtrip(ann: Annotation): boolean {
+  return (
+    ann.author === "import" &&
+    typeof ann.importSource?.author === "string" &&
+    ann.importSource.author.length > 0
+  );
+}
+
+/**
+ * Reply analogue of `isImportRoundtrip`: an imported Word reply that round-trips
+ * back to its source file. Same corroboration rationale — `author === "import"`
+ * alone is insufficient under the `.passthrough()` envelope; require a populated
+ * `importAuthor`, which the genuine injection path always sets (reply author
+ * defaults to "Unknown", never empty — `parseCommentMetadata`). This keeps the
+ * reply gate symmetric with the annotation gate.
+ */
+function isImportReply(reply: AnnotationReply): boolean {
+  return (
+    reply.author === "import" &&
+    typeof reply.importAuthor === "string" &&
+    reply.importAuthor.length > 0
+  );
 }
 
 /**
@@ -126,10 +183,13 @@ function exportableReplies(repliesMap: Y.Map<unknown>, annotationId: string): An
     if (typeof value !== "object" || value === null) return;
     const reply = value as AnnotationReply;
     if (reply.annotationId !== annotationId) return;
-    // ADR-027/#1000: private replies (note-authored, imported Word replies)
-    // never leave Tandem. Treat anything not explicitly public-shaped as
-    // private (fail closed).
-    if (reply.private === true) return;
+    // ADR-027/#1000: private replies never reach Claude. The .docx file
+    // round-trip is a separate boundary: an imported Word reply (isImportReply)
+    // is written back to the file it came from even though it's private. A
+    // user-authored private reply (note-authored, or a private reply on an
+    // imported comment) never exports, and an `author:"import"` reply lacking
+    // the corroborating `importAuthor` is treated as untrusted (fail closed).
+    if (reply.private === true && !isImportReply(reply)) return;
     if (typeof reply.id !== "string") return;
     if (typeof reply.text !== "string" || reply.text.length === 0) return;
     out.push(reply);
@@ -166,11 +226,17 @@ export function prepareExportComments(doc: Y.Doc): ExportComment[] {
     const ann = sanitizeAnnotation(value, (event) => {
       console.error(`[docx-comment-export] sanitize rewrote ${event.id}: ${event.kind}`);
     });
-    // ADR-027 hard gate — see module header. Order matters for clarity, not
-    // correctness: every clause is independently sufficient to exclude.
-    if (ann.type !== "comment") return; // never notes, never highlights
-    if (ann.audience === "private") return; // defense-in-depth
-    if (ann.status !== "pending") return; // resolved comments drop from the file
+    // ADR-027 gate — see module header. Import round-trips (author:"import" +
+    // importSource) bypass the type/audience/status gates: they are file content
+    // written back to their own .docx, Claude-invisible throughout. User notes/
+    // highlights and user-private content never satisfy the predicate, so they
+    // stay excluded by every clause. Sanitize runs FIRST (above) so this sees
+    // the canonicalized record; the admitted import set is exactly
+    // {author:"import" + importSource} × {note, private-comment}.
+    const importRoundtrip = isImportRoundtrip(ann);
+    if (ann.type !== "comment" && !importRoundtrip) return; // never user notes/highlights
+    if (ann.audience === "private" && !importRoundtrip) return; // defense-in-depth
+    if (ann.status !== "pending" && !importRoundtrip) return; // resolved user comments drop
     candidates.push(ann);
   });
   if (candidates.length === 0) return [];

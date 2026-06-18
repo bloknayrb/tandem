@@ -8,8 +8,11 @@
 //   3. An imported Word comment promoted to a Tandem comment round-trips with
 //      the SAME deterministic `importAnnotationId`, so the existing inject
 //      dedup + durable LWW merge converge instead of duplicating.
-// Plus the ADR-027 hard gate: note content must never appear in ANY generated
-// XML part.
+// Plus the privacy boundary: USER-authored note/highlight content and
+// user-private content must never appear in any generated XML part. Imported
+// Word comments (author:"import") are the exception — they round-trip back to
+// their OWN .docx (file preservation, not Claude exposure); see the
+// imported-comment-writeback tests below and ADR-027's 2026-06-17 revision.
 
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -282,19 +285,64 @@ describe("exportYDocToDocx — ADR-027 privacy gate", () => {
     expect(await allXmlText(await unzip(buffer))).not.toContain("SECRET-NOTE-CONTENT");
   });
 
-  it("never emits un-promoted imported Word comments (they are private notes)", async () => {
+  it("writes un-promoted imported Word comments back to the file (round-trip, not Claude exposure)", async () => {
     const d = docFromHtml("<p>Hello brave world</p>");
     addAnnotation(d, 0, 5, {
       type: "note",
       author: "import",
       audience: "private",
-      content: "REVIEWER-PRIVATE-BODY",
+      content: "REVIEWER-BODY",
       importSource: { author: "Alice", file: "review.docx", commentId: "7" },
     });
 
     const buffer = await exportYDocToDocx(d);
+    // The import round-trips: it is content the user opened from THIS file and
+    // expects to still be there on save (Bryan's directive). The byline is the
+    // original reviewer; the original w:id is reused for re-import dedup.
+    const reExtracted = await extractDocxComments(buffer);
+    expect(reExtracted).toHaveLength(1);
+    expect(reExtracted[0].commentId).toBe("7");
+    expect(reExtracted[0].authorName).toBe("Alice");
+    expect(reExtracted[0].bodyText).toBe("REVIEWER-BODY");
+  });
+
+  it("does NOT export an author:import record lacking importSource (provenance corroboration)", async () => {
+    // The durable store's .passthrough() envelope leaves `author` its least-
+    // validated field. A tampered/legacy record claiming author:"import" but
+    // carrying user content (no importSource) must NOT bypass the gate, or it
+    // leaks private content into a shared file. The carve-out requires BOTH.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      type: "note",
+      author: "import",
+      audience: "private",
+      content: "SMUGGLED-PRIVATE-CONTENT",
+      // importSource deliberately absent
+    });
+
+    const buffer = await exportYDocToDocx(d);
     expect(await extractDocxComments(buffer)).toHaveLength(0);
-    expect(await allXmlText(await unzip(buffer))).not.toContain("REVIEWER-PRIVATE-BODY");
+    expect(await allXmlText(await unzip(buffer))).not.toContain("SMUGGLED-PRIVATE-CONTENT");
+  });
+
+  it("exports accepted/dismissed imports too (status is review state, not file content)", async () => {
+    // Per the directive ("imported comments should not be dropped"), an import
+    // round-trips regardless of pending/accepted/dismissed; only an explicit
+    // delete (removal from the map) drops it. A user/Claude resolved comment
+    // still drops (see the claude-resolved test above).
+    const d = docFromHtml("<p>Hello brave world</p>");
+    addAnnotation(d, 0, 5, {
+      type: "note",
+      author: "import",
+      audience: "private",
+      status: "dismissed",
+      content: "DISMISSED-IMPORT-BODY",
+      importSource: { author: "Bob", file: "review.docx", commentId: "9" },
+    });
+
+    expect(await allXmlText(await unzip(await exportYDocToDocx(d)))).toContain(
+      "DISMISSED-IMPORT-BODY",
+    );
   });
 
   it("never emits highlights", async () => {
@@ -327,23 +375,73 @@ describe("exportYDocToDocx — ADR-027 privacy gate", () => {
     expect(all).not.toContain("DISMISSED-COMMENT");
   });
 
-  it("never emits private replies, even on an exported comment", async () => {
+  it("never emits a USER-authored private reply, even on an exported comment", async () => {
     const d = docFromHtml("<p>Hello brave world</p>");
     const id = addAnnotation(d, 6, 11, { content: "Root comment" });
     addReply(d, { annotationId: id, text: "PUBLIC-REPLY", author: "claude" });
+    // A user's private reply (e.g. typed on a note) is the user's own content
+    // and never leaves Tandem — author !== "import", so the carve-out skips it.
     addReply(d, {
       annotationId: id,
-      text: "PRIVATE-REPLY-TEXT",
-      author: "import",
+      text: "USER-PRIVATE-REPLY",
+      author: "user",
       private: true,
-      importAuthor: "Alice",
     });
 
     const zip = await unzip(await exportYDocToDocx(d));
     const all = await allXmlText(zip);
     expect(all).toContain("PUBLIC-REPLY");
-    expect(all).not.toContain("PRIVATE-REPLY-TEXT");
-    expect(all).not.toContain("Alice");
+    expect(all).not.toContain("USER-PRIVATE-REPLY");
+  });
+
+  it("round-trips an imported (author:import) reply back to the file", async () => {
+    // Imported Word reply threads came FROM the file and go back to it, even
+    // though they're private (Claude-invisible). They flatten into the body.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    const id = addAnnotation(d, 0, 5, {
+      type: "note",
+      author: "import",
+      audience: "private",
+      content: "ROOT-IMPORT-COMMENT",
+      importSource: { author: "Alice", file: "review.docx", commentId: "3" },
+    });
+    addReply(d, {
+      annotationId: id,
+      text: "IMPORTED-REPLY-BODY",
+      author: "import",
+      private: true,
+      importAuthor: "Bob",
+    });
+
+    const all = await allXmlText(await unzip(await exportYDocToDocx(d)));
+    expect(all).toContain("ROOT-IMPORT-COMMENT");
+    expect(all).toContain("IMPORTED-REPLY-BODY");
+  });
+
+  it("does NOT export an author:import reply lacking importAuthor (provenance corroboration)", async () => {
+    // Symmetric with the annotation gate: author:"import" alone is insufficient
+    // under the .passthrough() envelope. A private reply without the corroborating
+    // importAuthor is untrusted and stays out of the file, even though its root
+    // (a genuine import) round-trips.
+    const d = docFromHtml("<p>Hello brave world</p>");
+    const id = addAnnotation(d, 0, 5, {
+      type: "note",
+      author: "import",
+      audience: "private",
+      content: "ROOT-IMPORT-OK",
+      importSource: { author: "Alice", file: "review.docx", commentId: "3" },
+    });
+    addReply(d, {
+      annotationId: id,
+      text: "UNCORROBORATED-REPLY",
+      author: "import",
+      private: true,
+      // importAuthor deliberately absent
+    });
+
+    const all = await allXmlText(await unzip(await exportYDocToDocx(d)));
+    expect(all).toContain("ROOT-IMPORT-OK");
+    expect(all).not.toContain("UNCORROBORATED-REPLY");
   });
 });
 
@@ -431,6 +529,40 @@ describe("exportYDocToDocx — import/export idempotency", () => {
     injectCommentsAsAnnotations(reopened, reExtracted, "review.docx");
     const reopenedKeys = [...reopened.getMap(Y_MAP_ANNOTATIONS).keys()];
     expect(reopenedKeys).toEqual([originalId]);
+    reopened.destroy();
+  });
+
+  it("an UNPROMOTED imported comment round-trips and re-imports without duplicating", async () => {
+    // Bryan's directive: a plain open → (edit) → save must not drop reviewer
+    // comments. Open a reviewer .docx, leave the comment an unpromoted private
+    // note, save, and re-open from the saved bytes into a FRESH Y.Doc (what a
+    // real reopen is — imported notes inject under `withInternal`, which the
+    // durable-sync observer skips, so they are re-derived each open, not loaded).
+    const fixture = await buildDocxWithComments(1);
+    const html = await loadDocx(fixture);
+    doc = new Y.Doc();
+    withInternal(doc, () => htmlToYDoc(doc, html));
+    const comments = await extractDocxComments(fixture);
+    injectCommentsAsAnnotations(doc, comments, "review.docx");
+
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const originalId = [...map.keys()][0];
+    const note = map.get(originalId) as Annotation;
+    expect(note.type).toBe("note");
+    expect(note.author).toBe("import");
+
+    // Save WITHOUT promoting → the import is written back to the file...
+    const buffer = await exportYDocToDocx(doc);
+    const reExtracted = await extractDocxComments(buffer);
+    expect(reExtracted).toHaveLength(1);
+    expect(reExtracted[0].commentId).toBe(note.importSource?.commentId);
+    expect(reExtracted[0].bodyText).toBe(note.content);
+
+    // ...and reopening re-injects exactly ONE note with the SAME id (the
+    // deterministic importAnnotationId converges; no duplicate accumulates).
+    const reopened = await reimport(buffer);
+    injectCommentsAsAnnotations(reopened, reExtracted, "review.docx");
+    expect([...reopened.getMap(Y_MAP_ANNOTATIONS).keys()]).toEqual([originalId]);
     reopened.destroy();
   });
 
