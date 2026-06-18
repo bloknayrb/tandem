@@ -1,7 +1,10 @@
 import { Hocuspocus } from "@hocuspocus/server";
 import * as Y from "yjs";
-
-import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
+import { CTRL_ROOM, TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
+import { connectionShouldBeReadOnly } from "../license/connection-gate.js";
+import { GATE_ENABLED } from "../license/gate-flag.js";
+import { resolveLicenseState } from "../license/license-state.js";
+import { resolveAppDataDir } from "../platform.js";
 
 let hocuspocusInstance: Hocuspocus | null = null;
 const documents = new Map<string, Y.Doc>();
@@ -131,7 +134,7 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
     // can clobber the broadcast openDocuments list itself (and in the old
     // design could clobber a map-broadcast generation id — which is why the
     // id now lives in module state and travels over HTTP only).
-    async onAuthenticate({ token, documentName, requestHeaders }) {
+    async onAuthenticate({ token, documentName, requestHeaders, connection }) {
       assertAllowedOrigin(requestHeaders?.origin);
       const expected = getExpectedGenerationToken?.() ?? null;
       if (expected === null || token !== expected) {
@@ -140,6 +143,25 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
             `(client token ${token ? `"${token.slice(0, 8)}…"` : "missing"})`,
         );
         throw new Error("Connection rejected: stale server generation");
+      }
+
+      // License gate — Surface A (#1116, ADR-040). In restricted mode mark
+      // document-room connections read-only so browser edits + annotations are
+      // rejected server-side (no CRDT revert). CTRL_ROOM stays writable so
+      // chat / mode / awareness keep working — the read-only escape hatch.
+      // No-op when the gate is dark.
+      if (GATE_ENABLED) {
+        const state = resolveLicenseState({
+          appDataDir: resolveAppDataDir(),
+          now: () => Date.now(),
+          gateEnabled: GATE_ENABLED,
+        });
+        if (connectionShouldBeReadOnly(documentName, CTRL_ROOM, state.status)) {
+          connection.readOnly = true;
+          console.error(
+            `[Hocuspocus] License restricted — read-only connection to ${documentName}`,
+          );
+        }
       }
     },
 
