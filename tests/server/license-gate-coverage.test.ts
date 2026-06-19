@@ -72,6 +72,11 @@ const GATED = [
 const UNGATED = [
   "tandem_resolveAnnotation",
   "tandem_save",
+  // `tandem_open` stays on withErrorBoundary so PLAIN open is the read/export
+  // escape hatch — but it carries an IN-HANDLER gate on the `force === true`
+  // sub-path (which runs clearAndReload → wipes the durable annotation store).
+  // The wrapper-based regex below can't see that sub-path gate; it's covered
+  // behaviorally in license-force-open-gate.test.ts (#1116 H1).
   "tandem_open",
   "tandem_getAnnotations",
   "tandem_getTextContent",
@@ -116,5 +121,27 @@ describe("Surface B gated-tool registration coverage", () => {
       gatedWith(name).test(SRC),
       `${name} must NOT be gated — it would break the read-only escape hatch`,
     ).toBe(false);
+  });
+
+  // Completeness: the two lists above only protect the tools they NAME. Without
+  // this, a future mutator registered with `withErrorBoundary` and forgotten in
+  // both lists would ship ungated AND green — exactly the fail-open class the
+  // suite claims to prevent. Assert every wrapped `tandem_*` registration is
+  // classified into exactly one list (catches a new ungated mutator AND a new
+  // reader accidentally gated). `\s*` so multi-line registrations are captured;
+  // gatedTool's internal `withErrorBoundary(toolName` uses a variable, not a
+  // string literal, so it isn't matched.
+  it("every registered tandem_* tool is classified as GATED or UNGATED", () => {
+    const registered = new Set(
+      [...SRC.matchAll(/(?:gatedTool|withErrorBoundary)\(\s*"(tandem_\w+)"/g)].map((m) => m[1]),
+    );
+    const classified = new Set([...GATED, ...UNGATED]);
+    const unclassified = [...registered].filter((n) => !classified.has(n));
+    const stale = [...classified].filter((n) => !registered.has(n));
+    expect(
+      unclassified,
+      `registered but unclassified (license fail-open risk): ${unclassified}`,
+    ).toEqual([]);
+    expect(stale, `classified but no longer registered (stale list entry): ${stale}`).toEqual([]);
   });
 });

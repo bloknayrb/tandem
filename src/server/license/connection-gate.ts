@@ -1,4 +1,5 @@
-import type { LicenseStatus } from "./license-types.js";
+import { CTRL_ROOM } from "../../shared/constants.js";
+import type { LicenseState, LicenseStatus } from "./license-types.js";
 
 /**
  * Surface A decision (#1116, ADR-040): should a Hocuspocus client connection be
@@ -14,4 +15,24 @@ export function connectionShouldBeReadOnly(
   status: LicenseStatus,
 ): boolean {
   return status === "restricted" && documentName !== ctrlRoom;
+}
+
+/**
+ * Apply the Surface A gate to a live connection: set `readOnly = true` when the
+ * resolved license state restricts this document room. Returns whether it
+ * clamped (so the caller can log). Extracted from `onAuthenticate` so the
+ * load-bearing ASSIGNMENT — not just the pure predicate — is unit-testable
+ * against a connection stub. No-op when the gate is inactive (dark build).
+ */
+export function applyConnectionGate(
+  connection: { readOnly?: boolean },
+  documentName: string,
+  state: LicenseState,
+): boolean {
+  if (!state.gateActive) return false;
+  if (connectionShouldBeReadOnly(documentName, CTRL_ROOM, state.status)) {
+    connection.readOnly = true;
+    return true;
+  }
+  return false;
 }

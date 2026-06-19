@@ -9,13 +9,7 @@
  * public endpoint — it never blocks or fails license delivery. This module
  * therefore never throws; it logs and returns `{ ok }`.
  */
-
-/** What the Worker needs to gate an update check. `updateWindowEnd: null` ⇒ never expires (grandfathered). */
-export interface LicenseEntitlement {
-  updateWindowEnd: string | null;
-  status: string; // license type: "personal" | "commercial" | "grandfathered"
-  version: string; // license schema version
-}
+import type { LicenseEntitlement } from "./license-types.js";
 
 export interface KvConfig {
   accountId: string;

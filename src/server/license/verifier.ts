@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import crypto from "crypto";
-import type { LicenseMetadata, SignedLicense } from "./license-types.js";
+import type { LicenseMetadata, SignatureVerified, SignedLicense } from "./license-types.js";
 import { TANDEM_PUBLIC_KEY } from "./public-key.js";
 
 export function canonicalObject(obj: any): any {
@@ -11,7 +11,12 @@ export function canonicalObject(obj: any): any {
     return obj.map(canonicalObject);
   }
   const sortedKeys = Object.keys(obj).sort();
-  const sortedObj: any = {};
+  // Null-prototype accumulator so a `__proto__` (or `constructor`/`prototype`)
+  // own-key is canonicalized as a normal key instead of mutating the prototype
+  // (plain `{}` + `sortedObj["__proto__"] = …` would silently drop it from the
+  // signed bytes). Symmetric signer/verifier either way, but this removes the
+  // foot-gun if the trusted field set ever grows.
+  const sortedObj: any = Object.create(null);
   for (const key of sortedKeys) {
     sortedObj[key] = canonicalObject(obj[key]);
   }
@@ -36,7 +41,7 @@ export function canonicalize(obj: any): string {
  * decision read `metadata.expiresAt` themselves (see `license-state.ts`).
  * Throws if the format is malformed or the signature is invalid.
  */
-export function verifyLicenseSignature(licenseString: string): LicenseMetadata {
+export function verifyLicenseSignature(licenseString: string): SignatureVerified {
   // Bound the input before any allocation — license blobs are small (<2KB).
   if (licenseString.length > 10_000) {
     throw new Error("License verification failed: input exceeds maximum length");
@@ -44,6 +49,13 @@ export function verifyLicenseSignature(licenseString: string): LicenseMetadata {
   try {
     // 1. Decode base64
     const decoded = Buffer.from(licenseString, "base64").toString("utf-8");
+    // Bound the DECODED payload too — a deeply-nested array can fit inside the
+    // 10k input bound yet blow the recursion stack in canonicalObject. Real
+    // blobs are <2KB; 4KB is a generous ceiling that rejects the pathological
+    // case before any parse/recurse.
+    if (decoded.length > 4096) {
+      throw new Error("License verification failed: payload exceeds maximum length");
+    }
     const signedLicense = JSON.parse(decoded) as SignedLicense;
 
     if (!signedLicense.metadata || !signedLicense.signature) {
@@ -60,7 +72,8 @@ export function verifyLicenseSignature(licenseString: string): LicenseMetadata {
       throw new Error("Signature verification failed");
     }
 
-    return signedLicense.metadata;
+    // Brand: this metadata is now signature-verified (run-gate may trust it).
+    return signedLicense.metadata as SignatureVerified;
   } catch (error: any) {
     // Preserve already-wrapped messages to avoid double-wrapping.
     if (error instanceof Error && error.message.startsWith("License verification failed")) {

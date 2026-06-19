@@ -90,7 +90,9 @@ Cloudflare account, KV namespace, custom domain, and secrets.
 
 1. Create a Cloudflare KV namespace; note its **namespace id** and your **account id**.
 2. Create an API token scoped to *Workers KV Storage: Edit* for that namespace.
-3. Set the Worker secret `LATEST_JSON` (or the configured manifest source) and deploy:
+3. Set the manifest source `PUBLIC_LATEST_JSON_URL` — a plaintext `[vars]` entry in
+   `wrangler.toml` (NOT a Worker *secret*; it's a public URL the Worker reads via
+   `env.PUBLIC_LATEST_JSON_URL`) — then deploy:
    ```bash
    cd infra/license-update-worker && npx wrangler deploy
    ```

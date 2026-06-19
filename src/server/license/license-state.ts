@@ -2,7 +2,7 @@ import fs from "fs";
 import { atomicWrite } from "../file-io/index.js";
 import { resolveAppDataDir } from "../platform.js";
 import { GATE_ENABLED } from "./gate-flag.js";
-import type { LicenseFile, LicenseMetadata, LicenseState, TrialFile } from "./license-types.js";
+import type { LicenseFile, LicenseState, SignatureVerified, TrialFile } from "./license-types.js";
 import { licenseFilePath, TRIAL_MS, trialFilePath } from "./paths.js";
 import { verifyLicenseSignature } from "./verifier.js";
 
@@ -36,12 +36,15 @@ export function resolveLicenseState(deps: {
   appDataDir: string;
   now: () => number;
   gateEnabled: boolean;
-  verify?: (blob: string) => LicenseMetadata;
+  // Branded: only a signature-verifying function fits, so the expiry-checking
+  // `verifyLicense` can't be wired here (it would lock out paid users past their
+  // update window). See SignatureVerified in license-types.ts.
+  verify?: (blob: string) => SignatureVerified;
 }): LicenseState {
   const { appDataDir, now, gateEnabled, verify = verifyLicenseSignature } = deps;
 
   if (!gateEnabled) {
-    return { gateActive: false, status: "licensed", updateWindowCurrent: true };
+    return { gateActive: false };
   }
 
   // One timestamp for the whole resolution — the licensed update-window check and
@@ -134,12 +137,18 @@ export async function ensureTrialStarted(
  * window — a user may activate an older license and still run forever; they
  * simply won't receive new updates until they renew.
  */
-export async function activateLicense(appDataDir: string, blob: string): Promise<LicenseState> {
-  const meta = verifyLicenseSignature(blob); // throws on malformed / bad signature
+export async function activateLicense(
+  appDataDir: string,
+  blob: string,
+  // Injectable for tests (sign with a temp keypair) — mirrors the seam on
+  // resolveLicenseState. Production uses the pinned-key signature verifier.
+  verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
+): Promise<LicenseState> {
+  const meta = verify(blob); // throws on malformed / bad signature
   if (!knownVersion(meta.version)) {
     throw new Error(`Unsupported license version: ${meta.version}`);
   }
   const body: LicenseFile = { version: 1, blob };
   await atomicWrite(licenseFilePath(appDataDir), JSON.stringify(body));
-  return resolveLicenseState({ appDataDir, now: () => Date.now(), gateEnabled: true });
+  return resolveLicenseState({ appDataDir, now: () => Date.now(), gateEnabled: true, verify });
 }

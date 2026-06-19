@@ -253,7 +253,10 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
       test: isTestPurchase,
     });
   } catch (err: any) {
+    // Detail stays server-side only — a validly-signed-but-malformed payload can
+    // throw past signature verification, and `err.message` could embed payload
+    // bytes. Return a static message (matches the activate-route posture).
     console.error("Webhook processing error:", err);
-    res.status(500).json({ error: `Webhook internal error: ${err.message}` });
+    res.status(500).json({ error: "Webhook internal error" });
   }
 }

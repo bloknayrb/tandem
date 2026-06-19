@@ -34,20 +34,22 @@ export function resolveLicenseInput(
 export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean): string[] {
   const lines: string[] = ["", "Tandem license", ""];
   lines.push(`  Enforcement:   ${enforcementOn ? "on" : "off (activates at v1.0)"}`);
-  if (state.status === "trial") {
-    lines.push(`  Status:        trial (${state.trial?.daysRemaining ?? 0} days remaining)`);
-  } else if (state.status === "restricted") {
+  if (state.gateActive && state.status === "trial") {
+    lines.push(`  Status:        trial (${state.trial.daysRemaining} days remaining)`);
+  } else if (state.gateActive && state.status === "restricted") {
     lines.push("  Status:        restricted — trial ended; activate a license to keep editing");
   } else {
+    // licensed (gate-active) — or the dark arm, which `tandem license` never
+    // produces (it forces gateEnabled:true), but the union requires the branch.
     lines.push("  Status:        licensed");
-    if (state.license) {
+    if (state.gateActive && state.status === "licensed") {
       lines.push(`  Licensee:      ${state.license.name} (${state.license.type})`);
+      const window = state.updateWindowCurrent ? "current" : "expired";
+      const through = state.license.expiresAt
+        ? ` (through ${state.license.expiresAt.slice(0, 10)})`
+        : "";
+      lines.push(`  Update window: ${window}${through}`);
     }
-    const window = state.updateWindowCurrent ? "current" : "expired";
-    const through = state.license?.expiresAt
-      ? ` (through ${state.license.expiresAt.slice(0, 10)})`
-      : "";
-    lines.push(`  Update window: ${window}${through}`);
   }
   lines.push("");
   return lines;
@@ -81,10 +83,11 @@ export async function runActivate(args: string[]): Promise<void> {
   const blob = resolveLicenseInput(input, fs.existsSync, (p) => fs.readFileSync(p, "utf-8"));
   try {
     const state = await activateLicense(resolveAppDataDir(), blob);
-    const who = state.license ? `${state.license.name} (${state.license.type})` : "this device";
+    const lic = state.gateActive && state.status === "licensed" ? state.license : null;
+    const who = lic ? `${lic.name} (${lic.type})` : "this device";
     console.log(`\n✓ License activated for ${who}.`);
-    if (state.license?.expiresAt) {
-      console.log(`  Updates included through ${state.license.expiresAt.slice(0, 10)}.`);
+    if (lic?.expiresAt) {
+      console.log(`  Updates included through ${lic.expiresAt.slice(0, 10)}.`);
     }
     console.log("");
   } catch {

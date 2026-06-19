@@ -1,7 +1,7 @@
 import { Hocuspocus } from "@hocuspocus/server";
 import * as Y from "yjs";
-import { CTRL_ROOM, TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
-import { connectionShouldBeReadOnly } from "../license/connection-gate.js";
+import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
+import { applyConnectionGate } from "../license/connection-gate.js";
 import { GATE_ENABLED } from "../license/gate-flag.js";
 import { resolveLiveLicenseState } from "../license/license-state.js";
 
@@ -149,10 +149,13 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
       // rejected server-side (no CRDT revert). CTRL_ROOM stays writable so
       // chat / mode / awareness keep working — the read-only escape hatch.
       // No-op when the gate is dark.
+      // `GATE_ENABLED` is the fast-path guard: in a dark build we skip the
+      // per-connection license file read entirely. `applyConnectionGate` does
+      // the predicate + the load-bearing `connection.readOnly = true` assignment
+      // (extracted so that assignment is unit-testable).
       if (GATE_ENABLED) {
-        const state = resolveLiveLicenseState();
-        if (connectionShouldBeReadOnly(documentName, CTRL_ROOM, state.status)) {
-          connection.readOnly = true;
+        const clamped = applyConnectionGate(connection, documentName, resolveLiveLicenseState());
+        if (clamped) {
           console.error(
             `[Hocuspocus] License restricted — read-only connection to ${documentName}`,
           );

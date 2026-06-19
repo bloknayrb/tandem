@@ -30,6 +30,12 @@ export interface UpdateDeps {
 
 export const LICENSE_HEADER = "X-Tandem-License-Id";
 
+// Reader view of the KV value written by `writeLicenseEntitlement`. The canonical
+// (writer) shape is `LicenseEntitlement` in `src/server/license/license-types.ts`;
+// this is a separate Cloudflare build so it keeps a minimal local copy (only
+// `updateWindowEnd` is read) — kept in lockstep by the parity test in
+// tests/server/license-update-worker.test.ts. `status`/`version` are optional
+// here because the Worker tolerates entries that omit them.
 interface Entitlement {
   updateWindowEnd: string | null;
   status?: string;
@@ -73,7 +79,17 @@ export async function handleUpdateRequest(request: Request, deps: UpdateDeps): P
 
   // Entitled — proxy the signed public manifest. A failed upstream fetch
   // degrades to no-update (the user just isn't offered an update this round).
-  const upstream = await fetchFn(latestJsonUrl, { headers: { Accept: "application/json" } });
+  // Both a non-ok response AND a thrown fetch (DNS/reset/timeout) must collapse
+  // to the byte-identical 204 — otherwise a thrown fetch escapes as a CF 500,
+  // and since this point is reached only for an entitled, in-window id, the
+  // 500-vs-204 split is an entitlement oracle (defeats the no-existence-oracle
+  // invariant in this file's header). So catch the throw too.
+  let upstream: Response;
+  try {
+    upstream = await fetchFn(latestJsonUrl, { headers: { Accept: "application/json" } });
+  } catch {
+    return reject();
+  }
   if (!upstream.ok) return reject();
   const body = await upstream.text();
   log?.({ result: "served", ts });

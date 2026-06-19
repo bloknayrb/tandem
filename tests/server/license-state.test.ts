@@ -9,7 +9,11 @@ import {
   ensureTrialStarted,
   resolveLicenseState,
 } from "../../src/server/license/license-state.js";
-import type { LicenseMetadata, SignedLicense } from "../../src/server/license/license-types.js";
+import type {
+  LicenseMetadata,
+  SignatureVerified,
+  SignedLicense,
+} from "../../src/server/license/license-types.js";
 import {
   licenseFilePath,
   TRIAL_DAYS,
@@ -39,7 +43,7 @@ function signBlob(privateKey: string, meta: LicenseMetadata): string {
 
 /** Signature-only verifier against a test public key (mirrors verifyLicenseSignature). */
 function makeVerify(publicKey: string) {
-  return (blob: string): LicenseMetadata => {
+  return (blob: string): SignatureVerified => {
     const parsed = JSON.parse(Buffer.from(blob, "base64").toString("utf-8")) as SignedLicense;
     const ok = crypto.verify(
       null,
@@ -48,7 +52,7 @@ function makeVerify(publicKey: string) {
       Buffer.from(parsed.signature, "hex"),
     );
     if (!ok) throw new Error("Signature verification failed");
-    return parsed.metadata;
+    return parsed.metadata as SignatureVerified;
   };
 }
 
@@ -97,9 +101,12 @@ describe("gate flag", () => {
 });
 
 describe("resolveLicenseState", () => {
-  it("flag off ⇒ licensed/unrestricted", () => {
+  it("flag off ⇒ inactive gate (dark arm, no status)", () => {
     const s = resolveLicenseState({ appDataDir: tmp(), now: () => 0, gateEnabled: false });
-    expect(s).toMatchObject({ gateActive: false, status: "licensed", updateWindowCurrent: true });
+    // Discriminated union: the dark arm is just `{ gateActive: false }` — the
+    // synthetic "licensed" sentinel is gone (the status WIRE keeps emitting it
+    // for back-compat; see routes/license.ts toLicenseStatusWire).
+    expect(s).toEqual({ gateActive: false });
   });
 
   it("no trial.json yet ⇒ trial at day 0", () => {
@@ -205,6 +212,61 @@ describe("resolveLicenseState", () => {
   });
 });
 
+// The gate's single most important property: a corrupt/unreadable file must
+// fail CLOSED (never grant `licensed`). Asserted by test, not just inspection.
+describe("resolveLicenseState — fail-closed on corrupt files", () => {
+  it("corrupt license.json ⇒ not licensed (falls through to trial)", () => {
+    const dir = tmp();
+    fs.writeFileSync(licenseFilePath(dir), "{not valid json");
+    const s = resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true });
+    expect(s.status).toBe("trial");
+  });
+
+  it("corrupt trial.json ⇒ treated as a fresh day-0 trial (soft by design)", () => {
+    const dir = tmp();
+    fs.writeFileSync(trialFilePath(dir), "{not valid json");
+    const s = resolveLicenseState({ appDataDir: dir, now: () => 0, gateEnabled: true });
+    expect(s.status).toBe("trial");
+    expect(s.status === "trial" && s.trial.daysRemaining).toBe(TRIAL_DAYS);
+  });
+
+  it("non-date firstRunAt ⇒ restricted (NaN window resolves closed, never open)", () => {
+    const dir = tmp();
+    fs.writeFileSync(trialFilePath(dir), JSON.stringify({ version: 1, firstRunAt: "not-a-date" }));
+    const s = resolveLicenseState({
+      appDataDir: dir,
+      now: () => 1_700_000_000_000,
+      gateEnabled: true,
+    });
+    // new Date("not-a-date").getTime() === NaN ⇒ expiresAt NaN ⇒ nowMs < NaN is
+    // false ⇒ restricted. Pin it so a refactor can't silently flip it open.
+    expect(s.status).toBe("restricted");
+  });
+});
+
+// The 14-day boundary is strict `<`. Both edges deterministic with the injected
+// clock (the PR deferred this; landing it before the v1.0 flag-flip).
+describe("resolveLicenseState — trial boundary", () => {
+  const t0 = 1_700_000_000_000;
+  it("exactly at expiry ⇒ restricted", () => {
+    const dir = tmp();
+    writeTrial(dir, t0);
+    const s = resolveLicenseState({ appDataDir: dir, now: () => t0 + TRIAL_MS, gateEnabled: true });
+    expect(s.status).toBe("restricted");
+  });
+  it("one ms before expiry ⇒ trial with 1 day remaining", () => {
+    const dir = tmp();
+    writeTrial(dir, t0);
+    const s = resolveLicenseState({
+      appDataDir: dir,
+      now: () => t0 + TRIAL_MS - 1,
+      gateEnabled: true,
+    });
+    expect(s.status).toBe("trial");
+    expect(s.status === "trial" && s.trial.daysRemaining).toBe(1);
+  });
+});
+
 describe("ensureTrialStarted", () => {
   it("writes trial.json once when gate enabled and does not overwrite", async () => {
     const dir = tmp();
@@ -224,5 +286,24 @@ describe("ensureTrialStarted", () => {
 describe("activateLicense", () => {
   it("rejects a garbage blob", async () => {
     await expect(activateLicense(tmp(), "not-a-license")).rejects.toThrow();
+  });
+
+  it("verifies + persists a valid license ⇒ licensed round-trip", async () => {
+    const dir = tmp();
+    const { publicKey, privateKey } = tempKeyPair();
+    const blob = signBlob(privateKey, meta({ name: "Paid User" }));
+    const state = await activateLicense(dir, blob, makeVerify(publicKey));
+    expect(state.status).toBe("licensed");
+    expect(state.status === "licensed" && state.license.name).toBe("Paid User");
+    // license.json persisted with the exact blob (so the next resolve re-verifies).
+    const saved = JSON.parse(fs.readFileSync(licenseFilePath(dir), "utf-8"));
+    expect(saved.blob).toBe(blob);
+  });
+
+  it("rejects a license of an unknown schema version", async () => {
+    const dir = tmp();
+    const { publicKey, privateKey } = tempKeyPair();
+    const blob = signBlob(privateKey, meta({ version: "2.0" }));
+    await expect(activateLicense(dir, blob, makeVerify(publicKey))).rejects.toThrow();
   });
 });

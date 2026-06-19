@@ -52,7 +52,7 @@ import {
   toDocListEntry,
 } from "./document-service.js";
 import { openFileByPath, openScratchpad } from "./file-opener.js";
-import { gatedTool } from "./license-gate.js";
+import { gatedTool, licenseGate } from "./license-gate.js";
 import {
   getTextContentOutputShape,
   listDocumentsOutputShape,
@@ -290,6 +290,15 @@ export function registerDocumentTools(server: McpServer): void {
         ),
     },
     withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }) => {
+      // License gate (#1116) — ONLY the destructive force-reload sub-path. Plain
+      // open stays ungated (the read/export escape hatch), but force=true runs
+      // clearAndReload, which wipes the durable annotation file — an editing-class
+      // operation a restricted user must not reach. Gate sits OUTSIDE the inner
+      // try so a (post-flip) open throw keeps its own error categorization.
+      if (force === true) {
+        const blocked = licenseGate();
+        if (blocked) return blocked;
+      }
       try {
         const result = await openFileByPath(filePath, { force });
 

@@ -53,19 +53,41 @@ describe("writeLicenseEntitlement", () => {
     expect(JSON.parse((init as RequestInit).body as string)).toEqual(entry);
   });
 
-  it("returns ok:false on a non-2xx response (non-fatal)", async () => {
+  it("returns ok:false on a non-2xx response (non-fatal) AND logs loudly with the id only", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchFn = vi.fn(async () => ({ ok: false, status: 500 }) as Response);
-    expect(await writeLicenseEntitlement("lic-1", entry, { config: CONFIG, fetchFn })).toEqual({
-      ok: false,
-    });
+    expect(
+      await writeLicenseEntitlement("lic-1", { ...entry, email: "buyer@example.com" } as never, {
+        config: CONFIG,
+        fetchFn,
+      }),
+    ).toEqual({ ok: false });
+    // A dropped entitlement write is observable (the only signal — the caller
+    // fires it with `void`), and the buyer email never reaches the log.
+    expect(spy).toHaveBeenCalled();
+    const logged = JSON.stringify(spy.mock.calls);
+    expect(logged).toContain("lic-1");
+    expect(logged).not.toContain("buyer@example.com");
+    spy.mockRestore();
   });
 
-  it("never throws when fetch rejects — returns ok:false", async () => {
+  it("never throws when fetch rejects — returns ok:false AND logs the id only", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchFn = vi.fn(async () => {
       throw new Error("network down");
     });
     await expect(
       writeLicenseEntitlement("lic-1", entry, { config: CONFIG, fetchFn }),
     ).resolves.toEqual({ ok: false });
+    expect(spy).toHaveBeenCalled();
+    expect(JSON.stringify(spy.mock.calls)).toContain("lic-1");
+    spy.mockRestore();
+  });
+
+  it("skip path logs that it skipped (observable non-config)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await writeLicenseEntitlement("lic-1", entry, { config: null, fetchFn: vi.fn() });
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

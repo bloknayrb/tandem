@@ -6,8 +6,23 @@ import {
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { activateLicense, resolveLiveLicenseState } from "../../license/license-state.js";
-import type { LicenseState } from "../../license/license-types.js";
+import type { LicenseState, LicenseStatus } from "../../license/license-types.js";
 import { resolveAppDataDir } from "../../platform.js";
+
+/**
+ * Loopback (full) status wire. `LicenseState` is a discriminated union whose
+ * dark arm is `{ gateActive: false }` with NO status; the wire keeps emitting the
+ * back-compat sentinel (`status:"licensed", updateWindowCurrent:true`) so the
+ * Tauri updater + client (which redeclare a flat shape and ignore `status` when
+ * `!gateActive`) stay byte-identical to the pre-union build. The active arms
+ * serialize exactly as before (full license + licenseId on the licensed arm).
+ */
+export function toLicenseStatusWire(state: LicenseState): Record<string, unknown> {
+  if (!state.gateActive) {
+    return { gateActive: false, status: "licensed", updateWindowCurrent: true };
+  }
+  return state;
+}
 
 /**
  * PII-scrubbed status for non-loopback (LAN / deprecated-browser) callers — drops
@@ -16,14 +31,22 @@ import { resolveAppDataDir } from "../../platform.js";
  */
 export function scrubForNonLoopback(s: LicenseState): {
   gateActive: boolean;
-  status: LicenseState["status"];
+  status: LicenseStatus;
   daysRemaining: number | undefined;
   updateWindowCurrent: boolean;
 } {
+  if (!s.gateActive) {
+    return {
+      gateActive: false,
+      status: "licensed",
+      daysRemaining: undefined,
+      updateWindowCurrent: true,
+    };
+  }
   return {
-    gateActive: s.gateActive,
+    gateActive: true,
     status: s.status,
-    daysRemaining: s.trial?.daysRemaining,
+    daysRemaining: s.status === "trial" ? s.trial.daysRemaining : undefined,
     updateWindowCurrent: s.updateWindowCurrent,
   };
 }
@@ -37,7 +60,7 @@ export function scrubForNonLoopback(s: LicenseState): {
 export function handleGetLicenseStatus(req: Request, res: Response): void {
   const state = resolveLiveLicenseState();
   if (isLoopback(req.socket.remoteAddress)) {
-    res.json(state);
+    res.json(toLicenseStatusWire(state));
     return;
   }
   res.json(scrubForNonLoopback(state));
