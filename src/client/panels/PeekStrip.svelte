@@ -226,7 +226,7 @@ function handleKey(e: KeyboardEvent) {
     opacity: 1;
   }
   /* When the strip widens on hover the label fades in over the preview; dim
-     the preview so the two don't clash (matches bundle app.css 553-554). */
+     the preview so the two don't clash. */
   .peek-strip:hover .peek-content {
     opacity: 0.25;
     transition: opacity 140ms ease;

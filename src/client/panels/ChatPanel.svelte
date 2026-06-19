@@ -316,11 +316,10 @@ function toggleAnchorExpand(msgId: string) {
   {/if}
 
   <!-- Composer: a rounded pill textarea + a standalone circular send button,
-       matching the SideRail chat design (app.css `.chat-input-area` /
-       `.chat-textarea` / `.chat-send-btn`). The pill carries its own border +
-       focus ring; the send button is a separate accent circle with a
-       paper-plane glyph (the prototype's dark-warm fill maps to the app's
-       accent primary so it stays on the semantic-token system). -->
+       matching the SideRail chat composer in the redesign. The pill carries
+       its own border + focus ring; the send button is a separate accent circle
+       with a paper-plane glyph (the prototype's dark-warm fill maps to the
+       app's accent primary so it stays on the semantic-token system). -->
   <div class="chat-input-area">
     <textarea
       bind:this={internalInputEl}
@@ -400,11 +399,10 @@ function toggleAnchorExpand(msgId: string) {
     font-style: italic;
   }
 
-  /* Composer — pill textarea + circular send button. Mirrors the SideRail
-     chat design (app.css `.chat-input-area` / `.chat-textarea` /
-     `.chat-send-btn`); the prototype's dark-warm send fill maps to the app's
-     accent primary, and a disabled state (muted, no pointer) is added for the
-     empty-input case the static prototype didn't model. */
+  /* Composer — pill textarea + circular send button, matching the SideRail
+     chat composer in the redesign; the prototype's dark-warm send fill maps to
+     the app's accent primary, and a disabled state (muted, no pointer) is added
+     for the empty-input case the static prototype didn't model. */
   .chat-input-area {
     display: flex;
     gap: var(--tandem-space-2);
