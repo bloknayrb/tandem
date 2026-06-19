@@ -98,6 +98,7 @@ const dotColor = $derived(
     align-items: center;
     margin-bottom: 6px;
     gap: 8px;
+    overflow: hidden;
   }
   .ach-type {
     font-weight: 600;
