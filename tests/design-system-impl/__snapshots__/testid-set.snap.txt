@@ -36,6 +36,7 @@ bulk-cancel-btn
 bulk-confirm-btn
 bulk-dismiss-btn
 changelog-error
+chat-send-btn
 chat-tab
 claude-typing-indicator-{*}
 claude-working-indicator
@@ -385,7 +386,6 @@ updater-banner
 updater-banner-dismiss
 updater-banner-install
 updater-banner-visible
-user-name-input
 view-changelog-btn
 view-documentation-btn
 {*}-{*}

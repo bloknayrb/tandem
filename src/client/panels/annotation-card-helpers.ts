@@ -13,6 +13,20 @@ export function getAuthorLabel(author: Annotation["author"], agentLabel?: string
   return "You";
 }
 
+/**
+ * Relative timestamp label for annotation chrome — "just now", "5m ago",
+ * "3h ago", else the locale date. Shared by the card header and the reply
+ * thread so both read identically.
+ */
+export function formatRelativeTime(timestamp: number): string {
+  const diffMin = Math.floor((Date.now() - timestamp) / 60_000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return new Date(timestamp).toLocaleDateString();
+}
+
 export function getDisplayType(ann: Annotation): string {
   if (ann.suggestedText !== undefined) return "replacement";
   return ann.type;

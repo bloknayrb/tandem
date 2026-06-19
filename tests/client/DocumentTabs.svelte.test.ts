@@ -66,6 +66,13 @@ beforeEach(() => {
     effect: null,
     onfinish: null,
   });
+  // The tab-reorder FLIP (s3, #798) wraps each TabItem in an `animate:flip`
+  // host; when a remaining tab moves (case C: removing "a" shifts "b" to the
+  // front), Svelte 5's flip calls `element.getAnimations()` to coordinate with
+  // any in-flight animation before measuring the delta. happy-dom doesn't
+  // implement it — return an empty list (nothing is mid-flight synchronously).
+  // biome-ignore lint/suspicious/noExplicitAny: test stub
+  (Element.prototype as any).getAnimations = () => [];
 });
 
 afterEach(async () => {

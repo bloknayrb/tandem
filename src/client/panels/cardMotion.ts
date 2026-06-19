@@ -290,6 +290,30 @@ export function tabExit(node: HTMLElement, { reduceMotion }: BarInParams): Trans
   };
 }
 
+const TAB_ENTER_MS = 220;
+
+/**
+ * s3 (enter) — the mirror of `tabExit`: a newly-opened tab unrolls on the INLINE
+ * axis (width 0→w) + fades in, so the adjacent tabs glide right to make room
+ * instead of snapping (`in:` directive on the TabItem root). A touch longer
+ * than the 200ms exit (220ms) so the unroll reads as settling in rather than
+ * snapping shut. `min-width:0` defeats the name span's width floor so the
+ * unroll starts from 0 (same reason as `tabExit`). Svelte skips intros on the
+ * initial render, so existing tabs don't all animate on app load — only a tab
+ * opened after mount unrolls. Reduced motion → instant.
+ */
+export function tabEnter(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const w = node.offsetWidth;
+  return {
+    duration: TAB_ENTER_MS,
+    easing: easeOut,
+    // t: 0→1 (present).
+    css: (t) =>
+      `opacity:${t}; width:${t * w}px; min-width:0; overflow:clip; box-sizing:border-box;`,
+  };
+}
+
 /** A28 popup-entrance duration. Exported so Toolbar's width-freeze window
  *  (`entering`) matches the transition exactly — no two-literals drift. */
 export const ENTER_POPUP_MS = 440;

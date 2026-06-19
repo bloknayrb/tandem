@@ -79,15 +79,23 @@ const { tandemMode, onModeChange }: Props = $props();
     /* Equal-width segments so the half-width thumb lands cleanly on either; the
        two labels ("Solo"/"Tandem") differ in length, so flex-equalize them. */
     flex: 1 1 0;
-    text-align: center;
-    padding: 5px 14px;
+    /* Center the label on both axes. `line-height: normal` (not the tight `1`)
+       is the load-bearing part: at `line-height: 1` the line box is shorter than
+       the glyph's natural box, so the text rendered ~0.7px high (2.6px gap above
+       vs 4px below). `normal` + flex centering distributes the leading evenly
+       (3.3px / 3.3px), and the padding is trimmed 5px→3px so the taller line box
+       keeps the pill at its original 21px height. */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 14px;
     border-radius: var(--tandem-r-pill);
     color: var(--tandem-fg-muted);
     background: transparent;
     border: none;
     cursor: pointer;
     font: inherit;
-    line-height: 1;
+    line-height: normal;
     /* Sit above the thumb; the thumb (not the button) now carries the active fill. */
     position: relative;
     z-index: 1;
