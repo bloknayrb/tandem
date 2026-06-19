@@ -11,10 +11,8 @@
  * broadcast — ever runs.
  */
 import type { NextFunction, Request, Response } from "express";
-import { GATE_ENABLED } from "../license/gate-flag.js";
-import { resolveLicenseState } from "../license/license-state.js";
+import { resolveLiveLicenseState } from "../license/license-state.js";
 import type { LicenseState } from "../license/license-types.js";
-import { resolveAppDataDir } from "../platform.js";
 import { mcpError, withErrorBoundary } from "./response.js";
 
 type McpToolResult = ReturnType<typeof mcpError>;
@@ -44,12 +42,7 @@ export function licenseGateResult(state: LicenseState): McpToolResult | null {
  * `readFileSync` and performs at most one Ed25519 verify.
  */
 export function licenseGate(): McpToolResult | null {
-  const state = resolveLicenseState({
-    appDataDir: resolveAppDataDir(),
-    now: () => Date.now(),
-    gateEnabled: GATE_ENABLED,
-  });
-  return licenseGateResult(state);
+  return licenseGateResult(resolveLiveLicenseState());
 }
 
 /**
@@ -70,17 +63,6 @@ export function gatedTool<TArgs extends Record<string, unknown>>(
   });
 }
 
-/** Live "is the on-device state restricted?" check — re-resolves per call. */
-export function isRestrictedNow(): boolean {
-  return (
-    resolveLicenseState({
-      appDataDir: resolveAppDataDir(),
-      now: () => Date.now(),
-      gateEnabled: GATE_ENABLED,
-    }).status === "restricted"
-  );
-}
-
 /** Send the HTTP 403 LICENSE_REQUIRED envelope (same shape as other /api errors). */
 export function sendLicenseRequired(res: Response): void {
   res.status(403).json({ error: "LICENSE_REQUIRED", message: RESTRICTED_MESSAGE });
@@ -94,7 +76,10 @@ export function sendLicenseRequired(res: Response): void {
  * restricted (and always a no-op when the gate is dark).
  */
 export function licenseGateMiddleware(_req: Request, res: Response, next: NextFunction): void {
-  if (isRestrictedNow()) {
+  // Same decision primitive as `gatedTool` (the MCP twin): `licenseGate()` returns
+  // the block envelope when restricted, null otherwise. The middleware discards the
+  // MCP envelope and renders the HTTP 403 instead — one policy, two transports.
+  if (licenseGate() !== null) {
     sendLicenseRequired(res);
     return;
   }

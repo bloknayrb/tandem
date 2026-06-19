@@ -5,8 +5,7 @@ import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
-import { GATE_ENABLED } from "../../license/gate-flag.js";
-import { activateLicense, resolveLicenseState } from "../../license/license-state.js";
+import { activateLicense, resolveLiveLicenseState } from "../../license/license-state.js";
 import type { LicenseState } from "../../license/license-types.js";
 import { resolveAppDataDir } from "../../platform.js";
 
@@ -36,11 +35,7 @@ export function scrubForNonLoopback(s: LicenseState): {
  * not the mutation helper — review §12 M1).
  */
 export function handleGetLicenseStatus(req: Request, res: Response): void {
-  const state = resolveLicenseState({
-    appDataDir: resolveAppDataDir(),
-    now: () => Date.now(),
-    gateEnabled: GATE_ENABLED,
-  });
+  const state = resolveLiveLicenseState();
   if (isLoopback(req.socket.remoteAddress)) {
     res.json(state);
     return;

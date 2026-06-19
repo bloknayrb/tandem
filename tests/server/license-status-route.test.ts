@@ -23,15 +23,20 @@ const FULL: LicenseState = {
   licenseId: "lic-123",
 };
 
-function fakeRes(): Response & { body: unknown } {
+function fakeRes(): Response & { body: unknown; statusCode: number } {
   const r = {
     body: undefined as unknown,
+    statusCode: 200,
+    status(code: number) {
+      r.statusCode = code;
+      return r;
+    },
     json(b: unknown) {
       r.body = b;
       return r;
     },
   };
-  return r as unknown as Response & { body: unknown };
+  return r as unknown as Response & { body: unknown; statusCode: number };
 }
 
 function reqFrom(remoteAddress: string): Request {
@@ -78,22 +83,6 @@ describe("handleGetLicenseStatus", () => {
   });
 });
 
-function fakeResStatus(): Response & { body: unknown; statusCode: number } {
-  const r = {
-    body: undefined as unknown,
-    statusCode: 200,
-    status(code: number) {
-      r.statusCode = code;
-      return r;
-    },
-    json(b: unknown) {
-      r.body = b;
-      return r;
-    },
-  };
-  return r as unknown as Response & { body: unknown; statusCode: number };
-}
-
 function activateReq(opts: { origin?: string; body?: unknown }): Request {
   return {
     headers: opts.origin ? { origin: opts.origin } : {},
@@ -104,14 +93,14 @@ function activateReq(opts: { origin?: string; body?: unknown }): Request {
 
 describe("handleActivateLicense", () => {
   it("rejects a non-allowlisted origin with 403 before touching the body", async () => {
-    const res = fakeResStatus();
+    const res = fakeRes();
     await handleActivateLicense(activateReq({ body: { license: "x" } }), res);
     expect(res.statusCode).toBe(403);
     expect((res.body as { error: string }).error).toBe("FORBIDDEN");
   });
 
   it("rejects a missing license body with 400 BAD_REQUEST", async () => {
-    const res = fakeResStatus();
+    const res = fakeRes();
     await handleActivateLicense(activateReq({ origin: "http://127.0.0.1:5173", body: {} }), res);
     expect(res.statusCode).toBe(400);
     expect((res.body as { error: string }).error).toBe("BAD_REQUEST");
@@ -119,7 +108,7 @@ describe("handleActivateLicense", () => {
 
   it("rejects a garbage license with a generic 400 that never echoes the blob", async () => {
     const secret = "SUPER-SECRET-GARBAGE-BLOB-BYTES";
-    const res = fakeResStatus();
+    const res = fakeRes();
     await handleActivateLicense(
       activateReq({ origin: "http://127.0.0.1:5173", body: { license: secret } }),
       res,

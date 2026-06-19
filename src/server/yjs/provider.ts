@@ -3,8 +3,7 @@ import * as Y from "yjs";
 import { CTRL_ROOM, TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
 import { connectionShouldBeReadOnly } from "../license/connection-gate.js";
 import { GATE_ENABLED } from "../license/gate-flag.js";
-import { resolveLicenseState } from "../license/license-state.js";
-import { resolveAppDataDir } from "../platform.js";
+import { resolveLiveLicenseState } from "../license/license-state.js";
 
 let hocuspocusInstance: Hocuspocus | null = null;
 const documents = new Map<string, Y.Doc>();
@@ -151,11 +150,7 @@ export async function startHocuspocus(port: number): Promise<Hocuspocus> {
       // chat / mode / awareness keep working — the read-only escape hatch.
       // No-op when the gate is dark.
       if (GATE_ENABLED) {
-        const state = resolveLicenseState({
-          appDataDir: resolveAppDataDir(),
-          now: () => Date.now(),
-          gateEnabled: GATE_ENABLED,
-        });
+        const state = resolveLiveLicenseState();
         if (connectionShouldBeReadOnly(documentName, CTRL_ROOM, state.status)) {
           connection.readOnly = true;
           console.error(

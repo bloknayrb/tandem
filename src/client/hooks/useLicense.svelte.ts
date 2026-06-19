@@ -26,6 +26,9 @@ const POLL_INTERVAL_MS = 60_000;
 
 function createLicenseStore() {
   let status = $state<LicenseStatusResponse | null>(null);
+  // One derived `ui` shared by all consumers (banner, wall, tab, editor) so
+  // `deriveLicenseUi` runs once per status change, not once per consumer per cycle.
+  const ui = $derived(deriveLicenseUi(status));
   let started = false;
   let timer: ReturnType<typeof setInterval> | null = null;
   let onTransition: (() => void) | null = null;
@@ -76,7 +79,7 @@ function createLicenseStore() {
       return status;
     },
     get ui(): LicenseUi {
-      return deriveLicenseUi(status);
+      return ui;
     },
     /** Begin polling. Idempotent; wires the transition callback once per cycle. */
     start(deps?: { onTransition?: () => void }): void {

@@ -77,6 +77,25 @@ const UNGATED = [
   "tandem_getTextContent",
   "tandem_getOutline",
   "tandem_exportAnnotations",
+  // Navigation / inspection / chat / file-management tools. None mutate Y.Doc
+  // *content*: reads, outline, and search are pure; tandem_convertToMarkdown writes
+  // a separate export file; tandem_rename is a filesystem op (not a content write);
+  // tandem_reply/checkInbox/getActivity touch CTRL_ROOM (chat/awareness), which
+  // stays writable when restricted; close/switch/list are tab management. Enumerated
+  // so the drift-guard ALSO catches a read tool being *accidentally gated* (which
+  // would break the escape hatch), not just a mutator being left ungated.
+  "tandem_status",
+  "tandem_listDocuments",
+  "tandem_switchDocument",
+  "tandem_close",
+  "tandem_rename",
+  "tandem_convertToMarkdown",
+  "tandem_search",
+  "tandem_resolveRange",
+  "tandem_getContext",
+  "tandem_getActivity",
+  "tandem_checkInbox",
+  "tandem_reply",
 ];
 
 describe("Surface B gated-tool registration coverage", () => {

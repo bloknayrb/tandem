@@ -1,5 +1,7 @@
 import fs from "fs";
 import { atomicWrite } from "../file-io/index.js";
+import { resolveAppDataDir } from "../platform.js";
+import { GATE_ENABLED } from "./gate-flag.js";
 import type { LicenseFile, LicenseMetadata, LicenseState, TrialFile } from "./license-types.js";
 import { licenseFilePath, TRIAL_MS, trialFilePath } from "./paths.js";
 import { verifyLicenseSignature } from "./verifier.js";
@@ -42,6 +44,10 @@ export function resolveLicenseState(deps: {
     return { gateActive: false, status: "licensed", updateWindowCurrent: true };
   }
 
+  // One timestamp for the whole resolution — the licensed update-window check and
+  // the trial-clock math must agree on a single "now".
+  const nowMs = now();
+
   // 1. A signature-valid license of a known version ⇒ licensed (runs forever).
   const lf = readJson<LicenseFile>(licenseFilePath(appDataDir));
   if (lf?.blob) {
@@ -49,7 +55,7 @@ export function resolveLicenseState(deps: {
       const meta = verify(lf.blob);
       if (knownVersion(meta.version)) {
         const updateWindowCurrent =
-          meta.expiresAt === null || new Date(meta.expiresAt).getTime() > now();
+          meta.expiresAt === null || new Date(meta.expiresAt).getTime() > nowMs;
         return {
           gateActive: true,
           status: "licensed",
@@ -65,10 +71,10 @@ export function resolveLicenseState(deps: {
 
   // 2. Trial clock (soft by design — ADR-040 §3). Absent file ⇒ day 0.
   const tf = readJson<TrialFile>(trialFilePath(appDataDir));
-  const firstRunAt = tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : now();
+  const firstRunAt = tf?.firstRunAt ? new Date(tf.firstRunAt).getTime() : nowMs;
   const expiresAt = firstRunAt + TRIAL_MS;
-  if (now() < expiresAt) {
-    const daysRemaining = Math.max(0, Math.ceil((expiresAt - now()) / 86_400_000));
+  if (nowMs < expiresAt) {
+    const daysRemaining = Math.max(0, Math.ceil((expiresAt - nowMs) / 86_400_000));
     return {
       gateActive: true,
       status: "trial",
@@ -83,6 +89,21 @@ export function resolveLicenseState(deps: {
 
   // 3. Trial expired, no license ⇒ restricted (read-only escape hatch).
   return { gateActive: true, status: "restricted", updateWindowCurrent: false };
+}
+
+/**
+ * Production-wired `resolveLicenseState`: the single place the live deps (real
+ * app-data dir, wall clock, build-time gate flag) are assembled. Shared by both
+ * enforcement surfaces — Hocuspocus `onAuthenticate` (Surface A) and the MCP
+ * `gatedTool` / `licenseGateMiddleware` (Surface B) — plus the status route, so
+ * a future deps change lands in one spot. Still cache-free: every call re-reads disk.
+ */
+export function resolveLiveLicenseState(): LicenseState {
+  return resolveLicenseState({
+    appDataDir: resolveAppDataDir(),
+    now: () => Date.now(),
+    gateEnabled: GATE_ENABLED,
+  });
 }
 
 /**
