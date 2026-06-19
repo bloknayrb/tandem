@@ -49,6 +49,11 @@ const AbsolutePath = z.string().min(1).refine(path.isAbsolute, {
  * than `127.0.0.1` (which would also be loopback but are not used by Tandem
  * and add attack surface — `127.0.0.2` etc. are valid loopback addresses
  * but reaching them implies someone configured an alternate bind).
+ *
+ * NOTE: `local-model/config.ts#validateEndpoint` intentionally accepts a WIDER
+ * loopback set (`localhost`, `[::1]`) for a user's own model server — do NOT
+ * "harmonize" the two. This one is deliberately the stricter posture: it guards
+ * a planted `~/.claude.json` entry, not a UX-entered endpoint.
  */
 export const LoopbackUrl = z
   .string()

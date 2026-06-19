@@ -80,6 +80,21 @@ export function findOccurrence(
   };
 }
 
+/**
+ * Count how many times `pattern` occurs in `fullText`, using the SAME literal
+ * (regex-escaped) matching as `findOccurrence` so the count and a subsequent
+ * resolve can never disagree. `findOccurrence` only exposes the total on its
+ * miss path; callers that need the count on a HIT (e.g. the local-model
+ * occurrence-clamp, #1123) use this instead.
+ */
+export function countOccurrences(fullText: string, pattern: string): number {
+  if (pattern === "") return 0;
+  const regex = new RegExp(escapeRegex(pattern), "g");
+  let count = 0;
+  while (regex.exec(fullText) !== null) count++;
+  return count;
+}
+
 /** Extract context window around a range. Pure logic extracted for testability. */
 export function extractContext(
   fullText: string,
