@@ -1,14 +1,17 @@
 /**
  * Local-model collaborator loop (#1123 M1, ADR-039) — public entry.
  *
- * M1.1 ships this as a LIBRARY: nothing in the running server imports it yet, so
- * the feature is dark (byte-identical runtime). M1.2 wires `runLocalModelTurn`
- * to the event queue (wake on `chat:message`) + chat write-back + lifecycle.
+ * M1.1 shipped this as a LIBRARY (no production import). M1.2 wires it via
+ * `collaborator.ts` — the ONLY server importer of this engine — which subscribes
+ * to the event queue (wake on `chat:message`), streams a chat reply, and manages
+ * the single-flight lifecycle.
  *
- * Note: a successful `createAnnotation` fires a `review-pending` browser
- * notification as a side-effect of the internal op — so the "no production
- * import of this directory" grep is the load-bearing dark guarantee, not
- * incidental. See the plan's §3.8.
+ * Dark guarantee (M1.2): merely importing this module has no side effect (no
+ * write, no `createAnnotation`/`review-pending` — those fire only when the loop
+ * RUNS). The load-bearing dark check is now that `collaborator.ts`'s
+ * `subscribe()` call is gated behind `BYO_MODELS_ENABLED` (the subscriber is
+ * never registered while dark), AND that `config-source.ts` returns null (so the
+ * loop is inert even if the flag flips before M1a). See the plan's §3.2/§3.7.
  */
 import type * as Y from "yjs";
 
@@ -33,6 +36,10 @@ export interface RunTurnOpts {
   timeoutMs?: number;
   signal?: AbortSignal;
   isLicenseRestricted?: () => boolean;
+  /** Per assistant content delta, for token streaming (#1123 M1.2). */
+  onContentDelta?: (delta: string) => void;
+  /** Per turn boundary (after `chat()`), for the streaming sink (#1123 M1.2). */
+  onTurnEnd?: (info: { hadToolCalls: boolean }) => void;
 }
 
 /** Run one collaborator turn (read/decide/act) against a document. */
@@ -51,6 +58,8 @@ export async function runLocalModelTurn(opts: RunTurnOpts): Promise<LoopResult> 
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
     isLicenseRestricted: opts.isLicenseRestricted,
+    onContentDelta: opts.onContentDelta,
+    onTurnEnd: opts.onTurnEnd,
   });
 }
 

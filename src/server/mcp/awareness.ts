@@ -38,6 +38,54 @@ export function resetInbox(): void {
   surfacedIds.clear();
 }
 
+/**
+ * Append a Claude-authored chat message to CTRL_ROOM's chat map — the single
+ * write path for `tandem_reply` AND the local-model collaborator's streamed
+ * reply (#1123 M1.2). Tagged `withMcp` + `author:"claude"`, so the ctrl-chat
+ * observer skips it on BOTH the origin gate (`mcp` ∈ CHANNEL_SKIP) and the
+ * `author !== "user"` gate — a Claude/local write can never self-wake the
+ * channel. Returns the new message id. Conditional spreads keep the on-wire
+ * `ChatMessage` shape identical to the historical `tandem_reply` write.
+ */
+export function appendClaudeChatMessage(
+  text: string,
+  opts: { documentId?: string; replyTo?: string } = {},
+): string {
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const id = generateMessageId();
+  const msg: ChatMessage = {
+    id,
+    author: "claude",
+    text,
+    timestamp: Date.now(),
+    ...(opts.documentId ? { documentId: opts.documentId } : {}),
+    ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+    read: true,
+  };
+  withMcp(ctrlDoc, () => chatMap.set(id, msg));
+  return id;
+}
+
+/**
+ * Update the text of an existing Claude-authored chat message, for the
+ * local-model collaborator's token streaming (#1123 M1.2). Re-`set`s a FRESH
+ * object so the value read from the map is never mutated in place; ONLY `text`
+ * changes — `id`, `author`, `timestamp` (deliberately NOT re-stamped: ChatPanel
+ * sorts by timestamp, so a bump would re-sort the live bubble on every flush),
+ * `read`, `documentId`, `replyTo` carry verbatim. No-op when the id is absent
+ * (doc closed / message GC'd). The re-`set` is an `update` action, which the
+ * ctrl-chat observer additionally drops at its `action !== "add"` gate — so a
+ * streamed delta self-wakes even less than the initial append.
+ */
+export function updateClaudeChatMessage(id: string, text: string): void {
+  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
+  const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
+  const existing = chatMap.get(id) as ChatMessage | undefined;
+  if (!existing) return;
+  withMcp(ctrlDoc, () => chatMap.set(id, { ...existing, text }));
+}
+
 export function registerAwarenessTools(server: McpServer): void {
   server.tool(
     "tandem_getActivity",
@@ -242,25 +290,9 @@ export function registerAwarenessTools(server: McpServer): void {
       // #651 presence: tandem_reply is a chat send — no annotationId — so the
       // marker is the generic "Claude is working" status-bar indicator.
       return withTypingPresence({ tool: "tandem_reply", documentId }, async () => {
-        const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-        const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
-
-        const id = generateMessageId();
         const current = getCurrentDoc(documentId);
         const docId = documentId ?? current?.id ?? undefined;
-
-        const msg: ChatMessage = {
-          id,
-          author: "claude",
-          text,
-          timestamp: Date.now(),
-          ...(docId ? { documentId: docId } : {}),
-          ...(replyTo ? { replyTo } : {}),
-          read: true,
-        };
-
-        withMcp(ctrlDoc, () => chatMap.set(id, msg));
-
+        const id = appendClaudeChatMessage(text, { documentId: docId, replyTo });
         return mcpSuccess({ sent: true, messageId: id });
       });
     }),

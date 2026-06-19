@@ -67,6 +67,13 @@ export interface ChatOpts {
   signal?: AbortSignal;
   /** response size ceiling; a hostile/buggy endpoint can lie about content-length. */
   maxResponseBytes?: number;
+  /**
+   * When provided (#1123 M1.2), the request streams (`stream:true`) and this is
+   * invoked per assistant CONTENT delta as tokens arrive, while `chat()` still
+   * returns the SAME accumulated `{content, toolCalls}` shape. Absent → the
+   * non-streaming `stream:false` path runs verbatim (byte-identical wire body).
+   */
+  onContentDelta?: (delta: string) => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -122,12 +129,21 @@ async function readBoundedText(res: Response, capBytes: number): Promise<string>
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** POST JSON to a validated loopback URL with timeout + abort + bounded read. */
-async function postJson(
+/**
+ * POST JSON to a validated loopback URL with timeout + abort, then hand the OK
+ * response to `consume`. Single-sources the loopback-security contract —
+ * `redirect:"error"`, the dual-signal (caller + timeout) abort merge, and the
+ * body-free HTTP-error redaction (raw body to stderr only) — so the streaming
+ * (`fetchStream`) and non-streaming (`postJson`) callers can never drift. The
+ * timeout timer is held across `consume` (a streamed read must run under it), so
+ * the deadline bounds the whole request+read, not just the connect.
+ */
+async function postLoopback<T>(
   url: string,
   payload: unknown,
-  opts: { timeoutMs: number; maxResponseBytes: number; signal?: AbortSignal },
-): Promise<unknown> {
+  opts: { timeoutMs: number; signal?: AbortSignal },
+  consume: (res: Response) => Promise<T>,
+): Promise<T> {
   const timeoutCtrl = new AbortController();
   const timer = setTimeout(() => timeoutCtrl.abort(), opts.timeoutMs);
   const signal = opts.signal
@@ -150,6 +166,19 @@ async function postJson(
         console.error(`[local-model] endpoint ${res.status} body: ${errBody.slice(0, 300)}`);
       throw new Error(`local model endpoint returned HTTP ${res.status}`);
     }
+    return await consume(res);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** POST JSON to a validated loopback URL with timeout + abort + bounded read. */
+async function postJson(
+  url: string,
+  payload: unknown,
+  opts: { timeoutMs: number; maxResponseBytes: number; signal?: AbortSignal },
+): Promise<unknown> {
+  return postLoopback(url, payload, opts, async (res) => {
     const text = await readBoundedText(res, opts.maxResponseBytes);
     try {
       return JSON.parse(text);
@@ -161,9 +190,7 @@ async function postJson(
       // payload and a V8 parse error can embed a source snippet.
       throw new Error("local model returned a non-JSON response");
     }
-  } finally {
-    clearTimeout(timer);
-  }
+  });
 }
 
 function toOpenAITools(tools: ToolSchema[]): unknown[] {
@@ -179,6 +206,7 @@ function buildV1Body(
   tools: ToolSchema[],
   temperature: number,
   toolChoice: ToolChoice,
+  stream: boolean,
 ): unknown {
   return {
     model,
@@ -197,7 +225,7 @@ function buildV1Body(
       ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
     })),
     ...(tools.length ? { tools: toOpenAITools(tools), tool_choice: toolChoice } : {}),
-    stream: false,
+    stream,
     temperature,
   };
 }
@@ -207,6 +235,7 @@ function buildNativeBody(
   messages: ChatMessage[],
   tools: ToolSchema[],
   temperature: number,
+  stream: boolean,
 ): unknown {
   return {
     model,
@@ -223,7 +252,7 @@ function buildNativeBody(
       ...(m.tool_name ? { tool_name: m.tool_name } : {}),
     })),
     tools: toOpenAITools(tools),
-    stream: false,
+    stream,
     options: { temperature },
   };
 }
@@ -231,6 +260,232 @@ function buildNativeBody(
 /** Trim trailing slashes so `${base}/v1/...` doesn't double up. */
 function baseUrl(endpoint: string): string {
   return endpoint.replace(/\/+$/, "");
+}
+
+// ---------------------------------------------------------------------------
+// Streaming (#1123 M1.2) — opt-in via ChatOpts.onContentDelta. Each invariant
+// below is a verified silent-failure risk from the pre-code review, not
+// boilerplate; see the plan §3.5b.
+// ---------------------------------------------------------------------------
+
+interface StreamAccum {
+  content: string;
+  /** v1: fragmented tool_call args keyed by the delta's OWN `index` (not array
+   *  position — else two parallel calls cross-contaminate their argument JSON). */
+  v1Tools: Map<number, { id?: string; name?: string; args: string }>;
+  /** native: whole tool_call objects (args already an object). */
+  nativeTools: { name: string; args: unknown }[];
+  /** count of recognized protocol frames; 0 at stream end ⇒ not a real stream
+   *  (e.g. a reverse-proxy HTML page) ⇒ the caller throws body-free. */
+  validFrames: number;
+}
+
+function newStreamAccum(): StreamAccum {
+  return { content: "", v1Tools: new Map(), nativeTools: [], validFrames: 0 };
+}
+
+/** Process one v1 SSE line. Returns true when the stream is done (`[DONE]`). */
+function handleV1Line(
+  line: string,
+  acc: StreamAccum,
+  onContentDelta?: (d: string) => void,
+): boolean {
+  const t = line.trim();
+  if (t === "" || t.startsWith(":")) return false; // blank / SSE keep-alive comment
+  if (!t.startsWith("data:")) return false; // unknown framing — skip, don't kill the turn
+  const data = t.slice("data:".length).trim();
+  if (data === "[DONE]") {
+    acc.validFrames += 1;
+    return true;
+  }
+  let parsed: {
+    choices?: {
+      delta?: {
+        content?: string;
+        tool_calls?: {
+          index?: number;
+          id?: string;
+          function?: { name?: string; arguments?: string };
+        }[];
+      };
+    }[];
+  };
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    // A data: payload that SHOULD be JSON but isn't — an anomaly, not routine.
+    // Body-free log + continue (review H2); never swallow a content line as "fine".
+    console.error("[local-model] stream: unparseable v1 data frame");
+    return false;
+  }
+  acc.validFrames += 1;
+  const delta = parsed.choices?.[0]?.delta;
+  if (delta?.content) {
+    acc.content += delta.content;
+    onContentDelta?.(delta.content);
+  }
+  if (Array.isArray(delta?.tool_calls)) {
+    for (const tc of delta.tool_calls) {
+      const idx = typeof tc.index === "number" ? tc.index : 0;
+      const entry = acc.v1Tools.get(idx) ?? { args: "" };
+      if (tc.id) entry.id = tc.id;
+      if (tc.function?.name) entry.name = tc.function.name;
+      if (typeof tc.function?.arguments === "string") entry.args += tc.function.arguments;
+      acc.v1Tools.set(idx, entry);
+    }
+  }
+  return false;
+}
+
+/** Process one native NDJSON line. Returns true when the stream is done. */
+function handleNativeLine(
+  line: string,
+  acc: StreamAccum,
+  onContentDelta?: (d: string) => void,
+): boolean {
+  const t = line.trim();
+  if (t === "") return false;
+  let parsed: {
+    message?: {
+      content?: string;
+      tool_calls?: { function?: { name?: string; arguments?: unknown } }[];
+    };
+    done?: boolean;
+  };
+  try {
+    parsed = JSON.parse(t);
+  } catch {
+    console.error("[local-model] stream: unparseable native NDJSON line");
+    return false;
+  }
+  acc.validFrames += 1;
+  const content = parsed.message?.content;
+  if (typeof content === "string" && content.length > 0) {
+    acc.content += content;
+    onContentDelta?.(content);
+  }
+  if (Array.isArray(parsed.message?.tool_calls)) {
+    for (const tc of parsed.message.tool_calls) {
+      acc.nativeTools.push({ name: tc.function?.name ?? "", args: tc.function?.arguments });
+    }
+  }
+  return parsed.done === true;
+}
+
+/**
+ * Read a streamed response: a RAW-byte cap checked pre-decode (so a newline-less
+ * flood can't grow the line buffer unbounded → OOM), ONE long-lived TextDecoder
+ * (a multi-byte codepoint split across a chunk boundary must not decode to two
+ * U+FFFDs), feeding each complete line to `onLine`. Stops on EOF or when
+ * `onLine` reports done.
+ */
+async function readStream(
+  res: Response,
+  capBytes: number,
+  onLine: (line: string) => boolean,
+): Promise<void> {
+  const body = res.body;
+  if (!body) return;
+  const reader = body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let lineBuffer = "";
+  let rawBytes = 0;
+  let done = false;
+  try {
+    while (!done) {
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
+      if (!value) continue;
+      rawBytes += value.byteLength;
+      if (rawBytes > capBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`local model response exceeded ${capBytes}-byte cap`);
+      }
+      lineBuffer += decoder.decode(value, { stream: true });
+      let nl = lineBuffer.indexOf("\n");
+      while (nl !== -1) {
+        const line = lineBuffer.slice(0, nl);
+        lineBuffer = lineBuffer.slice(nl + 1);
+        if (onLine(line)) {
+          done = true;
+          break;
+        }
+        nl = lineBuffer.indexOf("\n");
+      }
+    }
+    // Flush any trailing partial codepoint, then a final unterminated line.
+    if (!done) {
+      lineBuffer += decoder.decode();
+      if (lineBuffer.length > 0) onLine(lineBuffer);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** POST JSON and read a streamed response. Reuses `postLoopback`, whose timer is
+ *  held across the whole read (cleared only after the stream fully drains), so a
+ *  provider that sends headers then stalls is still killed. */
+async function fetchStream(
+  url: string,
+  payload: unknown,
+  opts: { timeoutMs: number; maxResponseBytes: number; signal?: AbortSignal },
+  onLine: (line: string) => boolean,
+): Promise<void> {
+  return postLoopback(url, payload, opts, (res) => readStream(res, opts.maxResponseBytes, onLine));
+}
+
+/** Streamed variant of `chat()` — same return shape, content delivered live via
+ *  `onContentDelta`. Tool calls are accumulated and dispatched only once the
+ *  turn completes (never partially). */
+async function chatStreaming(
+  opts: ChatOpts,
+  ctx: {
+    base: string;
+    transport: LocalModelTransport;
+    temperature: number;
+    toolChoice: ToolChoice;
+    timeoutMs: number;
+    maxResponseBytes: number;
+    started: number;
+  },
+): Promise<ChatResult> {
+  const { config, messages, tools, signal, onContentDelta } = opts;
+  const { base, transport, temperature, toolChoice, timeoutMs, maxResponseBytes, started } = ctx;
+  const acc = newStreamAccum();
+  const url = transport === "v1" ? `${base}/v1/chat/completions` : `${base}/api/chat`;
+  const body =
+    transport === "v1"
+      ? buildV1Body(config.modelId, messages, tools, temperature, toolChoice, true)
+      : buildNativeBody(config.modelId, messages, tools, temperature, true);
+  const onLine =
+    transport === "v1"
+      ? (line: string) => handleV1Line(line, acc, onContentDelta)
+      : (line: string) => handleNativeLine(line, acc, onContentDelta);
+
+  await fetchStream(url, body, { timeoutMs, maxResponseBytes, signal }, onLine);
+
+  // A 200 that produced zero recognizable frames (e.g. a reverse-proxy HTML
+  // page despite stream:true) is a non-JSON response — body-free, like postJson.
+  if (acc.validFrames === 0) throw new Error("local model returned a non-JSON response");
+
+  const toolCalls: RawToolCall[] =
+    transport === "v1"
+      ? [...acc.v1Tools.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, e]) => {
+            // "" args (a no-param tool) parses like a missing field → {args:{}};
+            // a malformed reassembled payload STILL yields {args:null,parseError}
+            // so the loop's jsonParseFailures ledger stays honest (review C2).
+            const { args, rawArgs, parseError } = parseArgs(e.args === "" ? null : e.args);
+            return { id: e.id ?? nextId(), name: e.name ?? "", args, rawArgs, parseError };
+          })
+      : acc.nativeTools.map((tc) => {
+          const { args, rawArgs, parseError } = parseArgs(tc.args);
+          return { id: nextId(), name: tc.name, args, rawArgs, parseError };
+        });
+
+  return { content: acc.content, toolCalls, raw: null, latencyMs: Date.now() - started };
 }
 
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
@@ -247,8 +502,22 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   const started = Date.now();
   const transport: LocalModelTransport = config.transport;
 
+  // Streaming path (opt-in via onContentDelta). The non-streaming branches below
+  // are unchanged — `stream:false` keeps their wire body byte-identical.
+  if (opts.onContentDelta) {
+    return chatStreaming(opts, {
+      base,
+      transport,
+      temperature,
+      toolChoice,
+      timeoutMs,
+      maxResponseBytes,
+      started,
+    });
+  }
+
   if (transport === "v1") {
-    const body = buildV1Body(config.modelId, messages, tools, temperature, toolChoice);
+    const body = buildV1Body(config.modelId, messages, tools, temperature, toolChoice, false);
     const raw = (await postJson(`${base}/v1/chat/completions`, body, {
       timeoutMs,
       maxResponseBytes,
@@ -270,7 +539,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   }
 
   // native /api/chat
-  const body = buildNativeBody(config.modelId, messages, tools, temperature);
+  const body = buildNativeBody(config.modelId, messages, tools, temperature, false);
   const raw = (await postJson(`${base}/api/chat`, body, {
     timeoutMs,
     maxResponseBytes,

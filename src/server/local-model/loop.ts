@@ -73,6 +73,14 @@ export interface RunLoopOpts {
   timeoutMs?: number;
   signal?: AbortSignal;
   isLicenseRestricted?: () => boolean;
+  /** When set, every turn streams and this fires per assistant content delta
+   *  (#1123 M1.2). Tool-use turns stream too (their content is preamble); the
+   *  loop's tool-call detection + metrics are unchanged. */
+  onContentDelta?: (delta: string) => void;
+  /** Fires once per turn after `chat()` returns, before tool dispatch (#1123
+   *  M1.2). `hadToolCalls` lets a streaming sink discard a tool-call turn's
+   *  preamble so the next turn's content replaces it instead of bleeding in. */
+  onTurnEnd?: (info: { hadToolCalls: boolean }) => void;
 }
 
 export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
@@ -115,6 +123,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         temperature: opts.temperature,
         timeoutMs: opts.timeoutMs,
         signal,
+        onContentDelta: opts.onContentDelta,
       });
 
       if (res.toolCalls.length === 0) {
@@ -126,8 +135,10 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
           latencyMs: res.latencyMs,
         });
         metrics.exit = "clean";
+        opts.onTurnEnd?.({ hadToolCalls: false });
         break;
       }
+      opts.onTurnEnd?.({ hadToolCalls: true });
 
       // Echo the assistant turn (with its tool calls) back into the transcript.
       messages.push({ role: "assistant", content: res.content, tool_calls: res.toolCalls });
