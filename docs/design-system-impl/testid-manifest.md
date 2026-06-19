@@ -240,6 +240,12 @@ shipped and were removed:
 ### Empty states (3.11 D5)
 - `empty-state-open-file` (state A primary), `empty-state-retry` + `empty-state-open-settings` (state C)
 
+### Licensing gate (#1116, ships dark)
+- `license-trial-banner`, `license-trial-days` (trial countdown banner)
+- `license-wall` (restricted-mode activation overlay)
+- `license-activate-input`, `license-activate-error`, `license-activate-submit` (shared activation form)
+- `license-settings-section`, `license-status-pill` (Settings → License tab)
+
 ### Test harnesses (not user-facing, kept for vitest)
 - `notifications-harness`, `throw-on-render-ok`,
   `harness-{acknowledge,version,banner-dismiss,banner-version}`

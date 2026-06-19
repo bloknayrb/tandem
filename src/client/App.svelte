@@ -31,6 +31,8 @@ import FidelityReportBanner from "./components/FidelityReportBanner.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import HelpModal from "./components/HelpModal.svelte";
 import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
+import LicenseBanner from "./components/LicenseBanner.svelte";
+import LicenseWall from "./components/LicenseWall.svelte";
 import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
@@ -65,6 +67,7 @@ import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { shouldDispatchFindNav } from "./hooks/useFindShortcuts.js";
 import { createFirstRunNeeded } from "./hooks/useFirstRunNeeded.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
+import { licenseStore } from "./hooks/useLicense.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
@@ -117,6 +120,16 @@ onDestroy(() => yjsSync.destroy());
 // it. Logic lives in the hook to keep App.svelte minimal.
 const scratchpadPersistence = createScratchpadPersistence(() => yjsSync.tabs);
 onDestroy(() => scratchpadPersistence.destroy());
+
+// #1116: license gate (ADR-040). Polls /api/license/status; on any
+// restricted↔unrestricted transition, rebuild the doc-room providers so the
+// server re-applies Surface A's read-only mode via onAuthenticate (a bare
+// reconnect() can't — connect() no-ops on a live socket in hocuspocus-provider
+// 3.x). This clamps to read-only on trial→restricted and releases it on
+// restricted→licensed. Dark builds (the default until v1.0) poll once and go
+// quiet — the store self-stops when gateActive is false, so this never fires.
+licenseStore.start({ onTransition: () => yjsSync.rebuildForLicenseChange() });
+onDestroy(() => licenseStore.stop());
 
 // In-memory closed-tab history for Ctrl+Alt+T (reopen closed tab). Lifetime is
 // the app session; resets on reload. See useClosedTabStack.ts for rationale.
@@ -1624,6 +1637,14 @@ $effect(() => {
 // Raw-markdown source view (#1021). Only editable .md documents qualify
 // (read-only .md like CHANGELOG and non-.md formats are excluded).
 const isReadOnly = $derived(activeTab?.readOnly === true);
+// When the license wall is up (trial expired, no license) the editor is forced
+// read-only as a client-side belt to the server gates — Surface A already makes
+// the Hocuspocus connection read-only, so this only stops local keystrokes that
+// the full-screen wall already covers. `showWall` is false when the gate is dark
+// or the license is valid, so this collapses to `isReadOnly` in the normal case.
+// Kept separate from `isReadOnly` so document-level affordances (source view,
+// status indicator) keep their own meaning. (#1116)
+const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
 
@@ -1837,6 +1858,10 @@ const tutorial = createTutorial(
         onRetry={() => { yjsSync.reconnect(); }}
       />
     {/if}
+
+    <!-- #1116: trial countdown. Self-gates (renders only during an active trial;
+         silent when the gate is dark or a license is active). -->
+    <LicenseBanner />
 
     <Toolbar
       {editor}
@@ -2103,6 +2128,12 @@ const tutorial = createTutorial(
         })}
     />
 
+    <!-- #1116: restricted-mode activation wall. Self-gates on `ui.showWall`
+         (trial expired, no license). Full-screen scrim over the editor; the
+         read/export escape hatch holds since the document underneath stays
+         loaded. Server gates (Surface A/B) are the real enforcement. -->
+    <LicenseWall />
+
     <HelpModal
       open={showHelp}
       onClose={() => (showHelp = false)}
@@ -2300,7 +2331,7 @@ const tutorial = createTutorial(
       <Editor
         ydoc={activeTab!.ydoc}
         provider={activeTab!.provider}
-        readOnly={isReadOnly}
+        readOnly={editorReadOnly}
         currentFilePath={activeTab!.filePath}
         format={activeTab!.format}
         {activeAnnotationId}

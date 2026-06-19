@@ -36,6 +36,7 @@ import { pushNotification } from "../notifications.js";
 import { anchoredRange } from "../positions.js";
 import { extractText, getCurrentDoc } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
+import { gatedTool } from "./license-gate.js";
 import { getAnnotationsOutputShape } from "./output-schemas.js";
 import {
   mcpError,
@@ -360,7 +361,7 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_highlight", async () => {
+    gatedTool("tandem_highlight", async () => {
       notifyDeprecatedTool("tandem_highlight");
       return mcpError(
         "DEPRECATED",
@@ -395,7 +396,7 @@ export function registerAnnotationTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
-    withErrorBoundary(
+    gatedTool(
       "tandem_comment",
       async ({
         from: rawFrom,
@@ -450,7 +451,7 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_suggest", async () => {
+    gatedTool("tandem_suggest", async () => {
       notifyDeprecatedTool("tandem_suggest");
       return mcpError(
         "DEPRECATED",
@@ -471,7 +472,7 @@ export function registerAnnotationTools(server: McpServer): void {
       documentId: z.string().optional(),
       textSnapshot: z.string().optional(),
     },
-    withErrorBoundary("tandem_flag", async () => {
+    gatedTool("tandem_flag", async () => {
       notifyDeprecatedTool("tandem_flag");
       return mcpError("DEPRECATED", "tandem_flag is deprecated. Use tandem_comment instead.");
     }),
@@ -570,7 +571,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_removeAnnotation", async ({ id, documentId }) => {
+    gatedTool("tandem_removeAnnotation", async ({ id, documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
       const result = store.removeAnnotation(id);
@@ -592,57 +593,54 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary(
-      "tandem_editAnnotation",
-      async ({ id, content, newText, reason, documentId }) => {
-        const store = getDocumentStore(documentId);
-        if (!store) return noDocumentError();
+    gatedTool("tandem_editAnnotation", async ({ id, content, newText, reason, documentId }) => {
+      const store = getDocumentStore(documentId);
+      if (!store) return noDocumentError();
 
-        // `reason` is a legacy alias for `content`; an explicit `content` wins.
-        // When all three are undefined the resolved patch is empty, which the
-        // store reports as `empty-patch` (matching the pre-seam field check).
-        const resolvedContent = content !== undefined ? content : reason;
-        const result = store.editAnnotation(id, {
-          ...(resolvedContent !== undefined ? { content: resolvedContent } : {}),
-          ...(newText !== undefined ? { suggestedText: newText } : {}),
-        });
+      // `reason` is a legacy alias for `content`; an explicit `content` wins.
+      // When all three are undefined the resolved patch is empty, which the
+      // store reports as `empty-patch` (matching the pre-seam field check).
+      const resolvedContent = content !== undefined ? content : reason;
+      const result = store.editAnnotation(id, {
+        ...(resolvedContent !== undefined ? { content: resolvedContent } : {}),
+        ...(newText !== undefined ? { suggestedText: newText } : {}),
+      });
 
-        switch (result.kind) {
-          case "not-found":
-            return mcpError("NOT_FOUND", `Annotation ${id} not found`);
-          case "invalid-note":
-            // ADR-027: notes are user-private. Claude must not read or modify
-            // them via MCP. The note→comment promotion path runs from the
-            // browser, not through this tool.
-            return mcpError(
-              "INVALID_ARGUMENT",
-              "Cannot edit a note via MCP — notes are user-private (ADR-027).",
-            );
-          case "not-pending":
-            return mcpError(
-              "ANNOTATION_RESOLVED",
-              `Cannot edit a ${result.currentStatus} annotation`,
-            );
-          case "empty-patch":
-            return mcpError(
-              "INVALID_ARGUMENT",
-              "No editable fields provided. Use content, newText, or reason.",
-            );
-          case "invalid-suggestion-target":
-            return mcpError(
-              "INVALID_ARGUMENT",
-              `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
-            );
-          case "ok":
-            return mcpSuccess({
-              id,
-              content: result.annotation.content,
-              suggestedText: result.annotation.suggestedText,
-              editedAt: result.annotation.editedAt,
-            });
-        }
-      },
-    ),
+      switch (result.kind) {
+        case "not-found":
+          return mcpError("NOT_FOUND", `Annotation ${id} not found`);
+        case "invalid-note":
+          // ADR-027: notes are user-private. Claude must not read or modify
+          // them via MCP. The note→comment promotion path runs from the
+          // browser, not through this tool.
+          return mcpError(
+            "INVALID_ARGUMENT",
+            "Cannot edit a note via MCP — notes are user-private (ADR-027).",
+          );
+        case "not-pending":
+          return mcpError(
+            "ANNOTATION_RESOLVED",
+            `Cannot edit a ${result.currentStatus} annotation`,
+          );
+        case "empty-patch":
+          return mcpError(
+            "INVALID_ARGUMENT",
+            "No editable fields provided. Use content, newText, or reason.",
+          );
+        case "invalid-suggestion-target":
+          return mcpError(
+            "INVALID_ARGUMENT",
+            `Cannot set replacement text on a ${result.annotationType} annotation. Only comments support suggestedText.`,
+          );
+        case "ok":
+          return mcpSuccess({
+            id,
+            content: result.annotation.content,
+            suggestedText: result.annotation.suggestedText,
+            editedAt: result.annotation.editedAt,
+          });
+      }
+    }),
   );
 
   server.tool(
@@ -800,7 +798,7 @@ export function registerAnnotationTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_annotationReply", async ({ annotationId, text, documentId }) => {
+    gatedTool("tandem_annotationReply", async ({ annotationId, text, documentId }) => {
       const store = getDocumentStore(documentId);
       if (!store) return noDocumentError();
 
