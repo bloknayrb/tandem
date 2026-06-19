@@ -4,6 +4,7 @@ import type { Request, Response } from "express";
 import fs from "fs";
 import path from "path";
 import { isGrandfathered } from "./grandfather-list.js";
+import { writeLicenseEntitlement } from "./kv-store.js";
 import type { LicenseMetadata, SignedLicense } from "./license-types.js";
 import { canonicalize } from "./verifier.js";
 
@@ -217,13 +218,31 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
 
     const base64License = Buffer.from(JSON.stringify(signedLicense)).toString("base64");
 
-    // 6. Deliver the license
-    console.error(`[license] generated for ${customerEmail} (ID: ${id})`);
+    // 6. Record the entitlement for the L3 update Worker (#1116, ADR-040 §7).
+    // Real purchases only (§12 M3) — test-mode checkouts must not entitle
+    // updates. Fire-and-forget + non-fatal: the signed blob below is the source
+    // of truth, KV is only the updater's cache, and we must not delay the
+    // webhook response (a slow KV call could trip the processor's retry → a
+    // duplicate license). writeLicenseEntitlement never throws and logs itself.
+    if (!isTestPurchase) {
+      void writeLicenseEntitlement(id, {
+        updateWindowEnd: expiresAt,
+        status: type,
+        version: metadata.version,
+      });
+    }
 
-    // In production we would integrate an email delivery service (like Resend)
+    // 7. Deliver the license. Log the license id ONLY, never the buyer email
+    // (§12 L1 / no-telemetry posture) — console.error is the persisted server
+    // log, and the id is the KV/blob join key, so the email adds nothing
+    // operationally. `customerEmail` remains the delivery recipient below.
+    console.error(`[license] generated (ID: ${id})`);
+
+    // In production we would integrate an email delivery service (like Resend),
+    // sending base64License to customerEmail.
     if (process.env.RESEND_API_KEY) {
       // Mock Resend delivery (could be imported if npm package is added)
-      console.error(`[license] dispatching to ${customerEmail}`);
+      console.error(`[license] dispatching (ID: ${id})`);
     }
 
     // Return only the license blob and test flag — metadata fields (name, email)
@@ -234,7 +253,10 @@ export async function handleLicenseWebhook(req: Request, res: Response): Promise
       test: isTestPurchase,
     });
   } catch (err: any) {
+    // Detail stays server-side only — a validly-signed-but-malformed payload can
+    // throw past signature verification, and `err.message` could embed payload
+    // bytes. Return a static message (matches the activate-route posture).
     console.error("Webhook processing error:", err);
-    res.status(500).json({ error: `Webhook internal error: ${err.message}` });
+    res.status(500).json({ error: "Webhook internal error" });
   }
 }

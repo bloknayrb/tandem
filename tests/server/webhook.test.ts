@@ -13,6 +13,15 @@ import {
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
 
+// Mock the L3 KV entitlement write so we can assert the `!isTestPurchase` gate
+// (#1116 §12 M3) without a real Cloudflare account. The wrapper defers the
+// reference so the hoisted vi.mock factory reads the initialized spy at call
+// time (mirrors tests/client/license-store.svelte.test.ts).
+const writeLicenseEntitlement = vi.fn();
+vi.mock("../../src/server/license/kv-store.js", () => ({
+  writeLicenseEntitlement: (...args: unknown[]) => writeLicenseEntitlement(...args),
+}));
+
 // Build a valid Polar `webhook-signature` header for a payload + secret. Mirrors
 // the signing scheme verified by verifyPolarSignature (t=<ts>,v1=<hmac>).
 function signPolar(payload: string, secret: string): string {
@@ -73,6 +82,7 @@ describe("Webhook Licensing", () => {
     beforeEach(() => {
       process.env.TANDEM_PRIVATE_KEY = testPrivateKey;
       process.env.POLAR_WEBHOOK_SECRET = POLAR_SECRET;
+      writeLicenseEntitlement.mockClear();
     });
 
     afterEach(() => {
@@ -136,6 +146,41 @@ describe("Webhook Licensing", () => {
       const decoded = JSON.parse(Buffer.from(jsonResponse.license, "base64").toString("utf-8"));
       expect(decoded.metadata.type).toBe("grandfathered");
       expect(decoded.metadata.expiresAt).toBeNull(); // Grandfathered never expires
+    });
+
+    it("writes the KV entitlement for a real (non-test) purchase", async () => {
+      const res = mockResponse();
+      await handleLicenseWebhook(
+        signedReq({
+          event: "order.created",
+          data: { customer: { name: "Jane Real", email: "jane@example.com" }, is_test: false },
+        }),
+        res,
+      );
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      // Fire-and-forget but the call itself is synchronous before the response.
+      expect(writeLicenseEntitlement).toHaveBeenCalledTimes(1);
+      expect(writeLicenseEntitlement).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ status: "personal" }),
+      );
+    });
+
+    it("does NOT write the KV entitlement for a test-mode purchase (§12 M3)", async () => {
+      const res = mockResponse();
+      await handleLicenseWebhook(
+        signedReq({
+          event: "order.created",
+          data: { customer: { name: "Sandy Sandbox", email: "sandy@example.com" }, is_test: true },
+        }),
+        res,
+      );
+
+      // A license is still issued (test buyers get a working key)…
+      expect(res.status).toHaveBeenCalledWith(200);
+      // …but the test order must never entitle the update Worker.
+      expect(writeLicenseEntitlement).not.toHaveBeenCalled();
     });
 
     it("rejects an unsigned request with 401 — no dev bypass, even in NODE_ENV=development", async () => {
