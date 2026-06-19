@@ -718,6 +718,13 @@ export function registerDocumentTools(server: McpServer): void {
           ...(result.fidelityWarnings && result.fidelityWarnings.length > 0
             ? { fidelityWarnings: result.fidelityWarnings }
             : {}),
+          // Post-write verification advisories (#1123 0e). Content-free strings;
+          // surfaced so the agent knows the save may have lost content
+          // unexpectedly (the user's original is backed up). A `blocked` verdict
+          // never reaches here — it aborts the save (result.status === "error").
+          ...(result.integrityWarnings && result.integrityWarnings.length > 0
+            ? { integrityWarnings: result.integrityWarnings }
+            : {}),
         });
       }
       if (result.status === "skipped") {

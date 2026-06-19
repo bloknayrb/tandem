@@ -125,6 +125,7 @@ fidelity-report-details
 fidelity-report-details-toggle
 fidelity-report-export-downgrades
 fidelity-report-import-losses
+fidelity-report-integrity-warnings
 file-open-browse
 file-open-dialog
 file-open-error

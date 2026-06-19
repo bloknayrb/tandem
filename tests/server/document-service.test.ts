@@ -51,9 +51,14 @@ vi.mock("../../src/server/session/manager.js", async (importOriginal) => {
 vi.mock("../../src/server/file-io/index.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const realAtomicWrite = actual.atomicWrite as (p: string, c: string) => Promise<void>;
+  const realAtomicWriteBuffer = actual.atomicWriteBuffer as (p: string, b: Buffer) => Promise<void>;
   return {
     ...actual,
     atomicWrite: vi.fn((p: string, c: string) => realAtomicWrite(p, c)),
+    // Spied so the .docx post-write-verify block test (#1123 0e) can assert the
+    // binary write NEVER happens when verification blocks. Delegates to real so
+    // any legitimate binary write still lands.
+    atomicWriteBuffer: vi.fn((p: string, b: Buffer) => realAtomicWriteBuffer(p, b)),
   };
 });
 
@@ -578,6 +583,46 @@ describe("saveDocumentToDisk", () => {
 
     const after = meta.get(Y_MAP_SAVED_AT_VERSION) as number;
     expect(after).toBeGreaterThan(before);
+  });
+
+  it("aborts the binary write (never overwrites) when post-write verify BLOCKS (#1123 0e)", async () => {
+    addDoc("blk-doc", {
+      id: "blk-doc",
+      filePath: "/tmp/blk.docx",
+      format: "docx",
+      readOnly: false,
+      source: "file",
+    });
+    const doc = getOrCreateDocument("blk-doc");
+    const frag = doc.getXmlFragment("default");
+    const p = new Y.XmlElement("paragraph");
+    frag.insert(0, [p]);
+    p.insert(0, [new Y.XmlText("real body content the user typed")]);
+
+    const { getAdapter, atomicWriteBuffer } = await import("../../src/server/file-io/index.js");
+    const { suppressNextChange } = await import("../../src/server/file-watcher.js");
+    const { pushNotification } = await import("../../src/server/notifications.js");
+    // Force the export to emit garbage bytes → the verify reimport can't re-open
+    // them → a confirmed-broken (blocked) verdict.
+    const adapter = getAdapter("docx");
+    vi.spyOn(adapter, "saveBinary").mockResolvedValue(Buffer.from("not a real docx") as never);
+
+    // These spies are module-level singletons that accumulate across tests in
+    // this file — clear them so the assertions below reflect only THIS save.
+    vi.mocked(atomicWriteBuffer).mockClear();
+    vi.mocked(suppressNextChange).mockClear();
+
+    const result = await saveDocumentToDisk("blk-doc", "manual");
+
+    expect(result.status).toBe("error");
+    expect(result.errorCode).toBe("VERIFY_BLOCKED");
+    // The crown-jewel guarantee: corrupt bytes were NEVER written, and the
+    // watcher suppressor was never armed for a write that didn't happen.
+    expect(atomicWriteBuffer).not.toHaveBeenCalled();
+    expect(suppressNextChange).not.toHaveBeenCalled();
+    expect(pushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "save-error", errorCode: "VERIFY_BLOCKED" }),
+    );
   });
 });
 

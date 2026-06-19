@@ -33,6 +33,12 @@ import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
+import {
+  type BlockReason,
+  blockReasonMessage,
+  integrityWarningLines,
+  verifyDocxRoundtrips,
+} from "../file-io/docx-verify.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
@@ -130,6 +136,32 @@ export interface SaveResult {
    * lossy-mammoth-import ceiling is surfaced separately at open time.
    */
   fidelityWarnings?: string[];
+  /**
+   * Post-write verification advisories (#1123 Phase 0e, `.docx` only) — content
+   * the save may have lost UNEXPECTEDLY (a comment/footnote that didn't survive
+   * a verify reimport, a soft text-retention shortfall). Distinct from
+   * `fidelityWarnings`: a louder, warning-level signal with a restore prompt,
+   * never folded into the "N features simplified" count. Content-free strings.
+   * A `blocked` verdict instead aborts the save (status:"error").
+   */
+  integrityWarnings?: string[];
+}
+
+/**
+ * Thrown by the binary save branch when post-write verification (#1123 0e)
+ * BLOCKS — the regenerated .docx didn't round-trip the live content. Carries a
+ * `code` so the catch surfaces it as a save-error with a stable error code
+ * (never an FS errno). The message is content-free (`blockReasonMessage`).
+ */
+class SaveVerificationError extends Error {
+  readonly code = "VERIFY_BLOCKED";
+  constructor(
+    message: string,
+    readonly reason: BlockReason,
+  ) {
+    super(message);
+    this.name = "SaveVerificationError";
+  }
 }
 
 /**
@@ -225,6 +257,7 @@ export async function saveDocumentToDisk(
     const dirtySnapshot = snapshotDirtyVersion(docId);
 
     let fidelityWarnings: string[] | undefined;
+    let integrityWarnings: string[] | undefined;
     if (isBinary) {
       // Binary branch (#576, .docx). Capture fidelity warnings against the same
       // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
@@ -241,10 +274,22 @@ export async function saveDocumentToDisk(
         appDataDir: resolveAppDataDir(),
         documentId: docId,
       });
+      // Post-write verification (#1123 Phase 0e): re-import the produced bytes
+      // and confirm they round-trip the live doc's CONTENT before overwriting.
+      // Runs AFTER the snapshot (so the original is recoverable) and BEFORE the
+      // write/suppressor (so a blocking verdict aborts with the file untouched
+      // and the watcher suppressor un-armed). Never throws — a `blocked` verdict
+      // is a returned value we escalate to a save-error here.
+      const verdict = await verifyDocxRoundtrips(buffer, doc, { docId: safeDocId });
+      if (verdict.kind === "blocked") {
+        throw new SaveVerificationError(blockReasonMessage(verdict.reason), verdict.reason);
+      }
       suppressNextChange(docState.filePath);
       await atomicWriteBuffer(docState.filePath, buffer);
       recordSelfWrite(docState.filePath, buffer);
       fidelityWarnings = warnings.length > 0 ? warnings : undefined;
+      const advisories = integrityWarningLines(verdict);
+      integrityWarnings = advisories.length > 0 ? advisories : undefined;
     } else {
       const output = adapter.save!(doc);
       // Pre-overwrite snapshot of the on-disk original (first write per path
@@ -282,13 +327,16 @@ export async function saveDocumentToDisk(
         meta.set(Y_MAP_FIDELITY_REPORT, {
           importLosses: prev?.importLosses ?? [],
           exportDowngrades: fidelityWarnings ?? [],
+          // Post-write verify advisories (#1123 0e) — louder than downgrades;
+          // `?? []` clears a prior save's advisory on a now-clean save.
+          integrityWarnings: integrityWarnings ?? [],
           updatedAt: Date.now(),
         } satisfies FidelityReport);
       }
     });
     markCleanIfUnchanged(docId, dirtySnapshot);
 
-    return { status: "saved", fidelityWarnings };
+    return { status: "saved", fidelityWarnings, integrityWarnings };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
