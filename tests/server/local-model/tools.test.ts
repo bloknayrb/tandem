@@ -163,6 +163,73 @@ describe("dispatch — M0 anchor hardening", () => {
     );
     expect((out.result as { ok?: boolean }).ok).toBe(true);
   });
+
+  // Regression: an empty quote + a non-integer occurrence_index would drive
+  // findOccurrence into a synchronous, un-abortable infinite loop (#1123). This
+  // test HANGS the runner on a regression; terminating with a clean miss is the
+  // assertion. No annotation must be written.
+  it("returns a miss for an empty quote (no hang) and writes nothing", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(
+      "comment_on_quote",
+      { quoted_text: "", occurrence_index: 1.5, comment: "x" },
+      { ydoc: doc },
+    );
+    expect((out.result as { error?: string }).error).toBe("ANCHOR_NOT_FOUND");
+    expect(getAnnotationsMap(doc).size).toBe(0);
+  });
+});
+
+describe("dispatch — reads", () => {
+  it("reads a section by heading text", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch("read_section", { heading: "Cost Summary" }, { ydoc: doc });
+    expect(out.effect.kind).toBe("read");
+    expect((out.result as { text?: string }).text).toContain("The budget is $500");
+  });
+
+  it("returns SECTION_NOT_FOUND for an unknown heading", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch("read_section", { heading: "No Such Heading" }, { ydoc: doc });
+    expect(out.effect.kind).toBe("read");
+    expect((out.result as { error?: string }).error).toBe("SECTION_NOT_FOUND");
+  });
+});
+
+describe("dispatch — replies", () => {
+  it("replies to a pending comment via withMcp and returns a reply id", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const created = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "needs detail" },
+      { ydoc: doc },
+    );
+    const annotationId = (created.result as { annotation_id: string }).annotation_id;
+
+    const origin = watchOrigin(doc);
+    const out = dispatch(
+      "reply_to_annotation",
+      { annotation_id: annotationId, text: "here is the detail" },
+      { ydoc: doc },
+    );
+    expect(out.effect.kind).toBe("reply");
+    expect((out.result as { ok?: boolean }).ok).toBe(true);
+    expect((out.result as { reply_id?: string }).reply_id).toBeDefined();
+    expect(origin.last()).toBe(MCP_ORIGIN); // Critical Rule #2 — reply uses a distinct write path
+  });
+
+  it("surfaces a failure (no swallow) when replying to a non-existent id", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(
+      "reply_to_annotation",
+      { annotation_id: "does-not-exist", text: "hi" },
+      { ydoc: doc },
+    );
+    expect(out.effect.kind).toBe("reply");
+    expect((out.result as { ok?: boolean }).ok).toBeUndefined();
+    expect((out.result as { error?: string }).error).toBeDefined();
+    if (out.effect.kind === "reply") expect(out.effect.ok).toBe(false);
+  });
 });
 
 describe("dispatch — license gate", () => {

@@ -6,7 +6,12 @@ import {
   removeDoc,
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
-import { extractContext, findOccurrence, searchText } from "../../src/server/mcp/navigation.js";
+import {
+  countOccurrences,
+  extractContext,
+  findOccurrence,
+  searchText,
+} from "../../src/server/mcp/navigation.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 
 function setupDoc(id: string, text: string) {
@@ -95,6 +100,47 @@ describe("findOccurrence", () => {
     if ("error" in result) {
       expect(result.totalCount).toBe(0);
     }
+  });
+
+  // An empty pattern is a zero-length-match regex; without the guard it loops
+  // forever for a non-integer occurrence (#1123). These tests would HANG the
+  // runner on a regression — termination is the assertion.
+  it("returns a miss for an empty pattern (integer occurrence) instead of a degenerate hit", () => {
+    for (const occ of [1, 2, 3]) {
+      const result = findOccurrence("abc", "", occ);
+      expect("error" in result).toBe(true);
+      if ("error" in result) expect(result.totalCount).toBe(0);
+    }
+  });
+
+  it("does not hang on an empty pattern with a non-integer occurrence", () => {
+    const result = findOccurrence("abc", "", 1.5);
+    expect("error" in result).toBe(true);
+  });
+});
+
+describe("countOccurrences", () => {
+  it("returns 0 for an empty pattern (the clamp-gate guard)", () => {
+    expect(countOccurrences("anything at all", "")).toBe(0);
+  });
+
+  it("counts a unique pattern as 1 and a repeated one as n", () => {
+    expect(countOccurrences("foo bar baz", "bar")).toBe(1);
+    expect(countOccurrences("foo foo foo", "foo")).toBe(3);
+  });
+
+  it("escapes regex metacharacters like findOccurrence (literal matching)", () => {
+    expect(countOccurrences("price $9.99 and $9x99", "$9.99")).toBe(1);
+  });
+
+  it("agrees with findOccurrence on overlapping patterns (non-overlapping count)", () => {
+    // "aa" in "aaaa": both walk a global regex that advances past each match,
+    // so both see exactly 2 non-overlapping occurrences — the invariant the
+    // clamp gate (count===1) depends on.
+    expect(countOccurrences("aaaa", "aa")).toBe(2);
+    const miss = findOccurrence("aaaa", "aa", 99);
+    expect("error" in miss).toBe(true);
+    if ("error" in miss) expect(miss.totalCount).toBe(2);
   });
 });
 

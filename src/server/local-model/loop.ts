@@ -24,8 +24,13 @@ export interface LoopMetrics {
   turns: number;
   toolCalls: number;
   jsonParseFailures: number;
+  /** ANY failed comment/replacement anchor — quote not found OR a found span the
+   *  server rejected (heading overlap, RANGE_*). Not just ANCHOR_NOT_FOUND, so
+   *  the capability ledger can't under-report a documented model failure mode. */
   anchorResolutionFailures: number;
   flatOnlyAnchors: number; // fullyAnchored === false on a successful anchor
+  /** failed reply_to_annotation calls (bad/hallucinated id, wrong type) */
+  replyFailures: number;
   blockedByLicense: number;
   wallMs: number;
   exit: "clean" | "max_turns" | "max_tool_calls" | "aborted" | "error";
@@ -87,6 +92,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
     jsonParseFailures: 0,
     anchorResolutionFailures: 0,
     flatOnlyAnchors: 0,
+    replyFailures: 0,
     blockedByLicense: 0,
     wallMs: 0,
     exit: "clean",
@@ -137,11 +143,8 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         });
         const eff = outcome.effect;
         if (eff.kind === "blocked") metrics.blockedByLicense += 1;
-        if (
-          (eff.kind === "comment" || eff.kind === "replacement") &&
-          !eff.ok &&
-          eff.errorCode === "ANCHOR_NOT_FOUND"
-        ) {
+        if ((eff.kind === "comment" || eff.kind === "replacement") && !eff.ok) {
+          // Any anchor failure: quote-not-found OR a found-but-rejected span.
           metrics.anchorResolutionFailures += 1;
         }
         if (
@@ -151,6 +154,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         ) {
           metrics.flatOnlyAnchors += 1;
         }
+        if (eff.kind === "reply" && !eff.ok) metrics.replyFailures += 1;
 
         stepCalls.push({
           name: tc.name,

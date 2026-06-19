@@ -61,6 +61,14 @@ export function findOccurrence(
   pattern: string,
   occurrence: number = 1,
 ): { from: FlatOffset; to: FlatOffset; text: string } | { error: string; totalCount: number } {
+  // An empty pattern compiles to a zero-length-match regex whose `lastIndex`
+  // never advances, so `regex.exec` returns forever. With an integer
+  // `occurrence` the count still terminates (and yields a degenerate {0,0}
+  // span); with a NON-integer `occurrence` (`count` is always integer) it would
+  // loop infinitely — a synchronous, un-abortable hang for any caller. Guard it
+  // at the boundary so every caller (local-model resolveAnchor AND the
+  // tandem_resolveRange MCP route) is safe, matching countOccurrences("")===0.
+  if (pattern === "") return { error: 'Text "" not found (empty pattern)', totalCount: 0 };
   const regex = new RegExp(escapeRegex(pattern), "g");
   let match;
   let count = 0;

@@ -151,7 +151,16 @@ async function postJson(
       throw new Error(`local model endpoint returned HTTP ${res.status}`);
     }
     const text = await readBoundedText(res, opts.maxResponseBytes);
-    return JSON.parse(text);
+    try {
+      return JSON.parse(text);
+    } catch {
+      // A 200 with a non-JSON body (a reverse-proxy HTML page, an NDJSON stream
+      // from a server ignoring stream:false) is a distinct fault from a network
+      // error — surface it as its own message so the loop doesn't bucket it as a
+      // generic "error". Body-free on purpose: the raw text is a third-party
+      // payload and a V8 parse error can embed a source snippet.
+      throw new Error("local model returned a non-JSON response");
+    }
   } finally {
     clearTimeout(timer);
   }

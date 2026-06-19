@@ -5,7 +5,7 @@
  * The model NEVER sees or emits character offsets. Every mutating tool takes
  * (quoted_text, occurrence_index); the server resolves to a CRDT-anchored range:
  *
- *   unescape -> countOccurrences -> (clamp occ iff count===1) ->
+ *   unescape -> countOccurrences -> (clamp occ->1 iff occ>1 and count===1) ->
  *   findOccurrence -> anchoredRange({rejectHeadingOverlap}) ->
  *   createAnnotation / addReplyToAnnotation   (wrapped in withMcp)
  *
@@ -45,9 +45,11 @@ export interface DispatchCtx {
 }
 
 export interface ToolOutcome {
-  /** JSON-serializable result handed back to the model as the tool message */
+  /** JSON-serializable result handed back to the model as the tool message.
+   *  Opaque to host code — branch on `effect`, never parse `result`. */
   result: unknown;
-  /** structured record of what happened, for metrics / diagnostics */
+  /** structured record of what happened, for metrics / diagnostics; the
+   *  host-side source of truth (the loop keys all metrics off this, not `result`). */
   effect:
     | { kind: "read" }
     | { kind: "blocked"; tool: string }
@@ -151,7 +153,11 @@ function asString(v: unknown): string {
 }
 function asOccurrence(v: unknown): number {
   const n = typeof v === "number" ? v : Number.parseInt(asString(v), 10);
-  return Number.isFinite(n) && n >= 1 ? n : 1;
+  // Floor to a positive integer: occurrence_index is 1-based and integral, and a
+  // non-integer here (e.g. a model emitting 1.5) would never equal findOccurrence's
+  // integer `count` — on an empty pattern that is an infinite loop (see the guard
+  // there). Math.floor keeps a valid occurrence; anything else falls back to 1.
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
 }
 
 /**
@@ -236,7 +242,7 @@ function annotateFromQuote(
       annotationId: id,
       anchor: { quoted_text: quoted, occurrence_index: r.occ },
       resolvedSpan: r.span,
-      fullyAnchored: (r.anchored as { fullyAnchored?: boolean }).fullyAnchored,
+      fullyAnchored: r.anchored.fullyAnchored,
     },
   };
 }

@@ -96,6 +96,36 @@ describe("ollama-client — transport normalization", () => {
       expect.objectContaining({ redirect: "error" }),
     );
   });
+
+  it("re-echoes assistant tool_calls (object args) and tool_name on the native transport", async () => {
+    const fetchMock = stubFetch(() => new Response(JSON.stringify({ message: { content: "ok" } })));
+    await chat({
+      config: NATIVE,
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "c1", name: "get_outline", args: { x: 1 }, rawArgs: '{"x":1}' }],
+        },
+        { role: "tool", content: "{}", tool_call_id: "c1", tool_name: "get_outline" },
+      ],
+      tools: [],
+    });
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(init.body as string) as {
+      messages: {
+        role: string;
+        tool_calls?: { function: { name: string; arguments: unknown } }[];
+        tool_name?: string;
+      }[];
+    };
+    const asst = body.messages.find((m) => m.role === "assistant");
+    expect(asst?.tool_calls?.[0].function.name).toBe("get_outline");
+    // native sends the args as an OBJECT (not a JSON string like /v1)
+    expect(asst?.tool_calls?.[0].function.arguments).toEqual({ x: 1 });
+    const toolMsg = body.messages.find((m) => m.role === "tool");
+    expect(toolMsg?.tool_name).toBe("get_outline");
+  });
 });
 
 describe("ollama-client — security/robustness", () => {
@@ -116,6 +146,15 @@ describe("ollama-client — security/robustness", () => {
     await expect(
       chat({ config: V1, messages: [], tools: [], maxResponseBytes: 100 }),
     ).rejects.toThrow(/cap/);
+  });
+
+  it("throws a body-free error on a 200 with a non-JSON body (distinct from a network fault)", async () => {
+    stubFetch(() => new Response("<html>not json</html>", { status: 200 }));
+    await expect(chat({ config: V1, messages: [], tools: [] })).rejects.toThrow(
+      /non-JSON response/,
+    );
+    // the raw body must not leak into the thrown message
+    await expect(chat({ config: V1, messages: [], tools: [] })).rejects.not.toThrow(/html/);
   });
 
   it("surfaces an HTTP error by status (raw body not in the thrown message)", async () => {

@@ -20,6 +20,20 @@ function v1ToolCall(name: string): Response {
 function v1Text(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }));
 }
+function v1ToolCallArgs(name: string, args: Record<string, unknown>): Response {
+  return new Response(
+    JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: "",
+            tool_calls: [{ id: "c", function: { name, arguments: JSON.stringify(args) } }],
+          },
+        },
+      ],
+    }),
+  );
+}
 
 // A Response body is single-use, so the loop's repeated chat() calls each need a
 // FRESH Response — pass a factory, not a shared instance.
@@ -70,6 +84,23 @@ describe("runLoop — exits", () => {
     const r = await runLoop(base({ maxTurns: 2, maxToolCalls: 99 }));
     expect(r.metrics.exit).toBe("max_turns");
     expect(r.metrics.turns).toBe(2);
+  });
+});
+
+describe("runLoop — metric tallies", () => {
+  it("counts a heading-overlap rejection as an anchor-resolution failure (not just ANCHOR_NOT_FOUND)", async () => {
+    // base() doc is "# H\n\nbody text here\n"; quoting the heading marker "# H"
+    // is found but rejected by rejectHeadingOverlap — a failure the metric used
+    // to ignore.
+    stubFetch(() => v1ToolCallArgs("comment_on_quote", { quoted_text: "# H", comment: "x" }));
+    const r = await runLoop(base({ maxToolCalls: 1, maxTurns: 99 }));
+    expect(r.metrics.anchorResolutionFailures).toBe(1);
+  });
+
+  it("counts a failed reply_to_annotation in replyFailures", async () => {
+    stubFetch(() => v1ToolCallArgs("reply_to_annotation", { annotation_id: "nope", text: "hi" }));
+    const r = await runLoop(base({ maxToolCalls: 1, maxTurns: 99 }));
+    expect(r.metrics.replyFailures).toBe(1);
   });
 });
 
