@@ -1,10 +1,8 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
-import { USER_NAME_MAX_LEN } from "../../shared/constants";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
-import { createUserName } from "../hooks/useUserName.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
@@ -59,19 +57,8 @@ function claudeWorkingLabel(tool: string): string {
 
 const RECONNECTED_FLASH_MS = 2_000;
 
-const userNameState = createUserName();
 // #438: the status pill is the one surface that shows the specific model name.
 const agentLabel = createAgentLabel(createTandemSettings());
-let nameInput = $state(userNameState.userName);
-let inputEl: HTMLInputElement | undefined = $state();
-
-// Idle-sync: sync only when NOT focused and value differs
-$effect(() => {
-  const currentUserName = userNameState.userName;
-  if (nameInput !== currentUserName && document.activeElement !== inputEl) {
-    nameInput = currentUserName;
-  }
-});
 
 let showReconnectedFlash = $state(false);
 let elapsedSeconds = $state(0);
@@ -131,9 +118,18 @@ const connLabel = $derived(
         : "Disconnected — check that the server is running",
 );
 
-function commitName() {
-  userNameState.setUserName(nameInput);
-}
+// Color the connection label to match the dot state (design A4 status pill):
+// amber while reconnecting, red when disconnected, a brief green on the
+// reconnected flash, muted otherwise.
+const labelColor = $derived(
+  showReconnectedFlash
+    ? "var(--tandem-success-fg-strong)"
+    : connectionStatus === "connected"
+      ? "var(--tandem-fg-muted)"
+      : connectionStatus === "connecting"
+        ? "var(--tandem-warning-fg-strong)"
+        : "var(--tandem-error-fg-strong)",
+);
 
 // Word-count cycle (W5). Mode persists in localStorage. The chip click
 // advances the cycle; count is derived live from editor doc state via
@@ -167,12 +163,14 @@ function cycleWordMode() {
 <!-- v7 floating chrome (Wave 5): the in-flow status bar lifts into a small
      floating pill anchored bottom-left, applying the shared
      .tandem-floating-pill recipe. The pill keeps every field the in-flow
-     bar carried (display name, connection, count, saving, held badge,
-     Review-Only, Claude state) plus a new word-count chip that cycles
-     through words / chars / sentences / paragraphs on click. -->
+     bar carried (connection, count, saving, held badge, Review-Only, Claude
+     state) plus a word-count chip that cycles through words / chars /
+     sentences / paragraphs on click. The display-name editor lives in
+     Settings → Collaboration (`settings-modal-display-name`), not here — the
+     duplicate inline editor was removed in the design-fidelity pass. -->
 <!-- Status pill is faint until hover/focus-within. Pure-CSS opacity
-     transition; `:focus-within` reveals on keyboard focus so the
-     display-name input + word-count button remain reachable. -->
+     transition; `:focus-within` reveals on keyboard focus so the word-count
+     button remains reachable. -->
 <div
   class="tandem-floating-pill tandem-status-pill"
   style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 6px var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"
@@ -182,7 +180,7 @@ function cycleWordMode() {
       class="status-dot"
       style="width: 7px; height: 7px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {connected && showReconnectedFlash ? 'tandem-conn-bloom 500ms var(--tandem-ease-out)' : isReconnecting ? 'tandem-conn-pulse 900ms ease-in-out infinite' : 'none'};"
     ></span>
-    <span>{connLabel}</span>
+    <span style="color: {labelColor}; transition: color 0.3s ease;">{connLabel}</span>
     {#if editor}
       <button
         type="button"
@@ -203,29 +201,6 @@ function cycleWordMode() {
         Saving...
       </span>
     {/if}
-  </div>
-
-  <div style="display: flex; align-items: center; gap: var(--tandem-space-1); font-size: var(--tandem-text-xs); color: var(--tandem-fg-subtle);">
-    <span>You:</span>
-    <input
-      bind:this={inputEl}
-      data-testid="user-name-input"
-      type="text"
-      value={nameInput}
-      oninput={(e) => { nameInput = (e.target as HTMLInputElement).value; }}
-      onblur={commitName}
-      onkeydown={(e) => {
-        if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
-        if (e.key === "Escape") {
-          nameInput = userNameState.userName;
-          (e.currentTarget as HTMLInputElement).blur();
-        }
-      }}
-      aria-label="Display name"
-      title="Your display name"
-      maxlength={USER_NAME_MAX_LEN}
-      style="background: transparent; border: none; border-bottom: 1px dashed transparent; color: var(--tandem-fg-muted); font: inherit; font-family: var(--tandem-font-sans); font-size: var(--tandem-text-xs); width: 80px; outline: none; padding: 0 2px;"
-    />
   </div>
 
   {#if readOnly}

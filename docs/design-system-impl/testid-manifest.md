@@ -98,7 +98,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   (the primary action keeps `palette-item-new-scratchpad`)
 
 ### Status bar
-- `status-word-count`, `save-indicator`, `user-name-input`, `sb-held`
+- `status-word-count`, `save-indicator`, `sb-held`
+- `user-name-input` removed — the display-name editor was pulled out of the status pill (its default value "You" rendered as a duplicated "You: You"); name editing lives in Settings → Collaboration (`settings-modal-display-name`).
 
 ### Annotations (5-card audience-first split, ADR-027 / Conflict #8)
 - Dispatch + chrome: `annotation-card-{*}`,
