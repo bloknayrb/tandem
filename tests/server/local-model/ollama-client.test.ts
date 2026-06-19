@@ -322,6 +322,20 @@ describe("ollama-client — streaming (#1123 M1.2)", () => {
     ).rejects.not.toThrow(/secret proxy detail/);
   });
 
+  it("surfaces an HTTP error body-free on the STREAMING path too (postLoopback drift guard)", async () => {
+    // The streaming caller shares postLoopback's loopback-security contract with
+    // postJson. This guards against fetchStream drifting off it: a non-2xx
+    // streaming response must redact the body exactly like the non-streaming path.
+    stubFetch(() => new Response("internal detail leak", { status: 500 }));
+    await expect(
+      chat({ config: V1, messages: [], tools: [], onContentDelta: () => {} }),
+    ).rejects.toThrow(/HTTP 500/);
+    stubFetch(() => new Response("internal detail leak", { status: 500 }));
+    await expect(
+      chat({ config: V1, messages: [], tools: [], onContentDelta: () => {} }),
+    ).rejects.not.toThrow(/internal detail leak/);
+  });
+
   it("ignores SSE keep-alive/comment lines without dropping content", async () => {
     stubFetch(() =>
       streamResponse([

@@ -114,6 +114,25 @@ describe("runLoop — abort", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("does not dispatch a turn's tools when the signal aborts during chat() (abort lost the race)", async () => {
+    // fetch resolves SUCCESSFULLY with a mutating tool call, but flips the abort
+    // flag first — simulating a supersede/close/switch that fired mid-await yet
+    // lost the race to the fetch completing (so no AbortError is thrown).
+    // dispatch() is synchronous, so the post-await re-check is the only point
+    // that can stop this turn's writes from landing on the abandoned doc.
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => {
+      controller.abort();
+      return v1ToolCallArgs("comment_on_quote", { quoted_text: "body text", comment: "x" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const r = await runLoop(base({ signal: controller.signal, maxToolCalls: 9, maxTurns: 9 }));
+    expect(r.metrics.exit).toBe("aborted");
+    expect(r.metrics.turns).toBe(1); // chat() ran once...
+    expect(r.metrics.toolCalls).toBe(0); // ...but no tool was dispatched
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("classifies a thrown AbortError as 'aborted', not 'error'", async () => {
     vi.stubGlobal(
       "fetch",

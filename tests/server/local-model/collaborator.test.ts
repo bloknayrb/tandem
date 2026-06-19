@@ -15,6 +15,7 @@ import {
 } from "../../../src/server/events/queue.js";
 import {
   type CollaboratorDeps,
+  classifyFailure,
   createLocalModelCollaborator,
 } from "../../../src/server/local-model/collaborator.js";
 import type { LocalModelConfig } from "../../../src/server/local-model/config.js";
@@ -24,6 +25,10 @@ import {
   updateClaudeChatMessage,
 } from "../../../src/server/mcp/awareness.js";
 import { populateYDoc } from "../../../src/server/mcp/document.js";
+import {
+  getBuffer,
+  resetForTesting as resetNotifications,
+} from "../../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -74,6 +79,15 @@ function errorResult(errorMessage: string): LoopResult {
       exit: "error",
       errorMessage,
     },
+    steps: [],
+    finalContent: "",
+    messages: [],
+  };
+}
+
+function limitResult(exit: "max_turns" | "max_tool_calls"): LoopResult {
+  return {
+    metrics: { ...cleanResult("").metrics, exit },
     steps: [],
     finalContent: "",
     messages: [],
@@ -143,6 +157,7 @@ async function drain(collab: ReturnType<typeof createLocalModelCollaborator>) {
 
 beforeEach(() => {
   resetQueue();
+  resetNotifications();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
   // Clear CTRL_ROOM chat + mode so tests don't bleed.
@@ -327,6 +342,31 @@ describe("collaborator — streaming sink", () => {
     expect(msgs[0].text).toBe("The answer.");
     expect(msgs[0].text).not.toContain("Let me look");
   });
+
+  it("replaces (never blanks) an over-80-char preamble that already minted a bubble", async () => {
+    setupDoc("doc-preamble-mint", "Body");
+    const longPreamble = "x".repeat(100); // > STREAM_FLUSH_CHARS → mints a liveId mid-turn
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          opts.onContentDelta?.(longPreamble); // exceeds the char threshold → schedules an immediate flush
+          await new Promise((r) => setTimeout(r, 0)); // let that flush mint the bubble
+          opts.onTurnEnd?.({ hadToolCalls: true }); // preamble turn → reset buffer
+          opts.onContentDelta?.("Final answer.");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("Final answer.");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-preamble-mint" }));
+    await drain(collab);
+
+    const msgs = chatMessages();
+    expect(msgs).toHaveLength(1); // the minted bubble was UPDATED, not left + a new one added
+    expect(msgs[0].text).toBe("Final answer."); // replaced, never blanked to ""
+    expect(msgs[0].text).not.toContain("x");
+  });
 });
 
 describe("collaborator — single-flight supersede (D-B)", () => {
@@ -397,6 +437,47 @@ describe("collaborator — single-flight supersede (D-B)", () => {
     expect(texts).toContain("reply B");
     expect(texts).not.toContain("reply A"); // A was superseded → its reply dropped
   });
+
+  it("a superseded run finishing late does not clobber the active run's slot", async () => {
+    setupDoc("doc-slot", "Body");
+    let releaseB: (() => void) | null = null;
+    let bStarted: (() => void) | null = null;
+    const bStartedP = new Promise<void>((r) => {
+      bStarted = r;
+    });
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          if (opts.task === "A") {
+            // A resolves promptly when superseded; its finally runs BEFORE B's
+            // turn begins (B awaits A's promise). If the cleanup nulled the slot
+            // unconditionally it would null B's slot, not its own.
+            await new Promise<void>((res) =>
+              opts.signal?.addEventListener("abort", () => res(), { once: true }),
+            );
+            return cleanResult("");
+          }
+          bStarted?.();
+          await new Promise<void>((res) => {
+            releaseB = res;
+          });
+          return cleanResult("reply B");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+
+    collab.onEvent(chatEvent("A", { documentId: "doc-slot", messageId: "a" }));
+    await Promise.resolve();
+    collab.onEvent(chatEvent("B", { documentId: "doc-slot", messageId: "b" }));
+    await bStartedP; // A superseded + settled; B now in-flight
+
+    // A's finally already ran; the slot must still belong to B, not be nulled.
+    expect(collab.__currentDoc()).toBe("doc-slot");
+    (releaseB as unknown as () => void)?.();
+    await collab.__awaitCurrent();
+    expect(collab.__currentDoc()).toBeNull(); // cleared only after B truly completes
+  });
 });
 
 describe("collaborator — lifecycle aborts", () => {
@@ -465,6 +546,64 @@ describe("collaborator — lifecycle aborts", () => {
     await collab.__awaitCurrent();
     expect(aborted).toBe(true);
   });
+
+  it("does NOT abort an in-flight run when a DIFFERENT document is closed", async () => {
+    setupDoc("doc-fg", "Body");
+    setupDoc("doc-bg", "Body");
+    setActiveDocId("doc-fg");
+    let aborted = false;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: (opts) =>
+          new Promise((res) => {
+            opts.signal?.addEventListener("abort", () => {
+              aborted = true;
+            });
+            setTimeout(() => res(cleanResult("ok")), 5);
+          }),
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-fg" }));
+    await Promise.resolve();
+    collab.onEvent({
+      id: "evt_close_bg",
+      type: "document:closed",
+      timestamp: Date.now(),
+      documentId: "doc-bg", // a background tab, not the run's doc
+      payload: { fileName: "doc-bg" },
+    });
+    await collab.__awaitCurrent();
+    expect(aborted).toBe(false);
+  });
+
+  it("does NOT abort when a document:switched names the SAME running doc (re-focus)", async () => {
+    setupDoc("doc-same", "Body");
+    let aborted = false;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: (opts) =>
+          new Promise((res) => {
+            opts.signal?.addEventListener("abort", () => {
+              aborted = true;
+            });
+            setTimeout(() => res(cleanResult("ok")), 5);
+          }),
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-same" }));
+    await Promise.resolve();
+    collab.onEvent({
+      id: "evt_switch_same",
+      type: "document:switched",
+      timestamp: Date.now(),
+      documentId: "doc-same", // switched TO the doc the run targets
+      payload: { fileName: "doc-same" },
+    });
+    await collab.__awaitCurrent();
+    expect(aborted).toBe(false);
+  });
 });
 
 describe("collaborator — failure + robustness", () => {
@@ -484,6 +623,33 @@ describe("collaborator — failure + robustness", () => {
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
   });
+
+  for (const exit of ["max_turns", "max_tool_calls"] as const) {
+    it(`notifies (does not silently strand) on a ${exit} exit`, async () => {
+      setupDoc("doc-limit", "Body");
+      const collab = createLocalModelCollaborator(
+        makeDeps({
+          runTurn: async (opts) => {
+            // A tool-call turn streamed preamble; budget then ran out. onTurnEnd
+            // reset the buffer, so there's no clean answer to flush — without a
+            // notification the user is left with a stale/empty bubble.
+            opts.onContentDelta?.("Working on it. ");
+            opts.onTurnEnd?.({ hadToolCalls: true });
+            return limitResult(exit);
+          },
+        }),
+      );
+      collab.__setConfigForTests(CONFIG);
+      collab.onEvent(chatEvent("go", { documentId: "doc-limit" }));
+      await drain(collab);
+
+      expect(chatMessages()).toHaveLength(0); // preamble was reset → no stale bubble
+      const notes = getBuffer().filter((n) => n.documentId === "doc-limit");
+      expect(notes).toHaveLength(1);
+      expect(notes[0].severity).toBe("warning");
+      expect(notes[0].message).toMatch(/step limit/);
+    });
+  }
 
   it("a throwing runTurn does not escape as an unhandled rejection (H4)", async () => {
     setupDoc("doc-throw", "Body");
@@ -529,6 +695,30 @@ describe("collaborator — failure + robustness", () => {
     await collab.stop();
     expect(unsub).toHaveBeenCalled();
     expect(aborted).toBe(true);
+  });
+});
+
+describe("classifyFailure — bucketing + redaction", () => {
+  const cases: Array<[string, RegExp]> = [
+    ["local model returned a non-JSON response", /unreadable/],
+    ["invalid local-model endpoint: http://evil", /misconfigured/],
+    ["local model response exceeded 16777216-byte cap", /too large/],
+    ["local model endpoint returned HTTP 500", /server returned an error/],
+    ["The operation was aborted", /interrupted/],
+    ["ECONNREFUSED 127.0.0.1:11434 secret-detail", /could not reach the server/],
+  ];
+  for (const [errorMessage, expected] of cases) {
+    it(`maps "${errorMessage.slice(0, 28)}…" to a fixed string with no raw detail`, () => {
+      const out = classifyFailure(errorResult(errorMessage).metrics);
+      expect(out).toMatch(expected);
+      // Never embeds third-party detail (a V8 parse snippet / secret) into the UI string.
+      expect(out).not.toContain("secret-detail");
+      expect(out).not.toContain("127.0.0.1");
+      expect(out).not.toContain("evil");
+    });
+  }
+  it("falls back to the generic message when there is no errorMessage", () => {
+    expect(classifyFailure(cleanResult("").metrics)).toMatch(/could not reach the server/);
   });
 });
 

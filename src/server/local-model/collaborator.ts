@@ -100,7 +100,7 @@ function composeTask(text: string, selection?: ChatMessagePayload["selection"]):
  * V8-parse snippet must not reach the UI — it stays on stderr). Structural
  * redaction, per plan §3.6.
  */
-function classifyFailure(metrics: LoopMetrics): string {
+export function classifyFailure(metrics: LoopMetrics): string {
   const m = metrics.errorMessage ?? "";
   if (/non-JSON response/.test(m)) return "The local model returned an unreadable response.";
   if (/invalid local-model endpoint/.test(m)) return "The local model endpoint is misconfigured.";
@@ -221,11 +221,27 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
       // Ownership-gated terminal actions. A superseded / closed-doc / aborted run
       // drops its output silently (its last streamed partial stays in place).
       if (stillOwner()) {
-        if (result.metrics.exit === "clean") {
+        const exit = result.metrics.exit;
+        if (exit === "clean") {
           sink.flushFinal();
-        } else if (result.metrics.exit === "error") {
+        } else if (exit === "max_turns" || exit === "max_tool_calls") {
+          // Budget exhausted mid-task (the model looped on tool calls, or never
+          // produced a final no-tool answer turn). Commit any partial content
+          // (flushFinal no-ops if the last tool-call turn reset the buffer) AND
+          // tell the user the reply is incomplete — otherwise they're left with a
+          // stale/empty bubble and no "stopped early" signal.
+          sink.flushFinal();
+          pushNotification({
+            id: generateMessageId(),
+            type: "general-error",
+            severity: "warning",
+            message: "The local model stopped before finishing (it reached its step limit).",
+            documentId: req.docName,
+            timestamp: Date.now(),
+          });
+        } else if (exit === "error") {
           console.error(
-            `[local-model] run error (exit=${result.metrics.exit}): ${result.metrics.errorMessage ?? "unknown"}`,
+            `[local-model] run error (exit=${exit}): ${result.metrics.errorMessage ?? "unknown"}`,
           );
           pushNotification({
             id: generateMessageId(),
@@ -236,6 +252,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
             timestamp: Date.now(),
           });
         }
+        // exit === "aborted" → intentionally silent (superseded / closed / switched).
       }
     } finally {
       // Kill any pending flush timer on EVERY exit (clean/error/abort/throw).
@@ -292,6 +309,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     const task = event.payload.text?.trim();
     if (!task) return;
     if (readMode() !== "tandem") return; // hold in Solo (D-D)
+    // TODO(M1a): once config is dynamic, a config that resolves null AFTER a
+    // successful boot is indistinguishable from the dark no-op here — the boot
+    // breadcrumb in wire() fires only once. Re-resolve and/or log (rate-limited)
+    // so a post-boot misconfig isn't silent across many chat messages.
     if (!cachedConfig) return; // inert when unconfigured (M1a)
     const docName = event.documentId ?? getActiveDocId();
     if (!docName) return;

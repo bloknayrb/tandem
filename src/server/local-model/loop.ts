@@ -126,6 +126,18 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         onContentDelta: opts.onContentDelta,
       });
 
+      // An abort that fired during the await but LOST the race (chat() resolved
+      // before the abort propagated, so no AbortError was thrown) would otherwise
+      // dispatch this turn's tool writes onto a doc the user just superseded /
+      // closed / switched away from. dispatch() is synchronous, so the only
+      // interleave point is here, post-await — re-check before processing the
+      // turn so a stale run lands no annotations (symmetric with the gated chat
+      // write-back in collaborator.ts).
+      if (signal?.aborted) {
+        metrics.exit = "aborted";
+        break;
+      }
+
       if (res.toolCalls.length === 0) {
         finalContent = res.content;
         steps.push({
