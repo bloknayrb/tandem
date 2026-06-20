@@ -47,6 +47,10 @@ const INLINE_CHAR_LIMIT = 8000;
 /** Coalesce streamed deltas: flush at most this often OR every FLUSH_CHARS chars. */
 const STREAM_FLUSH_MS = 120;
 const STREAM_FLUSH_CHARS = 80;
+/** Truncate selectedText before embedding in the model prompt. A large selection
+ *  can't inflate token usage unboundedly; 500 chars captures any reasonable
+ *  user-selected excerpt (a paragraph or two). */
+const SELECTION_TEXT_CAP = 500;
 
 type Mode = "solo" | "tandem";
 
@@ -89,7 +93,9 @@ function readMode(): Mode {
 
 function composeTask(text: string, selection?: ChatMessagePayload["selection"]): string {
   if (selection?.selectedText) {
-    return `${text}\n\nThe user has selected: "${selection.selectedText}"`;
+    const raw = selection.selectedText;
+    const sel = raw.length > SELECTION_TEXT_CAP ? raw.slice(0, SELECTION_TEXT_CAP) + "..." : raw;
+    return `${text}\n\nThe user has selected: "${sel}"`;
   }
   return text;
 }

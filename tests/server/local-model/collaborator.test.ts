@@ -238,6 +238,35 @@ describe("collaborator — dispatch", () => {
     expect(seenTask).toContain('The user has selected: "Hello"');
   });
 
+  it("truncates selection text to SELECTION_TEXT_CAP before embedding in the prompt", async () => {
+    setupDoc("doc-selcap", "Hello world");
+    let seenTask = "";
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          seenTask = opts.task;
+          return cleanResult("");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    const longSel = "x".repeat(600);
+    collab.onEvent(
+      chatEvent("Summarize", {
+        documentId: "doc-selcap",
+        selection: { selectedText: longSel },
+      }),
+    );
+    await drain(collab);
+    expect(seenTask).toContain("Summarize");
+    expect(seenTask).toContain("...");
+    // The embedded selection must not exceed the cap + the "..." suffix
+    const match = seenTask.match(/The user has selected: "([^"]*)"/);
+    expect(match).not.toBeNull();
+    expect(match![1].length).toBeLessThanOrEqual(503); // 500 chars + "..."
+    expect(seenTask).not.toContain("x".repeat(600)); // raw oversized text never reaches the prompt
+  });
+
   it("holds in Solo mode (no loop)", async () => {
     setupDoc("doc-solo", "Body");
     setMode("solo");
