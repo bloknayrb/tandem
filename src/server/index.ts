@@ -30,6 +30,10 @@ import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
 import {
+  startLocalModelCollaborator,
+  stopLocalModelCollaborator,
+} from "./local-model/collaborator.js";
+import {
   restoreCtrlSession,
   restoreOpenDocuments,
   saveCurrentSession,
@@ -151,6 +155,10 @@ async function shutdown(signal: string) {
   console.error(`[Tandem] ${signal} received, saving session...`);
   try {
     unwatchAll();
+    // Abort any in-flight local-model run before tearing down (no-op while dark)
+    // so its loop stops issuing writes during shutdown. The run's AbortController
+    // cancels the in-flight model fetch, so this unwinds promptly.
+    await stopLocalModelCollaborator();
     // Stop the timer BEFORE the flush so it can't fire concurrently with it
     // (the savingDocs lock would make that safe per-doc, but redundant saves
     // during teardown are pure noise).
@@ -408,6 +416,10 @@ async function main() {
 
   // Attach event queue observers to CTRL_ROOM for channel push notifications
   attachCtrlObservers();
+
+  // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
+  // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
+  startLocalModelCollaborator();
 
   // Register doc lifecycle callbacks so the event queue reattaches observers
   // when Hocuspocus swaps Y.Doc instances (avoids circular import).
