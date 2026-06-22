@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-06-22
+
 ### Added
 
 - **`.docx` files now get a pre-overwrite backup, and you can restore it.** Before Tandem's first overwrite of a `.docx` each server run, it snapshots the original file's bytes verbatim to `{APP_DATA}/doc-backups/` — the same recovery mechanism `.md`/`.txt` already had, now extended to the binary save path. This matters most for `.docx`: exporting can drop Word features Tandem doesn't model (footnotes, headers/footers, custom styles), so the untouched original is the only faithful copy. Restore it from the command palette ("Restore a backup of this document…") or via `tandem_restoreBackup` — both restore the snapshot **byte-identical** (binary-safe, no ZIP corruption) and reload the open document in place, preserving and re-anchoring annotations and re-injecting imported Word comments. The `{name}.backup.docx` sidecar written by `tandem_applyChanges` remains a fallback when no snapshot exists yet. First step of the ".docx edit-with-confidence" initiative.
@@ -19,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Design-system polish across chat, status, tabs, and annotation cards (#1158).** Closing the last fidelity gaps in the floating-chrome redesign: the chat composer is rebuilt as a rounded pill textarea with a circular accent send button; the status pill colors its connection label to match the dot state (and drops a duplicate display-name editor); annotation cards and reply threads now show a relative creation timestamp ("2 min ago") via a shared helper; document tabs gain an unroll-in transition and a FLIP wrapper so reorders animate smoothly; and the mode toggle's label spacing is centered (fixing an asymmetric ~2px gap). Client-only visual refinement — no behavior or annotation-model change.
 - Settings → Network: the **Reconnect Strategy** control is now functional — "Exponential backoff" (1s→30s) and "Constant (2s)" thread through to the Hocuspocus provider backoff. Both keep auto-reconnect always on (the stale-tab restart recovery depends on it). Dropped the non-functional "Manual only" option (a saved `"manual"` migrates to "Exponential").
 
 ### Removed
@@ -27,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The "Admin permission required" popup that can appear when enabling Cowork on Windows is now visible, dismissable, and no longer traps you.** Enabling Cowork tries to add a Windows Firewall allow-rule that needs administrator elevation, which Tandem never has — so on a non-admin machine that modal appears, and three defects made it a dead end. It rendered *behind* the Settings modal that triggered it (both stacked at the same z-layer), so it was invisible until you dismissed Settings; the "Disable Cowork" escape hatch then errored out because its non-elevated `netsh delete` failed with "requires elevation" and was treated as fatal; and the modal had no Esc / click-outside dismissal, so even a successful disable left it on screen. Now the popup paints above the Settings modal and wizard, Esc / click-outside dismiss it for the session, and **disable works without admin** — firewall-rule removal is advisory rather than fatal (the allow-rule is VM-subnet-scoped and the server binds `127.0.0.1` only, so a leftover rule is inert), and disabling clears the declined-state flags that surface the modal. The stale "Port 3479 is blocked by a deny rule" copy — that rule was already retired — is corrected. Windows-only; no annotation-model change.
 - **Saving or restoring a file no longer triggers a spurious "File changed on disk — reloaded" notification (Windows).** A Windows/NTFS atomic rename fires ~2 filesystem `change` events per write, but the file watcher's suppression counter was armed once per write, so one event leaked through and the server reloaded the file it had just written — re-parsing the document and re-anchoring annotations needlessly (the activity tray showed it as "×2"). The watcher now has a second layer: after each of its own writes (save, save-as, restore), Tandem records a content fingerprint (size + SHA-256) of the exact bytes it wrote, and the delayed reload skips silently when the file on disk is byte-for-byte identical to what was just written. A content hash — not a size/timestamp check — is used deliberately so a genuine external edit (even one that keeps the byte count identical) is never mistaken for Tandem's own echo and silently dropped; the fingerprint is also short-lived, so a later external revert to identical bytes still reloads. Beyond the cosmetic toast, this removes up to three redundant reloads per save, each of which was an unnecessary annotation re-anchor pass.
 
 ### Security
