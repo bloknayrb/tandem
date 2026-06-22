@@ -12,8 +12,9 @@ import {
   parseCommentThreading,
 } from "../../src/server/file-io/docx-comments.js";
 import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
+import { refreshRange } from "../../src/server/positions.js";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import type { AnnotationReply } from "../../src/shared/types.js";
+import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 
 // ---------------------------------------------------------------------------
 // parseCommentMetadata
@@ -576,6 +577,168 @@ describe("injectCommentsAsAnnotations", () => {
     const revAfterHeal = healed.rev;
     injectCommentsAsAnnotations(doc, comments, "rev.docx");
     expect((map.get(id) as Record<string, unknown>).rev).toBe(revAfterHeal);
+  });
+
+  // -------------------------------------------------------------------------
+  // #1150 — offset-drift dedup (commentId secondary axis)
+  // -------------------------------------------------------------------------
+
+  it("re-anchors an imported note in place when its offsets drift, instead of duplicating [#1150]", () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "1", authorName: "Alice", bodyText: "Good", from: 0, to: 5 }],
+      "review.docx",
+    );
+    const key = Array.from(map.keys())[0];
+    expect(map.size).toBe(1);
+
+    // Same Word comment (id "1") whose flat range moved (external edit + reload).
+    const injected = injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "1", authorName: "Alice", bodyText: "Good", from: 6, to: 11 }],
+      "review.docx",
+    );
+    expect(injected).toBe(0); // updated in place, not injected
+    expect(map.size).toBe(1); // no duplicate
+    expect(Array.from(map.keys())).toEqual([key]); // same key
+    const ann = map.get(key) as Annotation;
+    expect(ann.range).toEqual({ from: 6, to: 11 }); // re-anchored to the new range
+    expect(ann.author).toBe("import");
+    expect(ann.audience).toBe("private");
+  });
+
+  it("strips a stale relRange when a drifted note can't fully anchor, so refreshRange can't resurrect the old range [#1150 C1]", () => {
+    // A heading doc: the "# " prefix offsets are unanchorable (clampedFromPrefix),
+    // which is how anchoredRange yields fullyAnchored:false. Flat text "# Title".
+    const hdoc = new Y.Doc();
+    htmlToYDoc(hdoc, "<h1>Title</h1>");
+    const map = hdoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // First anchor in the body ("Title") → fullyAnchored, so it carries a relRange.
+    injectCommentsAsAnnotations(
+      hdoc,
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 2, to: 7 }],
+      "f.docx",
+    );
+    const key = Array.from(map.keys())[0];
+    expect((map.get(key) as Annotation).relRange).toBeDefined();
+
+    // Drift onto the heading-prefix boundary → fresh anchor !fullyAnchored.
+    injectCommentsAsAnnotations(
+      hdoc,
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 0, to: 2 }],
+      "f.docx",
+    );
+    expect(map.size).toBe(1);
+    let ann = map.get(key) as Annotation;
+    // The pre-drift relRange (anchored at [2,7]) must NOT be inherited.
+    expect(ann.relRange).toBeUndefined();
+
+    // refreshRange therefore can't pull the range back to the old [2,7] anchor.
+    refreshRange(ann, hdoc, map);
+    ann = map.get(key) as Annotation;
+    expect(ann.range.from).not.toBe(2);
+  });
+
+  it("attaches a NEW reply on a drifted root to the kept root key [#1150]", () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    injectCommentsAsAnnotations(
+      doc,
+      [
+        {
+          commentId: "1",
+          authorName: "A",
+          bodyText: "Good",
+          from: 0,
+          to: 5,
+          replies: [{ commentId: "10", authorName: "B", bodyText: "reply-one" }],
+        },
+      ],
+      "f.docx",
+    );
+    const key = Array.from(map.keys())[0];
+    expect(repliesMap.size).toBe(1);
+
+    // Drift the root AND add a new reply.
+    injectCommentsAsAnnotations(
+      doc,
+      [
+        {
+          commentId: "1",
+          authorName: "A",
+          bodyText: "Good",
+          from: 6,
+          to: 11,
+          replies: [
+            { commentId: "10", authorName: "B", bodyText: "reply-one" },
+            { commentId: "11", authorName: "C", bodyText: "reply-two" },
+          ],
+        },
+      ],
+      "f.docx",
+    );
+    expect(map.size).toBe(1); // root not duplicated
+    expect(repliesMap.size).toBe(2); // existing reply deduped, new one added
+    const replies = Array.from(repliesMap.values()) as AnnotationReply[];
+    // Both the pre-existing and the new reply point at the kept root key.
+    expect(replies.find((r) => r.text === "reply-one")?.annotationId).toBe(key);
+    expect(replies.find((r) => r.text === "reply-two")?.annotationId).toBe(key);
+  });
+
+  it("does not re-inject a ghost note for a Word comment the user already promoted [#1150 I1]", () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 0, to: 5 }],
+      "f.docx",
+    );
+    const key = Array.from(map.keys())[0];
+    const note = map.get(key) as Annotation;
+    // Simulate batch-promote: note → comment, import → user, +promotedFrom marker
+    // (importSource survives, carrying commentId).
+    map.set(key, {
+      ...note,
+      author: "user",
+      type: "comment",
+      audience: "outbound",
+      promotedFrom: "note",
+      rev: (note.rev ?? 0) + 1,
+    } as Annotation);
+
+    // External edit moves the comment, then reload re-imports it.
+    const injected = injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 6, to: 11 }],
+      "f.docx",
+    );
+    expect(injected).toBe(0);
+    expect(map.size).toBe(1); // no ghost note
+    const after = map.get(key) as Annotation;
+    expect(after.author).toBe("user"); // promotion preserved
+    expect(after.type).toBe("comment");
+  });
+
+  it("still injects a genuinely new comment alongside a drifted one [#1150]", () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 0, to: 5 }],
+      "f.docx",
+    );
+    expect(map.size).toBe(1);
+
+    const injected = injectCommentsAsAnnotations(
+      doc,
+      [
+        { commentId: "1", authorName: "A", bodyText: "Good", from: 6, to: 11 }, // drift
+        { commentId: "2", authorName: "B", bodyText: "New", from: 0, to: 5 }, // new
+      ],
+      "f.docx",
+    );
+    expect(injected).toBe(1); // only the genuinely-new comment counts
+    expect(map.size).toBe(2);
   });
 });
 
