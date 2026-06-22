@@ -568,8 +568,9 @@ pub fn reconcile_stale_workspace_tokens(workspaces: &[PathBuf], current_token: &
     let mut rewritten = Vec::new();
     for ws_path in workspaces {
         // Write-time revalidation (#433): re-run the four-layer path guard
-        // before the per-workspace token rewrite. The orphan firewall-rule
-        // cleanup ran earlier on the enable path in lib.rs (before the add).
+        // before the per-workspace token rewrite. Per this function's ordering
+        // contract (§4), the caller has already run orphan firewall-rule cleanup
+        // and a successful firewall add before reaching here.
         let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
             Ok(p) => p,
             Err(reason) => {
@@ -1278,5 +1279,19 @@ mod tests {
         let content = fs::read_to_string(&entry_path).unwrap();
         let json: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(json["mcpServers"]["tandem"]["env"]["TANDEM_AUTH_TOKEN"], "current-token");
+    }
+
+    #[test]
+    fn test_reconcile_stale_workspace_tokens_skips_when_current() {
+        // Pins the needs_update == false branch: a workspace already carrying the
+        // current token must not be reported or rewritten (avoids needless writes
+        // + lock contention on every enable).
+        let (_guard, _dir, ws_path) = temp_ws();
+        install_tandem_plugin_into_workspace(&ws_path, "current-token", DEFAULT_TANDEM_URL).unwrap();
+
+        let rewritten = reconcile_stale_workspace_tokens(&[ws_path], "current-token");
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        assert!(rewritten.is_empty(), "no rewrite expected when token already current");
     }
 }

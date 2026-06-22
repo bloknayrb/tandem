@@ -2147,6 +2147,15 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // strictly more restrictive, and a retired deny rule is inert under the
         // 127.0.0.1 loopback bind (same rationale as the disable path below).
         let removed_firewall_rules = cowork_installer::reconcile_orphan_firewall_rules();
+        // Log removals here, before the add — a fail-closed add bails below, so
+        // folding this into the post-add log would silently drop the audit trail
+        // for "removed an allow rule but then failed to replace it".
+        if !removed_firewall_rules.is_empty() {
+            log::info!(
+                "[cowork] orphan reconcile: removed {} firewall rule(s)",
+                removed_firewall_rules.len()
+            );
+        }
 
         // Add allow firewall rule.
         let firewall_result = firewall::add_cowork_allow_rule(&cidr);
@@ -2181,10 +2190,9 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // fail-closed firewall add never reaches a workspace write (invariant §4).
         let rewritten_stale_entries =
             cowork_installer::reconcile_stale_workspace_tokens(&workspaces, &token);
-        if !removed_firewall_rules.is_empty() || !rewritten_stale_entries.is_empty() {
+        if !rewritten_stale_entries.is_empty() {
             log::info!(
-                "[cowork] orphan reconcile: removed {} rule(s), rewrote {} stale entry(s)",
-                removed_firewall_rules.len(),
+                "[cowork] reconcile: rewrote {} stale token entry(s)",
                 rewritten_stale_entries.len()
             );
         }
