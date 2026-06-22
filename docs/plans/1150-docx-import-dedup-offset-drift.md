@@ -151,3 +151,33 @@ reply-arg boundary; S1/S2), general (C1 slice-collision; commentId-only + reply 
 return-value production-invisible). Privacy verified clean: the drift-update hardcodes
 `type:"note"`/`audience:"private"`, never reaches a Claude-visible combination, and replies stay
 `private:true`.
+
+## Post-review amendments (PR #1166, 6-agent review)
+
+Reviewed by code / tests / comments / silent-failure / annotation-model / crdt agents. Real
+findings folded in:
+
+- **Reply preserved on promoted+drift (silent-failure MEDIUM).** The promoted-skip branch
+  originally `continue`d past the reply loop, silently dropping a Word reply added *after*
+  promotion. It now falls through (`effectiveKey = drift.key`, no note written) so the reply lands
+  threaded under the promoted record. Safe because an import reply is private by its own durable
+  property regardless of root (annotation-model confirmed). An edited body is still intentionally
+  not applied — promotion makes the content user-owned.
+- **Deterministic promoted-wins index tiebreak (convergent: tests / silent-failure / annotation-
+  model).** When two stored records share one canonical `commentId` (a legacy pre-#1150 duplicate),
+  the index now prefers the promoted record over an import note instead of relying on Y.Map
+  iteration order, and logs the collision so it is discoverable.
+- **Stale `textSnapshot` strip (crdt LOW).** The drift re-anchor destructure now drops a stale
+  `textSnapshot` alongside the stale `relRange`, by the same pre-reload-anchor symmetry (defensive;
+  import notes do not carry one today).
+- **Shared predicate extracted + comment corrected.** `isCanonicalWordId` lives in the new
+  `docx-comment-id.ts` leaf module, consumed by both the import dedup and export `reusableCommentId`
+  (the prior "must stay in lockstep / byte-identical copies" history was fabricated and was removed).
+- **Tests added:** non-canonical `w:id` duplicates-on-drift (safety boundary), promoted-wins
+  tiebreak (note inserted first so it regresses without the fix), new-reply-after-promotion lands,
+  `isCanonicalWordId` unit table.
+
+Deferred (noted, out of scope): garbage-collecting the legacy duplicate import note itself (the
+tiebreak makes the skip reliable, but the stale note persists until removed); swapping the raw
+NUL-byte delimiter in `importReplyId` for an escape sequence (pre-existing, makes the file diff as
+binary — not a regression, and the harness cannot emit the literal escape).

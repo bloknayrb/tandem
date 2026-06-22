@@ -1,10 +1,11 @@
 // Shared canonical-`w:id` predicate for the Word-comment round-trip.
 //
 // A leaf module (no project imports) so both the import side
-// (`docx-comments.ts`) and the export side (`docx-comment-export.ts`) can
-// depend on a single source of truth for "is this Word `w:id` safe to trust
-// as a stable identity" — they used to carry byte-identical copies that a
-// comment explicitly noted "must stay in lockstep" (#1150).
+// (`docx-comments.ts`) and the export side (`docx-comment-export.ts`) depend on
+// a single source of truth for "is this Word `w:id` safe to trust as a stable
+// identity" rather than duplicating the predicate. The export side previously
+// carried this check inline (`reusableCommentId`); #1150 adds the import
+// drift-dedup index as a second consumer, so it was extracted here.
 //
 // Canonical means: a non-negative decimal short enough to survive the
 // `IMPORT_COMMENT_ID_MAX` (32) slice un-truncated, with no non-canonical form

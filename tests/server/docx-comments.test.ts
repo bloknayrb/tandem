@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { IMPORT_AUTHOR_MAX, IMPORT_REPLY_BODY_CAP } from "../../src/server/annotations/schema.js";
+import { isCanonicalWordId } from "../../src/server/file-io/docx-comment-id.js";
 import {
   calculateCommentRanges,
   type DocxComment,
@@ -739,6 +740,128 @@ describe("injectCommentsAsAnnotations", () => {
     );
     expect(injected).toBe(1); // only the genuinely-new comment counts
     expect(map.size).toBe(2);
+  });
+
+  it("does NOT dedup on drift for a non-canonical w:id — it duplicates instead [#1150 safety boundary]", () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    // "01" is non-canonical (String(Number("01")) === "1" !== "01"), so it must
+    // never enter the byCommentId index: trusting it could collapse two distinct
+    // comments into one bucket (a silent cross-comment content swap). The safe
+    // degradation is duplicate-on-drift.
+    injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "01", authorName: "A", bodyText: "Good", from: 0, to: 5 }],
+      "f.docx",
+    );
+    expect(map.size).toBe(1);
+
+    const injected = injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "01", authorName: "A", bodyText: "Good", from: 6, to: 11 }],
+      "f.docx",
+    );
+    expect(injected).toBe(1); // injected as new, NOT re-anchored in place
+    expect(map.size).toBe(2); // the accepted duplicate-on-drift fallback
+  });
+
+  it("prefers the promoted record over a stale import note for the same commentId [#1150]", () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    // Seed a legacy duplicate: a stale import note AND a promoted record both
+    // carrying canonical commentId "1" under distinct keys (a pre-#1150 ghost).
+    // The note is inserted FIRST so plain first-seen-wins (Y.Map iteration =
+    // insertion order) would pick it — only the deterministic promoted-wins
+    // tiebreak makes the skip branch win, so this test regresses without it.
+    map.set("stale-note-key", {
+      id: "stale-note-key",
+      author: "import",
+      type: "note",
+      audience: "private",
+      range: { from: 0, to: 5 },
+      content: "Good",
+      status: "pending",
+      rev: 1,
+      importSource: { author: "A", file: "f.docx", commentId: "1" },
+    } as Annotation);
+    map.set("promoted-key", {
+      id: "promoted-key",
+      author: "user",
+      type: "comment",
+      audience: "outbound",
+      promotedFrom: "note",
+      range: { from: 0, to: 5 },
+      content: "Good",
+      status: "pending",
+      rev: 2,
+      importSource: { author: "A", file: "f.docx", commentId: "1" },
+    } as Annotation);
+
+    // Drift the comment. The index must deterministically pick the PROMOTED
+    // record (skip branch) regardless of Y.Map iteration order, so no note is
+    // re-anchored and the promotion is left intact.
+    const injected = injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "1", authorName: "A", bodyText: "Edited", from: 6, to: 11 }],
+      "f.docx",
+    );
+    expect(injected).toBe(0); // skipped, not injected
+    expect((map.get("promoted-key") as Annotation).author).toBe("user"); // untouched
+    expect((map.get("promoted-key") as Annotation).range).toEqual({ from: 0, to: 5 });
+    // The stale import note is left as-is (not re-anchored to the drifted range).
+    expect((map.get("stale-note-key") as Annotation).range).toEqual({ from: 0, to: 5 });
+  });
+
+  it("injects a NEW reply added after promotion when the comment drifts [#1150]", () => {
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    injectCommentsAsAnnotations(
+      doc,
+      [{ commentId: "1", authorName: "A", bodyText: "Good", from: 0, to: 5 }],
+      "f.docx",
+    );
+    const key = Array.from(map.keys())[0];
+    const note = map.get(key) as Annotation;
+    map.set(key, {
+      ...note,
+      author: "user",
+      type: "comment",
+      audience: "outbound",
+      promotedFrom: "note",
+      rev: (note.rev ?? 0) + 1,
+    } as Annotation);
+
+    // User adds a reply in Word, then the comment drifts and re-imports.
+    const injected = injectCommentsAsAnnotations(
+      doc,
+      [
+        {
+          commentId: "1",
+          authorName: "A",
+          bodyText: "Good",
+          from: 6,
+          to: 11,
+          replies: [{ commentId: "10", authorName: "B", bodyText: "post-promote reply" }],
+        },
+      ],
+      "f.docx",
+    );
+    expect(injected).toBe(0); // no ghost note
+    expect(map.size).toBe(1);
+    expect((map.get(key) as Annotation).author).toBe("user"); // promotion preserved
+    // The post-promotion reply still lands, threaded under the promoted record.
+    expect(repliesMap.size).toBe(1);
+    const reply = Array.from(repliesMap.values())[0] as AnnotationReply;
+    expect(reply.text).toBe("post-promote reply");
+    expect(reply.annotationId).toBe(key);
+    expect(reply.author).toBe("import"); // private by its own durable property
+  });
+
+  it("isCanonicalWordId accepts canonical decimals and rejects everything else", () => {
+    for (const ok of ["0", "5", "42", "123456789"]) {
+      expect(isCanonicalWordId(ok)).toBe(true);
+    }
+    for (const bad of ["01", "-1", "", " 5", "5 ", "0x5", "1234567890", "abc", undefined]) {
+      expect(isCanonicalWordId(bad)).toBe(false);
+    }
   });
 });
 
