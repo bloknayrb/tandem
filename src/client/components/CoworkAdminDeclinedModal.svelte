@@ -6,6 +6,11 @@ import {
   type InvokeFn,
   loadInvoke,
 } from "../cowork/cowork-invoke";
+import {
+  adminPopupDismissed,
+  dismissAdminPopup,
+  noteUacDeclinedAt,
+} from "../cowork/coworkAdminDismiss.svelte";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
 
 const FOCUSABLE_SELECTOR =
@@ -15,14 +20,25 @@ const coworkState = createCoworkStatus(() => true);
 
 const uacDeclined = $derived(coworkState.status?.uacDeclined === true);
 
+// Session-scoped dismiss: the popup is hidden once the user presses Esc / clicks the
+// backdrop, and re-armed only on a genuinely new decline. `dismissed` lives in a module
+// so it survives the wizard-driven remount of this component (App.svelte gate).
+const visible = $derived(uacDeclined && !adminPopupDismissed());
+
 let modalEl: HTMLDivElement | undefined = $state();
 let confirmingDisable = $state(false);
 let busy = $state(false);
 let error = $state<string | null>(null);
 
+// Watch the declined timestamp: re-arm the popup on a new decline, ignore the
+// non-null → null transition that disabling produces.
+$effect(() => {
+  noteUacDeclinedAt(coworkState.status?.uacDeclinedAt ?? null);
+});
+
 // Title badge — surfaces the warning in the OS window/tab list
 $effect(() => {
-  if (!uacDeclined) return;
+  if (!visible) return;
   const prev = typeof document !== "undefined" ? document.title : null;
   if (typeof document !== "undefined" && !document.title.startsWith("⚠")) {
     document.title = `⚠ ${document.title}`;
@@ -34,10 +50,17 @@ $effect(() => {
   };
 });
 
-// Focus trap on Tab
+// Focus trap on Tab + Escape-to-dismiss
 $effect(() => {
-  if (!uacDeclined) return;
+  if (!visible) return;
   const handler = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      // Don't let a dismiss race a disable in flight: if disable then fails, the
+      // modal would unmount and swallow the error while Cowork stays enabled.
+      if (busy) return;
+      dismissAdminPopup();
+      return;
+    }
     if (e.key !== "Tab" || !modalEl) return;
     const focusables = modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
     if (focusables.length === 0) return;
@@ -63,7 +86,7 @@ $effect(() => {
 
 // Move focus into the modal on open
 $effect(() => {
-  if (!uacDeclined) return;
+  if (!visible) return;
   modalEl?.focus();
 });
 
@@ -97,7 +120,9 @@ async function handleDisable(): Promise<void> {
     await coworkToggleIntegration(invoke, false);
     await coworkState.refetch();
   }, "Failed to disable Cowork");
-  confirmingDisable = false;
+  // Collapse the confirm panel only on success; on failure keep it up so the Disable
+  // button stays for a one-click retry (the error banner renders above it regardless).
+  if (!error) confirmingDisable = false;
 }
 </script>
 
@@ -106,8 +131,31 @@ async function handleDisable(): Promise<void> {
     Cowork status check failed: unable to determine if admin elevation was declined. Please
     restart Tandem to restore normal operation.
   </div>
-{:else if uacDeclined}
-  <div class="cad-backdrop" data-testid="cowork-admin-declined-backdrop">
+{:else if visible}
+  <!--
+    Backdrop a11y mirrors SettingsModal's scrim (PR #671): role="button" +
+    tabindex="-1" + aria-label gives svelte-check an interactive path without firing
+    the noninteractive-click rule; Escape is handled by the window keydown effect
+    above. tabindex="-1" keeps the backdrop out of the tab order so the dialog's focus
+    trap still works. The click guard dismisses only on a backdrop (not dialog) click.
+  -->
+  <div
+    class="cad-backdrop"
+    data-testid="cowork-admin-declined-backdrop"
+    role="button"
+    tabindex="-1"
+    aria-label="Dismiss admin permission notice"
+    onclick={(e) => {
+      // `busy` guard: don't dismiss while a disable is in flight (see Escape handler).
+      if (!busy && e.target === e.currentTarget) dismissAdminPopup();
+    }}
+    onkeydown={(e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (!busy) dismissAdminPopup();
+      }
+    }}
+  >
     <div
       bind:this={modalEl}
       class="cad-dialog"
@@ -122,9 +170,10 @@ async function handleDisable(): Promise<void> {
       </h2>
 
       <div class="cad-description">
-        Cowork integration requires Windows admin permission to configure firewall rules. Without
-        it, Tandem can't safely be reached from inside the Cowork VM. Port 3479 is currently
-        blocked by a deny rule to protect your machine.
+        Cowork integration needs Windows admin permission to add the firewall rule that lets
+        Claude inside the Cowork VM reach Tandem. Without it, that rule wasn't added, so Cowork
+        can't connect. Nothing was exposed — Tandem's server only listens on this computer
+        (127.0.0.1). You can dismiss this for now, or turn Cowork off below.
       </div>
 
       {#if error}
@@ -137,7 +186,9 @@ async function handleDisable(): Promise<void> {
         <div class="cad-warning-banner" data-testid="cowork-admin-declined-confirm-disable">
           <div class="cad-confirm-heading">Disable Cowork integration?</div>
           <div class="cad-confirm-body">
-            The deny rule will remain in place. You can re-enable Cowork later from Settings.
+            Cowork will be turned off. Any firewall rule a past admin run added is left in
+            place (it's harmless — the server only listens on this computer). You can
+            re-enable Cowork later from Settings.
           </div>
           <div class="cad-actions">
             <button
@@ -206,7 +257,9 @@ async function handleDisable(): Promise<void> {
     inset: 0;
     /* Theme-adaptive backdrop (cluster 3.2 modal recipe). */
     background: color-mix(in srgb, var(--tandem-bg) 70%, transparent);
-    z-index: var(--tandem-z-above-titlebar);
+    /* Sits above every other above-titlebar surface (Settings modal / wizard at +1)
+       so this critical notice is never painted behind the dialog that triggered it. */
+    z-index: calc(var(--tandem-z-above-titlebar) + 5);
     display: flex;
     align-items: center;
     justify-content: center;

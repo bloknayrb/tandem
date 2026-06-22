@@ -9,10 +9,11 @@ import type { CoworkStatus } from "../../src/client/types.js";
 // ---------------------------------------------------------------------------
 // Modal visibility condition
 //
-// CoworkAdminDeclinedModal renders when status.uacDeclined === true and
-// returns null otherwise. Tests here verify the condition logic without
-// mounting the component (consistent with the project's pure-function test
-// pattern).
+// CoworkAdminDeclinedModal renders when status.uacDeclined === true AND the
+// user hasn't dismissed it this session (visible = uacDeclined && !dismissed —
+// the dismiss half is covered in cowork-admin-dismiss.test.ts). These tests
+// verify the uacDeclined half without mounting the component (consistent with
+// the project's pure-function test pattern).
 // ---------------------------------------------------------------------------
 
 function makeStatus(overrides: Partial<CoworkStatus> = {}): CoworkStatus {
