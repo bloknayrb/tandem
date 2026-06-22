@@ -320,7 +320,7 @@ pub fn remove_cowork_rules() -> Result<(), FirewallError> {
 /// stale rules from a previous failed uninstall.
 ///
 /// Returns `Err` on spawn failure or unexpected netsh errors so that
-/// `reconcile_orphans` can distinguish "no orphans" from "scan failed".
+/// `reconcile_orphan_firewall_rules` can distinguish "no orphans" from "scan failed".
 pub fn scan_orphan_rules() -> Result<Vec<String>, FirewallError> {
     let start = Instant::now();
     let output = Command::new("netsh")

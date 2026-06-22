@@ -74,16 +74,6 @@ pub struct WorkspaceWriteReport {
     pub cowork_settings: WriteStatus,
 }
 
-/// Summary of orphan reconciliation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReconcileReport {
-    /// Names of orphan firewall rules that were removed.
-    pub removed_firewall_rules: Vec<String>,
-    /// Paths of workspace entries that had stale tokens and were rewritten.
-    pub rewritten_stale_entries: Vec<String>,
-}
-
 // ---------------------------------------------------------------------------
 // ACL guard (heuristic — full DACL inspection deferred to v0.8.1)
 // ---------------------------------------------------------------------------
@@ -523,48 +513,64 @@ pub fn apply_token_to_all_workspaces(token: &str) -> Vec<WorkspaceWriteReport> {
 // Orphan reconciliation
 // ---------------------------------------------------------------------------
 
-/// Scan for and reconcile orphan firewall rules and stale env blocks.
+/// Remove orphan `"Tandem Cowork*"` firewall rules left by a previous failed
+/// uninstall (security invariant §12). Returns the names of rules removed, or an
+/// empty vec on scan/remove failure.
 ///
-/// Removes firewall rules left by a previous failed uninstall and rewrites
-/// workspace entries whose `env.TANDEM_AUTH_TOKEN` does not match the current
-/// token (security invariant §12).
-pub fn reconcile_orphans(workspaces: &[PathBuf], current_token: &str) -> ReconcileReport {
+/// **Ordering contract (issue #1163):** on the enable path this MUST run *before*
+/// `firewall::add_cowork_allow_rule`. `scan_orphan_rules` matches by the name
+/// prefix `"Tandem Cowork"`, which is identical to the allow rule's own name, so
+/// it cannot distinguish a freshly-added rule from a true orphan — reconciling
+/// *after* the add would scan the just-added rule as an orphan and delete it,
+/// leaving every enable with no allow rule. The stale-token half of the old
+/// combined reconcile is split into [`reconcile_stale_workspace_tokens`], which
+/// runs *after* a successful add so a fail-closed firewall add never reaches a
+/// workspace write (invariant §4).
+pub fn reconcile_orphan_firewall_rules() -> Vec<String> {
     use crate::firewall;
 
     let orphan_rules = match firewall::scan_orphan_rules() {
         Ok(rules) => rules,
         Err(e) => {
+            // Warn (not silent) so callers know the scan was inconclusive rather
+            // than treating a failed scan as "no orphans".
             log::warn!(
                 "[cowork-install] reconcile: orphan rule scan failed ({e}) — skipping rule removal"
             );
-            // Return early with an empty report so callers know the scan was
-            // not conclusive, rather than silently treating failure as "no orphans".
-            return ReconcileReport {
-                removed_firewall_rules: vec![],
-                rewritten_stale_entries: vec![],
-            };
+            return vec![];
         }
     };
-    let mut removed_rules = Vec::new();
 
-    if !orphan_rules.is_empty() {
-        log::warn!(
-            "[cowork-install] reconcile: found {} orphan firewall rule(s): {:?}",
-            orphan_rules.len(),
-            orphan_rules
-        );
-        if let Err(e) = firewall::remove_cowork_rules() {
-            log::warn!("[cowork-install] reconcile: failed to remove orphan rules: {e}");
-        } else {
-            removed_rules = orphan_rules;
-        }
+    if orphan_rules.is_empty() {
+        return vec![];
     }
 
+    log::warn!(
+        "[cowork-install] reconcile: found {} orphan firewall rule(s): {:?}",
+        orphan_rules.len(),
+        orphan_rules
+    );
+    if let Err(e) = firewall::remove_cowork_rules() {
+        log::warn!("[cowork-install] reconcile: failed to remove orphan rules: {e}");
+        return vec![];
+    }
+    orphan_rules
+}
+
+/// Rewrite workspace plugin entries whose `env.TANDEM_AUTH_TOKEN` does not match
+/// the current token (security invariant §12). Returns the paths rewritten.
+///
+/// **Ordering contract (§4):** on the enable path this MUST run *after* a
+/// successful `firewall::add_cowork_allow_rule`. A fail-closed firewall add must
+/// not be followed by any workspace write, so this is intentionally split from
+/// [`reconcile_orphan_firewall_rules`] (which runs before the add).
+pub fn reconcile_stale_workspace_tokens(workspaces: &[PathBuf], current_token: &str) -> Vec<String> {
     let mut rewritten = Vec::new();
     for ws_path in workspaces {
         // Write-time revalidation (#433): re-run the four-layer path guard
-        // before the per-workspace token rewrite. Only the token rewrite is
-        // gated here — the orphan firewall-rule cleanup above already ran.
+        // before the per-workspace token rewrite. Per this function's ordering
+        // contract (§4), the caller has already run orphan firewall-rule cleanup
+        // and a successful firewall add before reaching here.
         let ws_path = match crate::cowork_workspace_scan::revalidate_resolved_path(ws_path) {
             Ok(p) => p,
             Err(reason) => {
@@ -630,10 +636,7 @@ pub fn reconcile_orphans(workspaces: &[PathBuf], current_token: &str) -> Reconci
         }
     }
 
-    ReconcileReport {
-        removed_firewall_rules: removed_rules,
-        rewritten_stale_entries: rewritten,
-    }
+    rewritten
 }
 
 // ---------------------------------------------------------------------------
@@ -1247,5 +1250,48 @@ mod tests {
         let content = fs::read_to_string(ws_path.join("cowork_plugins/installed_plugins.json")).unwrap();
         let json: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(json["mcpServers"]["tandem"]["env"]["TANDEM_AUTH_TOKEN"], "new-token");
+    }
+
+    #[test]
+    fn test_reconcile_stale_workspace_tokens_rewrites_mismatch() {
+        // Net-new coverage enabled by the #1163 split: the token-rewrite half is
+        // now testable in isolation (the old combined reconcile_orphans was
+        // entangled with netsh). temp_ws() sets TANDEM_COWORK_ROOT_OVERRIDE and
+        // nests the ws under it so revalidate_resolved_path (#433) passes instead
+        // of skipping the rewrite — without it this test would fail red.
+        let (_guard, _dir, ws_path) = temp_ws();
+        install_tandem_plugin_into_workspace(&ws_path, "old-token", DEFAULT_TANDEM_URL).unwrap();
+
+        let rewritten = reconcile_stale_workspace_tokens(&[ws_path.clone()], "current-token");
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        // The reported path is the #433-revalidated (canonicalized) form, which on
+        // Windows carries the \\?\ extended-length prefix — assert on the suffix,
+        // not exact string equality, then verify the actual on-disk rewrite.
+        assert_eq!(rewritten.len(), 1, "stale entry should be reported as rewritten");
+        assert!(
+            rewritten[0].ends_with("installed_plugins.json"),
+            "unexpected rewritten path: {}",
+            rewritten[0]
+        );
+
+        let entry_path = ws_path.join("cowork_plugins/installed_plugins.json");
+        let content = fs::read_to_string(&entry_path).unwrap();
+        let json: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["mcpServers"]["tandem"]["env"]["TANDEM_AUTH_TOKEN"], "current-token");
+    }
+
+    #[test]
+    fn test_reconcile_stale_workspace_tokens_skips_when_current() {
+        // Pins the needs_update == false branch: a workspace already carrying the
+        // current token must not be reported or rewritten (avoids needless writes
+        // + lock contention on every enable).
+        let (_guard, _dir, ws_path) = temp_ws();
+        install_tandem_plugin_into_workspace(&ws_path, "current-token", DEFAULT_TANDEM_URL).unwrap();
+
+        let rewritten = reconcile_stale_workspace_tokens(&[ws_path], "current-token");
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        assert!(rewritten.is_empty(), "no rewrite expected when token already current");
     }
 }

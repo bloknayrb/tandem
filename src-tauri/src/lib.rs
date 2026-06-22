@@ -2134,6 +2134,29 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         let cidr = firewall::detect_vethernet_subnet()
             .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))?;
 
+        // Scan workspaces up-front (read-only) — reused for both reconcile and install.
+        let workspaces = find_cowork_workspaces();
+
+        // Orphan firewall reconciliation BEFORE the add (issue #1163): remove stale
+        // "Tandem Cowork*" rules from a previous failed uninstall first. The orphan
+        // scan matches by name prefix (identical to the allow rule's own name), so
+        // reconciling AFTER the add would scan the just-added rule as an orphan and
+        // delete it — leaving every enable with no allow rule. Trade-off: on an
+        // elevated run where cleanup succeeds but the add then errors, a leftover
+        // rule is dropped without replacement; for the VM-scoped allow rule that's
+        // strictly more restrictive, and a retired deny rule is inert under the
+        // 127.0.0.1 loopback bind (same rationale as the disable path below).
+        let removed_firewall_rules = cowork_installer::reconcile_orphan_firewall_rules();
+        // Log removals here, before the add — a fail-closed add bails below, so
+        // folding this into the post-add log would silently drop the audit trail
+        // for "removed an allow rule but then failed to replace it".
+        if !removed_firewall_rules.is_empty() {
+            log::info!(
+                "[cowork] orphan reconcile: removed {} firewall rule(s)",
+                removed_firewall_rules.len()
+            );
+        }
+
         // Add allow firewall rule.
         let firewall_result = firewall::add_cowork_allow_rule(&cidr);
         if let Err(ref e) = firewall_result {
@@ -2163,14 +2186,14 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // Resolve TANDEM_URL (host.docker.internal by default; LAN-IP if override set).
         let tandem_url = cowork_installer::resolve_tandem_url(&cowork_meta::load().map_err(|e| e.to_string())?);
 
-        // Orphan reconciliation (invariant §12).
-        let workspaces = find_cowork_workspaces();
-        let reconcile = cowork_installer::reconcile_orphans(&workspaces, &token);
-        if !reconcile.removed_firewall_rules.is_empty() || !reconcile.rewritten_stale_entries.is_empty() {
+        // Stale-token reconciliation (invariant §12) — AFTER the successful add, so a
+        // fail-closed firewall add never reaches a workspace write (invariant §4).
+        let rewritten_stale_entries =
+            cowork_installer::reconcile_stale_workspace_tokens(&workspaces, &token);
+        if !rewritten_stale_entries.is_empty() {
             log::info!(
-                "[cowork] orphan reconcile: removed {} rule(s), rewrote {} stale entry(s)",
-                reconcile.removed_firewall_rules.len(),
-                reconcile.rewritten_stale_entries.len()
+                "[cowork] reconcile: rewrote {} stale token entry(s)",
+                rewritten_stale_entries.len()
             );
         }
 
@@ -2280,10 +2303,10 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // traps exactly the non-admin user who needs the escape hatch. Leaving a rule is
         // safe: the deny rule is retired, the allow rule is scoped to the VM subnet, and
         // the server binds 127.0.0.1 only, so a leftover rule is inert. This aligns with
-        // reconcile_orphans (cowork_installer.rs), which already treats remove failures as
-        // non-fatal (§12). (Caveat: leaving the rule is inert only under the default
+        // reconcile_orphan_firewall_rules (cowork_installer.rs), which already treats remove
+        // failures as non-fatal (§12). (Caveat: leaving the rule is inert only under the default
         // loopback bind; a future TANDEM_BIND_HOST=routable + stale VM-CIDR rule is an
-        // untested composition. A later enable *may* clear it via reconcile_orphans, but
+        // untested composition. A later enable *may* clear it via reconcile_orphan_firewall_rules, but
         // that's best-effort — reconcile returns early if its scan fails — and the leftover
         // is an inert allow rule, not a missing protection.)
         let firewall_failed = match firewall::remove_cowork_rules() {
