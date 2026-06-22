@@ -2261,21 +2261,34 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             false // No workspaces = nothing to uninstall = success (firewall still needs removing).
         };
 
-        // Firewall removal: failure is a SECURITY regression — propagate as Err.
-        let firewall_err = firewall::remove_cowork_rules().err();
+        // Firewall removal is ADVISORY, not fatal. Tandem never runs elevated, so a
+        // `netsh delete` on a rule a past elevated run wrote fails with "requires
+        // elevation" — surfacing as NetshFailure (run_netsh only classifies AdminDeclined
+        // for `add`), indistinguishable from other delete failures. Failing disable here
+        // traps exactly the non-admin user who needs the escape hatch. Leaving a rule is
+        // safe: the deny rule is retired, the allow rule is scoped to the VM subnet, and
+        // the server binds 127.0.0.1 only, so a leftover rule is inert. This aligns with
+        // reconcile_orphans (cowork_installer.rs), which already treats remove failures as
+        // non-fatal (§12). (Caveat: leaving the rule is inert only under the default
+        // loopback bind; a future TANDEM_BIND_HOST=routable + stale VM-CIDR rule is an
+        // untested composition — a later enable sweeps it via reconcile_orphans.)
+        let firewall_failed = match firewall::remove_cowork_rules() {
+            Ok(()) => false,
+            Err(fe) => {
+                log::warn!("[cowork] disable: firewall rule removal failed (non-fatal): {fe}");
+                true
+            }
+        };
 
-        // Persist meta regardless of workspace/firewall outcome so the UI reflects
-        // "user requested disable." An Err return still signals failure to the caller.
-        if let Err(e) = cowork_meta::update(|m| { m.enabled = false; }) {
+        // Persist meta regardless of workspace/firewall outcome. Clearing the UAC-declined
+        // flag is what makes the "Admin permission required" modal disappear: the user has
+        // resolved the blocked state by turning the feature off.
+        if let Err(e) = cowork_meta::update(|m| {
+            m.enabled = false;
+            m.uac_declined_last_attempt = false;
+            m.uac_declined_at = None;
+        }) {
             log::warn!("[cowork] failed to persist meta after disable: {e}");
-        }
-
-        if let Some(fe) = firewall_err {
-            return Err(format!(
-                "Cowork disable: firewall rule removal failed ({fe}). \
-                 An allow rule may still permit traffic on port 3479. \
-                 Remove 'Tandem Cowork' rules manually in Windows Defender Firewall."
-            ));
         }
 
         if workspace_all_failed {
@@ -2290,7 +2303,13 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             ));
         }
 
-        Ok("Cowork disabled".to_string())
+        if firewall_failed {
+            Ok("Cowork disabled (a leftover firewall rule may remain — harmless; \
+                Tandem's server only listens on this computer)"
+                .to_string())
+        } else {
+            Ok("Cowork disabled".to_string())
+        }
     }
 }
 #[cfg(not(target_os = "windows"))]
