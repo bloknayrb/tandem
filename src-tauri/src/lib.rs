@@ -2271,7 +2271,9 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // reconcile_orphans (cowork_installer.rs), which already treats remove failures as
         // non-fatal (§12). (Caveat: leaving the rule is inert only under the default
         // loopback bind; a future TANDEM_BIND_HOST=routable + stale VM-CIDR rule is an
-        // untested composition — a later enable sweeps it via reconcile_orphans.)
+        // untested composition. A later enable *may* clear it via reconcile_orphans, but
+        // that's best-effort — reconcile returns early if its scan fails — and the leftover
+        // is an inert allow rule, not a missing protection.)
         let firewall_failed = match firewall::remove_cowork_rules() {
             Ok(()) => false,
             Err(fe) => {
@@ -2282,12 +2284,18 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
 
         // Persist meta regardless of workspace/firewall outcome. Clearing the UAC-declined
         // flag is what makes the "Admin permission required" modal disappear: the user has
-        // resolved the blocked state by turning the feature off.
-        if let Err(e) = cowork_meta::update(|m| {
+        // resolved the blocked state by turning the feature off. Unlike the advisory
+        // firewall removal above, this write is the disable's CORE contract — if it fails,
+        // the on-disk state stays `enabled = true` with the UAC flag set, so the modal
+        // never goes away and the integration still reads as on. We therefore fail loud
+        // (Err in the success-path tail below) instead of returning a green toast over a
+        // stale state. Borrow in the warn so the Result survives for the later check.
+        let meta_persist = cowork_meta::update(|m| {
             m.enabled = false;
             m.uac_declined_last_attempt = false;
             m.uac_declined_at = None;
-        }) {
+        });
+        if let Err(e) = &meta_persist {
             log::warn!("[cowork] failed to persist meta after disable: {e}");
         }
 
@@ -2300,6 +2308,18 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
                 "Cowork disable failed: all {} workspace(s) failed to uninstall. Failures: {}",
                 workspaces.len(),
                 failure_summary.join("; ")
+            ));
+        }
+
+        // Workspace uninstall + firewall removal already ran (idempotent / inert), and the
+        // disable branch re-drives this whole path on a repeat call, so failing here strands
+        // nothing — a retry safely re-attempts the persist. Surface it so the user knows the
+        // disable didn't stick rather than discovering the modal is still up.
+        if let Err(e) = meta_persist {
+            return Err(format!(
+                "Cowork was turned off, but saving that state failed ({e}). Cowork is still \
+                 marked enabled and the admin-permission notice stays open. Try disabling \
+                 again; if it persists, restart Tandem."
             ));
         }
 

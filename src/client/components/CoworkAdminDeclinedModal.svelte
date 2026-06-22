@@ -55,6 +55,9 @@ $effect(() => {
   if (!visible) return;
   const handler = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      // Don't let a dismiss race a disable in flight: if disable then fails, the
+      // modal would unmount and swallow the error while Cowork stays enabled.
+      if (busy) return;
       dismissAdminPopup();
       return;
     }
@@ -117,7 +120,9 @@ async function handleDisable(): Promise<void> {
     await coworkToggleIntegration(invoke, false);
     await coworkState.refetch();
   }, "Failed to disable Cowork");
-  confirmingDisable = false;
+  // Collapse the confirm panel only on success; on failure keep it up so the Disable
+  // button stays for a one-click retry (the error banner renders above it regardless).
+  if (!error) confirmingDisable = false;
 }
 </script>
 
@@ -141,12 +146,13 @@ async function handleDisable(): Promise<void> {
     tabindex="-1"
     aria-label="Dismiss admin permission notice"
     onclick={(e) => {
-      if (e.target === e.currentTarget) dismissAdminPopup();
+      // `busy` guard: don't dismiss while a disable is in flight (see Escape handler).
+      if (!busy && e.target === e.currentTarget) dismissAdminPopup();
     }}
     onkeydown={(e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        dismissAdminPopup();
+        if (!busy) dismissAdminPopup();
       }
     }}
   >
