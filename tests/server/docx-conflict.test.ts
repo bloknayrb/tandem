@@ -406,6 +406,46 @@ describe("handleResolveDocxConflict — route doc selection", () => {
     expect(extractText(doc)).toContain("Fallback disk body");
   });
 
+  it("treats an empty-string documentId as absent (falls back to the active doc)", async () => {
+    // The `documentId.length > 0` / `documentId?.length` ladder deliberately
+    // treats "" as "not supplied" rather than an invalid id — pin it so a
+    // refactor (e.g. to `documentId ?? getActiveDocId()`) can't silently change it.
+    const { id, doc } = await flaggedDocx("empty-id.docx", "Empty-id disk body");
+    setActiveDocId(id);
+
+    const res = makeRes();
+    await handleResolveDocxConflict(
+      makeReq({ documentId: "", choice: "reload" }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(0);
+    expect(conflictOf(doc)).toBeUndefined();
+    expect(extractText(doc)).toContain("Empty-id disk body");
+  });
+
+  it("forwards choice 'keep' for the body documentId (clears flag, retains edits, re-baselines)", async () => {
+    // Every other handler test uses "reload"; this proves the handler forwards
+    // the validated `choice` rather than hard-coding/swapping it.
+    const { id, doc } = await flaggedDocx("keep.docx", "Keep disk body");
+    setActiveDocId(null); // no active doc — proves the body id is what's used
+    const textBefore = extractText(doc);
+
+    const res = makeRes();
+    await handleResolveDocxConflict(
+      makeReq({ documentId: id, choice: "keep" }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(0);
+    expect(res._body).toMatchObject({ success: true });
+    expect(conflictOf(doc)).toBeUndefined();
+    expect(extractText(doc)).toBe(textBefore); // edits kept, NOT reloaded
+    expect(extractText(doc)).toContain("local unsaved edit");
+    // savedAt re-baselined so a subsequent explicit save is unblocked.
+    expect(doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION)).toBeGreaterThan(0);
+  });
+
   it("rejects an invalid choice with 400", async () => {
     const res = makeRes();
     await handleResolveDocxConflict(makeReq({ choice: "nope" }), res as unknown as Response);
