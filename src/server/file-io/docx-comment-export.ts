@@ -54,6 +54,7 @@ import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type { Annotation, AnnotationReply } from "../../shared/types.js";
 import { extractText } from "../mcp/document-model.js";
 import { refreshRange } from "../positions.js";
+import { isCanonicalWordId } from "./docx-comment-id.js";
 
 /** A privacy-gated, range-resolved comment ready for OOXML emission. */
 export interface ExportComment {
@@ -122,17 +123,14 @@ function isImportReply(reply: AnnotationReply): boolean {
 
 /**
  * Returns the original Word comment id as a number when it can be reused
- * verbatim (canonical non-negative decimal — the 9-digit cap keeps it well
- * inside OOXML's int32 `w:id` range), else null. Reusing the original id
- * keeps `importAnnotationId` stable across a promote → save → re-open cycle.
+ * verbatim, else null. Reusing the original id keeps `importAnnotationId`
+ * stable across a promote → save → re-open cycle. The canonical-form check
+ * (which also rejects "01", whose re-imported id would differ) is the shared
+ * `isCanonicalWordId` predicate — the import drift-dedup index (#1150) trusts
+ * the same gate.
  */
 function reusableCommentId(raw: string | undefined): number | null {
-  if (!raw || !/^\d{1,9}$/.test(raw)) return null;
-  const n = Number(raw);
-  // Reject non-canonical forms ("01") — the re-imported id would be the
-  // emitted canonical string and the hash would differ anyway.
-  if (String(n) !== raw) return null;
-  return n;
+  return isCanonicalWordId(raw) ? Number(raw) : null;
 }
 
 function authorLabel(ann: Annotation): string {
