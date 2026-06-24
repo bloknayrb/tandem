@@ -12,10 +12,10 @@ import {
 import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT, Y_MAP_CLAUDE } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
 import { ChannelErrorCodeSchema, type ClaudeAwareness } from "../../shared/types.js";
-import { generateMessageId } from "../../shared/utils.js";
 import { sseHandler } from "../events/sse.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
+import { appendClaudeChatMessage } from "./awareness.js";
 
 const pendingPermissions = new Map<
   string,
@@ -99,19 +99,12 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
       res.status(400).json({ error: "BAD_REQUEST", message: "text is required" });
       return;
     }
-    const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
-    const id = generateMessageId();
-    const msg = {
-      id,
-      author: "claude" as const,
-      text,
-      timestamp: Date.now(),
+    // Narrow the untrusted body fields, then route through the shared Claude-chat
+    // write path that `tandem_reply` and the local-model collaborator also use.
+    const id = appendClaudeChatMessage(text, {
       ...(typeof documentId === "string" ? { documentId } : {}),
       ...(typeof replyTo === "string" ? { replyTo } : {}),
-      read: true,
-    };
-    withMcp(ctrlDoc, () => chatMap.set(id, msg));
+    });
     res.json({ sent: true, messageId: id });
   });
 

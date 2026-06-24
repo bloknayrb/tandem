@@ -51,6 +51,18 @@ const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
 /// the Node shutdown sequence (dirty-doc flush + session save) before exit.
 /// Keep in sync with API_SHUTDOWN in src/shared/api-paths.ts.
 const SHUTDOWN_URL: &str = "http://127.0.0.1:3479/api/shutdown";
+/// License status endpoint (loopback). The updater reads `licenseId` +
+/// `updateWindowCurrent` to decide whether to route update checks through the
+/// license-gated Worker (#1116, ADR-040 §7). Keep in sync with
+/// API_LICENSE_STATUS in src/shared/api-paths.ts.
+const LICENSE_STATUS_URL: &str = "http://127.0.0.1:3479/api/license/status";
+/// Deployed license-update Worker endpoint (owner-configured; see
+/// docs/licensing-operations.md §3). EMPTY until the Worker is deployed for
+/// v1.0 — while empty, update checks always use the default public endpoint
+/// from tauri.conf.json, so updater behavior is byte-identical to today. The
+/// `{{target}}`, `{{arch}}`, and `{{current_version}}` template vars are
+/// expanded by tauri-plugin-updater at check time.
+const LICENSE_UPDATE_ENDPOINT: &str = "";
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(15);
 const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -2122,6 +2134,29 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         let cidr = firewall::detect_vethernet_subnet()
             .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))?;
 
+        // Scan workspaces up-front (read-only) — reused for both reconcile and install.
+        let workspaces = find_cowork_workspaces();
+
+        // Orphan firewall reconciliation BEFORE the add (issue #1163): remove stale
+        // "Tandem Cowork*" rules from a previous failed uninstall first. The orphan
+        // scan matches by name prefix (identical to the allow rule's own name), so
+        // reconciling AFTER the add would scan the just-added rule as an orphan and
+        // delete it — leaving every enable with no allow rule. Trade-off: on an
+        // elevated run where cleanup succeeds but the add then errors, a leftover
+        // rule is dropped without replacement; for the VM-scoped allow rule that's
+        // strictly more restrictive, and a retired deny rule is inert under the
+        // 127.0.0.1 loopback bind (same rationale as the disable path below).
+        let removed_firewall_rules = cowork_installer::reconcile_orphan_firewall_rules();
+        // Log removals here, before the add — a fail-closed add bails below, so
+        // folding this into the post-add log would silently drop the audit trail
+        // for "removed an allow rule but then failed to replace it".
+        if !removed_firewall_rules.is_empty() {
+            log::info!(
+                "[cowork] orphan reconcile: removed {} firewall rule(s)",
+                removed_firewall_rules.len()
+            );
+        }
+
         // Add allow firewall rule.
         let firewall_result = firewall::add_cowork_allow_rule(&cidr);
         if let Err(ref e) = firewall_result {
@@ -2151,14 +2186,14 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
         // Resolve TANDEM_URL (host.docker.internal by default; LAN-IP if override set).
         let tandem_url = cowork_installer::resolve_tandem_url(&cowork_meta::load().map_err(|e| e.to_string())?);
 
-        // Orphan reconciliation (invariant §12).
-        let workspaces = find_cowork_workspaces();
-        let reconcile = cowork_installer::reconcile_orphans(&workspaces, &token);
-        if !reconcile.removed_firewall_rules.is_empty() || !reconcile.rewritten_stale_entries.is_empty() {
+        // Stale-token reconciliation (invariant §12) — AFTER the successful add, so a
+        // fail-closed firewall add never reaches a workspace write (invariant §4).
+        let rewritten_stale_entries =
+            cowork_installer::reconcile_stale_workspace_tokens(&workspaces, &token);
+        if !rewritten_stale_entries.is_empty() {
             log::info!(
-                "[cowork] orphan reconcile: removed {} rule(s), rewrote {} stale entry(s)",
-                reconcile.removed_firewall_rules.len(),
-                reconcile.rewritten_stale_entries.len()
+                "[cowork] reconcile: rewrote {} stale token entry(s)",
+                rewritten_stale_entries.len()
             );
         }
 
@@ -2261,21 +2296,42 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             false // No workspaces = nothing to uninstall = success (firewall still needs removing).
         };
 
-        // Firewall removal: failure is a SECURITY regression — propagate as Err.
-        let firewall_err = firewall::remove_cowork_rules().err();
+        // Firewall removal is ADVISORY, not fatal. Tandem never runs elevated, so a
+        // `netsh delete` on a rule a past elevated run wrote fails with "requires
+        // elevation" — surfacing as NetshFailure (run_netsh only classifies AdminDeclined
+        // for `add`), indistinguishable from other delete failures. Failing disable here
+        // traps exactly the non-admin user who needs the escape hatch. Leaving a rule is
+        // safe: the deny rule is retired, the allow rule is scoped to the VM subnet, and
+        // the server binds 127.0.0.1 only, so a leftover rule is inert. This aligns with
+        // reconcile_orphan_firewall_rules (cowork_installer.rs), which already treats remove
+        // failures as non-fatal (§12). (Caveat: leaving the rule is inert only under the default
+        // loopback bind; a future TANDEM_BIND_HOST=routable + stale VM-CIDR rule is an
+        // untested composition. A later enable *may* clear it via reconcile_orphan_firewall_rules, but
+        // that's best-effort — reconcile returns early if its scan fails — and the leftover
+        // is an inert allow rule, not a missing protection.)
+        let firewall_failed = match firewall::remove_cowork_rules() {
+            Ok(()) => false,
+            Err(fe) => {
+                log::warn!("[cowork] disable: firewall rule removal failed (non-fatal): {fe}");
+                true
+            }
+        };
 
-        // Persist meta regardless of workspace/firewall outcome so the UI reflects
-        // "user requested disable." An Err return still signals failure to the caller.
-        if let Err(e) = cowork_meta::update(|m| { m.enabled = false; }) {
+        // Persist meta regardless of workspace/firewall outcome. Clearing the UAC-declined
+        // flag is what makes the "Admin permission required" modal disappear: the user has
+        // resolved the blocked state by turning the feature off. Unlike the advisory
+        // firewall removal above, this write is the disable's CORE contract — if it fails,
+        // the on-disk state stays `enabled = true` with the UAC flag set, so the modal
+        // never goes away and the integration still reads as on. We therefore fail loud
+        // (Err in the success-path tail below) instead of returning a green toast over a
+        // stale state. Borrow in the warn so the Result survives for the later check.
+        let meta_persist = cowork_meta::update(|m| {
+            m.enabled = false;
+            m.uac_declined_last_attempt = false;
+            m.uac_declined_at = None;
+        });
+        if let Err(e) = &meta_persist {
             log::warn!("[cowork] failed to persist meta after disable: {e}");
-        }
-
-        if let Some(fe) = firewall_err {
-            return Err(format!(
-                "Cowork disable: firewall rule removal failed ({fe}). \
-                 An allow rule may still permit traffic on port 3479. \
-                 Remove 'Tandem Cowork' rules manually in Windows Defender Firewall."
-            ));
         }
 
         if workspace_all_failed {
@@ -2290,7 +2346,25 @@ fn cowork_toggle_integration(enabled: bool) -> Result<String, String> {
             ));
         }
 
-        Ok("Cowork disabled".to_string())
+        // Workspace uninstall + firewall removal already ran (idempotent / inert), and the
+        // disable branch re-drives this whole path on a repeat call, so failing here strands
+        // nothing — a retry safely re-attempts the persist. Surface it so the user knows the
+        // disable didn't stick rather than discovering the modal is still up.
+        if let Err(e) = meta_persist {
+            return Err(format!(
+                "Cowork was turned off, but saving that state failed ({e}). Cowork is still \
+                 marked enabled and the admin-permission notice stays open. Try disabling \
+                 again; if it persists, restart Tandem."
+            ));
+        }
+
+        if firewall_failed {
+            Ok("Cowork disabled (a leftover firewall rule may remain — harmless; \
+                Tandem's server only listens on this computer)"
+                .to_string())
+        } else {
+            Ok("Cowork disabled".to_string())
+        }
     }
 }
 #[cfg(not(target_os = "windows"))]
@@ -2939,8 +3013,67 @@ fn show_update_error_dialog(app: &tauri::AppHandle, error: &str) {
 
 /// Check for updates and optionally prompt the user.
 /// `manual` controls whether the user gets feedback on "no update" / error.
+/// Subset of `GET /api/license/status` the updater needs. Keys are camelCase on
+/// the wire (see src/server/mcp/routes/license.ts); `#[serde(default)]` keeps a
+/// scrubbed/partial body from failing deserialization.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LicenseStatusResponse {
+    #[serde(default)]
+    gate_active: bool,
+    #[serde(default)]
+    license_id: Option<String>,
+    #[serde(default)]
+    update_window_current: bool,
+}
+
+/// Ask the sidecar (loopback) whether update checks should route through the
+/// license-gated Worker. Returns `Some(license_id)` ONLY when a Worker endpoint
+/// is configured AND the gate is active AND the license's update window is
+/// current. Every other case (no endpoint, gate dark, trial, restricted,
+/// expired window, sidecar unreachable, scrubbed body) falls back to `None` ⇒
+/// the default public endpoint. Never errors — update checks must not depend on
+/// the license probe succeeding.
+async fn entitled_license_id(app: &tauri::AppHandle) -> Option<String> {
+    if LICENSE_UPDATE_ENDPOINT.is_empty() {
+        return None;
+    }
+    let client = app.try_state::<reqwest::Client>()?.inner().clone();
+    let resp = client.get(LICENSE_STATUS_URL).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let status: LicenseStatusResponse = resp.json().await.ok()?;
+    if status.gate_active && status.update_window_current {
+        status.license_id
+    } else {
+        None
+    }
+}
+
+/// Build the updater, routing through the license-gated Worker (with the opaque
+/// license-id header) when the device is entitled, else the default public
+/// endpoint from `tauri.conf.json`. Both `check_for_update` and `install_update`
+/// go through this so check + install agree on the source (#1116, ADR-040 §7).
+async fn build_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    match entitled_license_id(app).await {
+        Some(lid) => {
+            let endpoint = Url::parse(LICENSE_UPDATE_ENDPOINT)
+                .map_err(|e| format!("Invalid license update endpoint: {e}"))?;
+            app.updater_builder()
+                .endpoints(vec![endpoint])
+                .map_err(|e| e.to_string())?
+                .header("X-Tandem-License-Id", lid)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())
+        }
+        None => app.updater().map_err(|e| e.to_string()),
+    }
+}
+
 async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
-    let updater = match app.updater() {
+    let updater = match build_updater(app).await {
         Ok(u) => u,
         Err(e) => {
             log::debug!("Updater unavailable: {e}");
@@ -3011,8 +3144,8 @@ async fn check_for_update(app: &tauri::AppHandle, manual: bool) {
 /// release the server advertises) and dispatches the install flow.
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
-    let updater = app
-        .updater()
+    let updater = build_updater(&app)
+        .await
         .map_err(|e| format!("Updater not configured: {e}"))?;
     let update = updater
         .check()

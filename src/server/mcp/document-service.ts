@@ -7,11 +7,13 @@ import {
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
+  Y_MAP_FIDELITY_REPORT,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
+import type { FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { closeStore, createStore } from "../annotations/store.js";
@@ -31,10 +33,16 @@ import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
+import {
+  type BlockReason,
+  blockReasonMessage,
+  integrityWarningLines,
+  verifyDocxRoundtrips,
+} from "../file-io/docx-verify.js";
 import { validateRenameFilename } from "../file-io/filename-safety.js";
 import { atomicWrite, atomicWriteBuffer, getAdapter } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
-import { suppressNextChange, unwatchFile } from "../file-watcher.js";
+import { recordSelfWrite, suppressNextChange, unwatchFile } from "../file-watcher.js";
 import { assertPathSafe } from "../integrations/apply.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
@@ -128,6 +136,32 @@ export interface SaveResult {
    * lossy-mammoth-import ceiling is surfaced separately at open time.
    */
   fidelityWarnings?: string[];
+  /**
+   * Post-write verification advisories (#1123 Phase 0e, `.docx` only) — content
+   * the save may have lost UNEXPECTEDLY (a comment/footnote that didn't survive
+   * a verify reimport, a soft text-retention shortfall). Distinct from
+   * `fidelityWarnings`: a louder, warning-level signal with a restore prompt,
+   * never folded into the "N features simplified" count. Content-free strings.
+   * A `blocked` verdict instead aborts the save (status:"error").
+   */
+  integrityWarnings?: string[];
+}
+
+/**
+ * Thrown by the binary save branch when post-write verification (#1123 0e)
+ * BLOCKS — the regenerated .docx didn't round-trip the live content. Carries a
+ * `code` so the catch surfaces it as a save-error with a stable error code
+ * (never an FS errno). The message is content-free (`blockReasonMessage`).
+ */
+class SaveVerificationError extends Error {
+  readonly code = "VERIFY_BLOCKED";
+  constructor(
+    message: string,
+    readonly reason: BlockReason,
+  ) {
+    super(message);
+    this.name = "SaveVerificationError";
+  }
 }
 
 /**
@@ -223,15 +257,39 @@ export async function saveDocumentToDisk(
     const dirtySnapshot = snapshotDirtyVersion(docId);
 
     let fidelityWarnings: string[] | undefined;
+    let integrityWarnings: string[] | undefined;
     if (isBinary) {
       // Binary branch (#576, .docx). Capture fidelity warnings against the same
       // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
       // (atomicWrite's UTF-8 encoding would corrupt the binary).
       const warnings = detectExportFidelityIssues(doc);
       const buffer = await adapter.saveBinary!(doc);
+      // Pre-overwrite snapshot of the on-disk original (first write per path per
+      // run), mirroring the text branch below. .docx is the highest-stakes case:
+      // a regenerated export can drop features mammoth never imported (footnotes,
+      // headers/footers, custom styles), so the verbatim on-disk bytes are the
+      // user's only recovery. snapshotBeforeFirstWrite is format-agnostic (raw
+      // byte copy) and never throws — a snapshot failure must not block the save.
+      await snapshotBeforeFirstWrite(docState.filePath, {
+        appDataDir: resolveAppDataDir(),
+        documentId: docId,
+      });
+      // Post-write verification (#1123 Phase 0e): re-import the produced bytes
+      // and confirm they round-trip the live doc's CONTENT before overwriting.
+      // Runs AFTER the snapshot (so the original is recoverable) and BEFORE the
+      // write/suppressor (so a blocking verdict aborts with the file untouched
+      // and the watcher suppressor un-armed). Never throws — a `blocked` verdict
+      // is a returned value we escalate to a save-error here.
+      const verdict = await verifyDocxRoundtrips(buffer, doc, { docId: safeDocId });
+      if (verdict.kind === "blocked") {
+        throw new SaveVerificationError(blockReasonMessage(verdict.reason), verdict.reason);
+      }
       suppressNextChange(docState.filePath);
       await atomicWriteBuffer(docState.filePath, buffer);
+      recordSelfWrite(docState.filePath, buffer);
       fidelityWarnings = warnings.length > 0 ? warnings : undefined;
+      const advisories = integrityWarningLines(verdict);
+      integrityWarnings = advisories.length > 0 ? advisories : undefined;
     } else {
       const output = adapter.save!(doc);
       // Pre-overwrite snapshot of the on-disk original (first write per path
@@ -242,6 +300,7 @@ export async function saveDocumentToDisk(
       });
       suppressNextChange(docState.filePath);
       await atomicWrite(docState.filePath, output);
+      recordSelfWrite(docState.filePath, output);
     }
     // `dirty` records whether a body edit landed DURING the async write (the
     // saved bytes already match the session state otherwise) — consumed by the
@@ -257,10 +316,27 @@ export async function saveDocumentToDisk(
       // A successful save wrote the in-memory edits to disk — any pending
       // external-conflict flag (#1069) is resolved. No-op when absent.
       meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      // Refresh the export-downgrade half of the fidelity report (#1145, 0c),
+      // preserving the import-loss half set at open. docx-only — only the
+      // binary branch computes fidelityWarnings; `?? []` clears a prior save's
+      // downgrades on a now-clean save. Whole-object replacement is safe: the
+      // value is opaque (no field-level CRDT merge) and all writers are
+      // server-side + serialized, so this read-modify-write can't interleave.
+      if (isBinary) {
+        const prev = meta.get(Y_MAP_FIDELITY_REPORT) as FidelityReport | undefined;
+        meta.set(Y_MAP_FIDELITY_REPORT, {
+          importLosses: prev?.importLosses ?? [],
+          exportDowngrades: fidelityWarnings ?? [],
+          // Post-write verify advisories (#1123 0e) — louder than downgrades;
+          // `?? []` clears a prior save's advisory on a now-clean save.
+          integrityWarnings: integrityWarnings ?? [],
+          updatedAt: Date.now(),
+        } satisfies FidelityReport);
+      }
     });
     markCleanIfUnchanged(docId, dirtySnapshot);
 
-    return { status: "saved", fidelityWarnings };
+    return { status: "saved", fidelityWarnings, integrityWarnings };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
@@ -446,6 +522,7 @@ export async function saveDocumentAsToDisk(
     });
     suppressNextChange(resolved);
     await atomicWrite(resolved, output);
+    recordSelfWrite(resolved, output);
 
     // Persist a session for the promoted path so a restart restores the
     // newly-saved doc rather than dropping content on the floor.

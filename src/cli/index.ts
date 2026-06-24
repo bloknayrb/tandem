@@ -63,6 +63,8 @@ Usage:
                                     ports, server health, annotation store)
   tandem doctor --json              Same checks, emit a single JSON report on stdout
   tandem rotate-token               Rotate the auth token with a 60-second grace window
+  tandem activate <license|path>    Activate a signed license (string or file path)
+  tandem license                    Show the current license / trial status
   tandem --uninstall-scrub          Remove Tandem's MCP entries, skill, and Cowork
                                     registration from Claude configs (run before
                                     uninstalling; the Windows uninstaller runs it)
@@ -146,6 +148,12 @@ try {
   } else if (args[0] === "rotate-token") {
     const { rotateToken } = await import("./rotate-token.js");
     await rotateToken();
+  } else if (args[0] === "activate") {
+    const { runActivate } = await import("./license.js");
+    await runActivate(args);
+  } else if (args[0] === "license") {
+    const { runLicenseStatus } = await import("./license.js");
+    await runLicenseStatus();
   } else if (!args[0] || args[0] === "start") {
     const { runStart } = await import("./start.js");
     runStart();

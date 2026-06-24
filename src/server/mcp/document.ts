@@ -52,6 +52,7 @@ import {
   toDocListEntry,
 } from "./document-service.js";
 import { openFileByPath, openScratchpad } from "./file-opener.js";
+import { gatedTool, licenseGate } from "./license-gate.js";
 import {
   getTextContentOutputShape,
   listDocumentsOutputShape,
@@ -289,6 +290,15 @@ export function registerDocumentTools(server: McpServer): void {
         ),
     },
     withErrorBoundary("tandem_open", async ({ filePath, force, authoredBy }) => {
+      // License gate (#1116) — ONLY the destructive force-reload sub-path. Plain
+      // open stays ungated (the read/export escape hatch), but force=true runs
+      // clearAndReload, which wipes the durable annotation file — an editing-class
+      // operation a restricted user must not reach. Gate sits OUTSIDE the inner
+      // try so a (post-flip) open throw keeps its own error categorization.
+      if (force === true) {
+        const blocked = licenseGate();
+        if (blocked) return blocked;
+      }
       try {
         const result = await openFileByPath(filePath, { force });
 
@@ -351,7 +361,7 @@ export function registerDocumentTools(server: McpServer): void {
           "Initial markdown. Block structure (headings, lists, blank-line-separated paragraphs) is parsed into real blocks.",
         ),
     },
-    withErrorBoundary("tandem_scratchpad", async ({ content }) => {
+    gatedTool("tandem_scratchpad", async ({ content }) => {
       const result = await openScratchpad(content);
       return mcpSuccess({
         documentId: result.documentId,
@@ -434,7 +444,7 @@ export function registerDocumentTools(server: McpServer): void {
           "Expected text at [from, to] — returns RANGE_MOVED with relocated range on mismatch, or RANGE_GONE if text was deleted",
         ),
     },
-    withErrorBoundary(
+    gatedTool(
       "tandem_edit",
       async ({ from: rawFrom, to: rawTo, newText, documentId, textSnapshot }) => {
         // #651 presence: tandem_edit targets text (not an annotation), so the
@@ -605,7 +615,7 @@ export function registerDocumentTools(server: McpServer): void {
         .optional()
         .describe("Target document ID (defaults to active document)"),
     },
-    withErrorBoundary("tandem_appendContent", async ({ content, documentId }) => {
+    gatedTool("tandem_appendContent", async ({ content, documentId }) => {
       return withTypingPresence({ tool: "tandem_appendContent", documentId }, async () => {
         const r = requireDocument(documentId);
         if (!r) return noDocumentError();
@@ -707,6 +717,13 @@ export function registerDocumentTools(server: McpServer): void {
           filePath: r.filePath,
           ...(result.fidelityWarnings && result.fidelityWarnings.length > 0
             ? { fidelityWarnings: result.fidelityWarnings }
+            : {}),
+          // Post-write verification advisories (#1123 0e). Content-free strings;
+          // surfaced so the agent knows the save may have lost content
+          // unexpectedly (the user's original is backed up). A `blocked` verdict
+          // never reaches here — it aborts the save (result.status === "error").
+          ...(result.integrityWarnings && result.integrityWarnings.length > 0
+            ? { integrityWarnings: result.integrityWarnings }
             : {}),
         });
       }

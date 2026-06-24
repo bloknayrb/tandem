@@ -28,6 +28,9 @@ gha-creds-*.json
 .claude/plans/
 .claude/scheduled_tasks.lock
 .claude/.workflow-state/
+# Un-anchored: workflow-state dirs can be created under nested .claude/ roots
+# (e.g. src/client/hooks/.claude/) where the root-anchored rule above misses them.
+**/.workflow-state/
 # Ephemeral PR working files (diffs, review scratch, body drafts)
 .claude/.pr*
 .clone/

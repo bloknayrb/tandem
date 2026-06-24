@@ -49,7 +49,7 @@ export type ThemePreference = "light" | "dark" | "warm" | "system";
  * is unaffected — a dark OS appearance always resolves to `"dark"`.
  */
 export type SystemLightVariant = "light" | "warm";
-export type SidecarRetryStrategy = "exponential" | "constant-2s" | "manual";
+export type SidecarRetryStrategy = "exponential" | "constant-2s";
 
 /**
  * Provider tag for entries in the local Models registry (#659).
@@ -166,10 +166,10 @@ export interface TandemSettings {
   railHoverReveal: boolean;
   soloRailHidden: boolean;
   degradedBannerDelayMs: number;
-  // TODO(v0.11.0): wire to yjsSync reconnect strategy
+  // Reconnect backoff curve for the Hocuspocus providers. Both strategies keep
+  // auto-reconnect ON (the stale-tab generation-gate recovery depends on it);
+  // they only change the timing. Consumed in yjsSync via `backoffOptionsFor`.
   sidecarRetryStrategy: SidecarRetryStrategy;
-  // TODO(v0.11.0): wire to offline annotation queuing
-  holdAnnotationsWhileOffline: boolean;
   // #649: opt-in Word-style margin annotation view (PR 1 — minimum viable; collision resolution in PR 2; narrow-layout fallback in PR 3)
   marginView: boolean;
   // #596 → 1.13: per-annotation-type display toggles (split from the old single
@@ -233,7 +233,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 15,
+  schemaVersion: 16,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -257,7 +257,6 @@ const DEFAULTS: TandemSettings = {
   soloRailHidden: true,
   degradedBannerDelayMs: 30000,
   sidecarRetryStrategy: "exponential",
-  holdAnnotationsWhileOffline: true,
   marginView: false,
   showComments: true,
   showHighlights: true,
@@ -459,7 +458,7 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   `normalizeKnownFields` defaults a missing field to true, preserving the new
  *   hover-to-float behavior for existing users.
  */
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 16;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -552,15 +551,9 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
         ? parsed.degradedBannerDelayMs
         : DEFAULTS.degradedBannerDelayMs,
     sidecarRetryStrategy:
-      parsed.sidecarRetryStrategy === "exponential" ||
-      parsed.sidecarRetryStrategy === "constant-2s" ||
-      parsed.sidecarRetryStrategy === "manual"
+      parsed.sidecarRetryStrategy === "exponential" || parsed.sidecarRetryStrategy === "constant-2s"
         ? parsed.sidecarRetryStrategy
         : DEFAULTS.sidecarRetryStrategy,
-    holdAnnotationsWhileOffline:
-      typeof parsed.holdAnnotationsWhileOffline === "boolean"
-        ? parsed.holdAnnotationsWhileOffline
-        : DEFAULTS.holdAnnotationsWhileOffline,
     marginView: parsed.marginView === true,
     showComments: parsed.showComments === false ? false : DEFAULTS.showComments,
     showHighlights: parsed.showHighlights === false ? false : DEFAULTS.showHighlights,
@@ -759,6 +752,22 @@ export function loadSettings(): TandemSettings {
         // true and preserves an explicit false.
         parsed = { ...parsed, schemaVersion: 15 };
       }
+      if (parsed.schemaVersion === 15) {
+        // v15→v16: remove `holdAnnotationsWhileOffline` (offline annotation
+        // queuing was never built — the toggle was inert UI) and drop the
+        // `"manual"` reconnect strategy (it would have had to disable
+        // auto-reconnect — a finite maxAttempts — which the stale-tab
+        // generation-gate recovery relies on staying ON; the wired strategies
+        // keep maxAttempts:0 = retry forever. See yjsSync
+        // `authenticationFailed → scheduleRebuild`).
+        // The field strip + coercion are belt-and-suspenders: normalizeKnownFields
+        // already drops the unknown key and no longer accepts `"manual"`, and
+        // REMOVED_FIELDS blocks the forward-compat passthrough.
+        const next: Record<string, unknown> = { ...parsed, schemaVersion: 16 };
+        delete next.holdAnnotationsWhileOffline;
+        if (next.sidecarRetryStrategy === "manual") next.sidecarRetryStrategy = "exponential";
+        parsed = next;
+      }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
       // is the contract `createTandemSettings.updateSettings` checks.
@@ -814,6 +823,7 @@ export function loadSettings(): TandemSettings {
           "showIntegrationWizard",
           "showAnnotationDecorations",
           "editorWidthPercent",
+          "holdAnnotationsWhileOffline",
         ]);
         const futureFields: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(parsed)) {

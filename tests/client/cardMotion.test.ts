@@ -6,6 +6,7 @@ import {
   cardExit,
   cardFlyToMargin,
   registerFlySource,
+  tabEnter,
   tabExit,
 } from "../../src/client/panels/cardMotion";
 
@@ -176,6 +177,38 @@ describe("tabExit", () => {
 
   it("uses the ease-out curve", () => {
     const { easing } = tabExit(el(), {});
+    expect(easing!(0)).toBe(0);
+    expect(easing!(1)).toBe(1);
+    expect(easing!(0.5)).toBeGreaterThan(0.5); // front-loaded
+  });
+});
+
+describe("tabEnter", () => {
+  it("unrolls immediately under reduce-motion (motion.md: no slide)", () => {
+    expect(tabEnter(el(), { reduceMotion: true })).toEqual({ duration: 0 });
+  });
+
+  it("returns a real inline-axis unroll with motion allowed", () => {
+    const cfg = tabEnter(el(), { reduceMotion: false });
+    // A touch longer than the 200ms exit (settles in rather than snapping shut).
+    expect(cfg.duration).toBe(220);
+    expect(typeof cfg.easing).toBe("function");
+    const present = cfg.css!(1, 0);
+    const absent = cfg.css!(0, 1);
+    expect(present).toContain("opacity:1");
+    expect(absent).toContain("opacity:0");
+    // unrolls width (not height) so adjacent tabs glide right to make room,
+    // with min-width:0 to defeat the name span's width floor and clip the unroll.
+    expect(present).toContain("width:");
+    expect(present).toContain("min-width:0");
+    expect(present).toContain("overflow:clip");
+    // UNLIKE tabExit: an entering tab is interactive — it must NOT go inert,
+    // or a click landing mid-unroll on a freshly-opened tab would be swallowed.
+    expect(present).not.toContain("pointer-events:none");
+  });
+
+  it("uses the ease-out curve", () => {
+    const { easing } = tabEnter(el(), {});
     expect(easing!(0)).toBe(0);
     expect(easing!(1)).toBe(1);
     expect(easing!(0.5)).toBeGreaterThan(0.5); // front-loaded

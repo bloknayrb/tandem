@@ -20,6 +20,35 @@ export const BYO_MODELS_ENABLED = false;
 /** File extensions the server accepts for opening. */
 export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
 
+/**
+ * Inline marks the `.docx` import path (`docx-html.ts#htmlToYDoc`) can emit onto
+ * Y.XmlText. The client Tiptap schema MUST register a mark for every name here:
+ * y-prosemirror's sync (`createTextNodesFromYText`) calls `schema.mark(name)` for
+ * each delta attribute and, on an UNREGISTERED mark, its catch deletes the whole
+ * offending Y.XmlText and propagates the deletion to disk — silent content loss,
+ * not a crash. So this list is the contract the editor schema is tested against
+ * (`tests/client/editor-schema-marks.test.ts`). Lives in shared (not docx-html)
+ * so the client guard imports the real source rather than a drift-prone copy.
+ * The markdown path (`mdast-ydoc.ts`) emits a different set (its core + the
+ * `rawMarkdown` mark, already client-registered).
+ */
+export const DOCX_INLINE_MARKS = [
+  "bold",
+  "italic",
+  "strike",
+  "code",
+  "link",
+  "underline",
+  "superscript",
+  "subscript",
+  // Footnote reference marker (#1123 Tier-A #3). Carries `{ id, kind }` on the
+  // verbatim `[N]` text mammoth renders, so export can emit a real
+  // `<w:footnoteReference>`. The literal "footnote-ref" MUST byte-match the
+  // delta-attribute key `docx-html.ts` writes AND the client `Mark.create`
+  // name (`footnote-ref.ts`) — a one-char drift is silent XmlText deletion.
+  "footnote-ref",
+] as const;
+
 // DEFAULT_FONT_BY_EXTENSION removed as a #887 follow-up: seeded defaults
 // silently overrode the user's global editor-font choice for un-customized
 // formats (changing Settings > Editor Font did nothing for .docx / .html /
@@ -126,6 +155,29 @@ export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
  * `withInternal` (server metadata); cleared on resolve / reload / explicit save.
  */
 export const Y_MAP_EXTERNAL_CONFLICT = "externalConflict";
+/**
+ * Per-document docx fidelity report (#1145, `.docx` only). Holds a
+ * `FidelityReport` (see shared/types.ts): Word features mammoth dropped on
+ * import (`importLosses`, set at open / force-reload / file-watcher reload) and
+ * what the export downgraded on the most recent save (`exportDowngrades`). The
+ * client renders a calm, self-erasing notice while either list is non-empty.
+ * No observer is attached to the per-document `documentMeta` map (durable-sync
+ * watches only annotations/replies; the only `documentMeta` channel observer is
+ * `ctrl-meta` on CTRL_ROOM), so the write is inert at any origin — server
+ * write-only, client read-only.
+ */
+export const Y_MAP_FIDELITY_REPORT = "fidelityReport";
+/**
+ * Per-document reconstructed Word footnote bodies (#1123 Tier-A #3 PR 2, `.docx`
+ * only). Holds `Record<string, FootnoteBody>` (see shared/types.ts) keyed by the
+ * OOXML footnote id, written off-fragment under Y_MAP_DOCUMENT_META so the inline
+ * `[N]` marker stays offset-neutral (a footnote body is not document body text).
+ * Written as a WHOLE-VALUE replace at import (so a force-reload of a doc with
+ * fewer footnotes can't leave stale ids) and read by the exporter to emit real
+ * `<w:footnote>` parts. Same inertness as Y_MAP_FIDELITY_REPORT: no observer on
+ * per-document documentMeta, so the write is server-only, client/Claude-invisible.
+ */
+export const Y_MAP_FOOTNOTE_BODIES = "footnoteBodies";
 
 export const AUTHORSHIP_TOGGLE_KEY = "tandem:showAuthorship";
 /**

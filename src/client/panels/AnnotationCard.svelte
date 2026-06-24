@@ -474,4 +474,11 @@ function handleKeyDown(e: KeyboardEvent) {
     font-size: 0;
     gap: 0;
   }
+  /* `.ach-time` carries an explicit font-size that overrides the parent's
+     `font-size: 0`, so it must be hidden directly in stub mode — otherwise
+     the timestamp text renders at 10px and pushes scrollWidth past
+     clientWidth (the C-2 E2E scrollWidth gate). */
+  .is-density-stub :global(.ach-time) {
+    display: none;
+  }
 </style>

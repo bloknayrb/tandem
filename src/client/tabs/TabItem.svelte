@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
-import { tabExit } from "../panels/cardMotion.js";
+import { tabEnter, tabExit } from "../panels/cardMotion.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import TabRenameInput from "./TabRenameInput.svelte";
 
@@ -173,6 +173,7 @@ function handleMouseLeaveClose() {
   aria-selected={isActive}
   aria-label={tab.fileName}
   style={tabStyle}
+  in:tabEnter={{ reduceMotion }}
   out:tabExit={{ reduceMotion }}
   onclick={() => onswitch(tab.id)}
   onpointerdown={(e) => onpointerdown(e, tab.id)}

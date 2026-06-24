@@ -19,7 +19,8 @@ import { extractText } from "./document-model.js";
 import { getCurrentDoc, requireDocument } from "./document-service.js";
 import { YDocStore } from "./document-store.js";
 import { restoreDocumentFromBackup } from "./file-opener.js";
-import { mcpError, mcpSuccess, noDocumentError, withErrorBoundary } from "./response.js";
+import { gatedTool } from "./license-gate.js";
+import { mcpError, mcpSuccess, noDocumentError } from "./response.js";
 
 // ---------------------------------------------------------------------------
 // Shared core logic (used by both MCP tool and API endpoint)
@@ -218,7 +219,7 @@ export function registerApplyTools(server: McpServer): void {
         .optional()
         .describe("Custom backup path (default: {name}.backup.docx)"),
     },
-    withErrorBoundary("tandem_applyChanges", async (args) => {
+    gatedTool("tandem_applyChanges", async (args) => {
       try {
         const result = await applyChangesCore(args.documentId, args.author, args.backupPath);
         return mcpSuccess(result);
@@ -236,21 +237,20 @@ export function registerApplyTools(server: McpServer): void {
 
   server.tool(
     "tandem_restoreBackup",
-    "Restore a document from a backup. For .docx: restores the {name}.backup.docx sidecar " +
-      "created by tandem_applyChanges. For .md/.txt: Tandem snapshots the on-disk file before " +
-      "its first overwrite each server run; call without `backup` to list available snapshots " +
-      "(newest first), then call again with `backup` set to a snapshot name to restore it. " +
-      "Restoring reloads the open document in place — annotations are preserved and re-anchored.",
+    "Restore a document from a backup. Tandem snapshots a document's on-disk bytes before its " +
+      "first overwrite each server run (.md/.txt/.docx). Call without `backup` to list available " +
+      "snapshots (newest first), then call again with `backup` set to a snapshot name to restore " +
+      "it. For .docx with no snapshots yet, falls back to the {name}.backup.docx sidecar written " +
+      "by tandem_applyChanges. Restoring reloads the open document in place — annotations are " +
+      "preserved and re-anchored.",
     {
       documentId: z.string().optional().describe("Target document ID (defaults to active doc)"),
       backup: z
         .string()
         .optional()
-        .describe(
-          "Snapshot filename to restore (.md/.txt only). Omit to list available snapshots.",
-        ),
+        .describe("Snapshot filename to restore. Omit to list available snapshots."),
     },
-    withErrorBoundary("tandem_restoreBackup", async (args) => {
+    gatedTool("tandem_restoreBackup", async (args) => {
       // path.basename on the ID strips any directory components so CodeQL
       // does not trace args.documentId through Map.get to existing.filePath.
       // Valid IDs (64-char hex / upload_*) have no separators, so this is a
@@ -261,8 +261,9 @@ export function registerApplyTools(server: McpServer): void {
 
       const { filePath } = docState;
 
-      // .docx keeps the original sidecar semantics ({name}.backup.docx written
-      // by tandem_applyChanges) — unchanged behavior.
+      // .docx gains the same pre-overwrite doc-backups snapshots as .md/.txt
+      // (#1086 extended). The {name}.backup.docx sidecar written by
+      // tandem_applyChanges is preserved as a fallback when no snapshots exist.
       if (docState.format === "docx") {
         if (docState.source !== "file") {
           return mcpError(
@@ -270,40 +271,56 @@ export function registerApplyTools(server: McpServer): void {
             "Uploaded documents and scratchpads have no on-disk backup file.",
           );
         }
-        if (args.backup !== undefined) {
-          return mcpError(
-            "FORMAT_ERROR",
-            ".docx documents restore from their {name}.backup.docx sidecar — omit the `backup` parameter.",
-          );
-        }
-        const backupPath = filePath.replace(/\.docx$/i, ".backup.docx");
-
-        try {
-          await fs.access(backupPath);
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-            return mcpError("FILE_NOT_FOUND", `No backup file found at ${backupPath}`);
+        // A named snapshot restores through the shared reload lifecycle below
+        // (re-parses the .docx, re-injects Word comments, re-anchors annotations).
+        if (args.backup === undefined) {
+          const snapshots = await listDocBackups(filePath, resolveAppDataDir());
+          if (snapshots.length > 0) {
+            return mcpSuccess({
+              filePath,
+              backups: snapshots,
+              message:
+                "Snapshots listed newest first. Call tandem_restoreBackup again with `backup` " +
+                "set to one of these names to restore it.",
+            });
           }
-          throw err;
-        }
+          // No doc-backups snapshots — fall back to the applyChanges sidecar.
+          const backupPath = filePath.replace(/\.docx$/i, ".backup.docx");
+          try {
+            await fs.access(backupPath);
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+              return mcpError(
+                "FILE_NOT_FOUND",
+                `No backups found for ${path.basename(filePath)}. Tandem snapshots a .docx ` +
+                  "before its first overwrite each server run; tandem_applyChanges also writes a " +
+                  "{name}.backup.docx sidecar.",
+              );
+            }
+            throw err;
+          }
 
-        await fs.copyFile(backupPath, filePath);
-        // Verify restored file matches backup size
-        const [backupStat, restoredStat] = await Promise.all([
-          fs.stat(backupPath),
-          fs.stat(filePath),
-        ]);
-        if (backupStat.size !== restoredStat.size) {
-          throw new Error("Restore verification failed: file sizes do not match.");
+          await fs.copyFile(backupPath, filePath);
+          // Verify restored file matches backup size
+          const [backupStat, restoredStat] = await Promise.all([
+            fs.stat(backupPath),
+            fs.stat(filePath),
+          ]);
+          if (backupStat.size !== restoredStat.size) {
+            throw new Error("Restore verification failed: file sizes do not match.");
+          }
+          return mcpSuccess({
+            message: `Restored ${path.basename(filePath)} from backup.`,
+            restoredFrom: backupPath,
+          });
         }
-        return mcpSuccess({
-          message: `Restored ${path.basename(filePath)} from backup.`,
-          restoredFrom: backupPath,
-        });
+        // args.backup provided → fall through to the shared named-snapshot restore.
       }
 
-      // Text documents (.md/.txt): pre-overwrite snapshots under
-      // {APP_DATA}/doc-backups (#1086). No `backup` arg = list mode.
+      // Shared snapshot path: .md/.txt list-or-restore, plus the named-snapshot
+      // restore .docx falls through to from above. Snapshots live under
+      // {APP_DATA}/doc-backups (#1086). No `backup` arg = list mode (.md/.txt
+      // only — .docx no-arg returned above).
       try {
         if (args.backup === undefined) {
           if (docState.source !== "file") {

@@ -3,7 +3,7 @@ import type { Snippet } from "svelte";
 import type { Annotation } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
-import { getAuthorLabel, getDisplayType } from "./annotation-card-helpers";
+import { formatRelativeTime, getAuthorLabel, getDisplayType } from "./annotation-card-helpers";
 
 interface Props {
   annotation: Annotation;
@@ -81,6 +81,9 @@ const dotColor = $derived(
       <span class="ach-dot" aria-hidden="true" style="background: {dotColor};"></span>
     {/if}
     {authorLabel}
+    <span class="ach-time" title={new Date(annotation.timestamp).toLocaleString()}>
+      {formatRelativeTime(annotation.timestamp)}
+    </span>
   </span>
 </div>
 
@@ -95,6 +98,7 @@ const dotColor = $derived(
     align-items: center;
     margin-bottom: 6px;
     gap: 8px;
+    overflow: hidden;
   }
   .ach-type {
     font-weight: 600;
@@ -151,6 +155,14 @@ const dotColor = $derived(
     font-style: italic;
     font-size: 10px;
     color: var(--tandem-fg-subtle);
+  }
+  /* Creation time — mono + faint, echoing the design's `.card-time`. Hover
+     title carries the absolute timestamp. */
+  .ach-time {
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+    color: var(--tandem-fg-faint);
+    white-space: nowrap;
   }
   .ach-dot {
     width: 6px;

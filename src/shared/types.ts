@@ -323,6 +323,65 @@ export interface ExternalConflictState {
   detectedAt: number;
 }
 
+/**
+ * Per-document docx fidelity report (#1145, `.docx` only) — the "honesty layer".
+ * Tells the user what won't round-trip BEFORE they invest edits. Stored under
+ * Y_MAP_DOCUMENT_META at Y_MAP_FIDELITY_REPORT; server write-only, client reads
+ * it to render a calm, self-erasing notice (hidden while both lists are empty).
+ */
+export interface FidelityReport {
+  /**
+   * Word features mammoth dropped on import (footnotes, headers/footers,
+   * tracked changes, custom styles — the round-trip ceiling). Set at open and
+   * re-set on every re-import (force-reload, file-watcher reload).
+   */
+  importLosses: string[];
+  /**
+   * Content the export downgraded on the most recent save (unsupported blocks,
+   * non-`data:` images). Refreshed each binary save; reset by a re-import.
+   * These are ANNOUNCED, expected downgrades — rendered as a calm/info notice.
+   */
+  exportDowngrades: string[];
+  /**
+   * Post-write verification advisories (#1123 Phase 0e). Distinct from
+   * `exportDowngrades`: these flag content the save may have lost UNEXPECTEDLY
+   * (a comment or footnote body that didn't survive a verify reimport, a
+   * gross-but-not-blocking text-retention shortfall) — a louder, warning-level
+   * signal with a restore affordance, never folded into the "N features
+   * simplified" count. CONTENT-FREE by construction: fixed strings + counts
+   * only, never document text (the advisory is also Claude-visible via the
+   * `tandem_save` MCP result). Optional for forward-compat: pre-0e reports lack
+   * it, so every reader uses `?? []`. Refreshed each binary save; reset by a
+   * re-import.
+   */
+  integrityWarnings?: string[];
+  /** ms epoch of the last update. */
+  updatedAt: number;
+}
+
+/**
+ * A reconstructed Word footnote body (#1123 Tier-A #3 PR 2). Captured from
+ * `word/footnotes.xml` on import, stored off-fragment under
+ * Y_MAP_DOCUMENT_META at Y_MAP_FOOTNOTE_BODIES (keyed by the OOXML footnote id,
+ * the same id mammoth puts in its `#footnote-N` href), and re-emitted as a real
+ * `<w:footnote>` on export. Server write-only, opaque to the client and Claude.
+ */
+export interface FootnoteBody {
+  /**
+   * Plain body text. Rich body formatting (bold/italic, multi-paragraph) is
+   * deliberately flattened to plain text in PR 2 and reported honestly via
+   * `hadFormatting`; rich-body fidelity is a deferred fast-follow.
+   */
+  text: string;
+  /**
+   * Whether the source OOXML body carried formatting we drop on import
+   * (`<w:b>`/`<w:i>`/`<w:u>`/`<w:hyperlink>` or >1 `<w:p>`). Drives a count-only
+   * honesty line — NEVER thread the body text through the loss-line path (it
+   * bypasses the mammoth-message redaction; see `footnoteLossLines`).
+   */
+  hadFormatting: boolean;
+}
+
 /** Text selection snapshot captured when opening chat, attached to the next outgoing ChatMessage as its anchor. */
 export interface CapturedAnchor extends DocumentRange {
   textSnapshot: string;

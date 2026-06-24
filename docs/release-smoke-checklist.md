@@ -14,6 +14,7 @@ matrix across OS versions, observer soak, accessibility) live in
 
 - [ ] `tauri-release.yml` — every matrix build green, `release-check` summary green, artifacts + `latest.json` on the GitHub Release.
 - [ ] `tauri-webdriver.yml` — the tag-triggered run is green (webview-level key-interception E2E on Windows/WebView2). A failure here doesn't block artifact publishing — it's a signal to investigate **before announcing** the release.
+- [ ] macOS arm64 **launch smoke** (the "Smoke-test bundled sidecar" step inside `tauri-release.yml`) green — confirms the bundled `node-sidecar` actually boots and serves `/health` on Apple Silicon. A red here means the app is dead-on-arrival even though signing/notarization passed (e.g. the #983 V8-init SIGTRAP), so it no longer falls to the manual macOS pass below.
 - [ ] CHANGELOG section for the version is final (the in-app View Changelog button serves this file).
 
 ## 1. Windows (10 22H2 or 11)
@@ -30,9 +31,13 @@ matrix across OS versions, observer soak, accessibility) live in
 
 ## 2. macOS (real hardware, Apple Silicon)
 
-This is the platform CI verifies most (codesign + notarization ticket + sidecar
-entitlement checks in `tauri-release.yml`) but where only hardware proves the
-end state (#428 closed with exactly this residual).
+This is the platform CI verifies most — `tauri-release.yml` checks codesign +
+the notarization ticket + the sidecar JIT entitlement, and now also **boots the
+bundled arm64 `node-sidecar` headlessly and waits for `/health`** (so "notarized
+but dead-on-arrival", e.g. the #983 V8-init SIGTRAP, fails the build). What only
+hardware can still prove is the Gatekeeper UX, the GUI window itself, the updater
+against the *previous* version, and the OS-keychain round-trip (#428 closed with
+exactly this residual).
 
 - [ ] Download the `.dmg` from the release page **in a browser** (the quarantine attribute is the point — `curl` skips it).
 - [ ] Open the dmg → drag to Applications → launch from Applications. **No Gatekeeper dialog at all** — "damaged", "unidentified developer", or needing right-click → Open all mean notarization regressed: stop and check [428-macos-notarization-runbook.md](428-macos-notarization-runbook.md).

@@ -30,6 +30,10 @@ import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
 import {
+  startLocalModelCollaborator,
+  stopLocalModelCollaborator,
+} from "./local-model/collaborator.js";
+import {
   restoreCtrlSession,
   restoreOpenDocuments,
   saveCurrentSession,
@@ -151,6 +155,10 @@ async function shutdown(signal: string) {
   console.error(`[Tandem] ${signal} received, saving session...`);
   try {
     unwatchAll();
+    // Abort any in-flight local-model run before tearing down (no-op while dark)
+    // so its loop stops issuing writes during shutdown. The run's AbortController
+    // cancels the in-flight model fetch, so this unwinds promptly.
+    await stopLocalModelCollaborator();
     // Stop the timer BEFORE the flush so it can't fire concurrently with it
     // (the savingDocs lock would make that safe per-doc, but redundant saves
     // during teardown are pure noise).
@@ -231,6 +239,20 @@ async function main() {
   } catch (err) {
     console.error(
       `[Tandem] Warning: backup sweep failed: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
+  // Start the trial clock on first boot of a gate-active build (ADR-040 #1116).
+  // No-op when the gate is dark. Runs in BOTH http and stdio mode, before any
+  // transport bind, so the first /api/license/status read sees a started trial.
+  try {
+    const { ensureTrialStarted } = await import("./license/license-state.js");
+    const { GATE_ENABLED } = await import("./license/gate-flag.js");
+    const { resolveAppDataDir } = await import("./platform.js");
+    await ensureTrialStarted(resolveAppDataDir(), () => Date.now(), GATE_ENABLED);
+  } catch (err) {
+    console.error(
+      `[Tandem] Warning: trial-clock init failed: ${err instanceof Error ? err.message : err}`,
     );
   }
 
@@ -394,6 +416,10 @@ async function main() {
 
   // Attach event queue observers to CTRL_ROOM for channel push notifications
   attachCtrlObservers();
+
+  // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
+  // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
+  startLocalModelCollaborator();
 
   // Register doc lifecycle callbacks so the event queue reattaches observers
   // when Hocuspocus swaps Y.Doc instances (avoids circular import).

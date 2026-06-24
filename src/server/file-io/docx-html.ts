@@ -3,18 +3,11 @@
 import type { ChildNode, Element, Text } from "domhandler";
 import * as htmlparser2 from "htmlparser2";
 import * as Y from "yjs";
+import { DOCX_INLINE_MARKS } from "../../shared/constants.js";
+import type { FootnoteBody } from "../../shared/types.js";
 
 /** All marks that can appear on inline text (superset of mdast-ydoc) */
-const ALL_MARKS = [
-  "bold",
-  "italic",
-  "strike",
-  "code",
-  "link",
-  "underline",
-  "superscript",
-  "subscript",
-] as const;
+const ALL_MARKS = DOCX_INLINE_MARKS;
 
 /** Map HTML tag names to the mark they apply */
 const INLINE_MARK_TAGS: Record<string, (el: Element) => Record<string, object>> = {
@@ -60,6 +53,162 @@ const BLOCK_TAGS = new Set([
 
 type DeferredText = { xmlText: Y.XmlText; children: ChildNode[]; marks: Record<string, object> };
 
+// -- Footnote reconstruction (#1123 Tier-A #3 PR 2) ---------------------------
+//
+// mammoth renders a Word footnote as an inline
+//   <sup><a href="#footnote-N" id="footnote-ref-N">[N]</a></sup>
+// plus a trailing
+//   <ol><li id="footnote-N"><p>body <a href="#footnote-ref-N">↑</a></p></li></ol>
+// (N is the OOXML footnote id, mirrored in the href). Endnotes use the disjoint
+// `#endnote-N` / `id="endnote-N"` namespace, so the footnote patterns below never
+// match them — endnotes keep degrading to a visible list (CRITICAL-2).
+
+const FOOTNOTE_REF_HREF = /^#footnote-(\d+)$/;
+const FOOTNOTE_LI_ID = /^footnote-(\d+)$/;
+
+/** If `<a>` is a footnote inline reference, its id; else null. */
+function footnoteRefId(el: Element): string | null {
+  const match = (el.attribs.href || "").match(FOOTNOTE_REF_HREF);
+  return match ? match[1] : null;
+}
+
+/**
+ * If `<li>` is a mammoth footnote list item — `id="footnote-N"` AND a back-link
+ * `<a href="#footnote-ref-N">` inside — its id; else null. The back-link is
+ * required so a coincidental author-authored `id="footnote-5"` is never mistaken
+ * for a flattened footnote (false-removal guard).
+ */
+function footnoteListItemId(li: Element): string | null {
+  const match = (li.attribs.id || "").match(FOOTNOTE_LI_ID);
+  if (!match) return null;
+  const backLink = `#footnote-ref-${match[1]}`;
+  const stack: ChildNode[] = [...li.children];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node && isElement(node)) {
+      if (node.tagName.toLowerCase() === "a" && (node.attribs.href || "") === backLink) {
+        return match[1];
+      }
+      stack.push(...node.children);
+    }
+  }
+  return null;
+}
+
+/** Collect every footnote ref id (A) and footnote list-item id (B) in the DOM. */
+function collectFootnoteSignals(nodes: ChildNode[]): {
+  refIds: Set<string>;
+  listIds: Set<string>;
+} {
+  const refIds = new Set<string>();
+  const listIds = new Set<string>();
+  const walk = (ns: ChildNode[]): void => {
+    for (const node of ns) {
+      if (!isElement(node)) continue;
+      const tag = node.tagName.toLowerCase();
+      if (tag === "a") {
+        const id = footnoteRefId(node);
+        if (id !== null) refIds.add(id);
+      } else if (tag === "li") {
+        const id = footnoteListItemId(node);
+        if (id !== null) listIds.add(id);
+      }
+      walk(node.children);
+    }
+  };
+  walk(nodes);
+  return { refIds, listIds };
+}
+
+/**
+ * RECONCILIATION INVARIANT (CRITICAL-3): a footnote id is reconstructed only
+ * when it has an inline mark target (A) AND a removable trailing `<li>` (B) AND
+ * a captured body (C). Any id where these disagree (a mammoth-format drift) is
+ * left to degrade to a visible list — no mark, no `<li>` removal, export emits
+ * nothing for it — converting a half-state into the lesser evil
+ * (degraded-but-present), never silent loss or duplication.
+ */
+function reconcileFootnotes(
+  nodes: ChildNode[],
+  footnoteBodies: Record<string, FootnoteBody>,
+): Set<string> {
+  const { refIds, listIds } = collectFootnoteSignals(nodes);
+  const bodyIds = new Set(Object.keys(footnoteBodies));
+  const approved = new Set<string>();
+  for (const id of new Set([...refIds, ...listIds, ...bodyIds])) {
+    if (refIds.has(id) && listIds.has(id) && bodyIds.has(id)) {
+      approved.add(id);
+    } else {
+      console.error(
+        `[docx-footnotes] footnote id=${id} failed reconciliation ` +
+          `(inline-ref=${refIds.has(id)} list-item=${listIds.has(id)} body=${bodyIds.has(id)}); ` +
+          "degrading to a visible list for this id (no reconstruction).",
+      );
+    }
+  }
+  return approved;
+}
+
+/**
+ * Compute which CAPTURED footnote ids will reconstruct vs be dropped, for a
+ * given mammoth HTML + captured bodies, WITHOUT mutating a doc or logging. The
+ * import honesty line (computed in `parse`, before `apply` runs the transform)
+ * calls this so it reflects the SAME reconciliation `htmlToYDoc` performs in
+ * `apply` — identical inputs (`loaded.html` + bodies) → identical partition — so
+ * a footnote that fails reconciliation (an orphaned definition with no inline
+ * ref, or a future mammoth-format drift) is reported as a real loss instead of
+ * being silently claimed "preserved". Logging stays in `reconcileFootnotes` (the
+ * apply path) so a discrepancy is recorded exactly once.
+ */
+export function reconcileFootnoteIds(
+  html: string,
+  footnoteBodies: Record<string, FootnoteBody>,
+): { reconstructed: string[]; dropped: string[] } {
+  const bodyIds = Object.keys(footnoteBodies);
+  if (bodyIds.length === 0) return { reconstructed: [], dropped: [] };
+  if (!html.trim()) return { reconstructed: [], dropped: bodyIds };
+  const { refIds, listIds } = collectFootnoteSignals(htmlparser2.parseDocument(html).children);
+  const reconstructed: string[] = [];
+  const dropped: string[] = [];
+  for (const id of bodyIds) {
+    (refIds.has(id) && listIds.has(id) ? reconstructed : dropped).push(id);
+  }
+  return { reconstructed, dropped };
+}
+
+/**
+ * Detector B: remove approved footnotes' trailing `<li>`s so the reconstructed
+ * body doesn't ALSO survive as a visible list. Operates at `<li>` granularity
+ * (leaves endnote / non-approved items in place) and drops an enclosing `<ol>`
+ * only when no `<li>` survives. Returns the rewritten children array.
+ */
+function pruneFootnoteListItems(nodes: ChildNode[], approved: Set<string>): ChildNode[] {
+  const out: ChildNode[] = [];
+  for (const node of nodes) {
+    if (isElement(node)) {
+      if (node.tagName.toLowerCase() === "ol") {
+        const kept = node.children.filter((child) => {
+          if (isElement(child) && child.tagName.toLowerCase() === "li") {
+            const id = footnoteListItemId(child);
+            if (id !== null && approved.has(id)) return false;
+          }
+          return true;
+        });
+        const survivingLi = kept.some(
+          (child) => isElement(child) && child.tagName.toLowerCase() === "li",
+        );
+        if (!survivingLi) continue; // list emptied by removal → drop it entirely
+        node.children = pruneFootnoteListItems(kept, approved);
+        out.push(node);
+        continue;
+      }
+      node.children = pruneFootnoteListItems(node.children, approved);
+    }
+    out.push(node);
+  }
+  return out;
+}
+
 /**
  * Build Yjs insert attributes from the current mark stack.
  * Explicitly sets null for inactive marks to prevent Yjs mark inheritance.
@@ -83,8 +232,19 @@ function isText(node: ChildNode): node is Text {
 /**
  * Convert parsed HTML into Y.Doc XmlFragment elements.
  * Two-pass pattern per ADR-009: build element tree first, then populate text.
+ *
+ * `footnoteBodies` (#1123 Tier-A #3 PR 2) are the footnote bodies captured from
+ * `word/footnotes.xml`, keyed by OOXML id. When provided, footnotes that pass
+ * reconciliation get a `footnote-ref` mark on their inline `[N]` text and have
+ * their trailing `<li>` pruned. Returns the RECONCILED subset (only ids that
+ * actually reconstructed) — the caller persists exactly these to
+ * Y_MAP_FOOTNOTE_BODIES so a stale id from a prior reload can't linger.
  */
-export function htmlToYDoc(doc: Y.Doc, html: string): void {
+export function htmlToYDoc(
+  doc: Y.Doc,
+  html: string,
+  footnoteBodies: Record<string, FootnoteBody> = {},
+): Record<string, FootnoteBody> {
   const fragment = doc.getXmlFragment("default");
 
   // Clear existing content
@@ -92,9 +252,16 @@ export function htmlToYDoc(doc: Y.Doc, html: string): void {
     fragment.delete(0, fragment.length);
   }
 
-  if (!html.trim()) return;
+  if (!html.trim()) return {};
 
   const parsed = htmlparser2.parseDocument(html);
+
+  // Footnote reconciliation: which ids have a mark target (A), a removable
+  // trailing <li> (B), AND a captured body (C). Then prune the approved <li>s
+  // from the DOM BEFORE the transform so the body doesn't double as a list.
+  const approvedFootnotes = reconcileFootnotes(parsed.children, footnoteBodies);
+  parsed.children = pruneFootnoteListItems(parsed.children, approvedFootnotes);
+
   const deferred: DeferredText[] = [];
   const allElements: Y.XmlElement[] = [];
 
@@ -108,10 +275,15 @@ export function htmlToYDoc(doc: Y.Doc, html: string): void {
     fragment.insert(0, allElements);
   }
 
-  // Pass 2: populate text now that elements are attached to Y.Doc
+  // Pass 2: populate text now that elements are attached to Y.Doc (Detector A
+  // attaches footnote-ref marks for approved ids).
   for (const { xmlText, children, marks } of deferred) {
-    processInlineNodes(xmlText, children, marks);
+    processInlineNodes(xmlText, children, marks, approvedFootnotes);
   }
+
+  const reconciled: Record<string, FootnoteBody> = {};
+  for (const id of approvedFootnotes) reconciled[id] = footnoteBodies[id];
+  return reconciled;
 }
 
 /** Convert a DOM node to Y.XmlElement(s). Inline-only containers become paragraphs. */
@@ -364,6 +536,7 @@ function processInlineNodes(
   xmlText: Y.XmlText,
   nodes: ChildNode[],
   marks: Record<string, object>,
+  approvedFootnotes: Set<string>,
 ): void {
   for (const node of nodes) {
     if (isText(node)) {
@@ -385,21 +558,39 @@ function processInlineNodes(
       continue;
     }
 
+    // Detector A: a reconstructed footnote's inline reference. Attach the
+    // `footnote-ref` mark ONLY — DROP the inherited superscript (export's
+    // FootnoteReferenceRun renders superscript natively) and the now-empty link,
+    // so gen1/gen2 mark-key sets match. Read the id from the RAW href before the
+    // `a` mark factory below sanitizes "#footnote-N" to "".
+    if (tag === "a") {
+      const fnId = footnoteRefId(node);
+      if (fnId !== null && approvedFootnotes.has(fnId)) {
+        processInlineNodes(
+          xmlText,
+          node.children,
+          { "footnote-ref": { id: fnId, kind: "footnote" } },
+          approvedFootnotes,
+        );
+        continue;
+      }
+    }
+
     // Inline mark tag?
     const markFactory = INLINE_MARK_TAGS[tag];
     if (markFactory) {
       const newMarks = { ...marks, ...markFactory(node) };
-      processInlineNodes(xmlText, node.children, newMarks);
+      processInlineNodes(xmlText, node.children, newMarks, approvedFootnotes);
       continue;
     }
 
     // Code element inside pre — just extract text
     if (tag === "code") {
-      processInlineNodes(xmlText, node.children, marks);
+      processInlineNodes(xmlText, node.children, marks, approvedFootnotes);
       continue;
     }
 
     // Unknown inline element — recurse (best effort)
-    processInlineNodes(xmlText, node.children, marks);
+    processInlineNodes(xmlText, node.children, marks, approvedFootnotes);
   }
 }

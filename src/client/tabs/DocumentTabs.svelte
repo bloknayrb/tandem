@@ -1,9 +1,11 @@
 <script lang="ts">
 import { onDestroy, untrack } from "svelte";
+import { flip } from "svelte/animate";
 import { createScratchpad } from "../actions/builtin.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { loadInvoke } from "../cowork/cowork-invoke.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
+import { motionOff } from "../panels/cardMotion.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import {
@@ -653,20 +655,32 @@ $effect(() => {
     style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 6px 8px;"
   >
     {#each tabs as tab (tab.id)}
-      <TabItem
-        {tab}
-        isActive={tab.id === activeTabId}
-        onswitch={onTabSwitch}
-        onclose={guardedClose}
-        onpointerdown={handleTabPointerDown}
-        dropIndicator={dropTarget?.id === tab.id ? dropTarget.side : null}
-        onkeydown={handleKeyDown}
-        {reduceMotion}
-        isRenaming={renamingTabId === tab.id}
-        onstartrename={startRename}
-        onrename={commitRename}
-        onrenamecancel={cancelRename}
-      />
+      <!-- s3 reorder (#798): a `role="presentation"` flex wrapper carries
+           `animate:flip` so the non-dragged tabs glide to their new slots when
+           the list reorders on drop. `animate:` must sit on the keyed each's
+           immediate child *element* (TabItem is a component, so it can't take
+           the directive directly); the presentation role keeps the tablist→tab
+           ownership intact (axe traverses the transparent wrapper). Drag
+           hit-testing (closest on the tab-prefixed testid + role=tab) and
+           scroll-into-view (querySelector on the active tab testid) both
+           resolve to the TabItem root inside — the wrapper carries no testid
+           and role="presentation", so it's invisible to them. -->
+      <div class="tab-flip" role="presentation" animate:flip={{ duration: motionOff(reduceMotion) ? 0 : 200 }}>
+        <TabItem
+          {tab}
+          isActive={tab.id === activeTabId}
+          onswitch={onTabSwitch}
+          onclose={guardedClose}
+          onpointerdown={handleTabPointerDown}
+          dropIndicator={dropTarget?.id === tab.id ? dropTarget.side : null}
+          onkeydown={handleKeyDown}
+          {reduceMotion}
+          isRenaming={renamingTabId === tab.id}
+          onstartrename={startRename}
+          onrename={commitRename}
+          onrenamecancel={cancelRename}
+        />
+      </div>
     {/each}
   </div>
 
@@ -732,6 +746,15 @@ $effect(() => {
 </div>
 
 <style>
+  /* s3 reorder (#798): transparent flex wrapper that carries `animate:flip`.
+     It must not introduce box geometry of its own — `display: contents` would
+     drop it from the flex layout (and break the FLIP measurement), so it's a
+     zero-padding flex item that shrinks to the TabItem pill. */
+  .tab-flip {
+    display: flex;
+    flex-shrink: 0;
+  }
+
   :global(.tab-scroll-hide) {
     scrollbar-width: none;
     -ms-overflow-style: none;

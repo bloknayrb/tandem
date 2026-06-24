@@ -20,6 +20,7 @@ const listSessionsMetadata = vi.fn();
 const deleteSession = vi.fn();
 const clearAllSessions = vi.fn();
 const isStoreReadOnly = vi.fn(() => false);
+const isLoopbackMock = vi.fn(() => true);
 
 vi.mock("../../src/server/session/manager.js", () => ({
   listSessionsMetadata: () => listSessionsMetadata(),
@@ -30,6 +31,12 @@ vi.mock("../../src/server/session/manager.js", () => ({
 vi.mock("../../src/server/annotations/store.js", () => ({
   isStoreReadOnly: () => isStoreReadOnly(),
 }));
+
+// Allow tests to simulate non-loopback callers for path-stripping coverage.
+vi.mock("../../src/server/auth/middleware.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/server/auth/middleware.js")>();
+  return { ...original, isLoopback: (...args: unknown[]) => isLoopbackMock(...args) };
+});
 
 import {
   handleClearSessions,
@@ -90,6 +97,8 @@ describe("session management routes (#103)", () => {
     clearAllSessions.mockReset();
     isStoreReadOnly.mockReset();
     isStoreReadOnly.mockReturnValue(false);
+    isLoopbackMock.mockReset();
+    isLoopbackMock.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -161,5 +170,35 @@ describe("session management routes (#103)", () => {
     const res = await request(buildApp(), "POST", API_SESSIONS_CLEAR, {});
     expect(res.status).toBe(403);
     expect(clearAllSessions).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/sessions strips filePath to basename for non-loopback callers (#1121 F5)", async () => {
+    isLoopbackMock.mockReturnValue(false);
+    listSessionsMetadata.mockResolvedValue([
+      { filePath: "/home/user/Documents/work.md", lastAccessed: 100, annotationCount: 2 },
+    ]);
+    const res = await request(buildApp(), "GET", API_SESSIONS);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      data: {
+        sessions: [{ filePath: "work.md", lastAccessed: 100, annotationCount: 2 }],
+      },
+    });
+  });
+
+  it("GET /api/sessions returns full filePath for loopback callers", async () => {
+    isLoopbackMock.mockReturnValue(true);
+    listSessionsMetadata.mockResolvedValue([
+      { filePath: "/home/user/Documents/work.md", lastAccessed: 100, annotationCount: 2 },
+    ]);
+    const res = await request(buildApp(), "GET", API_SESSIONS);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      data: {
+        sessions: [
+          { filePath: "/home/user/Documents/work.md", lastAccessed: 100, annotationCount: 2 },
+        ],
+      },
+    });
   });
 });

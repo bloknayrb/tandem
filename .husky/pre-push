@@ -1,4 +1,20 @@
 #!/usr/bin/env sh
+
+# Skip checks on delete-only pushes (branch pruning) — there are no new commits
+# to verify, so running the full suite is pure waste. Git feeds pre-push one
+# line per ref on stdin: "<local ref> <local oid> <remote ref> <remote oid>".
+# A deletion carries an all-zero local oid; if every ref is a deletion, bail.
+only_deletes=1
+while read -r _local_ref local_oid _remote_ref _remote_oid; do
+	case "$local_oid" in
+		*[!0]*) only_deletes=0 ;; # any non-zero char => a real ref update
+	esac
+done
+if [ "$only_deletes" -eq 1 ]; then
+	echo "pre-push: delete-only push, skipping checks"
+	exit 0
+fi
+
 npx biome check src/ tests/
 npm test -- --run --reporter=dot
 cargo test --manifest-path src-tauri/Cargo.toml

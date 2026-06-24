@@ -98,7 +98,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   (the primary action keeps `palette-item-new-scratchpad`)
 
 ### Status bar
-- `status-word-count`, `save-indicator`, `user-name-input`, `sb-held`
+- `status-word-count`, `save-indicator`, `sb-held`
+- `user-name-input` removed — the display-name editor was pulled out of the status pill (its default value "You" rendered as a duplicated "You: You"); name editing lives in Settings → Collaboration (`settings-modal-display-name`).
 
 ### Annotations (5-card audience-first split, ADR-027 / Conflict #8)
 - Dispatch + chrome: `annotation-card-{*}`,
@@ -139,6 +140,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `updater-banner`, `updater-banner-{install,dismiss,visible}`
 - `review-only-banner`, `review-only-dismiss`,
   `convert-to-markdown-btn`
+- `fidelity-report-banner`, `fidelity-report-details-toggle`,
+  `fidelity-report-details`, `fidelity-report-import-losses`,
+  `fidelity-report-export-downgrades` (#1145 — `.docx` honesty notice)
 
 ### Modals & dialogs
 - `help-modal`, `help-modal-close`
@@ -185,7 +189,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `narrow|comfortable|wide|full`, interpolated, so it lands as `editor-measure-{*}`
   in the snapshot. Replaced `editor-width-slider` when `editorWidthPercent` → `editorMeasure`.)
 - `high-contrast-toggle`, `annotation-patterns-toggle`
-- `network-{restart-sidecar,degraded-delay-slider,retry-strategy,hold-annotations-toggle}`
+- `network-{restart-sidecar,degraded-delay-slider,retry-strategy}`
 
 ### Settings — Models tab
 - `models-{empty-state,save-error,legacy-migration-banner,legacy-migrate-btn,legacy-migration-status}`
@@ -235,6 +239,12 @@ shipped and were removed:
 
 ### Empty states (3.11 D5)
 - `empty-state-open-file` (state A primary), `empty-state-retry` + `empty-state-open-settings` (state C)
+
+### Licensing gate (#1116, ships dark)
+- `license-trial-banner`, `license-trial-days` (trial countdown banner)
+- `license-wall` (restricted-mode activation overlay)
+- `license-activate-input`, `license-activate-error`, `license-activate-submit` (shared activation form)
+- `license-settings-section`, `license-status-pill` (Settings → License tab)
 
 ### Test harnesses (not user-facing, kept for vitest)
 - `notifications-harness`, `throw-on-render-ok`,

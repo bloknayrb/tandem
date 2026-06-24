@@ -349,7 +349,6 @@ describe("useTandemSettings — updateSettings write path", () => {
     soloRailHidden: true,
     degradedBannerDelayMs: 30000,
     sidecarRetryStrategy: "exponential",
-    holdAnnotationsWhileOffline: true,
     marginView: false,
     showAnnotationDecorations: true,
     models: [],

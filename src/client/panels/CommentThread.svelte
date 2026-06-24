@@ -2,6 +2,7 @@
 import type { AnnotationReply } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
+import { formatRelativeTime } from "./annotation-card-helpers";
 
 interface Props {
   replies: AnnotationReply[];
@@ -10,18 +11,6 @@ interface Props {
 let { replies }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
-
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  return date.toLocaleDateString();
-}
 </script>
 
 {#if replies.length > 0}
@@ -53,7 +42,7 @@ function formatTime(timestamp: number): string {
             {#if reply.editedAt}
               <span class="ct-edited">(edited)</span>
             {/if}
-            {formatTime(reply.timestamp)}
+            {formatRelativeTime(reply.timestamp)}
           </span>
         </div>
         <p class="ct-body">{reply.text}</p>

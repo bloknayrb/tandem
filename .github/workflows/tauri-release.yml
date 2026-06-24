@@ -334,6 +334,141 @@ jobs:
           done
           if [ "$errors" -ne 0 ]; then exit 1; fi
 
+      # Headless runtime smoke (macOS arm64). The verify step above proves the
+      # bundle is signed + notarization-stapled — but a notarized app can still
+      # be dead-on-arrival: #983 was the hardened-runtime sidecar SIGTRAPing in
+      # V8 init on Apple Silicon (notarized, yet it never started). The stapler
+      # gate can't see that; only running the binary can. This boots the ACTUAL
+      # signed node-sidecar from inside the bundle exactly as the Tauri shell
+      # does (`node-sidecar dist/server/index.js`, TANDEM_TAURI_SIDECAR=1) and
+      # waits for /health — turning "does it actually run on macOS" into a
+      # release gate instead of something only a human with a Mac could catch.
+      #
+      # Scoped to the aarch64 leg: macos-latest runners are Apple Silicon, so
+      # the native arm64 binary execs directly — and arm64 is exactly where #983
+      # lived. The x86_64 bundle would need Rosetta to run here; rather than take
+      # a Rosetta-availability flake on a release-blocking gate, the x86_64 leg
+      # keeps the codesign + stapler gate above and skips the runtime boot.
+      #
+      # We exec the sidecar binary directly rather than `open` the .app: the
+      # kernel enforces the same hardened-runtime flags on any exec, so the #983
+      # class still reproduces, but it's display-free and deterministic (no
+      # WindowServer dependency) — the right trade for a gate that blocks ship.
+      # Full GUI launch + interactive flows (VoiceOver, update install, keychain
+      # round-trip) remain the manual / cloud-Mac smoke-checklist slice.
+      - name: Smoke-test bundled sidecar (macOS arm64)
+        if: matrix.node-target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          # The if: above scopes this to the aarch64 leg, whose build outputs under
+          # target/aarch64-apple-darwin/ (cargo always nests under <triple> when
+          # --target is passed). Glob that exact dir and require exactly one bundle,
+          # so a stale .app from another target left in the workspace can't be the
+          # one we smoke.
+          apps=(src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app)
+          if [ ${#apps[@]} -ne 1 ]; then
+            echo "::error::Smoke: expected exactly 1 arm64 .app bundle, found ${#apps[@]}: ${apps[*]:-<none>}"
+            exit 1
+          fi
+          app="${apps[0]}"
+          sidecar="$app/Contents/MacOS/node-sidecar"
+          entry="$app/Contents/Resources/dist/server/index.js"
+          for f in "$sidecar" "$entry"; do
+            if [ ! -e "$f" ]; then
+              echo "::error::Smoke: missing required bundle file: $f"
+              exit 1
+            fi
+          done
+
+          # Hermetic start: clear any stray listener on the WS (3478) and MCP (3479)
+          # ports before spawn. On a fresh runner this is a no-op; it removes the
+          # only false-pass vector (a pre-existing process answering /health) and the
+          # only non-3479 bind dependency (the server binds Hocuspocus on 3478 too,
+          # via Promise.all — if that bind fails, /health never comes up). BSD xargs
+          # lacks GNU's -r, so clear without xargs.
+          for p in 3478 3479; do
+            stray="$(lsof -ti "tcp:$p" -sTCP:LISTEN 2>/dev/null || true)"
+            if [ -n "$stray" ]; then
+              echo "Smoke: clearing stray listener(s) on :$p — $stray"
+              kill -9 $stray 2>/dev/null || true
+            fi
+          done
+
+          data="$(mktemp -d)"
+          # Mirror the shell's pre-spawn sample copy so the welcome.md cold-start
+          # parse path (markdown -> Y.Doc) is exercised too. Best-effort: a missing
+          # sample is non-fatal server-side (it logs ENOENT and still binds /health).
+          cp -R "$app/Contents/Resources/sample" "$data/sample" 2>/dev/null || true
+
+          out="$data/sidecar.out"
+          err="$data/sidecar.err"
+          # Match the shell's spawn (lib.rs start_sidecar): production mode +
+          # isolated data dir, launcher OFF (no Claude/reaper spawn in CI). No auth
+          # token needed — /health is loopback auth-exempt (server.ts). We exec the
+          # binary directly, so $! is the node process itself — and thus the process
+          # that binds the ports, which the ownership check below relies on.
+          TANDEM_TAURI_SIDECAR=1 \
+          TANDEM_DATA_DIR="$data" \
+          TANDEM_DISABLE_LAUNCHER=1 \
+            "$sidecar" "$entry" >"$out" 2>"$err" &
+          pid=$!
+
+          cleanup() {
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            rm -rf "$data" || true
+          }
+          trap cleanup EXIT
+
+          dump_logs() {
+            echo "--- last 50 lines of sidecar stderr ---"
+            tail -n 50 "$err" 2>/dev/null || true
+            echo "--- last 20 lines of sidecar stdout ---"
+            tail -n 20 "$out" 2>/dev/null || true
+          }
+
+          # Port 3479 = DEFAULT_MCP_PORT (shared/constants.ts); HEALTH_URL in lib.rs.
+          # Wall-clock deadline (not an iteration count) so a slow curl can't shrink
+          # the window. 120s budgets notarized first-exec plus the pre-bind document
+          # opens (CHANGELOG/welcome.md parse) that run before the server binds.
+          health="http://127.0.0.1:3479/health"
+          deadline=$((SECONDS + 120))
+          ok=0
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::Smoke: node-sidecar exited before /health responded — V8 init / boot crash (the #983 class)."
+              dump_logs
+              exit 1
+            fi
+            body="$(curl -fsS --max-time 5 "$health" 2>/dev/null || true)"
+            if printf '%s' "$body" | grep -q '"status":"ok"'; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::Smoke: /health did not return status=ok within 120s — the bundled sidecar did not come up."
+            dump_logs
+            exit 1
+          fi
+
+          # Pin "healthy on :3479" to "OUR sidecar": confirm the listener is $pid.
+          # Kills the residual false-pass where some other process answers /health.
+          # A DIFFERENT pid is a hard fail; an empty result is inconclusive (don't
+          # flake on an lsof quirk when health already passed and the port was
+          # pre-cleared, so only our spawn could have bound it).
+          listener="$(lsof -nP -iTCP:3479 -sTCP:LISTEN -t 2>/dev/null || true)"
+          if [ -n "$listener" ] && ! printf '%s\n' "$listener" | grep -qx "$pid"; then
+            echo "::error::Smoke: /health is served by pid(s) [$listener], not our sidecar (pid $pid) — stale-listener false-pass averted."
+            dump_logs
+            exit 1
+          fi
+          echo "ok: our sidecar (pid $pid) booted + /health returned status=ok; listener on :3479 = [${listener:-unconfirmed}]"
+
       # tauri-action (observed 2026-05, no upstream issue found) does not
       # always surface signCommand non-zero exits as job failure. Verify
       # every produced bundle is signed and timestamped; fail the job

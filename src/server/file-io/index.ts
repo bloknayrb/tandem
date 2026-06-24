@@ -1,15 +1,20 @@
 import * as crypto from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
-import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
+import {
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_DOCUMENT_META,
+  Y_MAP_FOOTNOTE_BODIES,
+} from "../../shared/constants.js";
 import { extractText, populateYDoc } from "../mcp/document-model.js";
-import { htmlToYDoc, loadDocxWithWarnings } from "./docx.js";
+import { htmlToYDoc, loadDocxWithWarnings, reconcileFootnoteIds } from "./docx.js";
 import {
   type DocxComment,
   extractDocxComments,
   injectCommentsAsAnnotations,
 } from "./docx-comments.js";
 import { exportYDocToDocx } from "./docx-export.js";
+import { type DocxNotes, footnoteLossLines, parseDocxFootnotes } from "./docx-footnotes.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -57,8 +62,10 @@ const plaintextAdapter: FormatAdapter = {
  * in the Y.Doc and serializes to a `.docx` buffer on EXPLICIT save only. This
  * supersedes ADR-004's read-only default; the protective layer is now "never
  * overwrite without an explicit save" rather than `contenteditable=false`.
- * Exports body + Word comments (#1068; `comment`-type annotations only, per
- * the ADR-027 gate in `docx-comment-export.ts`) — tracked changes stay deferred.
+ * Exports body + Word comments (#1068): user/Claude `comment`-type annotations
+ * AND imported Word comments written back to their source file (private notes
+ * that round-trip but stay Claude-invisible), per the gate in
+ * `docx-comment-export.ts` — tracked changes stay deferred.
  *
  *   - `parse` runs `loadDocxWithWarnings` + `extractDocxComments` in parallel.
  *     mammoth import-fidelity warnings land as a `LoadIssue { kind: "other" }`
@@ -77,7 +84,7 @@ const docxAdapter: FormatAdapter = {
   async parse(content): Promise<Prepared> {
     const buffer = content as Buffer;
     const issues: LoadIssue[] = [];
-    const [loaded, comments] = await Promise.all([
+    const [loaded, comments, notes] = await Promise.all([
       loadDocxWithWarnings(buffer),
       extractDocxComments(buffer).catch((err) => {
         console.error(
@@ -87,24 +94,54 @@ const docxAdapter: FormatAdapter = {
         issues.push({ kind: "comments-failed", error: err });
         return [] as DocxComment[];
       }),
+      // Footnote/endnote capture (#1123 Tier-A #3): mammoth flattens these to a
+      // trailing list and emits NO warning. Read the real notes directly from
+      // the ZIP so the import can BOTH surface an honest loss line AND capture
+      // footnote bodies for reconstruction. parseDocxFootnotes never throws (it
+      // catches per-part + per-archive); this .catch is last-resort defense.
+      parseDocxFootnotes(buffer).catch((err) => {
+        console.error("[docx-footnotes] parse failed unexpectedly:", err);
+        return { footnotes: {}, endnotes: 0 } satisfies DocxNotes;
+      }),
     ]);
-    if (loaded.warnings.length > 0) {
+    // Note losses lead (the named, higher-impact loss). mammoth's per-occurrence
+    // warnings are already deduped + capped inside summarizeMammothMessages; the
+    // note lines are a bounded fixed set (≤3), so they ride on top of that cap
+    // without re-flooding — and crucially this guard fires when EITHER source is
+    // non-empty, because mammoth emits zero warnings for notes. The honesty line
+    // is driven off the RECONCILED partition (same inputs `htmlToYDoc` reconciles
+    // in `apply` → identical result), so a footnote that won't reconstruct (an
+    // orphaned definition, or a mammoth-format drift) is reported as a loss, not
+    // silently claimed "preserved".
+    const reconciliation = reconcileFootnoteIds(loaded.html, notes.footnotes);
+    const importLosses = [...footnoteLossLines(notes, reconciliation), ...loaded.warnings];
+    if (importLosses.length > 0) {
       issues.push({
         kind: "other",
         error: undefined,
         message:
           "Some Word formatting couldn't be imported and won't be preserved on save: " +
-          `${loaded.warnings.join("; ")}.`,
+          `${importLosses.join("; ")}.`,
+        // Granular list for the persistent fidelity report (#1145); the joined
+        // `message` above drives the transient open-time toast.
+        importLosses,
       });
     }
-    return { format: "docx", html: loaded.html, comments, issues };
+    return { format: "docx", html: loaded.html, comments, footnoteBodies: notes.footnotes, issues };
   },
   async saveBinary(doc): Promise<Buffer> {
     return exportYDocToDocx(doc);
   },
   apply(doc, prepared, ctx) {
     if (prepared.format !== "docx") return [];
-    htmlToYDoc(doc, prepared.html);
+    const reconciledFootnotes = htmlToYDoc(doc, prepared.html, prepared.footnoteBodies);
+    // Persist the reconstructed footnote bodies off-fragment so the exporter can
+    // re-emit real <w:footnote> parts (#1123 Tier-A #3 PR 2). WHOLE-VALUE replace
+    // (a reload with fewer footnotes must not leave stale ids). The caller's
+    // transact is already origin-tagged; this documentMeta key has no observer
+    // (server write-only, client/Claude-invisible) and sits OUTSIDE the comment-
+    // inject rollback zone below, which only deletes newly-added annotation keys.
+    doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_FOOTNOTE_BODIES, reconciledFootnotes);
     const out: LoadIssue[] = [];
     if (prepared.comments.length > 0) {
       // Snapshot-and-rollback: Yjs does NOT roll back inner-transact writes

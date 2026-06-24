@@ -110,7 +110,9 @@ test.describe("viewport layouts", () => {
 
     await expect(page.locator("[data-testid='toolbar-highlight-btn']")).toBeVisible();
 
-    const statusBarBox = await page.locator("[data-testid='user-name-input']").boundingBox();
+    // The display-name editor was removed from the status pill (it lives in
+    // Settings); the word-count chip is now the pill's stable content anchor.
+    const statusBarBox = await page.locator("[data-testid='status-word-count']").boundingBox();
     expect(statusBarBox).not.toBeNull();
     expect(statusBarBox!.height).toBeGreaterThan(0);
 
@@ -396,10 +398,13 @@ test.describe("tab order traversal", () => {
     ];
     const matchesToolbar = (l: string) =>
       toolbarLabels.some((t) => l.toLowerCase().includes(t.toLowerCase()));
+    // The status pill's focusable stop is now the word-count chip (the
+    // display-name input was removed — it lives in Settings). Its aria-label
+    // ends with "(click to change unit)"; the testid is the fallback.
     const matchesStatusBar = (l: string) =>
-      l.toLowerCase().includes("display name") || l === "user-name-input";
+      l.toLowerCase().includes("click to change unit") || l === "status-word-count";
 
-    // Tab through the focusable chrome. The status-bar display-name input sits
+    // Tab through the focusable chrome. The status-bar word-count chip sits
     // near the END of the sequence, and the redesign + Wave M added many stops
     // ahead of it — so we use a generous cap (not a fixed 30) and break early
     // once both a toolbar stop and the status-bar stop have been seen. This

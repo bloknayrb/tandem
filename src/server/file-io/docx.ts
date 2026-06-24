@@ -8,7 +8,7 @@ import type { Annotation } from "../../shared/types.js";
 import { getElementText } from "../mcp/document-model.js";
 
 // Re-export for backward compatibility — consumers can import from either module
-export { htmlToYDoc } from "./docx-html.js";
+export { htmlToYDoc, reconcileFootnoteIds } from "./docx-html.js";
 
 /**
  * Convert a .docx buffer to HTML via mammoth.js.
@@ -34,7 +34,17 @@ export async function loadDocx(content: Buffer): Promise<string> {
 export async function loadDocxWithWarnings(
   content: Buffer,
 ): Promise<{ html: string; warnings: string[] }> {
-  const result = await mammoth.convertToHtml({ buffer: content });
+  // styleMap is the SECOND arg of convertToHtml(input, options) — merging it into
+  // the input object silently no-ops. mammoth IGNORES underline by default (its
+  // docs: underline "can be easily confused with hyperlinks in HTML"), so without
+  // this map a <w:u> run reaches htmlToYDoc as plain text and the underline mark
+  // is lost on round-trip. "u => u" emits a literal <u> (which docx-html.ts maps
+  // to the underline mark) — NOT "u => em", which would silently re-code underline
+  // as italic. Additive: includeDefaultStyleMap stays true, so headings/bold/lists
+  // still resolve via mammoth's defaults. (Underline style/color — double/dotted/
+  // wavy/colored — is flattened to a boolean by mammoth upstream, so it round-trips
+  // as a single black underline; an accepted import ceiling, undetectable to warn on.)
+  const result = await mammoth.convertToHtml({ buffer: content }, { styleMap: ["u => u"] });
 
   for (const msg of result.messages) {
     console.error(`[mammoth] ${msg.type}: ${msg.message}`);
@@ -45,6 +55,15 @@ export async function loadDocxWithWarnings(
 
 /** Max distinct fidelity warnings surfaced to the user (avoid toast flooding). */
 const MAX_FIDELITY_WARNINGS = 8;
+
+/**
+ * Max characters per emitted warning line. The quote-stripping below redacts
+ * the variable payload mammoth quotes (style names), but the report these feed
+ * is now a PERSISTENT surface (#1145), not a 4s toast — so clamp each line as a
+ * content-oracle backstop: a future mammoth message that surfaces user text
+ * unquoted can leak at most this many chars, not an unbounded paragraph.
+ */
+const MAX_WARNING_LINE_LENGTH = 120;
 
 /**
  * Collapse mammoth's per-occurrence messages into a small set of distinct,
@@ -61,12 +80,32 @@ export function summarizeMammothMessages(
     if (msg.type !== "warning" && msg.type !== "error") continue;
     // Normalize "Unrecognised paragraph style: 'Foo' (Style ID: Bar)" and
     // similar to a single bucket so 200 runs collapse to one line.
+    // Redact every slot mammoth can put user-authored text in. Style/font
+    // names can be sensitive (client names, project codenames, foundry-licensed
+    // brand fonts), and these strings now feed a PERSISTENT banner (#1145), so
+    // redaction must cover mammoth's actual message forms (enumerated from its
+    // warning() emitters), not just the quoted one:
+    //   - "Unrecognised paragraph style: 'Name' (Style ID: ID)" → quotes + (…)
+    //   - "…style with ID ID was referenced but not defined…" → bare UNQUOTED
+    //     `with ID <token>` slot.
+    //   - "…w:sym… ignored: char F0A7 in font <Brand Font>" → the trailing
+    //     `in font <name>` slot (a name CAN contain spaces, so anchor to EOL).
+    // The MAX_WARNING_LINE_LENGTH clamp below is the forward backstop for any
+    // slot a future mammoth version introduces.
     const normalized = msg.message
       .replace(/['"][^'"]*['"]/g, "…")
       .replace(/\(Style ID:[^)]*\)/gi, "")
+      .replace(/\bwith ID \S+/gi, "with ID …")
+      .replace(/\bin font \S.*$/i, "in font …")
       .replace(/\s+/g, " ")
       .trim();
-    seen.add(normalized);
+    // Clamp per-line (defense-in-depth, see MAX_WARNING_LINE_LENGTH). Dedup on
+    // the clamped form so two messages differing only past the cap collapse.
+    seen.add(
+      normalized.length > MAX_WARNING_LINE_LENGTH
+        ? `${normalized.slice(0, MAX_WARNING_LINE_LENGTH - 1)}…`
+        : normalized,
+    );
   }
   return [...seen].slice(0, MAX_FIDELITY_WARNINGS);
 }

@@ -1,6 +1,11 @@
 import type { Request, Response } from "express";
 
+import { API_DOCX_CONFLICT_RESOLVE } from "../../../shared/api-paths.js";
 import { getActiveDocId, hasDoc } from "../../documents/registry.js";
+import {
+  assertLoopbackForMutation,
+  assertOriginAllowlisted,
+} from "../../integrations/api-routes.js";
 import { resolveExternalConflict } from "../file-opener.js";
 import { sendApiError } from "./_shared.js";
 
@@ -13,11 +18,10 @@ import { sendApiError } from "./_shared.js";
  * - "reload": discard the unsaved edits, reload from disk through the
  *   file-watcher reload lifecycle (annotations preserved + re-anchored).
  *
- * State-mutating, but same middleware posture as POST /api/save and
- * POST /api/document/reload: the `mw` DNS-rebinding + CORS gate closes CSRF (a
- * cross-origin JSON POST triggers a preflight answered with Allow-Origin:
- * null), so no separate loopback gate is needed. Idempotent: resolving with no
- * pending conflict is a no-op success (double-click / stale-banner race).
+ * Gated on origin allowlist + loopback (#1121 F6): resolving a docx conflict
+ * is a destructive state change and must not be reachable by authenticated LAN
+ * peers. Idempotent: resolving with no pending conflict is a no-op success
+ * (double-click / stale-banner race).
  *
  * `documentId` is accepted from the body (mirroring POST /api/save): the conflict
  * banner is per-tab and the server's active doc does NOT track the client's
@@ -31,6 +35,8 @@ import { sendApiError } from "./_shared.js";
  * unknown id.
  */
 export async function handleResolveDocxConflict(req: Request, res: Response): Promise<void> {
+  if (assertOriginAllowlisted(req, res, API_DOCX_CONFLICT_RESOLVE)) return;
+  if (assertLoopbackForMutation(req, res)) return;
   const { documentId, choice } = (req.body ?? {}) as Record<string, unknown>;
   if (choice !== "keep" && choice !== "reload") {
     res.status(400).json({ error: "BAD_REQUEST", message: 'choice must be "keep" or "reload".' });

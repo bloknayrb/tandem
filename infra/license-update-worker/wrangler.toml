@@ -1,0 +1,19 @@
+# Tandem license-checked update endpoint (Cloudflare Worker).
+# Owner-deployed — see docs/licensing-operations.md §3. Replace the placeholders
+# below with your own account's values before `npx wrangler deploy`.
+
+name = "tandem-license-update"
+main = "src/worker.ts"
+compatibility_date = "2024-09-23"
+
+# KV namespace holding licenseId → { updateWindowEnd, status, version }, written
+# by the issuance webhook (src/server/license/kv-store.ts). Create it with
+# `npx wrangler kv namespace create LICENSE_KV` and paste the id here.
+[[kv_namespaces]]
+binding = "LICENSE_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+# The public, signed release manifest the Worker proxies to entitled callers.
+# Same artifact the public (unlicensed) updater path uses.
+PUBLIC_LATEST_JSON_URL = "https://github.com/REPLACE_OWNER/REPLACE_REPO/releases/latest/download/latest.json"

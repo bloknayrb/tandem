@@ -1,5 +1,11 @@
 import type { Request, Response } from "express";
 import path from "path";
+
+import { API_RENAME } from "../../../shared/api-paths.js";
+import {
+  assertLoopbackForMutation,
+  assertOriginAllowlisted,
+} from "../../integrations/api-routes.js";
 import { renameDocument } from "../document-service.js";
 import { errorCodeToHttpStatus } from "./_shared.js";
 
@@ -7,11 +13,12 @@ import { errorCodeToHttpStatus } from "./_shared.js";
  * POST /api/rename — rename an open on-disk document's file in place (#1017).
  *
  * Body: `{ documentId: string, newName: string }`. `newName` is a bare basename
- * (same directory, same extension). The DNS-rebinding Host check + CORS Origin
- * reflection come from the shared `apiMiddleware`; renameDocument performs all
- * the path/name validation and the migration.
+ * (same directory, same extension). Gated on origin allowlist + loopback so
+ * authenticated LAN callers cannot rename local files (#1121 F6).
  */
 export async function handleRename(req: Request, res: Response): Promise<void> {
+  if (assertOriginAllowlisted(req, res, API_RENAME)) return;
+  if (assertLoopbackForMutation(req, res)) return;
   const { documentId: rawDocumentId, newName: rawNewName } = (req.body ?? {}) as Record<
     string,
     unknown

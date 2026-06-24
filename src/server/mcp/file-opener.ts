@@ -14,13 +14,14 @@ import {
   Y_MAP_AWARENESS,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
+  Y_MAP_FIDELITY_REPORT,
   Y_MAP_READ_ONLY,
   Y_MAP_SAVED_AT_VERSION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withReload } from "../../shared/origins.js";
 import { SCRATCHPAD_PREFIX, UPLOAD_PREFIX } from "../../shared/paths.js";
-import type { Annotation, ExternalConflictState } from "../../shared/types.js";
+import type { Annotation, ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
@@ -30,8 +31,14 @@ import { loadAndMerge } from "../annotations/sync.js";
 import { isDirty, markClean, markDirty, registerDirtyObserver } from "../documents/dirty.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
-import { atomicWrite, getAdapter, type LoadIssue, type Prepared } from "../file-io/index.js";
-import { suppressNextChange, watchFile } from "../file-watcher.js";
+import {
+  atomicWrite,
+  atomicWriteBuffer,
+  getAdapter,
+  type LoadIssue,
+  type Prepared,
+} from "../file-io/index.js";
+import { recordSelfWrite, suppressNextChange, watchFile } from "../file-watcher.js";
 import { pushNotification } from "../notifications.js";
 import { resolveAppDataDir } from "../platform.js";
 import { anchoredRange, refreshAllRanges, validateRange } from "../positions.js";
@@ -433,9 +440,10 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
   }
 }
 
-/** Formats restorable from pre-overwrite doc-backups (the snapshot module only
- *  ever covers the text `atomicWrite` save path, so this mirrors its scope). */
-const TEXT_RESTORE_FORMATS = new Set(["md", "txt"]);
+/** Formats restorable from pre-overwrite doc-backups. .docx joined .md/.txt once
+ *  the binary save path also snapshots before overwriting; the snapshot module
+ *  is format-agnostic (raw bytes), so a .docx snapshot restores byte-identical. */
+const RESTORE_FORMATS = new Set(["md", "txt", "docx"]);
 
 export interface RestoreBackupResult {
   message: string;
@@ -479,9 +487,11 @@ export async function restoreDocumentFromBackup(
       code: "INVALID_PATH",
     });
   }
-  if (!TEXT_RESTORE_FORMATS.has(existing.format)) {
+  if (!RESTORE_FORMATS.has(existing.format)) {
     throw Object.assign(
-      new Error(`Backup snapshots exist only for .md/.txt documents (this is ${existing.format}).`),
+      new Error(
+        `Backup snapshots exist only for .md/.txt/.docx documents (this is ${existing.format}).`,
+      ),
       { code: "UNSUPPORTED_FORMAT" },
     );
   }
@@ -504,9 +514,12 @@ export async function restoreDocumentFromBackup(
       code: "FILE_NOT_FOUND",
     });
   }
-  let content: string;
+  // .docx snapshots are raw ZIP bytes — a utf-8 round-trip would corrupt them,
+  // so read/write them as a Buffer (mirrors the binary branch in reloadFromDisk).
+  const isDocx = existing.format === "docx";
+  let content: string | Buffer;
   try {
-    content = await fs.readFile(snapshotPath, "utf-8");
+    content = isDocx ? await fs.readFile(snapshotPath) : await fs.readFile(snapshotPath, "utf-8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw Object.assign(
@@ -526,7 +539,18 @@ export async function restoreDocumentFromBackup(
   await snapshotBeforeFirstWrite(existing.filePath, { appDataDir, documentId: id });
 
   suppressNextChange(existing.filePath);
-  await atomicWrite(existing.filePath, content);
+  if (isDocx) {
+    // atomicWriteBuffer preserves the ZIP byte-for-byte; reloadFromDisk below
+    // re-parses it and re-injects Word comments idempotently via adapter.apply.
+    await atomicWriteBuffer(existing.filePath, content as Buffer);
+  } else {
+    await atomicWrite(existing.filePath, content as string);
+  }
+  // Content backstop for the watcher: the restore write's own `change`-event
+  // echo can leak past the single suppressNextChange (NTFS fires ~2 events).
+  // The direct reloadFromDisk below does the intended re-anchor; this stops the
+  // leaked echo from triggering a SECOND, spurious reload + "file changed" toast.
+  recordSelfWrite(existing.filePath, content);
   // The early reloadInProgress check above closes the common case, but a
   // watcher reload can still start during the awaits since that check. A
   // silent skip here would report success while the Y.Doc still holds
@@ -767,6 +791,31 @@ function applyPreparedContent(doc: Y.Doc, prepared: Prepared, ctx: PopulateConte
   const applyIssues = adapter.apply(doc, prepared, { fileName: ctx.displayName });
   for (const issue of prepared.issues) notifyIssue(issue, ctx);
   for (const issue of applyIssues) notifyIssue(issue, ctx);
+  writeImportLossReport(doc, prepared);
+}
+
+/**
+ * Write/refresh the docx fidelity report's import-loss half (#1145, the
+ * "honesty layer" / phase 0f). MUST run inside the caller's origin-tagged
+ * transaction — `applyPreparedContent` is always wrapped in `withInternal`
+ * (open + force-reload). docx-only; resets `exportDowngrades` because a
+ * re-import makes any prior save's downgrades stale. Always writes for docx so
+ * a re-import with no losses clears a prior report (the client hides the banner
+ * when both lists are empty). The write is inert for the channel + durable-sync
+ * subsystems regardless of origin (no observer on per-doc documentMeta).
+ */
+function writeImportLossReport(doc: Y.Doc, prepared: Prepared): void {
+  if (prepared.format !== "docx") return;
+  let importLosses: string[] = [];
+  for (const issue of prepared.issues) {
+    if (issue.kind === "other" && issue.importLosses) importLosses = issue.importLosses;
+  }
+  const meta = doc.getMap(Y_MAP_DOCUMENT_META);
+  meta.set(Y_MAP_FIDELITY_REPORT, {
+    importLosses,
+    exportDowngrades: [],
+    updatedAt: Date.now(),
+  } satisfies FidelityReport);
 }
 
 /** Translate a single LoadIssue to a user-facing notification. */
@@ -928,6 +977,15 @@ function evictPartialDocState(doc: Y.Doc, docId: string | undefined): void {
  * Clear the four document-state Y.Maps (annotations, replies, awareness,
  * user-awareness) in place. Caller wraps with the appropriate origin helper
  * and is responsible for the XmlFragment if it also needs clearing.
+ *
+ * NOT exhaustive by design: `documentMeta` keys owned by the docx adapter — the
+ * fidelity report (Y_MAP_FIDELITY_REPORT) and footnote bodies
+ * (Y_MAP_FOOTNOTE_BODIES) — are intentionally NOT cleared here. Each is rewritten
+ * as a whole-value replace on every (re)import (`writeImportLossReport` /
+ * `docxAdapter.apply`), so a reload of the same path can't strand a stale value,
+ * and a document's format is stable across reloads (Save-As to another format
+ * yields a new document/tab). Don't add them here assuming this is the canonical
+ * reset — the adapter owns their lifecycle.
  */
 function clearDocMaps(doc: Y.Doc): void {
   const maps = [
@@ -1332,6 +1390,12 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       meta.set(Y_MAP_SAVED_AT_VERSION, diskStat?.mtimeMs ?? Date.now());
       meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      // Refresh the import-loss half of the fidelity report (#1145): this path
+      // re-imports the doc but deliberately drops `reloadPrepared.issues` for
+      // toast purposes (above), so without this the persistent banner would
+      // show the PRE-reload losses — a stale, lying notice. docx-only; resets
+      // exportDowngrades since the re-import invalidates a prior save's set.
+      writeImportLossReport(doc, reloadPrepared);
     });
 
     // 3. Refresh all annotation ranges in a batch transaction (sanitize legacy shapes)
@@ -1406,10 +1470,13 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
  * reloadFromDisk reads a Buffer; comment injection is idempotent). A doc with
  * UNSAVED edits is NEVER auto-reloaded — a binary repopulation would clobber
  * the only copy of those edits — it gets an external-conflict flag the client
- * surfaces as a keep-vs-reload banner instead. Tandem's own `.docx` save never
- * reaches this callback: the binary save branch arms `suppressNextChange`
- * before `atomicWriteBuffer`, and suppression is consumed at fs.watch event
- * ARRIVAL (see file-watcher.ts), not at debounce delivery.
+ * surfaces as a keep-vs-reload banner instead. Tandem's own saves are filtered
+ * out before this callback by the file-watcher's two-layer self-write defense:
+ * the arrival-time `suppressNextChange` counter swallows the rename events, and
+ * a delivery-time content fingerprint (`recordSelfWrite`) catches any event
+ * that leaks past it (NTFS fires ~2 events per atomic rename but the counter is
+ * armed once). A genuinely-changed file still reaches here — the fingerprint
+ * skips only bytes identical to what Tandem just wrote. See file-watcher.ts.
  */
 export function wireFileWatcher(id: string, filePath: string, format: string): void {
   try {

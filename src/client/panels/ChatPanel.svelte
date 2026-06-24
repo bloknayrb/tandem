@@ -315,30 +315,44 @@ function toggleAnchorExpand(msgId: string) {
     </div>
   {/if}
 
-  <!-- Composer: textarea + Send share a single bordered wrapper. The
-       `:focus-within` accent ring lives on the wrapper (not the textarea)
-       so the Send button is part of the focused surface. Mirrors the
-       redesign `surfaces.css .thread-composer { border + :focus-within
-       accent ring }` pattern. -->
-  <div class="chat-composer-outer">
-    <div class="chat-composer">
-      <textarea
-        bind:this={internalInputEl}
-        value={inputText}
-        oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
-        onkeydown={handleKeyDown}
-        placeholder="Message your AI..."
-        rows={2}
-        class="chat-composer-input"
-      ></textarea>
-      <button
-        onclick={sendMessage}
-        disabled={!inputText.trim()}
-        class={"chat-composer-send" + (inputText.trim() ? " on" : "")}
+  <!-- Composer: a rounded pill textarea + a standalone circular send button,
+       matching the SideRail chat composer in the redesign. The pill carries
+       its own border + focus ring; the send button is a separate accent circle
+       with a paper-plane glyph (the prototype's dark-warm fill maps to the
+       app's accent primary so it stays on the semantic-token system). -->
+  <div class="chat-input-area">
+    <textarea
+      bind:this={internalInputEl}
+      value={inputText}
+      oninput={(e) => (inputText = (e.target as HTMLTextAreaElement).value)}
+      onkeydown={handleKeyDown}
+      placeholder="Message your AI…"
+      rows={1}
+      class="chat-textarea"
+    ></textarea>
+    <button
+      onclick={sendMessage}
+      disabled={!inputText.trim()}
+      class="chat-send-btn"
+      aria-label="Send message"
+      title="Send · Enter"
+      data-testid="chat-send-btn"
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        style="display:block"
+        aria-hidden="true"
       >
-        Send
-      </button>
-    </div>
+        <path d="M14 2L2 8l4 2 2 4 2-4 4-8z" />
+      </svg>
+    </button>
   </div>
 </div>
 
@@ -385,52 +399,58 @@ function toggleAnchorExpand(msgId: string) {
     font-style: italic;
   }
 
-  /* Composer surface — surfaces.css `.thread-composer` analog. */
-  .chat-composer-outer {
-    padding: var(--tandem-space-2) var(--tandem-space-3);
-    border-top: 1px solid var(--tandem-border);
-  }
-  .chat-composer {
+  /* Composer — pill textarea + circular send button, matching the SideRail
+     chat composer in the redesign; the prototype's dark-warm send fill maps to
+     the app's accent primary, and a disabled state (muted, no pointer) is added
+     for the empty-input case the static prototype didn't model. */
+  .chat-input-area {
     display: flex;
-    align-items: stretch;
     gap: var(--tandem-space-2);
-    padding: var(--tandem-space-2);
-    background: var(--tandem-surface);
-    border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-3);
-    transition: border-color 120ms ease, box-shadow 120ms ease;
+    align-items: flex-end;
+    flex-shrink: 0;
+    padding: var(--tandem-space-3);
+    border-top: 1px solid var(--tandem-border);
+    background: var(--tandem-surface-muted);
   }
-  .chat-composer:focus-within {
-    border-color: var(--tandem-accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--tandem-accent) 20%, transparent);
-  }
-  .chat-composer-input {
+  .chat-textarea {
     flex: 1;
     min-width: 0;
-    border: none;
-    outline: none;
-    resize: none;
-    background: transparent;
-    color: var(--tandem-fg);
+    border: 1px solid var(--tandem-border);
+    background: var(--tandem-surface);
+    border-radius: var(--tandem-r-pill);
+    padding: 8px 14px;
     font-family: inherit;
     font-size: var(--tandem-text-base);
-    padding: 0;
+    color: var(--tandem-fg);
+    resize: none;
+    outline: none;
+    min-height: 36px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
   }
-  .chat-composer-send {
-    align-self: flex-end;
-    padding: var(--tandem-space-1) var(--tandem-space-3);
+  .chat-textarea:focus {
+    border-color: var(--tandem-accent);
+    box-shadow: 0 0 0 3px var(--tandem-accent-bg);
+  }
+  .chat-send-btn {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--tandem-r-circle);
     border: none;
-    border-radius: var(--tandem-r-2);
-    background: var(--tandem-surface-sunk);
-    color: var(--tandem-fg-muted);
-    font-size: var(--tandem-text-base);
-    font-weight: 500;
-    cursor: default;
-    transition: background 120ms ease, color 120ms ease;
-  }
-  .chat-composer-send.on {
     background: var(--tandem-accent);
     color: var(--tandem-accent-fg);
+    display: grid;
+    place-items: center;
     cursor: pointer;
+    transition: filter 150ms ease, background 120ms ease, color 120ms ease;
+  }
+  .chat-send-btn:hover:not(:disabled) {
+    filter: brightness(1.12);
+  }
+  .chat-send-btn:disabled {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg-faint);
+    cursor: default;
   }
 </style>

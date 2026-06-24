@@ -12,6 +12,8 @@ import {
   API_DOCUMENT_RELOAD,
   API_DOCX_CONFLICT_RESOLVE,
   API_INFO,
+  API_LICENSE_ACTIVATE,
+  API_LICENSE_STATUS,
   API_MODE,
   API_NOTIFY_STREAM,
   API_OPEN,
@@ -28,6 +30,7 @@ import {
   API_UPLOAD,
 } from "../../shared/api-paths.js";
 import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
+import { licenseGateMiddleware } from "./license-gate.js";
 import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
 import { handleApplyChanges } from "./routes/apply-changes.js";
@@ -39,6 +42,7 @@ import { handleGetDocumentRaw } from "./routes/document-raw.js";
 import { handleReloadFromMarkdown } from "./routes/document-reload.js";
 import { handleResolveDocxConflict } from "./routes/docx-conflict.js";
 import { makeInfoHandler } from "./routes/info.js";
+import { handleActivateLicense, handleGetLicenseStatus } from "./routes/license.js";
 import { handleMode } from "./routes/mode.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
 import { handleOpen } from "./routes/open.js";
@@ -174,6 +178,15 @@ export function registerApiRoutes(
   // NOTE: /api/mode is GET-only — no OPTIONS registration
   app.get(API_MODE, mw, handleMode);
 
+  // License status (#1116). GET-only; loopback callers get the full state
+  // (licensee name + licenseId), non-loopback gets a PII-scrubbed subset.
+  app.get(API_LICENSE_STATUS, mw, handleGetLicenseStatus);
+
+  // License activate (#1116). Gated on origin allowlist + loopback inside the
+  // handler — a license is a credential, installable only by a local caller.
+  app.options(API_LICENSE_ACTIVATE, mw);
+  app.post(API_LICENSE_ACTIVATE, mw, largeBody, handleActivateLicense);
+
   app.options(API_OPEN, mw);
   app.post(API_OPEN, mw, largeBody, handleOpen);
 
@@ -183,49 +196,61 @@ export function registerApiRoutes(
   app.options(API_SAVE, mw);
   app.post(API_SAVE, mw, largeBody, handleSave);
 
-  // Rename inherits the same Host-header (DNS-rebinding) + CORS Origin posture
-  // as open/close/save via `mw`. There is no loopback gate here (and
-  // assertLoopbackForMutation is a no-op on the default loopback bind anyway);
-  // CSRF is closed because a cross-origin JSON POST triggers a preflight that
-  // `mw` answers with Allow-Origin: null. See #1017 security review.
+  // Rename is gated on origin allowlist + loopback inside the handler (#1121 F6).
   app.options(API_RENAME, mw);
   app.post(API_RENAME, mw, largeBody, handleRename);
 
   app.options(API_UPLOAD, mw);
   app.post(API_UPLOAD, mw, largeBody, handleUpload);
 
+  // Scratchpad create / append content is a document mutation — license-gated
+  // (#1116 Surface B) so a restricted user can't author into a fresh doc.
   app.options(API_SCRATCHPAD, mw);
-  app.post(API_SCRATCHPAD, mw, handleScratchpad);
+  app.post(API_SCRATCHPAD, mw, licenseGateMiddleware, handleScratchpad);
 
   app.options(API_CONVERT, mw);
   app.post(API_CONVERT, mw, largeBody, handleConvert);
 
+  // Apply tracked changes mutates document content — license-gated (#1116).
   app.options(API_APPLY_CHANGES, mw);
-  app.post(API_APPLY_CHANGES, mw, largeBody, handleApplyChanges);
+  app.post(API_APPLY_CHANGES, mw, licenseGateMiddleware, largeBody, handleApplyChanges);
 
-  // Raw-markdown source view/edit (#1021). GET is read-only (no loopback gate,
-  // like /api/mode); POST replaces document content from a user-supplied string.
+  // Raw-markdown source view/edit (#1021). GET is loopback-only (full doc
+  // content must not be disclosed to LAN peers, #1121 F5); POST is gated on
+  // origin allowlist + loopback inside the handler (#1121 F6).
   app.get(API_DOCUMENT_RAW, mw, handleGetDocumentRaw);
+  // Reload-from-disk overwrites in-memory content — license-gated (#1116).
   app.options(API_DOCUMENT_RELOAD, mw);
-  app.post(API_DOCUMENT_RELOAD, mw, largeBody, handleReloadFromMarkdown);
+  app.post(API_DOCUMENT_RELOAD, mw, licenseGateMiddleware, largeBody, handleReloadFromMarkdown);
 
-  // Pre-overwrite document backups (#1086). GET lists snapshots (read-only);
-  // POST restores one — same CSRF posture as /api/rename (see routes/backups.ts).
+  // Pre-overwrite document backups (#1086). GET strips absolute filePath to
+  // basename for non-loopback callers (#1121 F5); POST is gated on origin
+  // allowlist + loopback inside the handler (#1121 F6).
   app.get(API_BACKUPS, mw, handleListBackups);
+  // Restore overwrites the document with a snapshot — license-gated (#1116).
   app.options(API_BACKUPS_RESTORE, mw);
-  app.post(API_BACKUPS_RESTORE, mw, largeBody, handleRestoreBackup);
+  app.post(API_BACKUPS_RESTORE, mw, licenseGateMiddleware, largeBody, handleRestoreBackup);
 
-  // .docx external-conflict resolution (#1069): keep unsaved edits or reload
-  // fresh from disk. Same CSRF posture as /api/document/reload (see handler).
+  // .docx external-conflict resolution (#1069). Gated on origin allowlist +
+  // loopback inside the handler (#1121 F6); also license-gated (#1116) — it
+  // writes a resolution to the document.
   app.options(API_DOCX_CONFLICT_RESOLVE, mw);
-  app.post(API_DOCX_CONFLICT_RESOLVE, mw, largeBody, handleResolveDocxConflict);
+  app.post(
+    API_DOCX_CONFLICT_RESOLVE,
+    mw,
+    licenseGateMiddleware,
+    largeBody,
+    handleResolveDocxConflict,
+  );
 
-  // Annotation reply: browser user posts a reply to an annotation thread
+  // Annotation reply: browser user posts a reply to an annotation thread.
+  // License-gated (#1116) — an annotation mutation.
   app.options(API_ANNOTATION_REPLY, mw);
-  app.post(API_ANNOTATION_REPLY, mw, largeBody, handleAnnotationReply);
+  app.post(API_ANNOTATION_REPLY, mw, licenseGateMiddleware, largeBody, handleAnnotationReply);
 
+  // Remove-annotation is an annotation mutation — license-gated (#1116).
   app.options(API_REMOVE_ANNOTATION, mw);
-  app.post(API_REMOVE_ANNOTATION, mw, largeBody, handleRemoveAnnotation);
+  app.post(API_REMOVE_ANNOTATION, mw, licenseGateMiddleware, largeBody, handleRemoveAnnotation);
 
   // Stale store.lock reclaim (#1077). Mutating: the handler gates on origin
   // allowlist + loopback before touching the lockfile (same posture as the
@@ -233,8 +258,8 @@ export function registerApiRoutes(
   app.options(API_STORE_RECLAIM_LOCK, mw);
   app.post(API_STORE_RECLAIM_LOCK, mw, handleStoreReclaimLock);
 
-  // Persisted-session management UI (#103): list (read-only), delete one, clear all.
-  // The mutating routes gate on origin + loopback inside their handlers.
+  // Persisted-session management UI (#103): list (strips filePath to basename for
+  // non-loopback callers, #1121 F5); mutating routes gate on origin + loopback.
   app.get(API_SESSIONS, mw, handleListSessions);
 
   app.options(API_SESSIONS_DELETE, mw);

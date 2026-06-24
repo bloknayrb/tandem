@@ -36,6 +36,7 @@ bulk-cancel-btn
 bulk-confirm-btn
 bulk-dismiss-btn
 changelog-error
+chat-send-btn
 chat-tab
 claude-typing-indicator-{*}
 claude-working-indicator
@@ -120,6 +121,12 @@ empty-state-open-settings
 empty-state-retry
 error-boundary-recover-btn
 error-boundary-reload-btn
+fidelity-report-banner
+fidelity-report-details
+fidelity-report-details-toggle
+fidelity-report-export-downgrades
+fidelity-report-import-losses
+fidelity-report-integrity-warnings
 file-open-browse
 file-open-dialog
 file-open-error
@@ -190,6 +197,14 @@ integration-wizard-step-detect
 integration-wizard-step-done
 integration-wizard-step-error
 left-outline-rail
+license-activate-error
+license-activate-input
+license-activate-submit
+license-settings-section
+license-status-pill
+license-trial-banner
+license-trial-days
+license-wall
 margin-anchor-dot
 margin-bubble-{*}
 margin-column-{*}
@@ -221,7 +236,6 @@ models-legacy-migration-banner
 models-legacy-migration-status
 models-save-error
 network-degraded-delay-slider
-network-hold-annotations-toggle
 network-restart-sidecar
 network-retry-strategy
 new-tab-browse
@@ -380,7 +394,6 @@ updater-banner
 updater-banner-dismiss
 updater-banner-install
 updater-banner-visible
-user-name-input
 view-changelog-btn
 view-documentation-btn
 {*}-{*}
