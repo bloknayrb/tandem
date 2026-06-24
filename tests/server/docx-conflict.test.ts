@@ -67,6 +67,7 @@ import {
 import { loadSession, saveSession } from "../../src/server/session/manager.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
+  TAURI_HOSTNAME,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_SAVED_AT_VERSION,
@@ -321,7 +322,11 @@ describe("handleResolveDocxConflict — route doc selection", () => {
   }
 
   function makeReq(body: unknown): Request {
-    return { body } as unknown as Request;
+    return {
+      body,
+      headers: { origin: `http://${TAURI_HOSTNAME}` },
+      socket: { remoteAddress: "127.0.0.1" },
+    } as unknown as Request;
   }
 
   /** Open a docx, dirty it, deliver an external change → pending conflict flag. */
