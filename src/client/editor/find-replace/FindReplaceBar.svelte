@@ -122,6 +122,11 @@ let isReplacing = $state(false);
 let replaceProgress = $state<{ replaced: number; total: number } | null>(null);
 let partialWarning = $state<string | null>(null);
 
+// Replace row collapses by default (B4). Pure UI state driven by user events —
+// toggled imperatively in handlers, never via $effect (would risk the tick
+// cascade documented in Editor.svelte's setEditable/bumpTick guard).
+let replaceOpen = $state(false);
+
 // Tick counter — bump to force re-read of plugin state
 let tick = $state(0);
 
@@ -134,7 +139,17 @@ const findState = $derived.by(() => {
 const matchCount = $derived(findState?.matches.length ?? 0);
 const activeIndex = $derived(findState?.activeIndex ?? -1);
 
+// No-match tint applies only to in-document find (cross-tab uses its own panel).
+const noMatch = $derived(scope === "doc" && !!query && matchCount === 0 && !regexError);
+const countLabel = $derived.by(() => {
+  if (scope !== "doc" || !query) return "";
+  if (regexError) return "error";
+  if (matchCount === 0) return "0 matches";
+  return `${activeIndex + 1} / ${matchCount}`;
+});
+
 let queryInput = $state<HTMLInputElement | null>(null);
+let replaceInput = $state<HTMLInputElement | null>(null);
 
 $effect(() => {
   if (!open) return;
@@ -157,16 +172,24 @@ $effect(() => {
 });
 
 $effect(() => {
+  // Only subscribe while the bar is open: the match count is rendered only
+  // inside `{#if open}`, so bumping on every editor transaction while the bar
+  // is closed is pure waste (this component stays mounted in editorColumn).
+  if (!open) return;
   const ed = editor;
   if (!ed || ed.isDestroyed) return;
 
+  // Bump on `transaction` — NOT just `update`/`selectionUpdate`. find/findNext/
+  // findPrev dispatch META-ONLY transactions that change neither the doc nor the
+  // selection, so those two events never fire and the match count freezes at 0
+  // (pre-existing bug, made loud by the no-match tint). `transaction` fires for
+  // every transaction (a superset) and tick++ dispatches no PM transaction itself,
+  // so there is no feedback loop with Editor.svelte's setEditable/readOnly guard.
   const bumpTick = () => tick++;
-  ed.on("update", bumpTick);
-  ed.on("selectionUpdate", bumpTick);
+  ed.on("transaction", bumpTick);
   return () => {
     if (!ed.isDestroyed) {
-      ed.off("update", bumpTick);
-      ed.off("selectionUpdate", bumpTick);
+      ed.off("transaction", bumpTick);
     }
   };
 });
@@ -212,6 +235,14 @@ function handleScopeChange(newScope: Scope) {
   }
 }
 
+// Imperative toggle (no $effect) — focus the replace input after it un-hides.
+function toggleReplace() {
+  replaceOpen = !replaceOpen;
+  if (replaceOpen) {
+    requestAnimationFrame(() => replaceInput?.focus());
+  }
+}
+
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === "Enter") {
     e.preventDefault();
@@ -223,6 +254,16 @@ function handleKeydown(e: KeyboardEvent) {
     return;
   }
   if (e.key === "Escape") {
+    // Two-stage: collapse an open replace row first, then close. Stop the event
+    // so it never bubbles to App-level Escape handlers (which would close the
+    // bar outright and make the first stage invisible).
+    e.preventDefault();
+    e.stopPropagation();
+    if (replaceOpen) {
+      replaceOpen = false;
+      queryInput?.focus();
+      return;
+    }
     close();
   }
 }
@@ -262,367 +303,568 @@ async function handleReplaceAll() {
 </script>
 
 {#if open}
-  <div
-    data-testid="find-replace-bar"
-    role="dialog"
-    tabindex="-1"
-    aria-modal="false"
-    aria-label="Find and replace"
-    class="fr-bar"
-    onkeydown={handleKeydown}
-  >
-    <!-- Scope pills -->
-    {#if tabs.length > 1}
-      <div data-testid="find-scope-pills" class="fr-scope-row">
+  <!-- Anchor: floats top-right of the editor column (a non-scrolling wrapper in
+       App.svelte is the offset parent, so the panel never scrolls with the doc).
+       Slide-in-from-above motion shared with the new-tab / slash-menu family. -->
+  <div class="fr-anchor">
+    <div
+      data-testid="find-replace-bar"
+      role="dialog"
+      tabindex="-1"
+      aria-modal="false"
+      aria-label="Find and replace"
+      class="fr"
+      class:no-match={noMatch}
+      onkeydown={handleKeydown}
+    >
+      <!-- Find row -->
+      <div class="fr-find">
+        <span class="ic" aria-hidden="true">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+        </span>
+        <input
+          bind:this={queryInput}
+          data-testid="find-input"
+          type="text"
+          placeholder="Find in document…"
+          aria-label="Find in document"
+          autocomplete="off"
+          bind:value={query}
+          oninput={dispatchFind}
+        />
+        <span
+          data-testid="find-match-count"
+          class="count"
+          class:no-match={noMatch}
+          class:err={!!regexError}
+        >{countLabel}</span>
+        <span class="esc" aria-hidden="true">Esc</span>
+      </div>
+
+      <!-- Controls strip: nav + toggles + expand/close -->
+      <div class="fr-controls">
+        <div class="nav-group">
+          <button
+            data-testid="find-prev-btn"
+            class="fr-nav"
+            onclick={() => editor?.commands.findPrev()}
+            disabled={matchCount === 0}
+            title="Previous match (⇧↵)"
+            aria-label="Previous match"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 15l-6-6-6 6" /></svg>
+          </button>
+          <button
+            data-testid="find-next-btn"
+            class="fr-nav"
+            onclick={() => editor?.commands.findNext()}
+            disabled={matchCount === 0}
+            title="Next match (↵)"
+            aria-label="Next match"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+          </button>
+        </div>
+        <div class="toggles">
+          <button
+            data-testid="find-case-toggle"
+            class="fr-toggle"
+            class:on={caseSensitive}
+            aria-pressed={caseSensitive}
+            title="Case sensitive"
+            onclick={() => { caseSensitive = !caseSensitive; dispatchFind(); }}
+          >Aa</button>
+          <button
+            data-testid="find-word-toggle"
+            class="fr-toggle"
+            class:on={wholeWord}
+            aria-pressed={wholeWord}
+            title="Whole word"
+            onclick={() => { wholeWord = !wholeWord; dispatchFind(); }}
+          >\b</button>
+          <button
+            data-testid="find-regex-toggle"
+            class="fr-toggle"
+            class:on={regexMode}
+            aria-pressed={regexMode}
+            title="Regular expression"
+            onclick={() => { regexMode = !regexMode; dispatchFind(); }}
+          >.*</button>
+        </div>
+        <span class="spacer"></span>
         <button
-          data-testid="find-scope-doc"
-          class="fr-scope-pill"
-          class:on={scope === "doc"}
-          onclick={() => handleScopeChange("doc")}
-          aria-pressed={scope === "doc"}
-        >This document</button>
+          data-testid="find-replace-expand-btn"
+          class="fr-expand"
+          class:on={replaceOpen}
+          aria-label="Toggle replace row"
+          aria-expanded={replaceOpen}
+          title="Toggle replace"
+          onclick={toggleReplace}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+        </button>
         <button
-          data-testid="find-scope-tabs"
-          class="fr-scope-pill"
-          class:on={scope === "tabs"}
-          onclick={() => handleScopeChange("tabs")}
-          aria-pressed={scope === "tabs"}
-        >Open tabs</button>
+          data-testid="find-close-btn"
+          class="fr-close"
+          onclick={close}
+          title="Close (Esc)"
+          aria-label="Close find bar"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M6 18L18 6" /></svg>
+        </button>
       </div>
-    {/if}
 
-    <!-- Query row -->
-    <div class="fr-row">
-      <input
-        bind:this={queryInput}
-        data-testid="find-input"
-        type="text"
-        placeholder="Find…"
-        aria-label="Find"
-        bind:value={query}
-        oninput={dispatchFind}
-        class="fr-input"
-        class:has-error={!!regexError}
-      />
-      <!-- Match count -->
-      <span data-testid="find-match-count" class="fr-count">
-        {#if query}
-          {matchCount === 0 ? "No matches" : `${activeIndex + 1} / ${matchCount}`}
-        {/if}
-      </span>
-      <!-- Prev / Next -->
-      <button
-        data-testid="find-prev-btn"
-        class="fr-nav"
-        onclick={() => editor?.commands.findPrev()}
-        disabled={matchCount === 0}
-        title="Previous match (Shift+Enter)"
-        aria-label="Previous match"
-      >
-        ↑
-      </button>
-      <button
-        data-testid="find-next-btn"
-        class="fr-nav"
-        onclick={() => editor?.commands.findNext()}
-        disabled={matchCount === 0}
-        title="Next match (Enter)"
-        aria-label="Next match"
-      >
-        ↓
-      </button>
-      <!-- Close -->
-      <button
-        data-testid="find-close-btn"
-        class="fr-close"
-        onclick={close}
-        title="Close (Esc)"
-        aria-label="Close find bar"
-      >
-        ×
-      </button>
-    </div>
-
-    {#if regexError}
-      <div class="fr-error" role="alert">
-        {regexError}
+      <!-- Replace row (always mounted; hidden via attribute so the input ref stays bound) -->
+      <div class="fr-replace" hidden={!replaceOpen}>
+        <span class="ic" aria-hidden="true">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M9 15l3 3 3-3" /><path d="M12 12v6" /></svg>
+        </span>
+        <input
+          bind:this={replaceInput}
+          data-testid="replace-input"
+          type="text"
+          placeholder="Replace with…"
+          aria-label="Replace with"
+          autocomplete="off"
+          bind:value={replaceText}
+        />
+        <button
+          data-testid="replace-btn"
+          class="fr-replace-btn"
+          onclick={() => { if (editor) { replaceActive(editor.view, replaceText); tick++; } }}
+          disabled={matchCount === 0 || isReplacing || scope === "tabs"}
+          title={scope === "tabs" ? "Replace is not available in Open tabs mode" : undefined}
+        >
+          Replace
+        </button>
+        <button
+          data-testid="replace-all-btn"
+          class="fr-replace-btn primary"
+          onclick={handleReplaceAll}
+          disabled={matchCount === 0 || isReplacing || scope === "tabs"}
+          title={scope === "tabs" ? "Replace All is not available in Open tabs mode" : undefined}
+        >
+          {#if isReplacing && replaceProgress}
+            {replaceProgress.replaced}/{replaceProgress.total}
+          {:else}
+            All
+          {/if}
+        </button>
       </div>
-    {/if}
 
-    <!-- Options -->
-    <div class="fr-options">
-      <label class="fr-toggle">
-        <input
-          data-testid="find-case-toggle"
-          type="checkbox"
-          bind:checked={caseSensitive}
-          onchange={dispatchFind}
-        />
-        Aa
-      </label>
-      <label class="fr-toggle">
-        <input
-          data-testid="find-word-toggle"
-          type="checkbox"
-          bind:checked={wholeWord}
-          onchange={dispatchFind}
-        />
-        \b
-      </label>
-      <label class="fr-toggle">
-        <input
-          data-testid="find-regex-toggle"
-          type="checkbox"
-          bind:checked={regexMode}
-          onchange={dispatchFind}
-        />
-        .*
-      </label>
-    </div>
+      <!-- Scope pills — only with 2+ tabs open -->
+      {#if tabs.length > 1}
+        <div data-testid="find-scope-pills" class="fr-scope">
+          <span class="label">Scope</span>
+          <button
+            data-testid="find-scope-doc"
+            class="fr-scope-pill"
+            class:on={scope === "doc"}
+            onclick={() => handleScopeChange("doc")}
+            aria-pressed={scope === "doc"}
+          >This document</button>
+          <button
+            data-testid="find-scope-tabs"
+            class="fr-scope-pill"
+            class:on={scope === "tabs"}
+            onclick={() => handleScopeChange("tabs")}
+            aria-pressed={scope === "tabs"}
+          >Open tabs</button>
+        </div>
+      {/if}
 
-    <!-- Replace row -->
-    <div class="fr-row">
-      <input
-        data-testid="replace-input"
-        type="text"
-        placeholder="Replace with…"
-        aria-label="Replace with"
-        bind:value={replaceText}
-        class="fr-input"
-      />
-      <button
-        data-testid="replace-btn"
-        class="fr-replace-btn"
-        onclick={() => { if (editor) { replaceActive(editor.view, replaceText); tick++; } }}
-        disabled={matchCount === 0 || isReplacing || scope === "tabs"}
-        title={scope === "tabs" ? "Replace is not available in Open tabs mode" : undefined}
-      >
-        Replace
-      </button>
-      <button
-        data-testid="replace-all-btn"
-        class="fr-replace-btn"
-        onclick={handleReplaceAll}
-        disabled={matchCount === 0 || isReplacing || scope === "tabs"}
-        title={scope === "tabs" ? "Replace All is not available in Open tabs mode" : undefined}
-      >
-        {#if isReplacing && replaceProgress}
-          {replaceProgress.replaced}/{replaceProgress.total}
-        {:else}
-          All
-        {/if}
-      </button>
-    </div>
+      <!-- Regex error strip (find row also surfaces "error" in the count) -->
+      {#if regexError}
+        <div class="fr-msg error" role="alert">
+          <span class="msg-ic" aria-hidden="true">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4" /><path d="M12 17h.01" /><path d="M10.29 3.86l-8.16 14.14A2 2 0 0 0 3.84 21h16.32a2 2 0 0 0 1.71-3l-8.16-14.14a2 2 0 0 0-3.42 0z" /></svg>
+          </span>
+          <span>{regexError}</span>
+        </div>
+      {/if}
 
-    {#if partialWarning}
-      <div class="fr-warning" role="status">
-        {partialWarning}
-      </div>
-    {/if}
+      <!-- Partial replace-all warning -->
+      {#if partialWarning}
+        <div class="fr-msg warning" role="status">
+          {partialWarning}
+        </div>
+      {/if}
 
-    <!-- Cross-doc results -->
-    {#if scope === "tabs"}
-      <div data-testid="find-cross-doc-results" class="fr-xdoc">
-        {#if crossDocSearching}
-          <div class="fr-xdoc-status">Searching…</div>
-        {:else if query && crossDocResults.length === 0}
-          <div class="fr-xdoc-status">No matches in open tabs</div>
-        {:else}
-          {#each crossDocResults as result}
-            <div class="fr-xdoc-row">
-              <div class="fr-xdoc-name">
-                {result.fileName}
-                <span class="fr-xdoc-count">({result.count} {result.count === 1 ? 'match' : 'matches'})</span>
-              </div>
-              {#each result.snippets as snippet}
-                <div class="fr-xdoc-snip">
-                  {snippet}
+      <!-- Cross-doc results (kept in-panel; restyled to fit B4) -->
+      {#if scope === "tabs"}
+        <div data-testid="find-cross-doc-results" class="fr-xdoc">
+          {#if crossDocSearching}
+            <div class="fr-xdoc-status">Searching…</div>
+          {:else if query && crossDocResults.length === 0}
+            <div class="fr-xdoc-status">No matches in open tabs</div>
+          {:else}
+            {#each crossDocResults as result}
+              <div class="fr-xdoc-row">
+                <div class="fr-xdoc-name">
+                  {result.fileName}
+                  <span class="fr-xdoc-count">({result.count} {result.count === 1 ? 'match' : 'matches'})</span>
                 </div>
-              {/each}
-            </div>
-          {/each}
-        {/if}
+                {#each result.snippets as snippet}
+                  <div class="fr-xdoc-snip">
+                    {snippet}
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+
+      <!-- Footer: mono keyboard legend on a sunk strip -->
+      <div class="fr-footer">
+        <span class="kgrp"><span class="key">↵</span>next</span>
+        <span class="kgrp"><span class="key">⇧</span><span class="key">↵</span>prev</span>
+        <span class="spacer"></span>
+        <span class="kgrp">Esc to close</span>
       </div>
-    {/if}
+    </div>
   </div>
 {/if}
 
 <style>
-  /* Find/Replace bar — B4 recipe layered onto production's bottom-right
-     anchor (the bar's position is information, not decoration; users have
-     learned where to find it, so we keep `position: absolute; bottom; right`
-     rather than the bundle's top-right). */
-  .fr-bar {
+  /* B4 — Find & Replace. Floating panel anchored top-right of the editor
+     column (the App.svelte wrapper is the non-scrolling offset parent). Same
+     chrome family as the new-tab / slash menus: surface card, hairline border,
+     soft shadow, mono keyboard legend at the foot. */
+  .fr-anchor {
     position: absolute;
-    bottom: 0;
-    right: 0;
+    top: 8px;
+    right: 12px;
+    z-index: var(--tandem-z-overlay, 200);
+    transform-origin: top right;
+    animation: fr-pop-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes fr-pop-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-anchor { animation: none; }
+  }
+
+  .fr {
+    width: 440px;
+    max-width: calc(100% - 24px);
     background: var(--tandem-surface);
     border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-3) var(--tandem-r-3) 0 0;
-    padding: var(--tandem-space-3) var(--tandem-space-4);
-    box-shadow: var(--tandem-shadow-3);
-    z-index: var(--tandem-z-overlay, 200);
-    min-width: 320px;
-    max-width: 480px;
+    border-radius: var(--tandem-r-4);
+    box-shadow: var(--tandem-shadow-2);
+    overflow: hidden;
     display: flex;
     flex-direction: column;
-    gap: var(--tandem-space-2);
   }
 
-  .fr-row {
+  /* ── Find row: borderless input on the panel surface ── */
+  .fr-find {
     display: flex;
+    align-items: center;
     gap: var(--tandem-space-2);
-    align-items: center;
-  }
-
-  /* Scope pills — token names parallel `find-scope-pill.on` for the active
-     state so the recipe stays self-documenting. */
-  .fr-scope-row {
-    display: flex;
-    gap: var(--tandem-space-1);
-    align-items: center;
-  }
-  .fr-scope-pill {
-    padding: 2px var(--tandem-space-2);
-    font-size: var(--tandem-text-xs);
-    border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-pill);
+    padding: 10px 12px 10px 14px;
     background: var(--tandem-surface);
-    color: var(--tandem-fg-muted);
-    cursor: pointer;
   }
-  .fr-scope-pill.on {
-    border-color: var(--tandem-accent-border);
-    background: var(--tandem-accent-bg);
-    color: var(--tandem-accent);
+  .fr-find .ic {
+    color: var(--tandem-fg-faint);
+    display: inline-grid;
+    place-items: center;
+    flex-shrink: 0;
   }
-
-  /* Inputs default to surface-sunk (per B4) so the bar's content area reads
-     as nested into the floating surface, not flat against it. */
-  .fr-input {
+  .fr-find input {
     flex: 1;
-    padding: 4px 8px;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: var(--tandem-font-sans);
     font-size: var(--tandem-text-sm);
-    border: 1px solid var(--tandem-border);
+    color: var(--tandem-fg);
+    padding: 0;
+  }
+  .fr-find input::placeholder {
+    color: var(--tandem-fg-faint);
+  }
+  .count {
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+    color: var(--tandem-fg-faint);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .count.no-match,
+  .count.err {
+    color: var(--tandem-error-fg-strong);
+  }
+  .esc {
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+    color: var(--tandem-fg-faint);
+    padding: 1px 6px;
     border-radius: var(--tandem-r-2);
     background: var(--tandem-surface-sunk);
-    color: var(--tandem-fg);
-    outline: none;
-  }
-  .fr-input::placeholder {
-    color: var(--tandem-fg-subtle);
-  }
-  .fr-input:focus {
-    border-color: var(--tandem-accent-border);
-    background: var(--tandem-surface);
-  }
-  .fr-input.has-error {
-    border-color: var(--tandem-error);
-  }
-
-  /* Match-count chip — monospace pill that reads as state, not content. */
-  .fr-count {
-    font-family: var(--tandem-font-mono, ui-monospace, SFMono-Regular, monospace);
-    font-size: var(--tandem-text-xs);
-    color: var(--tandem-fg-muted);
-    white-space: nowrap;
-    min-width: 48px;
-    text-align: right;
-  }
-
-  .fr-nav {
-    background: none;
     border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-2);
-    padding: 2px 6px;
-    cursor: pointer;
-    font-size: 12px;
+    flex-shrink: 0;
+  }
+
+  /* No-match: tint the find-row strip rather than a separate message. */
+  .fr.no-match .fr-find {
+    background: var(--tandem-error-bg);
+  }
+  .fr.no-match .fr-find input {
+    color: var(--tandem-error-fg-strong);
+  }
+  .fr.no-match .fr-find input::placeholder {
+    color: var(--tandem-error-fg-strong);
+    opacity: 0.5;
+  }
+
+  /* ── Controls strip: nav + toggles on a quieter surface ── */
+  .fr-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px 6px 10px;
+    border-top: 1px solid var(--tandem-border);
+    background: var(--tandem-surface-muted);
+  }
+  .nav-group {
+    display: inline-flex;
+    gap: 2px;
+  }
+  .fr-nav {
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
     color: var(--tandem-fg-muted);
+    border-radius: var(--tandem-r-3);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 100ms, color 100ms;
   }
   .fr-nav:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
   }
   .fr-nav:disabled {
-    opacity: 0.4;
+    opacity: 0.35;
     cursor: default;
   }
 
-  .fr-close {
-    background: none;
-    border: 1px solid transparent;
-    cursor: pointer;
-    font-size: 16px;
-    color: var(--tandem-fg-muted);
-    padding: 0;
-    width: 22px;
-    height: 22px;
-    display: grid;
-    place-items: center;
-    border-radius: var(--tandem-r-2);
-    line-height: 1;
-  }
-  .fr-close:hover,
-  .fr-close:focus-visible {
-    color: var(--tandem-fg);
-    background: var(--tandem-surface-sunk);
-    outline: none;
-  }
-
-  .fr-error {
-    font-size: var(--tandem-text-xs);
-    color: var(--tandem-error-fg);
-  }
-  .fr-warning {
-    font-size: var(--tandem-text-xs);
-    color: var(--tandem-warning-fg);
-    padding: 2px 0;
-  }
-
-  .fr-options {
-    display: flex;
-    gap: var(--tandem-space-3);
-    align-items: center;
+  .toggles {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: 4px;
   }
   .fr-toggle {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: var(--tandem-text-xs);
+    height: 24px;
+    min-width: 28px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    background: transparent;
     color: var(--tandem-fg-muted);
+    border-radius: var(--tandem-r-3);
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-xs);
+    font-weight: 500;
+    line-height: 1;
     cursor: pointer;
-    user-select: none;
+    transition: background 100ms, color 100ms, border-color 100ms;
+    display: inline-grid;
+    place-items: center;
+  }
+  .fr-toggle:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .fr-toggle.on {
+    background: var(--tandem-accent-bg);
+    border-color: var(--tandem-accent-border);
+    color: var(--tandem-accent-fg-strong);
   }
 
-  .fr-replace-btn {
-    padding: 4px 10px;
-    font-size: var(--tandem-text-xs);
+  .spacer {
+    flex: 1;
+  }
+  .fr-expand,
+  .fr-close {
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--tandem-fg-faint);
+    border-radius: var(--tandem-r-3);
+    display: grid;
+    place-items: center;
     cursor: pointer;
-    border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-2);
+    transition: background 100ms, color 100ms;
+    flex-shrink: 0;
+  }
+  .fr-expand:hover,
+  .fr-close:hover,
+  .fr-expand:focus-visible,
+  .fr-close:focus-visible {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+    outline: none;
+  }
+  .fr-expand.on {
+    color: var(--tandem-accent-fg-strong);
+  }
+  .fr-expand svg {
+    transition: transform 150ms;
+  }
+  .fr-expand.on svg {
+    transform: rotate(180deg);
+  }
+
+  /* ── Replace row ── */
+  .fr-replace {
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+    padding: 10px 12px 10px 14px;
+    border-top: 1px solid var(--tandem-border);
     background: var(--tandem-surface);
+  }
+  .fr-replace[hidden] {
+    display: none;
+  }
+  .fr-replace .ic {
+    color: var(--tandem-fg-faint);
+    display: inline-grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+  .fr-replace input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: var(--tandem-font-sans);
+    font-size: var(--tandem-text-sm);
+    color: var(--tandem-fg);
+    padding: 0;
+  }
+  .fr-replace input::placeholder {
+    color: var(--tandem-fg-faint);
+  }
+  .fr-replace-btn {
+    height: 24px;
+    padding: 0 10px;
+    font-family: var(--tandem-font-sans);
+    font-size: var(--tandem-text-xs);
+    font-weight: 500;
+    border-radius: var(--tandem-r-pill);
+    border: 1px solid var(--tandem-border);
+    background: transparent;
     color: var(--tandem-fg-muted);
+    cursor: pointer;
+    transition: background 100ms, color 100ms, border-color 100ms;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .fr-replace-btn:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
+    border-color: var(--tandem-border-strong);
   }
   .fr-replace-btn:disabled {
-    opacity: 0.4;
+    opacity: 0.35;
     cursor: default;
   }
+  .fr-replace-btn.primary {
+    background: var(--tandem-accent);
+    color: var(--tandem-accent-fg);
+    border-color: transparent;
+  }
+  .fr-replace-btn.primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+    background: var(--tandem-accent);
+  }
 
-  /* Cross-doc results panel — divider + tighter rhythm than the main rows. */
+  /* ── Scope row ── */
+  .fr-scope {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px 10px;
+    border-top: 1px solid var(--tandem-border);
+    background: var(--tandem-surface-muted);
+  }
+  .fr-scope .label {
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--tandem-fg-faint);
+    margin-right: 4px;
+  }
+  .fr-scope-pill {
+    height: 22px;
+    padding: 0 10px;
+    border-radius: var(--tandem-r-pill);
+    border: 1px solid var(--tandem-border);
+    background: transparent;
+    color: var(--tandem-fg-muted);
+    font-family: var(--tandem-font-sans);
+    font-size: var(--tandem-text-xs);
+    cursor: pointer;
+    transition: background 100ms, color 100ms, border-color 100ms;
+  }
+  .fr-scope-pill:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .fr-scope-pill.on {
+    background: var(--tandem-accent-bg);
+    border-color: var(--tandem-accent-border);
+    color: var(--tandem-accent-fg-strong);
+  }
+
+  /* ── Inline message strips (regex error / partial-replace warning) ── */
+  .fr-msg {
+    padding: 8px 14px;
+    font-size: var(--tandem-text-xs);
+    border-top: 1px solid var(--tandem-border);
+    font-family: var(--tandem-font-sans);
+    line-height: 1.4;
+    display: flex;
+    align-items: flex-start;
+    gap: var(--tandem-space-2);
+  }
+  .fr-msg.error {
+    color: var(--tandem-error-fg-strong);
+    background: var(--tandem-error-bg);
+  }
+  .fr-msg.warning {
+    color: var(--tandem-warning-fg);
+    background: var(--tandem-warning-bg);
+  }
+  .fr-msg .msg-ic {
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* ── Cross-doc results panel ── */
   .fr-xdoc {
     border-top: 1px solid var(--tandem-border);
-    padding-top: var(--tandem-space-2);
+    padding: var(--tandem-space-2) 14px;
+    background: var(--tandem-surface-muted);
     display: flex;
     flex-direction: column;
     gap: var(--tandem-space-1);
+    max-height: 220px;
+    overflow-y: auto;
   }
   .fr-xdoc-status {
     font-size: var(--tandem-text-xs);
-    color: var(--tandem-fg-subtle);
+    color: var(--tandem-fg-faint);
   }
   .fr-xdoc-row {
     display: flex;
@@ -635,7 +877,7 @@ async function handleReplaceAll() {
     font-weight: 500;
   }
   .fr-xdoc-count {
-    color: var(--tandem-fg-subtle);
+    color: var(--tandem-fg-faint);
     font-weight: normal;
   }
   .fr-xdoc-snip {
@@ -645,5 +887,32 @@ async function handleReplaceAll() {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* ── Footer: mono key legend on a sunk strip ── */
+  .fr-footer {
+    padding: 7px 14px;
+    border-top: 1px solid var(--tandem-border);
+    background: var(--tandem-surface-sunk);
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-2xs);
+    color: var(--tandem-fg-faint);
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-3);
+  }
+  .fr-footer .kgrp {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .fr-footer .key {
+    padding: 1px 5px;
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    color: var(--tandem-fg-muted);
+    min-width: 14px;
+    text-align: center;
   }
 </style>

@@ -2298,6 +2298,10 @@ const tutorial = createTutorial(
 {/snippet}
 
 {#snippet editorColumn()}
+  <!-- Non-scrolling offset parent for the floating find bar: anchors it to the
+       editor column's top-right so it floats above the doc and never scrolls
+       away. `.editor-scroll` keeps all its bindings, handlers, and styles. -->
+  <div class="editor-column-wrap">
   <div
     bind:this={editorScrollEl}
     data-testid="editor-scroll-container"
@@ -2499,7 +2503,10 @@ const tutorial = createTutorial(
       </div>
     {/if}
     {/if}
-    <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
+  </div>
+    <!-- Find/Replace bar: sibling of the scroll container so it floats top-right
+         of the editor column without scrolling with the document. The `{#if open}`
+         gate lives inside the component. -->
     <FindReplaceBar
       {editor}
       open={findBarOpen}
@@ -2815,6 +2822,19 @@ const tutorial = createTutorial(
     align-items: center;
     justify-content: center;
     font-weight: 700;
+  }
+
+  .editor-column-wrap {
+    /* Wraps `.editor-scroll` so the floating find bar (its sibling) anchors to
+       the editor column's bounds and floats above the scrolling document rather
+       than scrolling with it. Takes the flex slot `.editor-scroll` held in the
+       editor row; the scroll element fills it. As an *ancestor* of
+       `.editor-scroll` it doesn't alter the positioned-ancestor chain for the
+       margin bubbles (INVARIANT 4 resolves them against `.margin-track`). */
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
   }
 
   /* Editor stage grid cells (Phase 3.5; non-docx). Both cells are
