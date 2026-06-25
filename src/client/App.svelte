@@ -2298,19 +2298,23 @@ const tutorial = createTutorial(
 {/snippet}
 
 {#snippet editorColumn()}
-  <div
-    bind:this={editorScrollEl}
-    data-testid="editor-scroll-container"
-    class="editor-scroll tandem-scroll-fade-y"
-    class:hide-raw-md={!settingsState.settings.showRawMarkdown}
-    use:scrollFade={"y"}
-    role="region"
-    aria-label="Document editor"
-    style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
-    ondragover={fileDrop.handleEditorDragOver}
-    ondragleave={fileDrop.handleEditorDragLeave}
-    ondrop={fileDrop.handleEditorDrop}
-  >
+  <!-- Non-scrolling offset parent for the floating find bar: anchors it to the
+       editor column's top-right so it floats above the doc and never scrolls
+       away. `.editor-scroll` keeps all its bindings, handlers, and styles. -->
+  <div class="editor-column-wrap">
+    <div
+      bind:this={editorScrollEl}
+      data-testid="editor-scroll-container"
+      class="editor-scroll tandem-scroll-fade-y"
+      class:hide-raw-md={!settingsState.settings.showRawMarkdown}
+      use:scrollFade={"y"}
+      role="region"
+      aria-label="Document editor"
+      style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
+      ondragover={fileDrop.handleEditorDragOver}
+      ondragleave={fileDrop.handleEditorDragLeave}
+      ondrop={fileDrop.handleEditorDrop}
+    >
     <ReviewOnlyBanner
       visible={isReadOnly && activeTab?.format === "docx"}
       documentId={activeTab?.id}
@@ -2499,7 +2503,10 @@ const tutorial = createTutorial(
       </div>
     {/if}
     {/if}
-    <!-- Find/Replace bar — always mounted so query persists; overlaid at bottom of editor column -->
+    </div>
+    <!-- Find/Replace bar: sibling of the scroll container so it floats top-right
+         of the editor column without scrolling with the document. The `{#if open}`
+         gate lives inside the component. -->
     <FindReplaceBar
       {editor}
       open={findBarOpen}
@@ -2815,6 +2822,19 @@ const tutorial = createTutorial(
     align-items: center;
     justify-content: center;
     font-weight: 700;
+  }
+
+  .editor-column-wrap {
+    /* Wraps `.editor-scroll` so the floating find bar (its sibling) anchors to
+       the editor column's bounds and floats above the scrolling document rather
+       than scrolling with it. Takes the flex slot `.editor-scroll` held in the
+       editor row; the scroll element fills it. As an *ancestor* of
+       `.editor-scroll` it doesn't alter the positioned-ancestor chain for the
+       margin bubbles (INVARIANT 4 resolves them against `.margin-track`). */
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
   }
 
   /* Editor stage grid cells (Phase 3.5; non-docx). Both cells are

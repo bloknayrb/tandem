@@ -140,6 +140,7 @@ find-next-btn
 find-prev-btn
 find-regex-toggle
 find-replace-bar
+find-replace-expand-btn
 find-scope-doc
 find-scope-pills
 find-scope-tabs
