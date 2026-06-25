@@ -25,6 +25,7 @@ const {
   reloadDocumentFromMarkdown,
   resolveExternalConflict,
   getActiveDocId,
+  hasDoc,
 } = vi.hoisted(() => ({
   isLoopbackMock: vi.fn(() => true),
   getCurrentDoc: vi.fn(),
@@ -34,6 +35,7 @@ const {
   reloadDocumentFromMarkdown: vi.fn(),
   resolveExternalConflict: vi.fn(),
   getActiveDocId: vi.fn(),
+  hasDoc: vi.fn(() => true),
 }));
 
 vi.mock("../../src/server/auth/middleware.js", async (importOriginal) => {
@@ -49,7 +51,7 @@ vi.mock("../../src/server/mcp/file-opener.js", () => ({
   reloadDocumentFromMarkdown,
   resolveExternalConflict,
 }));
-vi.mock("../../src/server/documents/registry.js", () => ({ getActiveDocId }));
+vi.mock("../../src/server/documents/registry.js", () => ({ getActiveDocId, hasDoc }));
 
 import { handleListBackups, handleRestoreBackup } from "../../src/server/mcp/routes/backups.js";
 import { handleGetDocumentRaw } from "../../src/server/mcp/routes/document-raw.js";

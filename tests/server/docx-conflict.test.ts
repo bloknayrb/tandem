@@ -47,16 +47,19 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
   suppressNextChange: vi.fn(),
 }));
 
+import type { Request, Response } from "express";
 import { resetForTesting as resetDirtyState } from "../../src/server/documents/dirty.js";
 import { suppressNextChange, watchFile } from "../../src/server/file-watcher.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import {
   getOpenDocs,
+  hasDoc,
   removeDoc,
   saveDocumentToDisk,
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
 import { openFileByPath, resolveExternalConflict } from "../../src/server/mcp/file-opener.js";
+import { handleResolveDocxConflict } from "../../src/server/mcp/routes/docx-conflict.js";
 import {
   getBuffer,
   resetForTesting as resetNotifications,
@@ -64,6 +67,7 @@ import {
 import { loadSession, saveSession } from "../../src/server/session/manager.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
+  TAURI_HOSTNAME,
   Y_MAP_DOCUMENT_META,
   Y_MAP_EXTERNAL_CONFLICT,
   Y_MAP_SAVED_AT_VERSION,
@@ -287,6 +291,172 @@ describe("resolveExternalConflict", () => {
     await expect(resolveExternalConflict("nope", "keep")).rejects.toMatchObject({
       code: "NO_DOCUMENT",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleResolveDocxConflict — route-level doc selection (#1162)
+//
+// The banner is per-tab and the server's active doc does NOT track the client's
+// focused tab, so the handler must resolve the conflict on the body's
+// `documentId`, not on `getActiveDocId()`. Regression: on an upgrade boot the
+// read-only CHANGELOG.md becomes server-active, and clicking "Reload from file"
+// on a restored .docx tab silently no-op'd because the handler resolved the
+// active (CHANGELOG) doc instead of the docx.
+// ---------------------------------------------------------------------------
+describe("handleResolveDocxConflict — route doc selection", () => {
+  function makeRes() {
+    const res = {
+      _status: 0,
+      _body: null as unknown,
+      status(code: number) {
+        this._status = code;
+        return this;
+      },
+      json(body: unknown) {
+        this._body = body;
+        return this;
+      },
+    };
+    return res;
+  }
+
+  function makeReq(body: unknown): Request {
+    return {
+      body,
+      headers: { origin: `http://${TAURI_HOSTNAME}` },
+      socket: { remoteAddress: "127.0.0.1" },
+    } as unknown as Request;
+  }
+
+  /** Open a docx, dirty it, deliver an external change → pending conflict flag. */
+  async function flaggedDocx(name: string, diskBody: string) {
+    const filePath = path.join(tmpDir, name);
+    await fs.writeFile(filePath, await buildSimpleDocx("Original"));
+    const opened = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    const watcherPath = vi
+      .mocked(watchFile)
+      .mock.calls.filter(([p]) => p === filePath)
+      .at(-1)![0];
+    makeDirty(doc);
+    await fs.writeFile(filePath, await buildSimpleDocx(diskBody));
+    await capturedWatcherCallback(watcherPath)(watcherPath);
+    expect(conflictOf(doc)).toBeDefined();
+    return { id: opened.documentId, doc };
+  }
+
+  it("honors the body documentId over a DIFFERENT server-active doc (the regression)", async () => {
+    // The docx that carries the conflict and is the client's focused tab.
+    const { id: docxId, doc: docxDoc } = await flaggedDocx("focused.docx", "Newer disk body");
+
+    // A second, conflict-free doc that the server considers active (mimics the
+    // read-only CHANGELOG.md opened on upgrade).
+    const otherPath = path.join(tmpDir, "active-other.docx");
+    await fs.writeFile(otherPath, await buildSimpleDocx("Other doc"));
+    const other = await openFileByPath(otherPath);
+    setActiveDocId(other.documentId);
+    expect(hasDoc(docxId)).toBe(true);
+
+    const res = makeRes();
+    await handleResolveDocxConflict(
+      makeReq({ documentId: docxId, choice: "reload" }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(0); // success (no error status)
+    expect(res._body).toMatchObject({ success: true });
+    // The docx — NOT the active doc — was reloaded: flag cleared, disk content in.
+    expect(conflictOf(docxDoc)).toBeUndefined();
+    expect(extractText(docxDoc)).toContain("Newer disk body");
+    expect(extractText(docxDoc)).not.toContain("local unsaved edit");
+  });
+
+  it("rejects an unknown documentId with 400 instead of falling back to the active doc", async () => {
+    // A valid, different active doc proves the body id was consulted + rejected,
+    // not silently bypassed via getActiveDocId().
+    const { id: activeId } = await flaggedDocx("active.docx", "Active disk body");
+    setActiveDocId(activeId);
+
+    const res = makeRes();
+    await handleResolveDocxConflict(
+      makeReq({ documentId: "does-not-exist", choice: "reload" }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(400);
+    expect(res._body).toMatchObject({ error: "NO_DOCUMENT" });
+  });
+
+  it("rejects a non-string documentId with 400", async () => {
+    const res = makeRes();
+    await handleResolveDocxConflict(
+      makeReq({ documentId: 123, choice: "reload" }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(400);
+    expect(res._body).toMatchObject({ error: "BAD_REQUEST" });
+  });
+
+  it("falls back to the active doc when documentId is absent", async () => {
+    const { id, doc } = await flaggedDocx("fallback.docx", "Fallback disk body");
+    setActiveDocId(id);
+
+    const res = makeRes();
+    await handleResolveDocxConflict(makeReq({ choice: "reload" }), res as unknown as Response);
+
+    expect(res._status).toBe(0);
+    expect(conflictOf(doc)).toBeUndefined();
+    expect(extractText(doc)).toContain("Fallback disk body");
+  });
+
+  it("treats an empty-string documentId as absent (falls back to the active doc)", async () => {
+    // The `documentId.length > 0` / `documentId?.length` ladder deliberately
+    // treats "" as "not supplied" rather than an invalid id — pin it so a
+    // refactor (e.g. to `documentId ?? getActiveDocId()`) can't silently change it.
+    const { id, doc } = await flaggedDocx("empty-id.docx", "Empty-id disk body");
+    setActiveDocId(id);
+
+    const res = makeRes();
+    await handleResolveDocxConflict(
+      makeReq({ documentId: "", choice: "reload" }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(0);
+    expect(conflictOf(doc)).toBeUndefined();
+    expect(extractText(doc)).toContain("Empty-id disk body");
+  });
+
+  it("forwards choice 'keep' for the body documentId (clears flag, retains edits, re-baselines)", async () => {
+    // Every other handler test uses "reload"; this proves the handler forwards
+    // the validated `choice` rather than hard-coding/swapping it.
+    const { id, doc } = await flaggedDocx("keep.docx", "Keep disk body");
+    setActiveDocId(null); // no active doc — proves the body id is what's used
+    const textBefore = extractText(doc);
+
+    const res = makeRes();
+    await handleResolveDocxConflict(
+      makeReq({ documentId: id, choice: "keep" }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(0);
+    expect(res._body).toMatchObject({ success: true });
+    expect(conflictOf(doc)).toBeUndefined();
+    expect(extractText(doc)).toBe(textBefore); // edits kept, NOT reloaded
+    expect(extractText(doc)).toContain("local unsaved edit");
+    // savedAt re-baselined so a subsequent explicit save is unblocked.
+    expect(doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION)).toBeGreaterThan(0);
+  });
+
+  it("rejects an invalid choice with 400", async () => {
+    const res = makeRes();
+    await handleResolveDocxConflict(makeReq({ choice: "nope" }), res as unknown as Response);
+
+    expect(res._status).toBe(400);
+    expect(res._body).toMatchObject({ error: "BAD_REQUEST" });
   });
 });
 
