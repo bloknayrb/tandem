@@ -269,6 +269,7 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 function close() {
+  replaceOpen = false;
   editor?.commands.findClose();
   onClose();
 }
