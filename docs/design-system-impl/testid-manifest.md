@@ -210,14 +210,14 @@ shipped and were removed:
   `integration-wizard-secret-{input,submit}-{*}`,
   `integration-wizard-apply-result-{*}`
 - More integrations + Cowork sub-view: `integration-wizard-more`,
-  `integration-wizard-cowork-{setup,step,back,error}`, plus the reused
+  `integration-wizard-cowork-{setup,step,back,error,explainer}`, plus the reused
   `cowork-enable-confirm-btn` / `cowork-vethernet-cidr`
 
 ### Cowork modals & settings
 - `cowork-onboarding-{step,confirm,error,enable-btn,enable-confirm-btn,enable-cancel-btn,skip-btn,learn-more-btn,learn-more-link}`
-- `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn}`
+- `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn,learn-more-link}`
 - `cowork-settings{,-loading,-unsupported,-undetected,-error}`,
-  `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`,
+  `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,
   `cowork-enable-{confirm,confirm-btn,cancel-btn}`,
   `cowork-vethernet-cidr`,
   `cowork-lan-ip-override{,-checkbox}`,

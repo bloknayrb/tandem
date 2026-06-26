@@ -1,0 +1,48 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+// Guards against the published Claude Code plugin manifest drifting out of
+// sync with the npm package — historically `plugin.json` was left at 0.8.0
+// while the package shipped 0.14.x. There is no automated version-bump step
+// (releases are manual `chore(release)` commits), so this test is the
+// enforcement: bump `package.json` and `.claude-plugin/plugin.json` together
+// or CI fails here.
+
+function readJson(relPath: string): Record<string, unknown> {
+  const url = new URL(relPath, import.meta.url);
+  return JSON.parse(readFileSync(url, "utf8")) as Record<string, unknown>;
+}
+
+const pkg = readJson("../package.json");
+const plugin = readJson("../.claude-plugin/plugin.json");
+const marketplace = readJson("../.claude-plugin/marketplace.json");
+
+describe("published Claude Code plugin manifest", () => {
+  it("plugin.json version tracks package.json version", () => {
+    expect(plugin.version).toBe(pkg.version);
+  });
+
+  it("declares the host MCP servers over loopback (correct for Claude Code on the host)", () => {
+    // The host marketplace plugin connects over loopback with no auth token —
+    // that is correct here. The Cowork VM path is configured separately by the
+    // Rust installer with host.docker.internal + a per-machine token, which a
+    // published manifest cannot carry. Do not "fix" this URL to a VM address.
+    const servers = plugin.mcpServers as Record<
+      string,
+      { args?: string[]; env?: Record<string, string> }
+    >;
+    expect(servers.tandem.env?.TANDEM_URL).toBe("http://127.0.0.1:3479");
+    expect(servers.tandem.args).toEqual(["-y", "tandem-editor", "mcp-stdio"]);
+    expect(servers["tandem-channel"].args).toEqual(["-y", "tandem-editor", "channel"]);
+  });
+
+  it("marketplace install identity is tandem@tandem-editor", () => {
+    // `claude plugin install <plugin>@<marketplace>` → plugin name `tandem`,
+    // marketplace name `tandem-editor`. Docs and dialogs reference this exact
+    // identity, so pin it.
+    expect(marketplace.name).toBe("tandem-editor");
+    expect(plugin.name).toBe("tandem");
+    const plugins = marketplace.plugins as Array<{ name: string }>;
+    expect(plugins.some((p) => p.name === "tandem")).toBe(true);
+  });
+});

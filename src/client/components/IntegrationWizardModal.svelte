@@ -440,8 +440,9 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
               <div class="iw-banner-warning">
                 {@render warningIcon()}
                 <span>
-                  Tandem writes plugin entries to every detected Cowork workspace so Claude running
-                  in Cowork can reach the documents you have open.
+                  Tandem registers itself as a plugin in every detected Cowork workspace so Claude
+                  in Cowork can reach your open documents. This adds a Windows firewall rule so the
+                  Cowork VM can connect back — admin is required once.
                 </span>
               </div>
               {#if coworkStatus.status?.vethernetCidr}
@@ -456,6 +457,24 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                   rights). Enabling writes the workspace plugin entries either way.
                 </p>
               {/if}
+              <details class="iw-advanced" data-testid="integration-wizard-cowork-explainer">
+                <summary>
+                  {@render chevronIcon()}
+                  What this does &amp; how to verify
+                </summary>
+                <div class="iw-advanced-body">
+                  <p class="iw-hint-text">
+                    You don't add a marketplace or run any commands inside Cowork — Tandem writes
+                    the plugin entry for you. After enabling, open a Cowork session and ask Claude
+                    to open or list your documents; Tandem's tools should appear. If they don't,
+                    re-run “Enable Cowork”.
+                  </p>
+                  <p class="iw-hint-text">
+                    Live updates (annotations and chat as they happen) need the Tandem desktop app
+                    running; the Cowork connection itself is request-and-response.
+                  </p>
+                </div>
+              </details>
             {/if}
             {#if coworkError}
               <div

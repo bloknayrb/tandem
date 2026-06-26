@@ -122,7 +122,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
     </div>
   {:else if variant === "unsupported"}
     <div class="cs-info-banner" data-testid="cowork-settings-unsupported">
-      Cowork integration is available on Windows in v0.8.0. macOS/Linux support tracked in #316 /
+      Cowork integration is available on Windows today. macOS/Linux support is tracked in #316 /
       #317.
     </div>
   {:else if variant === "undetected"}
@@ -164,6 +164,26 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
     </label>
     <div class="cs-help">Integration enabled: {s.enabled ? "yes" : "no"}</div>
 
+    <details class="cs-explainer" data-testid="cowork-explainer">
+      <summary>What this does &amp; how to verify</summary>
+      <div class="cs-explainer-body">
+        <p>
+          Enabling registers Tandem as a plugin in every detected Cowork workspace, so Claude
+          running inside Cowork can reach the documents you have open. This needs Windows admin
+          once to add a firewall rule that lets the Cowork VM connect back to Tandem on this
+          computer — you don't add a marketplace or run any commands inside Cowork yourself.
+        </p>
+        <p>
+          <strong>Verify:</strong> in a Cowork session, ask Claude to open or list your documents
+          — Tandem's tools should appear. If they don't, re-run “Enable” here.
+        </p>
+        <p>
+          <strong>Note:</strong> live updates (annotations and chat as they happen) need the
+          Tandem desktop app running; the Cowork connection itself is request-and-response.
+        </p>
+      </div>
+    </details>
+
     {#if confirming === "enable"}
       <div
         class="cs-warning-banner"
@@ -172,8 +192,9 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
       >
         <div class="cs-confirm-heading">Confirm: Enable Cowork</div>
         <div class="cs-confirm-body">
-          Tandem will write plugin entries to every detected Cowork workspace so Claude running in
-          Cowork can reach the documents you have open.
+          Tandem will register itself as a plugin in every detected Cowork workspace so Claude in
+          Cowork can reach your open documents. This adds a Windows firewall rule so the Cowork VM
+          can connect back — admin is required once.
         </div>
         <div class="cs-actions">
           <button
@@ -337,6 +358,26 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
   }
   .cs-link {
     color: var(--tandem-accent);
+  }
+
+  .cs-explainer {
+    font-size: 12px;
+    color: var(--tandem-fg-muted);
+  }
+  .cs-explainer > summary {
+    cursor: pointer;
+    color: var(--tandem-accent);
+    font-size: 11px;
+  }
+  .cs-explainer-body {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    line-height: 1.5;
+  }
+  .cs-explainer-body p {
+    margin: 0;
   }
 
   .cs-toggle {

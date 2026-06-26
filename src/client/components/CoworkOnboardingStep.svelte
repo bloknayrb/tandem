@@ -68,8 +68,10 @@ function handleSkip(): void {
     <div class="cos-confirm-banner" data-testid="cowork-onboarding-confirm">
       <div class="cos-confirm-heading">Confirm: Enable Cowork</div>
       <div class="cos-confirm-body">
-        Tandem will write plugin entries to every detected Cowork workspace so Claude running in
-        Cowork can reach the documents you have open.
+        Tandem will register itself as a plugin in every detected Cowork workspace so Claude in
+        Cowork can reach your open documents. This adds a Windows firewall rule so the Cowork VM
+        can connect back — admin is required once. To check it worked afterward, ask Claude in a
+        Cowork session to open or list your documents.
       </div>
       <div class="cos-actions">
         <button
