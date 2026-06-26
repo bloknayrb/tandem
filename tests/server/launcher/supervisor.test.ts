@@ -9,8 +9,10 @@ import {
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import {
   createSupervisor,
+  RESUME_CONFIRM_MS,
   resolveRouteCwd,
   resolveSafeCwd,
+  shouldClearSession,
 } from "../../../src/server/launcher/supervisor.js";
 import { REAPER_NOT_FOUND_MARKER } from "../../../src/shared/launcher/contract.js";
 
@@ -352,5 +354,41 @@ describe("supervisor — early spawn-failure surfacing (Fix A)", () => {
     } finally {
       await sup.stop();
     }
+  });
+});
+
+describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => {
+  it("clears on non-zero exit while resuming and unconfirmed", () => {
+    expect(shouldClearSession({ resuming: true, code: 1, resumeConfirmed: false })).toBe(true);
+  });
+
+  it("does NOT clear on signal kill (code = null) while resuming and unconfirmed", () => {
+    // SIGTERM / SIGKILL: code is null. Must not invalidate a session just
+    // because the user stopped the supervisor before the confirm window elapsed.
+    expect(shouldClearSession({ resuming: true, code: null, resumeConfirmed: false })).toBe(false);
+  });
+
+  it("does NOT clear when resumeConfirmed is true, even on non-zero exit", () => {
+    // Claude ran long enough to confirm the session; a crash later should not
+    // remove the session so the next restart can attempt another --resume.
+    expect(shouldClearSession({ resuming: true, code: 1, resumeConfirmed: true })).toBe(false);
+  });
+
+  it("does NOT clear on non-zero exit when not resuming (fresh spawn)", () => {
+    expect(shouldClearSession({ resuming: false, code: 1, resumeConfirmed: false })).toBe(false);
+  });
+
+  it("does NOT clear on clean exit (code = 0) while resuming and unconfirmed", () => {
+    // User stopped Claude cleanly before the window elapsed — session is valid.
+    expect(shouldClearSession({ resuming: true, code: 0, resumeConfirmed: false })).toBe(false);
+  });
+});
+
+describe("RESUME_CONFIRM_MS threshold constraint (issue #1169)", () => {
+  it("is greater than 15_000 ms — must exceed the longest observed --resume probe time (~6 s)", () => {
+    // The old RESUME_GRACE_MS was 5_000, which was shorter than the ~6 s probe
+    // time. Any value <= 6_000 would recreate the bug. We use 15_000 as a
+    // conservative lower bound to guard against regressions.
+    expect(RESUME_CONFIRM_MS).toBeGreaterThan(15_000);
   });
 });

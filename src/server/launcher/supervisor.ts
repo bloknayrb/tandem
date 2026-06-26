@@ -39,7 +39,13 @@ interface SpawnPlan {
 }
 
 const SESSION_FILE_NAME = "launcher-session.json";
-const RESUME_GRACE_MS = 5_000;
+/** How long a resumed spawn must run before its session is considered
+ * confirmed successful. If it exits non-zero before this threshold, the saved
+ * session is cleared so the next spawn starts fresh. Must be strictly greater
+ * than the longest observed `claude --resume <id>` probe time (~6 s on a slow
+ * machine) — the old 5 s grace window was shorter than that probe, causing
+ * the stale session to never be cleared (issue #1169). */
+export const RESUME_CONFIRM_MS = 30_000;
 const RESTART_BACKOFFS_MS = [1_000, 5_000, 30_000];
 /** Circuit breaker: if Claude crashes this many times within
  * CIRCUIT_BREAKER_WINDOW_MS, the supervisor gives up and surfaces via status.
@@ -81,6 +87,21 @@ export type SupervisorStatus =
       resuming: boolean;
     };
 
+/**
+ * Pure decision: should the saved session be cleared after a spawn exits?
+ * Exported for unit testing — all three parameters must be satisfied:
+ *   - we were attempting a resume (`resuming`)
+ *   - the process exited with an error code (not a signal kill — code is null on SIGTERM)
+ *   - the spawn never ran long enough to be considered successfully resumed
+ */
+export function shouldClearSession(opts: {
+  resuming: boolean;
+  code: number | null;
+  resumeConfirmed: boolean;
+}): boolean {
+  return opts.resuming && opts.code !== null && opts.code !== 0 && !opts.resumeConfirmed;
+}
+
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let child: ChildProcess | null = null;
   let currentCwd: string | undefined;
@@ -89,6 +110,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopRequested = false;
   let restartIndex = 0;
   let restartTimer: NodeJS.Timeout | null = null;
+  /** Confirmation timer for the active spawn. Set in spawnOnce, cancelled in
+   * stopInternal and the exit handler. Module-scoped so stopInternal can
+   * cancel it if the user-stops the process before it confirms. */
+  let confirmTimer: NodeJS.Timeout | null = null;
   /** Circuit-breaker timestamps of recent restart attempts. */
   let recentAttempts: number[] = [];
   /** True once the breaker has tripped — supervisor refuses further restarts. */
@@ -261,6 +286,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
     const spawnedAt = Date.now();
 
+    // Track whether this spawn has run long enough to be considered a
+    // successful resume. Fresh spawns are inherently "confirmed" — only a
+    // --resume that exits early (conversation not found) should clear the
+    // saved session. The timer is cancelled in the exit handler and in
+    // stopInternal() so it never fires on a deliberate stop.
+    let resumeConfirmed = !plan.resuming;
+    if (plan.resuming) {
+      confirmTimer = setTimeout(() => {
+        resumeConfirmed = true;
+        confirmTimer = null;
+      }, RESUME_CONFIRM_MS);
+    }
+
     child.stderr?.on("data", (chunk: Buffer) => {
       const line = chunk.toString().trimEnd();
       if (line) console.error(`[Claude] ${line}`);
@@ -293,10 +331,20 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
       child = null;
 
-      // If we were resuming and crashed inside the grace window, drop the
-      // saved session and retry fresh next time.
-      if (plan.resuming && code !== 0 && ranFor < RESUME_GRACE_MS) {
-        console.error("[Launcher] Resume failed within grace window — clearing saved session");
+      // Cancel the confirmation timer — the process has already exited.
+      if (confirmTimer) {
+        clearTimeout(confirmTimer);
+        confirmTimer = null;
+      }
+
+      // If the resume failed before being confirmed, drop the stale session so
+      // the next restart goes fresh. Guard code !== null to avoid clearing on
+      // signal kills (SIGTERM/SIGKILL set code=null, signal="SIGTERM"/"SIGKILL").
+      // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
+      // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
+      // was set (5 s), so the session was never cleared (issue #1169).
+      if (shouldClearSession({ resuming: plan.resuming, code, resumeConfirmed })) {
+        console.error("[Launcher] Resume failed before confirmation — clearing saved session");
         clearSavedSession();
       }
 
@@ -389,10 +437,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
     try {
       await spawnOnce(plan);
-      // Reset backoff once a spawn lives past the resume window.
+      // Reset backoff once a spawn runs long enough to be considered stable.
+      // Must match RESUME_CONFIRM_MS — a doomed --resume exits at ~6s, so
+      // the old 5s timer fired while the process was still alive, resetting
+      // restartIndex before the exit and permanently neutering the backoff.
       setTimeout(() => {
         if (child) restartIndex = 0;
-      }, RESUME_GRACE_MS);
+      }, RESUME_CONFIRM_MS);
     } catch (err) {
       console.error("[Launcher] Spawn failed:", err);
     }
@@ -419,6 +470,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (restartTimer) {
       clearTimeout(restartTimer);
       restartTimer = null;
+    }
+    if (confirmTimer) {
+      clearTimeout(confirmTimer);
+      confirmTimer = null;
     }
     const c = child;
     if (!c || c.killed) return;
