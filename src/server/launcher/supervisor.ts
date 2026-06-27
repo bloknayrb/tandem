@@ -305,6 +305,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     });
 
     child.on("error", (err: NodeJS.ErrnoException) => {
+      // Cancel the confirmation timer — spawn errors don't flow through the
+      // exit handler, so confirmTimer must be cleared here too. Without this,
+      // the 30s timer from a failed resuming spawn would fire later and null
+      // out confirmTimer for a subsequent spawn.
+      if (confirmTimer) {
+        clearTimeout(confirmTimer);
+        confirmTimer = null;
+      }
       // CRITICAL: clear child state so status() doesn't lie about being
       // running and so subsequent start()/relaunch() actually re-attempt.
       // ENOENT is unrecoverable without user action — trip the breaker

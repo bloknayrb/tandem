@@ -385,10 +385,11 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
 });
 
 describe("RESUME_CONFIRM_MS threshold constraint (issue #1169)", () => {
-  it("is greater than 15_000 ms — must exceed the longest observed --resume probe time (~6 s)", () => {
+  it("is at least 30_000 ms — must safely exceed the longest observed --resume probe time (~6 s)", () => {
     // The old RESUME_GRACE_MS was 5_000, which was shorter than the ~6 s probe
-    // time. Any value <= 6_000 would recreate the bug. We use 15_000 as a
-    // conservative lower bound to guard against regressions.
-    expect(RESUME_CONFIRM_MS).toBeGreaterThan(15_000);
+    // time. Any value <= 6_000 would recreate the bug. We require >= 30_000 ms
+    // (5× the observed probe time) as a meaningful safety margin. If you need
+    // to reduce this constant, update the bound here with justification.
+    expect(RESUME_CONFIRM_MS).toBeGreaterThanOrEqual(30_000);
   });
 });
