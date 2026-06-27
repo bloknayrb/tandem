@@ -26,6 +26,7 @@ Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md]
 - [For developers and contributors](#for-developers-and-contributors)
   - [Architecture overview](#architecture-overview)
   - [The MCP integration policy](#the-mcp-integration-policy)
+  - [Cowork](#cowork)
   - [MCP tools at a glance](#mcp-tools-at-a-glance)
   - [Channel push and real-time updates](#channel-push-and-real-time-updates)
   - [Development setup](#development-setup)

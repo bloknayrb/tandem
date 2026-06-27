@@ -33,9 +33,18 @@ describe("published Claude Code plugin manifest", () => {
     // published manifest cannot carry. Do not "fix" this URL to a VM address.
     const servers = plugin.mcpServers as Record<
       string,
-      { args?: string[]; env?: Record<string, string> }
+      { command?: string; args?: string[]; env?: Record<string, string> }
     >;
+    // Both servers must use npx — a change to bunx or node would silently
+    // break installations.
+    expect(servers.tandem.command).toBe("npx");
+    expect(servers["tandem-channel"].command).toBe("npx");
+    // Both servers must point at loopback — do NOT "fix" these to a VM address.
+    // The Cowork VM path is written separately by the Rust installer with
+    // host.docker.internal + a per-machine token that a published manifest
+    // cannot carry.
     expect(servers.tandem.env?.TANDEM_URL).toBe("http://127.0.0.1:3479");
+    expect(servers["tandem-channel"].env?.TANDEM_URL).toBe("http://127.0.0.1:3479");
     expect(servers.tandem.args).toEqual(["-y", "tandem-editor", "mcp-stdio"]);
     expect(servers["tandem-channel"].args).toEqual(["-y", "tandem-editor", "channel"]);
   });

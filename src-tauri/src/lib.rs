@@ -2093,7 +2093,7 @@ pub fn prevent_default_flags() -> tauri_plugin_prevent_default::Flags {
 
 /// Error string returned by every non-Windows Cowork stub.
 #[cfg(not(target_os = "windows"))]
-const WINDOWS_ONLY_ERR: &str = "Cowork integration is Windows-only in v0.8.0";
+const WINDOWS_ONLY_ERR: &str = "Cowork integration is Windows-only";
 
 /// Scan for Cowork workspace directories.
 ///
