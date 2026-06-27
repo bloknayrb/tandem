@@ -1,4 +1,5 @@
 <script lang="ts">
+import { TANDEM_REPO_URL } from "../../shared/constants";
 import { formatCoworkError } from "../cowork/cowork-helpers";
 import {
   coworkRetryAdminElevation,
@@ -175,6 +176,15 @@ async function handleDisable(): Promise<void> {
         can't connect. Nothing was exposed — Tandem's server only listens on this computer
         (127.0.0.1). You can dismiss this for now, or turn Cowork off below.
       </div>
+      <a
+        class="cad-link"
+        data-testid="cowork-admin-declined-learn-more-link"
+        href={`${TANDEM_REPO_URL}#cowork`}
+        target="_blank"
+        rel="noreferrer"
+      >
+        Learn more
+      </a>
 
       {#if error}
         <div class="cad-error" data-testid="cowork-admin-declined-error" role="alert">
@@ -288,6 +298,13 @@ async function handleDisable(): Promise<void> {
     font-size: 13px;
     line-height: 1.5;
     color: var(--tandem-fg-muted);
+  }
+  .cad-link {
+    color: var(--tandem-accent);
+    text-decoration: underline;
+    font-size: 12px;
+    display: inline-block;
+    margin-top: 6px;
   }
   .cad-error {
     font-size: 12px;

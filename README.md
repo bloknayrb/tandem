@@ -26,6 +26,7 @@ Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md]
 - [For developers and contributors](#for-developers-and-contributors)
   - [Architecture overview](#architecture-overview)
   - [The MCP integration policy](#the-mcp-integration-policy)
+  - [Cowork](#cowork)
   - [MCP tools at a glance](#mcp-tools-at-a-glance)
   - [Channel push and real-time updates](#channel-push-and-real-time-updates)
   - [Development setup](#development-setup)
@@ -172,10 +173,29 @@ Client compatibility:
 | AI surface | Status |
 |---|---|
 | **Claude Code** (local CLI) | Default. Validated. Channel push supported. |
-| **Claude Desktop** (local app) | Supported via the Cowork bridge. Channel push N/A. |
+| **Claude Desktop** (local app) | Supported via the [Cowork plugin bridge](#cowork) (Windows today). Request/response only — channel push N/A. |
 | **claude.ai web chat** | Not supported. Would require exposing the local server publicly via a tunnel, which is outside scope. |
 | **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) | Best-effort, MCP-contract-compatible, not validated. |
 | **Non-MCP AIs** | Not supported today. **Local models** (Ollama / LM Studio via OpenAI-compatible endpoints) are committed for v1.0 ([ADR-039](docs/decisions.md#adr-039-non-mcp-model-providers-local-slice-v10-cloud-slice-v11), tracked in #1123); cloud providers (ChatGPT direct, Gemini direct) follow in v1.1. |
+
+### Cowork
+
+[Cowork](https://www.anthropic.com/news/claude-code-on-the-web) is Claude Desktop's local agent mode — Claude runs in an isolated VM on your machine. Tandem connects to it through Claude's **plugin system**, but you don't add a marketplace or run any `/plugin` commands yourself.
+
+- **How to enable (Windows desktop app):** open the integration wizard (Settings → AI Assistant, or "Set up" next to Cowork) and click **Enable Cowork**, or toggle it on in Settings → Network. Tandem writes the plugin entry into every detected Cowork workspace and adds a Windows firewall rule so the VM can reach the Tandem server on this computer. That firewall step needs admin once — without it, the VM can't connect.
+- **Why it's automated, not a manual marketplace install:** inside the VM the plugin must point at `host.docker.internal:3479` and carry a per-machine secret auth token. A published marketplace plugin can't carry that token, so Tandem provisions the workspace entries directly. (The published `tandem@tandem-editor` marketplace plugin is for Claude Code running *on the host*, over `127.0.0.1` — see below.)
+- **Verify:** in a Cowork session, ask Claude to open or list your documents — Tandem's tools should appear. If they don't, re-run Enable.
+- **Real-time updates:** live annotation/chat push needs the Tandem desktop app and Claude Code's channel flag (see [Channel push](#channel-push-and-real-time-updates)); the Cowork connection itself is request/response.
+- **macOS / Linux:** not yet — tracked in #316 / #317.
+
+For Claude Code on the host, the published plugin can be added from the marketplace instead of the wizard:
+
+```bash
+claude plugin marketplace add bloknayrb/tandem
+claude plugin install tandem@tandem-editor
+```
+
+This activates the MCP tools and the bundled skill. It does **not** auto-enable channel push (that still needs `--dangerously-load-development-channels`, see below).
 
 ### MCP tools at a glance
 

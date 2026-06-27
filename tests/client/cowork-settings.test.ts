@@ -404,7 +404,7 @@ describe("cowork invoke wrappers", () => {
   it("propagates invoke rejections so the caller's try/catch can surface a toast", async () => {
     const invoke = vi
       .fn<InvokeFn>()
-      .mockRejectedValue(new Error("Cowork integration is Windows-only in v0.8.0"));
+      .mockRejectedValue(new Error("Cowork integration is Windows-only"));
     await expect(coworkGetStatus(invoke as unknown as InvokeFn)).rejects.toThrow(/Windows-only/);
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "tandem",
-  "version": "0.8.0",
+  "version": "0.14.3",
   "description": "Edit and iterate on documents with any MCP-capable AI. Claude is the default and best-supported client today.",
   "author": {
     "name": "Tandem"

@@ -55,12 +55,14 @@ cowork-admin-declined-disable-btn
 cowork-admin-declined-disable-cancel-btn
 cowork-admin-declined-disable-confirm-btn
 cowork-admin-declined-error
+cowork-admin-declined-learn-more-link
 cowork-admin-declined-modal
 cowork-admin-declined-retry-btn
 cowork-admin-declined-status-error
 cowork-enable-cancel-btn
 cowork-enable-confirm
 cowork-enable-confirm-btn
+cowork-explainer
 cowork-inline-toast
 cowork-lan-ip-override
 cowork-lan-ip-override-checkbox
@@ -178,6 +180,7 @@ integration-wizard-close
 integration-wizard-connect-btn
 integration-wizard-cowork-back
 integration-wizard-cowork-error
+integration-wizard-cowork-explainer
 integration-wizard-cowork-setup
 integration-wizard-cowork-step
 integration-wizard-done-close
