@@ -30,8 +30,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type ZodRawShape, z } from "zod";
+import type { DoctorReport } from "../../src/cli/doctor.js";
 import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
+import { registerDiagnosticsTools } from "../../src/server/mcp/diagnostics.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
 import {
   addDoc,
@@ -42,6 +44,7 @@ import {
 import { registerNavigationTools } from "../../src/server/mcp/navigation.js";
 import {
   checkInboxOutputShape,
+  diagnosticsOutputShape,
   getAnnotationsOutputShape,
   getTextContentOutputShape,
   listDocumentsOutputShape,
@@ -57,12 +60,41 @@ import { rangeOf } from "../helpers/ydoc-factory.js";
 
 let client: Client;
 
+/** Deterministic doctor report so diagnostics tests never touch real ports. */
+const STUB_DOCTOR_REPORT: DoctorReport = {
+  ok: true,
+  crashed: false,
+  failures: 0,
+  warnings: 1,
+  summary: "1 warning(s) — Tandem should work, but check the items above.",
+  error: null,
+  results: [
+    {
+      check: "health",
+      status: "pass",
+      message: "MCP HTTP /health responded",
+      data: { port: 3479, hasSession: true },
+    },
+    {
+      check: "user-mcp-config",
+      status: "warn",
+      message: "No active MCP session — Claude Code hasn't connected yet",
+      fix: "Restart Claude and run /mcp",
+    },
+  ],
+};
+
 async function setupMcpClient(): Promise<Client> {
   const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
   registerDocumentTools(server);
   registerAnnotationTools(server);
   registerNavigationTools(server);
   registerAwarenessTools(server);
+  registerDiagnosticsTools(server, {
+    version: "9.9.9-test",
+    transport: "http",
+    collect: async () => STUB_DOCTOR_REPORT,
+  });
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const mcpClient = new Client({ name: "test-client", version: "0.0.1" });
@@ -118,7 +150,7 @@ beforeEach(async () => {
 });
 
 describe("tools/list advertises outputSchema", () => {
-  it("exactly the six migrated tools declare an outputSchema", async () => {
+  it("exactly the data-returning tools declare an outputSchema", async () => {
     const { tools } = await client.listTools();
     const withSchema = tools
       .filter((t) => t.outputSchema !== undefined)
@@ -126,12 +158,71 @@ describe("tools/list advertises outputSchema", () => {
       .sort();
     expect(withSchema).toEqual([
       "tandem_checkInbox",
+      "tandem_diagnostics",
       "tandem_getAnnotations",
       "tandem_getTextContent",
       "tandem_listDocuments",
       "tandem_search",
       "tandem_status",
     ]);
+  });
+});
+
+describe("tandem_diagnostics structured output (#1174 gap #2)", () => {
+  it("returns the filtered doctor report plus environment fields", async () => {
+    const result = (await client.callTool({
+      name: "tandem_diagnostics",
+      arguments: {},
+    })) as ToolResult;
+    const sc = expectStructuredMatch(result, diagnosticsOutputShape);
+    expect(sc.ok).toBe(true);
+    expect(sc.warnings).toBe(1);
+    expect(sc.version).toBe("9.9.9-test");
+    expect(sc.transport).toBe("http");
+    expect(sc.platform).toBe(process.platform);
+    const results = sc.results as Array<Record<string, unknown>>;
+    expect(results.map((r) => r.check)).toEqual(["health", "user-mcp-config"]);
+    // Per-check `data` bag (free-form record) survives schema validation.
+    expect((results[0].data as Record<string, unknown>).port).toBe(3479);
+  });
+
+  it("drops dev-repo-only checks (node-modules / mcp-json) from the report", async () => {
+    // A fresh client whose collector includes dev-repo checks — they must be
+    // filtered out so a desktop/global install (arbitrary cwd) isn't told it
+    // failed two meaningless checks.
+    const server = new McpServer({ name: "tandem-test", version: "0.0.1" });
+    registerDiagnosticsTools(server, {
+      version: "9.9.9-test",
+      transport: "http",
+      collect: async () => ({
+        ok: false,
+        crashed: false,
+        failures: 1,
+        warnings: 0,
+        summary: "1 issue(s) found.",
+        error: null,
+        results: [
+          { check: "node-modules", status: "fail", message: "deps missing" },
+          { check: "mcp-json", status: "fail", message: "no .mcp.json" },
+          { check: "health", status: "pass", message: "ok" },
+        ],
+      }),
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const c = new Client({ name: "test-client", version: "0.0.1" });
+    await server.connect(st);
+    await c.connect(ct);
+
+    const result = (await c.callTool({
+      name: "tandem_diagnostics",
+      arguments: {},
+    })) as ToolResult;
+    const sc = expectStructuredMatch(result, diagnosticsOutputShape);
+    const results = sc.results as Array<Record<string, unknown>>;
+    expect(results.map((r) => r.check)).toEqual(["health"]);
+    // Aggregates recomputed after filtering: the two dev-repo failures are gone.
+    expect(sc.failures).toBe(0);
+    expect(sc.ok).toBe(true);
   });
 });
 

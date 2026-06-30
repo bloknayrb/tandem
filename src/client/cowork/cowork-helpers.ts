@@ -171,6 +171,87 @@ export function aggregateWorkspaceStatus(ws: WorkspaceStatus): WorkspaceFileStat
 }
 
 /**
+ * Post-enable reachability of the Cowork stdio channel (#1174 gap #3).
+ *
+ * `enabled` only means "a firewall rule was added and ≥1 plugin install
+ * succeeded at enable time" — a write-succeeded signal, not proof a Cowork
+ * session can actually find and load the Tandem plugin now. This derives a
+ * reachability verdict from the on-disk truth the status scan already reports,
+ * so the UI can show more than a bare `enabled` boolean.
+ *
+ * - `reachable` — ≥1 workspace has all three registry files installed, so a
+ *   Cowork session launched there will discover and load the Tandem plugin.
+ * - `unreachable` — enabled, but no workspace is fully installed AND at least
+ *   one shows a hard install problem (failed / schema drift / insecure ACL).
+ *   Actionable: re-scan or re-enable.
+ * - `pending` — enabled, but nothing to confirm yet (no workspaces, or the
+ *   registry just hasn't been populated — the background heal-pass installs
+ *   into a workspace the first time a Cowork session opens). Informational.
+ * - `not-applicable` — integration not enabled; nothing to verify.
+ *
+ * Note: this is a host-side, on-disk reachability signal. It cannot observe the
+ * VM→host network hop directly (the Cowork VM doesn't forward loopback, ADR-023);
+ * that hop is what the enable-time firewall rule — verified fail-closed — covers.
+ */
+export type CoworkReachability = "reachable" | "unreachable" | "pending" | "not-applicable";
+
+/** True when every plugin-registry file for this workspace is present + valid. */
+export function coworkWorkspaceReachable(ws: WorkspaceStatus): boolean {
+  const installed = (s: WorkspaceFileStatus): boolean => s === "ok" || s === "alreadyPresent";
+  return (
+    installed(ws.installedPlugins) &&
+    installed(ws.knownMarketplaces) &&
+    installed(ws.coworkSettings)
+  );
+}
+
+export function coworkReachability(status: CoworkStatus | null): CoworkReachability {
+  if (!status || !status.enabled) return "not-applicable";
+  const workspaces = status.workspaces ?? [];
+  if (workspaces.some(coworkWorkspaceReachable)) return "reachable";
+  // No fully-installed workspace. A hard install error is actionable now; a
+  // bare "not configured" / "locked (retrying)" just means the heal-pass hasn't
+  // populated the registry yet, which is expected before the first session.
+  const anyHardError = workspaces.some(
+    (ws) => workspaceFileStatusFamily(aggregateWorkspaceStatus(ws)) === "error",
+  );
+  return anyHardError ? "unreachable" : "pending";
+}
+
+/** User-facing copy + token family for a reachability verdict. */
+export function coworkReachabilityCopy(r: CoworkReachability): {
+  title: string;
+  detail: string;
+  family: StatusTokenFamily;
+} {
+  switch (r) {
+    case "reachable":
+      return {
+        title: "Tandem is reachable from Cowork",
+        detail:
+          "At least one Cowork workspace has the Tandem plugin installed — a Cowork session can find and load it.",
+        family: "success",
+      };
+    case "unreachable":
+      return {
+        title: "Tandem isn't reachable yet",
+        detail:
+          "Cowork is enabled, but a workspace install didn't complete. Re-scan workspaces, or restart Claude Desktop and re-enable.",
+        family: "error",
+      };
+    case "pending":
+      return {
+        title: "Waiting for a Cowork session",
+        detail:
+          "Cowork is enabled. The Tandem plugin installs into a workspace the first time you open a Cowork session.",
+        family: "warning",
+      };
+    case "not-applicable":
+      return { title: "", detail: "", family: "neutral" };
+  }
+}
+
+/**
  * Decide whether the first-launch onboarding should insert the Cowork step.
  * Centralizes the gating so tests cover all branches without mounting the
  * tutorial.

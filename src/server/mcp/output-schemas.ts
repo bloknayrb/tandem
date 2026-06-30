@@ -225,3 +225,41 @@ export const searchOutputShape = {
   matches: z.array(z.object({ from: z.number(), to: z.number(), text: z.string() })),
   count: z.number(),
 };
+
+// ---------------------------------------------------------------------------
+// tandem_diagnostics (#1174 gap #2)
+// ---------------------------------------------------------------------------
+
+/**
+ * One `tandem doctor` check result. Mirrors `DoctorResult` in `cli/doctor.ts`.
+ * `data` is a free-form per-check detail bag (ports, paths, PIDs) — surfaced
+ * only over the loopback-gated MCP transport, same posture as /api/diagnostics.
+ */
+const doctorResultSchema = z.object({
+  check: z.string(),
+  status: z.enum(["pass", "warn", "fail"]),
+  message: z.string(),
+  fix: z.string().optional().describe("Suggested remediation when the check did not pass"),
+  data: z.record(z.string(), z.unknown()).optional().describe("Per-check detail bag"),
+});
+
+/**
+ * The filtered `DoctorReport` (dev-repo-only checks dropped) plus the runtime
+ * environment fields the /api/diagnostics route also returns. Keep in lockstep
+ * with the handler payload in `diagnostics.ts`.
+ */
+export const diagnosticsOutputShape = {
+  ok: z.boolean().describe("True when no checks failed"),
+  crashed: z.boolean().describe("True if the diagnostic collector itself threw"),
+  failures: z.number(),
+  warnings: z.number(),
+  summary: z.string().describe("One-line human-readable summary"),
+  error: z.string().nullable().describe("Collector-level error message, or null"),
+  results: z.array(doctorResultSchema),
+  version: z.string().describe("Running Tandem version"),
+  transport: z.enum(["http", "stdio"]).describe("Transport this MCP server is serving"),
+  platform: z.string().describe("process.platform"),
+  arch: z.string().describe("process.arch"),
+  nodeVersion: z.string().describe("process.version"),
+  tauriSidecar: z.boolean().describe("True when running as the Tauri desktop sidecar"),
+};

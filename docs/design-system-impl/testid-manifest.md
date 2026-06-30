@@ -222,6 +222,7 @@ shipped and were removed:
   `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,
   `cowork-enable-{confirm,confirm-btn,cancel-btn}`,
   `cowork-vethernet-cidr`,
+  `cowork-reachability` (post-enable stdio-channel reachability verdict, #1174 gap #3),
   `cowork-lan-ip-override{,-checkbox}`,
   `cowork-{workspace-table,workspace-row-{*}-{*},workspace-report-{*}-{*},rescan-btn}`
 

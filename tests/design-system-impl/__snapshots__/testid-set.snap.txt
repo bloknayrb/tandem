@@ -75,6 +75,7 @@ cowork-onboarding-learn-more-btn
 cowork-onboarding-learn-more-link
 cowork-onboarding-skip-btn
 cowork-onboarding-step
+cowork-reachability
 cowork-rescan-btn
 cowork-settings
 cowork-settings-error
