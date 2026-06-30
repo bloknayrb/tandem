@@ -3,6 +3,8 @@ import { onDestroy } from "svelte";
 import { COWORK_RESCAN_DEBOUNCE_MS, TANDEM_REPO_URL } from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
+  coworkReachability,
+  coworkReachabilityCopy,
   coworkSettingsVariant,
   formatCoworkError,
   makeDebouncer,
@@ -56,6 +58,12 @@ const debouncer = makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS);
 onDestroy(() => debouncer.cancel());
 
 const variant = $derived(coworkSettingsVariant(coworkState.status));
+const reachability = $derived(coworkReachability(coworkState.status));
+
+function reachabilityBannerStyle(family: StatusTokenFamily): string {
+  const tokens = STATUS_TOKENS[family];
+  return `border: 1px solid ${tokens.border}; background: ${tokens.bg}; color: ${tokens.fg}; border-radius: var(--tandem-r-3); padding: 8px 10px; font-size: 12px;`;
+}
 
 async function withInvoke(
   op: (invoke: InvokeFn) => Promise<void>,
@@ -163,6 +171,20 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
       <span>Enable Cowork integration</span>
     </label>
     <div class="cs-help">Integration enabled: {s.enabled ? "yes" : "no"}</div>
+
+    {#if reachability !== "not-applicable"}
+      {@const copy = coworkReachabilityCopy(reachability)}
+      <div
+        class="cs-reachability"
+        data-testid="cowork-reachability"
+        data-reachability={reachability}
+        role={reachability === "unreachable" ? "alert" : undefined}
+        style={reachabilityBannerStyle(copy.family)}
+      >
+        <div class="cs-reachability-title">{copy.title}</div>
+        <div class="cs-reachability-detail">{copy.detail}</div>
+      </div>
+    {/if}
 
     <details class="cs-explainer" data-testid="cowork-explainer">
       <summary>What this does &amp; how to verify</summary>
@@ -398,6 +420,18 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
 
   .cs-vethernet {
     font-size: 12px;
+  }
+
+  /* Reachability banner. border/bg/fg are computed at runtime by
+     reachabilityBannerStyle() since they vary per status family, keeping the
+     status-family map the single source of truth (same pattern as the
+     workspace rows). */
+  .cs-reachability-title {
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .cs-reachability-detail {
+    line-height: 1.4;
   }
 
   .cs-actions {

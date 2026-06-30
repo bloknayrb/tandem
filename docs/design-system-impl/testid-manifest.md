@@ -204,11 +204,13 @@ opt-in sub-view, NOT the 6-step `pick→secrets→review→saving` flow the orig
 manifest anticipated. The phantom step/continue/save testids below never
 shipped and were removed:
 - `integration-wizard{,-close,-keychain-fallback,-advanced}`
-- MCP connect machine: `integration-wizard-step-{detect,applying,done,error}`,
+- MCP connect machine: `integration-wizard-step-{detect,applying,done,error,verifying}`,
   `integration-wizard-{connect-btn,check-again,done-close,done-retry,error-retry}`
 - Detected installs: `integration-wizard-card-{*}`, `integration-wizard-pick-{*}`,
   `integration-wizard-secret-{input,submit}-{*}`,
   `integration-wizard-apply-result-{*}`
+- Post-apply reachability (#1174): `integration-wizard-reachability-{*}`,
+  `integration-wizard-whats-next`
 - More integrations + Cowork sub-view: `integration-wizard-more`,
   `integration-wizard-cowork-{setup,step,back,error,explainer}`, plus the reused
   `cowork-enable-confirm-btn` / `cowork-vethernet-cidr`
@@ -220,6 +222,7 @@ shipped and were removed:
   `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,
   `cowork-enable-{confirm,confirm-btn,cancel-btn}`,
   `cowork-vethernet-cidr`,
+  `cowork-reachability` (post-enable stdio-channel reachability verdict, #1174 gap #3),
   `cowork-lan-ip-override{,-checkbox}`,
   `cowork-{workspace-table,workspace-row-{*}-{*},workspace-report-{*}-{*},rescan-btn}`
 
