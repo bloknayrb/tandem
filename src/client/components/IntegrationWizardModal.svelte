@@ -42,6 +42,11 @@ import {
   detectedToPicked,
   type PickedIntegration,
 } from "../hooks/useIntegrationWizard.svelte.js";
+import {
+  createReachabilityCheck,
+  type ReachabilityStatus,
+  type ReachabilityTarget,
+} from "../hooks/useReachabilityCheck.svelte.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
 
 interface Props {
@@ -78,6 +83,44 @@ const cliStatus = createClaudeCliStatus(
 // never sees a flash of the install button before the GET resolves.
 const showInstallCta = $derived(cliStatus.presence === "NOT_INSTALLED");
 const showInstalledNotOnPath = $derived(cliStatus.presence === "INSTALLED_NOT_ON_PATH");
+
+// Post-apply reachability (#1174 gap #1). Once the Done screen shows, verify the
+// Tandem MCP server actually answers at the URL we just wrote (HTTP targets =
+// Claude Code), and watch live for Claude connecting. stdio targets (Claude
+// Desktop) have no running server to probe → rendered not-applicable. Only
+// `applied` rows are verified; the join to `config.transport` mirrors
+// `resultLabel`'s picked-lookup. `getActive` is PURE; the targets closure is
+// snapshotted inside the hook (never read reactively in its effect).
+const reachabilityTargets = $derived(
+  wizard.applyResults
+    .filter((r) => r.status === "applied")
+    .map((r) => ({
+      id: r.id,
+      transport: wizard.picked.find((p) => p.id === r.id)?.config.transport,
+    }))
+    .filter((t): t is ReachabilityTarget => t.transport === "http" || t.transport === "stdio"),
+);
+const reachability = createReachabilityCheck(
+  () => reachabilityTargets,
+  () => open && wizard.step === "done",
+  `http://127.0.0.1:${DEFAULT_MCP_PORT}`,
+);
+
+function reachabilityStatusFor(id: string): ReachabilityStatus | null {
+  return reachability.results.find((r) => r.id === id)?.status ?? null;
+}
+
+// Adapt the "what's next" guidance to the reachability outcome.
+const whatsNext = $derived.by((): "connected" | "unreachable" | "stdio-only" | "default" => {
+  const rows = reachability.results;
+  const hasHttp = rows.some(
+    (r) => r.status === "reachable" || r.status === "unreachable" || r.status === "verifying",
+  );
+  if (!hasHttp && rows.length > 0) return "stdio-only";
+  if (rows.some((r) => r.status === "unreachable")) return "unreachable";
+  if (reachability.claudeConnected) return "connected";
+  return "default";
+});
 
 // MAIN ↔ COWORK sub-view toggle. Reset to "main" on (re)open below.
 let view = $state<"main" | "cowork">("main");
@@ -369,6 +412,28 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
   </div>
 {/snippet}
 
+{#snippet reachabilityLine(id: string)}
+  {@const status = reachabilityStatusFor(id)}
+  {#if status}
+    <span
+      class="iw-reachability iw-reachability-{status}"
+      data-testid="integration-wizard-reachability-{id}"
+      data-reachability-status={status}
+    >
+      {#if status === "verifying"}
+        Checking Tandem is reachable…
+      {:else if status === "reachable"}
+        {reachability.claudeConnected ? "Claude connected just now" : "Tandem is responding"}
+      {:else if status === "unreachable"}
+        Config written, but the Tandem MCP server isn't responding — start Tandem, then restart
+        Claude.
+      {:else}
+        Tandem starts when Claude Desktop opens
+      {/if}
+    </span>
+  {/if}
+{/snippet}
+
 {#if open}
   <div
     role="presentation"
@@ -645,6 +710,11 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                 {anyApplyErrors ? "Partly connected" : "Claude is connected to Tandem"}
               </h3>
             </div>
+            {#if reachability.phase === "verifying"}
+              <div class="iw-verifying" data-testid="integration-wizard-step-verifying">
+                {@render loadingDots("Verifying Claude can reach Tandem…")}
+              </div>
+            {/if}
             {#if wizard.applyResults.length > 0}
               <div class="iw-results">
                 {#each wizard.applyResults as result (result.id)}
@@ -665,6 +735,7 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                       <span class="iw-result-name">{resultLabel(result)}</span>
                       {#if result.status === "applied"}
                         <span class="iw-result-detail">Connected</span>
+                        {@render reachabilityLine(result.id)}
                       {:else if result.status === "skipped"}
                         <span class="iw-result-detail">
                           Left unchanged (already set up, or couldn't be safely edited)
@@ -677,7 +748,7 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                 {/each}
               </div>
             {/if}
-            <div class="iw-whats-next">
+            <div class="iw-whats-next" data-testid="integration-wizard-whats-next">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -692,8 +763,17 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                 <path d="M12 8h.01" />
               </svg>
               <span>
-                Restart Claude Code, then type <code class="iw-code-inline">/mcp</code> to verify —
-                or just ask Claude to open a document.
+                {#if whatsNext === "connected"}
+                  Claude is connected and talking to Tandem. Ask it to open a document.
+                {:else if whatsNext === "unreachable"}
+                  Tandem doesn't seem to be running. Start Tandem, then restart Claude and run
+                  <code class="iw-code-inline">/mcp</code>.
+                {:else if whatsNext === "stdio-only"}
+                  Open Claude Desktop to start using Tandem.
+                {:else}
+                  Restart Claude Code, then type <code class="iw-code-inline">/mcp</code> to verify —
+                  or just ask Claude to open a document.
+                {/if}
               </span>
             </div>
           </section>
@@ -1294,6 +1374,24 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
   }
   .iw-result-error .iw-result-detail {
     color: var(--tandem-error-fg-strong);
+  }
+
+  /* Post-apply reachability sub-line under an applied row. */
+  .iw-reachability {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
+  }
+  .iw-reachability-reachable {
+    color: var(--tandem-success-fg-strong);
+  }
+  .iw-reachability-unreachable {
+    color: var(--tandem-warning-fg-strong);
+  }
+
+  /* Transient "Verifying…" banner above the result rows. */
+  .iw-verifying {
+    font-size: var(--tandem-text-sm);
+    color: var(--tandem-fg-muted);
   }
 
   .iw-whats-next {

@@ -193,6 +193,7 @@ integration-wizard-install-success
 integration-wizard-keychain-fallback
 integration-wizard-more
 integration-wizard-pick-{*}
+integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
 integration-wizard-secret-submit-{*}
@@ -200,6 +201,8 @@ integration-wizard-step-applying
 integration-wizard-step-detect
 integration-wizard-step-done
 integration-wizard-step-error
+integration-wizard-step-verifying
+integration-wizard-whats-next
 left-outline-rail
 license-activate-error
 license-activate-input
@@ -271,6 +274,7 @@ popup-note-submit
 popup-show-formatbar-btn
 railFloat.left ? "rail-float-left" : undefined
 railFloat.right ? "rail-float-right" : undefined
+reachability-harness
 recent-file-{*}
 recent-files-list
 reduce-motion-toggle
