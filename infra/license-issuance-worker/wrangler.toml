@@ -1,0 +1,41 @@
+# Tandem license ISSUANCE endpoint (Cloudflare Worker).
+# Owner-deployed — see docs/licensing-operations.md. Receives Polar webhooks,
+# mints Ed25519-signed licenses, records them, and emails them. Replace the
+# placeholders below with your own account's values before `npx wrangler deploy`.
+#
+# Deploy a SEPARATE instance per environment (Polar sandbox vs production): each
+# has its own Polar org, webhook endpoint, and webhook secret. Set
+# TANDEM_ISSUANCE_ENV=sandbox on the sandbox instance so it never writes update
+# entitlements.
+
+name = "tandem-license-issuance"
+main = "src/worker.ts"
+compatibility_date = "2024-09-23"
+
+[vars]
+# "production" (default) or "sandbox". A sandbox deployment writes the ledger
+# (so you can inspect issuance) but NOT the update entitlement.
+TANDEM_ISSUANCE_ENV = "production"
+# The verified Resend sender, e.g. "Tandem <noreply@yourdomain.com>".
+RESEND_FROM = "REPLACE_WITH_VERIFIED_SENDER"
+
+# Update entitlements: licenseId -> { updateWindowEnd, status, version }. This
+# MUST be the SAME namespace the license-update Worker reads (paste the same id
+# you used in infra/license-update-worker/wrangler.toml). Contains NO PII.
+[[kv_namespaces]]
+binding = "LICENSE_KV"
+id = "REPLACE_WITH_LICENSE_KV_NAMESPACE_ID"
+
+# Issuance ledger: order:<mode>:<orderId> -> record (email, licenseId, ...) plus
+# evt:<webhook-id> replay markers. Holds PII — a SEPARATE, issuance-only
+# namespace the update Worker never binds. Create with
+# `npx wrangler kv namespace create LEDGER_KV`.
+[[kv_namespaces]]
+binding = "LEDGER_KV"
+id = "REPLACE_WITH_LEDGER_KV_NAMESPACE_ID"
+
+# Secrets (set with `npx wrangler secret put <NAME>`, never in this file):
+#   TANDEM_PRIVATE_KEY    Ed25519 PEM PKCS#8 (the private half of public-key.ts)
+#   POLAR_WEBHOOK_SECRET  whsec_... from the Polar webhook endpoint config
+#   RESEND_API_KEY        re_... from Resend
+#   GRANDFATHER_EMAILS    optional, comma/space-separated beta-tester emails
