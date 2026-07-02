@@ -163,10 +163,16 @@ Worker, its KV namespaces, and its secrets.
 3. On **`order.refunded`**: deletes the update entitlement (the offline
    run-license stays perpetual by design) and marks the ledger refunded.
 
-Idempotent across Polar retries (per-attempt freshness + a `evt:<webhook-id>`
-completion marker + the durable `order:<mode>:<orderId>` ledger). PII lives only
-in `LEDGER_KV`; `LICENSE_KV` is PII-free; the HTTP response never carries the
-blob; logs are `{ result, ts }` only.
+Idempotent across Polar retries (per-attempt freshness + a
+`evt:<mode>:<webhook-id>` completion marker + the durable
+`order:<mode>:<orderId>` ledger; a refund that outraces its paid event writes a
+tombstone so the late paid retry can't resurrect a refunded order). PII lives
+only in `LEDGER_KV`; `LICENSE_KV` is PII-free; the HTTP response never carries
+the blob; logs are `{ result, ts }` plus a non-PII failure `stage` on errors.
+**Alert on `"result":"dropped"`** — it means an order event arrived whose
+payload couldn't be fulfilled (no usable email/order id), i.e. possibly a paid
+sale with nothing issued; the event is deliberately not marked done, so fixing
+the cause and using Polar's manual re-send recovers it.
 
 ### 3.5b. Provision
 

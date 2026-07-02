@@ -15,16 +15,20 @@
  *
  * Security posture (see the design review folded into this file):
  *  - Signature verified (Standard-Webhooks/svix) BEFORE any parse or side effect.
- *  - Fail-closed ordering: missing secret/key → 503; bad headers/JSON → 400;
- *    bad signature / stale timestamp → 401.
+ *  - Fail-closed status mapping, in gate order: non-POST → 405; missing
+ *    secret/key → 503; missing headers → 400; bad signature / stale
+ *    timestamp → 401; bad JSON → 400.
  *  - Three idempotency layers: per-attempt timestamp freshness, a `webhook-id`
  *    completion set (blocks replays of fully-processed events), and the durable
- *    `orderId` ledger (blocks re-mint; drives retry-based recovery).
+ *    `orderId` ledger (blocks re-mint; drives retry-based recovery). Note KV is
+ *    eventually consistent / last-write-wins: two truly-simultaneous deliveries
+ *    of one order can double-mint (the second write orphans the first record) —
+ *    accepted; strict once-only would need a Durable Object.
  *  - PII (email/name) lives ONLY in the issuance-owned ledger KV, never in the
- *    entitlement KV the update Worker reads. Logs carry `{ result, ts }` only —
- *    never an email or license id. The HTTP response NEVER contains the blob
- *    (that would leak it into Polar's delivery logs); it reaches the buyer by
- *    email alone.
+ *    entitlement KV the update Worker reads. Logs carry `{ result, ts }` plus a
+ *    non-PII failure `stage` on errors — never an email or license id. The HTTP
+ *    response NEVER contains the blob (that would leak it into Polar's delivery
+ *    logs); it reaches the buyer by email alone.
  */
 
 import {
@@ -43,15 +47,18 @@ const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 /** Standard-Webhooks freshness tolerance (svix guidance; each attempt is
  * freshly timestamped, so this does not reject legitimate retries). */
 export const TIMESTAMP_TOLERANCE_S = 300;
-/** TTL for the `webhook-id` completion marker — comfortably longer than Polar's
- * full retry span so a late retry of a SUCCEEDED event still short-circuits. */
+/** TTL for the `webhook-id` completion marker. Long enough for Polar's retry
+ * span in practice; a late marker miss is harmless — the orderId ledger still
+ * answers `duplicate` without re-minting or re-emailing. */
 export const EVENT_TTL_S = 24 * 60 * 60;
 
 const MAX_NAME_LEN = 128;
 const MAX_EMAIL_LEN = 254; // RFC 5321
-/** The on-device verifier hard-rejects a decoded blob ≥ 4096 bytes
- * (`verifier.ts`). We must never email a blob the buyer's own client can't
- * verify, so we assert well under that ceiling before delivery. */
+/** The on-device verifier rejects a decoded blob whose length exceeds 4096
+ * (`verifier.ts`, measured on the decoded string). Our `>=`-on-bytes check is
+ * deliberately stricter (UTF-8 bytes ≥ UTF-16 units), so no blob that passes
+ * here can fail on-device. We must never email a blob the buyer's own client
+ * can't verify. */
 const MAX_BLOB_DECODED_BYTES = 4096;
 
 /** Minimal structural view of a Cloudflare KV namespace (read + write). */
@@ -62,9 +69,43 @@ export interface KvNamespace {
 }
 
 /** Coarse, closed result enum for logging — deliberately NOT the fine-grained
- * internal reason (which could become a discrimination oracle). `"error"` is
- * the one retryable outcome: it maps to HTTP 500 so Polar re-delivers. */
-export type ResultKind = "issued" | "duplicate" | "revoked" | "ignored" | "rejected" | "error";
+ * internal reason in the HTTP response (which could become a discrimination
+ * oracle). `"error"` is the one retryable outcome: it maps to a retryable 5xx
+ * (500; 503 for config failures) so Polar re-delivers. `"dropped"` marks an
+ * order event that could not be fulfilled from its payload (no usable
+ * email/orderId) — a paid sale may be behind it, so it's the one result worth
+ * alerting on; it returns 200 (a retry carries the same bytes) but is NOT
+ * marked done, so a manual Polar re-send after a fix reprocesses it. */
+export type ResultKind =
+  | "issued"
+  | "duplicate"
+  | "revoked"
+  | "ignored"
+  | "dropped"
+  | "rejected"
+  | "error";
+
+/** Non-PII failure stage attached to error logs. Cloudflare's log stream is
+ * operator-only (not attacker-visible), so tagging the failing stage — and the
+ * upstream HTTP status for email — costs no security and makes a launch-day
+ * Resend misconfiguration debuggable. */
+export type FailStage = "config" | "email" | "blob-size" | "ledger" | "unexpected";
+
+interface Failure {
+  stage: FailStage;
+  status?: number;
+}
+
+export interface LogEntry {
+  result: ResultKind;
+  ts: number;
+  stage?: FailStage;
+  /** Upstream HTTP status (email stage only). */
+  status?: number;
+}
+
+/** What issue()/revoke() produce: a terminal result, or a Failure (→ 500). */
+type EventOutcome = Exclude<ResultKind, "rejected" | "error"> | Failure;
 
 export interface IssuanceDeps {
   webhookSecret: string;
@@ -73,19 +114,24 @@ export interface IssuanceDeps {
   entitlementKv: KvNamespace;
   /** issuance-owned store: `order:<mode>:<id>` records + `evt:<mode>:<id>`. */
   ledgerKv: KvNamespace;
-  /** Deliver the license blob to the buyer. Non-throwing; returns `{ ok }`. */
-  sendEmail: (to: string, name: string, blob: string) => Promise<{ ok: boolean }>;
+  /** Deliver the license blob to the buyer. Non-throwing; `status` is the
+   * upstream HTTP status when a response was received (absent on config or
+   * network failure). */
+  sendEmail: (to: string, name: string, blob: string) => Promise<{ ok: boolean; status?: number }>;
   isGrandfathered: (email: string) => boolean;
   /** Deploy-time env flag: a sandbox deployment must not entitle updates. */
   isTest: boolean;
   now: () => number;
   newLicenseId: () => string;
   toleranceS?: number;
-  log?: (entry: { result: ResultKind; ts: number }) => void;
+  log?: (entry: LogEntry) => void;
 }
 
-/** Durable ledger record. Holds exactly the fields needed to re-sign an
- * identical blob on a retry/resend — no separate copy of the signature. */
+/** Durable ledger record. Carries the fields needed to re-sign an identical
+ * blob on a retry/resend (Ed25519 is deterministic per RFC 8032 — a randomized
+ * scheme would break the resend story) plus dedup/refund bookkeeping — no
+ * separate copy of the signature. A refund that arrives before the paid event
+ * writes a TOMBSTONE: `refunded: true` with empty licenseId/email. */
 interface LedgerRecord {
   orderId: string;
   licenseId: string;
@@ -110,11 +156,40 @@ const orderKeyOf = (isTest: boolean, orderId: string): string =>
 const evtKeyOf = (isTest: boolean, webhookId: string): string =>
   `evt:${modeOf(isTest)}:${webhookId}`;
 
-/** Read an order's ledger record; null when absent. A corrupt record throws,
- * landing in the handler's top-level catch → retryable 500. */
+/** A ledger record that exists but can't be parsed/validated. Surfaces as a
+ * retryable 500 with `stage: "ledger"` — NEVER as a silent re-mint (a corrupt
+ * record must not look like "no record", or a refunded order could re-issue and
+ * a duplicate could double-mint). */
+class LedgerCorruptError extends Error {}
+
+function isLedgerRecord(v: unknown): v is LedgerRecord {
+  const r = v as LedgerRecord | null;
+  return (
+    typeof r?.orderId === "string" &&
+    typeof r.licenseId === "string" &&
+    typeof r.email === "string" &&
+    typeof r.name === "string" &&
+    (r.type === "personal" || r.type === "grandfathered") &&
+    typeof r.createdAt === "string" &&
+    (r.updateWindowEnd === null || typeof r.updateWindowEnd === "string") &&
+    typeof r.emailSent === "boolean" &&
+    typeof r.refunded === "boolean"
+  );
+}
+
+/** Read an order's ledger record; null when absent; LedgerCorruptError when
+ * present but unparsable/shape-invalid (→ retryable 500, never a re-mint). */
 async function readOrder(deps: IssuanceDeps, orderId: string): Promise<LedgerRecord | null> {
   const raw = await deps.ledgerKv.get(orderKeyOf(deps.isTest, orderId));
-  return raw ? (JSON.parse(raw) as LedgerRecord) : null;
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new LedgerCorruptError();
+  }
+  if (!isLedgerRecord(parsed)) throw new LedgerCorruptError();
+  return parsed;
 }
 
 function writeOrder(deps: IssuanceDeps, rec: LedgerRecord): Promise<void> {
@@ -169,16 +244,20 @@ function metadataFrom(rec: LedgerRecord) {
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<ResultKind> {
+async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
   // `data.customer` is Polar's authoritative buyer object; the extra fallbacks
   // are belt-and-suspenders against schema drift so a paid customer is never
   // silently dropped for a nesting change.
   const email = cleanEmail(data?.customer?.email ?? data?.user?.email ?? data?.billing?.email);
-  if (!email) return "ignored"; // malformed → don't retry forever
+  // No usable identity → "dropped", not "ignored": a paid sale may be behind
+  // this. 200 (a retry carries the same bytes) but NOT marked done, so a manual
+  // re-send after a parser fix reprocesses it; the distinct result is the
+  // alert hook.
+  if (!email) return "dropped";
 
   const name = cleanName(data?.customer?.name ?? data?.user?.name);
   const orderId = typeof data?.id === "string" ? data.id : null;
-  if (!orderId) return "ignored";
+  if (!orderId) return "dropped";
 
   const grandfathered = deps.isGrandfathered(email);
 
@@ -199,7 +278,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Resu
     if (!existing.emailSent) {
       const blob = await signLicense(metadataFrom(existing), deps.signBytes);
       const sent = await deps.sendEmail(existing.email, existing.name, blob);
-      if (!sent.ok) return "error";
+      if (!sent.ok) return { stage: "email", status: sent.status };
       existing.emailSent = true;
       await writeOrder(deps, existing);
     }
@@ -233,7 +312,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Resu
   // email≤254 the blob is ~0.6KB, so this only fires on a logic regression —
   // and then fails LOUD (retryable 500 + error logs), not as a silent drop.
   const padding = blob.endsWith("==") ? 2 : blob.endsWith("=") ? 1 : 0;
-  if ((blob.length / 4) * 3 - padding >= MAX_BLOB_DECODED_BYTES) return "error";
+  if ((blob.length / 4) * 3 - padding >= MAX_BLOB_DECODED_BYTES) return { stage: "blob-size" };
 
   // Durable ledger first (holds everything needed to re-sign on retry). A
   // failed entitlement write below throws → retryable 500; the retry hits the
@@ -242,7 +321,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Resu
   if (!deps.isTest) await deps.entitlementKv.put(licenseId, entitlementValue(rec));
 
   const sent = await deps.sendEmail(email, name, blob);
-  if (!sent.ok) return "error"; // 500 → retry re-sends
+  if (!sent.ok) return { stage: "email", status: sent.status }; // 500 → retry re-sends
 
   rec.emailSent = true;
   await writeOrder(deps, rec);
@@ -274,15 +353,35 @@ function isFreeOrder(data: any): boolean {
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function revoke(data: any, deps: IssuanceDeps): Promise<ResultKind> {
+async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
   if (data?.refunded !== true) return "ignored";
   const orderId = typeof data?.id === "string" ? data.id : null;
-  if (!orderId) return "ignored";
+  if (!orderId) return "dropped";
 
   const rec = await readOrder(deps, orderId);
-  if (!rec) return "ignored";
+  if (!rec) {
+    // Refund-before-paid: delivery order is not guaranteed, and a refund that
+    // outraces a (failed, still-retrying) paid event must not be lost — Polar
+    // won't redeliver a refund we 200'd. Write a TOMBSTONE so the later paid
+    // retry hits the `existing.refunded` tiebreaker instead of minting a live
+    // entitlement for a refunded order.
+    const tombstone: LedgerRecord = {
+      orderId,
+      licenseId: "",
+      email: "",
+      name: "",
+      type: "personal",
+      createdAt: new Date(nowMs).toISOString(),
+      updateWindowEnd: null,
+      emailSent: true,
+      refunded: true,
+    };
+    await writeOrder(deps, tombstone);
+    return "revoked";
+  }
 
-  if (!deps.isTest) await deps.entitlementKv.delete(rec.licenseId);
+  // Tombstones (and never-entitled records) have no licenseId to delete.
+  if (!deps.isTest && rec.licenseId) await deps.entitlementKv.delete(rec.licenseId);
   rec.refunded = true;
   await writeOrder(deps, rec);
   return "revoked";
@@ -303,15 +402,20 @@ function jsonResponse(status: number): Response {
 export async function handleIssuance(request: Request, deps: IssuanceDeps): Promise<Response> {
   const nowMs = deps.now();
   const ts = Math.floor(nowMs / 1000);
-  const reply = (status: number, result: ResultKind): Response => {
-    deps.log?.({ result, ts });
+  const reply = (status: number, result: ResultKind, fail?: Failure): Response => {
+    const entry: LogEntry = { result, ts };
+    if (fail) {
+      entry.stage = fail.stage;
+      if (fail.status !== undefined) entry.status = fail.status;
+    }
+    deps.log?.(entry);
     return jsonResponse(status);
   };
   try {
     if (request.method !== "POST") return reply(405, "rejected");
 
     // (1) Config present? Fail closed BEFORE reading anything.
-    if (!deps.webhookSecret) return reply(503, "error");
+    if (!deps.webhookSecret) return reply(503, "error", { stage: "config" });
 
     // (2) Read the raw body ONCE — signed content is over these exact bytes.
     const rawBody = await request.text();
@@ -355,26 +459,37 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
       return reply(200, "duplicate");
     }
 
-    // (8) Route on an allowlisted event type only; anything else is ignored.
-    let result: ResultKind;
+    // (8) Route on an allowlisted event type only. Unknown event TYPES are
+    // terminally uninteresting → mark done so replays short-circuit.
+    let outcome: EventOutcome;
     if (type === "order.paid") {
-      result = await issue(payload.data, deps, nowMs);
+      outcome = await issue(payload.data, deps, nowMs);
     } else if (type === "order.refunded") {
-      result = await revoke(payload.data, deps);
+      outcome = await revoke(payload.data, deps, nowMs);
     } else {
-      result = "ignored";
+      await deps.ledgerKv.put(evtKey, "done", { expirationTtl: EVENT_TTL_S });
+      return reply(200, "ignored");
     }
 
-    if (result === "error") return reply(500, "error"); // Polar retries
+    if (typeof outcome === "object") return reply(500, "error", outcome); // Polar retries
 
-    // (9) Mark processed only on full success (including ignored event types,
-    // so replays don't re-enter the router).
-    await deps.ledgerKv.put(evtKey, "done", { expirationTtl: EVENT_TTL_S });
-    return reply(200, result);
-  } catch {
+    // (9) Mark done only for durable outcomes. `ignored`/`dropped` order events
+    // are deliberately NOT marked: nothing durable was written, reprocessing is
+    // idempotent, and the marker would make a manual Polar re-send (the
+    // recovery path after fixing a parser/coupon issue) silently no-op for the
+    // marker's TTL.
+    if (outcome === "issued" || outcome === "duplicate" || outcome === "revoked") {
+      await deps.ledgerKv.put(evtKey, "done", { expirationTtl: EVENT_TTL_S });
+    }
+    return reply(200, outcome);
+  } catch (err) {
     // Any unexpected throw collapses to a static 500 — never re-thrown with
-    // payload content (which could echo body bytes into the runtime log).
-    return reply(500, "error");
+    // payload content (which could echo body bytes into the runtime log). The
+    // stage distinguishes a corrupt ledger record (operator: inspect/repair the
+    // order key via `wrangler kv`) from everything else.
+    return reply(500, "error", {
+      stage: err instanceof LedgerCorruptError ? "ledger" : "unexpected",
+    });
   }
 }
 
@@ -432,7 +547,10 @@ async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: str
         text: licenseEmailText(name, blob),
       }),
     });
-    return { ok: resp.ok };
+    // Carry the upstream status into the error log (`stage: "email"`) — a 422
+    // (unverified sender domain) vs 401 (bad key) vs 429 (rate limit) is the
+    // difference between a five-minute fix and a blind redeploy loop.
+    return { ok: resp.ok, status: resp.status };
   } catch {
     return { ok: false };
   }
@@ -457,7 +575,7 @@ function licenseEmailText(name: string, blob: string): string {
 
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    const log = (entry: { result: ResultKind; ts: number }) => console.log(JSON.stringify(entry));
+    const log = (entry: LogEntry) => console.log(JSON.stringify(entry));
 
     // Import the signing key up front — a bad/missing key fails closed (503)
     // before any webhook processing.
@@ -466,7 +584,7 @@ export default {
         const key = await importPkcs8Ed25519(env.TANDEM_PRIVATE_KEY);
         signerCache = { pem: env.TANDEM_PRIVATE_KEY, signBytes: webCryptoSigner(key) };
       } catch {
-        log({ result: "error", ts: Math.floor(Date.now() / 1000) });
+        log({ result: "error", ts: Math.floor(Date.now() / 1000), stage: "config" });
         return jsonResponse(503);
       }
     }

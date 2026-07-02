@@ -27,9 +27,9 @@ binding = "LICENSE_KV"
 id = "REPLACE_WITH_LICENSE_KV_NAMESPACE_ID"
 
 # Issuance ledger: order:<mode>:<orderId> -> record (email, licenseId, ...) plus
-# evt:<webhook-id> replay markers. Holds PII — a SEPARATE, issuance-only
-# namespace the update Worker never binds. Create with
-# `npx wrangler kv namespace create LEDGER_KV`.
+# evt:<mode>:<webhook-id> replay markers (every key carries the test/live mode
+# segment). Holds PII — a SEPARATE, issuance-only namespace the update Worker
+# never binds. Create with `npx wrangler kv namespace create LEDGER_KV`.
 [[kv_namespaces]]
 binding = "LEDGER_KV"
 id = "REPLACE_WITH_LEDGER_KV_NAMESPACE_ID"

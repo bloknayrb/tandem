@@ -31,14 +31,20 @@ separate follow-up.
    run-license is perpetual by design) and marks the ledger record refunded.
 
 **Idempotency (three layers):** per-attempt timestamp freshness, a
-`evt:<webhook-id>` completion marker (blocks replays of processed events), and
-the durable `order:<mode>:<orderId>` ledger (blocks re-mint; a retry of a
-*failed* delivery re-drives — re-asserts the entitlement and resends the email).
+`evt:<mode>:<webhook-id>` completion marker (blocks replays of processed
+events), and the durable `order:<mode>:<orderId>` ledger (blocks re-mint; a
+retry of a *failed* delivery re-drives — re-asserts the entitlement and resends
+the email). A refund that outraces its paid event writes a **tombstone** so the
+late paid retry can't mint a live entitlement for a refunded order. An order
+event with no usable email/orderId is logged as `dropped` (the alert-worthy
+result) and deliberately NOT marked done, so a manual Polar re-send after a fix
+reprocesses it.
 
 **Privacy:** PII (email/name) lives ONLY in `LEDGER_KV`; `LICENSE_KV` is
 PII-free. The HTTP response never contains the license blob (it would leak into
 Polar's delivery logs) — it reaches the buyer by email alone. Logs carry
-`{ result, ts }` only.
+`{ result, ts }` plus a non-PII failure `stage` (and upstream email HTTP status)
+on errors — never an email or license id.
 
 ## Deploy
 
