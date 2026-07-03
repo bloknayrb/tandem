@@ -161,7 +161,15 @@ Worker, its KV namespaces, and its secrets.
    **ledger** (`LEDGER_KV`), writes the update **entitlement** (`LICENSE_KV` —
    the same namespace §3's update Worker reads), and emails the blob via Resend.
 3. On **`order.refunded`**: deletes the update entitlement (the offline
-   run-license stays perpetual by design) and marks the ledger refunded.
+   run-license stays perpetual by design) and marks the ledger refunded — gated
+   on the payload's `refunded` field being **exactly** `true`; an explicit
+   `false` is ignored, and a missing/non-boolean field is treated as
+   `"dropped"` (see below), never as a silent revoke or a silent no-op.
+
+> Polar's exact field name/shape for a refunded order is **still unverified**
+> against a real sandbox payload (the same category of uncertainty as the
+> `$0`-order amount fields in §1b) — confirm it before relying on refund
+> revocation, and watch for `"dropped"` events during that window.
 
 Idempotent across Polar retries (per-attempt freshness + a
 `evt:<mode>:<webhook-id>` completion marker + the durable
@@ -169,10 +177,12 @@ Idempotent across Polar retries (per-attempt freshness + a
 tombstone so the late paid retry can't resurrect a refunded order). PII lives
 only in `LEDGER_KV`; `LICENSE_KV` is PII-free; the HTTP response never carries
 the blob; logs are `{ result, ts }` plus a non-PII failure `stage` on errors.
-**Alert on `"result":"dropped"`** — it means an order event arrived whose
-payload couldn't be fulfilled (no usable email/order id), i.e. possibly a paid
-sale with nothing issued; the event is deliberately not marked done, so fixing
-the cause and using Polar's manual re-send recovers it.
+**Alert on `"result":"dropped"`** — it means an event arrived whose payload
+couldn't be fulfilled: either an `order.paid` with no usable email/order id
+(possibly a paid sale with nothing issued), or an `order.refunded` whose
+`refunded` field didn't read as a confirmed `true`/`false` (possibly a real
+refund left live). The event is deliberately not marked done, so fixing the
+cause and using Polar's manual re-send recovers it.
 
 ### 3.5b. Provision
 

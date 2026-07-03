@@ -458,14 +458,41 @@ describe("handleIssuance: idempotency & recovery", () => {
     const deps = baseDeps();
     await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
     const firstLicenseId = ledgerRec(deps).licenseId;
+    // Spy AFTER the initial mint so the assertion below can only pass if the
+    // duplicate path itself calls put() again — asserting on end-state alone
+    // (map.has) would pass even if the "idempotent re-assert" call were deleted.
+    const putSpy = vi.spyOn(deps.entitlementKv, "put");
 
     const res = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_2" }), deps);
     expect(res.status).toBe(200);
     expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
     expect(ledgerRec(deps).licenseId).toBe(firstLicenseId); // no re-mint
     expect(deps.sendEmail).toHaveBeenCalledOnce(); // no re-email (emailSent)
-    // entitlement re-asserted under the SAME id
+    // entitlement re-assert actually executed on the duplicate path, under the
+    // SAME id
+    expect(putSpy).toHaveBeenCalledExactlyOnceWith(firstLicenseId, expect.any(String));
     expect(deps.entitlementKv.map.has(firstLicenseId)).toBe(true);
+  });
+
+  it("a resend of an already-paid order reporting $0 still re-drives instead of being ignored", async () => {
+    // Simulates a manual Polar resend/redelivery whose payload snapshot reads a
+    // later-adjusted amount. The ledger dedup/re-drive check must win over the
+    // coupon-containment gate, or an already-legitimate order with a stuck
+    // failed email would be silently "ignored" forever instead of recovered.
+    const sendEmail = vi.fn(async () => ({ ok: false })); // first attempt fails, stays unsent
+    const deps = baseDeps({ sendEmail });
+    const first = await handleIssuance(makeRequest(paidBody("ord_1"), { id: "evt_1" }), deps);
+    expect(first.status).toBe(500);
+    const licenseId = ledgerRec(deps).licenseId;
+    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // written before the failed send
+
+    sendEmail.mockResolvedValue({ ok: true });
+    const zeroBody = paidBody("ord_1", { total_amount: 0 });
+    const res = await handleIssuance(makeRequest(zeroBody, { id: "evt_2" }), deps);
+    expect(res.status).toBe(200);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
+    expect(ledgerRec(deps).emailSent).toBe(true); // re-drove the stuck email
+    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // still entitled
   });
 
   it("a corrupt ledger record → retryable 500 tagged 'ledger', never a re-mint", async () => {
@@ -589,11 +616,37 @@ describe("handleIssuance: order.refunded", () => {
     expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
   });
 
-  it("ignores a refund event without the refunded discriminator (H1)", async () => {
+  it("ignores a refund event with an explicit refunded:false discriminator (H1)", async () => {
     const deps = await issued();
     const licenseId = ledgerRec(deps).licenseId;
     await handleIssuance(makeRequest(refundBody("ord_1", false), { id: "evt_r2" }), deps);
     expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // NOT revoked
+  });
+
+  it("a missing/ambiguous refunded field is 'dropped' — NOT revoked, NOT ignored, NOT marked done", async () => {
+    // Polar's exact field shape for order.refunded is unconfirmed. A payload
+    // that omits `refunded` entirely must neither silently revoke a paying
+    // customer's entitlement on a guessed-wrong field, nor silently swallow a
+    // real refund forever.
+    const deps = await issued();
+    const licenseId = ledgerRec(deps).licenseId;
+    const body = JSON.stringify({ type: "order.refunded", data: { id: "ord_1" } });
+    const res = await handleIssuance(makeRequest(body, { id: "evt_ambig" }), deps);
+    expect(res.status).toBe(200); // a retry carries the same bytes
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
+    expect(deps.entitlementKv.map.get(licenseId)).toBeDefined(); // NOT revoked on a guess
+    expect(deps.ledgerKv.map.get("evt:live:evt_ambig")).toBeUndefined(); // NOT marked done
+
+    // Once the real field shape is confirmed, a manual re-send with an
+    // explicit refunded:true revokes normally — the ambiguous attempt above
+    // did not poison anything.
+    const res2 = await handleIssuance(
+      makeRequest(refundBody("ord_1"), { id: "evt_confirmed" }),
+      deps,
+    );
+    expect(res2.status).toBe(200);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
+    expect(deps.entitlementKv.map.get(licenseId)).toBeUndefined();
   });
 
   it("does not resurrect a refunded entitlement when the paid event retries (H2)", async () => {

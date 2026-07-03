@@ -72,10 +72,13 @@ export interface KvNamespace {
  * internal reason in the HTTP response (which could become a discrimination
  * oracle). `"error"` is the one retryable outcome: it maps to a retryable 5xx
  * (500; 503 for config failures) so Polar re-delivers. `"dropped"` marks an
- * order event that could not be fulfilled from its payload (no usable
- * email/orderId) — a paid sale may be behind it, so it's the one result worth
- * alerting on; it returns 200 (a retry carries the same bytes) but is NOT
- * marked done, so a manual Polar re-send after a fix reprocesses it. */
+ * event whose payload could not be fulfilled — an `order.paid` with no usable
+ * email/orderId (a paid sale may be behind it), OR an `order.refunded` whose
+ * `refunded` discriminator field is missing/non-boolean (a real refund may be
+ * behind it; Polar's exact field shape is unconfirmed — see `revoke()`) — so
+ * it's the one result worth alerting on; it returns 200 (a retry carries the
+ * same bytes) but is NOT marked done, so a manual Polar re-send after a fix
+ * reprocesses it. */
 export type ResultKind =
   | "issued"
   | "duplicate"
@@ -261,11 +264,12 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
 
   const grandfathered = deps.isGrandfathered(email);
 
-  // $0 / 100%-off coupon containment: a free order only yields a license for a
-  // listed grandfather email. A non-listed $0 order is an authorization gap (a
-  // leaked coupon → unbounded free licenses), so we ignore it.
-  if (isFreeOrder(data) && !grandfathered) return "ignored";
-
+  // Ledger dedup/re-drive MUST run before the coupon-containment gate below.
+  // A redelivery/resend of an already-ledgered order can carry a payload
+  // snapshot that differs from the original (e.g. a later partial adjustment
+  // reads the current total as ≤0) — if the free-order gate ran first, that
+  // resend would be silently "ignored" instead of hitting the re-drive branch,
+  // breaking the failed-email recovery story for a real, already-paid order.
   const existing = await readOrder(deps, orderId);
   if (existing) {
     // If a refund already revoked this order, a late retry of the original paid
@@ -280,10 +284,21 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
       const sent = await deps.sendEmail(existing.email, existing.name, blob);
       if (!sent.ok) return { stage: "email", status: sent.status };
       existing.emailSent = true;
+      // NOTE: if this write itself fails, the exception below collapses to a
+      // retryable 500 with `emailSent` still false on disk — a retry re-sends
+      // the same (deterministic) blob rather than losing it. Accepted:
+      // duplicate delivery of a customer's own license is harmless, unlike a
+      // silently-dropped one.
       await writeOrder(deps, existing);
     }
     return "duplicate";
   }
+
+  // $0 / 100%-off coupon containment: a free order only yields a license for a
+  // listed grandfather email. A non-listed $0 order is an authorization gap (a
+  // leaked coupon → unbounded free licenses), so we ignore it. Only reached
+  // for a genuinely NEW order (no ledger record above).
+  if (isFreeOrder(data) && !grandfathered) return "ignored";
 
   // Fresh issuance. NOTE: only `personal`/`grandfathered` are minted here. If a
   // `commercial` SKU is ever sold through this same webhook it would be silently
@@ -324,6 +339,10 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   if (!sent.ok) return { stage: "email", status: sent.status }; // 500 → retry re-sends
 
   rec.emailSent = true;
+  // If THIS write fails, the exception below collapses to a retryable 500 with
+  // `emailSent` still false on disk — a retry re-sends the same (deterministic)
+  // blob rather than losing it. Accepted: duplicate delivery of a customer's
+  // own license is harmless, unlike a silently-dropped one.
   await writeOrder(deps, rec);
   return "issued";
 }
@@ -348,15 +367,26 @@ function isFreeOrder(data: any): boolean {
 
 // ---------------------------------------------------------------------------
 // order.refunded → revoke the UPDATE entitlement (not the offline run-license,
-// which is perpetual by design). Gated on an explicit refunded discriminator so
-// a mis-routed non-refund event can never delete an entitlement.
+// which is perpetual by design). An ambiguous/unconfirmed `refunded` field
+// resolves to "dropped" (alert, no commit) rather than a guessed revoke/ignore.
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
-  if (data?.refunded !== true) return "ignored";
+  // Only an EXPLICIT `false` is treated as a genuinely mis-routed non-refund
+  // event — routing here already required `type === "order.refunded"`, so
+  // this is defense-in-depth, not the primary discriminator. Polar's exact
+  // field name/shape for a refunded order is UNCONFIRMED against a real
+  // sandbox payload (same risk class as `isFreeOrder`'s amount-field guess).
+  // A missing/non-boolean field is therefore NEITHER auto-revoked (which
+  // would silently delete a paying customer's entitlement on a wrong guess)
+  // NOR auto-ignored (which would silently leave a real refund unprocessed
+  // forever) — it falls through to "dropped" below: alertable, not committed
+  // either way, recoverable via a manual Polar re-send once confirmed.
+  if (data?.refunded === false) return "ignored";
   const orderId = typeof data?.id === "string" ? data.id : null;
   if (!orderId) return "dropped";
+  if (data?.refunded !== true) return "dropped";
 
   const rec = await readOrder(deps, orderId);
   if (!rec) {
