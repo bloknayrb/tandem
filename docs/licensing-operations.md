@@ -58,14 +58,21 @@ update window even while enforcement still ships dark.
 > console (fine). Any **server/log** record of issuance must log the license
 > **id** only, never the email (§12 L1). The webhook already does this.
 
-### 1b. Via the issuance webhook (if you wire payments first)
+### 1b. Via the issuance Worker (if you wire payments first)
 
-If a beta tester goes through the checkout flow, add their email to
-`GRANDFATHER_EMAILS` in `src/server/license/grandfather-list.ts` **before** they
-check out. `handleLicenseWebhook` calls `isGrandfathered(email)` (lowercase +
-trim) and issues `type: "grandfathered"`, `expiresAt: null` automatically — no
-charge logic, just the type/expiry branch. Redeploy the webhook after editing
-the list.
+If a beta tester goes through the checkout flow, add their email to the
+issuance Worker's `GRANDFATHER_EMAILS` secret (comma/space-separated) **before**
+they check out — see §3.5. The Worker lowercases + trims and issues
+`type: "grandfathered"`, `expiresAt: null` automatically — no charge logic, just
+the type/expiry branch. Re-`wrangler secret put GRANDFATHER_EMAILS` after
+editing the list.
+
+> A 100%-off coupon is the intended zero-cost path for listed testers. The
+> Worker deliberately **ignores** a `$0` order from a *non*-listed email (a
+> leaked coupon would otherwise mint unbounded free licenses), and whether a
+> `$0` checkout fires `order.paid` at all is **still unverified** — confirm it
+> in the Polar sandbox before relying on it, and keep §1a (manual signing) as
+> the reliable fallback.
 
 ## 2. Issuing a paid license manually (fallback)
 
@@ -135,6 +142,91 @@ uses the public GitHub endpoint — no error.
 - Updater asks `GET /api/license/status` (loopback). If `gateActive && licenseId && updateWindowCurrent`, it points at the Worker with an `X-Tandem-License-Id` header; otherwise it uses the public GitHub `latest.json`.
 - The Worker returns a **byte-identical no-update** response for unknown ids and expired windows (no existence oracle) and logs only `{ result, ts }` — never the id.
 
+## 3.5. The issuance endpoint (Cloudflare — owner-deployed)
+
+The **issuance Worker** (`infra/license-issuance-worker/`) is the public seam
+that turns a paid **Polar** checkout into a signed license. It supersedes the
+loopback-only server handler `src/server/license/webhook.ts` (which Polar can
+never reach). Like §3 it's owner-deployed; **you** own the Polar org, the
+Worker, its KV namespaces, and its secrets.
+
+### 3.5a. What it does
+
+1. Verifies the **Standard-Webhooks (svix)** signature Polar sends
+   (`webhook-signature` = HMAC-SHA256 over `${id}.${timestamp}.${body}`, key =
+   base64-decoded `whsec_` secret) and rejects stale timestamps — before any
+   side effect.
+2. On **`order.paid`**: mints + signs a license (`personal` with a 1-year update
+   window, or `grandfathered`/`expiresAt: null` for a listed email), writes the
+   **ledger** (`LEDGER_KV`), writes the update **entitlement** (`LICENSE_KV` —
+   the same namespace §3's update Worker reads), and emails the blob via Resend.
+3. On **`order.refunded`**: deletes the update entitlement (the offline
+   run-license stays perpetual by design) and marks the ledger refunded — gated
+   on the payload's `refunded` field being **exactly** `true`; an explicit
+   `false` is ignored, and a missing/non-boolean field is treated as
+   `"dropped"` (see below), never as a silent revoke or a silent no-op.
+
+> Polar's exact field name/shape for a refunded order is **still unverified**
+> against a real sandbox payload (the same category of uncertainty as the
+> `$0`-order amount fields in §1b) — confirm it before relying on refund
+> revocation, and watch for `"dropped"` events during that window.
+
+Idempotent across Polar retries (per-attempt freshness + a
+`evt:<mode>:<webhook-id>` completion marker + the durable
+`order:<mode>:<orderId>` ledger; a refund that outraces its paid event writes a
+tombstone so the late paid retry can't resurrect a refunded order). PII lives
+only in `LEDGER_KV`; `LICENSE_KV` is PII-free; the HTTP response never carries
+the blob; logs are `{ result, ts }` plus a non-PII failure `stage` on errors.
+**Alert on `"result":"dropped"`** — it means an event arrived whose payload
+couldn't be fulfilled: either an `order.paid` with no usable email/order id
+(possibly a paid sale with nothing issued), or an `order.refunded` whose
+`refunded` field didn't read as a confirmed `true`/`false` (possibly a real
+refund left live). The event is deliberately not marked done, so fixing the
+cause and using Polar's manual re-send recovers it.
+
+### 3.5b. Provision
+
+```bash
+cd infra/license-issuance-worker
+npx wrangler kv namespace create LEDGER_KV        # new, issuance-only (PII)
+# reuse the update Worker's LICENSE_KV id, or create one and use it for both
+# edit wrangler.toml: paste both ids, set RESEND_FROM + TANDEM_ISSUANCE_ENV
+npx wrangler secret put TANDEM_PRIVATE_KEY        # Ed25519 PEM PKCS#8 (§0)
+npx wrangler secret put POLAR_WEBHOOK_SECRET      # whsec_... from Polar
+npx wrangler secret put RESEND_API_KEY            # re_... from Resend
+npx wrangler secret put GRANDFATHER_EMAILS        # optional (§1b)
+npx wrangler deploy
+```
+
+Point the Polar webhook endpoint (subscribed to `order.paid` + `order.refunded`)
+at the deployed URL. Deploy a **separate sandbox instance**
+(`TANDEM_ISSUANCE_ENV=sandbox`, the sandbox Polar secret) to test end-to-end
+without writing production entitlements — the sandbox needs no Polar KYC, so
+this is unblocked before any LLC/payout setup.
+
+### 3.5c. Recovery & monitoring
+
+- The ledger record persists everything needed to **re-sign an identical blob**
+  (no separate blob copy), so a failed email is recoverable: the Worker returns
+  a retryable `500` and Polar's retry re-drives (re-asserts the entitlement,
+  resends the email). Records with `emailSent: false` are the "who didn't get
+  their license" worklist.
+- Entitlement-write failure is likewise retryable (`500`), unlike §3b's
+  fire-and-forget server write — the issuance Worker owns the KV binding
+  directly, so it can afford to block-and-retry.
+- Resend needs a **verified sending domain** with SPF, DKIM, and DMARC, or mail
+  lands in spam.
+- **Known gap — concurrent-delivery races.** Workers KV has no
+  compare-and-swap; two genuinely concurrent deliveries for the same order
+  (e.g. an ordinary Polar retry landing on a different edge PoP, not just an
+  attacker) can both mint, or a refund's tombstone can be overwritten by a
+  mint that lands just after its recheck. See the Worker's README "Known
+  limitation" section. **After refunding a higher-value order**, spot-check
+  with `npx wrangler kv key get "order:live:<orderId>" --namespace-id
+  <LEDGER_KV id>` that `refunded: true` and that `LICENSE_KV` no longer has a
+  live entry for that order's `licenseId`, until the tracked Durable-Object
+  fix lands.
+
 ## 4. The v1.0 flag flip (enabling enforcement)
 
 1. Confirm the commercial-readiness exit criterion (ADR-040 / roadmap).
@@ -155,3 +247,4 @@ uses the public GitHub endpoint — no error.
 | Activate (tester) | `tandem activate <key-or-path>` |
 | Check status (tester) | `tandem license` |
 | Deploy update Worker | `cd infra/license-update-worker && npx wrangler deploy` |
+| Deploy issuance Worker | `cd infra/license-issuance-worker && npx wrangler deploy` |

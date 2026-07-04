@@ -812,6 +812,7 @@ Both are silent from the user's perspective today; both end when the integration
 - In-app license-verification + server-side trial gate + license-authenticated updater are v1.0 work — tracked in #1116 (engineering, Wave 5L / v0.16.0) + #1117 (commercial infra, Bryan-led calendar gate) since 2026-06-11; the v1.0.0 tag is gated by the Commercial-readiness exit criterion in roadmap.md.
 - Existing beta users are grandfathered with a free license at 1.0; new users pay.
 - §1/§2 finalized; revenue ceiling is modest and accepted (full commitment, no kill-criterion).
+- **§6 narrowed to Polar for the issuance seam (2026-07-03, #1176):** the issuance Worker (`infra/license-issuance-worker/`) verifies Polar's Standard-Webhooks (svix) signature scheme specifically — it does not implement Paddle's webhook scheme. §6's "Polar.sh or Paddle" framing is still open at the checkout-provider level, but the built issuance seam is Polar-only in practice; adding Paddle later means a second signature-verification path in the Worker, not a drop-in swap.
 
 **Cross-references:** ADR-038 (MCP-first policy — basis for §2), ADR-022 / ADR-026 / ADR-027 (annotation system / authorship / data model — the in-place review surface), ADR-028 (split-status pattern), `docs/positioning.md`, `docs/roadmap.md` #394 + D4, `LICENSE` (BUSL-1.1).
 
