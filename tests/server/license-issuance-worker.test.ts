@@ -685,6 +685,127 @@ describe("handleIssuance: order.refunded", () => {
   });
 });
 
+describe("handleIssuance: pre-commit recheck narrows the double-mint/tombstone-clobber race", () => {
+  // These simulate a same-orderId write landing on a DIFFERENT concurrent
+  // request between our initial ledger read and our commit — the exact gap
+  // the pre-commit recheck in issue()/revoke() closes. Modeled by making the
+  // order key's second `get()` (the recheck) return what the "other" request
+  // would have just committed, rather than by spinning up real concurrency.
+
+  it("issue() defers to a refund tombstone that lands between its initial read and its commit", async () => {
+    const deps = baseDeps();
+    const orderId = "ord_race_issue";
+    const tombstone = JSON.stringify({
+      orderId,
+      licenseId: "",
+      email: "",
+      name: "",
+      type: "personal",
+      createdAt: new Date(NOW).toISOString(),
+      updateWindowEnd: null,
+      emailSent: true,
+      refunded: true,
+    });
+    let calls = 0;
+    const realGet = deps.ledgerKv.get.bind(deps.ledgerKv);
+    deps.ledgerKv.get = vi.fn(async (k: string) => {
+      if (k === `order:live:${orderId}`) {
+        calls++;
+        // 1st call = issue()'s initial read (no record yet, so it proceeds to
+        // mint). Every call after = the pre-commit recheck — simulate a
+        // concurrent revoke() having committed its tombstone in between.
+        return calls > 1 ? tombstone : null;
+      }
+      return realGet(k);
+    });
+
+    const res = await handleIssuance(
+      makeRequest(paidBody(orderId), { id: "evt_race_issue" }),
+      deps,
+    );
+    expect(res.status).toBe(200);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "duplicate", ts: NOW / 1000 });
+    expect(deps.sendEmail).not.toHaveBeenCalled(); // never resurrected/emailed
+    expect(deps.entitlementKv.map.size).toBe(0); // never entitled
+    expect(calls).toBeGreaterThan(1); // the recheck actually ran
+  });
+
+  it("revoke() defers to a mint that lands between its initial read and its tombstone write, revoking it instead of orphaning it", async () => {
+    const deps = baseDeps();
+    const orderId = "ord_race_revoke";
+    const mintedRec = {
+      orderId,
+      licenseId: "lic-race",
+      email: "buyer@example.com",
+      name: "Jane Buyer",
+      type: "personal",
+      createdAt: new Date(NOW).toISOString(),
+      updateWindowEnd: new Date(NOW + 1000).toISOString(),
+      emailSent: true,
+      refunded: false,
+    };
+    // Pre-seed the entitlement as if the concurrent mint's own
+    // entitlementKv.put already landed.
+    deps.entitlementKv.map.set(
+      "lic-race",
+      JSON.stringify({
+        updateWindowEnd: mintedRec.updateWindowEnd,
+        status: "personal",
+        version: LICENSE_VERSION,
+      }),
+    );
+
+    let calls = 0;
+    const realGet = deps.ledgerKv.get.bind(deps.ledgerKv);
+    deps.ledgerKv.get = vi.fn(async (k: string) => {
+      if (k === `order:live:${orderId}`) {
+        calls++;
+        // 1st call = revoke()'s initial read (no record yet). Every call
+        // after = the pre-commit recheck — simulate the concurrent mint
+        // having committed in between.
+        return calls > 1 ? JSON.stringify(mintedRec) : null;
+      }
+      return realGet(k);
+    });
+
+    const res = await handleIssuance(
+      makeRequest(refundBody(orderId), { id: "evt_race_revoke" }),
+      deps,
+    );
+    expect(res.status).toBe(200);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "revoked", ts: NOW / 1000 });
+    expect(deps.entitlementKv.map.get("lic-race")).toBeUndefined(); // revoked, not orphaned
+    expect(calls).toBeGreaterThan(1); // the recheck actually ran
+  });
+});
+
+describe("handleIssuance: input hygiene hardening", () => {
+  it("rejects an oversized body before any HMAC/JSON work", async () => {
+    const deps = baseDeps();
+    const bigBody = JSON.stringify({
+      type: "order.paid",
+      data: {
+        id: "ord_big",
+        total_amount: 4900,
+        customer: { email: "a@b.co", name: "x".repeat(100_000) },
+      },
+    });
+    const res = await handleIssuance(makeRequest(bigBody, { id: "evt_big" }), deps);
+    expect(res.status).toBe(400);
+    expect(deps.ledgerKv.map.size).toBe(0);
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("drops an order whose email fails the minimal shape check (no domain dot)", async () => {
+    const deps = baseDeps();
+    const body = paidBody("ord_bademail", { customer: { email: "not-an-email@nodot", name: "X" } });
+    const res = await handleIssuance(makeRequest(body, { id: "evt_bademail" }), deps);
+    expect(res.status).toBe(200);
+    expect(deps.log).toHaveBeenLastCalledWith({ result: "dropped", ts: NOW / 1000 });
+    expect(deps.ledgerKv.map.size).toBe(0);
+  });
+});
+
 describe("issuance → update Worker contract", () => {
   // Behavioral parity across the two separately-built Workers: the entitlement
   // handleIssuance writes must be readable by handleUpdateRequest. This pins

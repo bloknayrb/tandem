@@ -20,10 +20,18 @@
  *    timestamp → 401; bad JSON → 400.
  *  - Three idempotency layers: per-attempt timestamp freshness, a `webhook-id`
  *    completion set (blocks replays of fully-processed events), and the durable
- *    `orderId` ledger (blocks re-mint; drives retry-based recovery). Note KV is
- *    eventually consistent / last-write-wins: two truly-simultaneous deliveries
- *    of one order can double-mint (the second write orphans the first record) —
- *    accepted; strict once-only would need a Durable Object.
+ *    `orderId` ledger (blocks re-mint; drives retry-based recovery). `issue()`
+ *    and `revoke()` each re-read the ledger immediately before their first
+ *    commit (see the "pre-commit recheck" comments below) so a same-orderId
+ *    write from a concurrent request — another `order.paid` delivery, or an
+ *    `order.refunded` racing it — is deferred to instead of blindly
+ *    overwritten. This SHRINKS the window (from the whole request, including
+ *    async Ed25519 signing, down to one KV round trip) but Workers KV has no
+ *    compare-and-swap, so it does not make the pair atomic: two requests that
+ *    are truly simultaneous through both reads can still both commit (a
+ *    double-mint, or a mint that lands after a refund's tombstone recheck).
+ *    Closing that residual gap needs a Durable Object per orderId — accepted
+ *    as a follow-up (see README).
  *  - PII (email/name) lives ONLY in the issuance-owned ledger KV, never in the
  *    entitlement KV the update Worker reads. Logs carry `{ result, ts }` plus a
  *    non-PII failure `stage` on errors — never an email or license id. The HTTP
@@ -54,6 +62,11 @@ export const EVENT_TTL_S = 24 * 60 * 60;
 
 const MAX_NAME_LEN = 128;
 const MAX_EMAIL_LEN = 254; // RFC 5321
+/** A real Polar order payload is well under 10KB; this is defense-in-depth
+ * against forcing an unauthenticated caller's oversized body through HMAC +
+ * JSON.parse before the signature check can reject it (the secret is not
+ * needed to reach the body-read line). */
+const MAX_BODY_BYTES = 65_536;
 /** The on-device verifier rejects a decoded blob whose length exceeds 4096
  * (`verifier.ts`, measured on the decoded string). Our `>=`-on-bytes check is
  * deliberately stricter (UTF-8 bytes ≥ UTF-16 units), so no blob that passes
@@ -216,9 +229,15 @@ function cleanName(raw: unknown): string {
   return s || "Valued Customer";
 }
 
+// Minimal structural check (one "@", a non-empty local + domain part, a dot
+// somewhere in the domain not at either end) — not full RFC 5322. Polar is the
+// identity authority here; this only guards against schema drift producing an
+// obviously-unusable string, not against a legitimate-but-unusual address.
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function cleanEmail(raw: unknown): string | null {
   const e = (typeof raw === "string" ? raw : "").replace(CONTROL_CHARS, "").replace(/\s+/g, "");
-  if (!e || e.length > MAX_EMAIL_LEN || !e.includes("@")) return null;
+  if (!e || e.length > MAX_EMAIL_LEN || !EMAIL_SHAPE.test(e)) return null;
   return e;
 }
 
@@ -246,6 +265,31 @@ function metadataFrom(rec: LedgerRecord) {
 // order.paid → mint (or idempotently re-drive) a license.
 // ---------------------------------------------------------------------------
 
+/** Re-assert entitlement / resend a stuck email for an order that ALREADY has
+ * a ledger record — used both for a genuine redelivery and for a fresh-mint
+ * attempt that lost a race (see the pre-commit recheck in `issue()` below). If
+ * a refund already revoked the order, this is the tiebreaker: never resurrect
+ * or re-email. */
+async function reDrive(existing: LedgerRecord, deps: IssuanceDeps): Promise<EventOutcome> {
+  if (existing.refunded) return "duplicate";
+  if (!deps.isTest) {
+    await deps.entitlementKv.put(existing.licenseId, entitlementValue(existing)); // idempotent re-assert
+  }
+  if (!existing.emailSent) {
+    const blob = await signLicense(metadataFrom(existing), deps.signBytes);
+    const sent = await deps.sendEmail(existing.email, existing.name, blob);
+    if (!sent.ok) return { stage: "email", status: sent.status };
+    existing.emailSent = true;
+    // NOTE: if this write itself fails, the exception below collapses to a
+    // retryable 500 with `emailSent` still false on disk — a retry re-sends
+    // the same (deterministic) blob rather than losing it. Accepted:
+    // duplicate delivery of a customer's own license is harmless, unlike a
+    // silently-dropped one.
+    await writeOrder(deps, existing);
+  }
+  return "duplicate";
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
   // `data.customer` is Polar's authoritative buyer object; the extra fallbacks
@@ -271,28 +315,7 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   // resend would be silently "ignored" instead of hitting the re-drive branch,
   // breaking the failed-email recovery story for a real, already-paid order.
   const existing = await readOrder(deps, orderId);
-  if (existing) {
-    // If a refund already revoked this order, a late retry of the original paid
-    // event must NOT resurrect the entitlement or re-email. Events can
-    // interleave; the ledger's refunded flag is the tiebreaker.
-    if (existing.refunded) return "duplicate";
-    if (!deps.isTest) {
-      await deps.entitlementKv.put(existing.licenseId, entitlementValue(existing)); // idempotent re-assert
-    }
-    if (!existing.emailSent) {
-      const blob = await signLicense(metadataFrom(existing), deps.signBytes);
-      const sent = await deps.sendEmail(existing.email, existing.name, blob);
-      if (!sent.ok) return { stage: "email", status: sent.status };
-      existing.emailSent = true;
-      // NOTE: if this write itself fails, the exception below collapses to a
-      // retryable 500 with `emailSent` still false on disk — a retry re-sends
-      // the same (deterministic) blob rather than losing it. Accepted:
-      // duplicate delivery of a customer's own license is harmless, unlike a
-      // silently-dropped one.
-      await writeOrder(deps, existing);
-    }
-    return "duplicate";
-  }
+  if (existing) return reDrive(existing, deps);
 
   // $0 / 100%-off coupon containment: a free order only yields a license for a
   // listed grandfather email. A non-listed $0 order is an authorization gap (a
@@ -328,6 +351,19 @@ async function issue(data: any, deps: IssuanceDeps, nowMs: number): Promise<Even
   // and then fails LOUD (retryable 500 + error logs), not as a silent drop.
   const padding = blob.endsWith("==") ? 2 : blob.endsWith("=") ? 1 : 0;
   if ((blob.length / 4) * 3 - padding >= MAX_BLOB_DECODED_BYTES) return { stage: "blob-size" };
+
+  // Pre-commit recheck: Workers KV has no compare-and-swap, so another request
+  // (a concurrent `order.paid` delivery racing us, OR a `order.refunded`
+  // tombstone — see `revoke()`'s symmetric recheck) may have written a record
+  // for this orderId in the time since our read above (which included the
+  // await for Ed25519 signing). Re-reading immediately before the commit
+  // shrinks that window from "the whole request" down to one KV round trip and
+  // defers to whatever landed first instead of blindly overwriting it. This is
+  // NOT full atomicity — two requests can still both pass both reads if they
+  // are truly concurrent — closing that residual gap needs a Durable Object
+  // per orderId (see README).
+  const recheck = await readOrder(deps, orderId);
+  if (recheck) return reDrive(recheck, deps);
 
   // Durable ledger first (holds everything needed to re-sign on retry). A
   // failed entitlement write below throws → retryable 500; the retry hits the
@@ -371,6 +407,17 @@ function isFreeOrder(data: any): boolean {
 // resolves to "dropped" (alert, no commit) rather than a guessed revoke/ignore.
 // ---------------------------------------------------------------------------
 
+/** Revoke an order that ALREADY has a ledger record: delete its entitlement
+ * (tombstones and never-entitled records have no licenseId, so this is a
+ * no-op for them) and mark it refunded. Idempotent — revoking an
+ * already-refunded record just re-writes the same state. */
+async function applyRefund(rec: LedgerRecord, deps: IssuanceDeps): Promise<EventOutcome> {
+  if (!deps.isTest && rec.licenseId) await deps.entitlementKv.delete(rec.licenseId);
+  rec.refunded = true;
+  await writeOrder(deps, rec);
+  return "revoked";
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<EventOutcome> {
   // Only an EXPLICIT `false` is treated as a genuinely mis-routed non-refund
@@ -389,31 +436,36 @@ async function revoke(data: any, deps: IssuanceDeps, nowMs: number): Promise<Eve
   if (data?.refunded !== true) return "dropped";
 
   const rec = await readOrder(deps, orderId);
-  if (!rec) {
-    // Refund-before-paid: delivery order is not guaranteed, and a refund that
-    // outraces a (failed, still-retrying) paid event must not be lost — Polar
-    // won't redeliver a refund we 200'd. Write a TOMBSTONE so the later paid
-    // retry hits the `existing.refunded` tiebreaker instead of minting a live
-    // entitlement for a refunded order.
-    const tombstone: LedgerRecord = {
-      orderId,
-      licenseId: "",
-      email: "",
-      name: "",
-      type: "personal",
-      createdAt: new Date(nowMs).toISOString(),
-      updateWindowEnd: null,
-      emailSent: true,
-      refunded: true,
-    };
-    await writeOrder(deps, tombstone);
-    return "revoked";
-  }
+  if (rec) return applyRefund(rec, deps);
 
-  // Tombstones (and never-entitled records) have no licenseId to delete.
-  if (!deps.isTest && rec.licenseId) await deps.entitlementKv.delete(rec.licenseId);
-  rec.refunded = true;
-  await writeOrder(deps, rec);
+  // No record yet — but this is the SAME KV-has-no-compare-and-swap gap as
+  // `issue()`'s pre-commit recheck: a concurrent `order.paid` mint may be
+  // committing right now, between our read above and the tombstone write
+  // below. Re-read immediately before writing the tombstone; if a mint landed,
+  // revoke IT (delete its entitlement, mark refunded) instead of blindly
+  // writing an empty-licenseId tombstone that would silently orphan its
+  // entitlement forever (Polar never redelivers a refund we've already 200'd,
+  // so there is no second chance to catch this).
+  const recheck = await readOrder(deps, orderId);
+  if (recheck) return applyRefund(recheck, deps);
+
+  // Refund-before-paid: delivery order is not guaranteed, and a refund that
+  // outraces a (failed, still-retrying) paid event must not be lost — Polar
+  // won't redeliver a refund we 200'd. Write a TOMBSTONE so the later paid
+  // retry hits the `existing.refunded` tiebreaker instead of minting a live
+  // entitlement for a refunded order.
+  const tombstone: LedgerRecord = {
+    orderId,
+    licenseId: "",
+    email: "",
+    name: "",
+    type: "personal",
+    createdAt: new Date(nowMs).toISOString(),
+    updateWindowEnd: null,
+    emailSent: true,
+    refunded: true,
+  };
+  await writeOrder(deps, tombstone);
   return "revoked";
 }
 
@@ -447,8 +499,20 @@ export async function handleIssuance(request: Request, deps: IssuanceDeps): Prom
     // (1) Config present? Fail closed BEFORE reading anything.
     if (!deps.webhookSecret) return reply(503, "error", { stage: "config" });
 
+    // (1b) Reject an oversized body via its declared Content-Length BEFORE
+    // buffering it — the webhook secret isn't needed to reach this point, so
+    // an unauthenticated caller could otherwise force an arbitrarily large
+    // body through HMAC + JSON.parse before signature verification can reject
+    // it. A missing/unparsable header falls through to the read below (the
+    // platform's own request-size ceiling is the backstop).
+    const declaredLength = Number(request.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+      return reply(400, "rejected");
+    }
+
     // (2) Read the raw body ONCE — signed content is over these exact bytes.
     const rawBody = await request.text();
+    if (rawBody.length > MAX_BODY_BYTES) return reply(400, "rejected");
 
     // (3) Headers present & well-formed?
     const headers = {

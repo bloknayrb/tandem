@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **License issuance Worker landed (#1116, ADR-040).** `infra/license-issuance-worker/` is the public seam that turns a paid Polar checkout into an Ed25519-signed license: it verifies the Standard-Webhooks (svix) signature Polar actually sends (the loopback-only server handler it supersedes used an invented, wrong scheme Polar never sends), mints/signs the license, records an issuance ledger, writes the update entitlement the sibling `infra/license-update-worker/` reads, and emails the license via Resend — all before any behavior-visible change to the shipped app (the run-time license gate stays off by default per ADR-040). Owner-deployed; see `docs/licensing-operations.md`.
+
 ## [0.14.3] - 2026-06-22
 
 ### Added

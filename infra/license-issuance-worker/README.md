@@ -38,7 +38,10 @@ the email). A refund that outraces its paid event writes a **tombstone** so the
 late paid retry can't mint a live entitlement for a refunded order. An order
 event with no usable email/orderId is logged as `dropped` (the alert-worthy
 result) and deliberately NOT marked done, so a manual Polar re-send after a fix
-reprocesses it.
+reprocesses it. `issue()` and `revoke()` each re-read the ledger a second time
+immediately before their first commit, narrowing (not eliminating) the window
+for a same-orderId race against a concurrent delivery — see "Known limitation"
+below.
 
 **Privacy:** PII (email/name) lives ONLY in `LEDGER_KV`; `LICENSE_KV` is
 PII-free. The HTTP response never contains the license blob (it would leak into
@@ -64,8 +67,51 @@ Point the Polar webhook endpoint at the deployed URL. Deploy a **separate**
 sandbox instance (`TANDEM_ISSUANCE_ENV=sandbox`, sandbox Polar secret) to test
 without writing production entitlements.
 
+## Known limitation: concurrent-delivery races (tracked, not yet closed)
+
+Workers KV has no compare-and-swap. `issue()` and `revoke()` each re-read the
+`order:<mode>:<orderId>` ledger record immediately before their first commit,
+so a same-orderId write from a genuinely concurrent request (another
+`order.paid` delivery, or an `order.refunded` racing it) is detected and
+deferred to instead of blindly overwritten — this narrows the window from the
+whole request (including the async Ed25519 sign) down to one KV round trip.
+It does **not** make the pair atomic: two requests that are truly simultaneous
+through both reads can still both commit — a double-mint (two valid licenses
+for one order), or a refund that fails to revoke an entitlement minted just
+after its recheck. Cloudflare KV's eventual consistency (propagation lag
+across edge locations) means this isn't only a contrived race — an ordinary
+Polar retry landing on a different PoP can trigger it.
+
+**Operational mitigation until this is closed:** after refunding a
+higher-value order, verify with `npx wrangler kv key get "order:live:<orderId>"
+--namespace-id <LEDGER_KV id>` that `refunded: true` and that `LICENSE_KV` no
+longer has a live entry for that order's `licenseId`.
+
+**Proper fix (follow-up, not built here):** a Cloudflare Durable Object keyed
+on `orderId`, using `blockConcurrencyWhile` (or a single serialized queue) to
+make the read-then-write in `issue()`/`revoke()` atomic per order. Out of
+scope for this PR — it's a new binding + wrangler config + migration, not a
+same-shape change to the existing pure-handler design.
+
 ## Not yet built (follow-ups)
 
+- The Durable-Object-based fix for the concurrent-delivery race above.
 - A rate-limited **"resend my license"** endpoint (needs an email index +
   rate-limit store).
-- Stripping the superseded server `webhook.ts` from the shipped bundle.
+- Stripping the superseded server `webhook.ts` from the shipped bundle — it is
+  **still mounted** at `/webhooks/license` (`src/server/mcp/server.ts`) pending
+  that follow-up, so it is not dead code yet. That route is deliberately exempt
+  from the app's usual DNS-rebinding Host check and Bearer auth (an external
+  webhook caller can't carry either), so its only protection is its own
+  signature check — which uses the wrong (non-svix) scheme Polar doesn't send,
+  and returns the license blob directly in its HTTP response (this Worker
+  deliberately never does either). Practical exposure today is low (it 503s
+  without `POLAR_WEBHOOK_SECRET`/`TANDEM_PRIVATE_KEY` configured, which a stock
+  install doesn't set, and Polar can't reach a loopback-bound server) — but
+  this Worker should replace it before enabling non-loopback binding with real
+  licensing secrets in play.
+- Confirming whether `webhook.ts`'s route could ever be wired to the *same*
+  live Polar webhook subscription as this Worker (it still speaks both Polar's
+  and Paddle's schemes) — if so, that's a second, independent
+  duplicate-issuance path entirely outside this Worker's ledger, separate from
+  the concurrency race above.

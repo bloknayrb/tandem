@@ -216,6 +216,16 @@ this is unblocked before any LLC/payout setup.
   directly, so it can afford to block-and-retry.
 - Resend needs a **verified sending domain** with SPF, DKIM, and DMARC, or mail
   lands in spam.
+- **Known gap — concurrent-delivery races.** Workers KV has no
+  compare-and-swap; two genuinely concurrent deliveries for the same order
+  (e.g. an ordinary Polar retry landing on a different edge PoP, not just an
+  attacker) can both mint, or a refund's tombstone can be overwritten by a
+  mint that lands just after its recheck. See the Worker's README "Known
+  limitation" section. **After refunding a higher-value order**, spot-check
+  with `npx wrangler kv key get "order:live:<orderId>" --namespace-id
+  <LEDGER_KV id>` that `refunded: true` and that `LICENSE_KV` no longer has a
+  live entry for that order's `licenseId`, until the tracked Durable-Object
+  fix lands.
 
 ## 4. The v1.0 flag flip (enabling enforcement)
 
