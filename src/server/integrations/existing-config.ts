@@ -12,7 +12,8 @@
  * `buildMcpEntries` produces:
  * - HTTP `tandem`: `LoopbackUrl.safeParse(url)` rejects credential URLs,
  *   IPv6 loopback, decimal/hex IP obfuscation, NFC/NFD homoglyphs.
- * - stdio `tandem`: tuple-equality with `npx -y tandem-editor mcp-stdio`.
+ * - stdio `tandem`: `npx -y tandem-editor[@<version>] mcp-stdio` (the middle
+ *   token may be bare or exact-version-pinned).
  * - stdio `tandem-channel`: `isValidNodeBinary` command + `.js` first arg.
  *
  * Invalid entries are still surfaced (so the user sees what's on disk),
@@ -69,16 +70,28 @@ export interface ExistingMcpInstall {
   errorMessage?: string;
 }
 
-/** Canonical `args` for the npx-launched stdio tandem entry (claude-desktop). */
-const TANDEM_STDIO_NPX_ARGS = ["-y", "tandem-editor", "mcp-stdio"] as const;
+/**
+ * Canonical `args` for the npx-launched stdio tandem entry (claude-desktop).
+ * The middle token is the npm spec: the package name alone, OR pinned to an
+ * exact version (`tandem-editor@1.2.3`). `buildMcpEntries` now emits the pinned
+ * form (to force `npm exec` past any stale global `tandem-editor`), so the
+ * validator must accept both — otherwise it would flag apply.ts's own freshly
+ * written entry as `invalid-args`.
+ */
+const TANDEM_STDIO_NPX_HEAD = ["-y"] as const;
+const TANDEM_STDIO_NPX_TAIL = ["mcp-stdio"] as const;
+/** `tandem-editor` bare, or `tandem-editor@<exact semver>` (with optional prerelease). */
+const TANDEM_EDITOR_SPEC_RE = /^tandem-editor(@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)?$/;
+/** Canonical unpinned tuple, retained for the `invalid-args` reason string. */
+const TANDEM_STDIO_NPX_ARGS = [...TANDEM_STDIO_NPX_HEAD, "tandem-editor", ...TANDEM_STDIO_NPX_TAIL];
 
 /**
  * Validate an existing `tandem` mcpServers entry against the canonical
  * shapes `buildMcpEntries` produces. HTTP entries must be loopback (via
  * the same Zod schema that gates new entries); stdio entries must be
- * either the canonical `npx -y tandem-editor mcp-stdio` tuple, or a
- * Node-shaped command (for legacy sidecar invocations from older Tauri
- * builds).
+ * either the canonical `npx -y tandem-editor[@<version>] mcp-stdio` tuple
+ * (bare or exact-version-pinned), or a Node-shaped command (for legacy
+ * sidecar invocations from older Tauri builds).
  */
 export function validateTandemEntry(entry: McpEntry): EntryValidation {
   // HTTP variant: { type: "http", url: "http://127.0.0.1:..." }
@@ -99,15 +112,18 @@ export function validateTandemEntry(entry: McpEntry): EntryValidation {
   }
   const args = Array.isArray(entry.args) ? entry.args : [];
 
-  // Canonical: npx -y tandem-editor mcp-stdio
+  // Canonical: npx -y tandem-editor[@<version>] mcp-stdio
   if (entry.command === "npx") {
     const argsOk =
-      args.length === TANDEM_STDIO_NPX_ARGS.length &&
-      TANDEM_STDIO_NPX_ARGS.every((expected, i) => args[i] === expected);
+      args.length === 3 &&
+      args[0] === TANDEM_STDIO_NPX_HEAD[0] &&
+      typeof args[1] === "string" &&
+      TANDEM_EDITOR_SPEC_RE.test(args[1]) &&
+      args[2] === TANDEM_STDIO_NPX_TAIL[0];
     if (!argsOk) {
       return {
         status: "invalid-args",
-        reason: `npx args must be ${JSON.stringify(TANDEM_STDIO_NPX_ARGS)}; got ${JSON.stringify(args)}`,
+        reason: `npx args must be ${JSON.stringify(TANDEM_STDIO_NPX_ARGS)} (the package may be version-pinned as 'tandem-editor@<version>'); got ${JSON.stringify(args)}`,
       };
     }
     return { status: "valid" };

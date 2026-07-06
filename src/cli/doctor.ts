@@ -23,6 +23,7 @@
  * cleanly and the standalone shim can mirror it.
  */
 
+import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { request } from "node:http";
 import { createConnection } from "node:net";
@@ -30,6 +31,10 @@ import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { parseLockfile } from "../server/annotations/lockfile.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
+
+// Injected by tsup into dist/cli. Absent in tsx dev / vitest (typeof-guarded at
+// use). This is the version the `npx` bridge entries are pinned to.
+declare const __TANDEM_VERSION__: string;
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -577,6 +582,79 @@ export function summarizeDoctorResults(failures: number, warnings: number): stri
   return "All checks passed. Tandem is ready.";
 }
 
+// ── Check: stale global tandem-editor ───────────────────────────────
+//
+// The `tandem` MCP bridge is launched via `npx -y tandem-editor@<v> mcp-stdio`.
+// A globally-installed `tandem-editor` whose version predates the `mcp-stdio`
+// subcommand USED to be silently reused by `npx` (the exact "Server disconnected"
+// failure). The version pin now bypasses it, but a stale/foreign global can still
+// bite a hand-typed `npx tandem-editor` — so surface it. Runs inside the
+// synchronous Copy-Diagnostics path, so it MUST be time-bounded and non-fatal:
+// npm being absent (bundled-node Tauri sidecar), unreachable, or slow is a SKIP,
+// never a fail.
+
+/** Resolve a global `tandem-editor` version, or null when it can't be determined. */
+function globalTandemEditorVersion(): Promise<string | null> {
+  return new Promise((resolve) => {
+    // shell:true so Windows resolves the `npm.cmd` shim (bare execFile("npm")
+    // ENOENTs there). Args are all static — no injection surface.
+    execFile(
+      "npm",
+      ["ls", "-g", "--depth=0", "--json", "tandem-editor"],
+      { shell: true, windowsHide: true, timeout: 4000, maxBuffer: 8 * 1024 * 1024 },
+      (_err, stdout) => {
+        // `npm ls` exits non-zero on unrelated global peer issues but still
+        // prints JSON to stdout, so parse stdout regardless of the exit code.
+        if (!stdout || stdout.trim().length === 0) {
+          resolve(null);
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout) as {
+            dependencies?: Record<string, { version?: string }>;
+          };
+          resolve(parsed.dependencies?.["tandem-editor"]?.version ?? null);
+        } catch {
+          resolve(null);
+        }
+      },
+    );
+  });
+}
+
+async function checkStaleGlobal(r: Recorder): Promise<void> {
+  const bundled = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : null;
+  // Without a known bundled version (tsx dev / vitest) there's nothing to
+  // compare against — skip silently rather than guess.
+  if (!bundled) return;
+
+  let globalVersion: string | null;
+  try {
+    globalVersion = await globalTandemEditorVersion();
+  } catch {
+    // npm absent / spawn failure / timeout — skip, never fail.
+    return;
+  }
+
+  if (globalVersion === null) {
+    // No global install (the common, healthy case) or npm unavailable. Either
+    // way there's nothing that can shadow the pinned npx spec.
+    return;
+  }
+
+  if (globalVersion === bundled) {
+    r.pass(`Global tandem-editor@${globalVersion} matches this build`);
+    return;
+  }
+
+  r.warn(
+    `Global tandem-editor@${globalVersion} differs from this build (${bundled}) — ` +
+      "a stale global can break `npx tandem-editor` (e.g. Claude Desktop's MCP bridge).",
+    "npm uninstall -g tandem-editor   (or: npm install -g tandem-editor@latest)",
+    { globalVersion, bundledVersion: bundled },
+  );
+}
+
 export interface RunDoctorOptions {
   /** WebSocket (Hocuspocus) port to probe. Defaults to {@link DEFAULT_WS_PORT}. */
   wsPort?: number;
@@ -601,6 +679,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("mcp-json", () => checkMcpJson(r));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
+  await r.check("stale-global", () => checkStaleGlobal(r));
 
   const { mcp } = await r.check("ports", () => checkPorts(r, wsPort, mcpPort));
 

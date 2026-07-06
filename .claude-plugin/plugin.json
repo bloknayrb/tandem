@@ -1,6 +1,6 @@
 {
   "name": "tandem",
-  "version": "0.8.0",
+  "version": "0.14.3",
   "description": "Edit and iterate on documents with any MCP-capable AI. Claude is the default and best-supported client today.",
   "author": {
     "name": "Tandem"
@@ -11,14 +11,14 @@
   "mcpServers": {
     "tandem": {
       "command": "npx",
-      "args": ["-y", "tandem-editor", "mcp-stdio"],
+      "args": ["-y", "tandem-editor@0.14.3", "mcp-stdio"],
       "env": {
         "TANDEM_URL": "http://127.0.0.1:3479"
       }
     },
     "tandem-channel": {
       "command": "npx",
-      "args": ["-y", "tandem-editor", "channel"],
+      "args": ["-y", "tandem-editor@0.14.3", "channel"],
       "env": {
         "TANDEM_URL": "http://127.0.0.1:3479"
       }

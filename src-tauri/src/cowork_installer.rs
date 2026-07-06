@@ -687,10 +687,16 @@ fn merge_installed_plugins(
     })?;
 
     // Build the desired entry — token is captured in the value, never in a log.
+    // Pin the npx spec to this build's exact version so `npm exec` fetches the
+    // correct `tandem-editor` inside the Cowork guest instead of reusing a
+    // stale global copy that predates the `mcp-stdio` subcommand. CARGO_PKG_VERSION
+    // tracks package.json today (release bumps both); the drift guard in
+    // tests/plugin/plugin-version-pin.test.ts fails CI if they diverge.
+    let editor_spec = format!("tandem-editor@{}", env!("CARGO_PKG_VERSION"));
     let desired = json!({
         "type": "stdio",
         "command": "npx",
-        "args": ["-y", "tandem-editor", "mcp-stdio"],
+        "args": ["-y", editor_spec, "mcp-stdio"],
         "env": {
             "TANDEM_AUTH_TOKEN": token,
             "TANDEM_URL": tandem_url
