@@ -44,9 +44,13 @@ git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
 - If there's already an `[Unreleased]` section, show what to append, not a replacement
 - Omit empty categories (don't show "### Security" if there are no security commits)
 
-## Releasing — bump version in three places
+## Releasing — bump version in FOUR places
 
-When cutting a release (`chore(release): vX.Y.Z`), bump the version in `package.json`, `.claude-plugin/plugin.json`, AND `src-tauri/Cargo.toml`'s `[package].version`. None of the three bump automatically, so any one drifts if you forget it. `tests/plugin-manifest.test.ts` fails if `package.json`/`plugin.json` diverge; `tests/plugin/plugin-version-pin.test.ts` fails if any of the three diverge (it also checks that `plugin.json`'s pinned `tandem-editor@<version>` npx specs match) — treat either failure as "you bumped one, not all three." The Cargo version matters beyond CI: the Cowork installer pins its npx spec via `env!("CARGO_PKG_VERSION")`, so a stale Cargo version ships a build that pins the WRONG published npm version.
+When cutting a release (`chore(release): vX.Y.Z`), bump the version in `package.json`, `.claude-plugin/plugin.json` (top-level **and** both `tandem-editor@<version>` npx pins), `src-tauri/Cargo.toml`'s `[package].version`, AND `src-tauri/tauri.conf.json`'s `version`. None bump automatically, so any one drifts if you forget it. Then regenerate the lockfiles (`npm install --package-lock-only`; `cargo update --manifest-path src-tauri/Cargo.toml -p tandem-desktop --precise <version> --offline`) or `npm ci` / rust CI will fail on drift.
+
+`tests/plugin/plugin-version-pin.test.ts` fails if any of the four diverge (it also checks `plugin.json`'s pinned npx specs); `tests/plugin-manifest.test.ts` fails if `package.json`/`plugin.json` diverge — treat either failure as "you bumped some, not all." Why each surface matters beyond CI:
+- **Cargo.toml** — the Cowork installer pins its npx spec via `env!("CARGO_PKG_VERSION")`; a stale value ships a build pinning the WRONG published npm version.
+- **tauri.conf.json** — drives the desktop bundle artifact names (`Tandem_<version>_x64.dmg`, …) AND the tauri-action `__VERSION__` that names/targets the GitHub release. A stale value builds correctly-coded installers under the wrong version number and **uploads them onto the PREVIOUS release** (this bit v0.15.0: 0.14.3-named artifacts clobbered the published v0.14.3 release before the guard was added). No `CARGO_PKG_VERSION`-style derivation exists for it, so it rots silently.
 
 ## Conventions
 
