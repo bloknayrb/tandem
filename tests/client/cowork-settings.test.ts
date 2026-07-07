@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   aggregateWorkspaceStatus,
+  coworkReachability,
+  coworkReachabilityCopy,
   coworkSettingsVariant,
+  coworkWorkspaceReachable,
   firewallErrorHint,
   formatCoworkError,
   isTauriRuntime,
@@ -313,6 +316,132 @@ describe("aggregateWorkspaceStatus", () => {
 });
 
 // ---------------------------------------------------------------------------
+// coworkReachability / coworkWorkspaceReachable / coworkReachabilityCopy (#1174 gap #3)
+// ---------------------------------------------------------------------------
+
+describe("coworkWorkspaceReachable", () => {
+  function ws(
+    a: WorkspaceStatus["installedPlugins"],
+    b: WorkspaceStatus["knownMarketplaces"],
+    c: WorkspaceStatus["coworkSettings"],
+  ): WorkspaceStatus {
+    return {
+      workspaceId: "ws1",
+      vmId: "vm1",
+      installedPlugins: a,
+      knownMarketplaces: b,
+      coworkSettings: c,
+      path: "C:/fake",
+    };
+  }
+
+  it("true when all three files are 'ok'", () => {
+    expect(coworkWorkspaceReachable(ws("ok", "ok", "ok"))).toBe(true);
+  });
+
+  it("true when files are 'ok' or 'alreadyPresent' (idempotent re-install counts)", () => {
+    expect(coworkWorkspaceReachable(ws("ok", "alreadyPresent", "ok"))).toBe(true);
+  });
+
+  it("false when any file is not installed", () => {
+    expect(coworkWorkspaceReachable(ws("ok", "notConfigured", "ok"))).toBe(false);
+    expect(coworkWorkspaceReachable(ws("ok", "ok", "failed"))).toBe(false);
+    expect(coworkWorkspaceReachable(ws("locked", "ok", "ok"))).toBe(false);
+  });
+});
+
+describe("coworkReachability", () => {
+  function ws(
+    a: WorkspaceStatus["installedPlugins"],
+    b: WorkspaceStatus["knownMarketplaces"],
+    c: WorkspaceStatus["coworkSettings"],
+  ): WorkspaceStatus {
+    return {
+      workspaceId: "ws1",
+      vmId: "vm1",
+      installedPlugins: a,
+      knownMarketplaces: b,
+      coworkSettings: c,
+      path: "C:/fake",
+    };
+  }
+
+  it("'not-applicable' when status is null", () => {
+    expect(coworkReachability(null)).toBe("not-applicable");
+  });
+
+  it("'not-applicable' when the integration is not enabled", () => {
+    expect(coworkReachability(makeStatus({ enabled: false }))).toBe("not-applicable");
+  });
+
+  it("'reachable' when ≥1 workspace is fully installed", () => {
+    expect(
+      coworkReachability(makeStatus({ enabled: true, workspaces: [ws("ok", "ok", "ok")] })),
+    ).toBe("reachable");
+  });
+
+  it("'reachable' if any one of several workspaces is complete (others partial)", () => {
+    expect(
+      coworkReachability(
+        makeStatus({
+          enabled: true,
+          workspaces: [ws("notConfigured", "notConfigured", "notConfigured"), ws("ok", "ok", "ok")],
+        }),
+      ),
+    ).toBe("reachable");
+  });
+
+  it("'unreachable' when no workspace is complete and one has a hard error", () => {
+    expect(
+      coworkReachability(makeStatus({ enabled: true, workspaces: [ws("failed", "ok", "ok")] })),
+    ).toBe("unreachable");
+    expect(
+      coworkReachability(
+        makeStatus({ enabled: true, workspaces: [ws("schemaDrift", "ok", "ok")] }),
+      ),
+    ).toBe("unreachable");
+  });
+
+  it("'pending' when enabled but no workspaces scanned yet (heal-pass will install)", () => {
+    expect(coworkReachability(makeStatus({ enabled: true, workspaces: [] }))).toBe("pending");
+  });
+
+  it("'pending' when workspaces exist but are only 'notConfigured' (awaiting heal-pass)", () => {
+    expect(
+      coworkReachability(
+        makeStatus({
+          enabled: true,
+          workspaces: [ws("notConfigured", "notConfigured", "notConfigured")],
+        }),
+      ),
+    ).toBe("pending");
+  });
+
+  it("'pending' when a workspace is only 'locked' (retrying, not a hard error)", () => {
+    expect(
+      coworkReachability(makeStatus({ enabled: true, workspaces: [ws("locked", "ok", "ok")] })),
+    ).toBe("pending");
+  });
+});
+
+describe("coworkReachabilityCopy", () => {
+  it("maps each verdict to a token family", () => {
+    expect(coworkReachabilityCopy("reachable").family).toBe("success");
+    expect(coworkReachabilityCopy("unreachable").family).toBe("error");
+    expect(coworkReachabilityCopy("pending").family).toBe("warning");
+    expect(coworkReachabilityCopy("not-applicable").family).toBe("neutral");
+  });
+
+  it("provides non-empty copy for surfaced verdicts and empty copy for not-applicable", () => {
+    for (const r of ["reachable", "unreachable", "pending"] as const) {
+      expect(coworkReachabilityCopy(r).title.length).toBeGreaterThan(0);
+      expect(coworkReachabilityCopy(r).detail.length).toBeGreaterThan(0);
+    }
+    expect(coworkReachabilityCopy("not-applicable").title).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // makeDebouncer — covers the rescan debounce (2s per task spec)
 // ---------------------------------------------------------------------------
 
@@ -404,7 +533,7 @@ describe("cowork invoke wrappers", () => {
   it("propagates invoke rejections so the caller's try/catch can surface a toast", async () => {
     const invoke = vi
       .fn<InvokeFn>()
-      .mockRejectedValue(new Error("Cowork integration is Windows-only in v0.8.0"));
+      .mockRejectedValue(new Error("Cowork integration is Windows-only"));
     await expect(coworkGetStatus(invoke as unknown as InvokeFn)).rejects.toThrow(/Windows-only/);
   });
 });

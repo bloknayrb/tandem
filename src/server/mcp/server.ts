@@ -25,6 +25,7 @@ import { registerAnnotationTools } from "./annotations.js";
 import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
 import { registerChannelRoutes } from "./channel-routes.js";
+import { type DiagnosticsToolDeps, registerDiagnosticsTools } from "./diagnostics.js";
 import { registerDocumentTools } from "./document.js";
 import { getGenerationId } from "./document-service.js";
 import { registerApplyTools } from "./docx-apply.js";
@@ -105,7 +106,7 @@ let currentTransport: StreamableHTTPServerTransport | null = null;
 let connectingPromise: Promise<void> | null = null;
 
 /** Create an McpServer with all tool groups registered (no transport). */
-function createMcpServer(): McpServer {
+function createMcpServer(diagnostics: DiagnosticsToolDeps = {}): McpServer {
   const server = new McpServer({
     name: "tandem",
     version: APP_VERSION,
@@ -116,6 +117,7 @@ function createMcpServer(): McpServer {
   registerNavigationTools(server);
   registerAwarenessTools(server);
   registerApplyTools(server);
+  registerDiagnosticsTools(server, diagnostics);
 
   return server;
 }
@@ -180,7 +182,7 @@ export async function closeMcpSession(): Promise<void> {
 
 /** Start the MCP server on stdio (legacy, used as fallback via TANDEM_TRANSPORT=stdio). */
 export async function startMcpServerStdio(): Promise<void> {
-  const server = createMcpServer();
+  const server = createMcpServer({ version: APP_VERSION, transport: "stdio" });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -239,7 +241,7 @@ export async function startMcpServerHttp(
    */
   shutdownWiring?: import("./routes/shutdown.js").ShutdownRouteDeps,
 ): Promise<Server> {
-  mcpServer = createMcpServer();
+  mcpServer = createMcpServer({ version: APP_VERSION, transport: "http", wsPort, mcpPort: port });
   // Snapshot tool count now — all registrations are unconditional in createMcpServer(),
   // so this is stable for the lifetime of the process.
   const toolCount = snapshotToolCount(mcpServer);

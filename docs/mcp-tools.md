@@ -2,7 +2,7 @@
 
 These tools are exposed over the MCP protocol. **Claude Code is Tandem's default and most-tested client** ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), but the tools are available to any MCP-capable client connecting to `http://127.0.0.1:3479/mcp`.
 
-Tandem exposes 31 tools via MCP HTTP (28 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
+Tandem exposes 32 tools via MCP HTTP (29 active, 3 deprecated stubs that return MCP error responses with code `DEPRECATED`). The channel shim also exposes `tandem_reply` for real-time push contexts — the shim itself is a Claude-specific stdio transport on top of the MCP contract; other MCP clients discover the HTTP transport automatically and subscribe to `/api/events` directly for the same real-time stream. All tools use flat text character offsets for positions — use `tandem_resolveRange` to get safe offsets from text patterns.
 
 ## Response Format
 
@@ -20,7 +20,7 @@ All tools return responses in a standard envelope:
 
 ### Structured Output (`outputSchema` / `structuredContent`)
 
-Six data-returning tools additionally advertise an MCP `outputSchema` and emit `structuredContent` so typed clients can validate responses end-to-end:
+Seven data-returning tools additionally advertise an MCP `outputSchema` and emit `structuredContent` so typed clients can validate responses end-to-end:
 
 - `tandem_status`
 - `tandem_getTextContent`
@@ -28,6 +28,7 @@ Six data-returning tools additionally advertise an MCP `outputSchema` and emit `
 - `tandem_checkInbox`
 - `tandem_listDocuments`
 - `tandem_search`
+- `tandem_diagnostics`
 
 For these tools, `structuredContent` carries the exact same object as the text envelope's `data` field — the text content is unchanged for backward compatibility. Error responses from these tools are marked with the MCP-level `isError: true` flag (and carry no `structuredContent`); the text content still holds the `{ "error": true, ... }` JSON envelope above. Schemas live in `src/server/mcp/output-schemas.ts`. Per ADR-027, the annotation schemas deliberately omit `type: "note"` — user-private notes can never appear in structured payloads.
 
@@ -901,6 +902,47 @@ tandem_reply({ text: "I've finished reviewing the cost section. Two figures need
 - Chat messages are stored in `Y.Map('chat')` on the `__tandem_ctrl__` Y.Doc, so they persist across the session but are not tied to a specific document.
 - The `documentId` field captures which document was active for context, but the message itself lives on the control channel.
 - New user messages appear in `tandem_checkInbox` via the `chatMessages` array.
+
+---
+
+## Diagnostics Tools
+
+### tandem_diagnostics
+
+Read connection and boot health as a structured report: Node version, `.mcp.json` / `~/.claude.json` registration, port probes (3478 WebSocket + 3479 MCP HTTP), the `/health` endpoint, and the SSE event stream. Wraps the same `runDoctor()` collector that backs `GET /api/diagnostics`, but rides the MCP transport — so an MCP-connected agent (including a Cowork VM that **cannot** reach `localhost:3479`, see [ADR-023](decisions.md)) can self-diagnose a broken connection without a loopback HTTP round-trip it may not be able to make.
+
+Read-only, takes **no parameters**, and is **not** license-gated — diagnostics stay available even when the license gate is restricted.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| _(none)_ | | | |
+
+**Returns** (the dev-repo-filtered `DoctorReport` plus runtime environment fields — identical payload shape to `GET /api/diagnostics`, advertised via `outputSchema`):
+```json
+{
+  "ok": true,
+  "crashed": false,
+  "failures": 0,
+  "warnings": 1,
+  "summary": "1 warning(s) — Tandem should work, but check the items above.",
+  "error": null,
+  "results": [
+    { "check": "health", "status": "pass", "message": "MCP HTTP /health responded", "data": { "port": 3479, "hasSession": true } },
+    { "check": "user-mcp-config", "status": "warn", "message": "No active MCP session — Claude Code hasn't connected yet", "fix": "Restart Claude and run /mcp" }
+  ],
+  "version": "0.14.0",
+  "transport": "http",
+  "platform": "win32",
+  "arch": "x64",
+  "nodeVersion": "v22.0.0",
+  "tauriSidecar": true
+}
+```
+
+**Notes:**
+- The two dev-repo-only checks (`node-modules`, `mcp-json`) are filtered out and `ok`/`failures`/`warnings`/`summary` recomputed — they read `process.cwd()` and would fail for every desktop / npm-global install. (`tandem doctor` on the CLI keeps them; there the cwd is meaningful.)
+- The report embeds absolute paths and PIDs in per-check `data` bags — surfaced only over the loopback-gated MCP transport, the same posture that makes `GET /api/diagnostics` loopback-only.
+- Use this instead of asking the user to run `tandem doctor` when an MCP call fails unexpectedly.
 
 ---
 

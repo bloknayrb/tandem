@@ -55,12 +55,14 @@ cowork-admin-declined-disable-btn
 cowork-admin-declined-disable-cancel-btn
 cowork-admin-declined-disable-confirm-btn
 cowork-admin-declined-error
+cowork-admin-declined-learn-more-link
 cowork-admin-declined-modal
 cowork-admin-declined-retry-btn
 cowork-admin-declined-status-error
 cowork-enable-cancel-btn
 cowork-enable-confirm
 cowork-enable-confirm-btn
+cowork-explainer
 cowork-inline-toast
 cowork-lan-ip-override
 cowork-lan-ip-override-checkbox
@@ -73,6 +75,7 @@ cowork-onboarding-learn-more-btn
 cowork-onboarding-learn-more-link
 cowork-onboarding-skip-btn
 cowork-onboarding-step
+cowork-reachability
 cowork-rescan-btn
 cowork-settings
 cowork-settings-error
@@ -178,6 +181,7 @@ integration-wizard-close
 integration-wizard-connect-btn
 integration-wizard-cowork-back
 integration-wizard-cowork-error
+integration-wizard-cowork-explainer
 integration-wizard-cowork-setup
 integration-wizard-cowork-step
 integration-wizard-done-close
@@ -190,6 +194,7 @@ integration-wizard-install-success
 integration-wizard-keychain-fallback
 integration-wizard-more
 integration-wizard-pick-{*}
+integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
 integration-wizard-secret-submit-{*}
@@ -197,6 +202,8 @@ integration-wizard-step-applying
 integration-wizard-step-detect
 integration-wizard-step-done
 integration-wizard-step-error
+integration-wizard-step-verifying
+integration-wizard-whats-next
 left-outline-rail
 license-activate-error
 license-activate-input
@@ -268,6 +275,7 @@ popup-note-submit
 popup-show-formatbar-btn
 railFloat.left ? "rail-float-left" : undefined
 railFloat.right ? "rail-float-right" : undefined
+reachability-harness
 recent-file-{*}
 recent-files-list
 reduce-motion-toggle

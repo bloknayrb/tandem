@@ -101,6 +101,10 @@ const UNGATED = [
   "tandem_getActivity",
   "tandem_checkInbox",
   "tandem_reply",
+  // Read-only boot/connection health (#1174 gap #2). Deliberately ungated: an
+  // agent must be able to self-diagnose a broken connection even when the
+  // license gate is restricted — diagnostics never mutate.
+  "tandem_diagnostics",
 ];
 
 describe("Surface B gated-tool registration coverage", () => {

@@ -44,6 +44,10 @@ git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
 - If there's already an `[Unreleased]` section, show what to append, not a replacement
 - Omit empty categories (don't show "### Security" if there are no security commits)
 
+## Releasing — bump version in two places
+
+When cutting a release (`chore(release): vX.Y.Z`), bump the version in BOTH `package.json` AND `.claude-plugin/plugin.json`. The published Claude Code plugin manifest has no automated bump, so it drifts if you forget. `tests/plugin-manifest.test.ts` fails if the two diverge — treat that failure as "you bumped one, not both."
+
 ## Conventions
 
 Going forward, changelog entries follow [ADR-038](../../../docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) framing — write "your AI" / "the AI" generically; use "Claude" as the concrete example when a feature is Claude-specific (e.g. channel push, plugin monitor, cowork, auto-launcher, plugin marketplace). Past entries (v0.12.0 and earlier) are historical record and not rewritten.
