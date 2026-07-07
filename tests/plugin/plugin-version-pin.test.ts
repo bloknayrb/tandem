@@ -10,6 +10,13 @@
  *     marketplace (its own top-level `version` field was already 5 minors stale).
  *   - `src-tauri/Cargo.toml` — the Cowork installer pins via `env!("CARGO_PKG_VERSION")`,
  *     which is only correct while the Rust crate version equals the npm version.
+ *   - `src-tauri/tauri.conf.json` — drives the desktop bundle artifact names
+ *     (`Tandem_<version>_x64.dmg`, …) AND the tauri-action `__VERSION__` that
+ *     names/targets the GitHub release. A stale value here builds correctly-coded
+ *     installers under the WRONG version and uploads them onto the PREVIOUS
+ *     release (observed on v0.15.0: 0.14.3-named artifacts clobbered the
+ *     published v0.14.3 release). This surface has no CARGO_PKG_VERSION-style
+ *     derivation, so it silently rots.
  *
  * This test fails CI the moment any of them diverges from package.json.
  * (`src/server/integrations/apply.ts` build-injects the version from package.json
@@ -34,6 +41,10 @@ const plugin = JSON.parse(readFileSync(join(repoRoot, ".claude-plugin/plugin.jso
 
 const cargoToml = readFileSync(join(repoRoot, "src-tauri/Cargo.toml"), "utf8");
 
+const tauriConf = JSON.parse(readFileSync(join(repoRoot, "src-tauri/tauri.conf.json"), "utf8")) as {
+  version: string;
+};
+
 /** Pull the version from the first `[package]` table in Cargo.toml. */
 function cargoPackageVersion(toml: string): string {
   const pkgSection = toml.split(/^\[/m).find((s) => s.startsWith("package]"));
@@ -56,6 +67,12 @@ describe("plugin/version pin drift guard", () => {
     // The Cowork installer pins tandem-editor via env!("CARGO_PKG_VERSION"),
     // so a divergent crate version would pin the WRONG npm package version.
     expect(cargoPackageVersion(cargoToml)).toBe(expected);
+  });
+
+  it("src-tauri/tauri.conf.json version matches package.json", () => {
+    // Drives desktop artifact names and the tauri-action release __VERSION__.
+    // A stale value ships mis-versioned installers onto the wrong release.
+    expect(tauriConf.version).toBe(expected);
   });
 
   it("every plugin.json npx tandem-editor entry pins the package.json version", () => {
