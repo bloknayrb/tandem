@@ -1,9 +1,9 @@
 [package]
 name = "tandem-desktop"
-version = "0.14.3"
+version = "0.15.0"
 description = "Collaborative AI-human document editor"
 authors = ["Bryan Kolb"]
-license = "MIT"
+license = "BUSL-1.1"
 repository = "https://github.com/bloknayrb/tandem"
 edition = "2021"
 rust-version = "1.77.2"
