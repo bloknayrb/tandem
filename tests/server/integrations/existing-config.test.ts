@@ -346,6 +346,38 @@ describe("validateTandemEntry", () => {
     ).toBe("valid");
   });
 
+  it("accepts the version-pinned npx stdio shape (buildMcpEntries now emits this)", () => {
+    expect(
+      validateTandemEntry({
+        command: "npx",
+        args: ["-y", "tandem-editor@0.14.3", "mcp-stdio"],
+      }).status,
+    ).toBe("valid");
+    // prerelease-tagged versions too
+    expect(
+      validateTandemEntry({
+        command: "npx",
+        args: ["-y", "tandem-editor@1.0.0-rc.1", "mcp-stdio"],
+      }).status,
+    ).toBe("valid");
+  });
+
+  it("rejects a non-exact/tag pin (only bare or exact semver allowed)", () => {
+    expect(
+      validateTandemEntry({ command: "npx", args: ["-y", "tandem-editor@latest", "mcp-stdio"] })
+        .status,
+    ).toBe("invalid-args");
+  });
+
+  it("rejects a foreign package that merely starts with tandem-editor", () => {
+    expect(
+      validateTandemEntry({
+        command: "npx",
+        args: ["-y", "tandem-editor-evil", "mcp-stdio"],
+      }).status,
+    ).toBe("invalid-args");
+  });
+
   it("rejects npx with tampered args", () => {
     expect(validateTandemEntry({ command: "npx", args: ["-y", "evil-package"] }).status).toBe(
       "invalid-args",

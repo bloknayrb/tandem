@@ -107,6 +107,37 @@ const CHANNEL_DIST = resolveChannelDist();
 
 const MCP_URL = `http://127.0.0.1:${DEFAULT_MCP_PORT}`;
 
+// Injected by tsup at build time. apply.ts is bundled into BOTH `dist/cli`
+// (carries `__TANDEM_VERSION__`) and `dist/server` (carries `__APP_VERSION__`),
+// and neither define exists in both bundles. esbuild leaves a *bare* reference
+// to an absent define as a free global → runtime ReferenceError (no build
+// error), so each MUST be `typeof`-guarded — mirroring `APP_VERSION` in
+// `src/server/mcp/server.ts`. The disk fallback only runs in tsx dev / vitest,
+// where `__dirname` (src/server/integrations) resolves the repo-root
+// package.json via the same two candidates server.ts uses.
+declare const __TANDEM_VERSION__: string;
+declare const __APP_VERSION__: string;
+export function resolveCliVersion(): string {
+  if (typeof __TANDEM_VERSION__ !== "undefined") return __TANDEM_VERSION__;
+  if (typeof __APP_VERSION__ !== "undefined") return __APP_VERSION__;
+  for (const rel of ["../../package.json", "../../../package.json"]) {
+    try {
+      const pkg = JSON.parse(readFileSync(resolve(__dirname, rel), "utf8")) as { version: string };
+      if (pkg.version) return pkg.version;
+    } catch {
+      // try next candidate
+    }
+  }
+  console.error("[Tandem] Could not resolve CLI version for npx pin; using unpinned fallback");
+  return "0.0.0-unknown";
+}
+
+// Pinning the npx spec to an exact version forces `npm exec` to fetch/run the
+// correct published `tandem-editor` instead of reusing whatever (possibly
+// stale, pre-`mcp-stdio`) global copy is installed — the root cause of the
+// "Server disconnected"/"Could not attach" failure. See the plan/ADR notes.
+const CLI_VERSION = resolveCliVersion();
+
 /**
  * Refuse to read a config larger than 5 MiB. The realistic `.claude.json` is
  * single-digit kilobytes; anything beyond that is either accidental corruption
@@ -216,7 +247,7 @@ export function buildMcpEntries(
     }
     tandemEntry = {
       command: "npx",
-      args: ["-y", "tandem-editor", "mcp-stdio"],
+      args: ["-y", `tandem-editor@${CLI_VERSION}`, "mcp-stdio"],
       env,
     };
   } else {

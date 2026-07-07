@@ -190,6 +190,7 @@
 - `tandem` is required to be running on the host before Cowork plugin sessions do anything useful. Plugin README calls this out.
 - The published tarball no longer contains a `workspaces` field. Future monorepo work must not reintroduce it without also adding a publish-time strip.
 - **Follow-up owed:** CI smoke test that runs `npm pack` → install tarball globally → `npx -y tandem-editor --version` on Linux + Windows. The existing vitest harness spawns via `--import tsx` on source and bypasses the npm tarball + npx path — this is the class of bug it can't catch. Filed for Phase 2 prereqs.
+- **Update (#1177):** the bare `npx -y tandem-editor <subcommand>` spec above let `npm exec` silently reuse any already-installed global `tandem-editor` — including a stale pre-desktop global predating `mcp-stdio` — instead of the intended version, producing "Server disconnected" on Claude Desktop startup. All npx entries (plugin manifest, Cowork VM installer, `tandem setup`'s Claude Desktop config) now pin an exact version instead: `npx -y tandem-editor@<version> <subcommand>`.
 
 ## ADR-024: `bearer_methods_supported` is advisory metadata; Claude Code ignores it (Phase 2 spike)
 **Status:** Accepted (spike findings; enforcement change deferred to PR b)

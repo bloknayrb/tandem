@@ -44,9 +44,9 @@ git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
 - If there's already an `[Unreleased]` section, show what to append, not a replacement
 - Omit empty categories (don't show "### Security" if there are no security commits)
 
-## Releasing — bump version in two places
+## Releasing — bump version in three places
 
-When cutting a release (`chore(release): vX.Y.Z`), bump the version in BOTH `package.json` AND `.claude-plugin/plugin.json`. The published Claude Code plugin manifest has no automated bump, so it drifts if you forget. `tests/plugin-manifest.test.ts` fails if the two diverge — treat that failure as "you bumped one, not both."
+When cutting a release (`chore(release): vX.Y.Z`), bump the version in `package.json`, `.claude-plugin/plugin.json`, AND `src-tauri/Cargo.toml`'s `[package].version`. None of the three bump automatically, so any one drifts if you forget it. `tests/plugin-manifest.test.ts` fails if `package.json`/`plugin.json` diverge; `tests/plugin/plugin-version-pin.test.ts` fails if any of the three diverge (it also checks that `plugin.json`'s pinned `tandem-editor@<version>` npx specs match) — treat either failure as "you bumped one, not all three." The Cargo version matters beyond CI: the Cowork installer pins its npx spec via `env!("CARGO_PKG_VERSION")`, so a stale Cargo version ships a build that pins the WRONG published npm version.
 
 ## Conventions
 

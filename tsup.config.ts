@@ -56,6 +56,9 @@ export default defineConfig([
     define: {
       __MCP_SDK_VERSION__: JSON.stringify(mcpSdkPkg.version),
       __APP_VERSION__: JSON.stringify(pkg.version),
+      // apply.ts (bundled here) reads __TANDEM_VERSION__ first to pin the npx
+      // spec; define it in the server bundle too so it isn't a bare free global.
+      __TANDEM_VERSION__: JSON.stringify(pkg.version),
       __LICENSE_GATE_ENABLED__: JSON.stringify(LICENSE_GATE_ENABLED),
     },
   },

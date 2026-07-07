@@ -19,6 +19,7 @@ import {
   buildMcpEntries,
   detectTargets,
   installSkill,
+  resolveCliVersion,
   shouldRegisterChannelShim,
   validateChannelShimPrereq,
 } from "../../src/server/integrations/apply.js";
@@ -86,7 +87,14 @@ describe("buildMcpEntries", () => {
       targetKind: "claude-desktop",
     });
     expect(entries.tandem.command).toBe("npx");
-    expect(entries.tandem.args).toEqual(["-y", "tandem-editor", "mcp-stdio"]);
+    // The npx spec is pinned to this build's version so `npm exec` bypasses any
+    // stale global tandem-editor. resolveCliVersion() is the same source the
+    // code uses, so this assertion tracks releases without rotting.
+    expect(entries.tandem.args).toEqual([
+      "-y",
+      `tandem-editor@${resolveCliVersion()}`,
+      "mcp-stdio",
+    ]);
     expect(entries.tandem.env?.TANDEM_URL).toBe(`http://127.0.0.1:${DEFAULT_MCP_PORT}`);
     expect(entries.tandem.type).toBeUndefined();
     expect(entries.tandem.url).toBeUndefined();

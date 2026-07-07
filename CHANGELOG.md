@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **License issuance Worker landed (#1116, ADR-040).** `infra/license-issuance-worker/` is the public seam that turns a paid Polar checkout into an Ed25519-signed license: it verifies the Standard-Webhooks (svix) signature Polar actually sends (the loopback-only server handler it supersedes used an invented, wrong scheme Polar never sends), mints/signs the license, records an issuance ledger, writes the update entitlement the sibling `infra/license-update-worker/` reads, and emails the license via Resend — all before any behavior-visible change to the shipped app (the run-time license gate stays off by default per ADR-040). Owner-deployed; see `docs/licensing-operations.md`.
 
+### Fixed
+
+- **`npx -y tandem-editor mcp-stdio` no longer risks silently running a stale global install.** A bare package name in `npx`'s spec resolves to `*`, which `npm exec` happily matches to *any* already-installed copy — on a machine with a leftover pre-desktop global `tandem-editor` predating the `mcp-stdio` subcommand, Claude Desktop's `tandem` MCP server showed "Server disconnected" because npx ran the stale global instead of fetching the current version. The plugin manifest, the Cowork VM installer, and `tandem setup`'s Claude Desktop config now all pin the npx spec to this build's exact version (`tandem-editor@<version>`), which forces `npm exec` past any stale global. `tandem doctor` gained a companion check that warns (with a one-line fix) when a global `tandem-editor` differs from the running build, for the case of a hand-typed `npx tandem-editor` outside the pinned entries.
+
 ## [0.14.3] - 2026-06-22
 
 ### Added
