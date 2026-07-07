@@ -594,7 +594,7 @@ export function summarizeDoctorResults(failures: number, warnings: number): stri
 // never a fail.
 
 /** Resolve a global `tandem-editor` version, or null when it can't be determined. */
-function globalTandemEditorVersion(): Promise<string | null> {
+export function globalTandemEditorVersion(): Promise<string | null> {
   return new Promise((resolve) => {
     // shell:true so Windows resolves the `npm.cmd` shim (bare execFile("npm")
     // ENOENTs there). Args are all static — no injection surface.
@@ -622,6 +622,41 @@ function globalTandemEditorVersion(): Promise<string | null> {
   });
 }
 
+/**
+ * Pure decision step, split out of {@link checkStaleGlobal} so the
+ * match/mismatch/nothing-to-report logic is directly unit-testable without
+ * needing to fake the tsup-injected `__TANDEM_VERSION__` global or mock
+ * `child_process` — see tests/cli/doctor.test.ts.
+ */
+export function evaluateStaleGlobal(
+  bundled: string,
+  globalVersion: string | null,
+): {
+  status: "pass" | "warn";
+  message: string;
+  fix?: string;
+  data?: Record<string, unknown>;
+} | null {
+  if (globalVersion === null) {
+    // No global install (the common, healthy case) or npm unavailable. Either
+    // way there's nothing that can shadow the pinned npx spec.
+    return null;
+  }
+
+  if (globalVersion === bundled) {
+    return { status: "pass", message: `Global tandem-editor@${globalVersion} matches this build` };
+  }
+
+  return {
+    status: "warn",
+    message:
+      `Global tandem-editor@${globalVersion} differs from this build (${bundled}) — ` +
+      "a stale global can break `npx tandem-editor` (e.g. Claude Desktop's MCP bridge).",
+    fix: "npm uninstall -g tandem-editor   (or: npm install -g tandem-editor@latest)",
+    data: { globalVersion, bundledVersion: bundled },
+  };
+}
+
 async function checkStaleGlobal(r: Recorder): Promise<void> {
   const bundled = typeof __TANDEM_VERSION__ !== "undefined" ? __TANDEM_VERSION__ : null;
   // Without a known bundled version (tsx dev / vitest) there's nothing to
@@ -636,23 +671,14 @@ async function checkStaleGlobal(r: Recorder): Promise<void> {
     return;
   }
 
-  if (globalVersion === null) {
-    // No global install (the common, healthy case) or npm unavailable. Either
-    // way there's nothing that can shadow the pinned npx spec.
-    return;
-  }
+  const result = evaluateStaleGlobal(bundled, globalVersion);
+  if (!result) return;
 
-  if (globalVersion === bundled) {
-    r.pass(`Global tandem-editor@${globalVersion} matches this build`);
-    return;
+  if (result.status === "pass") {
+    r.pass(result.message);
+  } else {
+    r.warn(result.message, result.fix, result.data);
   }
-
-  r.warn(
-    `Global tandem-editor@${globalVersion} differs from this build (${bundled}) — ` +
-      "a stale global can break `npx tandem-editor` (e.g. Claude Desktop's MCP bridge).",
-    "npm uninstall -g tandem-editor   (or: npm install -g tandem-editor@latest)",
-    { globalVersion, bundledVersion: bundled },
-  );
 }
 
 export interface RunDoctorOptions {

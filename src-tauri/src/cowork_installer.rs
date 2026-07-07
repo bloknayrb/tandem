@@ -952,8 +952,54 @@ mod tests {
         let json: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(json["mcpServers"]["tandem"]["type"], "stdio");
         assert_eq!(json["mcpServers"]["tandem"]["command"], "npx");
+        // The npx spec must be pinned to this build's exact version — a bare
+        // "tandem-editor" would let `npm exec` reuse a stale global copy that
+        // predates the `mcp-stdio` subcommand (the root cause this pin fixes).
+        let expected_spec = format!("tandem-editor@{}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            json["mcpServers"]["tandem"]["args"],
+            json!(["-y", expected_spec, "mcp-stdio"])
+        );
         // Token must be present but we avoid logging it — just check it's non-empty.
         assert!(json["mcpServers"]["tandem"]["env"]["TANDEM_AUTH_TOKEN"].as_str().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_install_rewrites_a_stale_pinned_version() {
+        let (_guard, _dir, ws_path) = temp_ws();
+        let plugins_dir = ws_path.join("cowork_plugins");
+        fs::create_dir_all(&plugins_dir).unwrap();
+
+        // Pre-populate with a "tandem" entry pinned to an old/foreign version —
+        // simulates a workspace installed by a previous build.
+        let existing = json!({
+            "mcpServers": {
+                "tandem": {
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "tandem-editor@0.0.1", "mcp-stdio"],
+                    "env": { "TANDEM_AUTH_TOKEN": "old-token", "TANDEM_URL": DEFAULT_TANDEM_URL }
+                }
+            }
+        });
+        fs::write(
+            plugins_dir.join("installed_plugins.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        ).unwrap();
+
+        let report = install_tandem_plugin_into_workspace(&ws_path, "secret-token", DEFAULT_TANDEM_URL).unwrap();
+        std::env::remove_var("TANDEM_COWORK_ROOT_OVERRIDE");
+
+        // The stale pin must be treated as drift, not as already-present.
+        assert_eq!(report.installed_plugins, WriteStatus::Ok);
+
+        let content = fs::read_to_string(plugins_dir.join("installed_plugins.json")).unwrap();
+        let json: Value = serde_json::from_str(&content).unwrap();
+        let expected_spec = format!("tandem-editor@{}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            json["mcpServers"]["tandem"]["args"],
+            json!(["-y", expected_spec, "mcp-stdio"])
+        );
     }
 
     #[test]

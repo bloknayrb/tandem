@@ -1,9 +1,26 @@
+import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runDoctor, runDoctorCli, summarizeDoctorResults } from "../../src/cli/doctor.js";
+import {
+  evaluateStaleGlobal,
+  globalTandemEditorVersion,
+  runDoctor,
+  runDoctorCli,
+  summarizeDoctorResults,
+} from "../../src/cli/doctor.js";
 import { allocPort } from "../helpers/alloc-port.js";
+
+// checkStaleGlobal (which calls globalTandemEditorVersion, which calls
+// execFile) only runs its real logic when __TANDEM_VERSION__ is defined —
+// tsup-injected, never true under vitest — so runDoctor()-based tests never
+// invoke execFile. Mocking it here only affects the direct
+// globalTandemEditorVersion() tests below.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFile: vi.fn() };
+});
 
 // Doctor reads the annotation store from TANDEM_APP_DATA_DIR (env override in
 // resolveAppDataDir). Point it at a temp dir so the annotation-store check is
@@ -273,5 +290,70 @@ describe("runDoctorCli --json printer", () => {
     expect(/\[(PASS|WARN|FAIL)\]/.test(combined)).toBe(true);
     // The whole stream is NOT a single JSON object.
     expect(() => JSON.parse(combined)).toThrow();
+  });
+});
+
+describe("evaluateStaleGlobal", () => {
+  it("reports nothing when there is no global install", () => {
+    expect(evaluateStaleGlobal("0.14.3", null)).toBeNull();
+  });
+
+  it("passes when the global version matches the bundled version", () => {
+    const result = evaluateStaleGlobal("0.14.3", "0.14.3");
+    expect(result).toMatchObject({ status: "pass" });
+    expect(result?.message).toContain("0.14.3");
+  });
+
+  it("warns with an uninstall fix when the global version differs", () => {
+    const result = evaluateStaleGlobal("0.14.3", "0.2.11");
+    expect(result).toMatchObject({ status: "warn" });
+    expect(result?.message).toContain("0.2.11");
+    expect(result?.message).toContain("0.14.3");
+    expect(result?.fix).toContain("npm uninstall -g tandem-editor");
+    expect(result?.data).toEqual({ globalVersion: "0.2.11", bundledVersion: "0.14.3" });
+  });
+});
+
+describe("globalTandemEditorVersion", () => {
+  const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
+
+  afterEach(() => {
+    mockExecFile.mockReset();
+  });
+
+  it("parses the version out of npm ls -g --json output", async () => {
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
+      callback(
+        null,
+        JSON.stringify({ dependencies: { "tandem-editor": { version: "0.2.11" } } }),
+        "",
+      );
+    });
+
+    await expect(globalTandemEditorVersion()).resolves.toBe("0.2.11");
+  });
+
+  it("resolves null when npm ls prints no stdout (npm absent or errored before output)", async () => {
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
+      callback(new Error("spawn npm ENOENT"), "", "");
+    });
+
+    await expect(globalTandemEditorVersion()).resolves.toBeNull();
+  });
+
+  it("resolves null when stdout is not valid JSON", async () => {
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
+      callback(null, "not json", "");
+    });
+
+    await expect(globalTandemEditorVersion()).resolves.toBeNull();
+  });
+
+  it("resolves null when tandem-editor is not among the global dependencies", async () => {
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
+      callback(null, JSON.stringify({ dependencies: {} }), "");
+    });
+
+    await expect(globalTandemEditorVersion()).resolves.toBeNull();
   });
 });

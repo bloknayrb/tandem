@@ -45,8 +45,14 @@ describe("published Claude Code plugin manifest", () => {
     // cannot carry.
     expect(servers.tandem.env?.TANDEM_URL).toBe("http://127.0.0.1:3479");
     expect(servers["tandem-channel"].env?.TANDEM_URL).toBe("http://127.0.0.1:3479");
-    expect(servers.tandem.args).toEqual(["-y", "tandem-editor", "mcp-stdio"]);
-    expect(servers["tandem-channel"].args).toEqual(["-y", "tandem-editor", "channel"]);
+    // The npx spec is pinned to this exact package version (not bare, not
+    // @latest) so `npm exec` can't be shadowed by a stale global `tandem-editor`
+    // predating a subcommand — see tests/plugin/plugin-version-pin.test.ts for
+    // the dedicated drift guard. Derive the expected value from pkg.version
+    // rather than hardcoding it, so a release bump doesn't rot this assertion.
+    const version = pkg.version as string;
+    expect(servers.tandem.args).toEqual(["-y", `tandem-editor@${version}`, "mcp-stdio"]);
+    expect(servers["tandem-channel"].args).toEqual(["-y", `tandem-editor@${version}`, "channel"]);
   });
 
   it("marketplace install identity is tandem@tandem-editor from bloknayrb/tandem", () => {
