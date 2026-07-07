@@ -50,6 +50,12 @@ Tandem is built to work with Anthropic's Claude out of the box. Other AI tools c
 *The main view. Your document fills the left side. The side panel on the right holds the AI's annotations and the chat conversation.*
 
 <p align="center">
+  <img src="docs/screenshots/05-review-mode.png" alt="A passage of text selected in the document, with a floating formatting toolbar above it and a small popup below offering color swatches and an Annotate button" width="800">
+</p>
+
+*Select any passage and a compact toolbar appears. Mark it with a color, or turn it into a note the AI can act on — and the AI sees the selection the moment you make it.*
+
+<p align="center">
   <img src="docs/screenshots/03-side-panel.png" alt="A close-up of annotation cards beside the document, including a replacement card showing the original text in red strikethrough and the proposed text in green, with Accept and Reject buttons" width="500">
 </p>
 
@@ -65,7 +71,7 @@ Tandem is built to work with Anthropic's Claude out of the box. Other AI tools c
   <img src="docs/screenshots/04-toolbar-actions.png" alt="The top of the editor showing several documents open in tabs, the formatting toolbar, a text selection, and the Solo and Tandem mode toggle" width="800">
 </p>
 
-*Several documents open in tabs, with the formatting toolbar above the text. Highlight a passage and the AI sees the selection as you make it. The Solo / Tandem toggle on the right controls whether the AI's annotations appear live or wait until you are ready.*
+*Several documents open in tabs, with the formatting toolbar above the text. The Solo / Tandem toggle on the right controls whether the AI's annotations appear live or wait until you are ready.*
 
 ## Who Tandem is for
 
