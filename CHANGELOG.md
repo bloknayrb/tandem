@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The first-run integration setup wizard now auto-opens in the desktop app (#1181).** In the Tauri desktop build (the primary Windows distribution), the wizard never appeared on first launch: the first-run check fetched a *relative* `/api/integrations/first-run-needed` URL, but the desktop WebView origin is `tauri.localhost`, so the request hit Tauri's asset protocol instead of the sidecar on `127.0.0.1:3479`, silently failed, and defaulted to "not needed" — suppressing the wizard forever. (The bug stayed hidden because the npm browser distribution serves the client *from* the sidecar, where the relative URL is same-origin.) The check now targets the sidecar's absolute base like every sibling hook, and re-checks once the sidecar connection is confirmed so a cold-start race can't leave it stuck at "not needed" — while skipping that recheck once the wizard is already showing, so a transient hiccup can't yank it out from under you mid-flow.
+
 ## [0.15.0] - 2026-07-07
 
 ### Added
