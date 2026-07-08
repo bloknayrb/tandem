@@ -439,6 +439,25 @@ const aiReadiness = createAiReadiness({
   soloMode: () => modeState.tandemMode === "solo",
 });
 
+// Boot-race guard for the first-run wizard. The hook's boot fetch fires once at
+// construction with no retry; in the desktop app the WebView loads immediately
+// while the sidecar is still spawning (no `visible:false`, sidecar started on a
+// background task), so a cold-start race can leave `needed=false` permanently.
+// Re-check once the sidecar is confirmed reachable. `yjsSync.connected` is a
+// sound readiness proxy: the connect path only builds the Hocuspocus provider
+// AFTER a successful `GET :3479/api/info`, so `connected === true` implies
+// `first-run-needed` (registered in the same route pass) is live. Latch only on
+// a SUCCESSFUL refetch (component-scoped, non-reactive) so a transient failure
+// lets a later reconnect retry; dismissal is still respected by isAutoOpenFirstRun.
+let firstRunRecheckedOnConnect = false;
+$effect(() => {
+  if (yjsSync.connected && !firstRunRecheckedOnConnect) {
+    void firstRun.refetch().then((ok) => {
+      if (ok) firstRunRecheckedOnConnect = true;
+    });
+  }
+});
+
 /** Opens the Claude Code integration wizard (the "Connect AI" CTA). Reuses the
  *  existing manual-reopen event path so dismissal isn't burned (see the
  *  `tandem:open-integration-wizard` listener below). */

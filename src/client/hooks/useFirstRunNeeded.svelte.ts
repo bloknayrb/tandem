@@ -9,6 +9,7 @@
 
 import type { FirstRunNeededResponse } from "../../shared/integrations/contract";
 import { API_INTEGRATIONS_FIRST_RUN } from "../../shared/integrations/contract";
+import { API_BASE } from "../utils/fileUpload";
 
 export interface FirstRunNeededState {
   /** `true` when the server says the wizard should auto-open. `null` while loading. */
@@ -20,8 +21,12 @@ export interface FirstRunNeededState {
   /** True once the initial fetch has settled (success OR network error). */
   readonly settled: boolean;
   /** Re-fetch — used before transitioning the wizard to visible to catch
-   *  concurrent persists from another tab / `tandem setup --apply`. */
-  refetch(): Promise<void>;
+   *  concurrent persists from another tab / `tandem setup --apply`, and by
+   *  App.svelte to re-check once the sidecar becomes reachable (boot race).
+   *  Resolves `true` when the fetch settled with a real server answer, `false`
+   *  on non-OK / network error / malformed JSON (or a superseded run). Callers
+   *  that don't need the outcome may ignore it. */
+  refetch(): Promise<boolean>;
 }
 
 /**
@@ -37,15 +42,22 @@ export function createFirstRunNeeded(): FirstRunNeededState {
   let settled = $state(false);
   let gen = 0;
 
-  async function fetchOnce(): Promise<void> {
+  async function fetchOnce(): Promise<boolean> {
     const captured = ++gen;
     try {
-      const res = await fetch(API_INTEGRATIONS_FIRST_RUN, { credentials: "same-origin" });
+      // Absolute base (like every sibling hook — API_BASE points at the sidecar
+      // on :3479). A relative `/api/...` URL only works in the npm browser
+      // distribution, where the client is served BY the sidecar. In the Tauri
+      // desktop app the WebView origin is `tauri.localhost`, so a relative fetch
+      // hits Tauri's asset protocol, never the sidecar — silently failing and
+      // suppressing the first-run wizard forever. See IntegrationWizardModal's
+      // `baseUrl` for the same reasoning.
+      const res = await fetch(`${API_BASE}${API_INTEGRATIONS_FIRST_RUN}`);
       if (!res.ok) {
         // Treat network/server failure as "wizard not needed" — the safer
         // default is to NOT auto-open when we can't reach the server. The
         // user can still manually open via Settings → Reopen wizard.
-        if (captured !== gen) return;
+        if (captured !== gen) return false;
         needed = false;
         // Reset serverVersion + nonce: "set only when the latest fetch
         // succeeded" is a clearer invariant than "kept from prior success"
@@ -54,15 +66,16 @@ export function createFirstRunNeeded(): FirstRunNeededState {
         serverVersion = null;
         confirmationNonce = null;
         settled = true;
-        return;
+        return false;
       }
       const body = (await res.json()) as Partial<FirstRunNeededResponse>;
-      if (captured !== gen) return;
+      if (captured !== gen) return false;
       needed = body.needed === true;
       serverVersion = typeof body.serverVersion === "string" ? body.serverVersion : null;
       confirmationNonce =
         typeof body.confirmationNonce === "string" ? body.confirmationNonce : null;
       settled = true;
+      return true;
     } catch {
       // Intentional: server-unreachable / malformed-JSON → wizard does
       // NOT auto-open. The safer default — auto-opening a wizard over an
@@ -70,11 +83,12 @@ export function createFirstRunNeeded(): FirstRunNeededState {
       // first-run on a one-off server hiccup. Manual reopen via
       // Settings → Reopen wizard is always available. Don't "fix" this
       // by flipping the default.
-      if (captured !== gen) return;
+      if (captured !== gen) return false;
       needed = false;
       serverVersion = null;
       confirmationNonce = null;
       settled = true;
+      return false;
     }
   }
 
