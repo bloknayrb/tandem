@@ -449,9 +449,14 @@ const aiReadiness = createAiReadiness({
 // `first-run-needed` (registered in the same route pass) is live. Latch only on
 // a SUCCESSFUL refetch (component-scoped, non-reactive) so a transient failure
 // lets a later reconnect retry; dismissal is still respected by isAutoOpenFirstRun.
+// Skip entirely once `needed === true`: this recheck exists to recover a false
+// NEGATIVE (the race), not to revalidate a value the wizard is already showing.
+// Without this guard, a transient failure on this second, redundant fetch would
+// unconditionally reset `needed=false` (fetchOnce's error path), yanking an
+// already-auto-opened wizard out from under the user mid-flow.
 let firstRunRecheckedOnConnect = false;
 $effect(() => {
-  if (yjsSync.connected && !firstRunRecheckedOnConnect) {
+  if (yjsSync.connected && !firstRunRecheckedOnConnect && firstRun.needed !== true) {
     void firstRun.refetch().then((ok) => {
       if (ok) firstRunRecheckedOnConnect = true;
     });
