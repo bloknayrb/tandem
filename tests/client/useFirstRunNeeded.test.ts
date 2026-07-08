@@ -3,6 +3,8 @@ import { flushSync } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createFirstRunNeeded } from "../../src/client/hooks/useFirstRunNeeded.svelte.js";
+import { API_BASE } from "../../src/client/utils/fileUpload.js";
+import { API_INTEGRATIONS_FIRST_RUN } from "../../src/shared/integrations/contract.js";
 
 /**
  * Coverage for `createFirstRunNeeded` — the boot-time first-run-needed
@@ -22,7 +24,7 @@ interface FetchResponse {
 }
 
 function fetchStubReturning(response: FetchResponse | Error): typeof fetch {
-  return (async () => {
+  return vi.fn(async () => {
     if (response instanceof Error) throw response;
     return response as unknown as Response;
   }) as unknown as typeof fetch;
@@ -64,6 +66,53 @@ describe("createFirstRunNeeded", () => {
     expect(state.serverVersion).toBe("0.12.0-test");
     expect(state.confirmationNonce).toBe("nonce-1");
     expect(state.settled).toBe(true);
+  });
+
+  it("fetches the sidecar via the absolute API base, not a relative URL", async () => {
+    // Regression guard for the Tauri-desktop bug: a relative `/api/...` URL
+    // resolves against the `tauri.localhost` WebView origin and never reaches
+    // the sidecar, so the first-run wizard silently never opens. The URL must
+    // carry the absolute `API_BASE` (http://127.0.0.1:<port>) like every sibling
+    // hook — and the call must pass no options (no `credentials`), matching the
+    // sibling convention.
+    globalThis.fetch = fetchStubReturning(
+      mkResponse({ needed: true, serverVersion: "v", confirmationNonce: "n" }),
+    );
+    createFirstRunNeeded();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    expect(globalThis.fetch).toHaveBeenCalledWith(`${API_BASE}${API_INTEGRATIONS_FIRST_RUN}`);
+    expect(API_BASE.startsWith("http://127.0.0.1:")).toBe(true);
+  });
+
+  it("refetch() resolves true on success and false on failure", async () => {
+    // The App.svelte boot-race guard latches only on a successful refetch, so
+    // the resolved boolean is load-bearing.
+    let shouldThrow = false;
+    globalThis.fetch = (async () => {
+      if (shouldThrow) throw new Error("network down");
+      return mkResponse({
+        needed: true,
+        serverVersion: "v",
+        confirmationNonce: "n",
+      }) as unknown as Response;
+    }) as unknown as typeof fetch;
+    const state = createFirstRunNeeded();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    // Server answers → true.
+    await expect(state.refetch()).resolves.toBe(true);
+    // Network throws → false (the App latch would stay unset, allowing a retry).
+    shouldThrow = true;
+    await expect(state.refetch()).resolves.toBe(false);
+  });
+
+  it("refetch() resolves false on a non-OK response", async () => {
+    globalThis.fetch = fetchStubReturning(mkResponse({}, false, 500));
+    const state = createFirstRunNeeded();
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    await expect(state.refetch()).resolves.toBe(false);
   });
 
   it("defaults to needed=false when the network throws", async () => {
