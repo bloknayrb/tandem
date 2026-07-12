@@ -1759,6 +1759,16 @@ const review = useAnnotationReview({
   // Lets the hook's auto-set effect avoid clobbering externally-set ids
   // (e.g., from Alt+]/Alt+[ keyboard navigation).
   getActiveAnnotationId: () => activeAnnotationId,
+  onApplyFailed: (ann) =>
+    notifications.push({
+      id: `suggestion-apply-failed-${Date.now()}`,
+      type: "annotation-error",
+      severity: "warning",
+      message:
+        "Couldn't apply the suggestion — the text has changed. The annotation is still pending.",
+      dedupKey: `suggestion-apply-failed:${ann.id}`,
+      timestamp: Date.now(),
+    }),
 });
 
 // Resolve target for accept/dismiss: the explicitly-selected annotation, or —

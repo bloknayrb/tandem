@@ -55,6 +55,14 @@ export interface UseAnnotationReviewParams {
    * `targets[reviewIndex]`.
    */
   getActiveAnnotationId?: () => string | null;
+  /**
+   * Called when accepting a suggestion fails because its range could not be
+   * resolved (e.g. the underlying text changed since the suggestion was
+   * created). The annotation has already been reverted to `"pending"` by the
+   * time this fires. Callers use this to surface a toast — keep any message
+   * generic per ADR-027 (never echo annotation content here).
+   */
+  onApplyFailed?: (ann: Annotation) => void;
 }
 
 export interface UseAnnotationReviewReturn {
@@ -75,6 +83,7 @@ export function useAnnotationReview({
   onActiveAnnotationChange,
   getScrollBehavior,
   getActiveAnnotationId,
+  onApplyFailed,
 }: UseAnnotationReviewParams): UseAnnotationReviewReturn {
   // Reactive state
   let reviewIndex = $state(0);
@@ -113,6 +122,7 @@ export function useAnnotationReview({
         if (!applied) {
           // Revert annotation status — text replacement failed
           map.set(id, { ...ann, status: "pending" });
+          onApplyFailed?.(ann);
           return;
         }
       }
