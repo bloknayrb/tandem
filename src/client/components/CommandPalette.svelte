@@ -6,6 +6,7 @@ import type { Annotation } from "../../shared/types.js";
 import { type Action, getActionsMap } from "../actions/registry.svelte.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
+import { fuzzyMatch, toSegments } from "../utils/fuzzy-match.js";
 import { walkHeadings } from "../utils/headings.js";
 
 // ---------------------------------------------------------------------------
@@ -40,8 +41,15 @@ const searchText = $derived((activePrefix ? query.slice(1) : query).trim().toLow
 // Result types
 // ---------------------------------------------------------------------------
 
-type ActionResult = { kind: "action"; id: string; action: Action };
-type HeadingResult = { kind: "heading"; id: string; text: string; level: number; pos: number };
+type ActionResult = { kind: "action"; id: string; action: Action; matchIndices?: number[] };
+type HeadingResult = {
+  kind: "heading";
+  id: string;
+  text: string;
+  level: number;
+  pos: number;
+  matchIndices?: number[];
+};
 type AnnotationResult = {
   kind: "annotation";
   id: string;
@@ -63,23 +71,47 @@ type PaletteResult = ActionResult | HeadingResult | AnnotationResult | ShortcutR
 // Result derivations
 // ---------------------------------------------------------------------------
 
+// Ranking helper shared by all four modes below: attach a stable original
+// index alongside the max weighted-field score, then sort desc by score with
+// an origIndex tiebreak (JS sort is stable, but the explicit tiebreak
+// documents the intent and survives a future non-stable-sort refactor).
+function rankByScore<T>(scored: { result: T; score: number; origIndex: number }[]): T[] {
+  scored.sort((a, b) => b.score - a.score || a.origIndex - b.origIndex);
+  return scored.map((s) => s.result);
+}
+
 // Commands: `>` prefix or no prefix
 const commandResults = $derived.by((): ActionResult[] => {
   if (activePrefix !== null && activePrefix !== ">") return [];
   const actionsMap = getActionsMap();
   const q = searchText;
-  const results: ActionResult[] = [];
-  for (const action of actionsMap.values()) {
-    if (
-      !q ||
-      action.label.toLowerCase().includes(q) ||
-      action.group.toLowerCase().includes(q) ||
-      (action.shortcut?.toLowerCase().includes(q) ?? false)
-    ) {
-      results.push({ kind: "action", id: action.id, action });
-    }
+  if (!q) {
+    return Array.from(actionsMap.values(), (action) => ({
+      kind: "action" as const,
+      id: action.id,
+      action,
+    }));
   }
-  return results;
+  const scored: { result: ActionResult; score: number; origIndex: number }[] = [];
+  let origIndex = 0;
+  for (const action of actionsMap.values()) {
+    const labelMatch = fuzzyMatch(q, action.label);
+    const groupMatch = fuzzyMatch(q, action.group);
+    const shortcutMatch = action.shortcut ? fuzzyMatch(q, action.shortcut) : null;
+    const fieldScores: number[] = [];
+    if (labelMatch) fieldScores.push(labelMatch.score);
+    if (groupMatch) fieldScores.push(groupMatch.score * 0.75);
+    if (shortcutMatch) fieldScores.push(shortcutMatch.score * 0.75);
+    if (fieldScores.length > 0) {
+      scored.push({
+        result: { kind: "action", id: action.id, action, matchIndices: labelMatch?.indices },
+        score: Math.max(...fieldScores),
+        origIndex,
+      });
+    }
+    origIndex++;
+  }
+  return rankByScore(scored);
 });
 
 // Headings: `#` prefix
@@ -88,28 +120,53 @@ const headingResults = $derived.by((): HeadingResult[] => {
   const ed = editor;
   if (!ed || ed.isDestroyed) return [];
   const q = searchText;
-  return walkHeadings(ed)
-    .filter((h) => !q || h.text.toLowerCase().includes(q))
-    .map((h, idx) => ({ kind: "heading" as const, id: `heading-${idx}`, ...h }));
+  const headings = walkHeadings(ed);
+  if (!q) {
+    return headings.map((h, idx) => ({ kind: "heading" as const, id: `heading-${idx}`, ...h }));
+  }
+  const scored: { result: HeadingResult; score: number; origIndex: number }[] = [];
+  headings.forEach((h, idx) => {
+    const textMatch = fuzzyMatch(q, h.text);
+    if (!textMatch) return;
+    scored.push({
+      result: { kind: "heading", id: `heading-${idx}`, ...h, matchIndices: textMatch.indices },
+      score: textMatch.score,
+      origIndex: idx,
+    });
+  });
+  return rankByScore(scored);
 });
 
 // Annotations: `@` prefix — lazy, reactive on `annotations` prop change
 const annotationResults = $derived.by((): AnnotationResult[] => {
   if (activePrefix !== "@") return [];
   const q = searchText;
-  return annotations
-    .filter((a) => {
-      if (!q) return true;
-      return a.content.toLowerCase().includes(q) || a.textSnapshot?.toLowerCase().includes(q);
-    })
-    .slice(0, 50)
-    .map((a) => ({
-      kind: "annotation" as const,
-      id: `annotation-${a.id}`,
-      label: a.content ? a.content.slice(0, 60) : "(no content)",
-      snippet: a.textSnapshot ?? "",
-      annotationType: a.type,
-    }));
+  const toRow = (a: Annotation): AnnotationResult => ({
+    kind: "annotation",
+    id: `annotation-${a.id}`,
+    label: a.content ? a.content.slice(0, 60) : "(no content)",
+    snippet: a.textSnapshot ?? "",
+    annotationType: a.type,
+  });
+  if (!q) {
+    return annotations.slice(0, 50).map(toRow);
+  }
+  const scored: { result: AnnotationResult; score: number; origIndex: number }[] = [];
+  annotations.forEach((a, idx) => {
+    const contentMatch = fuzzyMatch(q, a.content);
+    const snapshotMatch = a.textSnapshot ? fuzzyMatch(q, a.textSnapshot) : null;
+    const fieldScores: number[] = [];
+    if (contentMatch) fieldScores.push(contentMatch.score);
+    if (snapshotMatch) fieldScores.push(snapshotMatch.score * 0.75);
+    if (fieldScores.length === 0) return;
+    // Note: annotation rows are not match-highlighted (see template) because
+    // the winning field can be content OR textSnapshot, and indices from one
+    // field don't map onto the other's displayed text unambiguously.
+    scored.push({ result: toRow(a), score: Math.max(...fieldScores), origIndex: idx });
+  });
+  // Sort over the FULL set first, then take the best 50 — a `.slice(0, 50)`
+  // before sorting could drop a high-scoring match found later in the array.
+  return rankByScore(scored).slice(0, 50);
 });
 
 // Shortcuts: `?` prefix
@@ -117,37 +174,52 @@ const shortcutResults = $derived.by((): ShortcutResult[] => {
   if (activePrefix !== "?") return [];
   const q = searchText;
   const actionsMap = getActionsMap();
-  const results: ShortcutResult[] = [];
 
-  // Registry-derived shortcuts
+  type ShortcutCandidate = { id: string; keys: string; description: string; group: string };
+  const candidates: ShortcutCandidate[] = [];
   for (const action of actionsMap.values()) {
     if (!action.shortcut) continue;
-    if (!q || action.label.toLowerCase().includes(q) || action.shortcut.toLowerCase().includes(q)) {
-      results.push({
-        kind: "shortcut",
-        id: `shortcut-registry-${action.id}`,
-        keys: action.shortcut,
-        description: action.label,
-        group: action.group,
-      });
-    }
+    candidates.push({
+      id: `shortcut-registry-${action.id}`,
+      keys: action.shortcut,
+      description: action.label,
+      group: action.group,
+    });
   }
-
-  // Static shortcuts
   for (let i = 0; i < STATIC_SHORTCUT_ROWS.length; i++) {
     const row = STATIC_SHORTCUT_ROWS[i];
-    if (!q || row.description.toLowerCase().includes(q) || row.keys.toLowerCase().includes(q)) {
-      results.push({
-        kind: "shortcut",
-        id: `shortcut-static-${i}`,
-        keys: row.keys,
-        description: row.description,
-        group: "other",
-      });
-    }
+    candidates.push({
+      id: `shortcut-static-${i}`,
+      keys: row.keys,
+      description: row.description,
+      group: "other",
+    });
   }
 
-  return results;
+  const toRow = (c: ShortcutCandidate): ShortcutResult => ({
+    kind: "shortcut",
+    id: c.id,
+    keys: c.keys,
+    description: c.description,
+    group: c.group,
+  });
+  if (!q) {
+    return candidates.map(toRow);
+  }
+  const scored: { result: ShortcutResult; score: number; origIndex: number }[] = [];
+  candidates.forEach((c, idx) => {
+    const descMatch = fuzzyMatch(q, c.description);
+    const keysMatch = fuzzyMatch(q, c.keys);
+    const fieldScores: number[] = [];
+    if (descMatch) fieldScores.push(descMatch.score);
+    if (keysMatch) fieldScores.push(keysMatch.score * 0.75);
+    if (fieldScores.length === 0) return;
+    // Shortcut rows are not match-highlighted (see template) — same
+    // ambiguity as annotations: the winning field can be description OR
+    // keys, so indices from one don't map onto the other's displayed text.
+    scored.push({ result: toRow(c), score: Math.max(...fieldScores), origIndex: idx });
+  });
+  return rankByScore(scored);
 });
 
 // Flat list for keyboard navigation
@@ -381,7 +453,15 @@ function handleBackdropClick(e: MouseEvent) {
               "
             >
               {#if result.kind === "action"}
-                <span style="font-size: var(--tandem-text-sm);">{result.action.label}</span>
+                <span style="font-size: var(--tandem-text-sm);">
+                  {#if result.matchIndices}
+                    {#each toSegments(result.action.label, result.matchIndices) as seg, si (si)}
+                      {#if seg.match}<span class="palette-match">{seg.text}</span>{:else}{seg.text}{/if}
+                    {/each}
+                  {:else}
+                    {result.action.label}
+                  {/if}
+                </span>
                 {#if result.action.shortcut}
                   <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-family: var(--tandem-font-mono);">
                     {result.action.shortcut}
@@ -395,7 +475,15 @@ function handleBackdropClick(e: MouseEvent) {
                     font-family: var(--tandem-font-mono);
                     min-width: 20px;
                   ">H{result.level}</span>
-                  <span style="font-size: var(--tandem-text-sm); padding-left: calc({result.level - 1} * var(--tandem-space-2));">{result.text}</span>
+                  <span style="font-size: var(--tandem-text-sm); padding-left: calc({result.level - 1} * var(--tandem-space-2));">
+                    {#if result.matchIndices}
+                      {#each toSegments(result.text, result.matchIndices) as seg, si (si)}
+                        {#if seg.match}<span class="palette-match">{seg.text}</span>{:else}{seg.text}{/if}
+                      {/each}
+                    {:else}
+                      {result.text}
+                    {/if}
+                  </span>
                 </span>
               {:else if result.kind === "annotation"}
                 <span style="display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0;">
@@ -448,6 +536,15 @@ function handleBackdropClick(e: MouseEvent) {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
     color: var(--tandem-fg-muted);
+  }
+
+  /* C1 — fuzzy-match highlight for command labels + heading text (not
+     annotation/shortcut rows; see the score-derivation comments above). A
+     plain span, not <mark>, so we control the fill via a semantic token
+     instead of the browser's default yellow. */
+  .palette-match {
+    background: var(--tandem-accent-bg);
+    border-radius: var(--tandem-r-1);
   }
 
   /* A11 (#798) — palette entrance. The scrim and modal mount once under
