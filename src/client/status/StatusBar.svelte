@@ -60,6 +60,8 @@ const RECONNECTED_FLASH_MS = 2_000;
 // #438: the status pill is the one surface that shows the specific model name.
 const agentLabel = createAgentLabel(createTandemSettings());
 
+const SAVED_FLASH_MS = 4_000;
+
 let showReconnectedFlash = $state(false);
 let elapsedSeconds = $state(0);
 // intentional snapshot — updated inside $effect to detect rising-edge reconnect
@@ -73,6 +75,25 @@ $effect(() => {
     const timer = setTimeout(() => {
       showReconnectedFlash = false;
     }, RECONNECTED_FLASH_MS);
+    return () => clearTimeout(timer);
+  }
+});
+
+// Saved flash: falling-edge detector (was saving, now isn't) shows a brief
+// "Saved HH:MM" confirmation where the "Saving…" indicator was. Mirrors
+// showReconnectedFlash's snapshot/effect/timer structure but inverted.
+let savedLabel = $state<string | null>(null);
+// intentional snapshot — updated inside $effect to detect falling-edge save completion
+let prevSaving = untrack(() => saving);
+
+$effect(() => {
+  const was = prevSaving;
+  prevSaving = saving;
+  if (was && !saving) {
+    savedLabel = `Saved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    const timer = setTimeout(() => {
+      savedLabel = null;
+    }, SAVED_FLASH_MS);
     return () => clearTimeout(timer);
   }
 });
@@ -199,6 +220,13 @@ function cycleWordMode() {
         style="color: var(--tandem-accent);"
       >
         Saving...
+      </span>
+    {:else if savedLabel}
+      <span
+        data-testid="saved-indicator"
+        style="color: var(--tandem-success-fg-strong);"
+      >
+        {savedLabel}
       </span>
     {/if}
   </div>

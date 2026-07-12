@@ -9,12 +9,13 @@ import {
 } from "../../../src/client/status/word-count-cycle.js";
 
 describe("word-count-cycle — cycle order + persistence", () => {
-  it("cycles words → characters → sentences → paragraphs → pages → words", () => {
+  it("cycles words → characters → sentences → paragraphs → pages → reading → words", () => {
     expect(nextMode("words")).toBe("characters");
     expect(nextMode("characters")).toBe("sentences");
     expect(nextMode("sentences")).toBe("paragraphs");
     expect(nextMode("paragraphs")).toBe("pages");
-    expect(nextMode("pages")).toBe("words");
+    expect(nextMode("pages")).toBe("reading");
+    expect(nextMode("reading")).toBe("words");
   });
 
   it("modeLabel returns a short label for each mode", () => {
@@ -23,6 +24,7 @@ describe("word-count-cycle — cycle order + persistence", () => {
     expect(modeLabel("sentences")).toBe("sentences");
     expect(modeLabel("paragraphs")).toBe("paragraphs");
     expect(modeLabel("pages")).toBe("pages");
+    expect(modeLabel("reading")).toBe("min read");
   });
 
   describe("loadMode / saveMode", () => {
@@ -57,6 +59,11 @@ describe("word-count-cycle — cycle order + persistence", () => {
     it("round-trips a saved mode", () => {
       saveMode("sentences");
       expect(loadMode()).toBe("sentences");
+    });
+
+    it("round-trips the 'reading' mode", () => {
+      saveMode("reading");
+      expect(loadMode()).toBe("reading");
     });
 
     it("rejects unknown stored values and defaults to 'words'", () => {
@@ -106,6 +113,7 @@ describe("word-count-cycle — getCount derivations", () => {
       "sentences",
       "paragraphs",
       "pages",
+      "reading",
     ] as WordCountMode[]) {
       expect(getCount(null, m)).toBe(0);
     }
@@ -170,5 +178,22 @@ describe("word-count-cycle — getCount derivations", () => {
     // 500 words → 2 pages.
     const exactTwo = Array.from({ length: 500 }, (_, i) => `w${i}`).join(" ");
     expect(getCount(makeEditor(exactTwo) as never, "pages")).toBe(2);
+  });
+
+  it("reading = max(1, round(words / 200)) minutes, 0 words → 0", () => {
+    // Empty doc → 0 minutes.
+    expect(getCount(makeEditor("") as never, "reading")).toBe(0);
+    expect(getCount(makeEditor("   ") as never, "reading")).toBe(0);
+    // 1 word → 1 min read (rounds up from < 1).
+    expect(getCount(makeEditor("hello") as never, "reading")).toBe(1);
+    // 199 words → 1 min read (round(0.995) = 1).
+    const words199 = Array.from({ length: 199 }, (_, i) => `w${i}`).join(" ");
+    expect(getCount(makeEditor(words199) as never, "reading")).toBe(1);
+    // 300 words → 2 min read (round(1.5) = 2).
+    const words300 = Array.from({ length: 300 }, (_, i) => `w${i}`).join(" ");
+    expect(getCount(makeEditor(words300) as never, "reading")).toBe(2);
+    // 500 words → 3 min read (round(2.5) = 3).
+    const words500 = Array.from({ length: 500 }, (_, i) => `w${i}`).join(" ");
+    expect(getCount(makeEditor(words500) as never, "reading")).toBe(3);
   });
 });

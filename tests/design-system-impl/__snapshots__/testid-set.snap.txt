@@ -294,6 +294,7 @@ report-bug-link
 review-only-banner
 review-only-dismiss
 save-indicator
+saved-indicator
 selection-toolbar-toggle
 send-to-claude-btn-{*}
 session-delete
