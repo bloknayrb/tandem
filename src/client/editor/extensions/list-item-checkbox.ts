@@ -43,11 +43,15 @@ export const ListItemCheckbox = ListItem.extend({
       ...this.parent?.(),
       checked: {
         default: null,
-        // A split (Enter) starts a fresh plain bullet rather than inheriting a
-        // pre-checked box; users type `[ ] ` or use the slash command to make
-        // the next item a checkbox. (Enter-continues-as-task is a deferrable
-        // nicety; keeping default split behavior avoids overriding the list
-        // keymap.)
+        // `keepOnSplit: false` means Tiptap's own split-attribute propagation
+        // (`getSplittedAttributes`) never carries `checked` onto a new item —
+        // it always starts `null` (plain bullet) unless something overrides
+        // it. Enter-continues-as-task (below, in `addKeyboardShortcuts`)
+        // explicitly overrides the new item to `checked: false` when the
+        // split originates inside a checkbox item; a bare `keepOnSplit: true`
+        // can't be used instead because it would propagate `checked: true`
+        // as-is and can't distinguish "continuing a checked item" from
+        // "continuing a plain item".
         keepOnSplit: false,
         parseHTML: (element) => {
           const raw = element.getAttribute("data-checked");
@@ -92,6 +96,47 @@ export const ListItemCheckbox = ListItem.extend({
         },
       }),
     ];
+  },
+
+  addKeyboardShortcuts() {
+    const itemType = this.type;
+    return {
+      ...this.parent?.(),
+      // Continue the checkbox on Enter: splitting inside a checked/unchecked
+      // item should produce a new checkbox item (unchecked, so completing a
+      // task doesn't propagate to the next one), not a plain bullet. Splitting
+      // inside a plain item stays plain (no override — `checked` defaults to
+      // `null` via `keepOnSplit: false` above).
+      //
+      // Accepted deviation from GitHub: splitting at position 0 of a checked
+      // item (cursor before any text) leaves the emptied *first* item as
+      // `checked: true` and moves the original content into the *second*,
+      // newly created item, which gets `checked: false`. GitHub instead keeps
+      // the checked state on the item that retains the content and makes the
+      // new (empty) item unchecked. Reproducing GitHub's behavior would
+      // require detecting the position-0 case and swapping which side gets
+      // which attrs — not worth the complexity for a rare edge case; pinned
+      // by a test below.
+      Enter: () => {
+        const { $from } = this.editor.state.selection;
+        let checked: unknown;
+        for (let depth = $from.depth; depth > 0; depth--) {
+          const node = $from.node(depth);
+          if (node.type === itemType) {
+            checked = node.attrs.checked;
+            break;
+          }
+        }
+        if (checked !== null && checked !== undefined) {
+          return this.editor.commands.splitListItem(this.name, { checked: false });
+        }
+        // Plain item (or empty item at list end): fall through to the
+        // default split, which returns `false` for an empty item, letting
+        // the keymap chain continue to StarterKit's liftEmptyBlock (list
+        // exit/outdent) — same as plain-list Enter behavior.
+        return this.editor.commands.splitListItem(this.name);
+      },
+    };
   },
 
   addProseMirrorPlugins() {
