@@ -106,11 +106,14 @@ describe("probe: Link's built-in paste-link behavior (no custom handlePaste)", (
     // Documented for the report regardless of outcome — see Editor.svelte's
     // handlePaste comment: direct editorProps handlers run BEFORE plugin
     // handlers, so our deterministic implementation is correct either way.
+    // Exact-equality comparison (not substring matching) — this is a test
+    // assertion on link hrefs, not URL sanitization (CodeQL js/incomplete-url-substring-sanitization).
+    const didLink = hrefs.some((href) => href === "https://example.com");
 
     console.log(
-      `[probe] Link's built-in pasteHandler ${hrefs.includes("https://example.com") ? "DID" : "did NOT"} link the pasted URL over a selection (no custom handlePaste).`,
+      `[probe] Link's built-in pasteHandler ${didLink ? "DID" : "did NOT"} link the pasted URL over a selection (no custom handlePaste).`,
     );
-    expect(typeof hrefs.includes("https://example.com")).toBe("boolean");
+    expect(typeof didLink).toBe("boolean");
   });
 });
 
