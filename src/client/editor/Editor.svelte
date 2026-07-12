@@ -3,6 +3,7 @@ import { HocuspocusProvider } from "@hocuspocus/provider";
 import { Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
+import { TextSelection } from "@tiptap/pm/state";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
@@ -192,6 +193,31 @@ $effect(() => {
         // context menu's "Paste as Plain Text" (issue #923) so the two never
         // diverge.
         return buildPlainTextSlice(text, view.state.schema, $context.marks());
+      },
+      // Paste URL over a non-empty selection → link the selected text instead
+      // of replacing it. Direct `editorProps` handlers run BEFORE both
+      // `clipboardTextParser` above and Link's own `pasteHandler` plugin, so
+      // returning true here suppresses both — no double handling regardless
+      // of whether Link's paste-link behavior would also have fired.
+      // Ctrl+Shift+V (plain paste) hits this path too: a bare URL carries no
+      // formatting to strip, so "plain paste" and "rich paste" produce the
+      // same result here. We deliberately don't branch on ProseMirror's
+      // internal `view.input.shiftKey` — not a stable API surface.
+      handlePaste: (view, event) => {
+        const text = event.clipboardData?.getData("text/plain")?.trim();
+        if (!text || /\s/.test(text)) return false;
+        if (!isSafeExternalHref(text)) return false;
+
+        const { selection } = view.state;
+        if (selection.empty || !(selection instanceof TextSelection)) return false;
+
+        const linkType = view.state.schema.marks.link;
+        if (!linkType) return false;
+
+        view.dispatch(
+          view.state.tr.addMark(selection.from, selection.to, linkType.create({ href: text })),
+        );
+        return true;
       },
     },
     editable: untrack(() => !readOnly),
