@@ -191,10 +191,24 @@ function handleKeyDown(e: KeyboardEvent) {
     handleCancel();
   }
 }
+
+// Keyboard activation for the card root (plain tabindex, not roving — the card
+// is a heavyweight composite with inner tabbables like reply/accept buttons,
+// so we only act on Enter/Space when the event target IS the root itself; the
+// `e.target !== e.currentTarget` guard keeps Enter in the reply composer and
+// Space on inner buttons from re-triggering onClick). Alt+]/Alt+[ registry
+// navigation (SidePanel) is unrelated and untouched by this handler.
+function handleCardKeyDown(e: KeyboardEvent) {
+  if (e.target !== e.currentTarget) return;
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    onClick?.();
+  }
+}
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   class="tandem-annotation-card"
   class:is-review-target={isReviewTarget}
@@ -203,6 +217,8 @@ function handleKeyDown(e: KeyboardEvent) {
   in:cardEnter={{ enabled: lifecycleMotion, reduceMotion }}
   out:cardExit={{ enabled: lifecycleMotion, reduceMotion, id: annotation.id, modes: exitModes }}
   onclick={onClick}
+  onkeydown={handleCardKeyDown}
+  tabindex={onClick ? 0 : undefined}
   data-testid="annotation-card-{annotation.id}"
   data-annotation-id={annotation.id}
   data-annotation-type={annotation.type}
@@ -344,6 +360,14 @@ function handleKeyDown(e: KeyboardEvent) {
   }
   .tandem-annotation-card:hover {
     box-shadow: var(--tandem-shadow-2);
+  }
+  /* Keyboard-activation focus ring (C2). Placed BEFORE .is-review-target below
+     so, at equal specificity (both are two-class-weight selectors), source
+     order gives the review-target ring priority when a card is both focused
+     and the active review target — the two rings would otherwise fight. */
+  .tandem-annotation-card:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--tandem-accent-border), var(--tandem-shadow-2);
   }
   /* Placed after :hover so the focused-card ring wins at equal specificity.
      Selected state is a CONTRASTING accent ring + a soft glow that persists —

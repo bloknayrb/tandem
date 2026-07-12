@@ -36,6 +36,7 @@ bulk-cancel-btn
 bulk-confirm-btn
 bulk-dismiss-btn
 changelog-error
+chat-anchor-quote-{*}
 chat-send-btn
 chat-tab
 claude-typing-indicator-{*}
