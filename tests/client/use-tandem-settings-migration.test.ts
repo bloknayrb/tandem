@@ -760,6 +760,8 @@ describe("loadSettings — migration chain", () => {
       degradedBannerDelayMs: 60000,
       sidecarRetryStrategy: "constant-2s" as const, // non-default (default exponential)
       marginView: true, // #649 — the canonical "resets on update" field
+      smartTypography: true, // A4 — non-default (default false)
+      spellcheck: false, // A5 — non-default (default true)
     };
     writeRaw(userBlob);
     const s = loadSettings();
@@ -789,6 +791,8 @@ describe("loadSettings — migration chain", () => {
     expect(s.degradedBannerDelayMs).toBe(60000);
     expect(s.sidecarRetryStrategy).toBe("constant-2s");
     expect(s.marginView).toBe(true);
+    expect(s.smartTypography).toBe(true);
+    expect(s.spellcheck).toBe(false);
   });
 
   it("#941: per-type decoration flags + marginView survive a full v9→current migration", () => {
@@ -879,5 +883,62 @@ describe("loadSettings — migration chain", () => {
     const s = loadSettings();
     expect(s._readOnly).toBe(true);
     expect(s.systemLightVariant).toBe("warm");
+  });
+
+  // v16→v17 (A4/A5): introduce BOTH `smartTypography` (default false) and
+  // `spellcheck` (default true) in a single combined bump. Pure version bump
+  // for both — a pre-v17 blob with neither field defaults to
+  // smartTypography=false, spellcheck=true (today's behavior: no Typography
+  // extension, native spellcheck on).
+  it("v16→v17: smartTypography defaults false and spellcheck defaults true when absent", () => {
+    writeRaw({ schemaVersion: 16, theme: "dark" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.smartTypography).toBe(false);
+    expect(s.spellcheck).toBe(true);
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it.each([
+    { why: "explicit smartTypography=true survives the bump", val: true, expected: true },
+    { why: "explicit smartTypography=false survives the bump", val: false, expected: false },
+  ])("v16→v17: smartTypography=$val — $why", ({ val, expected }) => {
+    writeRaw({ schemaVersion: 16, smartTypography: val });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.smartTypography).toBe(expected);
+  });
+
+  it.each([
+    { why: "explicit spellcheck=false survives the bump", val: false, expected: false },
+    { why: "explicit spellcheck=true survives the bump", val: true, expected: true },
+  ])("v16→v17: spellcheck=$val — $why", ({ val, expected }) => {
+    writeRaw({ schemaVersion: 16, spellcheck: val });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.spellcheck).toBe(expected);
+  });
+
+  it("forward-compat (v99) sanitizes smartTypography/spellcheck to booleans", () => {
+    writeRaw({ schemaVersion: 99, smartTypography: "yes", spellcheck: "no" });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.smartTypography).toBe(false);
+    expect(s.spellcheck).toBe(true);
+  });
+
+  it("smartTypography=true and spellcheck=false are preserved across EVERY in-range schemaVersion bump", () => {
+    // Mirrors the marginView/systemLightVariant ratchet: a future migration
+    // step that rebuilds the object instead of spreading would silently
+    // reset these fields.
+    for (let v = 2; v < CURRENT_SCHEMA_VERSION; v++) {
+      store.clear();
+      writeRaw({ schemaVersion: v, smartTypography: true, spellcheck: false });
+      const s = loadSettings();
+      expect(s.schemaVersion, `start v${v}`).toBe(CURRENT_SCHEMA_VERSION);
+      expect(s.smartTypography, `smartTypography dropped starting at v${v}`).toBe(true);
+      expect(s.spellcheck, `spellcheck dropped starting at v${v}`).toBe(false);
+    }
   });
 });

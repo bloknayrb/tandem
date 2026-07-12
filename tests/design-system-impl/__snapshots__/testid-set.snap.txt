@@ -118,6 +118,8 @@ editor-font-{*}-btn
 editor-measure-{*}
 editor-root
 editor-scroll-container
+editor-smart-typography
+editor-spellcheck-toggle
 editor-stage
 empty-state-connect-ai
 empty-state-open-file

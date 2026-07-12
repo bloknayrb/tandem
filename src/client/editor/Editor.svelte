@@ -3,9 +3,12 @@ import { HocuspocusProvider } from "@hocuspocus/provider";
 import { Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
+import Typography from "@tiptap/extension-typography";
 import { TextSelection } from "@tiptap/pm/state";
+import type { EditorProps } from "@tiptap/pm/view";
 import { untrack } from "svelte";
 import * as Y from "yjs";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
 import { installContextMenu } from "./context-menu/install";
@@ -112,6 +115,83 @@ let editorRoot: HTMLDivElement | null = null;
 // editor root; styles live in editor.css. No DOM injection.
 const isPaged = $derived(format === "docx");
 
+// Singleton settings store (safe by design — see createTandemSettings'
+// doc-comment; StatusBar.svelte is the existing precedent for reaching it
+// straight from a leaf component instead of threading a prop through
+// App.svelte).
+const settingsState = createTandemSettings();
+
+// `settings` is wholesale-reassigned on every settings write (any field, not
+// just these two), so reading `settingsState.settings.smartTypography` /
+// `.spellcheck` directly inside an `$effect` would track the whole object
+// and rebuild/re-apply on every unrelated settings change. These `$derived`
+// memos narrow tracking to just the one boolean each — load-bearing, not
+// stylistic.
+const smartTypography = $derived(settingsState.settings.smartTypography);
+const spellcheckOn = $derived(settingsState.settings.spellcheck);
+
+// Full `editorProps` factory (A5). Tiptap's `editor.setOptions({ editorProps
+// })` replaces `editorProps` wholesale — it is NOT a shallow merge — so
+// toggling spellcheck without recreating the editor requires re-supplying
+// every existing prop (attributes, clipboardTextParser, handlePaste) plus
+// the new `spellcheck` attribute, not just the changed piece.
+function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
+  return {
+    attributes: {
+      class: "tandem-editor",
+      // `min-height` lives in editor.css (`.tandem-editor` = 500px,
+      // `.tandem-paged .tandem-editor` = 1056px). Inline `min-height` here
+      // would beat the paged-layout selector via specificity and silently
+      // lose the 11in sheet height for .docx.
+      style: "outline: none; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
+      // Emitted explicitly in both directions (not omitted when on) so the
+      // attribute is symmetric and testable.
+      spellcheck: String(spellcheckOnValue),
+    },
+    // Paste raw markdown as formatted rich text (#788). We return a parsed
+    // ProseMirror Slice so y-prosemirror's sync plugin captures it via the
+    // normal paste transaction — we never touch the Y.Doc directly. When the
+    // user requests plain-text paste (Ctrl+Shift+V → `plain === true`), or the
+    // text isn't markdown-ish, we fall through to plain-text parsing.
+    clipboardTextParser: (text, $context, plain, view) => {
+      if (!plain) {
+        const slice = markdownToSlice(text, view.state.schema);
+        if (slice) return slice;
+      }
+      // Fall back to plain-text behavior: split on blank-line groups into
+      // paragraphs, carrying the context's active marks. Shared with the
+      // context menu's "Paste as Plain Text" (issue #923) so the two never
+      // diverge.
+      return buildPlainTextSlice(text, view.state.schema, $context.marks());
+    },
+    // Paste URL over a non-empty selection → link the selected text instead
+    // of replacing it. Direct `editorProps` handlers run BEFORE both
+    // `clipboardTextParser` above and Link's own `pasteHandler` plugin, so
+    // returning true here suppresses both — no double handling regardless
+    // of whether Link's paste-link behavior would also have fired.
+    // Ctrl+Shift+V (plain paste) hits this path too: a bare URL carries no
+    // formatting to strip, so "plain paste" and "rich paste" produce the
+    // same result here. We deliberately don't branch on ProseMirror's
+    // internal `view.input.shiftKey` — not a stable API surface.
+    handlePaste: (view, event) => {
+      const text = event.clipboardData?.getData("text/plain")?.trim();
+      if (!text || /\s/.test(text)) return false;
+      if (!isSafeExternalHref(text)) return false;
+
+      const { selection } = view.state;
+      if (selection.empty || !(selection instanceof TextSelection)) return false;
+
+      const linkType = view.state.schema.marks.link;
+      if (!linkType) return false;
+
+      view.dispatch(
+        view.state.tr.addMark(selection.from, selection.to, linkType.create({ href: text })),
+      );
+      return true;
+    },
+  };
+}
+
 // -------------------------------------------------------------------------
 // Editor lifecycle: re-create when (ydoc, provider) identity changes.
 //
@@ -125,6 +205,12 @@ $effect(() => {
   // Track identity of ydoc + provider so this effect re-runs on swap.
   void ydoc;
   void provider;
+  // Also track `smartTypography` (via the narrow $derived memo above, not
+  // raw `settingsState.settings`) so toggling the setting tears down and
+  // rebuilds the editor — the only way to add/remove an extension from
+  // Tiptap's ExtensionManager. Same lifecycle cost as a tab switch; cheap
+  // and infrequent (a Settings-modal checkbox flip, not a hot path).
+  const smartTypographyOn = smartTypography;
 
   if (!editorRoot) return;
 
@@ -168,58 +254,14 @@ $effect(() => {
       SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
       FindReplaceExtension,
       SelectionDecorationExtension,
+      // A4: opt-in smart typography (smart quotes/dashes/ellipsis as you
+      // type). Input-rules-only — no new nodes/marks — so it stays out of
+      // buildSchemaExtensions() and is appended here like the other
+      // runtime-param extensions. Default off; conditionally included based
+      // on the tracked `smartTypographyOn` above.
+      ...(smartTypographyOn ? [Typography] : []),
     ],
-    editorProps: {
-      attributes: {
-        class: "tandem-editor",
-        // `min-height` lives in editor.css (`.tandem-editor` = 500px,
-        // `.tandem-paged .tandem-editor` = 1056px). Inline `min-height` here
-        // would beat the paged-layout selector via specificity and silently
-        // lose the 11in sheet height for .docx.
-        style: "outline: none; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
-      },
-      // Paste raw markdown as formatted rich text (#788). We return a parsed
-      // ProseMirror Slice so y-prosemirror's sync plugin captures it via the
-      // normal paste transaction — we never touch the Y.Doc directly. When the
-      // user requests plain-text paste (Ctrl+Shift+V → `plain === true`), or the
-      // text isn't markdown-ish, we fall through to plain-text parsing.
-      clipboardTextParser: (text, $context, plain, view) => {
-        if (!plain) {
-          const slice = markdownToSlice(text, view.state.schema);
-          if (slice) return slice;
-        }
-        // Fall back to plain-text behavior: split on blank-line groups into
-        // paragraphs, carrying the context's active marks. Shared with the
-        // context menu's "Paste as Plain Text" (issue #923) so the two never
-        // diverge.
-        return buildPlainTextSlice(text, view.state.schema, $context.marks());
-      },
-      // Paste URL over a non-empty selection → link the selected text instead
-      // of replacing it. Direct `editorProps` handlers run BEFORE both
-      // `clipboardTextParser` above and Link's own `pasteHandler` plugin, so
-      // returning true here suppresses both — no double handling regardless
-      // of whether Link's paste-link behavior would also have fired.
-      // Ctrl+Shift+V (plain paste) hits this path too: a bare URL carries no
-      // formatting to strip, so "plain paste" and "rich paste" produce the
-      // same result here. We deliberately don't branch on ProseMirror's
-      // internal `view.input.shiftKey` — not a stable API surface.
-      handlePaste: (view, event) => {
-        const text = event.clipboardData?.getData("text/plain")?.trim();
-        if (!text || /\s/.test(text)) return false;
-        if (!isSafeExternalHref(text)) return false;
-
-        const { selection } = view.state;
-        if (selection.empty || !(selection instanceof TextSelection)) return false;
-
-        const linkType = view.state.schema.marks.link;
-        if (!linkType) return false;
-
-        view.dispatch(
-          view.state.tr.addMark(selection.from, selection.to, linkType.create({ href: text })),
-        );
-        return true;
-      },
-    },
+    editorProps: makeEditorProps(untrack(() => spellcheckOn)),
     editable: untrack(() => !readOnly),
     autofocus: untrack(() => !readOnly),
   });
@@ -260,6 +302,26 @@ $effect(() => {
   if (_lastReadOnly === ro) return;
   _lastReadOnly = ro;
   ed.setEditable(!ro);
+});
+
+// -- A5: spellcheck toggling without recreating the editor ------------------
+// `setOptions({ editorProps })` replaces `editorProps` wholesale (not a
+// shallow merge), so `makeEditorProps` always rebuilds the full object
+// (attributes + clipboardTextParser + handlePaste), not just the spellcheck
+// bit. Guarded with a last-value check mirroring `_lastReadOnly` above so a
+// settings write to an unrelated field (which reassigns `settings` — and
+// therefore re-evaluates `spellcheckOn` — wholesale) doesn't call
+// `setOptions` redundantly. Known-harmless: this fires once at mount with
+// the same value construction already used, same redundancy as
+// `_lastReadOnly`/`setEditable`.
+let _lastSpellcheck: boolean | undefined;
+$effect(() => {
+  const ed = editor;
+  if (!ed) return;
+  const sc = spellcheckOn;
+  if (_lastSpellcheck === sc) return;
+  _lastSpellcheck = sc;
+  ed.setOptions({ editorProps: makeEditorProps(sc) });
 });
 
 // -- Keep CollaborationCursor name synced with stored display name --------
