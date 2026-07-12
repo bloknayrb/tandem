@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   isSafeExternalHref,
   SAFE_EXTERNAL_PREFIXES,
+  SAFE_IMAGE_PREFIXES,
   sanitizeHrefForPaste,
+  sanitizeImageSrcForPaste,
 } from "../../src/client/editor/utils/url-safety";
 
 describe("SAFE_EXTERNAL_PREFIXES", () => {
@@ -94,5 +96,61 @@ describe("sanitizeHrefForPaste", () => {
 
   it("rejects a bare leading colon", () => {
     expect(sanitizeHrefForPaste(":alert(1)")).toBeNull();
+  });
+});
+
+describe("sanitizeImageSrcForPaste", () => {
+  it("returns null for null/undefined/empty", () => {
+    expect(sanitizeImageSrcForPaste(null)).toBeNull();
+    expect(sanitizeImageSrcForPaste(undefined)).toBeNull();
+    expect(sanitizeImageSrcForPaste("")).toBeNull();
+    expect(sanitizeImageSrcForPaste("   ")).toBeNull();
+  });
+
+  it.each(SAFE_IMAGE_PREFIXES)("accepts %s prefix", (prefix) => {
+    expect(sanitizeImageSrcForPaste(`${prefix}example.com/x.png`)).toBe(
+      `${prefix}example.com/x.png`,
+    );
+  });
+
+  it("rejects mailto: (valid link target, never a valid image source)", () => {
+    expect(sanitizeImageSrcForPaste("mailto:foo@bar.com")).toBeNull();
+  });
+
+  it("accepts in-page fragments and relative/root-relative paths", () => {
+    expect(sanitizeImageSrcForPaste("#section")).toBe("#section");
+    expect(sanitizeImageSrcForPaste("./img.png")).toBe("./img.png");
+    expect(sanitizeImageSrcForPaste("../img.png")).toBe("../img.png");
+    expect(sanitizeImageSrcForPaste("/abs/img.png")).toBe("/abs/img.png");
+  });
+
+  it("accepts allowlisted base64 data: image subtypes", () => {
+    for (const subtype of ["png", "jpeg", "jpg", "gif", "webp"]) {
+      const src = `data:image/${subtype};base64,AAAA`;
+      expect(sanitizeImageSrcForPaste(src)).toBe(src);
+    }
+  });
+
+  it("rejects data:image/svg+xml even when base64-encoded", () => {
+    expect(sanitizeImageSrcForPaste("data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=")).toBeNull();
+    expect(sanitizeImageSrcForPaste("data:image/svg+xml,<svg/>")).toBeNull();
+  });
+
+  it("rejects non-base64 data: image URIs even for allowlisted subtypes", () => {
+    // Only the exact `;base64,` encoding is allowlisted — a raw/URL-encoded
+    // data: URI for the same subtype is still rejected.
+    expect(sanitizeImageSrcForPaste("data:image/png,rawbytes")).toBeNull();
+  });
+
+  it("rejects other unsafe schemes", () => {
+    expect(sanitizeImageSrcForPaste("javascript:alert(1)")).toBeNull();
+    expect(sanitizeImageSrcForPaste("vbscript:msgbox")).toBeNull();
+    expect(sanitizeImageSrcForPaste("file:///etc/passwd")).toBeNull();
+  });
+
+  it("trims whitespace before evaluation", () => {
+    expect(sanitizeImageSrcForPaste("  https://example.com/x.png  ")).toBe(
+      "https://example.com/x.png",
+    );
   });
 });

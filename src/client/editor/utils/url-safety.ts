@@ -77,3 +77,64 @@ export function sanitizeHrefForPaste(raw: string | null | undefined): string | n
   // Has a scheme prefix that isn't allowlisted → drop.
   return null;
 }
+
+/**
+ * Image-src prefixes safe to paste directly. Mirrors {@link SAFE_EXTERNAL_PREFIXES}
+ * minus `mailto:` — a valid link target, but never a valid image source.
+ */
+export const SAFE_IMAGE_PREFIXES = ["http://", "https://", "ftp://", "//"] as const;
+
+/**
+ * `data:` image subtypes allowed as pasted image sources: boundable raster
+ * formats commonly emitted by `.docx` image embeds and web copy/paste.
+ * `svg+xml` is deliberately excluded — inline SVG can carry a `<script>` tag
+ * or an event-handler attribute (`onload=`, etc.) that executes in the
+ * editor's DOM, unlike the raster formats below, which are inert pixel data.
+ */
+const SAFE_IMAGE_DATA_URI = /^data:image\/(?:png|jpeg|jpg|gif|webp);base64,/i;
+
+/**
+ * Sanitize an image `src` encountered at MARKDOWN PASTE time. Returns the
+ * trimmed src when safe, or `null` when it should be dropped (caller
+ * downgrades the image to plain alt text rather than rendering it — see
+ * markdown-paste.ts's `normalizeImagesForPaste`).
+ *
+ * Safe inputs (returns trimmed src):
+ *   - any {@link SAFE_IMAGE_PREFIXES} match (case-insensitive)
+ *   - in-page fragments: `#section`
+ *   - relative / root-relative paths: `./img.png`, `../img.png`, `/img.png`
+ *   - `data:image/(png|jpeg|jpg|gif|webp);base64,...`
+ *
+ * Unsafe inputs (returns null):
+ *   - `data:image/svg+xml...` and any other `data:` subtype
+ *   - any other unknown scheme: `javascript:`, `vbscript:`, `file:`, etc.
+ *
+ * Scheme detection mirrors {@link sanitizeHrefForPaste} (a `:` before any
+ * `/`, `#`, or `?` means "has a scheme"), duplicated rather than shared so
+ * the link and image allowlists can diverge independently — one edit here
+ * can never silently change what links are considered safe, or vice versa.
+ */
+export function sanitizeImageSrcForPaste(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  if (SAFE_IMAGE_DATA_URI.test(trimmed)) return trimmed;
+  // Any other `data:` URI (including `data:image/svg+xml`) falls through to
+  // the "unknown scheme" branch below and is rejected.
+
+  const lower = trimmed.toLowerCase();
+  if (SAFE_IMAGE_PREFIXES.some((p) => lower.startsWith(p))) return trimmed;
+
+  if (trimmed.startsWith("#")) return trimmed;
+
+  const firstColon = trimmed.indexOf(":");
+  if (firstColon === -1) return trimmed; // no colon → relative/root path
+  const seps = ["/", "#", "?"].map((ch) => trimmed.indexOf(ch)).filter((idx) => idx !== -1);
+  const firstPathSep = seps.length ? Math.min(...seps) : Number.POSITIVE_INFINITY;
+  if (firstPathSep < firstColon) return trimmed; // colon after path sep → not a scheme
+
+  // Has a scheme prefix that isn't allowlisted (or is `data:` with a
+  // non-allowlisted subtype) → drop.
+  return null;
+}

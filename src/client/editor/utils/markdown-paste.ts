@@ -18,25 +18,185 @@ import { Slice } from "@tiptap/pm/model";
 import MarkdownIt from "markdown-it";
 import type { ParseSpec } from "prosemirror-markdown";
 import { MarkdownParser } from "prosemirror-markdown";
-import { sanitizeHrefForPaste } from "./url-safety";
+import { sanitizeHrefForPaste, sanitizeImageSrcForPaste } from "./url-safety";
 
 // Link-href sanitization uses the shared ALLOWLIST in ./url-safety.ts
 // (http://, https://, mailto:, ftp://, //, plus fragments and relative
 // paths). The Editor's click-time anchor intercept uses the same allowlist
 // via isSafeExternalHref — one source of truth means a new XSS-relevant
 // scheme rejected by the click-time check is automatically rejected at
-// paste time too (no drift between the two defense layers).
+// paste time too (no drift between the two defense layers). Image sources
+// go through the sibling allowlist `sanitizeImageSrcForPaste` (same file) —
+// see `normalizeImagesForPaste` below.
+
+/**
+ * Minimal structural types for the markdown-it tokens/state our core-ruler
+ * plugins (below) read and write. Deliberately NOT importing markdown-it's
+ * own `Token`/`StateCore` types — deep subpath type imports through
+ * `@types/markdown-it` are fragile under `moduleResolution: "bundler"`. This
+ * local shape covers exactly the members we touch and is structurally
+ * compatible with the real runtime objects markdown-it constructs.
+ */
+interface MdToken {
+  type: string;
+  tag: string;
+  nesting: 0 | 1 | -1;
+  content: string;
+  children: MdToken[] | null;
+  attrGet(name: string): string | null;
+}
+
+interface MdCoreState {
+  tokens: MdToken[];
+  Token: new (type: string, tag: string, nesting: 0 | 1 | -1) => MdToken;
+}
+
+/**
+ * Core-ruler plugin: wraps each table cell's flat `inline` token in a
+ * `paragraph_open`/`paragraph_close` pair.
+ *
+ * Tiptap's `tableHeader`/`tableCell` nodes are `block+` (they must contain
+ * block nodes, e.g. `paragraph`), but markdown-it's table rule emits inline
+ * content directly inside `th`/`td` — `th_open, inline, th_close` with no
+ * wrapping block. Handed straight to `MarkdownParser`, `createAndFill` can't
+ * place inline content into a `block+` node and returns null, silently
+ * dropping the cell. GFM pipe-table cells are always single-line (no nested
+ * block content is possible in the syntax), so `th_open`/`td_open` is always
+ * immediately followed by exactly one `inline` token — a fixed pattern safe
+ * to pattern-match without a general tree walk.
+ *
+ * Registered on the `core` ruler (not `block`) so it runs once over the
+ * final flat token stream, after the default `inline` core rule has already
+ * decided token boundaries — flat-array splicing is simplest to do as a
+ * dedicated pass rather than threading paragraph-wrapping into the table
+ * block rule itself (which we don't own).
+ */
+function wrapCellParagraphs(state: MdCoreState): void {
+  const tokens = state.tokens;
+  const out: MdToken[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    out.push(tok);
+    if ((tok.type === "th_open" || tok.type === "td_open") && tokens[i + 1]?.type === "inline") {
+      const open = new state.Token("paragraph_open", "p", 1);
+      const close = new state.Token("paragraph_close", "p", -1);
+      out.push(open, tokens[i + 1], close);
+      i += 1; // the inline token was consumed directly above; don't re-push it
+    }
+  }
+  state.tokens = out;
+}
+
+/** True when an inline `image` token's `src` passes the paste-time allowlist. */
+function isSafeImageToken(tok: MdToken): boolean {
+  return sanitizeImageSrcForPaste(tok.attrGet("src")) != null;
+}
+
+/**
+ * Build a plain-text fallback token carrying an image's alt text, for images
+ * we can't render as-is (unsafe src, or mixed with other inline content — see
+ * `normalizeImagesForPaste`). `tok.content` is the image's raw label source
+ * (markdown-it stores it pre-inline-parse on the `image` token itself), which
+ * is exactly the `alt` text for the common case of a plain-text label.
+ */
+function imageFallbackToken(state: MdCoreState, tok: MdToken): MdToken {
+  const fallback = new state.Token("text", "", 0);
+  fallback.content = tok.content || tok.attrGet("alt") || "";
+  return fallback;
+}
+
+/**
+ * Core-ruler plugin: makes pasted markdown images renderable against a
+ * schema where the `image` node is BLOCK-level (`editor-extensions.ts`,
+ * `Image.configure({ allowBase64: true })` — default `inline: false`) while
+ * markdown-it emits `image` as an INLINE token nested inside `inline`
+ * tokens' `children` arrays.
+ *
+ * Two passes, in this order (sanitize MUST run before hoist — see below):
+ *
+ * 1. Sanitize: any `image` token whose `src` fails {@link sanitizeImageSrcForPaste}
+ *    (unlisted scheme, `data:image/svg+xml`, etc.) is replaced in place with
+ *    a plain-text fallback token carrying its alt text. Runs over every
+ *    `inline` token in the flat stream, including ones inside table cells
+ *    (this rule is registered AFTER `wrapCellParagraphs`, so cell content is
+ *    already paragraph-wrapped by the time this runs — seeing them here for
+ *    free) and blockquotes (blockquote markers are flat open/close tokens
+ *    too, so their paragraphs appear in the same top-level array).
+ *
+ * 2. Hoist / downgrade: a paragraph whose ENTIRE inline content is a single
+ *    (now-sanitized) image is promoted — mirroring the server's
+ *    `splitParagraphImages`, `src/server/file-io/mdast-ydoc.ts` — from
+ *    `paragraph_open, inline({children:[image]}), paragraph_close` to a bare
+ *    block-level `image` token. Any image that survives pass 1 but sits
+ *    alongside other inline content in the same paragraph is downgraded to
+ *    its alt-text fallback: our `image` node can't be a paragraph's inline
+ *    child, so leaving it in place would make `createAndFill` return null
+ *    and silently drop the WHOLE paragraph — a regression versus the
+ *    previous "drop the image, keep the text" behavior (see the #885
+ *    follow-up test in markdown-paste.test.ts).
+ *
+ * Sanitizing before hoisting matters: a rejected image becomes inline text
+ * in pass 1, so its paragraph is no longer single-image and correctly never
+ * hoists in pass 2. Reversing the order would let a rejected image survive
+ * into pass 2 as a bare block-level token (nothing left to reject it), then
+ * only get caught by chance if it happened to share a paragraph with other
+ * text.
+ */
+function normalizeImagesForPaste(state: MdCoreState): void {
+  for (const tok of state.tokens) {
+    if (tok.type !== "inline" || !tok.children) continue;
+    for (let i = 0; i < tok.children.length; i++) {
+      const child = tok.children[i];
+      if (child.type === "image" && !isSafeImageToken(child)) {
+        tok.children[i] = imageFallbackToken(state, child);
+      }
+    }
+  }
+
+  const tokens = state.tokens;
+  const out: MdToken[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok.type === "paragraph_open") {
+      const inlineTok = tokens[i + 1];
+      const closeTok = tokens[i + 2];
+      if (inlineTok?.type === "inline" && closeTok?.type === "paragraph_close") {
+        const children = inlineTok.children ?? [];
+        if (children.length === 1 && children[0].type === "image") {
+          out.push(children[0]);
+          i += 2; // consumed inline + paragraph_close along with paragraph_open
+          continue;
+        }
+      }
+    }
+    if (tok.type === "inline" && tok.children) {
+      for (let j = 0; j < tok.children.length; j++) {
+        if (tok.children[j].type === "image") {
+          tok.children[j] = imageFallbackToken(state, tok.children[j]);
+        }
+      }
+    }
+    out.push(tok);
+  }
+  state.tokens = out;
+}
 
 /**
  * markdown-it token -> Tiptap schema entity map.
  *
- * Scope (per issue #788): paragraphs, headings, bold/italic/code/strike, links,
- * bullet/ordered lists, blockquotes, fenced code blocks. Images, tables, and
- * other unmapped block-level tokens are silently dropped via `ignore: true`
- * (#885 follow-up). Without an explicit `ignore`, the prosemirror-markdown
- * `MarkdownParser` throws `Token type 'image' not supported by parser` and the
- * caller falls back to plain text — losing ALL the user's surrounding
- * formatting just because the pasted snippet happens to mention an image.
+ * Scope (per issue #788, extended by the #885 follow-up): paragraphs,
+ * headings, bold/italic/code/strike, links, bullet/ordered lists,
+ * blockquotes, fenced code blocks, GFM tables, and images. Tables and images
+ * need the core-ruler plugins registered in `createMarkdownParser` (see
+ * `wrapCellParagraphs` / `normalizeImagesForPaste` above) to reshape the raw
+ * markdown-it token stream into something `MarkdownParser` can place against
+ * Tandem's schema — without them, both would either throw
+ * `Token type '...' not supported by parser` or silently drop content via
+ * `createAndFill` returning null. Any other unmapped block-level token is
+ * still silently dropped via `ignore: true` — without an explicit `ignore`,
+ * the parser throws and the caller falls back to plain text, losing ALL the
+ * user's surrounding formatting just because the pasted snippet happens to
+ * mention the unmapped construct.
  */
 function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
   const tokens: { [name: string]: ParseSpec } = {
@@ -68,8 +228,8 @@ function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
     // source. There's no Tiptap equivalent (StarterKit collapses these to
     // spaces during DOM serialization anyway); drop the token cleanly so it
     // doesn't surface as an "unsupported token" parser error. `noCloseToken`
-    // is required because softbreak/html_inline/html_block/image are emitted
-    // as single tokens (no `_open`/`_close` pair) — without it,
+    // is required because softbreak/html_inline/html_block are emitted as
+    // single tokens (no `_open`/`_close` pair) — without it,
     // prosemirror-markdown would register `softbreak_open`/`_close` handlers
     // that never fire and the bare `softbreak` token still throws.
     softbreak: { ignore: true, noCloseToken: true },
@@ -78,11 +238,35 @@ function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
     // like comments. Ignore them defensively so the parser doesn't throw.
     html_block: { ignore: true, noCloseToken: true },
     html_inline: { ignore: true, noCloseToken: true },
-    // Images are tokens, not text — without an explicit mapping the parser
-    // would throw. We ignore (drop alt text + URL) rather than addText
-    // because Tiptap's image node is optional in StarterKit and we don't
-    // want to depend on it being present.
-    image: { ignore: true, noCloseToken: true },
+    // GFM table (enabled via `.enable(["table"])` in createMarkdownParser).
+    // `thead`/`tbody` are paired wrapper tokens with no Tiptap equivalent —
+    // NOT `noCloseToken` (they DO have separate `_open`/`_close` tokens; that
+    // flag is only for markdown-it's single-token constructs like `image` or
+    // `softbreak`). `th`/`td` map to Tiptap's `block+` cell nodes; their
+    // inline content is paragraph-wrapped by the `wrapCellParagraphs`
+    // core-ruler plugin before this spec ever sees them.
+    table: { block: "table" },
+    thead: { ignore: true },
+    tbody: { ignore: true },
+    tr: { block: "tableRow" },
+    th: { block: "tableHeader" },
+    td: { block: "tableCell" },
+    // Images are reshaped from markdown-it's inline token into a flat
+    // block-level token by the `normalizeImagesForPaste` core-ruler plugin
+    // before parsing reaches this spec (see that function's doc comment for
+    // the full block-vs-inline schema mismatch and the sanitize-before-hoist
+    // ordering). `src` has already passed `sanitizeImageSrcForPaste` by this
+    // point — any image that failed was replaced with a text fallback token
+    // upstream, so this handler only ever sees safe sources.
+    image: {
+      node: "image",
+      noCloseToken: true,
+      getAttrs: (tok) => ({
+        src: tok.attrGet("src"),
+        alt: tok.content || null,
+        title: tok.attrGet("title") || null,
+      }),
+    },
     em: { mark: "italic" },
     strong: { mark: "bold" },
     s: { mark: "strike" },
@@ -115,13 +299,63 @@ function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
 
 /**
  * Create a `MarkdownParser` bound to the given editor schema. The markdown-it
- * tokenizer enables GFM-ish features (strikethrough via `~~`, autolinks) while
- * disabling HTML passthrough so pasted `<script>`-style markup is treated as
- * literal text rather than raw HTML.
+ * tokenizer enables GFM-ish features (strikethrough via `~~`, autolinks,
+ * pipe tables) while disabling HTML passthrough so pasted `<script>`-style
+ * markup is treated as literal text rather than raw HTML.
+ *
+ * `table` is disabled by the `commonmark` preset by default — without
+ * `.enable(["table"])` no table tokens are ever emitted and `| a | b |`
+ * pastes as a plain paragraph of pipe-delimited text.
+ *
+ * The two core-ruler plugins run in this order, both AFTER markdown-it's
+ * default `inline` core rule (so `children` arrays are already populated):
+ * `wrapCellParagraphs` first, so that a table cell whose sole content is an
+ * image is already paragraph-wrapped by the time `normalizeImagesForPaste`
+ * runs — letting a solo cell image hoist straight into the cell (`th`/`td`
+ * are `block+`, so a bare `image` child is valid there) instead of being
+ * incorrectly downgraded to text for lack of a wrapping paragraph to hoist
+ * out of.
  */
 export function createMarkdownParser(schema: Schema): MarkdownParser {
-  const tokenizer = MarkdownIt("commonmark", { html: false }).enable(["strikethrough", "linkify"]);
+  const tokenizer = MarkdownIt("commonmark", { html: false }).enable([
+    "strikethrough",
+    "linkify",
+    "table",
+  ]);
+  tokenizer.core.ruler.push("tandem-wrap-cell-paragraphs", wrapCellParagraphs);
+  tokenizer.core.ruler.push("tandem-normalize-images", normalizeImagesForPaste);
   return new MarkdownParser(schema, tokenizer, buildTokenSpec(schema));
+}
+
+/**
+ * True when `line` is a valid GFM table delimiter row: pipe-separated cells
+ * that each contain only dashes and optional leading/trailing colons (e.g.
+ * `---`, `:--`, `--:`, `:-:`), with at least one non-empty cell. Mirrors the
+ * validation markdown-it's own table rule performs, kept independent so
+ * `looksLikeMarkdown` can stay a cheap heuristic that never invokes the
+ * tokenizer.
+ */
+function isTableDelimiterLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|");
+  if (cells.length === 0) return false;
+  return cells.every((c) => /^:?-+:?$/.test(c.trim())) && cells.some((c) => c.trim().length > 0);
+}
+
+/**
+ * True when `text` contains a GFM pipe table: a header row (any line with a
+ * `|`) immediately followed by a delimiter row. Requiring BOTH rows (not
+ * just a lone pipe-containing line) errs toward NOT converting — a line like
+ * `| just | pipes |` with no delimiter row underneath stays plain text,
+ * matching `looksLikeMarkdown`'s overall bias.
+ */
+function hasMarkdownTable(text: string): boolean {
+  const lines = text.split(/\r\n|\r|\n/);
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (lines[i].includes("|") && isTableDelimiterLine(lines[i + 1])) return true;
+  }
+  return false;
 }
 
 /**
@@ -140,13 +374,17 @@ export function looksLikeMarkdown(text: string): boolean {
     /^\s{0,3}(#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|```|~~~|-{3,}\s*$|\*{3,}\s*$|_{3,}\s*$)/m;
   if (blockPattern.test(text)) return true;
 
-  // Inline markers: bold/italic, inline code, strikethrough, or a markdown
-  // link [text](url). Emphasis markers require a non-space character adjacent
-  // to the delimiter (CommonMark flanking rule) so spaced asterisks like
-  // "a * b * c" are NOT mistaken for emphasis.
+  // Inline markers: bold/italic, inline code, strikethrough, a markdown link
+  // [text](url), or an image ![alt](url) — alt may be empty (`![]`), unlike
+  // the link-text bracket which requires at least one character. Emphasis
+  // markers require a non-space character adjacent to the delimiter
+  // (CommonMark flanking rule) so spaced asterisks like "a * b * c" are NOT
+  // mistaken for emphasis.
   const inlinePattern =
-    /(\*\*\S(?:[^*\n]*\S)?\*\*|__\S(?:[^_\n]*\S)?__|\*\S(?:[^*\n]*\S)?\*|`[^`\n]+`|~~\S(?:[^~\n]*\S)?~~|\[[^\]\n]+\]\([^)\n]+\))/;
+    /(\*\*\S(?:[^*\n]*\S)?\*\*|__\S(?:[^_\n]*\S)?__|\*\S(?:[^*\n]*\S)?\*|`[^`\n]+`|~~\S(?:[^~\n]*\S)?~~|!?\[[^\]\n]*\]\([^)\n]+\))/;
   if (inlinePattern.test(text)) return true;
+
+  if (hasMarkdownTable(text)) return true;
 
   return false;
 }
@@ -157,12 +395,22 @@ export function looksLikeMarkdown(text: string): boolean {
  * look like markdown OR when parsing produces nothing meaningful, signaling the
  * caller to fall back to normal plain-text paste.
  *
- * The slice is created with `Slice.maxOpen`, which opens both ends as far as
- * the content allows. This is what makes inline-only markdown merge into the
- * surrounding paragraph (pasting `**bold**` mid-sentence yields inline bold,
- * not a new paragraph) while block-level markdown (headings, lists, ...) still
- * pastes as its own blocks. A fully-closed slice would instead split the
- * paragraph at the cursor for every paste.
+ * The slice is created with `Slice.maxOpen(doc.content, false)`, which opens
+ * both ends as far as the content allows WITHOUT descending into isolating
+ * nodes. This is what makes inline-only markdown merge into the surrounding
+ * paragraph (pasting `**bold**` mid-sentence yields inline bold, not a new
+ * paragraph) while block-level markdown (headings, lists, ...) still pastes
+ * as its own blocks. A fully-closed slice would instead split the paragraph
+ * at the cursor for every paste.
+ *
+ * `openIsolating` (prosemirror-model's `Slice.maxOpen` second parameter,
+ * default `true`) must be `false` here: Tiptap's `table` node is
+ * `isolating: true` (`@tiptap/extension-table`), and the default `true`
+ * descends straight through that boundary — pasting a table produces a slice
+ * open ~4 levels deep (table > tableRow > tableHeader > paragraph), which
+ * then mangles a paste that lands mid-paragraph in unrelated content. No
+ * other token in this file's map targets an isolating node, so passing
+ * `false` unconditionally is safe for every other case too.
  */
 export function markdownToSlice(text: string, schema: Schema): Slice | null {
   if (!looksLikeMarkdown(text)) return null;
@@ -182,5 +430,5 @@ export function markdownToSlice(text: string, schema: Schema): Slice | null {
   // the default plain-text path handle it.
   if (doc.childCount === 0) return null;
 
-  return Slice.maxOpen(doc.content);
+  return Slice.maxOpen(doc.content, false);
 }

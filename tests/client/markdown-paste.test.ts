@@ -1,5 +1,5 @@
 import { Editor } from "@tiptap/core";
-import type { Schema } from "@tiptap/pm/model";
+import type { Node as ProseMirrorNode, Schema } from "@tiptap/pm/model";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
 import {
@@ -134,11 +134,15 @@ describe("markdownToSlice", () => {
     expect(hrefs.every((h) => h !== "javascript:alert(1)")).toBe(true);
   });
 
-  // #885 follow-up: an image in pasted markdown used to throw an
-  // "unsupported token" parser error and fall back to plain text, losing
-  // ALL surrounding formatting. Now the image is silently dropped and
-  // the rest of the markdown converts normally.
-  it("drops embedded images without losing surrounding formatting", () => {
+  // #885 follow-up: an image mixed with other text in the same paragraph
+  // used to throw an "unsupported token" parser error and fall back to
+  // plain text, losing ALL surrounding formatting. Then (pre-A1) the image
+  // was silently dropped while surrounding formatting survived. Now the
+  // image node itself is block-level and can't live inline next to text, so
+  // it's downgraded to its alt text (still inline) — surrounding formatting
+  // is untouched either way; only a standalone-paragraph image (see the
+  // "converts a standalone image" test below) becomes a real image node.
+  it("downgrades an image mixed with text to alt text without losing surrounding formatting", () => {
     const slice = markdownToSlice(
       "**bold** then ![alt](https://example.com/x.png) and a [link](https://example.com)",
       schema,
@@ -146,12 +150,82 @@ describe("markdownToSlice", () => {
     expect(slice).not.toBeNull();
     let sawBold = false;
     let sawLink = false;
+    let sawImageNode = false;
+    let sawAltText = false;
     slice!.content.descendants((node) => {
       if (node.marks.some((m) => m.type.name === "bold")) sawBold = true;
       if (node.marks.some((m) => m.type.name === "link")) sawLink = true;
+      if (node.type.name === "image") sawImageNode = true;
+      if (node.isText && node.text?.includes("alt")) sawAltText = true;
     });
     expect(sawBold).toBe(true);
     expect(sawLink).toBe(true);
+    expect(sawImageNode).toBe(false);
+    expect(sawAltText).toBe(true);
+  });
+
+  // #885 follow-up: a markdown image is now supported end-to-end (schema +
+  // server already round-trip it; only the client paste path was dropping
+  // it). A paragraph whose ENTIRE content is a single image hoists to a
+  // real block-level `image` node.
+  it("converts a standalone image to a block image node", () => {
+    const doc = parseToDoc("![a cat](https://example.com/cat.png)");
+    const first = doc.firstChild!;
+    expect(first.type.name).toBe("image");
+    expect(first.attrs.src).toBe("https://example.com/cat.png");
+    expect(first.attrs.alt).toBe("a cat");
+  });
+
+  // markdown-it has its OWN built-in destination blocklist (`javascript:`,
+  // `vbscript:`, `file:`, and `data:` outside a small good-image-subtype
+  // list) that runs during tokenizing, before our code ever sees a token —
+  // a `![...](javascript:...)` never becomes an `image` token at all; the
+  // whole construct falls back to literal source text (see the
+  // `sanitizeHrefForPaste`-scheme tests in url-safety.test.ts for the
+  // link-level equivalent). `blob:` is NOT in markdown-it's small blocklist,
+  // so it DOES produce a real `image` token — this is what exercises OUR
+  // allowlist-based `sanitizeImageSrcForPaste` end-to-end through the full
+  // paste pipeline.
+  it("downgrades an image with an unsafe src (blob:) to alt text", () => {
+    const slice = markdownToSlice("before ![bad](blob:https://example.com/x) after", schema)!;
+    expect(slice).not.toBeNull();
+    let sawImageNode = false;
+    let text = "";
+    slice.content.descendants((node) => {
+      if (node.type.name === "image") sawImageNode = true;
+      if (node.isText) text += node.text;
+    });
+    expect(sawImageNode).toBe(false);
+    expect(text).toContain("bad");
+  });
+
+  it("downgrades a standalone image with an unsafe src (blob:) to a plain-text paragraph", () => {
+    const doc = parseToDoc("![bad](blob:https://example.com/x)");
+    const first = doc.firstChild!;
+    expect(first.type.name).toBe("paragraph");
+    expect(first.textContent).toBe("bad");
+  });
+
+  it("accepts a standalone image with an allowlisted base64 data: URI", () => {
+    const doc = parseToDoc(
+      "![tiny](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=)",
+    );
+    const first = doc.firstChild!;
+    expect(first.type.name).toBe("image");
+    expect(first.attrs.src?.startsWith("data:image/png;base64,")).toBe(true);
+  });
+
+  // markdown-it's own `GOOD_DATA_RE` only checks for a `data:image/<subtype>;`
+  // prefix — it does NOT require base64 encoding, so this URI passes
+  // markdown-it's laxer built-in check and DOES become a real `image` token.
+  // Our stricter `sanitizeImageSrcForPaste` (base64-only) then rejects it,
+  // proving our allowlist is narrower than markdown-it's default, not just
+  // redundant with it.
+  it("rejects a standalone image with a non-base64 data: URI (stricter than markdown-it's own check)", () => {
+    const doc = parseToDoc("![evil](data:image/webp;not-base64,xyz)");
+    const first = doc.firstChild!;
+    expect(first.type.name).toBe("paragraph");
+    expect(first.textContent).toBe("evil");
   });
 
   it("converts bullet lists", () => {
@@ -192,6 +266,47 @@ describe("markdownToSlice", () => {
     expect(doc.child(1).type.name).toBe("paragraph");
     expect(doc.child(2).type.name).toBe("bulletList");
   });
+
+  // #885 follow-up: GFM tables used to be silently dropped (`ignore: true`).
+  // Cells must be paragraph-wrapped (Tiptap's tableHeader/tableCell are
+  // `block+`) and inline marks inside cells must survive.
+  it("converts a GFM table with paragraph-wrapped cells and marks inside cells", () => {
+    const doc = parseToDoc("| Name | Note |\n| --- | --- |\n| Alice | **hi** |\n| Bob | plain |");
+    const table = doc.firstChild!;
+    expect(table.type.name).toBe("table");
+    expect(table.childCount).toBe(3); // header row + 2 body rows
+
+    const headerRow = table.child(0);
+    expect(headerRow.type.name).toBe("tableRow");
+    expect(headerRow.childCount).toBe(2);
+    const headerCell = headerRow.child(0);
+    expect(headerCell.type.name).toBe("tableHeader");
+    // Cell content must be paragraph-wrapped, not bare inline content.
+    expect(headerCell.childCount).toBe(1);
+    expect(headerCell.child(0).type.name).toBe("paragraph");
+    expect(headerCell.textContent).toBe("Name");
+
+    const bodyRow1 = table.child(1);
+    expect(bodyRow1.type.name).toBe("tableRow");
+    const noteCell = bodyRow1.child(1);
+    expect(noteCell.type.name).toBe("tableCell");
+    expect(noteCell.child(0).type.name).toBe("paragraph");
+    expect(noteCell.textContent).toBe("hi");
+    let sawBoldInCell = false;
+    noteCell.descendants((node) => {
+      if (node.marks.some((m) => m.type.name === "bold")) sawBoldInCell = true;
+    });
+    expect(sawBoldInCell).toBe(true);
+
+    const bodyRow2 = table.child(2);
+    expect(bodyRow2.child(0).textContent).toBe("Bob");
+    expect(bodyRow2.child(1).textContent).toBe("plain");
+  });
+
+  it("does NOT convert a lone pipe-containing line with no delimiter row", () => {
+    expect(looksLikeMarkdown("| just | pipes |")).toBe(false);
+    expect(markdownToSlice("| just | pipes |", schema)).toBeNull();
+  });
 });
 
 describe("slice open-ness (paste integration)", () => {
@@ -214,6 +329,34 @@ describe("slice open-ness (paste integration)", () => {
     const html = editor.getHTML();
     expect(html).toContain("<h1>Title</h1>");
     expect(html).toContain("<ul>");
+  });
+
+  // `table` is `isolating: true` (@tiptap/extension-table). `Slice.maxOpen`
+  // defaults to descending into isolating nodes (`openIsolating = true`),
+  // which would open a table-first slice ~4 levels deep and mangle a paste
+  // landing mid-paragraph in surrounding, unrelated content. Asserts the
+  // `markdownToSlice(..., false)` fix: the table lands as a sibling block
+  // after the split paragraph, not spliced into its inline content.
+  it("pastes a table mid-paragraph as a sibling block, not spliced into inline content", () => {
+    editor.commands.setContent("<p>before after</p>");
+    editor.commands.setTextSelection(7); // between "before " and "after"
+    const slice = markdownToSlice("| a | b |\n| --- | --- |\n| 1 | 2 |", schema)!;
+    expect(slice).not.toBeNull();
+    editor.view.dispatch(editor.state.tr.replaceSelection(slice));
+    const doc = editor.state.doc;
+    const topLevel: ProseMirrorNode[] = [];
+    doc.forEach((node) => topLevel.push(node));
+    expect(topLevel.map((n) => n.type.name)).toContain("table");
+    // The paragraph must have been split around the paste point, not have
+    // the table's cell text merged into its own inline run. Only check
+    // TOP-LEVEL paragraphs here — table cells legitimately contain their own
+    // (paragraph-wrapped) "1"/"2" text and are not part of this assertion.
+    const topLevelParagraphs = topLevel.filter((n) => n.type.name === "paragraph");
+    expect(topLevelParagraphs.length).toBeGreaterThanOrEqual(1);
+    for (const p of topLevelParagraphs) {
+      expect(p.textContent).not.toContain("1");
+      expect(p.textContent).not.toContain("2");
+    }
   });
 });
 
