@@ -307,6 +307,93 @@ describe("markdownToSlice", () => {
     expect(looksLikeMarkdown("| just | pipes |")).toBe(false);
     expect(markdownToSlice("| just | pipes |", schema)).toBeNull();
   });
+
+  // F2: hasMarkdownTable now requires the header row and delimiter row to
+  // have the same cell count, mirroring markdown-it. Without this, a
+  // hand-typed table with a column-count typo routed through the markdown
+  // path anyway, where `softbreak: ignore` glued every line into one
+  // word-soup paragraph.
+  describe("table column-count detection (F2)", () => {
+    it("does NOT convert a header/delimiter pair with mismatched column counts", () => {
+      const text = "a | b\n--- |\nmore | data";
+      expect(looksLikeMarkdown(text)).toBe(false);
+      expect(markdownToSlice(text, schema)).toBeNull();
+    });
+
+    // Header row has an escaped pipe (`\|`, one literal backslash then a
+    // pipe in the actual pasted text — written here as `\\|` in the JS
+    // string source) — 2 real cells vs the delimiter row's 3. A naive
+    // (non-escape-aware) split would count 3 header cells too and wrongly
+    // treat this as a matching table; markdown-it's own escapedSplit
+    // refuses it, and so must we (P1).
+    it("does NOT convert when an escaped pipe makes the header cell count disagree with markdown-it", () => {
+      const text = "a \\| b | c\n--- | --- | ---";
+      expect(looksLikeMarkdown(text)).toBe(false);
+      expect(markdownToSlice(text, schema)).toBeNull();
+    });
+
+    it("still converts a normal two-column table", () => {
+      const text = "a | b\n--- | ---";
+      expect(looksLikeMarkdown(text)).toBe(true);
+      expect(markdownToSlice(text, schema)).not.toBeNull();
+    });
+
+    it("still converts a single-column table", () => {
+      const text = "| a |\n| --- |";
+      expect(looksLikeMarkdown(text)).toBe(true);
+      expect(markdownToSlice(text, schema)).not.toBeNull();
+    });
+  });
+
+  // F3: a solo image pasted inside a table cell used to hoist straight into
+  // the cell (`tableCell > image`), a shape the server's save path
+  // (`cellToPhrasingContent` in mdast-ydoc.ts) silently drops on the very
+  // next save — the image pastes fine, then vanishes from the file. Inside
+  // a cell it must downgrade to its alt-text fallback instead, same as a
+  // mixed-content paragraph image.
+  describe("table cell image safety (F3)", () => {
+    it("does not hoist a solo image inside a table cell; downgrades it to alt text instead", () => {
+      const doc = parseToDoc("| a |\n| --- |\n| ![pic](https://example.com/y.png) |");
+      const table = doc.firstChild!;
+      expect(table.type.name).toBe("table");
+      let sawImageNode = false;
+      let sawCellText = false;
+      table.descendants((node) => {
+        if (node.type.name === "image") sawImageNode = true;
+        if (node.type.name === "tableCell" && node.textContent === "pic") sawCellText = true;
+      });
+      expect(sawImageNode).toBe(false);
+      expect(sawCellText).toBe(true);
+    });
+
+    it("still hoists a top-level solo image alongside a table in the same paste", () => {
+      const doc = parseToDoc("![top](https://example.com/top.png)\n\n| a |\n| --- |\n| text |");
+      const topLevel: ProseMirrorNode[] = [];
+      doc.forEach((node) => topLevel.push(node));
+      expect(topLevel.some((n) => n.type.name === "image")).toBe(true);
+      expect(topLevel.some((n) => n.type.name === "table")).toBe(true);
+    });
+  });
+
+  // F5: accepted limitation, pinned rather than fixed. A solo image hoisted
+  // inside a listItem yields `listItem(paragraph(empty), image)` because
+  // the schema's listItem requires a paragraph head and `createAndFill`
+  // inserts one. Downgrading instead would lose the image entirely, which
+  // is worse; the server's own .docx import path independently produces
+  // `listItem > image`, so the shapes converge after a save/reload anyway.
+  it("solo image in a list item keeps the image (accepted: schema inserts an empty paragraph head)", () => {
+    const doc = parseToDoc("- ![cat](https://example.com/c.png)");
+    const list = doc.firstChild!;
+    expect(list.type.name).toBe("bulletList");
+    const item = list.firstChild!;
+    expect(item.type.name).toBe("listItem");
+    expect(item.childCount).toBe(2);
+    expect(item.child(0).type.name).toBe("paragraph");
+    expect(item.child(0).content.size).toBe(0);
+    expect(item.child(1).type.name).toBe("image");
+    expect(item.child(1).attrs.src).toBe("https://example.com/c.png");
+    expect(item.child(1).attrs.alt).toBe("cat");
+  });
 });
 
 describe("slice open-ness (paste integration)", () => {

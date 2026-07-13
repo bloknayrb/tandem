@@ -116,21 +116,50 @@ function imageFallbackToken(state: MdCoreState, tok: MdToken): MdToken {
  * {@link isSafeImageToken}) is promoted — mirroring the server's
  * `splitParagraphImages`, `src/server/file-io/mdast-ydoc.ts` — from
  * `paragraph_open, inline({children:[image]}), paragraph_close` to a bare
- * block-level `image` token. Every other image — unsafe src, or sitting
- * alongside other inline content in its paragraph — is downgraded in place
- * to its alt-text fallback: our `image` node can't be a paragraph's inline
- * child, so leaving it in place would make `createAndFill` return null and
- * silently drop the WHOLE paragraph — a regression versus "drop the image,
- * keep the text" (see the #885 follow-up test in markdown-paste.test.ts).
- * Per-child safety only matters for the solo-hoist decision: a mixed
- * paragraph downgrades its images regardless of safety either way.
+ * block-level `image` token, UNLESS that paragraph sits inside a table cell
+ * (`cellDepth > 0`, tracked below). A hoisted `tableCell > image` is a shape
+ * the server's save path silently drops: `cellToPhrasingContent`
+ * (`src/server/file-io/mdast-ydoc.ts`) discards any non-`paragraph` cell
+ * child whose plain text is empty, so `plainTextFromElement` sees nothing
+ * and the whole cell chunk is dropped — the image would paste correctly and
+ * then vanish from the file on the very next save. Inside a cell we instead
+ * fall through to the same downgrade-to-alt-text path used for a
+ * mixed-content paragraph: it survives save, which the hoisted shape does
+ * not. Every other image — unsafe src, or sitting alongside other inline
+ * content in its paragraph — is downgraded in place to its alt-text
+ * fallback: our `image` node can't be a paragraph's inline child, so
+ * leaving it in place would make `createAndFill` return null and silently
+ * drop the WHOLE paragraph — a regression versus "drop the image, keep the
+ * text" (see the #885 follow-up test in markdown-paste.test.ts). Per-child
+ * safety only matters for the solo-hoist decision: a mixed paragraph
+ * downgrades its images regardless of safety either way.
+ *
+ * Accepted limitation (F5, not fixed): a solo image hoisted inside a
+ * `listItem` (not a table cell) yields `listItem(paragraph(empty), image)`
+ * — the client `listItem` node requires a `paragraph` head, so
+ * `createAndFill` inserts an empty one alongside the hoisted `image`. Left
+ * alone deliberately: downgrading loses the image entirely (worse), and the
+ * server's own `.docx` import path independently produces `listItem >
+ * image` — the two shapes converge after a save/reload round-trip anyway.
  */
 function normalizeImagesForPaste(state: MdCoreState): void {
   const tokens = state.tokens;
   const out: MdToken[] = [];
+  // Tracks whether the token currently being visited is nested inside a
+  // table cell (`th`/`td`). Incremented/decremented on the cell open/close
+  // tokens themselves, before the paragraph_open hoist check below, so by
+  // the time we reach a cell's paragraph_open the depth already reflects
+  // "inside a cell." GFM cells never nest (no cell-within-cell), so a plain
+  // counter — rather than a stack — is sufficient.
+  let cellDepth = 0;
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
-    if (tok.type === "paragraph_open") {
+    if (tok.type === "th_open" || tok.type === "td_open") {
+      cellDepth++;
+    } else if (tok.type === "th_close" || tok.type === "td_close") {
+      cellDepth--;
+    }
+    if (tok.type === "paragraph_open" && cellDepth === 0) {
       const inlineTok = tokens[i + 1];
       const closeTok = tokens[i + 2];
       if (inlineTok?.type === "inline" && closeTok?.type === "paragraph_close") {
@@ -286,12 +315,20 @@ function buildTokenSpec(schema: Schema): { [name: string]: ParseSpec } {
  *
  * The two core-ruler plugins run in this order, both AFTER markdown-it's
  * default `inline` core rule (so `children` arrays are already populated):
- * `wrapCellParagraphs` first, so that a table cell whose sole content is an
- * image is already paragraph-wrapped by the time `normalizeImagesForPaste`
- * runs — letting a solo cell image hoist straight into the cell (`th`/`td`
- * are `block+`, so a bare `image` child is valid there) instead of being
- * incorrectly downgraded to text for lack of a wrapping paragraph to hoist
- * out of.
+ * `wrapCellParagraphs` first, so every `th`/`td`'s inline content is
+ * paragraph-wrapped before `normalizeImagesForPaste` walks the stream —
+ * that wrapping is required for ALL cell content, text or image, to satisfy
+ * Tiptap's `block+` cell schema (see `wrapCellParagraphs`'s own doc
+ * comment). `normalizeImagesForPaste` runs second and deliberately does
+ * NOT hoist a solo cell image into a bare `image` child the way it hoists a
+ * solo top-level paragraph image — see its `cellDepth` guard and doc
+ * comment for why (the server's save path silently drops that shape). The
+ * ordering still matters for cells even without hoisting: without
+ * `wrapCellParagraphs` running first, a cell's un-wrapped `inline` token
+ * would still have its image downgraded to alt text, but would remain bare
+ * `inline` content directly inside `th`/`td` — which `createAndFill` can't
+ * place against the `block+` schema — so the cell would still be dropped,
+ * just for a different reason.
  */
 export function createMarkdownParser(schema: Schema): MarkdownParser {
   const tokenizer = MarkdownIt("commonmark", { html: false }).enable([
@@ -305,32 +342,96 @@ export function createMarkdownParser(schema: Schema): MarkdownParser {
 }
 
 /**
+ * Split a single table row line into cell strings, mirroring markdown-it's
+ * own `escapedSplit` (verified against markdown-it 14.2.0
+ * `lib/rules_block/table.mjs`) closely enough to match its CELL COUNT for
+ * every input this file cares about — the cell text itself is only ever
+ * used for a delimiter-row regex check (see `isTableDelimiterLine`), never
+ * rendered.
+ *
+ * Escape-aware: a `|` immediately preceded by `\` is NOT a cell separator.
+ * This mirrors markdown-it's `isEscaped` check exactly — it looks only at
+ * the immediately-preceding character, not at backslash-run parity, so
+ * `\\|` (two backslashes then a pipe) is STILL not treated as a separator.
+ * Do not be cleverer than markdown-it here; a simple char-walk is correct.
+ *
+ * Leading/trailing empty cells (a `|` at the very start/end of the trimmed
+ * line) are dropped, down to a floor of one cell — this deliberately
+ * diverges from markdown-it's real (sequential shift-then-pop) behavior for
+ * a degenerate bare `"|"` line, where markdown-it ends up at 0 cells and
+ * this helper ends up at 1. That divergence is an accepted, documented
+ * false-positive path (see `hasMarkdownTable`'s doc comment) rather than a
+ * bug: a bare `"|"` header is a pathological input, not a realistic one. Do
+ * NOT replace this with `.replace(/^\|/, "").replace(/\|$/, "")`-style
+ * stripping — that counts `||`-edge cases differently than markdown-it's
+ * shift/pop-on-empty-cell approach, which this mirrors instead.
+ */
+function splitTableRowCells(line: string): string[] {
+  const str = line.trim();
+  const cells: string[] = [];
+  let current = "";
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === "|" && str[i - 1] !== "\\") {
+      cells.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  cells.push(current);
+  if (cells.length > 1 && cells[0] === "") cells.shift();
+  if (cells.length > 1 && cells[cells.length - 1] === "") cells.pop();
+  return cells;
+}
+
+/**
  * True when `line` is a valid GFM table delimiter row: pipe-separated cells
- * that each contain only dashes and optional leading/trailing colons (e.g.
- * `---`, `:--`, `--:`, `:-:`), with at least one non-empty cell. Mirrors the
- * validation markdown-it's own table rule performs, kept independent so
- * `looksLikeMarkdown` can stay a cheap heuristic that never invokes the
- * tokenizer.
+ * (split via {@link splitTableRowCells}, escape-aware and cell-count
+ * compatible with markdown-it) that each contain only dashes and optional
+ * leading/trailing colons (e.g. `---`, `:--`, `--:`, `:-:`), with at least
+ * one non-empty cell. An empty MIDDLE cell is rejected implicitly — the
+ * `/^:?-+:?$/` pattern requires at least one dash, so `""` never matches it.
+ * Mirrors the validation markdown-it's own table rule performs, kept
+ * independent so `looksLikeMarkdown` can stay a cheap heuristic that never
+ * invokes the tokenizer. The delimiter row can never contain a `\`
+ * (markdown-it's own charcode pre-scan only allows `|`, `-`, `:`, and
+ * whitespace on this line), so escape-awareness is a no-op for this
+ * caller — the shared helper exists for `hasMarkdownTable`'s header-row
+ * count, where it matters.
  */
 function isTableDelimiterLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
-  const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|");
+  const cells = splitTableRowCells(trimmed);
   if (cells.length === 0) return false;
   return cells.every((c) => /^:?-+:?$/.test(c.trim())) && cells.some((c) => c.trim().length > 0);
 }
 
 /**
  * True when `text` contains a GFM pipe table: a header row (any line with a
- * `|`) immediately followed by a delimiter row. Requiring BOTH rows (not
- * just a lone pipe-containing line) errs toward NOT converting — a line like
+ * `|`) immediately followed by a delimiter row, WHOSE CELL COUNTS MATCH
+ * (both via {@link splitTableRowCells}). Requiring both the row pair AND a
+ * matching column count (not just a lone pipe-containing line, and not just
+ * any delimiter row underneath it) errs toward NOT converting — a line like
  * `| just | pipes |` with no delimiter row underneath stays plain text,
  * matching `looksLikeMarkdown`'s overall bias.
+ *
+ * The column-count check mirrors markdown-it, which refuses to parse a
+ * table when the header and delimiter row cell counts differ. Without it, a
+ * hand-typed table with a column-count typo (e.g. a header cell the author
+ * forgot to close with `|`) would still route through the markdown path,
+ * where `softbreak: ignore` glues every source line into one word-soup
+ * paragraph instead of leaving the text alone.
  */
 function hasMarkdownTable(text: string): boolean {
   const lines = text.split(/\r\n|\r|\n/);
   for (let i = 0; i < lines.length - 1; i++) {
-    if (lines[i].includes("|") && isTableDelimiterLine(lines[i + 1])) return true;
+    if (!lines[i].includes("|")) continue;
+    if (!isTableDelimiterLine(lines[i + 1])) continue;
+    const headerCells = splitTableRowCells(lines[i]);
+    const delimiterCells = splitTableRowCells(lines[i + 1]);
+    if (headerCells.length > 0 && headerCells.length === delimiterCells.length) return true;
   }
   return false;
 }
