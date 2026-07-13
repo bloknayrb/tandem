@@ -64,9 +64,38 @@ export function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
       const linkType = view.state.schema.marks.link;
       if (!linkType) return false;
 
-      view.dispatch(
-        view.state.tr.addMark(selection.from, selection.to, linkType.create({ href: text })),
+      // Build the transaction first and only claim the event if it actually
+      // did something. `addMark` only produces steps for text nodes whose
+      // parent `allowsMarkType(link)` — e.g. a selection inside a code block
+      // yields zero steps, since the codeBlock schema forbids the link mark
+      // entirely. We check `tr.steps.length` rather than pre-checking
+      // `selection.$from.parent` because that also correctly handles mixed
+      // multi-block selections: if ANY part of the range can carry the link
+      // mark, `addMark` still applies it there (partial application is
+      // normal ProseMirror behavior), and we should still dispatch and claim
+      // the event in that case.
+      //
+      // When we return false, control passes on: Link's own `pasteHandler`
+      // plugin runs next and (verified empirically) ALSO falls through
+      // inside a code block — its `setMark` call hits the same
+      // `canSetMark` === false wall — so it doesn't intercept either. Only
+      // then does `clipboardTextParser` get a shot at the pasted slice,
+      // which inserts the URL as plain text into the code block. That's the
+      // same fallthrough chain the `javascript:`-scheme rejection above
+      // already relies on.
+      //
+      // Corollary: re-pasting a URL that's already the link's href over the
+      // same range also produces zero steps (the mark is already applied,
+      // so `addMark` is a no-op) — we return false, and Link's plugin claims
+      // the event and no-ops too, which is byte-identical to today's
+      // behavior for that case.
+      const tr = view.state.tr.addMark(
+        selection.from,
+        selection.to,
+        linkType.create({ href: text }),
       );
+      if (tr.steps.length === 0) return false;
+      view.dispatch(tr);
       return true;
     },
   };

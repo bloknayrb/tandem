@@ -137,3 +137,26 @@ describe("Editor.svelte handlePaste: paste URL over selection creates a link", (
     expect(editor.state.doc.textContent).toBe("https://a.com and more");
   });
 });
+
+describe("Editor.svelte handlePaste: paste URL over selection inside a code block (F4)", () => {
+  beforeEach(() => {
+    ({ editor, container } = makeEditor({
+      content: "<pre><code>const url = placeholder</code></pre>",
+      withHandler: true,
+    }));
+  });
+
+  it("rejects the link mark (forbidden inside a code block) and falls through to normal paste, replacing the selection with no link mark", () => {
+    selectAll(editor);
+    pasteText(editor, "https://example.com");
+
+    // `addMark` produces zero steps here (the codeBlock schema forbids the
+    // link mark), so our handler returns false without dispatching. Control
+    // falls through to Link's own pasteHandler plugin (which also declines
+    // inside a code block) and then to clipboardTextParser, which inserts
+    // the pasted URL as plain text — mirroring the `javascript:`
+    // fallthrough case above.
+    expect(linkHrefsIn(editor)).toEqual([]);
+    expect(editor.state.doc.textContent).toBe("https://example.com");
+  });
+});
