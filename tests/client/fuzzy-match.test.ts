@@ -79,21 +79,47 @@ describe("fuzzyMatch", () => {
     });
 
     it("recognizes a lowercase-to-uppercase transition as a word boundary", () => {
-      const result = fuzzyMatch("op", "toggleOutlinePanel");
-      // "O" (index 6) is a camelCase boundary; matching it should score higher
-      // than matching a same-position non-boundary letter would.
+      // "fb" against "fooBar": f(0) matches at the string start (+start
+      // bonus, +boundary), then b must skip "oo" (gap of 2, -2) before
+      // landing on "B" (index 3), which is itself a camelCase boundary (+8).
+      // Exact score pins the -2 gap penalty, which a looser assertion (e.g.
+      // "indices[0] is defined") would miss entirely.
+      const result = fuzzyMatch("fb", "fooBar");
       expect(result).not.toBeNull();
-      expect(result?.indices[0]).toBeDefined();
+      expect(result?.indices).toEqual([0, 3]);
+      expect(result?.score).toBe(26);
     });
   });
 
-  it("prefers the greedy consecutive run over an earlier non-consecutive start", () => {
-    // "ab" against "xabxxab": first "ab" is consecutive (indices 1,2); a
-    // subsequence-only strategy could instead pick 1 and a later 'b', which
-    // would score lower due to the gap penalty. Greedy-with-lookahead should
-    // pick the immediately-following char to keep the run consecutive.
-    const result = fuzzyMatch("ab", "xabxxab");
-    expect(result?.indices).toEqual([1, 2]);
+  it("prefers the greedy consecutive run over an earlier non-consecutive start (tier 2 only)", () => {
+    // Both cases below are NOT substrings of their targets (verified via the
+    // dashes breaking up the literal run), so they exercise the tier-2
+    // subsequence scan rather than tier 1 (F9b — the original test's query
+    // was a literal substring of its target, so tier 2 never ran).
+    //
+    // Note: we intentionally do NOT test for the greedy "lookahead" branch
+    // (checking `lowerTarget[searchFrom]` before falling back to `indexOf`)
+    // as distinct from a plain `indexOf(qc, searchFrom)` — `indexOf` returns
+    // `searchFrom` when the char matches there, so the two are observationally
+    // identical. These assertions only pin greedy-leftmost matching + score.
+
+    // "abc" vs "a-bcx": a(0), then b must skip "-" (gap 1, -1) to reach index
+    // 2, then c continues the run at index 3 (+16 consecutive).
+    // START 12 + boundary@0 8 + boundary@2 8 (after '-', non-alnum) - 1 gap
+    // + 16 consecutive = 43.
+    const abc = fuzzyMatch("abc", "a-bcx");
+    expect("a-bcx".toLowerCase().includes("abc")).toBe(false);
+    expect(abc?.indices).toEqual([0, 2, 3]);
+    expect(abc?.score).toBe(43);
+
+    // "aab" vs "aa-b" (NOT "aaab" — "aaab".indexOf("aab") === 1, which IS a
+    // substring and would reproduce the exact bug this test fixes).
+    // START 12 + boundary@0 8 + consecutive@1 16 - 1 gap (skip '-')
+    // + boundary@3 8 (after '-', non-alnum) = 43.
+    const aab = fuzzyMatch("aab", "aa-b");
+    expect("aa-b".toLowerCase().includes("aab")).toBe(false);
+    expect(aab?.indices).toEqual([0, 1, 3]);
+    expect(aab?.score).toBe(43);
   });
 
   it("supports a multi-word query where the space is matched as a literal subsequence char", () => {
@@ -111,10 +137,51 @@ describe("fuzzyMatch", () => {
     expect(tight!.score).toBeGreaterThan(loose!.score);
   });
 
-  it("caps target length before matching (annotations can be long)", () => {
-    const longTarget = `${"x".repeat(600)}needle`;
-    // "needle" only appears past the 500-char cap, so it should not match.
-    expect(fuzzyMatch("needle", longTarget)).toBeNull();
+  describe("Unicode-length-changing lowercase (F6)", () => {
+    it("returns an unhighlighted (empty-indices) match when toLowerCase() shifts string length", () => {
+      // "İ" (U+0130, Latin capital I with dot above) lowercases to "i̇"
+      // (two code units: "i" + combining dot above, U+0069 U+0307), so
+      // "İstanbul".toLowerCase() has length 9 while "İstanbul" itself has
+      // length 8 — every naive index would be shifted by one from that
+      // point on. The match must still be found (score/rank unaffected),
+      // but indices must come back empty rather than misaligned.
+      expect("İstanbul".toLowerCase().length).not.toBe("İstanbul".length);
+      const result = fuzzyMatch("stan", "İstanbul");
+      expect(result).not.toBeNull();
+      expect(result?.indices).toEqual([]);
+    });
+  });
+
+  describe("substring tier searches the full target, not just the truncated prefix (F7)", () => {
+    it("matches text past the 500-char truncation cap via the substring tier", () => {
+      const longTarget = `${"x".repeat(520)}needle`;
+      const result = fuzzyMatch("needle", longTarget);
+      expect(result).not.toBeNull();
+      // Deep substring match: score floors at 10000 - 499 = 9501 (no start
+      // or boundary bonus — "needle" isn't at index 0 and isn't preceded by
+      // a non-alphanumeric char).
+      expect(result?.score).toBeGreaterThanOrEqual(9501);
+      const expectedStart = longTarget.toLowerCase().indexOf("needle");
+      expect(expectedStart).toBeGreaterThan(500);
+      expect(result?.indices).toEqual(
+        Array.from({ length: "needle".length }, (_, i) => expectedStart + i),
+      );
+    });
+  });
+
+  describe("tier guarantee is absolute, not just realistic-query (F8)", () => {
+    it("keeps a pathological subsequence match's score at or below any substring match's floor", () => {
+      // A subsequence match that gets every possible bonus (start, many
+      // boundaries, long consecutive runs) still can't cross the clamp.
+      const query = `${"!".repeat(250)}?${"!".repeat(248)}`;
+      const target = `${"!".repeat(250)}x?${"!".repeat(248)}`;
+      expect(target.toLowerCase().includes(query.toLowerCase())).toBe(false);
+      const result = fuzzyMatch(query, target);
+      expect(result).not.toBeNull();
+      expect(result?.score).toBeLessThanOrEqual(9000);
+      // Strictly below the lowest possible substring-tier score.
+      expect(result?.score).toBeLessThan(9501);
+    });
   });
 });
 

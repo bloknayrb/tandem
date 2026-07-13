@@ -23,7 +23,13 @@ export interface MatchSegment {
   match: boolean;
 }
 
-/** Targets longer than this are truncated before matching (annotations can be long). */
+/**
+ * Only the subsequence tier (tier 2) truncates targets longer than this
+ * before scanning (annotations can be long, and the char-by-char scan isn't
+ * free). The substring tier (tier 1) always searches the FULL target — a
+ * single `indexOf` over even a 10 KB string is cheap, and truncating it
+ * would silently stop matching text past this offset (F7).
+ */
 const MAX_TARGET_LENGTH = 500;
 
 const SUBSTRING_BASE_SCORE = 10000;
@@ -34,6 +40,15 @@ const SUBSEQUENCE_CONSECUTIVE_BONUS = 16;
 const SUBSEQUENCE_BOUNDARY_BONUS = 8;
 const SUBSEQUENCE_START_BONUS = 12;
 const SUBSEQUENCE_GAP_PENALTY = 1;
+
+/**
+ * Hard ceiling on the tier-2 (subsequence) score. Combined with the tier-1
+ * floor below, substring matches always outrank subsequence matches —
+ * absolutely, not just for "realistic" queries (F8): a pathologically long,
+ * heavily-bonused subsequence match can otherwise exceed a substring match
+ * found deep in a long target.
+ */
+const SUBSEQUENCE_MAX_SCORE = 9000;
 
 /**
  * True when `target[idx]` starts a "word" — either the very start of the
@@ -54,42 +69,61 @@ function isWordBoundary(target: string, idx: number): boolean {
  * Fuzzy-match `query` against `target`, case-insensitively.
  *
  * Two tiers, in priority order:
- * 1. Exact substring — score = 10000 − matchIndex, +500 if the match starts
- *    at index 0, else +250 if it starts at a word boundary. The minimum
- *    substring score (10000 − 499, over the 500-char target cap) stays above
- *    the realistic maximum subsequence score for normal (short/medium)
- *    queries, so any substring match outranks any subsequence match.
- * 2. Subsequence — greedy scan that prefers extending the current
- *    consecutive run (checks the very next target char before searching
- *    ahead): +16 per consecutive-run char, +8 per matched char that lands on
- *    a word boundary, +12 if the first matched char is at index 0, −1 per
- *    skipped ("gap") character between consecutive matches. Returns `null`
- *    if `query` is not a subsequence of `target`.
+ * 1. Exact substring, searched over the FULL (untruncated) target — score =
+ *    10000 − min(matchIndex, 499), +500 if the match starts at index 0, else
+ *    +250 if it starts at a word boundary. The minimum possible substring
+ *    score is 10000 − 499 + 0 = 9501 (deep matches floor out rather than
+ *    going negative or unbounded).
+ * 2. Subsequence — greedy scan over a target capped at `MAX_TARGET_LENGTH`
+ *    chars, that prefers extending the current consecutive run (checks the
+ *    very next target char before searching ahead): +16 per consecutive-run
+ *    char, +8 per matched char that lands on a word boundary, +12 if the
+ *    first matched char is at index 0, −1 per skipped ("gap") character
+ *    between consecutive matches. The raw score is clamped to
+ *    `SUBSEQUENCE_MAX_SCORE` (9000). Returns `null` if `query` is not a
+ *    subsequence of `target`.
+ *
+ * With those bounds, 9501 > 9000 unconditionally: a substring match ALWAYS
+ * outranks a subsequence match — this is an absolute guarantee, not one that
+ * merely holds for realistic queries (F8). Two substring matches that are
+ * both past index 499 tie at the score floor; ties fall back to the
+ * palette's own original-index tiebreak.
+ *
+ * Highlight `indices` are positions in the target string. `target.toLowerCase()`
+ * can change string length for some Unicode characters (e.g. "İ" → "i̇"),
+ * which would shift every index relative to the original string. When that
+ * happens (`indicesReliable` is false) both tiers return `indices: []`
+ * instead of misaligned positions — `toSegments` then renders the row
+ * unhighlighted; score/rank are unaffected. Tier 2's boundary lookups
+ * (`isWordBoundary` on the truncated target) can also be slightly off in
+ * that case, but that only perturbs the score, not user-visible indices.
  *
  * Returns `null` for an empty query (nothing to score) or when no match is
  * found.
  */
 export function fuzzyMatch(query: string, target: string): FuzzyMatchResult | null {
   if (!query) return null;
-  const truncated = target.length > MAX_TARGET_LENGTH ? target.slice(0, MAX_TARGET_LENGTH) : target;
+  const lowerFull = target.toLowerCase();
+  const indicesReliable = lowerFull.length === target.length;
   const q = query.toLowerCase();
-  const lowerTarget = truncated.toLowerCase();
 
-  // Tier 1: exact substring.
-  const substringIdx = lowerTarget.indexOf(q);
+  // Tier 1: exact substring, over the full target (F7 — no truncation here).
+  const substringIdx = lowerFull.indexOf(q);
   if (substringIdx !== -1) {
-    let score = SUBSTRING_BASE_SCORE - substringIdx;
+    let score = SUBSTRING_BASE_SCORE - Math.min(substringIdx, 499);
     if (substringIdx === 0) {
       score += SUBSTRING_START_BONUS;
-    } else if (isWordBoundary(truncated, substringIdx)) {
+    } else if (isWordBoundary(target, substringIdx)) {
       score += SUBSTRING_BOUNDARY_BONUS;
     }
     const indices: number[] = [];
     for (let i = 0; i < q.length; i++) indices.push(substringIdx + i);
-    return { score, indices };
+    return { score, indices: indicesReliable ? indices : [] };
   }
 
-  // Tier 2: greedy-with-lookahead subsequence scan.
+  // Tier 2: greedy-with-lookahead subsequence scan, capped to MAX_TARGET_LENGTH.
+  const truncated = target.length > MAX_TARGET_LENGTH ? target.slice(0, MAX_TARGET_LENGTH) : target;
+  const lowerTarget = truncated.toLowerCase();
   const indices: number[] = [];
   let score = 0;
   let searchFrom = 0;
@@ -124,7 +158,7 @@ export function fuzzyMatch(query: string, target: string): FuzzyMatchResult | nu
     searchFrom = foundIdx + 1;
   }
 
-  return { score, indices };
+  return { score: Math.min(score, SUBSEQUENCE_MAX_SCORE), indices: indicesReliable ? indices : [] };
 }
 
 /** A field-scoring result: overall weighted score plus the primary field's match indices. */
