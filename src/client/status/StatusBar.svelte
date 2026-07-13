@@ -23,6 +23,8 @@ interface Props {
   claudeWorkingTool?: string | null;
   readOnly?: boolean;
   saving?: boolean;
+  /** Whether the most recently completed save succeeded — gates the "Saved" flash. */
+  lastSaveOk?: boolean;
   /** Editor for the active document — drives the word-count cycle. */
   editor?: TiptapEditor | null;
 }
@@ -37,6 +39,7 @@ let {
   claudeWorkingTool = null,
   readOnly,
   saving = false,
+  lastSaveOk = false,
   editor,
 }: Props = $props();
 
@@ -89,7 +92,7 @@ let prevSaving = untrack(() => saving);
 $effect(() => {
   const was = prevSaving;
   prevSaving = saving;
-  if (was && !saving) {
+  if (was && !saving && lastSaveOk) {
     savedLabel = `Saved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     const timer = setTimeout(() => {
       savedLabel = null;

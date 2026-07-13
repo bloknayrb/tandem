@@ -104,6 +104,16 @@ export const SAFE_IMAGE_PREFIXES = ["http://", "https://", "ftp://", "//"] as co
 const SAFE_IMAGE_DATA_URI = /^data:image\/(?:png|jpeg|jpg|gif|webp);base64,/i;
 
 /**
+ * Max length of a pasted `data:` image URI (base64 text, not decoded bytes).
+ * ~5MB of decoded image data, base64's ~4/3 expansion. Defense-in-depth
+ * against a single paste bloating the shared Y.Doc for every collaborator on
+ * next sync — mirrors the size-cap convention used elsewhere for paste-time
+ * inputs (see `word-diff.ts`'s `MAX_COMBINED_LENGTH`, `fuzzy-match.ts`'s
+ * `MAX_TARGET_LENGTH`).
+ */
+const MAX_DATA_URI_LENGTH = 7_000_000;
+
+/**
  * Sanitize an image `src` encountered at MARKDOWN PASTE time. Returns the
  * trimmed src when safe, or `null` when it should be dropped (caller
  * downgrades the image to plain alt text rather than rendering it — see
@@ -113,10 +123,11 @@ const SAFE_IMAGE_DATA_URI = /^data:image\/(?:png|jpeg|jpg|gif|webp);base64,/i;
  *   - any {@link SAFE_IMAGE_PREFIXES} match (case-insensitive)
  *   - in-page fragments: `#section`
  *   - relative / root-relative paths: `./img.png`, `../img.png`, `/img.png`
- *   - `data:image/(png|jpeg|jpg|gif|webp);base64,...`
+ *   - `data:image/(png|jpeg|jpg|gif|webp);base64,...` up to {@link MAX_DATA_URI_LENGTH}
  *
  * Unsafe inputs (returns null):
  *   - `data:image/svg+xml...` and any other `data:` subtype
+ *   - a `data:image/...;base64,` URI longer than {@link MAX_DATA_URI_LENGTH}
  *   - any other unknown scheme: `javascript:`, `vbscript:`, `file:`, etc.
  *
  * Scheme detection shares {@link hasSchemePrefix} with `sanitizeHrefForPaste`;
@@ -129,7 +140,9 @@ export function sanitizeImageSrcForPaste(raw: string | null | undefined): string
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
-  if (SAFE_IMAGE_DATA_URI.test(trimmed)) return trimmed;
+  if (SAFE_IMAGE_DATA_URI.test(trimmed)) {
+    return trimmed.length <= MAX_DATA_URI_LENGTH ? trimmed : null;
+  }
   // Any other `data:` URI (including `data:image/svg+xml`) falls through to
   // the "unknown scheme" branch below and is rejected.
 

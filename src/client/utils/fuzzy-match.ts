@@ -110,7 +110,7 @@ export function fuzzyMatch(query: string, target: string): FuzzyMatchResult | nu
   // Tier 1: exact substring, over the full target (F7 — no truncation here).
   const substringIdx = lowerFull.indexOf(q);
   if (substringIdx !== -1) {
-    let score = SUBSTRING_BASE_SCORE - Math.min(substringIdx, 499);
+    let score = SUBSTRING_BASE_SCORE - Math.min(substringIdx, MAX_TARGET_LENGTH - 1);
     if (substringIdx === 0) {
       score += SUBSTRING_START_BONUS;
     } else if (isWordBoundary(target, substringIdx)) {

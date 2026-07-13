@@ -142,6 +142,17 @@ describe("sanitizeImageSrcForPaste", () => {
     expect(sanitizeImageSrcForPaste("data:image/png,rawbytes")).toBeNull();
   });
 
+  it("accepts an allowlisted data: image URI right at the size cap", () => {
+    const prefix = "data:image/png;base64,";
+    const src = prefix + "A".repeat(7_000_000 - prefix.length);
+    expect(sanitizeImageSrcForPaste(src)).toBe(src);
+  });
+
+  it("rejects an allowlisted data: image URI over the size cap", () => {
+    const src = `data:image/png;base64,${"A".repeat(7_000_001)}`;
+    expect(sanitizeImageSrcForPaste(src)).toBeNull();
+  });
+
   it("rejects other unsafe schemes", () => {
     expect(sanitizeImageSrcForPaste("javascript:alert(1)")).toBeNull();
     expect(sanitizeImageSrcForPaste("vbscript:msgbox")).toBeNull();

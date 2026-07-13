@@ -55,8 +55,7 @@ export function diffWords(oldText: string, newText: string): DiffSegment[] | nul
   }
 
   // Backtrack from (m, n) to (0, 0), building ops in reverse.
-  type Op = { type: "equal" | "del" | "ins"; text: string };
-  const reversedOps: Op[] = [];
+  const reversedOps: DiffSegment[] = [];
   let i = m;
   let j = n;
   while (i > 0 && j > 0) {

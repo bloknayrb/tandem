@@ -436,6 +436,36 @@ function hasMarkdownTable(text: string): boolean {
   return false;
 }
 
+// Inline markers: bold/italic, inline code, strikethrough, a markdown link
+// [text](url), or an image ![alt](url) — alt may be empty (`![]`), unlike the
+// link-text bracket which requires at least one character. Emphasis markers
+// require a non-space character adjacent to the delimiter (CommonMark
+// flanking rule) so spaced asterisks like "a * b * c" are NOT mistaken for
+// emphasis.
+//
+// The link/image bracket classes (`[^\]\n]`, `[^)\n]`) don't exclude their own
+// delimiter (`[`/`(` respectively), unlike the emphasis classes which exclude
+// their own marker char. That self-overlap makes an unbounded `*`/`+` here
+// quadratic: a paste of N unmatched `[` (or `(`) chars retries the
+// greedy-then-backtrack scan from every position, ~O(n^2). Capping both to a
+// generous-but-finite length keeps real links/images matching (no realistic
+// link text or URL approaches this) while bounding worst-case paste time.
+//
+// Built once at module load (not per `looksLikeMarkdown` call, which runs on
+// every paste) since `MAX_INLINE_SPAN` is fixed — a `new RegExp` from a
+// template string can't use the literal-regex per-call-site cache a `/.../`
+// literal gets, so rebuilding it per call would re-parse the pattern on every
+// paste for no reason.
+const MAX_INLINE_SPAN = 2000;
+const INLINE_MARKDOWN_PATTERN = new RegExp(
+  `(\\*\\*\\S(?:[^*\\n]{0,${MAX_INLINE_SPAN}}\\S)?\\*\\*|` +
+    `__\\S(?:[^_\\n]{0,${MAX_INLINE_SPAN}}\\S)?__|` +
+    `\\*\\S(?:[^*\\n]{0,${MAX_INLINE_SPAN}}\\S)?\\*|` +
+    `\`[^\`\\n]{1,${MAX_INLINE_SPAN}}\`|` +
+    `~~\\S(?:[^~\\n]{0,${MAX_INLINE_SPAN}}\\S)?~~|` +
+    `!?\\[[^\\]\\n]{0,${MAX_INLINE_SPAN}}\\]\\([^)\\n]{1,${MAX_INLINE_SPAN}}\\))`,
+);
+
 /**
  * Heuristic: does this pasted text look like markdown worth converting?
  *
@@ -452,15 +482,7 @@ export function looksLikeMarkdown(text: string): boolean {
     /^\s{0,3}(#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|```|~~~|-{3,}\s*$|\*{3,}\s*$|_{3,}\s*$)/m;
   if (blockPattern.test(text)) return true;
 
-  // Inline markers: bold/italic, inline code, strikethrough, a markdown link
-  // [text](url), or an image ![alt](url) — alt may be empty (`![]`), unlike
-  // the link-text bracket which requires at least one character. Emphasis
-  // markers require a non-space character adjacent to the delimiter
-  // (CommonMark flanking rule) so spaced asterisks like "a * b * c" are NOT
-  // mistaken for emphasis.
-  const inlinePattern =
-    /(\*\*\S(?:[^*\n]*\S)?\*\*|__\S(?:[^_\n]*\S)?__|\*\S(?:[^*\n]*\S)?\*|`[^`\n]+`|~~\S(?:[^~\n]*\S)?~~|!?\[[^\]\n]*\]\([^)\n]+\))/;
-  if (inlinePattern.test(text)) return true;
+  if (INLINE_MARKDOWN_PATTERN.test(text)) return true;
 
   if (hasMarkdownTable(text)) return true;
 

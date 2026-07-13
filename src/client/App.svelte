@@ -1761,7 +1761,11 @@ const review = useAnnotationReview({
   getActiveAnnotationId: () => activeAnnotationId,
   onApplyFailed: (ann) =>
     notifications.push({
-      id: `suggestion-apply-failed-${Date.now()}`,
+      // Keyed by ann.id (matches dedupKey below), not Date.now() — two
+      // different annotations failing in the same millisecond must not
+      // collide onto one id, which would let one toast's dismiss timer
+      // remove the other's still-live entry.
+      id: `suggestion-apply-failed-${ann.id}`,
       type: "annotation-error",
       severity: "warning",
       message:
@@ -2123,6 +2127,7 @@ const tutorial = createTutorial(
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
       saving={saveStore.saving}
+      lastSaveOk={saveStore.lastSaveOk}
       {editor}
     />
 
