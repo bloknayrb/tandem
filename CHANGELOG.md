@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-13
+
+### Added
+
+- **The status pill now flashes a "Saved" confirmation, and the word count can show reading time (#1184).** After a save completes, the status pill briefly shows "Saved HH:MM" (falling-edge detection, mirroring the reconnected flash) so you get a visible confirmation instead of an invisible one — and the flash fires only on a *successful* save, with a failed save surfacing an error toast instead. The word-count chip's click-cycle gains a "min read" unit (200 wpm).
+- **Pressing Enter in a task list continues the checklist (#1184).** Enter inside a checked or unchecked task item now creates a new *unchecked* task item instead of dropping to a plain bullet. Plain list items are unaffected, and Enter on an empty item still exits the list.
+- **Pasting Markdown now preserves tables and images (#1184).** Pasted GFM tables build real table nodes and standalone images become block images; an image mixed into a paragraph degrades to its alt text rather than silently dropping the paragraph. Image sources pass a strict allowlist (http/https/ftp/protocol-relative/relative/base64 raster data URIs, capped at ~5MB decoded; `svg+xml` and `blob:` are rejected). Closes the #885 follow-up.
+- **Pasting a URL over a text selection now creates a link (#1184).** A single safe URL pasted over selected text applies a link mark to the selection instead of replacing it. Unsafe schemes, whitespace-bearing text, empty selections, and code-block selections fall through to a normal paste.
+- **Smart typography (opt-in) and a spellcheck toggle in Settings (#1184).** Smart typography (default off) turns straight quotes into curly quotes and `--`/`...` into em/en dashes and an ellipsis as you type — and the serializer round-trips those characters unchanged. Spellcheck (default on) toggles the editor's native spellcheck live, with no editor re-initialization.
+
+### Changed
+
+- **Command palette search is now fuzzy, ranked, and highlighted (#1184).** All four palette modes replace substring-only matching with a two-tier fuzzy scorer (substring matches always outrank subsequence matches; bonuses for consecutive runs, word boundaries, camelCase, and start-of-string). Results sort by score with a stable tiebreak, and matched spans are highlighted in the results.
+- **Suggestion cards now show a word-level diff (#1184).** Instead of striking the entire original text, a suggestion card renders a token-level diff — unchanged words plain, deletions struck, insertions tinted — in the universal old→new order. Very large inputs and snapshot-less suggestions fall back to the previous rendering.
+- **Annotation cards and chat anchor quotes are now keyboard-accessible (#1184).** Annotation cards with a click action are focusable and activate on Enter/Space (without hijacking keys pressed inside their inner controls), and chat anchor quotes expand on keyboard focus as well as hover, with a reduced-motion guard.
+
 ### Fixed
 
+- **Accepting a suggestion that no longer fits now tells you, instead of failing silently (#1184).** When a suggestion's range can't be resolved (the text changed underneath it), accepting it now surfaces a warning toast — "Couldn't apply the suggestion — the text has changed." — and the card reverts to pending. The message carries no annotation content (ADR-027).
 - **The first-run integration setup wizard now auto-opens in the desktop app (#1181).** In the Tauri desktop build (the primary Windows distribution), the wizard never appeared on first launch: the first-run check fetched a *relative* `/api/integrations/first-run-needed` URL, but the desktop WebView origin is `tauri.localhost`, so the request hit Tauri's asset protocol instead of the sidecar on `127.0.0.1:3479`, silently failed, and defaulted to "not needed" — suppressing the wizard forever. (The bug stayed hidden because the npm browser distribution serves the client *from* the sidecar, where the relative URL is same-origin.) The check now targets the sidecar's absolute base like every sibling hook, and re-checks once the sidecar connection is confirmed so a cold-start race can't leave it stuck at "not needed" — while skipping that recheck once the wizard is already showing, so a transient hiccup can't yank it out from under you mid-flow.
 
 ## [0.15.0] - 2026-07-07
