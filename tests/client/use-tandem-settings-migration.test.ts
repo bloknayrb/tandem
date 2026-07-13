@@ -10,26 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CURRENT_SCHEMA_VERSION, loadSettings } from "../../src/client/hooks/useTandemSettings.js";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants.js";
-
-function installLocalStorageStub() {
-  const store = new Map<string, string>();
-  const stub: Storage = {
-    get length() {
-      return store.size;
-    },
-    clear: () => store.clear(),
-    getItem: (key: string) => store.get(key) ?? null,
-    key: (index: number) => Array.from(store.keys())[index] ?? null,
-    removeItem: (key: string) => {
-      store.delete(key);
-    },
-    setItem: (key: string, value: string) => {
-      store.set(key, value);
-    },
-  };
-  vi.stubGlobal("localStorage", stub);
-  return store;
-}
+import { installLocalStorageStub } from "../helpers/local-storage-stub.js";
 
 describe("loadSettings — migration chain", () => {
   let store: Map<string, string>;

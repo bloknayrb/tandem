@@ -3,11 +3,11 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { useAnnotationReview } from "../../src/client/panels/useAnnotationReview.svelte.js";
+import UseAnnotationReviewHarness from "../../src/client/svelte-harness/UseAnnotationReviewHarness.svelte";
 import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { isReviewTarget } from "../../src/shared/types.js";
 import { makeAnnotation } from "../helpers/ydoc-factory.js";
-import UseAnnotationReviewHarness from "./harness/UseAnnotationReviewHarness.svelte";
 
 /**
  * Inline implementation of the getReviewTargets filter — mirrors

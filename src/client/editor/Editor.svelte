@@ -4,8 +4,6 @@ import { Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Typography from "@tiptap/extension-typography";
-import { TextSelection } from "@tiptap/pm/state";
-import type { EditorProps } from "@tiptap/pm/view";
 import { untrack } from "svelte";
 import * as Y from "yjs";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
@@ -15,6 +13,7 @@ import { installContextMenu } from "./context-menu/install";
 // Schema-defining extensions (nodes + marks + static plugins) live in one shared
 // module so the editor and tests register the same schema — see editor-extensions.ts.
 import { buildSchemaExtensions } from "./editor-extensions";
+import { makeEditorProps } from "./editor-props";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AnnotationPingExtension } from "./extensions/annotationPing";
 import { AuthorshipExtension } from "./extensions/authorship";
@@ -23,8 +22,6 @@ import { FindReplaceExtension } from "./extensions/find-replace";
 import { HeadingCollapseExtension } from "./extensions/heading-collapse";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
-import { markdownToSlice } from "./utils/markdown-paste";
-import { buildPlainTextSlice } from "./utils/plain-paste";
 import { isSafeExternalHref } from "./utils/url-safety";
 import "./editor.css";
 
@@ -129,68 +126,6 @@ const settingsState = createTandemSettings();
 // stylistic.
 const smartTypography = $derived(settingsState.settings.smartTypography);
 const spellcheckOn = $derived(settingsState.settings.spellcheck);
-
-// Full `editorProps` factory (A5). Tiptap's `editor.setOptions({ editorProps
-// })` replaces `editorProps` wholesale — it is NOT a shallow merge — so
-// toggling spellcheck without recreating the editor requires re-supplying
-// every existing prop (attributes, clipboardTextParser, handlePaste) plus
-// the new `spellcheck` attribute, not just the changed piece.
-function makeEditorProps(spellcheckOnValue: boolean): EditorProps {
-  return {
-    attributes: {
-      class: "tandem-editor",
-      // `min-height` lives in editor.css (`.tandem-editor` = 500px,
-      // `.tandem-paged .tandem-editor` = 1056px). Inline `min-height` here
-      // would beat the paged-layout selector via specificity and silently
-      // lose the 11in sheet height for .docx.
-      style: "outline: none; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
-      // Emitted explicitly in both directions (not omitted when on) so the
-      // attribute is symmetric and testable.
-      spellcheck: String(spellcheckOnValue),
-    },
-    // Paste raw markdown as formatted rich text (#788). We return a parsed
-    // ProseMirror Slice so y-prosemirror's sync plugin captures it via the
-    // normal paste transaction — we never touch the Y.Doc directly. When the
-    // user requests plain-text paste (Ctrl+Shift+V → `plain === true`), or the
-    // text isn't markdown-ish, we fall through to plain-text parsing.
-    clipboardTextParser: (text, $context, plain, view) => {
-      if (!plain) {
-        const slice = markdownToSlice(text, view.state.schema);
-        if (slice) return slice;
-      }
-      // Fall back to plain-text behavior: split on blank-line groups into
-      // paragraphs, carrying the context's active marks. Shared with the
-      // context menu's "Paste as Plain Text" (issue #923) so the two never
-      // diverge.
-      return buildPlainTextSlice(text, view.state.schema, $context.marks());
-    },
-    // Paste URL over a non-empty selection → link the selected text instead
-    // of replacing it. Direct `editorProps` handlers run BEFORE both
-    // `clipboardTextParser` above and Link's own `pasteHandler` plugin, so
-    // returning true here suppresses both — no double handling regardless
-    // of whether Link's paste-link behavior would also have fired.
-    // Ctrl+Shift+V (plain paste) hits this path too: a bare URL carries no
-    // formatting to strip, so "plain paste" and "rich paste" produce the
-    // same result here. We deliberately don't branch on ProseMirror's
-    // internal `view.input.shiftKey` — not a stable API surface.
-    handlePaste: (view, event) => {
-      const text = event.clipboardData?.getData("text/plain")?.trim();
-      if (!text || /\s/.test(text)) return false;
-      if (!isSafeExternalHref(text)) return false;
-
-      const { selection } = view.state;
-      if (selection.empty || !(selection instanceof TextSelection)) return false;
-
-      const linkType = view.state.schema.marks.link;
-      if (!linkType) return false;
-
-      view.dispatch(
-        view.state.tr.addMark(selection.from, selection.to, linkType.create({ href: text })),
-      );
-      return true;
-    },
-  };
-}
 
 // -------------------------------------------------------------------------
 // Editor lifecycle: re-create when (ydoc, provider) identity changes.
@@ -308,20 +243,15 @@ $effect(() => {
 // `setOptions({ editorProps })` replaces `editorProps` wholesale (not a
 // shallow merge), so `makeEditorProps` always rebuilds the full object
 // (attributes + clipboardTextParser + handlePaste), not just the spellcheck
-// bit. Guarded with a last-value check mirroring `_lastReadOnly` above so a
-// settings write to an unrelated field (which reassigns `settings` — and
-// therefore re-evaluates `spellcheckOn` — wholesale) doesn't call
-// `setOptions` redundantly. Known-harmless: this fires once at mount with
-// the same value construction already used, same redundancy as
-// `_lastReadOnly`/`setEditable`.
-let _lastSpellcheck: boolean | undefined;
+// bit. No last-value guard needed here (unlike `_lastReadOnly` above):
+// `spellcheckOn` is a memoized `$derived` of a primitive, so this effect only
+// re-fires on a real toggle — or on editor recreation, where the one
+// same-value `setOptions` call is harmless (the new editor was already
+// constructed with the current value).
 $effect(() => {
   const ed = editor;
   if (!ed) return;
-  const sc = spellcheckOn;
-  if (_lastSpellcheck === sc) return;
-  _lastSpellcheck = sc;
-  ed.setOptions({ editorProps: makeEditorProps(sc) });
+  ed.setOptions({ editorProps: makeEditorProps(spellcheckOn) });
 });
 
 // -- Keep CollaborationCursor name synced with stored display name --------

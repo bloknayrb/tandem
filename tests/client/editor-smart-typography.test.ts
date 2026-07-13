@@ -2,6 +2,7 @@ import { type AnyExtension, Editor } from "@tiptap/core";
 import Typography from "@tiptap/extension-typography";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
+import { makeEditorProps } from "../../src/client/editor/editor-props";
 
 /**
  * A4 (smart typography) + A5 (spellcheck) — editor-level checks.
@@ -55,15 +56,6 @@ describe("A4: smart typography extension presence", () => {
 });
 
 describe("A5: spellcheck editorProps attribute", () => {
-  function makeEditorProps(spellcheckOn: boolean) {
-    return {
-      attributes: {
-        class: "tandem-editor",
-        spellcheck: String(spellcheckOn),
-      },
-    };
-  }
-
   it('emits spellcheck="true" on the editor root when spellcheck is on (default)', () => {
     const editor = mount(buildSchemaExtensions(), makeEditorProps(true));
     expect(editor.view.dom.getAttribute("spellcheck")).toBe("true");

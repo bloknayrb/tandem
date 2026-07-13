@@ -127,6 +127,37 @@ export function fuzzyMatch(query: string, target: string): FuzzyMatchResult | nu
   return { score, indices };
 }
 
+/** A field-scoring result: overall weighted score plus the primary field's match indices. */
+export interface FieldScore {
+  score: number;
+  indices: number[];
+}
+
+/**
+ * Scores a candidate over a primary field plus optional secondary fields.
+ * Secondary scores are weighted ×0.75; the returned indices are always the
+ * primary field's (secondary-field indices don't map onto displayed text).
+ * Falsy secondary fields (empty string, null, undefined) are skipped, same
+ * as the ad-hoc `field ? fuzzyMatch(q, field) : null` guards this replaces.
+ * Returns `null` when no field matches.
+ */
+export function scoreFields(
+  query: string,
+  primary: string,
+  ...secondary: Array<string | null | undefined>
+): FieldScore | null {
+  const primaryMatch = fuzzyMatch(query, primary);
+  const scores: number[] = [];
+  if (primaryMatch) scores.push(primaryMatch.score);
+  for (const field of secondary) {
+    if (!field) continue;
+    const match = fuzzyMatch(query, field);
+    if (match) scores.push(match.score * 0.75);
+  }
+  if (scores.length === 0) return null;
+  return { score: Math.max(...scores), indices: primaryMatch ? primaryMatch.indices : [] };
+}
+
 /**
  * Split `target` into matched/unmatched runs given the (ascending or
  * unordered) match `indices` from `fuzzyMatch`. Consecutive matched indices

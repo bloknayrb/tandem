@@ -3,38 +3,20 @@ import type { Schema } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildSchemaExtensions } from "../../src/client/editor/editor-extensions";
-import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety";
+import { makeEditorProps } from "../../src/client/editor/editor-props";
 
 // Build an editor whose schema IS the production editor's schema — the exact
 // same `buildSchemaExtensions()` Editor.svelte uses — so link-mark assertions
 // target the real `link` mark. See tests/client/markdown-paste.test.ts for
 // the same pattern.
 //
-// `editorProps.handlePaste` is NOT part of `buildSchemaExtensions()` — it's
-// wired inline in Editor.svelte's `editorProps` block (production code isn't
-// exported as a standalone function). `withLinkPasteHandler` below reproduces
-// that exact handler so we can drive it through a REAL `paste` DOM event
-// (ProseMirror's `editHandlers.paste` reads `event.clipboardData` and calls
-// `view.someProp("handlePaste", ...)` — see prosemirror-view's `doPaste`),
-// not just a unit-tested pure function. Keep this in lockstep with
-// Editor.svelte's `handlePaste` if that implementation changes.
-function linkPasteHandler(view: import("@tiptap/pm/view").EditorView, event: ClipboardEvent) {
-  const text = event.clipboardData?.getData("text/plain")?.trim();
-  if (!text || /\s/.test(text)) return false;
-  if (!isSafeExternalHref(text)) return false;
-
-  const { selection } = view.state;
-  if (selection.empty || !(selection instanceof TextSelection)) return false;
-
-  const linkType = view.state.schema.marks.link;
-  if (!linkType) return false;
-
-  view.dispatch(
-    view.state.tr.addMark(selection.from, selection.to, linkType.create({ href: text })),
-  );
-  return true;
-}
-
+// `editorProps` (including `handlePaste`) comes straight from the production
+// `makeEditorProps` factory (extracted from Editor.svelte into
+// `src/client/editor/editor-props.ts`), driven through a REAL `paste` DOM
+// event (ProseMirror's `editHandlers.paste` reads `event.clipboardData` and
+// calls `view.someProp("handlePaste", ...)` — see prosemirror-view's
+// `doPaste`), not just a unit-tested pure function or a hand-copied
+// re-implementation.
 function makeEditor(opts: { content: string; withHandler: boolean }): {
   editor: Editor;
   schema: Schema;
@@ -46,11 +28,7 @@ function makeEditor(opts: { content: string; withHandler: boolean }): {
     element: container,
     extensions: buildSchemaExtensions(),
     content: opts.content,
-    editorProps: opts.withHandler
-      ? {
-          handlePaste: (view, event) => linkPasteHandler(view, event as ClipboardEvent),
-        }
-      : undefined,
+    editorProps: opts.withHandler ? makeEditorProps(true) : undefined,
   });
   return { editor, schema: editor.state.schema, container };
 }

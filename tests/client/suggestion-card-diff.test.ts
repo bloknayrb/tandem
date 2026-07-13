@@ -3,7 +3,9 @@
 import { render } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
 import SuggestionCard from "../../src/client/panels/SuggestionCard.svelte";
+import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types";
+import { makeAnnotation as makeBaseAnnotation } from "../helpers/ydoc-factory.js";
 
 // B1: suggestion cards used to strike the whole `textSnapshot` and insert the
 // whole `suggestedText`, which is unreadable for a one-word change in a long
@@ -22,15 +24,16 @@ function hasStyle(span: Element, needle: string): boolean {
   return (span.getAttribute("style") ?? "").includes(needle);
 }
 
+// Pins this suite's fields (id/content/range/timestamp/suggestedText) on top
+// of the shared factory's defaults (author/type/status already match).
 function makeAnnotation(overrides: Partial<SuggestionAnnotation> = {}): SuggestionAnnotation {
   return {
-    id: "sugg-1",
-    type: "comment",
-    author: "claude",
-    status: "pending",
-    content: "",
-    range: { from: 0, to: 10 },
-    timestamp: 1_700_000_000_000,
+    ...makeBaseAnnotation({
+      id: "sugg-1",
+      content: "",
+      range: { from: toFlatOffset(0), to: toFlatOffset(10) },
+      timestamp: 1_700_000_000_000,
+    }),
     suggestedText: "",
     ...overrides,
   } as SuggestionAnnotation;

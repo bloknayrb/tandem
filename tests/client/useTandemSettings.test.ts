@@ -14,30 +14,7 @@ import {
   SELECTION_DWELL_MIN_MS,
   TANDEM_SETTINGS_KEY,
 } from "../../src/shared/constants.js";
-
-/**
- * Minimal localStorage stub — vitest runs in node without a DOM, so we
- * install a backing Map and point `globalThis.localStorage` at it.
- */
-function installLocalStorageStub() {
-  const store = new Map<string, string>();
-  const stub: Storage = {
-    get length() {
-      return store.size;
-    },
-    clear: () => store.clear(),
-    getItem: (key: string) => store.get(key) ?? null,
-    key: (index: number) => Array.from(store.keys())[index] ?? null,
-    removeItem: (key: string) => {
-      store.delete(key);
-    },
-    setItem: (key: string, value: string) => {
-      store.set(key, value);
-    },
-  };
-  vi.stubGlobal("localStorage", stub);
-  return store;
-}
+import { installLocalStorageStub } from "../helpers/local-storage-stub.js";
 
 describe("loadSettings — selectionDwellMs clamping", () => {
   let store: Map<string, string>;

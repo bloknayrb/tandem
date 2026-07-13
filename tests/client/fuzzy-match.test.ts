@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fuzzyMatch, toSegments } from "../../src/client/utils/fuzzy-match.js";
+import { fuzzyMatch, scoreFields, toSegments } from "../../src/client/utils/fuzzy-match.js";
 
 describe("fuzzyMatch", () => {
   it("returns null for an empty query", () => {
@@ -148,6 +148,42 @@ describe("ranking tie stability", () => {
     const shuffled = [scored[2], scored[0], scored[1]];
     const sorted = shuffled.sort((a, b) => b.score - a.score || a.origIndex - b.origIndex);
     expect(sorted.map((c) => c.origIndex)).toEqual([0, 1, 2]);
+  });
+});
+
+describe("scoreFields", () => {
+  it("scores and returns indices from the primary field alone when no secondary is given", () => {
+    const primaryOnly = fuzzyMatch("panel", "Toggle Panel");
+    const result = scoreFields("panel", "Toggle Panel");
+    expect(result).not.toBeNull();
+    expect(result?.score).toBe(primaryOnly?.score);
+    expect(result?.indices).toEqual(primaryOnly?.indices);
+  });
+
+  it("matches via a secondary field only, weighting its score by 0.75 and returning empty indices", () => {
+    const secondaryMatch = fuzzyMatch("shortcut", "Ctrl+Shortcut");
+    const result = scoreFields("shortcut", "Toggle Panel", null, "Ctrl+Shortcut");
+    expect(result).not.toBeNull();
+    expect(result?.score).toBeCloseTo(secondaryMatch!.score * 0.75);
+    expect(result?.indices).toEqual([]);
+  });
+
+  it("weights the winning field and picks the max across primary and secondary matches", () => {
+    // Primary doesn't match; two secondaries do, at different scores — the
+    // higher-scoring (weighted) secondary should win, and null/empty/falsy
+    // secondaries should simply be skipped.
+    const weakSecondary = fuzzyMatch("zzz", "fuzzzzy");
+    const strongSecondary = fuzzyMatch("zzz", "zzzblast");
+    const result = scoreFields("zzz", "no match here", "", "fuzzzzy", undefined, "zzzblast");
+    expect(result).not.toBeNull();
+    expect(result?.score).toBeCloseTo(
+      Math.max(weakSecondary!.score, strongSecondary!.score) * 0.75,
+    );
+    expect(result?.indices).toEqual([]);
+  });
+
+  it("returns null when neither the primary nor any secondary field matches", () => {
+    expect(scoreFields("xyz", "Toggle Panel", "Formatting", "Ctrl+X")).toBeNull();
   });
 });
 

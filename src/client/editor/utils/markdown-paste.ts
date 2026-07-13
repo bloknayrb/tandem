@@ -112,47 +112,20 @@ function imageFallbackToken(state: MdCoreState, tok: MdToken): MdToken {
  * markdown-it emits `image` as an INLINE token nested inside `inline`
  * tokens' `children` arrays.
  *
- * Two passes, in this order (sanitize MUST run before hoist — see below):
- *
- * 1. Sanitize: any `image` token whose `src` fails {@link sanitizeImageSrcForPaste}
- *    (unlisted scheme, `data:image/svg+xml`, etc.) is replaced in place with
- *    a plain-text fallback token carrying its alt text. Runs over every
- *    `inline` token in the flat stream, including ones inside table cells
- *    (this rule is registered AFTER `wrapCellParagraphs`, so cell content is
- *    already paragraph-wrapped by the time this runs — seeing them here for
- *    free) and blockquotes (blockquote markers are flat open/close tokens
- *    too, so their paragraphs appear in the same top-level array).
- *
- * 2. Hoist / downgrade: a paragraph whose ENTIRE inline content is a single
- *    (now-sanitized) image is promoted — mirroring the server's
- *    `splitParagraphImages`, `src/server/file-io/mdast-ydoc.ts` — from
- *    `paragraph_open, inline({children:[image]}), paragraph_close` to a bare
- *    block-level `image` token. Any image that survives pass 1 but sits
- *    alongside other inline content in the same paragraph is downgraded to
- *    its alt-text fallback: our `image` node can't be a paragraph's inline
- *    child, so leaving it in place would make `createAndFill` return null
- *    and silently drop the WHOLE paragraph — a regression versus the
- *    previous "drop the image, keep the text" behavior (see the #885
- *    follow-up test in markdown-paste.test.ts).
- *
- * Sanitizing before hoisting matters: a rejected image becomes inline text
- * in pass 1, so its paragraph is no longer single-image and correctly never
- * hoists in pass 2. Reversing the order would let a rejected image survive
- * into pass 2 as a bare block-level token (nothing left to reject it), then
- * only get caught by chance if it happened to share a paragraph with other
- * text.
+ * A paragraph whose ENTIRE inline content is a single SAFE image (passes
+ * {@link isSafeImageToken}) is promoted — mirroring the server's
+ * `splitParagraphImages`, `src/server/file-io/mdast-ydoc.ts` — from
+ * `paragraph_open, inline({children:[image]}), paragraph_close` to a bare
+ * block-level `image` token. Every other image — unsafe src, or sitting
+ * alongside other inline content in its paragraph — is downgraded in place
+ * to its alt-text fallback: our `image` node can't be a paragraph's inline
+ * child, so leaving it in place would make `createAndFill` return null and
+ * silently drop the WHOLE paragraph — a regression versus "drop the image,
+ * keep the text" (see the #885 follow-up test in markdown-paste.test.ts).
+ * Per-child safety only matters for the solo-hoist decision: a mixed
+ * paragraph downgrades its images regardless of safety either way.
  */
 function normalizeImagesForPaste(state: MdCoreState): void {
-  for (const tok of state.tokens) {
-    if (tok.type !== "inline" || !tok.children) continue;
-    for (let i = 0; i < tok.children.length; i++) {
-      const child = tok.children[i];
-      if (child.type === "image" && !isSafeImageToken(child)) {
-        tok.children[i] = imageFallbackToken(state, child);
-      }
-    }
-  }
-
   const tokens = state.tokens;
   const out: MdToken[] = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -162,7 +135,11 @@ function normalizeImagesForPaste(state: MdCoreState): void {
       const closeTok = tokens[i + 2];
       if (inlineTok?.type === "inline" && closeTok?.type === "paragraph_close") {
         const children = inlineTok.children ?? [];
-        if (children.length === 1 && children[0].type === "image") {
+        if (
+          children.length === 1 &&
+          children[0].type === "image" &&
+          isSafeImageToken(children[0])
+        ) {
           out.push(children[0]);
           i += 2; // consumed inline + paragraph_close along with paragraph_open
           continue;

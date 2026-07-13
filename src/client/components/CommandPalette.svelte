@@ -6,7 +6,7 @@ import type { Annotation } from "../../shared/types.js";
 import { type Action, getActionsMap } from "../actions/registry.svelte.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
-import { fuzzyMatch, toSegments } from "../utils/fuzzy-match.js";
+import { scoreFields, toSegments } from "../utils/fuzzy-match.js";
 import { walkHeadings } from "../utils/headings.js";
 
 // ---------------------------------------------------------------------------
@@ -95,17 +95,11 @@ const commandResults = $derived.by((): ActionResult[] => {
   const scored: { result: ActionResult; score: number; origIndex: number }[] = [];
   let origIndex = 0;
   for (const action of actionsMap.values()) {
-    const labelMatch = fuzzyMatch(q, action.label);
-    const groupMatch = fuzzyMatch(q, action.group);
-    const shortcutMatch = action.shortcut ? fuzzyMatch(q, action.shortcut) : null;
-    const fieldScores: number[] = [];
-    if (labelMatch) fieldScores.push(labelMatch.score);
-    if (groupMatch) fieldScores.push(groupMatch.score * 0.75);
-    if (shortcutMatch) fieldScores.push(shortcutMatch.score * 0.75);
-    if (fieldScores.length > 0) {
+    const fieldScore = scoreFields(q, action.label, action.group, action.shortcut);
+    if (fieldScore) {
       scored.push({
-        result: { kind: "action", id: action.id, action, matchIndices: labelMatch?.indices },
-        score: Math.max(...fieldScores),
+        result: { kind: "action", id: action.id, action, matchIndices: fieldScore.indices },
+        score: fieldScore.score,
         origIndex,
       });
     }
@@ -126,11 +120,11 @@ const headingResults = $derived.by((): HeadingResult[] => {
   }
   const scored: { result: HeadingResult; score: number; origIndex: number }[] = [];
   headings.forEach((h, idx) => {
-    const textMatch = fuzzyMatch(q, h.text);
-    if (!textMatch) return;
+    const fieldScore = scoreFields(q, h.text);
+    if (!fieldScore) return;
     scored.push({
-      result: { kind: "heading", id: `heading-${idx}`, ...h, matchIndices: textMatch.indices },
-      score: textMatch.score,
+      result: { kind: "heading", id: `heading-${idx}`, ...h, matchIndices: fieldScore.indices },
+      score: fieldScore.score,
       origIndex: idx,
     });
   });
@@ -153,16 +147,12 @@ const annotationResults = $derived.by((): AnnotationResult[] => {
   }
   const scored: { result: AnnotationResult; score: number; origIndex: number }[] = [];
   annotations.forEach((a, idx) => {
-    const contentMatch = fuzzyMatch(q, a.content);
-    const snapshotMatch = a.textSnapshot ? fuzzyMatch(q, a.textSnapshot) : null;
-    const fieldScores: number[] = [];
-    if (contentMatch) fieldScores.push(contentMatch.score);
-    if (snapshotMatch) fieldScores.push(snapshotMatch.score * 0.75);
-    if (fieldScores.length === 0) return;
+    const fieldScore = scoreFields(q, a.content, a.textSnapshot);
+    if (!fieldScore) return;
     // Note: annotation rows are not match-highlighted (see template) because
     // the winning field can be content OR textSnapshot, and indices from one
     // field don't map onto the other's displayed text unambiguously.
-    scored.push({ result: toRow(a), score: Math.max(...fieldScores), origIndex: idx });
+    scored.push({ result: toRow(a), score: fieldScore.score, origIndex: idx });
   });
   // Sort over the FULL set first, then take the best 50 — a `.slice(0, 50)`
   // before sorting could drop a high-scoring match found later in the array.
@@ -208,16 +198,12 @@ const shortcutResults = $derived.by((): ShortcutResult[] => {
   }
   const scored: { result: ShortcutResult; score: number; origIndex: number }[] = [];
   candidates.forEach((c, idx) => {
-    const descMatch = fuzzyMatch(q, c.description);
-    const keysMatch = fuzzyMatch(q, c.keys);
-    const fieldScores: number[] = [];
-    if (descMatch) fieldScores.push(descMatch.score);
-    if (keysMatch) fieldScores.push(keysMatch.score * 0.75);
-    if (fieldScores.length === 0) return;
+    const fieldScore = scoreFields(q, c.description, c.keys);
+    if (!fieldScore) return;
     // Shortcut rows are not match-highlighted (see template) — same
     // ambiguity as annotations: the winning field can be description OR
     // keys, so indices from one don't map onto the other's displayed text.
-    scored.push({ result: toRow(c), score: Math.max(...fieldScores), origIndex: idx });
+    scored.push({ result: toRow(c), score: fieldScore.score, origIndex: idx });
   });
   return rankByScore(scored);
 });
@@ -331,6 +317,16 @@ function handleBackdropClick(e: MouseEvent) {
   if (e.target === e.currentTarget) close();
 }
 </script>
+
+{#snippet highlighted(text: string, indices: number[] | undefined)}
+  {#if indices}
+    {#each toSegments(text, indices) as seg, si (si)}
+      {#if seg.match}<span class="palette-match">{seg.text}</span>{:else}{seg.text}{/if}
+    {/each}
+  {:else}
+    {text}
+  {/if}
+{/snippet}
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -454,13 +450,7 @@ function handleBackdropClick(e: MouseEvent) {
             >
               {#if result.kind === "action"}
                 <span style="font-size: var(--tandem-text-sm);">
-                  {#if result.matchIndices}
-                    {#each toSegments(result.action.label, result.matchIndices) as seg, si (si)}
-                      {#if seg.match}<span class="palette-match">{seg.text}</span>{:else}{seg.text}{/if}
-                    {/each}
-                  {:else}
-                    {result.action.label}
-                  {/if}
+                  {@render highlighted(result.action.label, result.matchIndices)}
                 </span>
                 {#if result.action.shortcut}
                   <span style="font-size: var(--tandem-text-xs); color: var(--tandem-fg-faint); font-family: var(--tandem-font-mono);">
@@ -476,13 +466,7 @@ function handleBackdropClick(e: MouseEvent) {
                     min-width: 20px;
                   ">H{result.level}</span>
                   <span style="font-size: var(--tandem-text-sm); padding-left: calc({result.level - 1} * var(--tandem-space-2));">
-                    {#if result.matchIndices}
-                      {#each toSegments(result.text, result.matchIndices) as seg, si (si)}
-                        {#if seg.match}<span class="palette-match">{seg.text}</span>{:else}{seg.text}{/if}
-                      {/each}
-                    {:else}
-                      {result.text}
-                    {/if}
+                    {@render highlighted(result.text, result.matchIndices)}
                   </span>
                 </span>
               {:else if result.kind === "annotation"}

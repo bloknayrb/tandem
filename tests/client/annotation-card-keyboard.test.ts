@@ -3,24 +3,25 @@
 import { fireEvent, render } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import AnnotationCard from "../../src/client/panels/AnnotationCard.svelte";
+import { toFlatOffset } from "../../src/shared/positions/types.js";
 import type { Annotation } from "../../src/shared/types";
+import { makeAnnotation as makeBaseAnnotation } from "../helpers/ydoc-factory.js";
 
 // `cardEnter`/`cardExit` (cardMotion.ts) short-circuit to `{duration: 0}`
 // whenever `lifecycleMotion` is false (the default we use throughout this
 // file), so no WAAPI/`element.animate` stub is needed here — unlike
 // ReplyThread's `discloseUnfold`, these never actually run.
 
+// Pins this suite's fields (id/content/range/timestamp) on top of the shared
+// factory's defaults (author/type/status already match).
 function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
-  return {
+  return makeBaseAnnotation({
     id: "annotation-1",
-    type: "comment",
-    author: "claude",
-    status: "pending",
     content: "Body",
-    range: { from: 0, to: 1 },
+    range: { from: toFlatOffset(0), to: toFlatOffset(1) },
     timestamp: 0,
     ...overrides,
-  } as Annotation;
+  });
 }
 
 describe("AnnotationCard — keyboard activation (C2)", () => {

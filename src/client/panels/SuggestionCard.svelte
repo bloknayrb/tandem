@@ -60,19 +60,15 @@ const segments = $derived(
           >{segment.text}</span>
         {/if}
       {/each}
-    {:else if annotation.textSnapshot}
-      <span
-        style="text-decoration: line-through; color: var(--tandem-error); background-color: var(--tandem-error-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
-      >
-        {annotation.textSnapshot}
-      </span>
-      {" → "}
-      <span
-        style="color: var(--tandem-success-fg-strong); background-color: var(--tandem-success-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
-      >
-        {annotation.suggestedText}
-      </span>
     {:else}
+      {#if annotation.textSnapshot}
+        <span
+          style="text-decoration: line-through; color: var(--tandem-error); background-color: var(--tandem-error-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
+        >
+          {annotation.textSnapshot}
+        </span>
+        {" → "}
+      {/if}
       <span
         style="color: var(--tandem-success-fg-strong); background-color: var(--tandem-success-bg); padding: 0 2px; border-radius: var(--tandem-r-1);"
       >
