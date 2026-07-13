@@ -64,7 +64,14 @@ export function diffWords(oldText: string, newText: string): DiffSegment[] | nul
       reversedOps.push({ type: "equal", text: oldTokens[i - 1] });
       i--;
       j--;
-    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      // Strict `>` (not `>=`) is the tie-break that makes substitutions
+      // render del-before-ins (old -> new), matching jsdiff/GitHub convention
+      // and the legacy `~~old~~ -> new` fallback. Ops are pushed walking
+      // backward from the end of both strings and reversed below, so the op
+      // pushed LATER here lands EARLIER in the output; on a tie, taking the
+      // `ins` branch first means `del` ends up before `ins` after reversal.
+      // `>=` inverts this and renders "new ~~old~~" instead.
       reversedOps.push({ type: "del", text: oldTokens[i - 1] });
       i--;
     } else {

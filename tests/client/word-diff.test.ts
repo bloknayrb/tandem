@@ -38,18 +38,51 @@ describe("diffWords", () => {
     expect(reconstructOld(s)).toBe("The quick brown fox jumps");
     expect(reconstructNew(s)).toBe("The quick red fox jumps");
 
-    // Only "brown"/"red" differ — everything else must be equal segments.
-    const nonEqual = s.filter((seg) => seg.type !== "equal");
-    expect(nonEqual).toHaveLength(2);
-    expect(nonEqual.find((seg) => seg.type === "del")?.text).toBe("brown");
-    expect(nonEqual.find((seg) => seg.type === "ins")?.text).toBe("red");
+    // Exact segment list, in order. A substitution must render del before ins
+    // (old -> new, F1) — the previous order-insensitive `.find()` assertions
+    // masked this (F9a).
+    expect(s).toEqual([
+      { type: "equal", text: "The quick " },
+      { type: "del", text: "brown" },
+      { type: "ins", text: "red" },
+      { type: "equal", text: " fox jumps" },
+    ]);
+  });
 
-    // The surrounding words are untouched equal segments, not swept into the diff.
-    const equalText = s
-      .filter((seg) => seg.type === "equal")
-      .map((seg) => seg.text)
-      .join("");
-    expect(equalText).toBe("The quick  fox jumps");
+  it("renders the deletion before the insertion for a substitution", () => {
+    // Two separate substitutions in one input, to pin the ordering across
+    // more than one del/ins pair rather than a single coincidence.
+    const segments = diffWords("a X c Y e", "a P c Q e");
+    expect(segments).not.toBeNull();
+    const s = segments as DiffSegment[];
+    assertNoAdjacentSameType(s);
+    expect(reconstructOld(s)).toBe("a X c Y e");
+    expect(reconstructNew(s)).toBe("a P c Q e");
+
+    expect(s).toEqual([
+      { type: "equal", text: "a " },
+      { type: "del", text: "X" },
+      { type: "ins", text: "P" },
+      { type: "equal", text: " c " },
+      { type: "del", text: "Y" },
+      { type: "ins", text: "Q" },
+      { type: "equal", text: " e" },
+    ]);
+
+    // Every del must precede its corresponding ins, and no ins precedes any del.
+    const delIndices = s.reduce<number[]>((acc, seg, idx) => {
+      if (seg.type === "del") acc.push(idx);
+      return acc;
+    }, []);
+    const insIndices = s.reduce<number[]>((acc, seg, idx) => {
+      if (seg.type === "ins") acc.push(idx);
+      return acc;
+    }, []);
+    expect(delIndices).toHaveLength(2);
+    expect(insIndices).toHaveLength(2);
+    for (let k = 0; k < delIndices.length; k++) {
+      expect(delIndices[k]).toBeLessThan(insIndices[k]);
+    }
   });
 
   it("handles insertion-only changes (old text is a prefix/subset of new)", () => {
@@ -110,6 +143,16 @@ describe("diffWords", () => {
     // Something must be flagged as changed — a pure equal-only diff would
     // wrongly claim "foo  bar" and "foo bar" are the same.
     expect(s.some((seg) => seg.type !== "equal")).toBe(true);
+
+    // Whitespace substitutions follow the same del-before-ins ordering as
+    // word substitutions (F1) — the double space is deleted before the
+    // single space is inserted.
+    expect(s).toEqual([
+      { type: "equal", text: "foo" },
+      { type: "del", text: "  " },
+      { type: "ins", text: " " },
+      { type: "equal", text: "bar" },
+    ]);
   });
 
   it("returns null when the combined text length exceeds the size cap", () => {
