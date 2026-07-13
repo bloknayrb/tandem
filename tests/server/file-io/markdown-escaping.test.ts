@@ -304,6 +304,30 @@ describe("markdown escaping (#605)", () => {
     });
   });
 
+  // A4 (smart typography, #<UX writing experience>): Tiptap's Typography
+  // extension is input-rules-only — it rewrites keystrokes as the user
+  // types (e.g. "--" -> "–"), but never touches already-serialized
+  // characters. This golden test proves the *serializer* is a safe passthrough
+  // for the resulting typographic characters — i.e. turning the setting on
+  // cannot introduce escaping/alteration noise on save, independent of
+  // whatever the input-rules produce client-side.
+  describe("A4: smart typography characters round-trip byte-identically", () => {
+    it("curly quotes, dashes, ellipsis, and misc symbols survive mdast-ydoc -> remark-stringify", () => {
+      const input =
+        "Typographic chars: “quoted” and ‘single’, an em—dash, " +
+        "an en–dash, an ellipsis…, plus ½ © × symbols.\n";
+      const out = roundTrip(input);
+      expect(out).toBe(input);
+      parseEqual(out, input);
+    });
+
+    it("is idempotent (a second pass through the Y.Doc round-trip is a no-op)", () => {
+      const input = "Curly “quotes” and an em—dash — again.\n";
+      const once = roundTrip(input);
+      expect(roundTrip(once)).toBe(once);
+    });
+  });
+
   describe("CHANGELOG.md golden file", () => {
     // Use the direct serializer path (parse → serializeMdast), NOT the Y.Doc
     // round-trip. The Y.Doc representation does not preserve some inline

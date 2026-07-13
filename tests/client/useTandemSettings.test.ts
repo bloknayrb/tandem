@@ -14,30 +14,7 @@ import {
   SELECTION_DWELL_MIN_MS,
   TANDEM_SETTINGS_KEY,
 } from "../../src/shared/constants.js";
-
-/**
- * Minimal localStorage stub — vitest runs in node without a DOM, so we
- * install a backing Map and point `globalThis.localStorage` at it.
- */
-function installLocalStorageStub() {
-  const store = new Map<string, string>();
-  const stub: Storage = {
-    get length() {
-      return store.size;
-    },
-    clear: () => store.clear(),
-    getItem: (key: string) => store.get(key) ?? null,
-    key: (index: number) => Array.from(store.keys())[index] ?? null,
-    removeItem: (key: string) => {
-      store.delete(key);
-    },
-    setItem: (key: string, value: string) => {
-      store.set(key, value);
-    },
-  };
-  vi.stubGlobal("localStorage", stub);
-  return store;
-}
+import { installLocalStorageStub } from "../helpers/local-storage-stub.js";
 
 describe("loadSettings — selectionDwellMs clamping", () => {
   let store: Map<string, string>;
@@ -737,5 +714,100 @@ describe("defaultSaveDirectory (#1023)", () => {
     expect(
       mergeAndClampSettings(base, { defaultSaveDirectory: "  /srv/notes  " }).defaultSaveDirectory,
     ).toBe("/srv/notes");
+  });
+});
+
+describe("loadSettings — smartTypography (A4)", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function writeRawSettings(partial: Record<string, unknown>) {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
+  }
+
+  it("defaults to false when no settings are stored", () => {
+    expect(loadSettings().smartTypography).toBe(false);
+  });
+
+  it("defaults to false when settings exist but the key is absent", () => {
+    writeRawSettings({ theme: "dark" });
+    expect(loadSettings().smartTypography).toBe(false);
+  });
+
+  it("returns true for literal boolean true", () => {
+    writeRawSettings({ smartTypography: true });
+    expect(loadSettings().smartTypography).toBe(true);
+  });
+
+  it("returns false for the string 'true' (strict === true guard)", () => {
+    writeRawSettings({ smartTypography: "true" });
+    expect(loadSettings().smartTypography).toBe(false);
+  });
+
+  it("returns false for the number 1 (truthy non-boolean)", () => {
+    writeRawSettings({ smartTypography: 1 });
+    expect(loadSettings().smartTypography).toBe(false);
+  });
+
+  it("returns false for literal boolean false", () => {
+    writeRawSettings({ smartTypography: false });
+    expect(loadSettings().smartTypography).toBe(false);
+  });
+
+  it("round-trips true through mergeAndClampSettings", () => {
+    const base = loadSettings();
+    expect(mergeAndClampSettings(base, { smartTypography: true }).smartTypography).toBe(true);
+  });
+});
+
+describe("loadSettings — spellcheck (A5)", () => {
+  let store: Map<string, string>;
+
+  beforeEach(() => {
+    store = installLocalStorageStub();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function writeRawSettings(partial: Record<string, unknown>) {
+    store.set(TANDEM_SETTINGS_KEY, JSON.stringify(partial));
+  }
+
+  it("defaults to true when no settings are stored", () => {
+    expect(loadSettings().spellcheck).toBe(true);
+  });
+
+  it("defaults to true when settings exist but the key is absent", () => {
+    writeRawSettings({ theme: "dark" });
+    expect(loadSettings().spellcheck).toBe(true);
+  });
+
+  it("accepts spellcheck: false (mirrors the selectionToolbar coercion)", () => {
+    writeRawSettings({ spellcheck: false });
+    expect(loadSettings().spellcheck).toBe(false);
+  });
+
+  it("defaults to true for non-boolean values", () => {
+    writeRawSettings({ spellcheck: "nope" });
+    expect(loadSettings().spellcheck).toBe(true);
+  });
+
+  it("treats explicit true as true", () => {
+    writeRawSettings({ spellcheck: true });
+    expect(loadSettings().spellcheck).toBe(true);
+  });
+
+  it("round-trips false through mergeAndClampSettings", () => {
+    const base = loadSettings();
+    expect(mergeAndClampSettings(base, { spellcheck: false }).spellcheck).toBe(false);
   });
 });

@@ -3,14 +3,17 @@ import { HocuspocusProvider } from "@hocuspocus/provider";
 import { Editor as TiptapEditor } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
+import Typography from "@tiptap/extension-typography";
 import { untrack } from "svelte";
 import * as Y from "yjs";
+import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
 import { installContextMenu } from "./context-menu/install";
 // Schema-defining extensions (nodes + marks + static plugins) live in one shared
 // module so the editor and tests register the same schema — see editor-extensions.ts.
 import { buildSchemaExtensions } from "./editor-extensions";
+import { makeEditorProps } from "./editor-props";
 import { AnnotationExtension } from "./extensions/annotation";
 import { AnnotationPingExtension } from "./extensions/annotationPing";
 import { AuthorshipExtension } from "./extensions/authorship";
@@ -19,8 +22,6 @@ import { FindReplaceExtension } from "./extensions/find-replace";
 import { HeadingCollapseExtension } from "./extensions/heading-collapse";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
-import { markdownToSlice } from "./utils/markdown-paste";
-import { buildPlainTextSlice } from "./utils/plain-paste";
 import { isSafeExternalHref } from "./utils/url-safety";
 import "./editor.css";
 
@@ -111,6 +112,21 @@ let editorRoot: HTMLDivElement | null = null;
 // editor root; styles live in editor.css. No DOM injection.
 const isPaged = $derived(format === "docx");
 
+// Singleton settings store (safe by design — see createTandemSettings'
+// doc-comment; StatusBar.svelte is the existing precedent for reaching it
+// straight from a leaf component instead of threading a prop through
+// App.svelte).
+const settingsState = createTandemSettings();
+
+// `settings` is wholesale-reassigned on every settings write (any field, not
+// just these two), so reading `settingsState.settings.smartTypography` /
+// `.spellcheck` directly inside an `$effect` would track the whole object
+// and rebuild/re-apply on every unrelated settings change. These `$derived`
+// memos narrow tracking to just the one boolean each — load-bearing, not
+// stylistic.
+const smartTypography = $derived(settingsState.settings.smartTypography);
+const spellcheckOn = $derived(settingsState.settings.spellcheck);
+
 // -------------------------------------------------------------------------
 // Editor lifecycle: re-create when (ydoc, provider) identity changes.
 //
@@ -124,6 +140,12 @@ $effect(() => {
   // Track identity of ydoc + provider so this effect re-runs on swap.
   void ydoc;
   void provider;
+  // Also track `smartTypography` (via the narrow $derived memo above, not
+  // raw `settingsState.settings`) so toggling the setting tears down and
+  // rebuilds the editor — the only way to add/remove an extension from
+  // Tiptap's ExtensionManager. Same lifecycle cost as a tab switch; cheap
+  // and infrequent (a Settings-modal checkbox flip, not a hot path).
+  const smartTypographyOn = smartTypography;
 
   if (!editorRoot) return;
 
@@ -167,33 +189,14 @@ $effect(() => {
       SlashCommandExtension.configure({ onOpenChange: onSlashCommandMenuChange }),
       FindReplaceExtension,
       SelectionDecorationExtension,
+      // A4: opt-in smart typography (smart quotes/dashes/ellipsis as you
+      // type). Input-rules-only — no new nodes/marks — so it stays out of
+      // buildSchemaExtensions() and is appended here like the other
+      // runtime-param extensions. Default off; conditionally included based
+      // on the tracked `smartTypographyOn` above.
+      ...(smartTypographyOn ? [Typography] : []),
     ],
-    editorProps: {
-      attributes: {
-        class: "tandem-editor",
-        // `min-height` lives in editor.css (`.tandem-editor` = 500px,
-        // `.tandem-paged .tandem-editor` = 1056px). Inline `min-height` here
-        // would beat the paged-layout selector via specificity and silently
-        // lose the 11in sheet height for .docx.
-        style: "outline: none; font-size: var(--tandem-editor-font-size, 16px); line-height: 1.6;",
-      },
-      // Paste raw markdown as formatted rich text (#788). We return a parsed
-      // ProseMirror Slice so y-prosemirror's sync plugin captures it via the
-      // normal paste transaction — we never touch the Y.Doc directly. When the
-      // user requests plain-text paste (Ctrl+Shift+V → `plain === true`), or the
-      // text isn't markdown-ish, we fall through to plain-text parsing.
-      clipboardTextParser: (text, $context, plain, view) => {
-        if (!plain) {
-          const slice = markdownToSlice(text, view.state.schema);
-          if (slice) return slice;
-        }
-        // Fall back to plain-text behavior: split on blank-line groups into
-        // paragraphs, carrying the context's active marks. Shared with the
-        // context menu's "Paste as Plain Text" (issue #923) so the two never
-        // diverge.
-        return buildPlainTextSlice(text, view.state.schema, $context.marks());
-      },
-    },
+    editorProps: makeEditorProps(untrack(() => spellcheckOn)),
     editable: untrack(() => !readOnly),
     autofocus: untrack(() => !readOnly),
   });
@@ -234,6 +237,21 @@ $effect(() => {
   if (_lastReadOnly === ro) return;
   _lastReadOnly = ro;
   ed.setEditable(!ro);
+});
+
+// -- A5: spellcheck toggling without recreating the editor ------------------
+// `setOptions({ editorProps })` replaces `editorProps` wholesale (not a
+// shallow merge), so `makeEditorProps` always rebuilds the full object
+// (attributes + clipboardTextParser + handlePaste), not just the spellcheck
+// bit. No last-value guard needed here (unlike `_lastReadOnly` above):
+// `spellcheckOn` is a memoized `$derived` of a primitive, so this effect only
+// re-fires on a real toggle — or on editor recreation, where the one
+// same-value `setOptions` call is harmless (the new editor was already
+// constructed with the current value).
+$effect(() => {
+  const ed = editor;
+  if (!ed) return;
+  ed.setOptions({ editorProps: makeEditorProps(spellcheckOn) });
 });
 
 // -- Keep CollaborationCursor name synced with stored display name --------

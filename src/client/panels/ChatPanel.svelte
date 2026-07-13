@@ -164,16 +164,6 @@ async function clearChat() {
     console.warn("[ChatPanel] Failed to clear chat:", err);
   }
 }
-
-// Anchor expand state — keyed by message id
-let expandedAnchors = $state(new Set<string>());
-
-function toggleAnchorExpand(msgId: string) {
-  const next = new Set(expandedAnchors);
-  if (next.has(msgId)) next.delete(msgId);
-  else next.add(msgId);
-  expandedAnchors = next;
-}
 </script>
 
 <div
@@ -254,14 +244,9 @@ function toggleAnchorExpand(msgId: string) {
             type="button"
             onclick={() => scrollToAnchor(msg.anchor!, msg.documentId)}
             class="chat-anchor-quote"
-            style="background: var(--tandem-accent-bg); border: none; border-left: 3px solid var(--tandem-accent-border); padding: 4px 8px; margin-bottom: 6px; font: inherit; color: var(--tandem-accent-fg-strong); cursor: pointer; text-align: left; width: 100%; font-size: var(--tandem-text-sm); border-radius: 0 var(--tandem-r-2) var(--tandem-r-2) 0; max-height: {expandedAnchors.has(
-              msg.id,
-            )
-              ? '500px'
-              : '60px'}; overflow: hidden; transition: max-height 0.3s ease;"
+            data-testid="chat-anchor-quote-{msg.id}"
+            style="background: var(--tandem-accent-bg); border: none; border-left: 3px solid var(--tandem-accent-border); padding: 4px 8px; margin-bottom: 6px; font: inherit; color: var(--tandem-accent-fg-strong); cursor: pointer; text-align: left; width: 100%; font-size: var(--tandem-text-sm); border-radius: 0 var(--tandem-r-2) var(--tandem-r-2) 0;"
             title="Click to scroll to this text"
-            onmouseenter={() => toggleAnchorExpand(msg.id)}
-            onmouseleave={() => toggleAnchorExpand(msg.id)}
           >
             {msg.anchor.textSnapshot}
           </button>
@@ -397,6 +382,32 @@ function toggleAnchorExpand(msgId: string) {
   }
   .chat-markdown :global(em) {
     font-style: italic;
+  }
+
+  /* Anchor quote — collapsed to a 60px teaser, expands on hover OR focus so
+     keyboard users (Tab to the button) get the same reveal as a mouse hover
+     (C2). The element is already a <button>, so focus-visible + Enter
+     activation come free from native semantics. */
+  .chat-anchor-quote {
+    max-height: 60px;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+  }
+  .chat-anchor-quote:hover,
+  .chat-anchor-quote:focus-visible {
+    max-height: 500px;
+  }
+  /* Reduce-motion guard (C2) — ChatPanel had no existing reduce-motion block.
+     The `reduceMotion` prop drives `scrollBehavior` (JS) but nothing CSS today;
+     the pre-C2 inline transition ignored it too, so this preserves that parity
+     rather than introducing new prop-driven behavior. */
+  @media (prefers-reduced-motion: reduce) {
+    .chat-anchor-quote {
+      transition: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .chat-anchor-quote {
+    transition: none;
   }
 
   /* Composer — pill textarea + circular send button, matching the SideRail

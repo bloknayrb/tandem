@@ -208,6 +208,17 @@ export interface TandemSettings {
    */
   customShortcuts: Record<string, ShortcutChord>;
   /**
+   * Opt-in Tiptap Typography extension (smart quotes/dashes/ellipsis as you
+   * type). Input-rules-only — never rewrites existing content, never touches
+   * the schema. Default `false` (A4).
+   */
+  smartTypography: boolean;
+  /**
+   * Native browser spellcheck underlines in the editor content. Mirrors the
+   * `spellcheck` DOM attribute on `.tandem-editor`. Default `true` (A5).
+   */
+  spellcheck: boolean;
+  /**
    * **DO NOT** set this from product code. Internal marker stamped by
    * `loadSettings` when the on-disk `schemaVersion` is newer than this
    * client knows how to migrate. `createTandemSettings` short-circuits
@@ -233,7 +244,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 16,
+  schemaVersion: 17,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -266,6 +277,8 @@ const DEFAULTS: TandemSettings = {
   models: [],
   defaultModelId: null,
   customShortcuts: {},
+  smartTypography: false,
+  spellcheck: true,
 };
 
 /** Max length of an opaque keychain ref (matches server-side `REF_MAX_LENGTH`). */
@@ -457,8 +470,17 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   that #993's `systemLightVariant` owns v14. Pure version bump —
  *   `normalizeKnownFields` defaults a missing field to true, preserving the new
  *   hover-to-float behavior for existing users.
+ * v16→v17 (A4/A5, UX writing experience): introduce BOTH `smartTypography:
+ *   false` (opt-in Tiptap Typography extension) and `spellcheck: true`
+ *   (native browser spellcheck underlines) in a single combined bump — two
+ *   independent fields landing in the same PR share one version step rather
+ *   than each claiming its own. Pure version bump for both — do NOT set
+ *   either field here (that would clobber an explicit override);
+ *   `normalizeKnownFields` defaults a missing `smartTypography` to `false`
+ *   and a missing `spellcheck` to `true`, and preserves any explicit value
+ *   already present on the blob.
  */
-export const CURRENT_SCHEMA_VERSION = 16;
+export const CURRENT_SCHEMA_VERSION = 17;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -571,6 +593,8 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     // Returning it here also auto-adds `customShortcuts` to `knownKeys` for
     // the forward-compat passthrough.
     customShortcuts: parseCustomShortcuts(parsed.customShortcuts),
+    smartTypography: parsed.smartTypography === true,
+    spellcheck: parsed.spellcheck === false ? false : DEFAULTS.spellcheck,
   };
 }
 
@@ -767,6 +791,14 @@ export function loadSettings(): TandemSettings {
         delete next.holdAnnotationsWhileOffline;
         if (next.sidecarRetryStrategy === "manual") next.sidecarRetryStrategy = "exponential";
         parsed = next;
+      }
+      if (parsed.schemaVersion === 16) {
+        // v16→v17: introduce `smartTypography` and `spellcheck` (A4/A5).
+        // Pure version bump for both — do NOT set either field here (that
+        // would clobber an explicit override). normalizeKnownFields defaults
+        // a missing `smartTypography` to false and a missing `spellcheck` to
+        // true, and preserves explicit values already on the blob.
+        parsed = { ...parsed, schemaVersion: 17 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`

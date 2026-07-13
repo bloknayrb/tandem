@@ -350,3 +350,85 @@ test("#993: 'Use Warm when system is light' resolves system-light to warm, keeps
   await toggle.uncheck();
   await expect(html).toHaveAttribute("data-theme", "light");
 });
+
+// A4: smart typography (opt-in, default off). Toggling appends/removes the
+// Tiptap Typography extension via an editor rebuild — Editor.svelte
+// (`smartTypography` $derived read inside the rebuild `$effect`). The
+// extension's emDash input rule matches `/--$/` and replaces with an em
+// dash; no trailing space is required to trigger it, but we type one anyway
+// to mirror natural typing.
+test("A4: smart typography toggle converts '--' to an em dash while typing", async ({ page }) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tandem-editor");
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+
+  const firstParagraph = editor.locator("p", {
+    hasText: "This is the first paragraph of the test document.",
+  });
+  await expect(firstParagraph).toBeVisible();
+
+  // Baseline: setting off (default) — "--" stays literal.
+  await firstParagraph.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("--");
+  await expect(firstParagraph).toContainText("document.--");
+  // Undo the literal "--" before enabling the setting, so the two runs don't
+  // interfere with each other's text.
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Backspace");
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-editor']").click();
+  const smartTypographyToggle = page.locator("[data-testid='editor-smart-typography'] input");
+  await expect(smartTypographyToggle).toBeVisible();
+  await expect(smartTypographyToggle).not.toBeChecked();
+  await smartTypographyToggle.check();
+  await expect(smartTypographyToggle).toBeChecked();
+  await page.locator("[data-testid='settings-modal-close-btn']").click();
+  await expect(page.locator(MODAL)).toHaveCount(0);
+
+  // Editor rebuilt with Typography registered — "--" now converts to an em dash.
+  await firstParagraph.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("-- ");
+  await expect(firstParagraph).toContainText("document.— ");
+});
+
+// A5: spellcheck toggle (default on). Flips the native `spellcheck` DOM
+// attribute on `.tandem-editor` via `editor.setOptions` — NOT an editor
+// rebuild — so typing must keep working immediately after the toggle with no
+// reload and no loss of focus/content.
+test("A5: spellcheck toggle flips the editor's spellcheck attribute without destroying it", async ({
+  page,
+}) => {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  const editor = page.locator(".tandem-editor");
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+
+  // Default on.
+  await expect(editor).toHaveAttribute("spellcheck", "true");
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-editor']").click();
+  const spellcheckToggle = page.locator("[data-testid='editor-spellcheck-toggle'] input");
+  await expect(spellcheckToggle).toBeVisible();
+  await expect(spellcheckToggle).toBeChecked();
+  await spellcheckToggle.uncheck();
+  await expect(spellcheckToggle).not.toBeChecked();
+  await page.locator("[data-testid='settings-modal-close-btn']").click();
+  await expect(page.locator(MODAL)).toHaveCount(0);
+
+  // Flipped without a reload, and no editor recreation — same DOM node.
+  await expect(editor).toHaveAttribute("spellcheck", "false");
+
+  // Typing still works post-toggle (editor is alive, not torn down).
+  const firstParagraph = editor.locator("p", {
+    hasText: "This is the first paragraph of the test document.",
+  });
+  await firstParagraph.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" still editable");
+  await expect(firstParagraph).toContainText("document. still editable");
+});

@@ -146,4 +146,46 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
       </button>
     </form>
   </div>
+
+  <!-- Smart typography (A4) -->
+  <div style="margin-top: var(--tandem-space-5);">
+    <label
+      data-testid="editor-smart-typography"
+      style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+    >
+      <input
+        type="checkbox"
+        checked={settings.smartTypography}
+        onchange={(e) => onUpdate({ smartTypography: (e.target as HTMLInputElement).checked })}
+        style="accent-color: var(--tandem-accent);"
+      />
+      <span>Smart typography</span>
+    </label>
+    <div
+      style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);"
+    >
+      Convert straight quotes, dashes, and ... to typographic characters as you type.
+    </div>
+  </div>
+
+  <!-- Spellcheck (A5) -->
+  <div style="margin-top: var(--tandem-space-5);">
+    <label
+      data-testid="editor-spellcheck-toggle"
+      style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+    >
+      <input
+        type="checkbox"
+        checked={settings.spellcheck}
+        onchange={(e) => onUpdate({ spellcheck: (e.target as HTMLInputElement).checked })}
+        style="accent-color: var(--tandem-accent);"
+      />
+      <span>Spellcheck</span>
+    </label>
+    <div
+      style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);"
+    >
+      Show the browser's spelling underlines while you type.
+    </div>
+  </div>
 </div>

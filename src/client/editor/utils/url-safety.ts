@@ -37,6 +37,22 @@ export function isSafeExternalHref(href: string): boolean {
 }
 
 /**
+ * True when `trimmed` has a URI scheme prefix — a `:` appearing before any of
+ * `/`, `#`, or `?` (a colon appearing only after one of those, e.g. inside a
+ * filename or query string, is path-like, not a scheme). Shared detection
+ * mechanic for `sanitizeHrefForPaste` and `sanitizeImageSrcForPaste`; each
+ * keeps its own separate allowlist policy, so a change here can only ever
+ * affect what counts as "has a scheme", never which schemes are safe.
+ */
+function hasSchemePrefix(trimmed: string): boolean {
+  const firstColon = trimmed.indexOf(":");
+  if (firstColon === -1) return false;
+  const seps = ["/", "#", "?"].map((ch) => trimmed.indexOf(ch)).filter((idx) => idx !== -1);
+  const firstPathSep = seps.length ? Math.min(...seps) : Number.POSITIVE_INFINITY;
+  return firstPathSep >= firstColon;
+}
+
+/**
  * Sanitize an href encountered at MARKDOWN PASTE time. Returns the trimmed
  * href when safe, or `null` when it should be dropped.
  *
@@ -49,9 +65,9 @@ export function isSafeExternalHref(href: string): boolean {
  * Unsafe inputs (returns null):
  *   - any unknown scheme: `javascript:`, `data:`, `vbscript:`, `file:`, etc.
  *
- * Detection rule for "has a scheme": there's a `:` BEFORE any `/`, `#`, or
- * `?`. A leading `:` (degenerate) is also unsafe. Whitespace is trimmed
- * before evaluation so `   javascript:alert(1)` is recognized.
+ * Detection rule for "has a scheme": see {@link hasSchemePrefix}. A leading
+ * `:` (degenerate) is also unsafe. Whitespace is trimmed before evaluation so
+ * `   javascript:alert(1)` is recognized.
  */
 export function sanitizeHrefForPaste(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -64,16 +80,80 @@ export function sanitizeHrefForPaste(raw: string | null | undefined): string | n
   // Fragment-only link.
   if (trimmed.startsWith("#")) return trimmed;
 
-  // Relative or root-absolute path: no scheme delimiter ahead of the first
-  // path/query/fragment separator. If `:` appears AFTER `/`/`#`/`?` (e.g.
-  // a literal `:` inside a filename or query string), the prefix is path-like.
-  const firstColon = trimmed.indexOf(":");
-  if (firstColon === -1) return trimmed; // no colon → relative/root path
-  const firstPathSep = Math.min(
-    ...["/", "#", "?"].map((ch) => trimmed.indexOf(ch)).filter((idx) => idx !== -1),
-  );
-  if (Number.isFinite(firstPathSep) && firstPathSep < firstColon) return trimmed;
+  // Relative or root-absolute path: no scheme prefix ahead of the first
+  // path/query/fragment separator.
+  if (!hasSchemePrefix(trimmed)) return trimmed;
 
   // Has a scheme prefix that isn't allowlisted → drop.
+  return null;
+}
+
+/**
+ * Image-src prefixes safe to paste directly. Mirrors {@link SAFE_EXTERNAL_PREFIXES}
+ * minus `mailto:` — a valid link target, but never a valid image source.
+ */
+export const SAFE_IMAGE_PREFIXES = ["http://", "https://", "ftp://", "//"] as const;
+
+/**
+ * `data:` image subtypes allowed as pasted image sources: boundable raster
+ * formats commonly emitted by `.docx` image embeds and web copy/paste.
+ * `svg+xml` is deliberately excluded — inline SVG can carry a `<script>` tag
+ * or an event-handler attribute (`onload=`, etc.) that executes in the
+ * editor's DOM, unlike the raster formats below, which are inert pixel data.
+ */
+const SAFE_IMAGE_DATA_URI = /^data:image\/(?:png|jpeg|jpg|gif|webp);base64,/i;
+
+/**
+ * Max length of a pasted `data:` image URI (base64 text, not decoded bytes).
+ * ~5MB of decoded image data, base64's ~4/3 expansion. Defense-in-depth
+ * against a single paste bloating the shared Y.Doc for every collaborator on
+ * next sync — mirrors the size-cap convention used elsewhere for paste-time
+ * inputs (see `word-diff.ts`'s `MAX_COMBINED_LENGTH`, `fuzzy-match.ts`'s
+ * `MAX_TARGET_LENGTH`).
+ */
+const MAX_DATA_URI_LENGTH = 7_000_000;
+
+/**
+ * Sanitize an image `src` encountered at MARKDOWN PASTE time. Returns the
+ * trimmed src when safe, or `null` when it should be dropped (caller
+ * downgrades the image to plain alt text rather than rendering it — see
+ * markdown-paste.ts's `normalizeImagesForPaste`).
+ *
+ * Safe inputs (returns trimmed src):
+ *   - any {@link SAFE_IMAGE_PREFIXES} match (case-insensitive)
+ *   - in-page fragments: `#section`
+ *   - relative / root-relative paths: `./img.png`, `../img.png`, `/img.png`
+ *   - `data:image/(png|jpeg|jpg|gif|webp);base64,...` up to {@link MAX_DATA_URI_LENGTH}
+ *
+ * Unsafe inputs (returns null):
+ *   - `data:image/svg+xml...` and any other `data:` subtype
+ *   - a `data:image/...;base64,` URI longer than {@link MAX_DATA_URI_LENGTH}
+ *   - any other unknown scheme: `javascript:`, `vbscript:`, `file:`, etc.
+ *
+ * Scheme detection shares {@link hasSchemePrefix} with `sanitizeHrefForPaste`;
+ * the link and image ALLOWLISTS stay fully separate policy, so a scheme
+ * newly accepted (or rejected) for links never silently changes what's
+ * accepted for images, or vice versa.
+ */
+export function sanitizeImageSrcForPaste(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  if (SAFE_IMAGE_DATA_URI.test(trimmed)) {
+    return trimmed.length <= MAX_DATA_URI_LENGTH ? trimmed : null;
+  }
+  // Any other `data:` URI (including `data:image/svg+xml`) falls through to
+  // the "unknown scheme" branch below and is rejected.
+
+  const lower = trimmed.toLowerCase();
+  if (SAFE_IMAGE_PREFIXES.some((p) => lower.startsWith(p))) return trimmed;
+
+  if (trimmed.startsWith("#")) return trimmed;
+
+  if (!hasSchemePrefix(trimmed)) return trimmed;
+
+  // Has a scheme prefix that isn't allowlisted (or is `data:` with a
+  // non-allowlisted subtype) → drop.
   return null;
 }

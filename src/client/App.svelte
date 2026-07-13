@@ -1759,6 +1759,20 @@ const review = useAnnotationReview({
   // Lets the hook's auto-set effect avoid clobbering externally-set ids
   // (e.g., from Alt+]/Alt+[ keyboard navigation).
   getActiveAnnotationId: () => activeAnnotationId,
+  onApplyFailed: (ann) =>
+    notifications.push({
+      // Keyed by ann.id (matches dedupKey below), not Date.now() — two
+      // different annotations failing in the same millisecond must not
+      // collide onto one id, which would let one toast's dismiss timer
+      // remove the other's still-live entry.
+      id: `suggestion-apply-failed-${ann.id}`,
+      type: "annotation-error",
+      severity: "warning",
+      message:
+        "Couldn't apply the suggestion — the text has changed. The annotation is still pending.",
+      dedupKey: `suggestion-apply-failed:${ann.id}`,
+      timestamp: Date.now(),
+    }),
 });
 
 // Resolve target for accept/dismiss: the explicitly-selected annotation, or —
@@ -2113,6 +2127,7 @@ const tutorial = createTutorial(
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
       saving={saveStore.saving}
+      lastSaveOk={saveStore.lastSaveOk}
       {editor}
     />
 

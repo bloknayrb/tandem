@@ -36,6 +36,7 @@ bulk-cancel-btn
 bulk-confirm-btn
 bulk-dismiss-btn
 changelog-error
+chat-anchor-quote-{*}
 chat-send-btn
 chat-tab
 claude-typing-indicator-{*}
@@ -117,6 +118,8 @@ editor-font-{*}-btn
 editor-measure-{*}
 editor-root
 editor-scroll-container
+editor-smart-typography
+editor-spellcheck-toggle
 editor-stage
 empty-state-connect-ai
 empty-state-open-file
@@ -294,6 +297,7 @@ report-bug-link
 review-only-banner
 review-only-dismiss
 save-indicator
+saved-indicator
 selection-toolbar-toggle
 send-to-claude-btn-{*}
 session-delete

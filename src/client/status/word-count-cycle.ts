@@ -1,10 +1,23 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 
-export type WordCountMode = "words" | "characters" | "sentences" | "paragraphs" | "pages";
+export type WordCountMode =
+  | "words"
+  | "characters"
+  | "sentences"
+  | "paragraphs"
+  | "pages"
+  | "reading";
 
 const STORAGE_KEY = "tandem-status-count-mode";
 
-const CYCLE: readonly WordCountMode[] = ["words", "characters", "sentences", "paragraphs", "pages"];
+const CYCLE: readonly WordCountMode[] = [
+  "words",
+  "characters",
+  "sentences",
+  "paragraphs",
+  "pages",
+  "reading",
+];
 
 const MODE_LABEL: Record<WordCountMode, string> = {
   words: "words",
@@ -12,10 +25,13 @@ const MODE_LABEL: Record<WordCountMode, string> = {
   sentences: "sentences",
   paragraphs: "paragraphs",
   pages: "pages",
+  reading: "min read",
 };
 
 // Publishing-standard manuscript page basis (double-spaced, 12pt).
 const WORDS_PER_PAGE = 250;
+// Standard silent-reading-speed basis for the reading-time estimate.
+const WORDS_PER_MINUTE = 200;
 
 function countWords(text: string): number {
   const trimmed = text.trim();
@@ -80,5 +96,9 @@ export function getCount(editor: TiptapEditor | null, mode: WordCountMode): numb
     }
     case "pages":
       return Math.ceil(countWords(text) / WORDS_PER_PAGE);
+    case "reading": {
+      const words = countWords(text);
+      return words === 0 ? 0 : Math.max(1, Math.round(words / WORDS_PER_MINUTE));
+    }
   }
 }

@@ -95,9 +95,16 @@ function guardedRun(id: string, fn: (d: ActionDeps) => void | Promise<void>) {
 // ---------------------------------------------------------------------------
 
 let saving = $state(false);
+// Set right before `saving` flips back to false in `triggerSave`'s `finally`,
+// so a falling-edge "Saved" flash (StatusBar.svelte) can tell a completed save
+// apart from a failed one instead of firing on every path alike.
+let lastSaveOk = $state(false);
 export const saveStore = {
   get saving() {
     return saving;
+  },
+  get lastSaveOk() {
+    return lastSaveOk;
   },
 };
 let inflight = false;
@@ -379,6 +386,7 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
   if (!activeDocId || inflight) return;
   inflight = true;
   saving = true;
+  let ok = false;
   try {
     const resp = await fetch(`${API_BASE}${API_SAVE}`, {
       method: "POST",
@@ -387,11 +395,11 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
-      console.warn(
-        "[Tandem] Save failed:",
-        (body as Record<string, string>).message ?? resp.statusText,
-      );
+      const message = (body as Record<string, string>).message ?? resp.statusText;
+      console.warn("[Tandem] Save failed:", message);
+      deps?.notify("error", `Save failed: ${message}`);
     } else {
+      ok = true;
       // Surface export-fidelity downgrades (#1145, 0c). The server already
       // returns these on a .docx save (SaveResult.fidelityWarnings) but the
       // success body was previously dropped here. The persistent fidelity
@@ -421,9 +429,11 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
     }
   } catch (err) {
     console.warn("[Tandem] Save request failed:", err);
+    deps?.notify("error", "Save failed — check your connection and try again.");
   } finally {
     inflight = false;
     saving = false;
+    lastSaveOk = ok;
   }
 }
 
