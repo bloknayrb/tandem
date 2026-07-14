@@ -7,6 +7,8 @@ import ShortcutEditorList from "../ShortcutEditorList.svelte";
 let { settings, onUpdate, notify }: SettingsTabContext = $props();
 </script>
 
+<!-- showReadOnlyBanner={false}: the modal-level settings-readonly-banner
+     already covers this tab; the inline notice would be redundant here. -->
 <div data-testid="settings-modal-shortcuts-list">
-  <ShortcutEditorList {settings} {onUpdate} {notify} />
+  <ShortcutEditorList {settings} {onUpdate} {notify} showReadOnlyBanner={false} />
 </div>

@@ -58,8 +58,10 @@ $effect(() => {
       data-testid="settings-modal-default-mode-tandem-btn"
       role="radio"
       aria-checked={ctx.settings.defaultMode === "tandem"}
+      disabled={ctx.readOnly}
       onclick={() => ctx.onUpdate({ defaultMode: "tandem" })}
       class="settings-mode-btn"
+      style="cursor: {ctx.readOnly ? 'not-allowed' : 'pointer'}; opacity: {ctx.readOnly ? 0.5 : 1};"
     >
       Tandem
     </button>
@@ -68,8 +70,10 @@ $effect(() => {
       data-testid="settings-modal-default-mode-solo-btn"
       role="radio"
       aria-checked={ctx.settings.defaultMode === "solo"}
+      disabled={ctx.readOnly}
       onclick={() => ctx.onUpdate({ defaultMode: "solo" })}
       class="settings-mode-btn"
+      style="cursor: {ctx.readOnly ? 'not-allowed' : 'pointer'}; opacity: {ctx.readOnly ? 0.5 : 1};"
     >
       Solo
     </button>
@@ -86,8 +90,9 @@ $effect(() => {
   <input
     type="checkbox"
     checked={ctx.settings.soloRailHidden}
+    disabled={ctx.readOnly}
     onchange={(e) => ctx.onUpdate({ soloRailHidden: (e.target as HTMLInputElement).checked })}
-    style="accent-color: var(--tandem-accent);"
+    style="accent-color: var(--tandem-accent); cursor: {ctx.readOnly ? 'not-allowed' : 'pointer'}; opacity: {ctx.readOnly ? 0.5 : 1};"
   />
   <span>Hide side panel in Solo mode</span>
 </label>

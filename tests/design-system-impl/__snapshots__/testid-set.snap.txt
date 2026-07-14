@@ -352,6 +352,7 @@ settings-modal-working-directory-pick
 settings-modal-working-directory-reset
 settings-modal-working-directory-save
 settings-popover
+settings-readonly-banner
 settings-shortcuts-list
 settings-sidebar-footer
 settings-sidebar-version

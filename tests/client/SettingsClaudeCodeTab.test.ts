@@ -27,6 +27,7 @@ function makeProps() {
     onUpdate: vi.fn(),
     connected: true,
     reconnectAttempts: 0,
+    readOnly: false,
     notify: vi.fn(),
   };
 }

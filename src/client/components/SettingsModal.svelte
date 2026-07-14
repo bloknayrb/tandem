@@ -23,6 +23,15 @@ export interface SettingsTabContext {
   connected: boolean;
   reconnectAttempts: number;
   /**
+   * True when the settings store is forward-compat read-only
+   * (`settings._readOnly` — on-disk schemaVersion is newer than this build).
+   * `onUpdate` silently no-ops in that state; tabs must `disabled` every
+   * control that writes settings so one-way-bound checkboxes/radios don't
+   * flip visually and go stale. Required (not optional) so the compiler
+   * forces every context constructor to thread it.
+   */
+  readOnly: boolean;
+  /**
    * Push a transient toast notification. Tabs use this for ephemeral
    * "saved" / "failed" feedback that doesn't warrant a dedicated banner.
    * Fixed strings only — never include raw `err.message` (path leak risk).
@@ -76,6 +85,7 @@ import { onMount, untrack } from "svelte";
 import { BYO_MODELS_ENABLED, TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
 import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
+import { warningStateColors } from "../utils/colors";
 import { activationKeydown } from "../utils/keyboard-activate";
 import { openServerPath } from "../utils/server-paths";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
@@ -272,12 +282,19 @@ const activeTab = $derived(
 );
 const activeTabLabel = $derived(activeTab.label);
 
+// Forward-compat read-only: derived once here, threaded to every tab via
+// the context. The hook's silent no-op in `updateSettings` is the
+// load-bearing guard; `readOnly` exists so tabs can disable their write
+// controls for honest affordance (see SettingsTabContext.readOnly).
+const readOnly = $derived(settings._readOnly === true);
+
 const tabContext = $derived<SettingsTabContext>({
   open,
   settings,
   onUpdate,
   connected,
   reconnectAttempts,
+  readOnly,
   notify,
 });
 
@@ -597,6 +614,22 @@ async function handleViewChangelog(): Promise<void> {
         </button>
       </header>
 
+      {#if readOnly}
+        <!-- Non-flexing row between the header and the scroll body so every
+             tab shows it. Distinct testid from ShortcutEditorList's inline
+             store-readonly-banner (that one is suppressed inside the modal —
+             this banner covers the whole surface). -->
+        <div
+          class="settings-modal-readonly-banner"
+          data-testid="settings-readonly-banner"
+          role="note"
+          style="background: {warningStateColors.background}; border-block: 1px solid {warningStateColors.border}; color: {warningStateColors.color};"
+        >
+          Settings are read-only — they were saved by a newer version of Tandem. Changes are
+          disabled to protect them.
+        </div>
+      {/if}
+
       <div class="settings-modal-content-body tandem-scroll-fade-y" use:scrollFade={"y"}>
         <div class="settings-modal-content-inner">
           {#key activeTab.id}
@@ -823,6 +856,13 @@ async function handleViewChangelog(): Promise<void> {
     color: var(--tandem-fg);
     background: var(--tandem-surface-sunk);
     outline: none;
+  }
+
+  .settings-modal-readonly-banner {
+    flex-shrink: 0;
+    padding: var(--tandem-space-2) var(--tandem-space-5);
+    font-size: var(--tandem-text-xs);
+    line-height: 1.4;
   }
 
   .settings-modal-content-body {

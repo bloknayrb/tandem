@@ -243,9 +243,10 @@ function handleReset() {
     max={SELECTION_DWELL_MAX_MS}
     step={100}
     value={ctx.settings.selectionDwellMs}
+    disabled={ctx.readOnly}
     oninput={(e) =>
       ctx.onUpdate({ selectionDwellMs: Number((e.target as HTMLInputElement).value) })}
-    style="width: 100%; accent-color: var(--tandem-accent);"
+    style="width: 100%; accent-color: var(--tandem-accent); cursor: {ctx.readOnly ? 'not-allowed' : 'auto'}; opacity: {ctx.readOnly ? 0.5 : 1};"
     aria-label="Selection dwell time"
   />
   <div
@@ -263,9 +264,10 @@ function handleReset() {
   <input
     type="checkbox"
     checked={ctx.settings.selectionToolbar}
+    disabled={ctx.readOnly}
     onchange={(e) =>
       ctx.onUpdate({ selectionToolbar: (e.target as HTMLInputElement).checked })}
-    style="accent-color: var(--tandem-accent);"
+    style="accent-color: var(--tandem-accent); cursor: {ctx.readOnly ? 'not-allowed' : 'pointer'}; opacity: {ctx.readOnly ? 0.5 : 1};"
   />
   <span>Show floating selection toolbar</span>
 </label>
@@ -277,8 +279,9 @@ function handleReset() {
   <input
     type="checkbox"
     checked={ctx.settings.marginView}
+    disabled={ctx.readOnly}
     onchange={(e) => ctx.onUpdate({ marginView: (e.target as HTMLInputElement).checked })}
-    style="accent-color: var(--tandem-accent);"
+    style="accent-color: var(--tandem-accent); cursor: {ctx.readOnly ? 'not-allowed' : 'pointer'}; opacity: {ctx.readOnly ? 0.5 : 1};"
   />
   <span>Margin annotation view (Word-style)</span>
 </label>

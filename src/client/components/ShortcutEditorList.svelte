@@ -17,13 +17,20 @@ interface Props {
   settings: TandemSettings;
   onUpdate: (partial: Partial<TandemSettings>) => void;
   notify?: (severity: "info" | "warning" | "error", message: string) => void;
+  /**
+   * Show the inline read-only notice when the store is forward-compat
+   * read-only. The modal passes `false` (its surface-wide
+   * `settings-readonly-banner` already covers every tab); the popover keeps
+   * the default.
+   */
+  showReadOnlyBanner?: boolean;
 }
 
 // Destructure directly off $props() so each stays a live getter (capturing
 // into a local then re-destructuring freezes the getters — see SettingsModal
 // gotcha). `notify` is optional with a noop default because the popover
 // surface has no toast channel; conflict feedback is shown inline regardless.
-let { settings, onUpdate, notify = () => {} }: Props = $props();
+let { settings, onUpdate, notify = () => {}, showReadOnlyBanner = true }: Props = $props();
 
 let recordingId = $state<RemappableShortcutId | null>(null);
 let conflictError = $state<{ id: RemappableShortcutId; message: string } | null>(null);
@@ -134,7 +141,7 @@ const kbdStyle =
       </button>
     </div>
 
-    {#if readOnly}
+    {#if readOnly && showReadOnlyBanner}
       <div
         data-testid="store-readonly-banner"
         style="font-size: 11px; color: var(--tandem-warning-fg); margin-bottom: 8px;"

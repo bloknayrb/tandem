@@ -9,6 +9,7 @@ import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
 import { createUserName } from "../hooks/useUserName.svelte";
+import { warningStateColors } from "../utils/colors";
 import { openServerPath } from "../utils/server-paths";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
@@ -96,6 +97,11 @@ let {
 
 let popoverEl: HTMLDivElement | undefined = $state();
 let inputEl: HTMLInputElement | undefined = $state();
+
+// Forward-compat read-only (see SettingsTabContext.readOnly in
+// SettingsModal): onUpdate silently no-ops, so write controls must be
+// disabled for honest affordance. Display name stays live (separate store).
+const readOnly = $derived(settings._readOnly === true);
 
 const userNameState = createUserName();
 let nameInput = $state(userNameState.userName);
@@ -401,6 +407,19 @@ function aboutRows() {
         </button>
       </header>
 
+      {#if readOnly}
+        <!-- Same testid as the SettingsModal banner (snapshot set dedups) —
+             rendered once per surface, above the scroll body. -->
+        <div
+          data-testid="settings-readonly-banner"
+          role="note"
+          style="flex-shrink: 0; padding: var(--tandem-space-2) var(--tandem-space-5); font-size: var(--tandem-text-xs); line-height: 1.4; background: {warningStateColors.background}; border-bottom: 1px solid {warningStateColors.border}; color: {warningStateColors.color};"
+        >
+          Settings are read-only — they were saved by a newer version of Tandem. Changes are
+          disabled to protect them.
+        </div>
+      {/if}
+
       <div style="flex: 1; overflow-y: auto; padding: var(--tandem-space-5);">
         <div style="display: flex; flex-direction: column; gap: var(--tandem-space-5); max-width: 620px;">
           {#if activeSection === "collaboration"}
@@ -438,8 +457,9 @@ function aboutRows() {
                   data-testid="default-mode-tandem-btn"
                   role="radio"
                   aria-checked={settings.defaultMode === "tandem"}
+                  disabled={readOnly}
                   onclick={() => onUpdate({ defaultMode: "tandem" })}
-                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'tandem' ? 600 : 400}; cursor: pointer;"
+                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'tandem' ? 600 : 400}; cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
                 >
                   Tandem
                 </button>
@@ -448,8 +468,9 @@ function aboutRows() {
                   data-testid="default-mode-solo-btn"
                   role="radio"
                   aria-checked={settings.defaultMode === "solo"}
+                  disabled={readOnly}
                   onclick={() => onUpdate({ defaultMode: "solo" })}
-                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'solo' ? 600 : 400}; cursor: pointer;"
+                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'solo' ? 600 : 400}; cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
                 >
                   Solo
                 </button>
@@ -466,8 +487,9 @@ function aboutRows() {
               <input
                 type="checkbox"
                 checked={settings.soloRailHidden}
+                disabled={readOnly}
                 onchange={(e) => onUpdate({ soloRailHidden: (e.target as HTMLInputElement).checked })}
-                style="accent-color: var(--tandem-accent);"
+                style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
               />
               <span>Hide side panel in Solo mode</span>
             </label>
@@ -482,6 +504,7 @@ function aboutRows() {
               {onUpdate}
               {connected}
               {reconnectAttempts}
+              {readOnly}
               notify={noopNotify}
             />
           {:else if activeSection === "editor"}
@@ -491,6 +514,7 @@ function aboutRows() {
               {onUpdate}
               {connected}
               {reconnectAttempts}
+              {readOnly}
               notify={noopNotify}
             />
           {:else if activeSection === "network"}
@@ -500,6 +524,7 @@ function aboutRows() {
               {onUpdate}
               {connected}
               {reconnectAttempts}
+              {readOnly}
               notify={noopNotify}
             />
           {:else if activeSection === "accessibility"}
@@ -509,6 +534,7 @@ function aboutRows() {
               {onUpdate}
               {connected}
               {reconnectAttempts}
+              {readOnly}
               notify={noopNotify}
             />
           {:else if activeSection === "claude-code"}
@@ -529,8 +555,9 @@ function aboutRows() {
                 max={SELECTION_DWELL_MAX_MS}
                 step={100}
                 value={settings.selectionDwellMs}
+                disabled={readOnly}
                 oninput={(e) => onUpdate({ selectionDwellMs: Number((e.target as HTMLInputElement).value) })}
-                style="width: 100%; accent-color: var(--tandem-accent);"
+                style="width: 100%; accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'auto'}; opacity: {readOnly ? 0.5 : 1};"
                 aria-label="Selection dwell time"
               />
               <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--tandem-fg-subtle);">
@@ -546,8 +573,9 @@ function aboutRows() {
               <input
                 type="checkbox"
                 checked={settings.selectionToolbar}
+                disabled={readOnly}
                 onchange={(e) => onUpdate({ selectionToolbar: (e.target as HTMLInputElement).checked })}
-                style="accent-color: var(--tandem-accent);"
+                style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
               />
               <span>Show floating selection toolbar</span>
             </label>
@@ -559,8 +587,9 @@ function aboutRows() {
               <input
                 type="checkbox"
                 checked={settings.marginView}
+                disabled={readOnly}
                 onchange={(e) => onUpdate({ marginView: (e.target as HTMLInputElement).checked })}
-                style="accent-color: var(--tandem-accent);"
+                style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
               />
               <span>Margin annotation view (Word-style)</span>
             </label>
