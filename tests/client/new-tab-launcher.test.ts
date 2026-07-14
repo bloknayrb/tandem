@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  highlightSegments,
-  matchesQuery,
+  type LauncherRow,
   pipClassFor,
+  searchRows,
   toLauncherRow,
 } from "../../src/client/tabs/newTabLauncher.js";
 
@@ -64,53 +64,80 @@ describe("toLauncherRow", () => {
   });
 });
 
-describe("matchesQuery", () => {
-  const row = toLauncherRow({ path: "~/writing/posts/launch-day.md", openedAt: 0 });
+describe("searchRows", () => {
+  const row = (path: string): LauncherRow => toLauncherRow({ path, openedAt: 0 });
 
-  it.each([
-    { why: "empty query matches everything", query: "", expected: true },
-    { why: "whitespace query matches everything", query: "   ", expected: true },
-    { why: "substring of the name", query: "launch", expected: true },
-    { why: "case-insensitive name match", query: "LAUNCH", expected: true },
-    { why: "substring of the directory", query: "posts", expected: true },
-    { why: "no match anywhere", query: "zzz", expected: false },
-  ])("$why", ({ query, expected }) => {
-    expect(matchesQuery(row, query)).toBe(expected);
-  });
-});
-
-describe("highlightSegments", () => {
-  it("returns one unmatched segment for an empty query", () => {
-    expect(highlightSegments("chapter.md", "")).toEqual([{ text: "chapter.md", match: false }]);
+  it("returns all rows in input (recency) order with a single unmatched segment for an empty query", () => {
+    const rows = [row("/a/first.md"), row("/b/second.md"), row("/c/third.md")];
+    for (const query of ["", "   "]) {
+      const result = searchRows(rows, query);
+      expect(result.map((e) => e.row.path)).toEqual(["/a/first.md", "/b/second.md", "/c/third.md"]);
+      expect(result[0].nameSegments).toEqual([{ text: "first.md", match: false }]);
+    }
   });
 
-  it("returns one unmatched segment for a whitespace query", () => {
-    expect(highlightSegments("chapter.md", "  ")).toEqual([{ text: "chapter.md", match: false }]);
-  });
-
-  it("marks a single case-insensitive match in the middle", () => {
-    expect(highlightSegments("chapter.md", "APT")).toEqual([
+  it("matches on the name and highlights the matched run", () => {
+    const result = searchRows([row("~/writing/chapter.md")], "apt");
+    expect(result).toHaveLength(1);
+    expect(result[0].nameSegments).toEqual([
       { text: "ch", match: false },
       { text: "apt", match: true },
       { text: "er.md", match: false },
     ]);
   });
 
-  it("marks every non-overlapping occurrence", () => {
-    expect(highlightSegments("aXaXa", "a")).toEqual([
-      { text: "a", match: true },
-      { text: "X", match: false },
-      { text: "a", match: true },
-      { text: "X", match: false },
-      { text: "a", match: true },
+  it("is case-insensitive", () => {
+    const result = searchRows([row("~/writing/chapter.md")], "APT");
+    expect(result).toHaveLength(1);
+    expect(result[0].nameSegments.filter((s) => s.match).map((s) => s.text)).toEqual(["apt"]);
+  });
+
+  it("includes a dir-only match but renders the name unhighlighted", () => {
+    // Indices come from the primary field (name) only — same tradeoff the
+    // command palette accepts for annotation snippets.
+    const result = searchRows([row("~/writing/posts/launch.md")], "posts");
+    expect(result).toHaveLength(1);
+    expect(result[0].nameSegments).toEqual([{ text: "launch.md", match: false }]);
+  });
+
+  it("excludes rows that match neither name nor dir", () => {
+    const rows = [row("/a/alpha.md"), row("/b/beta.md")];
+    const result = searchRows(rows, "zzz");
+    expect(result).toEqual([]);
+  });
+
+  it("ranks a name match above a dir match (secondary field is ×0.75)", () => {
+    // "draft" hits the DIR of the first (more recent) row but the NAME of the
+    // second — quality outranks recency now.
+    const rows = [row("/home/draft/notes.md"), row("/home/other/draft.md")];
+    const result = searchRows(rows, "draft");
+    expect(result.map((e) => e.row.path)).toEqual(["/home/other/draft.md", "/home/draft/notes.md"]);
+  });
+
+  it("breaks equal-score ties by recency (original index)", () => {
+    // Identical names in different dirs, query matches only the names →
+    // identical scores; input (recency) order must be preserved.
+    const rows = [row("/x/chapter.md"), row("/y/chapter.md"), row("/z/chapter.md")];
+    const result = searchRows(rows, "chapter");
+    expect(result.map((e) => e.row.path)).toEqual([
+      "/x/chapter.md",
+      "/y/chapter.md",
+      "/z/chapter.md",
     ]);
   });
 
-  it("returns one matched segment when the whole name matches", () => {
-    expect(highlightSegments("draft", "draft")).toEqual([{ text: "draft", match: true }]);
+  it("includes subsequence matches (deliberately more permissive than the old substring filter)", () => {
+    const result = searchRows([row("~/book/chapter.md")], "chp");
+    expect(result).toHaveLength(1);
+    expect(result[0].row.name).toBe("chapter.md");
   });
 
-  it("returns one unmatched segment when there is no match", () => {
-    expect(highlightSegments("chapter.md", "zzz")).toEqual([{ text: "chapter.md", match: false }]);
+  it("segments always reassemble to the full name", () => {
+    const rows = [row("~/book/chapter.md"), row("/x/aXaXa.txt")];
+    for (const query of ["chp", "a", "aaa", "chapter"]) {
+      for (const entry of searchRows(rows, query)) {
+        expect(entry.nameSegments.map((s) => s.text).join("")).toBe(entry.row.name);
+      }
+    }
   });
 });

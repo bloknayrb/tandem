@@ -1,14 +1,17 @@
 /**
  * Pure helpers for the a7 new-tab launcher (`NewTabMenu.svelte`).
  *
- * Kept out of the component so the row-shaping, search filter, and match
+ * Kept out of the component so the row-shaping, search ranking, and match
  * highlighting are unit-testable in isolation — the `.svelte` file is then just
  * rendering + keyboard wiring. Ported from the Claude Design a7 bundle's
  * `new-tab-utils.ts`, adapted to production's stored recents shape
  * (`RecentFileEntry` with a full path + `openedAt`, vs the bundle's pre-split
- * name/path/when/ext mock).
+ * name/path/when/ext mock). Search converges on the command palette's
+ * fuzzy-match stack (`utils/fuzzy-match.ts`) instead of a bespoke substring
+ * filter.
  */
 
+import { type MatchSegment, rankByScore, scoreFields, toSegments } from "../utils/fuzzy-match.js";
 import { formatWhen, type RecentFileEntry } from "../utils/recentFiles.js";
 
 /** File-type bucket driving the recents-row pip color. */
@@ -27,9 +30,13 @@ export interface LauncherRow {
   pip: PipClass;
 }
 
-export interface NameSegment {
-  text: string;
-  match: boolean;
+/** Structural alias — keeps the launcher's existing segment naming. */
+export type NameSegment = MatchSegment;
+
+/** A launcher row paired with its name's matched/unmatched highlight runs. */
+export interface RankedRow {
+  row: LauncherRow;
+  nameSegments: NameSegment[];
 }
 
 const PIP_BY_EXT: Record<string, PipClass> = {
@@ -72,34 +79,36 @@ export function toLauncherRow(entry: RecentFileEntry, now: number = Date.now()):
   };
 }
 
-/** Case-insensitive substring match on the row's name and directory. */
-export function matchesQuery(row: LauncherRow, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return row.name.toLowerCase().includes(q) || row.dir.toLowerCase().includes(q);
-}
-
 /**
- * Split `name` into matched / unmatched segments for substring highlighting.
- * The template renders matched segments inside `<mark>`. An empty/whitespace
- * query yields a single unmatched segment (the whole name).
+ * Search + rank launcher rows with the command palette's fuzzy-match stack.
+ *
+ * Empty/whitespace query → all rows in input (recency) order, each with a
+ * single unmatched segment. Otherwise each row is scored via
+ * `scoreFields(q, name, dir)` — name is the primary field (full weight,
+ * supplies the highlight indices), dir the secondary (×0.75, indices never
+ * map onto the displayed name) — then sorted by `rankByScore` (score desc,
+ * recency tiebreak via original index). Non-matching rows are excluded.
+ *
+ * Deliberate behavior changes vs the old boolean `.includes()` filter:
+ * results rank by match quality rather than pure recency; subsequence
+ * matches are included (e.g. "chp" matches "chapter.md"); a dir-only match
+ * keeps the row but renders its name unhighlighted.
  */
-export function highlightSegments(name: string, query: string): NameSegment[] {
+export function searchRows(rows: LauncherRow[], query: string): RankedRow[] {
   const q = query.trim();
-  if (!q) return [{ text: name, match: false }];
-  const lower = name.toLowerCase();
-  const ql = q.toLowerCase();
-  const out: NameSegment[] = [];
-  let i = 0;
-  while (i < name.length) {
-    const idx = lower.indexOf(ql, i);
-    if (idx === -1) {
-      out.push({ text: name.slice(i), match: false });
-      break;
-    }
-    if (idx > i) out.push({ text: name.slice(i, idx), match: false });
-    out.push({ text: name.slice(idx, idx + ql.length), match: true });
-    i = idx + ql.length;
+  if (!q) {
+    return rows.map((row) => ({ row, nameSegments: toSegments(row.name, []) }));
   }
-  return out;
+  const scored: Array<{ result: RankedRow; score: number; origIndex: number }> = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const fieldScore = scoreFields(q, row.name, row.dir);
+    if (!fieldScore) continue;
+    scored.push({
+      result: { row, nameSegments: toSegments(row.name, fieldScore.indices) },
+      score: fieldScore.score,
+      origIndex: i,
+    });
+  }
+  return rankByScore(scored);
 }

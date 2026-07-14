@@ -1,14 +1,14 @@
 /**
- * Fuzzy matching + ranking for the command palette (C1).
+ * Fuzzy matching + ranking shared by the command palette (C1) and the
+ * new-tab launcher (`src/client/tabs/newTabLauncher.ts`).
  *
  * Two-tier scorer: an exact substring match always outranks a subsequence
  * match (see `fuzzyMatch` for the score bound reasoning), and within each
  * tier earlier / word-boundary-aligned matches score higher. Pure and
- * side-effect free so it's unit-testable independent of `CommandPalette.svelte`.
+ * side-effect free so it's unit-testable independent of the components.
  *
- * `toSegments` mirrors `highlightSegments` in `src/client/tabs/newTabLauncher.ts`
- * but takes explicit match indices (rather than re-deriving a substring range)
- * so it composes with `fuzzyMatch`'s subsequence output.
+ * `toSegments` takes explicit match indices (rather than re-deriving a
+ * substring range) so it composes with `fuzzyMatch`'s subsequence output.
  */
 
 /** A single fuzzy-match result: overall score plus the matched target indices. */
@@ -190,6 +190,20 @@ export function scoreFields(
   }
   if (scores.length === 0) return null;
   return { score: Math.max(...scores), indices: primaryMatch ? primaryMatch.indices : [] };
+}
+
+/**
+ * Sort scored candidates descending by score and return the results.
+ * The explicit `origIndex` tiebreak keeps equal-score candidates in their
+ * original (input) order — JS sort is stable, but the tiebreak documents the
+ * intent and survives a future non-stable-sort refactor. Sorts `scored` in
+ * place (callers always build the array fresh per query).
+ */
+export function rankByScore<T>(
+  scored: Array<{ result: T; score: number; origIndex: number }>,
+): T[] {
+  scored.sort((a, b) => b.score - a.score || a.origIndex - b.origIndex);
+  return scored.map((s) => s.result);
 }
 
 /**

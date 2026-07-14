@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { fuzzyMatch, scoreFields, toSegments } from "../../src/client/utils/fuzzy-match.js";
+import {
+  fuzzyMatch,
+  rankByScore,
+  scoreFields,
+  toSegments,
+} from "../../src/client/utils/fuzzy-match.js";
 
 describe("fuzzyMatch", () => {
   it("returns null for an empty query", () => {
@@ -185,14 +190,21 @@ describe("fuzzyMatch", () => {
   });
 });
 
-describe("ranking tie stability", () => {
-  // CommandPalette.svelte sorts scored candidates with
-  // `(a, b) => b.score - a.score || a.origIndex - b.origIndex`. Verify that
-  // shape here: equal-score candidates must keep their original relative
-  // order rather than being reshuffled.
+describe("rankByScore", () => {
+  // The shared ranking used by CommandPalette and the new-tab launcher:
+  // sort desc by score with an origIndex tiebreak, then unwrap results.
+  it("sorts descending by score", () => {
+    const ranked = rankByScore([
+      { result: "low", score: 10, origIndex: 0 },
+      { result: "high", score: 30, origIndex: 1 },
+      { result: "mid", score: 20, origIndex: 2 },
+    ]);
+    expect(ranked).toEqual(["high", "mid", "low"]);
+  });
+
   it("keeps original insertion order for equal-score matches", () => {
     const candidates = ["Open Panel", "Open Folder", "Open Panel"].map((target, origIndex) => ({
-      target,
+      result: target,
       origIndex,
       score: fuzzyMatch("open", target)!.score,
     }));
@@ -200,8 +212,8 @@ describe("ranking tie stability", () => {
     // this case) to "Open Folder" too — all three share the "Open " prefix.
     expect(candidates[0].score).toBe(candidates[2].score);
 
-    const sorted = [...candidates].sort((a, b) => b.score - a.score || a.origIndex - b.origIndex);
-    expect(sorted.map((c) => c.origIndex)).toEqual([0, 1, 2]);
+    const ranked = rankByScore([...candidates]);
+    expect(ranked).toEqual(["Open Panel", "Open Folder", "Open Panel"]);
   });
 
   it("re-sorts equal-score candidates back to original order even when shuffled beforehand", () => {
@@ -209,12 +221,15 @@ describe("ranking tie stability", () => {
       { label: "Alpha Panel", origIndex: 0 },
       { label: "Alpha Folder", origIndex: 1 },
       { label: "Alpha Widget", origIndex: 2 },
-    ].map((c) => ({ ...c, score: fuzzyMatch("alpha", c.label)!.score }));
+    ].map((c) => ({
+      result: c.origIndex,
+      origIndex: c.origIndex,
+      score: fuzzyMatch("alpha", c.label)!.score,
+    }));
     // Shuffle input order to confirm the sort — not insertion order — is what
     // restores origIndex order.
     const shuffled = [scored[2], scored[0], scored[1]];
-    const sorted = shuffled.sort((a, b) => b.score - a.score || a.origIndex - b.origIndex);
-    expect(sorted.map((c) => c.origIndex)).toEqual([0, 1, 2]);
+    expect(rankByScore(shuffled)).toEqual([0, 1, 2]);
   });
 });
 
