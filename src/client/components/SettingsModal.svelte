@@ -76,6 +76,7 @@ import { onMount, untrack } from "svelte";
 import { BYO_MODELS_ENABLED, TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
 import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
+import { activationKeydown } from "../utils/keyboard-activate";
 import { openServerPath } from "../utils/server-paths";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
@@ -435,12 +436,7 @@ async function handleViewChangelog(): Promise<void> {
     tabindex="-1"
     aria-label="Close settings"
     onclick={onClose}
-    onkeydown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onClose();
-      }
-    }}
+    onkeydown={activationKeydown(onClose)}
     data-testid="settings-modal-scrim"
     style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: var(--tandem-z-above-titlebar);"
   ></div>

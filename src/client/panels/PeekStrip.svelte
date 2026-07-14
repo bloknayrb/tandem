@@ -39,13 +39,6 @@ function dotClass(a: Annotation): string {
   if (a.author === "import") return "import";
   return "user";
 }
-
-function handleKey(e: KeyboardEvent) {
-  if (e.key === "Enter" || e.key === " ") {
-    e.preventDefault();
-    onActivate();
-  }
-}
 </script>
 
 <!-- A sliver of the collapsed panel pokes out from the window edge so the
@@ -58,7 +51,8 @@ function handleKey(e: KeyboardEvent) {
      stays out of the Tab sequence to avoid cluttering the focus order. Kept
      at -1 (NOT collapsed?0:-1) so the #859 inert-restoration-focus fix below
      holds — a Tab-reachable strip with no focus ring would be the inverse of
-     that bug. -->
+     that bug. No onkeydown: this is a native button, so Enter/Space
+     synthesize a click natively → onclick covers keyboard activation. -->
 <!-- display:none when the rail is expanded so the peek doesn't overlay the
      full panel's inside edge. Always rendered (instance persists) — the
      snap equivalent of the bundle's opacity:0-when-expanded. -->
@@ -71,7 +65,6 @@ function handleKey(e: KeyboardEvent) {
   aria-expanded={!collapsed}
   style={collapsed ? "" : "display: none;"}
   onclick={onActivate}
-  onkeydown={handleKey}
 >
   <span class="peek-chevron" aria-hidden="true">
     {side === "left" ? "›" : "‹"}

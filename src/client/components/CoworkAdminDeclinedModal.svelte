@@ -13,6 +13,7 @@ import {
   noteUacDeclinedAt,
 } from "../cowork/coworkAdminDismiss.svelte";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
+import { activationKeydown } from "../utils/keyboard-activate";
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -138,7 +139,11 @@ async function handleDisable(): Promise<void> {
     tabindex="-1" + aria-label gives svelte-check an interactive path without firing
     the noninteractive-click rule; Escape is handled by the window keydown effect
     above. tabindex="-1" keeps the backdrop out of the tab order so the dialog's focus
-    trap still works. The click guard dismisses only on a backdrop (not dialog) click.
+    trap still works. Both the click guard and the keydown (`selfOnly`) dismiss only
+    on the backdrop itself — the dialog is a CHILD of this div, so an unguarded
+    keydown would preventDefault() Enter/Space bubbling from the dialog's buttons
+    and link, breaking keyboard activation of every control inside while also
+    dismissing the popup out from under the user.
   -->
   <div
     class="cad-backdrop"
@@ -150,12 +155,12 @@ async function handleDisable(): Promise<void> {
       // `busy` guard: don't dismiss while a disable is in flight (see Escape handler).
       if (!busy && e.target === e.currentTarget) dismissAdminPopup();
     }}
-    onkeydown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
+    onkeydown={activationKeydown(
+      () => {
         if (!busy) dismissAdminPopup();
-      }
-    }}
+      },
+      { selfOnly: true },
+    )}
   >
     <div
       bind:this={modalEl}
