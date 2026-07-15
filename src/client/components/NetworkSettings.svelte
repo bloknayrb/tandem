@@ -2,12 +2,13 @@
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { createAppInfo } from "../hooks/useAppInfo.svelte.js";
 import type { SidecarRetryStrategy } from "../hooks/useTandemSettings.svelte.js";
+import { disabledControlStyle } from "../utils/colors.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
 type Props = SettingsTabContext;
 
-const { open, settings, onUpdate, connected, reconnectAttempts }: Props = $props();
+const { open, settings, onUpdate, connected, reconnectAttempts, readOnly }: Props = $props();
 
 const appInfo = createAppInfo(() => open);
 const isTauri = isTauriRuntime();
@@ -133,9 +134,10 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
       max="120000"
       step="5000"
       value={settings.degradedBannerDelayMs}
+      disabled={readOnly}
       oninput={(e) =>
         onUpdate({ degradedBannerDelayMs: Number((e.target as HTMLInputElement).value) })}
-      style="width: 100%; accent-color: var(--tandem-accent);"
+      style="width: 100%; accent-color: var(--tandem-accent); {disabledControlStyle(readOnly, 'auto')}"
       aria-label="Degraded banner delay"
     />
     <div
@@ -152,9 +154,10 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
     <select
       data-testid="network-retry-strategy"
       value={settings.sidecarRetryStrategy}
+      disabled={readOnly}
       onchange={(e) =>
         onUpdate({ sidecarRetryStrategy: (e.target as HTMLSelectElement).value as SidecarRetryStrategy })}
-      style="width: 100%; padding: 6px 8px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: pointer;"
+      style="width: 100%; padding: 6px 8px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); {disabledControlStyle(readOnly)}"
       aria-label="Reconnect retry strategy"
     >
       {#each RETRY_OPTIONS as opt (opt.value)}

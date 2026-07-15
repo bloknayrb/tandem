@@ -23,6 +23,15 @@ export interface SettingsTabContext {
   connected: boolean;
   reconnectAttempts: number;
   /**
+   * True when the settings store is forward-compat read-only
+   * (`settings._readOnly` — on-disk schemaVersion is newer than this build).
+   * `onUpdate` silently no-ops in that state; tabs must `disabled` every
+   * control that writes settings so one-way-bound checkboxes/radios don't
+   * flip visually and go stale. Required (not optional) so the compiler
+   * forces every context constructor to thread it.
+   */
+  readOnly: boolean;
+  /**
    * Push a transient toast notification. Tabs use this for ephemeral
    * "saved" / "failed" feedback that doesn't warrant a dedicated banner.
    * Fixed strings only — never include raw `err.message` (path leak risk).
@@ -76,7 +85,9 @@ import { onMount, untrack } from "svelte";
 import { BYO_MODELS_ENABLED, TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
 import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
+import { activationKeydown } from "../utils/keyboard-activate";
 import { openServerPath } from "../utils/server-paths";
+import SettingsReadonlyBanner from "./SettingsReadonlyBanner.svelte";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
@@ -271,12 +282,19 @@ const activeTab = $derived(
 );
 const activeTabLabel = $derived(activeTab.label);
 
+// Forward-compat read-only: derived once here, threaded to every tab via
+// the context. The hook's silent no-op in `updateSettings` is the
+// load-bearing guard; `readOnly` exists so tabs can disable their write
+// controls for honest affordance (see SettingsTabContext.readOnly).
+const readOnly = $derived(settings._readOnly === true);
+
 const tabContext = $derived<SettingsTabContext>({
   open,
   settings,
   onUpdate,
   connected,
   reconnectAttempts,
+  readOnly,
   notify,
 });
 
@@ -435,12 +453,7 @@ async function handleViewChangelog(): Promise<void> {
     tabindex="-1"
     aria-label="Close settings"
     onclick={onClose}
-    onkeydown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onClose();
-      }
-    }}
+    onkeydown={activationKeydown(onClose)}
     data-testid="settings-modal-scrim"
     style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); z-index: var(--tandem-z-above-titlebar);"
   ></div>
@@ -600,6 +613,12 @@ async function handleViewChangelog(): Promise<void> {
           ×
         </button>
       </header>
+
+      {#if readOnly}
+        <!-- Non-flexing row between the header and the scroll body so every
+             tab shows it. -->
+        <SettingsReadonlyBanner />
+      {/if}
 
       <div class="settings-modal-content-body tandem-scroll-fade-y" use:scrollFade={"y"}>
         <div class="settings-modal-content-inner">
@@ -897,6 +916,12 @@ async function handleViewChangelog(): Promise<void> {
   :global(.settings-mode-btn:focus-visible) {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 1px;
+  }
+  /* Forward-compat read-only store: the tab sets `disabled` on these radios;
+     the affordance lives here with the rest of the class's state variants. */
+  :global(.settings-mode-btn:disabled) {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 
   /* W9: narrow viewports collapse the persistent sidebar grid column into a

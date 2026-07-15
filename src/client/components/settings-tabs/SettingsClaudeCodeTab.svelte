@@ -10,6 +10,7 @@ import {
   LAUNCHER_ERROR_PATH_REJECTED,
 } from "../../../shared/launcher/contract";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
+import { disabledControlStyle } from "../../utils/colors";
 import { API_BASE } from "../../utils/fileUpload";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -243,9 +244,10 @@ function handleReset() {
     max={SELECTION_DWELL_MAX_MS}
     step={100}
     value={ctx.settings.selectionDwellMs}
+    disabled={ctx.readOnly}
     oninput={(e) =>
       ctx.onUpdate({ selectionDwellMs: Number((e.target as HTMLInputElement).value) })}
-    style="width: 100%; accent-color: var(--tandem-accent);"
+    style="width: 100%; accent-color: var(--tandem-accent); {disabledControlStyle(ctx.readOnly, 'auto')}"
     aria-label="Selection dwell time"
   />
   <div
@@ -263,9 +265,10 @@ function handleReset() {
   <input
     type="checkbox"
     checked={ctx.settings.selectionToolbar}
+    disabled={ctx.readOnly}
     onchange={(e) =>
       ctx.onUpdate({ selectionToolbar: (e.target as HTMLInputElement).checked })}
-    style="accent-color: var(--tandem-accent);"
+    style="accent-color: var(--tandem-accent); {disabledControlStyle(ctx.readOnly)}"
   />
   <span>Show floating selection toolbar</span>
 </label>
@@ -277,8 +280,9 @@ function handleReset() {
   <input
     type="checkbox"
     checked={ctx.settings.marginView}
+    disabled={ctx.readOnly}
     onchange={(e) => ctx.onUpdate({ marginView: (e.target as HTMLInputElement).checked })}
-    style="accent-color: var(--tandem-accent);"
+    style="accent-color: var(--tandem-accent); {disabledControlStyle(ctx.readOnly)}"
   />
   <span>Margin annotation view (Word-style)</span>
 </label>

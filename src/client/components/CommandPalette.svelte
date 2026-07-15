@@ -6,7 +6,7 @@ import type { Annotation } from "../../shared/types.js";
 import { type Action, getActionsMap } from "../actions/registry.svelte.js";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { STATIC_SHORTCUT_ROWS } from "../actions/static-shortcuts.js";
-import { scoreFields, toSegments } from "../utils/fuzzy-match.js";
+import { rankByScore, scoreFields, toSegments } from "../utils/fuzzy-match.js";
 import { walkHeadings } from "../utils/headings.js";
 
 // ---------------------------------------------------------------------------
@@ -71,14 +71,9 @@ type PaletteResult = ActionResult | HeadingResult | AnnotationResult | ShortcutR
 // Result derivations
 // ---------------------------------------------------------------------------
 
-// Ranking helper shared by all four modes below: attach a stable original
-// index alongside the max weighted-field score, then sort desc by score with
-// an origIndex tiebreak (JS sort is stable, but the explicit tiebreak
-// documents the intent and survives a future non-stable-sort refactor).
-function rankByScore<T>(scored: { result: T; score: number; origIndex: number }[]): T[] {
-  scored.sort((a, b) => b.score - a.score || a.origIndex - b.origIndex);
-  return scored.map((s) => s.result);
-}
+// Ranking shared by all four modes below (and the new-tab launcher):
+// `rankByScore` from utils/fuzzy-match sorts desc by score with a stable
+// origIndex tiebreak.
 
 // Commands: `>` prefix or no prefix
 const commandResults = $derived.by((): ActionResult[] => {

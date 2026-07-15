@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
 import type { RecentFileEntry } from "../utils/recentFiles.js";
-import { highlightSegments, matchesQuery, toLauncherRow } from "./newTabLauncher.js";
+import { searchRows, toLauncherRow } from "./newTabLauncher.js";
 
 interface Props {
   recentFiles: RecentFileEntry[];
@@ -29,7 +29,7 @@ let menuEl: HTMLDivElement | null = $state(null);
 let searchInputEl: HTMLInputElement | null = $state(null);
 
 const rows = $derived(recentFiles.map((e) => toLauncherRow(e)));
-const filtered = $derived(rows.filter((r) => matchesQuery(r, query)));
+const filtered = $derived(searchRows(rows, query));
 const hasRecents = $derived(rows.length > 0);
 const hasQuery = $derived(query.trim().length > 0);
 
@@ -153,25 +153,25 @@ $effect(() => {
         </div>
       {:else}
         <div class="ntl-recents">
-          {#each filtered as row, i (row.path)}
+          {#each filtered as entry, i (entry.row.path)}
             <button
               type="button"
               data-nav-item
               class="ntl-recent"
               data-testid={`new-tab-recent-${i}`}
-              onclick={() => onOpen(row.path)}
-              title={row.path}
+              onclick={() => onOpen(entry.row.path)}
+              title={entry.row.path}
             >
-              <span class="ntl-pip ntl-pip-{row.pip}"></span>
+              <span class="ntl-pip ntl-pip-{entry.row.pip}"></span>
               <span class="ntl-body">
                 <span class="ntl-name">
-                  {#each highlightSegments(row.name, query) as seg, si (si)}
+                  {#each entry.nameSegments as seg, si (si)}
                     {#if seg.match}<mark>{seg.text}</mark>{:else}{seg.text}{/if}
                   {/each}
                 </span>
-                {#if row.dir}<span class="ntl-path">{row.dir}</span>{/if}
+                {#if entry.row.dir}<span class="ntl-path">{entry.row.dir}</span>{/if}
               </span>
-              {#if row.when}<span class="ntl-when">{row.when}</span>{/if}
+              {#if entry.row.when}<span class="ntl-when">{entry.row.when}</span>{/if}
             </button>
           {/each}
         </div>

@@ -1,9 +1,10 @@
 <script lang="ts">
+import { disabledControlStyle } from "../utils/colors";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
 type Props = SettingsTabContext;
 
-let { settings, onUpdate }: Props = $props();
+let { settings, onUpdate, readOnly }: Props = $props();
 
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
@@ -18,8 +19,9 @@ const sectionLabelStyle =
     <input
       type="checkbox"
       checked={settings.highContrast}
+      disabled={readOnly}
       onchange={(e) => onUpdate({ highContrast: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent);"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>High contrast</span>
   </label>
@@ -37,8 +39,9 @@ const sectionLabelStyle =
     <input
       type="checkbox"
       checked={settings.annotationPatterns}
+      disabled={readOnly}
       onchange={(e) => onUpdate({ annotationPatterns: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent);"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Use pattern fills for annotations</span>
   </label>

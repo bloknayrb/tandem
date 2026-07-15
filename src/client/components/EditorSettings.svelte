@@ -2,11 +2,12 @@
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createRadioGroup } from "../hooks/useRadioGroup.svelte";
 import type { EditorMeasure } from "../hooks/useTandemSettings";
+import { disabledControlStyle } from "../utils/colors";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
 type Props = SettingsTabContext;
 
-let { settings, onUpdate, notify }: Props = $props();
+let { settings, onUpdate, notify, readOnly }: Props = $props();
 
 const sectionLabelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
@@ -93,8 +94,9 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
         aria-checked={active}
         tabindex={measureRg.tabIndexFor(preset.value)}
         data-testid={`editor-measure-${preset.value}`}
+        disabled={readOnly}
         onclick={() => onUpdate({ editorMeasure: preset.value })}
-        style={`flex: 1; padding: 6px 4px; border: none; border-radius: var(--tandem-r-1); cursor: pointer; font-size: 11px; font-weight: ${active ? 600 : 400}; background: ${active ? "var(--tandem-accent)" : "transparent"}; color: ${active ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
+        style={`flex: 1; padding: 6px 4px; border: none; border-radius: var(--tandem-r-1); ${disabledControlStyle(readOnly)} font-size: 11px; font-weight: ${active ? 600 : 400}; background: ${active ? "var(--tandem-accent)" : "transparent"}; color: ${active ? "var(--tandem-accent-fg)" : "var(--tandem-fg)"};`}
       >
         {preset.label}
       </button>
@@ -120,17 +122,19 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
         name="default-save-dir"
         data-testid="settings-default-save-folder-input"
         value={settings.defaultSaveDirectory ?? ""}
+        disabled={readOnly}
         onblur={(e) => commitSaveDirectory((e.currentTarget as HTMLInputElement).value)}
         placeholder="(default: AI working directory, then home)"
         aria-label="Default save folder path"
-        style="flex: 1; min-width: 0; padding: 6px 8px; font-size: 11px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg);"
+        style="flex: 1; min-width: 0; padding: 6px 8px; font-size: 11px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg); {disabledControlStyle(readOnly, 'auto')}"
       />
       {#if isTauri}
         <button
           type="button"
           data-testid="settings-default-save-folder-pick"
+          disabled={readOnly}
           onclick={pickSaveFolder}
-          style="padding: 6px 10px; font-size: 11px; white-space: nowrap; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg); cursor: pointer;"
+          style="padding: 6px 10px; font-size: 11px; white-space: nowrap; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); background: var(--tandem-surface); color: var(--tandem-fg); {disabledControlStyle(readOnly)}"
         >
           Choose…
         </button>
@@ -139,8 +143,8 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
         type="button"
         data-testid="settings-default-save-folder-reset"
         onclick={() => commitSaveDirectory(null)}
-        disabled={!settings.defaultSaveDirectory}
-        style={`padding: 6px 10px; font-size: 11px; white-space: nowrap; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); background: transparent; color: var(--tandem-fg-muted); cursor: ${settings.defaultSaveDirectory ? "pointer" : "default"}; opacity: ${settings.defaultSaveDirectory ? 1 : 0.5};`}
+        disabled={readOnly || !settings.defaultSaveDirectory}
+        style={`padding: 6px 10px; font-size: 11px; white-space: nowrap; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); background: transparent; color: var(--tandem-fg-muted); ${disabledControlStyle(readOnly || !settings.defaultSaveDirectory)}`}
       >
         Reset
       </button>
@@ -156,8 +160,9 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
       <input
         type="checkbox"
         checked={settings.smartTypography}
+        disabled={readOnly}
         onchange={(e) => onUpdate({ smartTypography: (e.target as HTMLInputElement).checked })}
-        style="accent-color: var(--tandem-accent);"
+        style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
       />
       <span>Smart typography</span>
     </label>
@@ -177,8 +182,9 @@ const activeHint = $derived(PRESETS.find((p) => p.value === settings.editorMeasu
       <input
         type="checkbox"
         checked={settings.spellcheck}
+        disabled={readOnly}
         onchange={(e) => onUpdate({ spellcheck: (e.target as HTMLInputElement).checked })}
-        style="accent-color: var(--tandem-accent);"
+        style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
       />
       <span>Spellcheck</span>
     </label>

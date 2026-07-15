@@ -7,11 +7,12 @@ import type {
   TextSize,
   ThemePreference,
 } from "../hooks/useTandemSettings.svelte";
+import { disabledControlStyle } from "../utils/colors";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
 type Props = SettingsTabContext;
 
-let { settings, onUpdate }: Props = $props();
+let { settings, onUpdate, readOnly }: Props = $props();
 
 // #811: per-format editor font. Keyed by the normalized `format` string
 // (matches `detectFormat`: `.markdown`→md, `.htm`→html).
@@ -64,12 +65,11 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
     `border: 2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"};`,
     "border-radius: var(--tandem-r-3);",
     `background: ${disabled ? "var(--tandem-surface-muted)" : selected ? "var(--tandem-accent-bg)" : "var(--tandem-surface)"};`,
-    `cursor: ${disabled ? "not-allowed" : "pointer"};`,
+    disabledControlStyle(disabled ?? false),
     "text-align: center;",
     "font-size: 11px;",
     `color: ${disabled ? "var(--tandem-fg-subtle)" : selected ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-muted)"};`,
     `font-weight: ${selected ? 600 : 400};`,
-    `opacity: ${disabled ? 0.6 : 1};`,
     "transition: border-color 0.15s, background 0.15s;",
   ].join(" ");
 }
@@ -129,8 +129,9 @@ for (const row of FONT_FORMAT_ROWS) {
         role="radio"
         aria-checked={settings.theme === t}
         tabindex={themeRg.tabIndexFor(t)}
+        disabled={readOnly}
         onclick={() => onUpdate({ theme: t })}
-        style={cardStyle(settings.theme === t)}
+        style={cardStyle(settings.theme === t, readOnly)}
       >
         {t === "light" ? "Light" : t === "warm" ? "Warm" : t === "dark" ? "Dark" : "System"}
       </button>
@@ -147,11 +148,12 @@ for (const row of FONT_FORMAT_ROWS) {
       <input
         type="checkbox"
         checked={settings.systemLightVariant === "warm"}
+        disabled={readOnly}
         onchange={(e) =>
           onUpdate({
             systemLightVariant: (e.target as HTMLInputElement).checked ? "warm" : "light",
           })}
-        style="accent-color: var(--tandem-accent);"
+        style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
       />
       <span>Use Warm when system is light</span>
     </label>
@@ -179,8 +181,9 @@ for (const row of FONT_FORMAT_ROWS) {
       role="radio"
       aria-checked={settings.primaryTab === "chat"}
       tabindex={primaryTabRg.tabIndexFor("chat")}
+      disabled={readOnly}
       onclick={() => onUpdate({ primaryTab: "chat" })}
-      style={cardStyle(settings.primaryTab === "chat")}
+      style={cardStyle(settings.primaryTab === "chat", readOnly)}
     >
       Chat
     </button>
@@ -189,8 +192,9 @@ for (const row of FONT_FORMAT_ROWS) {
       role="radio"
       aria-checked={settings.primaryTab === "annotations"}
       tabindex={primaryTabRg.tabIndexFor("annotations")}
+      disabled={readOnly}
       onclick={() => onUpdate({ primaryTab: "annotations" })}
-      style={cardStyle(settings.primaryTab === "annotations")}
+      style={cardStyle(settings.primaryTab === "annotations", readOnly)}
     >
       Annotations
     </button>
@@ -214,8 +218,9 @@ for (const row of FONT_FORMAT_ROWS) {
         role="radio"
         aria-checked={settings.textSize === size}
         tabindex={textSizeRg.tabIndexFor(size)}
+        disabled={readOnly}
         onclick={() => onUpdate({ textSize: size })}
-        style={cardStyle(settings.textSize === size)}
+        style={cardStyle(settings.textSize === size, readOnly)}
       >
         {size === "s" ? "Small" : size === "m" ? "Medium" : "Large"}
       </button>
@@ -242,8 +247,9 @@ for (const row of FONT_FORMAT_ROWS) {
       step="1"
       aria-labelledby="settings-accent-color-label"
       value={settings.accentHue}
+      disabled={readOnly}
       oninput={(e) => onUpdate({ accentHue: Number((e.target as HTMLInputElement).value) })}
-      style="flex: 1; accent-color: var(--tandem-accent);"
+      style="flex: 1; accent-color: var(--tandem-accent); {disabledControlStyle(readOnly, 'auto')}"
     />
   </div>
 </div>
@@ -264,8 +270,9 @@ for (const row of FONT_FORMAT_ROWS) {
         role="radio"
         aria-checked={settings.editorFont === value}
         tabindex={editorFontRg.tabIndexFor(value)}
+        disabled={readOnly}
         onclick={() => onUpdate({ editorFont: value })}
-        style={cardStyle(settings.editorFont === value)}
+        style={cardStyle(settings.editorFont === value, readOnly)}
       >
         {label}
       </button>
@@ -282,9 +289,9 @@ for (const row of FONT_FORMAT_ROWS) {
     <button
       data-testid="font-by-extension-reset"
       type="button"
-      disabled={!hasFontOverrides}
+      disabled={readOnly || !hasFontOverrides}
       onclick={resetFontsToDefaults}
-      style={`background: none; border: none; padding: 0; font-size: var(--tandem-text-2xs); color: ${hasFontOverrides ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-subtle)"}; cursor: ${hasFontOverrides ? "pointer" : "default"}; text-decoration: ${hasFontOverrides ? "underline" : "none"};`}
+      style={`background: none; border: none; padding: 0; font-size: var(--tandem-text-2xs); color: ${!readOnly && hasFontOverrides ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-subtle)"}; cursor: ${!readOnly && hasFontOverrides ? "pointer" : "not-allowed"}; text-decoration: ${!readOnly && hasFontOverrides ? "underline" : "none"};`}
     >
       Reset to defaults
     </button>
@@ -309,8 +316,9 @@ for (const row of FONT_FORMAT_ROWS) {
               role="radio"
               aria-checked={effectiveFontFor(row.format) === value}
               tabindex={fontByExtensionRgs[row.format].tabIndexFor(value)}
+              disabled={readOnly}
               onclick={() => setFontFor(row.format, value)}
-              style={cardStyle(effectiveFontFor(row.format) === value)}
+              style={cardStyle(effectiveFontFor(row.format) === value, readOnly)}
             >
               {label}
             </button>
@@ -340,8 +348,9 @@ for (const row of FONT_FORMAT_ROWS) {
         role="radio"
         aria-checked={settings.density === value}
         tabindex={densityRg.tabIndexFor(value)}
+        disabled={readOnly}
         onclick={() => onUpdate({ density: value })}
-        style={cardStyle(settings.density === value)}
+        style={cardStyle(settings.density === value, readOnly)}
       >
         {label}
       </button>
@@ -361,12 +370,13 @@ for (const row of FONT_FORMAT_ROWS) {
       <input
         type="checkbox"
         checked={settings[field]}
+        disabled={readOnly}
         onchange={(e) =>
           onUpdate({
             [field]: (e.target as HTMLInputElement).checked,
             ...(settings.decorationsMuted ? { decorationsMuted: false } : {}),
           })}
-        style="accent-color: var(--tandem-accent);"
+        style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
       />
       <span>{label}</span>
     </label>
@@ -388,8 +398,9 @@ for (const row of FONT_FORMAT_ROWS) {
     <input
       type="checkbox"
       checked={settings.reduceMotion}
+      disabled={readOnly}
       onchange={(e) => onUpdate({ reduceMotion: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent);"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Reduce motion</span>
   </label>
@@ -407,9 +418,10 @@ for (const row of FONT_FORMAT_ROWS) {
     <input
       type="checkbox"
       checked={settings.formattingBarVisible}
+      disabled={readOnly}
       onchange={(e) =>
         onUpdate({ formattingBarVisible: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent);"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Show formatting bar</span>
   </label>
@@ -428,8 +440,9 @@ for (const row of FONT_FORMAT_ROWS) {
     <input
       type="checkbox"
       checked={settings.showRawMarkdown}
+      disabled={readOnly}
       onchange={(e) => onUpdate({ showRawMarkdown: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent);"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Show raw markdown</span>
   </label>
@@ -449,8 +462,9 @@ for (const row of FONT_FORMAT_ROWS) {
     <input
       type="checkbox"
       checked={settings.railHoverReveal}
+      disabled={readOnly}
       onchange={(e) => onUpdate({ railHoverReveal: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent);"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Reveal rails on hover</span>
   </label>

@@ -134,15 +134,6 @@ const kbdStyle =
       </button>
     </div>
 
-    {#if readOnly}
-      <div
-        data-testid="store-readonly-banner"
-        style="font-size: 11px; color: var(--tandem-warning-fg); margin-bottom: 8px;"
-      >
-        Settings are read-only (a newer client wrote them). Shortcut changes are disabled.
-      </div>
-    {/if}
-
     <div style="display: flex; flex-direction: column; gap: 4px;">
       {#each REMAPPABLE_SHORTCUT_IDS as id (id)}
         {@const isRecording = recordingId === id}

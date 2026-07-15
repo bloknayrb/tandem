@@ -3,6 +3,7 @@ import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
+import { activationKeydown } from "../utils/keyboard-activate";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
 import { getCardLabel, getHighlightBorder } from "./annotation-card-helpers";
@@ -191,22 +192,13 @@ function handleKeyDown(e: KeyboardEvent) {
     handleCancel();
   }
 }
-
-// Keyboard activation for the card root (plain tabindex, not roving — the card
-// is a heavyweight composite with inner tabbables like reply/accept buttons,
-// so we only act on Enter/Space when the event target IS the root itself; the
-// `e.target !== e.currentTarget` guard keeps Enter in the reply composer and
-// Space on inner buttons from re-triggering onClick). Alt+]/Alt+[ registry
-// navigation (SidePanel) is unrelated and untouched by this handler.
-function handleCardKeyDown(e: KeyboardEvent) {
-  if (e.target !== e.currentTarget) return;
-  if (e.key === "Enter" || e.key === " ") {
-    e.preventDefault();
-    onClick?.();
-  }
-}
 </script>
 
+<!-- Keyboard activation on the card root uses plain tabindex, not roving —
+     the card is a heavyweight composite with inner tabbables (reply/accept
+     buttons), so `selfOnly` keeps Enter in the reply composer and Space on
+     inner buttons from re-triggering onClick. Alt+]/Alt+[ registry navigation
+     (SidePanel) is unrelated. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
@@ -217,7 +209,7 @@ function handleCardKeyDown(e: KeyboardEvent) {
   in:cardEnter={{ enabled: lifecycleMotion, reduceMotion }}
   out:cardExit={{ enabled: lifecycleMotion, reduceMotion, id: annotation.id, modes: exitModes }}
   onclick={onClick}
-  onkeydown={handleCardKeyDown}
+  onkeydown={activationKeydown(() => onClick?.(), { selfOnly: true })}
   tabindex={onClick ? 0 : undefined}
   data-testid="annotation-card-{annotation.id}"
   data-annotation-id={annotation.id}
