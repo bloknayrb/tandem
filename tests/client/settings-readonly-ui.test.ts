@@ -14,14 +14,21 @@
  */
 
 import { cleanup, render } from "@testing-library/svelte";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { tick } from "svelte";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AccessibilitySettings from "../../src/client/components/AccessibilitySettings.svelte";
 import AppearanceSettings from "../../src/client/components/AppearanceSettings.svelte";
 import EditorSettings from "../../src/client/components/EditorSettings.svelte";
+import NetworkSettings from "../../src/client/components/NetworkSettings.svelte";
 import SettingsModal from "../../src/client/components/SettingsModal.svelte";
+import SettingsPopover from "../../src/client/components/SettingsPopover.svelte";
 import ShortcutEditorList from "../../src/client/components/ShortcutEditorList.svelte";
+import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";
 import SettingsCollaborationTab from "../../src/client/components/settings-tabs/SettingsCollaborationTab.svelte";
+import SettingsModelsTab from "../../src/client/components/settings-tabs/SettingsModelsTab.svelte";
 import { loadSettings, type TandemSettings } from "../../src/client/hooks/useTandemSettings";
+import { _resetTandemSettingsSingletonForTests } from "../../src/client/hooks/useTandemSettings.svelte.js";
+import { installLocalStorageStub } from "../helpers/local-storage-stub.js";
 
 // loadSettings() against empty localStorage yields a complete, valid
 // TandemSettings (same approach as useTandemSettings.test.ts) — no
@@ -45,7 +52,19 @@ function makeCtx(readOnly: boolean) {
 const byTestId = (container: HTMLElement, id: string) =>
   container.querySelector<HTMLElement>(`[data-testid='${id}']`);
 
-afterEach(() => cleanup());
+// NetworkSettings, SettingsClaudeCodeTab, and SettingsPopover each fetch
+// app-info / integration state on mount (`open: true`). A never-resolving
+// stub keeps every case in this file from making a real network call
+// without needing per-suite fetch wiring — none of these tests assert on
+// that fetched data, only on the readOnly-gated controls.
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 type ControlCase = {
   name: string;
@@ -116,6 +135,27 @@ const CASES: ControlCase[] = [
     name: "SettingsCollaborationTab solo-rail checkbox",
     component: SettingsCollaborationTab,
     testid: "settings-modal-solo-rail-hidden-toggle",
+    innerInput: true,
+  },
+  {
+    name: "NetworkSettings degraded-delay slider",
+    component: NetworkSettings,
+    testid: "network-degraded-delay-slider",
+  },
+  {
+    name: "NetworkSettings retry-strategy select",
+    component: NetworkSettings,
+    testid: "network-retry-strategy",
+  },
+  {
+    name: "SettingsClaudeCodeTab dwell-time slider",
+    component: SettingsClaudeCodeTab,
+    testid: "settings-modal-dwell-time-slider",
+  },
+  {
+    name: "SettingsClaudeCodeTab selection-toolbar checkbox",
+    component: SettingsClaudeCodeTab,
+    testid: "settings-modal-selection-toolbar-toggle",
     innerInput: true,
   },
 ];
@@ -199,6 +239,90 @@ describe("ShortcutEditorList under read-only", () => {
     expect(byTestId(container, "store-readonly-banner")).toBeNull();
     expect((byTestId(container, "shortcuts-reset-all") as HTMLButtonElement | null)?.disabled).toBe(
       true,
+    );
+  });
+});
+
+// SettingsPopover derives `readOnly` itself (not threaded via
+// SettingsTabContext — the popover predates the tabbed modal), so it needs
+// its own settings._readOnly-driven coverage rather than a makeCtx() case.
+describe("SettingsPopover — readOnly gating", () => {
+  function renderPopover(readOnlyStore: boolean) {
+    return render(SettingsPopover, {
+      props: {
+        open: true,
+        onClose: vi.fn(),
+        settings: makeSettings(readOnlyStore),
+        onUpdate: vi.fn(),
+      },
+    });
+  }
+
+  function goToCollaboration(container: HTMLElement) {
+    const btn = Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-nav-btn")).find(
+      (b) => b.textContent?.includes("Collaboration"),
+    );
+    expect(btn, "Collaboration nav button not found").toBeTruthy();
+    btn?.click();
+  }
+
+  it("banner present iff settings._readOnly === true", () => {
+    const { container } = renderPopover(true);
+    expect(byTestId(container, "settings-readonly-banner")).toBeTruthy();
+    cleanup();
+    const { container: rw } = renderPopover(false);
+    expect(byTestId(rw, "settings-readonly-banner")).toBeNull();
+  });
+
+  it("Collaboration section's default-mode button and solo-rail checkbox disabled when readOnly", async () => {
+    const { container } = renderPopover(true);
+    goToCollaboration(container);
+    await tick();
+    expect(
+      (byTestId(container, "default-mode-tandem-btn") as HTMLButtonElement | null)?.disabled,
+    ).toBe(true);
+    const soloRail = byTestId(container, "solo-rail-hidden-toggle");
+    expect(soloRail?.querySelector<HTMLInputElement>("input")?.disabled).toBe(true);
+  });
+
+  it("Collaboration section's controls enabled when not readOnly", async () => {
+    const { container } = renderPopover(false);
+    goToCollaboration(container);
+    await tick();
+    expect(
+      (byTestId(container, "default-mode-tandem-btn") as HTMLButtonElement | null)?.disabled,
+    ).toBe(false);
+    const soloRail = byTestId(container, "solo-rail-hidden-toggle");
+    expect(soloRail?.querySelector<HTMLInputElement>("input")?.disabled).toBe(false);
+  });
+});
+
+// SettingsModelsTab hangs its Models registry off the module-level
+// `createTandemSettings()` singleton rather than the SettingsTabContext
+// `settings`/`onUpdate` props (see the component's own doc comment), so it
+// needs the singleton reset + a real localStorage backing rather than
+// makeSettings()/makeCtx() — those build a standalone TandemSettings object
+// the singleton never sees.
+describe("SettingsModelsTab — readOnly gating", () => {
+  beforeEach(() => {
+    installLocalStorageStub();
+    _resetTandemSettingsSingletonForTests();
+  });
+
+  afterEach(() => {
+    _resetTandemSettingsSingletonForTests();
+  });
+
+  it("empty-state add-model button disabled when readOnly", () => {
+    const { container } = render(SettingsModelsTab, { props: makeCtx(true) });
+    expect(byTestId(container, "models-empty-state")).toBeTruthy();
+    expect((byTestId(container, "model-add-btn") as HTMLButtonElement | null)?.disabled).toBe(true);
+  });
+
+  it("empty-state add-model button enabled when not readOnly", () => {
+    const { container } = render(SettingsModelsTab, { props: makeCtx(false) });
+    expect((byTestId(container, "model-add-btn") as HTMLButtonElement | null)?.disabled).toBe(
+      false,
     );
   });
 });
