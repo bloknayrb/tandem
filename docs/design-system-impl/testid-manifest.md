@@ -162,11 +162,11 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Settings — modal (Wave 9 + responsive)
 - `settings-modal{,-scrim,-content,-close-btn,-narrow-hamburger}`
-- `settings-readonly-banner` — forward-compat read-only notice, rendered on
-  BOTH settings surfaces (modal: between header and scroll body; popover: above
-  the scroll body) when `settings._readOnly` is set. Distinct from
-  `store-readonly-banner` (ShortcutEditorList's inline notice, popover-only —
-  suppressed inside the modal via `showReadOnlyBanner={false}`).
+- `settings-readonly-banner` — forward-compat read-only notice
+  (`SettingsReadonlyBanner.svelte`), rendered on BOTH settings surfaces
+  (modal: between header and scroll body; popover: above the scroll body)
+  when `settings._readOnly` is set. Distinct from `store-readonly-banner`
+  (SidePanel's annotation-store lock banner).
 - `settings-modal-sidebar-{version,footer}`,
   `settings-modal-mcp-status`, `settings-modal-tab-{*}`,
   `settings-modal-display-name`, `settings-modal-shortcuts-list`,

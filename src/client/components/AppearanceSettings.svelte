@@ -7,6 +7,7 @@ import type {
   TextSize,
   ThemePreference,
 } from "../hooks/useTandemSettings.svelte";
+import { disabledControlStyle } from "../utils/colors";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
 type Props = SettingsTabContext;
@@ -64,12 +65,11 @@ function cardStyle(selected: boolean, disabled?: boolean): string {
     `border: 2px solid ${selected ? "var(--tandem-accent)" : "var(--tandem-border)"};`,
     "border-radius: var(--tandem-r-3);",
     `background: ${disabled ? "var(--tandem-surface-muted)" : selected ? "var(--tandem-accent-bg)" : "var(--tandem-surface)"};`,
-    `cursor: ${disabled ? "not-allowed" : "pointer"};`,
+    disabledControlStyle(disabled ?? false),
     "text-align: center;",
     "font-size: 11px;",
     `color: ${disabled ? "var(--tandem-fg-subtle)" : selected ? "var(--tandem-accent-fg-strong)" : "var(--tandem-fg-muted)"};`,
     `font-weight: ${selected ? 600 : 400};`,
-    `opacity: ${disabled ? 0.6 : 1};`,
     "transition: border-color 0.15s, background 0.15s;",
   ].join(" ");
 }
@@ -153,7 +153,7 @@ for (const row of FONT_FORMAT_ROWS) {
           onUpdate({
             systemLightVariant: (e.target as HTMLInputElement).checked ? "warm" : "light",
           })}
-        style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+        style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
       />
       <span>Use Warm when system is light</span>
     </label>
@@ -249,7 +249,7 @@ for (const row of FONT_FORMAT_ROWS) {
       value={settings.accentHue}
       disabled={readOnly}
       oninput={(e) => onUpdate({ accentHue: Number((e.target as HTMLInputElement).value) })}
-      style="flex: 1; accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'auto'}; opacity: {readOnly ? 0.5 : 1};"
+      style="flex: 1; accent-color: var(--tandem-accent); {disabledControlStyle(readOnly, 'auto')}"
     />
   </div>
 </div>
@@ -376,7 +376,7 @@ for (const row of FONT_FORMAT_ROWS) {
             [field]: (e.target as HTMLInputElement).checked,
             ...(settings.decorationsMuted ? { decorationsMuted: false } : {}),
           })}
-        style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+        style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
       />
       <span>{label}</span>
     </label>
@@ -400,7 +400,7 @@ for (const row of FONT_FORMAT_ROWS) {
       checked={settings.reduceMotion}
       disabled={readOnly}
       onchange={(e) => onUpdate({ reduceMotion: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Reduce motion</span>
   </label>
@@ -421,7 +421,7 @@ for (const row of FONT_FORMAT_ROWS) {
       disabled={readOnly}
       onchange={(e) =>
         onUpdate({ formattingBarVisible: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Show formatting bar</span>
   </label>
@@ -442,7 +442,7 @@ for (const row of FONT_FORMAT_ROWS) {
       checked={settings.showRawMarkdown}
       disabled={readOnly}
       onchange={(e) => onUpdate({ showRawMarkdown: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Show raw markdown</span>
   </label>
@@ -464,7 +464,7 @@ for (const row of FONT_FORMAT_ROWS) {
       checked={settings.railHoverReveal}
       disabled={readOnly}
       onchange={(e) => onUpdate({ railHoverReveal: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Reveal rails on hover</span>
   </label>

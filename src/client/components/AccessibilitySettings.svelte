@@ -1,4 +1,5 @@
 <script lang="ts">
+import { disabledControlStyle } from "../utils/colors";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
 type Props = SettingsTabContext;
@@ -20,7 +21,7 @@ const sectionLabelStyle =
       checked={settings.highContrast}
       disabled={readOnly}
       onchange={(e) => onUpdate({ highContrast: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>High contrast</span>
   </label>
@@ -40,7 +41,7 @@ const sectionLabelStyle =
       checked={settings.annotationPatterns}
       disabled={readOnly}
       onchange={(e) => onUpdate({ annotationPatterns: (e.target as HTMLInputElement).checked })}
-      style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
     />
     <span>Use pattern fills for annotations</span>
   </label>

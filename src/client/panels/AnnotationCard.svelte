@@ -192,15 +192,13 @@ function handleKeyDown(e: KeyboardEvent) {
     handleCancel();
   }
 }
-
-// Keyboard activation for the card root (plain tabindex, not roving — the card
-// is a heavyweight composite with inner tabbables like reply/accept buttons,
-// so we only act on Enter/Space when the event target IS the root itself; the
-// `selfOnly` guard keeps Enter in the reply composer and Space on inner
-// buttons from re-triggering onClick). Alt+]/Alt+[ registry navigation
-// (SidePanel) is unrelated and untouched by this handler.
 </script>
 
+<!-- Keyboard activation on the card root uses plain tabindex, not roving —
+     the card is a heavyweight composite with inner tabbables (reply/accept
+     buttons), so `selfOnly` keeps Enter in the reply composer and Space on
+     inner buttons from re-triggering onClick. Alt+]/Alt+[ registry navigation
+     (SidePanel) is unrelated. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div

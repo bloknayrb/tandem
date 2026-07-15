@@ -2,6 +2,7 @@
 import { createModels } from "../../hooks/useModels.svelte";
 import type { ModelProvider, ModelRegistryEntry } from "../../hooks/useTandemSettings.svelte";
 import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
+import { disabledControlStyle } from "../../utils/colors";
 import ModelEditModal from "../ModelEditModal.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
@@ -159,7 +160,7 @@ async function runLegacyMigration() {
         data-testid="model-add-btn"
         disabled={readOnly}
         onclick={openAdd}
-        style="padding: 6px var(--tandem-space-3); font-size: 13px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1}; background: var(--tandem-accent); color: var(--tandem-accent-fg);"
+        style="padding: 6px var(--tandem-space-3); font-size: 13px; font-weight: 500; border: none; border-radius: var(--tandem-r-2); {disabledControlStyle(readOnly)} background: var(--tandem-accent); color: var(--tandem-accent-fg);"
       >
         Add your first model
       </button>
@@ -202,7 +203,7 @@ async function runLegacyMigration() {
                       checked={models.defaultModelId === entry.id}
                       disabled={readOnly}
                       onchange={() => models.setDefault(entry.id)}
-                      style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
                     />
                     <span>Default</span>
                   </label>
@@ -215,7 +216,7 @@ async function runLegacyMigration() {
                       checked={entry.enabled}
                       disabled={readOnly}
                       onchange={() => models.toggleEnabled(entry.id)}
-                      style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
                     />
                     <span>{entry.enabled ? "On" : "Off"}</span>
                   </label>
@@ -224,7 +225,7 @@ async function runLegacyMigration() {
                     data-testid={`model-edit-btn-${entry.id}`}
                     disabled={readOnly}
                     onclick={() => openEdit(entry)}
-                    style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                    style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-fg); {disabledControlStyle(readOnly)}"
                   >
                     Edit
                   </button>
@@ -234,7 +235,7 @@ async function runLegacyMigration() {
                       data-testid={`model-delete-confirm-${entry.id}`}
                       disabled={readOnly}
                       onclick={() => confirmDelete(entry.id)}
-                      style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                      style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); background: var(--tandem-error-bg); color: var(--tandem-error-fg-strong); {disabledControlStyle(readOnly)}"
                     >
                       Confirm
                     </button>
@@ -251,7 +252,7 @@ async function runLegacyMigration() {
                       data-testid={`model-delete-btn-${entry.id}`}
                       disabled={readOnly}
                       onclick={() => (pendingDeleteId = entry.id)}
-                      style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-error-fg); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                      style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-error-fg); {disabledControlStyle(readOnly)}"
                     >
                       Delete
                     </button>
@@ -269,7 +270,7 @@ async function runLegacyMigration() {
       data-testid="model-add-btn"
       disabled={readOnly}
       onclick={openAdd}
-      style="align-self: flex-start; padding: 6px var(--tandem-space-3); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-2); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1}; background: var(--tandem-surface); color: var(--tandem-accent);"
+      style="align-self: flex-start; padding: 6px var(--tandem-space-3); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-2); {disabledControlStyle(readOnly)} background: var(--tandem-surface); color: var(--tandem-accent);"
     >
       + Add model
     </button>

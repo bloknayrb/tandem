@@ -30,13 +30,10 @@ export interface LauncherRow {
   pip: PipClass;
 }
 
-/** Structural alias — keeps the launcher's existing segment naming. */
-export type NameSegment = MatchSegment;
-
 /** A launcher row paired with its name's matched/unmatched highlight runs. */
 export interface RankedRow {
   row: LauncherRow;
-  nameSegments: NameSegment[];
+  nameSegments: MatchSegment[];
 }
 
 const PIP_BY_EXT: Record<string, PipClass> = {

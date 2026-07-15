@@ -9,12 +9,13 @@ import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
 import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
 import { createUserName } from "../hooks/useUserName.svelte";
-import { warningStateColors } from "../utils/colors";
+import { disabledControlStyle } from "../utils/colors";
 import { openServerPath } from "../utils/server-paths";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
 import NetworkSettings from "./NetworkSettings.svelte";
+import SettingsReadonlyBanner from "./SettingsReadonlyBanner.svelte";
 import ShortcutEditorList from "./ShortcutEditorList.svelte";
 
 const HEADING_ID = "tandem-settings-heading";
@@ -408,16 +409,7 @@ function aboutRows() {
       </header>
 
       {#if readOnly}
-        <!-- Same testid as the SettingsModal banner (snapshot set dedups) —
-             rendered once per surface, above the scroll body. -->
-        <div
-          data-testid="settings-readonly-banner"
-          role="note"
-          style="flex-shrink: 0; padding: var(--tandem-space-2) var(--tandem-space-5); font-size: var(--tandem-text-xs); line-height: 1.4; background: {warningStateColors.background}; border-bottom: 1px solid {warningStateColors.border}; color: {warningStateColors.color};"
-        >
-          Settings are read-only — they were saved by a newer version of Tandem. Changes are
-          disabled to protect them.
-        </div>
+        <SettingsReadonlyBanner />
       {/if}
 
       <div style="flex: 1; overflow-y: auto; padding: var(--tandem-space-5);">
@@ -459,7 +451,7 @@ function aboutRows() {
                   aria-checked={settings.defaultMode === "tandem"}
                   disabled={readOnly}
                   onclick={() => onUpdate({ defaultMode: "tandem" })}
-                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'tandem' ? 600 : 400}; cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'tandem' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'tandem' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'tandem' ? 600 : 400}; {disabledControlStyle(readOnly)}"
                 >
                   Tandem
                 </button>
@@ -470,7 +462,7 @@ function aboutRows() {
                   aria-checked={settings.defaultMode === "solo"}
                   disabled={readOnly}
                   onclick={() => onUpdate({ defaultMode: "solo" })}
-                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'solo' ? 600 : 400}; cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                  style="flex: 1; padding: var(--tandem-space-2); min-height: 30px; border: 2px solid {settings.defaultMode === 'solo' ? 'var(--tandem-accent)' : 'var(--tandem-border)'}; border-radius: var(--tandem-r-3); background: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-bg)' : 'var(--tandem-surface)'}; color: {settings.defaultMode === 'solo' ? 'var(--tandem-accent-fg-strong)' : 'var(--tandem-fg-muted)'}; font-size: 12px; font-weight: {settings.defaultMode === 'solo' ? 600 : 400}; {disabledControlStyle(readOnly)}"
                 >
                   Solo
                 </button>
@@ -489,7 +481,7 @@ function aboutRows() {
                 checked={settings.soloRailHidden}
                 disabled={readOnly}
                 onchange={(e) => onUpdate({ soloRailHidden: (e.target as HTMLInputElement).checked })}
-                style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
               />
               <span>Hide side panel in Solo mode</span>
             </label>
@@ -557,7 +549,7 @@ function aboutRows() {
                 value={settings.selectionDwellMs}
                 disabled={readOnly}
                 oninput={(e) => onUpdate({ selectionDwellMs: Number((e.target as HTMLInputElement).value) })}
-                style="width: 100%; accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'auto'}; opacity: {readOnly ? 0.5 : 1};"
+                style="width: 100%; accent-color: var(--tandem-accent); {disabledControlStyle(readOnly, 'auto')}"
                 aria-label="Selection dwell time"
               />
               <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--tandem-fg-subtle);">
@@ -575,7 +567,7 @@ function aboutRows() {
                 checked={settings.selectionToolbar}
                 disabled={readOnly}
                 onchange={(e) => onUpdate({ selectionToolbar: (e.target as HTMLInputElement).checked })}
-                style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
               />
               <span>Show floating selection toolbar</span>
             </label>
@@ -589,7 +581,7 @@ function aboutRows() {
                 checked={settings.marginView}
                 disabled={readOnly}
                 onchange={(e) => onUpdate({ marginView: (e.target as HTMLInputElement).checked })}
-                style="accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+                style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
               />
               <span>Margin annotation view (Word-style)</span>
             </label>

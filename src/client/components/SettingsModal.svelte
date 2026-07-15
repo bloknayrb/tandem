@@ -85,9 +85,9 @@ import { onMount, untrack } from "svelte";
 import { BYO_MODELS_ENABLED, TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
 import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
-import { warningStateColors } from "../utils/colors";
 import { activationKeydown } from "../utils/keyboard-activate";
 import { openServerPath } from "../utils/server-paths";
+import SettingsReadonlyBanner from "./SettingsReadonlyBanner.svelte";
 import AccessibilitySettings from "./AccessibilitySettings.svelte";
 import AppearanceSettings from "./AppearanceSettings.svelte";
 import EditorSettings from "./EditorSettings.svelte";
@@ -616,18 +616,8 @@ async function handleViewChangelog(): Promise<void> {
 
       {#if readOnly}
         <!-- Non-flexing row between the header and the scroll body so every
-             tab shows it. Distinct testid from ShortcutEditorList's inline
-             store-readonly-banner (that one is suppressed inside the modal —
-             this banner covers the whole surface). -->
-        <div
-          class="settings-modal-readonly-banner"
-          data-testid="settings-readonly-banner"
-          role="note"
-          style="background: {warningStateColors.background}; border-block: 1px solid {warningStateColors.border}; color: {warningStateColors.color};"
-        >
-          Settings are read-only — they were saved by a newer version of Tandem. Changes are
-          disabled to protect them.
-        </div>
+             tab shows it. -->
+        <SettingsReadonlyBanner />
       {/if}
 
       <div class="settings-modal-content-body tandem-scroll-fade-y" use:scrollFade={"y"}>
@@ -858,13 +848,6 @@ async function handleViewChangelog(): Promise<void> {
     outline: none;
   }
 
-  .settings-modal-readonly-banner {
-    flex-shrink: 0;
-    padding: var(--tandem-space-2) var(--tandem-space-5);
-    font-size: var(--tandem-text-xs);
-    line-height: 1.4;
-  }
-
   .settings-modal-content-body {
     flex: 1;
     overflow-y: auto;
@@ -933,6 +916,12 @@ async function handleViewChangelog(): Promise<void> {
   :global(.settings-mode-btn:focus-visible) {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 1px;
+  }
+  /* Forward-compat read-only store: the tab sets `disabled` on these radios;
+     the affordance lives here with the rest of the class's state variants. */
+  :global(.settings-mode-btn:disabled) {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 
   /* W9: narrow viewports collapse the persistent sidebar grid column into a

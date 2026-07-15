@@ -21,41 +21,13 @@ import EditorSettings from "../../src/client/components/EditorSettings.svelte";
 import SettingsModal from "../../src/client/components/SettingsModal.svelte";
 import ShortcutEditorList from "../../src/client/components/ShortcutEditorList.svelte";
 import SettingsCollaborationTab from "../../src/client/components/settings-tabs/SettingsCollaborationTab.svelte";
-import type { TandemSettings } from "../../src/client/hooks/useTandemSettings.svelte";
+import { loadSettings, type TandemSettings } from "../../src/client/hooks/useTandemSettings";
 
+// loadSettings() against empty localStorage yields a complete, valid
+// TandemSettings (same approach as useTandemSettings.test.ts) — no
+// hand-maintained field list to go stale as the schema grows.
 function makeSettings(readOnlyStore: boolean): TandemSettings {
-  return {
-    theme: "light",
-    primaryTab: "chat",
-    textSize: "m",
-    editorFont: "sans",
-    density: "cozy",
-    accentHue: 240,
-    fontByExtension: {},
-    editorMeasure: "comfortable",
-    defaultSaveDirectory: null,
-    smartTypography: true,
-    spellcheck: true,
-    highContrast: false,
-    annotationPatterns: false,
-    reduceMotion: false,
-    formattingBarVisible: true,
-    showRawMarkdown: false,
-    railHoverReveal: true,
-    showAuthorship: true,
-    showComments: true,
-    showHighlights: true,
-    showNotes: true,
-    decorationsMuted: false,
-    systemLightVariant: "light",
-    defaultMode: "tandem",
-    soloRailHidden: false,
-    selectionDwellMs: 1000,
-    selectionToolbar: true,
-    marginView: false,
-    customShortcuts: {},
-    ...(readOnlyStore ? { _readOnly: true } : {}),
-  } as TandemSettings;
+  return { ...loadSettings(), ...(readOnlyStore ? { _readOnly: true as const } : {}) };
 }
 
 function makeCtx(readOnly: boolean) {
@@ -80,7 +52,7 @@ type ControlCase = {
   // biome-ignore lint/suspicious/noExplicitAny: component constructors differ
   component: any;
   testid: string;
-  /** Testid of an inner input when the target control is a label wrapper. */
+  /** True when the testid marks a label wrapper — descend to its `<input>`. */
   innerInput?: boolean;
 };
 
@@ -201,7 +173,7 @@ describe("settings-readonly-banner (modal-level)", () => {
     expect(byTestId(rw, "settings-readonly-banner")).toBeNull();
   });
 
-  it("suppresses ShortcutEditorList's inline banner inside the modal's shortcuts tab", async () => {
+  it("shortcuts tab shows only the surface-wide banner (ShortcutEditorList's old inline notice is gone)", async () => {
     const { container } = renderModal(true);
     // Navigate to the shortcuts tab.
     const tabBtn = byTestId(container, "settings-modal-tab-shortcuts");
@@ -209,31 +181,24 @@ describe("settings-readonly-banner (modal-level)", () => {
     tabBtn?.click();
     await Promise.resolve();
     expect(byTestId(container, "settings-modal-shortcuts-list")).toBeTruthy();
-    // The modal banner covers the surface; the inline one must be suppressed.
+    // ShortcutEditorList no longer owns a banner — both settings surfaces
+    // render the surface-wide one, so no double-banner anywhere.
     expect(byTestId(container, "store-readonly-banner")).toBeNull();
     expect(byTestId(container, "settings-readonly-banner")).toBeTruthy();
   });
 });
 
-describe("ShortcutEditorList inline banner prop", () => {
-  it("keeps its inline banner by default (popover surface)", () => {
+describe("ShortcutEditorList under read-only", () => {
+  it("disables its controls without rendering its own banner (hosts own the banner)", () => {
     const { container } = render(ShortcutEditorList, {
       props: {
         settings: makeSettings(true),
         onUpdate: vi.fn(),
-      },
-    });
-    expect(byTestId(container, "store-readonly-banner")).toBeTruthy();
-  });
-
-  it("hides the inline banner when showReadOnlyBanner is false", () => {
-    const { container } = render(ShortcutEditorList, {
-      props: {
-        settings: makeSettings(true),
-        onUpdate: vi.fn(),
-        showReadOnlyBanner: false,
       },
     });
     expect(byTestId(container, "store-readonly-banner")).toBeNull();
+    expect((byTestId(container, "shortcuts-reset-all") as HTMLButtonElement | null)?.disabled).toBe(
+      true,
+    );
   });
 });

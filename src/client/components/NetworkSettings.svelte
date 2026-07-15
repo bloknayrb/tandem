@@ -2,6 +2,7 @@
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { createAppInfo } from "../hooks/useAppInfo.svelte.js";
 import type { SidecarRetryStrategy } from "../hooks/useTandemSettings.svelte.js";
+import { disabledControlStyle } from "../utils/colors.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
 import type { SettingsTabContext } from "./SettingsModal.svelte";
 
@@ -136,7 +137,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
       disabled={readOnly}
       oninput={(e) =>
         onUpdate({ degradedBannerDelayMs: Number((e.target as HTMLInputElement).value) })}
-      style="width: 100%; accent-color: var(--tandem-accent); cursor: {readOnly ? 'not-allowed' : 'auto'}; opacity: {readOnly ? 0.5 : 1};"
+      style="width: 100%; accent-color: var(--tandem-accent); {disabledControlStyle(readOnly, 'auto')}"
       aria-label="Degraded banner delay"
     />
     <div
@@ -156,7 +157,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
       disabled={readOnly}
       onchange={(e) =>
         onUpdate({ sidecarRetryStrategy: (e.target as HTMLSelectElement).value as SidecarRetryStrategy })}
-      style="width: 100%; padding: 6px 8px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); cursor: {readOnly ? 'not-allowed' : 'pointer'}; opacity: {readOnly ? 0.5 : 1};"
+      style="width: 100%; padding: 6px 8px; font-size: 13px; color: var(--tandem-fg); background: var(--tandem-surface); border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); {disabledControlStyle(readOnly)}"
       aria-label="Reconnect retry strategy"
     >
       {#each RETRY_OPTIONS as opt (opt.value)}

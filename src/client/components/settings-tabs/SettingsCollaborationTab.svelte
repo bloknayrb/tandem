@@ -1,6 +1,7 @@
 <script lang="ts">
 import { USER_NAME_MAX_LEN } from "../../../shared/constants";
 import { createUserName } from "../../hooks/useUserName.svelte";
+import { disabledControlStyle } from "../../utils/colors";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
 // Keep `$props()` as a single proxy variable and read fields via `ctx.foo`.
@@ -61,7 +62,6 @@ $effect(() => {
       disabled={ctx.readOnly}
       onclick={() => ctx.onUpdate({ defaultMode: "tandem" })}
       class="settings-mode-btn"
-      style="cursor: {ctx.readOnly ? 'not-allowed' : 'pointer'}; opacity: {ctx.readOnly ? 0.5 : 1};"
     >
       Tandem
     </button>
@@ -73,7 +73,6 @@ $effect(() => {
       disabled={ctx.readOnly}
       onclick={() => ctx.onUpdate({ defaultMode: "solo" })}
       class="settings-mode-btn"
-      style="cursor: {ctx.readOnly ? 'not-allowed' : 'pointer'}; opacity: {ctx.readOnly ? 0.5 : 1};"
     >
       Solo
     </button>
@@ -92,7 +91,7 @@ $effect(() => {
     checked={ctx.settings.soloRailHidden}
     disabled={ctx.readOnly}
     onchange={(e) => ctx.onUpdate({ soloRailHidden: (e.target as HTMLInputElement).checked })}
-    style="accent-color: var(--tandem-accent); cursor: {ctx.readOnly ? 'not-allowed' : 'pointer'}; opacity: {ctx.readOnly ? 0.5 : 1};"
+    style="accent-color: var(--tandem-accent); {disabledControlStyle(ctx.readOnly)}"
   />
   <span>Hide side panel in Solo mode</span>
 </label>
