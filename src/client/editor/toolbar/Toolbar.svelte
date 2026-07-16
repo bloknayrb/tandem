@@ -965,8 +965,8 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
      single chromed card). Structural/animation CSS lives here (class-toggled on
      persistent DOM identity); per the family decision (option B) width is NOT
      morphed — it's constant at the natural format width, so P1 animates the shell
-     chrome (border-radius + the bg/border/shadow/backdrop fade-in as it becomes
-     the card) and P2 animates the block unfurl. The width unroll belongs to M2's
+     chrome (border-radius + the bg/border/shadow fade-in as it becomes the card)
+     and P2 animates the block unfurl. The width unroll belongs to M2's
      fresh-mount entrance. Timing tokens + the dual reduced-motion guard come from
      morphTiming.css (imported above). */
   .selection-popup {
@@ -985,31 +985,31 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
        through the 5px gap. These scoped rules override the global
        .tandem-floating-pill recipe (higher specificity). `border` stays
        `1px solid transparent` (not none) so border-color can interpolate during
-       P1; `backdrop-filter` is zeroed so it doesn't blur the inter-capsule gap.
-       The shell re-acquires the full card chrome in .is-annotate (= the note
-       popover), and P1 tweens all of it. P1 fires only on the .is-annotate
-       toggle, never on mount (a transition never animates an initial value), and
-       there is no annotate→format reverse, so the chrome tweens transparent→card
-       exactly once. */
+       P1. The recipe carries no backdrop-filter, so the shell needs no reset
+       here — it used to set `backdrop-filter: none` to cancel the recipe's blur,
+       but lightningcss collapsed that reset to `-webkit-`-only at minify time
+       (Chromium ignores the prefixed form; #1188), so in production the blur
+       leaked through this transparent shell as a stray frosted rect. The reset
+       is gone WITH the recipe's blur, not in favour of it — re-adding either
+       brings the bug back. The shell re-acquires the full card chrome in
+       .is-annotate (= the note popover), and P1 tweens all of it. P1 fires only
+       on the .is-annotate toggle, never on mount (a transition never animates an
+       initial value), and there is no annotate→format reverse, so the chrome
+       tweens transparent→card exactly once. */
     background: transparent;
     border: 1px solid transparent;
     box-shadow: none;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
     transition:
       border-radius var(--morph-p1) var(--tandem-ease-out),
       background-color var(--morph-p1) var(--tandem-ease-out),
       border-color var(--morph-p1) var(--tandem-ease-out),
-      box-shadow var(--morph-p1) var(--tandem-ease-out),
-      backdrop-filter var(--morph-p1) var(--tandem-ease-out);
+      box-shadow var(--morph-p1) var(--tandem-ease-out);
   }
   .selection-popup.is-annotate {
     border-radius: var(--tandem-r-4);
     background: var(--tandem-surface);
     border-color: var(--tandem-border);
     box-shadow: var(--c7-pill-shadow);
-    backdrop-filter: saturate(140%) blur(8px);
-    -webkit-backdrop-filter: saturate(140%) blur(8px);
   }
 
   /* A8 two-pill: format-state column of two capsules. The gap lives HERE (inside

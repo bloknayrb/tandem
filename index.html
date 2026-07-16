@@ -276,14 +276,23 @@
          tab pills, +/add pill, mode segment, status pill, mini-toolbar,
          wincontrols. Surfaces only need .tandem-floating-pill + a sensible
          border-radius (pill or 14px). Surface-specific overrides (padding,
-         max-width, drag-region) layer on top. */
+         max-width, drag-region) layer on top.
+         Deliberately NO backdrop-filter. --tandem-surface is opaque in
+         every theme, so a blur behind it never shows on the opaque consumers —
+         but this rule also reaches the ONE transparent consumer, the
+         selection-popup shell, where it painted a stray frosted rect in
+         PRODUCTION ONLY. The shell's scoped `backdrop-filter: none` reset can't
+         be relied on to cancel it: lightningcss (Vite's default CSS minifier)
+         collapses a `backdrop-filter` + `-webkit-backdrop-filter` pair into the
+         `-webkit-` form alone, and Chromium does not treat that as an alias, so
+         the reset silently evaporates in a minified build (see #1188). Don't
+         re-add a blur here — it buys nothing on an opaque surface and the
+         override that would contain it does not survive minification. */
       .tandem-floating-pill {
         background: var(--tandem-surface);
         border: 1px solid var(--tandem-border);
         border-radius: var(--tandem-r-pill);
         box-shadow: var(--c7-pill-shadow);
-        backdrop-filter: saturate(140%) blur(8px);
-        -webkit-backdrop-filter: saturate(140%) blur(8px);
       }
       [data-theme="dark"] .tandem-floating-pill {
         --c7-pill-shadow:
