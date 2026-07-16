@@ -161,6 +161,11 @@ Full file-level detail: [docs/architecture.md](docs/architecture.md#file-map)
 - **Uploaded files (`upload://` paths) are read-only.** `tandem_save` returns a session-only save.
 - **`cargo test` in CI requires sidecar stubs + GTK libs.** `tauri_build::build()` checks all declared `resources` (including `dist/client`, `dist/server`, `dist/channel`) and the sidecar binary. Create stubs before running: `mkdir -p src-tauri/binaries dist/channel dist/server dist/client && touch "src-tauri/binaries/node-sidecar-${TRIPLE}" "src-tauri/binaries/node-sidecar-${TRIPLE}.exe" "src-tauri/binaries/tandem-reaper-${TRIPLE}" "src-tauri/binaries/tandem-reaper-${TRIPLE}.exe"` (both externalBins must exist). On Ubuntu CI also install `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf` first.
 
+### Windows / Cross-platform
+- **`core.autocrlf=true` + late `.gitattributes eol=lf` leaves the working tree CRLF-stale.** The `eol` attribute only affects future checkouts — when `biome check .` fails locally on Windows with only CRLF format errors while CI passes, check `git ls-files --eol | grep "w/crlf"` before blaming the change under review; the fix is `git add --renormalize .` committed as its own dedicated PR, never `core.autocrlf=false`.
+- **`.husky/pre-commit` needs its `#!/usr/bin/env sh` shebang.** Without it, git-bash on Windows fails the commit with "cannot spawn: Exec format error" — restore the shebang rather than reaching for `--no-verify` (which `block-no-verify.sh` blocks anyway).
+- **`path.basename` on Linux doesn't split Windows backslash paths** (`path.basename('C:\\x\\f.md')` returns the whole string in Ubuntu CI). Normalize first — `filePath.replace(/\\/g, "/")` — before any separator-aware `path.*` call (`basename`/`dirname`/`extname`); pattern lives in `docIdFromPath` in `src/server/mcp/document-model.ts`.
+
 ## Security
 - Server binds to 127.0.0.1 by default. LAN binding (`TANDEM_BIND_HOST`) requires an auth token; `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` is an explicit insecure opt-in for development only
 - `TANDEM_ALLOW_UNAUTHENTICATED_LAN` is a misnomer: `loadOrCreateToken()` always mints a token and `authMiddleware` enforces it for all non-loopback requests — the runtime is always token-gated even under this flag (#1121 F7)

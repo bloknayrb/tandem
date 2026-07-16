@@ -11,16 +11,35 @@ Start the Tandem development servers and verify everything is connected.
 ## Important Gotchas
 - The server MUST be running before Claude Code connects via MCP
 - `freePort()` kills any existing process on :3478/:3479 at startup — you cannot run two instances
+- `freePort()` does NOT cover :5173 — an orphaned Vite from a killed `dev:standalone` survives and the new Vite silently binds :5174 instead (see step 2)
 - E2E tests (`npm run test:e2e`) will also kill dev servers on those ports
 
 ## Steps
+
+0. Run the doctor first — it diagnoses Node version, .mcp.json, server health, and ports before anything else:
+   ```bash
+   npm run doctor
+   ```
+   If you pulled since the last dev-server run, also refresh dependencies (they drift):
+   ```bash
+   npm install
+   ```
 
 1. Check if servers are already running:
    ```bash
    curl -s http://127.0.0.1:3479/health 2>/dev/null && echo "Server already running" || echo "Server not running"
    ```
 
-2. If not running, start the standalone dev environment (server + client):
+2. If the server is NOT running but something still holds :5173, it's an orphaned Vite from a previous `dev:standalone` — kill it, or the new Vite silently binds :5174 and the editor URL below is wrong:
+   ```bash
+   # Windows (git-bash)
+   netstat -ano | grep ":5173" | grep LISTENING   # note the PID in the last column
+   taskkill //PID <pid> //F
+   # macOS/Linux
+   lsof -ti tcp:5173 | xargs -r kill
+   ```
+
+3. If not running, start the standalone dev environment (server + client):
    ```bash
    npm run dev:standalone
    ```
@@ -29,15 +48,15 @@ Start the Tandem development servers and verify everything is connected.
    - MCP HTTP server on `:3479`
    - Vite dev server on `:5173`
 
-3. Wait for both servers to be ready:
+4. Wait for both servers to be ready:
    ```bash
    # Wait for MCP health endpoint
    for i in {1..15}; do curl -sf http://127.0.0.1:3479/health && break || sleep 1; done
    ```
 
-4. Verify MCP connection works by running `/mcp` in Claude Code if needed.
+5. Verify MCP connection works by running `/mcp` in Claude Code if needed.
 
-5. Open the editor at `http://127.0.0.1:5173` in the browser.
+6. Open the editor at `http://127.0.0.1:5173` in the browser.
 
 ## Restarting After Server Code Changes
 If you changed server code, restart just the server:
