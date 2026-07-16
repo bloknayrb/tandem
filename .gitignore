@@ -56,3 +56,9 @@ test-results/
 # Local-only context"). Was accidentally committed in 76949f8; untracked in
 # the documentation audit.
 CLAUDE.local.md
+
+# Generated design-baseline gallery (`npm run capture:design-baselines`).
+# Generated on demand, never committed — see docs/design-system-impl/baseline-procedure.md.
+# It was committed until #1190: a 3.1MB non-diffable file that embeds today's date at
+# capture time, so every regeneration dirtied it even when nothing had visually changed.
+docs/design-system-impl/preview/baselines/baselines.html

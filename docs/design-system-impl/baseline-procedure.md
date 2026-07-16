@@ -1,37 +1,14 @@
 # Visual Baseline Procedure
 
-Phase 0i of the design-system-impl umbrella. The capture script lives at `scripts/design-baselines/capture.spec.ts`; baselines land in `docs/design-system-impl/preview/baselines/`.
+The capture script lives at `scripts/design-baselines/capture.spec.ts`. Running it writes a single self-contained HTML gallery to `docs/design-system-impl/preview/baselines/baselines.html`.
+
+**That gallery is generated on demand and is not committed** (it's gitignored). Capture it when you want to look at something; let it go stale when you don't. See "Why it isn't committed" below — that changed in #1190, and the reasoning is recorded here so it doesn't get re-litigated.
 
 ## What this is
 
-A **visual reference library** for the eight cross-cutting surfaces of Tandem, captured into a single self-contained HTML gallery (`baselines.html`, markup + inlined CSS). Each surface × theme is embedded in an `<iframe srcdoc>` so its inlined `<html data-theme>` + stylesheet stay isolated. Opens in OpenDesign and any browser without the dev server.
+A **visual reference library** for Tandem's cross-cutting surfaces, captured into one self-contained HTML file (markup + inlined CSS). Each surface × theme is embedded in an `<iframe srcdoc>` so its inlined `<html data-theme>` + stylesheet stay isolated. Opens in any browser — no dev server, no network.
 
-The role is reference + drift detection at PR review time, **not** automated CI assertion. When a sub-PR re-skins a surface, the gallery regenerates and OpenDesign renders the visual change for review.
-
-One file rather than 16 because OpenDesign flattens every file under `docs/design-system-impl/` into one list — a single artifact keeps that view clean. The tradeoff: the per-surface git diff is gone (the combined file is ~12MB and not hand-diffable), so visual review happens in OD, not the diff.
-
-## Why HTML, not PNG
-
-Previous iteration of this gate used Playwright `toHaveScreenshot()` pixel diffs. HTML is strictly better for this use case:
-
-- **OS-portable.** PNGs differ between Windows / macOS / Linux because of font rendering, anti-aliasing, sub-pixel layout. HTML renders consistently. No platform gates or CI-only seeding needed.
-- **Viewable in OpenDesign.** OD watches `docs/design-system-impl/`. HTML files render there directly; PNG files are just images.
-- **Inspectable markup.** The captured markup + classes live in the file, so a regression can be traced to a class added / testid renamed / attribute changed. (The combined gallery isn't cleanly git-diffable, so primary review is visual in OD — but the markup is still there to inspect.)
-- **Self-contained.** Inlined CSS means the file is portable — share via OD, drop in a Slack message, archive, whatever.
-- **No CI cost.** The capture spec is on-demand only; routine CI doesn't run it.
-
-## Scope (8 surfaces × 2 themes = 16 scenes in one file)
-
-Eight cross-cutting / shared-recipe surfaces. The plan called for ~30 surfaces × 2 viewports = ~120 captures; that's too much maintenance for the signal value. Most surfaces consume shared recipes (floating-pill, card chrome, modal frame), so covering the recipes covers their consumers.
-
-1. **TitleBar** — type, color, chrome density expectations.
-2. **Editor body** — typography + authorship gutter + decoration colors.
-3. **SidePanel (annotations tab)** — rail chrome + filter bar + card list.
-4. **AnnotationCard (CommentCard)** — card chrome recipe.
-5. **FormattingBar** — floating-pill recipe.
-6. **CommandPalette** — exercises the floating-pill recipe in a different surface.
-7. **SettingsModal** — modal frame recipe.
-8. **ToastContainer** — status color tokens + transient animation surface.
+It is a **reference you generate when you have a question**, not a gate. The capture spec says so itself: no assertions, no regression detection. Nothing in CI depends on it.
 
 ## How to capture
 
@@ -41,48 +18,74 @@ From the repo root:
 npm run capture:design-baselines
 ```
 
-The command spawns the dev server, runs the capture spec, and writes a single `baselines.html` to `docs/design-system-impl/preview/baselines/`. Takes a couple of minutes.
+It spawns the dev server + Hocuspocus, drives Playwright through each surface in both themes, and writes `baselines.html` — several megabytes, a couple of minutes. Then open the file directly, or point OpenDesign at the directory.
 
-After capture:
-- Open `baselines.html` in OpenDesign (auto-detected) or directly in any browser.
-- The left surface picker jumps between surfaces; the Both/Light/Dark filter narrows themes.
+The left surface picker jumps between surfaces; the Both/Light/Dark filter narrows themes.
 
-## Sub-PR ritual
+## Scope (9 surfaces × 2 themes = 18 scenes)
 
-When a sub-PR re-skins a surface covered by this set:
+Cross-cutting / shared-recipe surfaces. The original plan called for ~30 surfaces × 2 viewports; that was too much maintenance for the signal. Most surfaces consume shared recipes (floating-pill, card chrome, modal frame), so covering the recipes covers their consumers.
 
-1. After implementing the change, run `npm run capture:design-baselines`.
-2. `git status` shows `baselines.html` changed.
-3. Open `baselines.html` in OD and confirm the re-skinned surface matches intent (and that cross-cutting surfaces consuming the same recipe didn't drift unexpectedly).
-4. PR description lists which surfaces changed and why.
-5. Commit the regenerated `baselines.html`.
+Listed in capture order (`capture.spec.ts`):
 
-If a sub-PR doesn't touch any of the 8 surfaces, no baseline regeneration needed.
+1. **title-bar** — type, color, chrome density expectations.
+2. **editor-body** — typography + authorship gutter + decoration colors.
+3. **outline-panel** — left-rail chrome.
+4. **side-panel-annotations** — right-rail chrome + filter bar + card list.
+5. **annotation-card-comment** — card chrome recipe.
+6. **formatting-bar** — floating-pill recipe.
+7. **command-palette** — the floating-pill recipe in a different surface.
+8. **settings-modal** — modal frame recipe.
+9. **toast-container** — status color tokens + transient animation surface. This one self-skips if the toast doesn't render in time, so a capture can legitimately produce 17 scenes rather than 18.
+
+## Why HTML, not PNG
+
+The iteration before this one used Playwright `toHaveScreenshot()` pixel diffs. HTML is better here:
+
+- **OS-portable.** PNGs differ across Windows / macOS / Linux (font rendering, anti-aliasing, sub-pixel layout). No platform gates or CI-only seeding needed.
+- **Inspectable markup.** The captured markup + classes live in the file, so an oddity can be traced to a class added / testid renamed / attribute changed.
+- **Self-contained.** Inlined CSS makes it portable — open it, share it, archive it.
+- **No CI cost.** On-demand only.
+
+## Why it isn't committed (#1190)
+
+It was committed, from the umbrella's merge (v0.13.5, 2026-05-29) until #1190. The rule was a ritual: *any sub-PR touching a covered surface regenerates the gallery and commits it.*
+
+**The ritual ran zero times.** Between the last capture and its removal, ~33 commits touched the nine covered surfaces and not one regenerated the file. By the end it contradicted master in 32 places — it still showed a `backdrop-filter` that #1189 had removed. Seven weeks stale, and nothing anywhere reported that.
+
+How far it drifted is easiest to see by size: the committed file was 3.1 MB; a capture from the same script the day it was removed produced 4.8 MB. The surfaces changed a lot. The gallery just didn't notice.
+
+Three things made the ritual unkeepable, and they'd all come back if it were reinstated:
+
+- **The output is non-deterministic.** Both `capture.spec.ts` and `combine.ts` embed `new Date()` at capture time, so *every* regeneration dirties a multi-megabyte file even when nothing visually changed. The signal-to-noise ratio of "the gallery changed" is zero.
+- **It isn't diffable.** Megabytes of inlined CSS in one file. Review had to happen by eye, in a browser, on an artifact whose accuracy you'd have to independently verify first — at which point you're just looking at the app.
+- **Nothing enforced it.** No CI job, no hook, no test. The contrast is sitting in this same directory: `testid-manifest.md` has an automated gate and is current. This file had none and rotted.
+
+The counter-argument worth naming, because it looks strong: the stale gallery *did* produce a signal during #1189 — it disagreed with master about `backdrop-filter`. True, and it was correctly declined. But the disagreement was about **the gallery's own staleness**, not a product defect. Drift detection detecting its own drift is an argument for retiring it, not keeping it; it cost review cycles and produced this issue.
+
+The other alternative — regenerate once, freeze it, relabel it "historical snapshot" — recreates exactly what #1190 was filed about: a file that reads authoritative while contradicting master a week later.
+
+**The honest cost of removal:** you lose a double-click visual reference. Regenerating needs Playwright and two servers. That's the trade, and it's worth it: an unmaintained reference whose accuracy you must independently verify isn't a reference.
+
+**What removal does not buy:** repo size. The three historical blobs are still in git history. This is about the working tree and the review surface, not bytes.
+
+## Known caveat: the seed has drifted
+
+`seedAnnotations()` hardcodes character offsets into `sample/welcome.md`, but `welcome.md` was rewritten in `1aa852a` (2026-05-31) — *after* the last commit of the gallery. A capture today still succeeds, but the demo annotations anchor to different text than the ones you'd see in the old committed gallery. Cosmetic for chrome review; fix the offsets if you ever need the annotation text itself to make sense.
 
 ## What the captured HTML contains
 
 - Full page body markup at the moment of capture.
 - All inlined CSS reachable from the page (own-origin stylesheets).
-- A banner at the top naming which surface the baseline focuses on (the page captures full context; the banner tells you what to look at).
-- `data-theme` attribute on `<html>` so the file renders in the correct theme when opened.
+- A banner naming which surface the scene focuses on (the page captures full context; the banner tells you what to look at).
+- `data-theme` on `<html>` so the file renders in the correct theme.
 
 What it does NOT contain:
-- Runtime-only framework IDs (radix-*, headlessui-*) — stripped to avoid spurious diffs.
-- The live dev server — files are self-contained.
+
+- Runtime-only framework IDs (radix-*, headlessui-*) — stripped.
+- The live dev server — the file is self-contained.
 - Annotation UUIDs are kept (the seed produces stable IDs across runs).
 
-## Non-determinism handling
+## Related
 
-The capture is mostly deterministic because:
-- The seed always opens the same `sample/welcome.md` content.
-- The same three annotations are created at the same offsets with the same text.
-- Annotation IDs depend on insertion order, which is stable.
-- Timestamps render as "just now" / "3m ago" — these may drift between runs (the timestamp text DOES change between captures taken hours apart). Treat these as expected diff noise; focus reviewer attention on structural changes.
-
-If a baseline shows changed timestamps but no other structural change, it's not a real drift signal — don't bother committing.
-
-## When this work retires
-
-The capture script and committed `baselines.html` stay in master after the umbrella merges, as an ongoing visual reference. Sub-PRs touching any of the 8 surfaces refresh the gallery as a discipline.
-
-The Phase 0 procedure docs (this file, derived-spec.md, conflicts-resolved.md) stay in `docs/design-system-impl/` as historical record of the umbrella's design decisions.
+The Phase 0 procedure docs (this file, `derived-spec.md`, `conflicts-resolved.md`) stay in `docs/design-system-impl/` as the historical record of the umbrella's design decisions.
