@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  evaluateNpmStaleness,
+  evaluateOrphanedVite,
   evaluateStaleGlobal,
   globalTandemEditorVersion,
+  isTandemEditorRepo,
   runDoctor,
   runDoctorCli,
   summarizeDoctorResults,
@@ -355,5 +358,228 @@ describe("globalTandemEditorVersion", () => {
     });
 
     await expect(globalTandemEditorVersion()).resolves.toBeNull();
+  });
+});
+
+describe("isTandemEditorRepo", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "tandem-repo-gate-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is false when package.json is absent", () => {
+    expect(isTandemEditorRepo(dir)).toBe(false);
+  });
+
+  it("is false when package.json is malformed JSON", () => {
+    writeFileSync(join(dir, "package.json"), "{not json");
+    expect(isTandemEditorRepo(dir)).toBe(false);
+  });
+
+  it("is false for someone else's package.json (global-install end-user cwd)", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "left-pad" }));
+    expect(isTandemEditorRepo(dir)).toBe(false);
+  });
+
+  it("is true when package.json names tandem-editor", () => {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: "0.16.0" }),
+    );
+    expect(isTandemEditorRepo(dir)).toBe(true);
+  });
+});
+
+describe("evaluateNpmStaleness", () => {
+  const pkg = { version: "1.0.0" };
+  // Mirrors the real shape: the hidden lockfile omits the root "" entry AND
+  // optional deps whose os/cpu exclude this machine (platform binaries).
+  const freshLock = {
+    version: "1.0.0",
+    packages: {
+      "": { version: "1.0.0" },
+      "node_modules/foo": { version: "2.3.4" },
+      "node_modules/plat-other-os": { version: "1.1.1", optional: true },
+    },
+  };
+  const freshHidden = {
+    version: "1.0.0",
+    packages: { "node_modules/foo": { version: "2.3.4" } },
+  };
+
+  it("skips (null) when any input is missing or unreadable", () => {
+    expect(evaluateNpmStaleness(null, freshLock, freshHidden)).toBeNull();
+    expect(evaluateNpmStaleness(pkg, null, freshHidden)).toBeNull();
+    expect(evaluateNpmStaleness(pkg, freshLock, null)).toBeNull();
+  });
+
+  it("passes on a fresh install — absent platform-optional deps are not drift", () => {
+    const result = evaluateNpmStaleness(pkg, freshLock, freshHidden);
+    expect(result).toMatchObject({ status: "pass" });
+    expect(result?.fix).toBeUndefined();
+  });
+
+  it("warns with fix `npm install` when package.json outruns package-lock.json", () => {
+    const result = evaluateNpmStaleness({ version: "1.1.0" }, freshLock, freshHidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    expect(result?.message).toContain("1.1.0");
+    expect(result?.message).toContain("1.0.0");
+  });
+
+  it("warns when node_modules was installed from a different lockfile root version", () => {
+    const hidden = { ...freshHidden, version: "0.9.0" };
+    const result = evaluateNpmStaleness(pkg, freshLock, hidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    expect(result?.message).toContain("0.9.0");
+  });
+
+  it("warns when an installed package version drifts from the lockfile", () => {
+    const hidden = {
+      version: "1.0.0",
+      packages: { "node_modules/foo": { version: "2.0.0" } },
+    };
+    const result = evaluateNpmStaleness(pkg, freshLock, hidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    expect(result?.data?.driftCount).toBe(1);
+  });
+
+  it("warns when a NON-optional lockfile package is missing from the installed tree", () => {
+    const hidden = { version: "1.0.0", packages: {} };
+    const result = evaluateNpmStaleness(pkg, freshLock, hidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    expect(result?.data?.driftCount).toBe(1);
+  });
+
+  it("warns when an extraneous package remains installed after removal from the lockfile", () => {
+    const hidden = {
+      version: "1.0.0",
+      packages: {
+        "node_modules/foo": { version: "2.3.4" },
+        "node_modules/gone": { version: "0.1.0" },
+      },
+    };
+    const result = evaluateNpmStaleness(pkg, freshLock, hidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+  });
+});
+
+describe("evaluateOrphanedVite", () => {
+  const ports = { wsPort: 3478, mcpPort: 3479 };
+
+  it("reports nothing when no Vite server is listening", () => {
+    expect(evaluateOrphanedVite({ viteUp: false, wsUp: false, mcpUp: false, ...ports })).toBeNull();
+    expect(evaluateOrphanedVite({ viteUp: false, wsUp: true, mcpUp: true, ...ports })).toBeNull();
+  });
+
+  it("warns with a kill + restart fix when Vite is up but both backend ports are down", () => {
+    const result = evaluateOrphanedVite({ viteUp: true, wsUp: false, mcpUp: false, ...ports });
+    expect(result).toMatchObject({ status: "warn" });
+    expect(result?.message).toContain("5173");
+    expect(result?.message).toContain("3478");
+    expect(result?.message).toContain("3479");
+    expect(result?.fix).toContain("Kill");
+    expect(result?.fix).toContain("npm run dev:standalone");
+  });
+
+  it("passes when Vite and the backend are both up", () => {
+    const result = evaluateOrphanedVite({ viteUp: true, wsUp: true, mcpUp: true, ...ports });
+    expect(result).toMatchObject({ status: "pass" });
+  });
+
+  it("does not flag an orphan while the backend is only partially up", () => {
+    // Half-started/half-crashed backend is the ports check's finding.
+    expect(
+      evaluateOrphanedVite({ viteUp: true, wsUp: true, mcpUp: false, ...ports }),
+    ).toMatchObject({ status: "pass" });
+    expect(
+      evaluateOrphanedVite({ viteUp: true, wsUp: false, mcpUp: true, ...ports }),
+    ).toMatchObject({ status: "pass" });
+  });
+});
+
+describe("dev-repo gating in runDoctor", () => {
+  let repoDir: string;
+  let cwdSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    repoDir = mkdtempSync(join(tmpdir(), "tandem-gate-"));
+  });
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    cwdSpy = undefined;
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  function mockCwd(dir: string): void {
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(dir);
+  }
+
+  /** Seed a minimal tandem-editor checkout with a consistent lockfile trio. */
+  function seedRepo(versions: { pkg: string; lock: string; hidden: string }): void {
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: versions.pkg }),
+    );
+    writeFileSync(
+      join(repoDir, "package-lock.json"),
+      JSON.stringify({
+        name: "tandem-editor",
+        version: versions.lock,
+        lockfileVersion: 3,
+        packages: { "": { version: versions.lock } },
+      }),
+    );
+    mkdirSync(join(repoDir, "node_modules"), { recursive: true });
+    writeFileSync(
+      join(repoDir, "node_modules", ".package-lock.json"),
+      JSON.stringify({
+        name: "tandem-editor",
+        version: versions.hidden,
+        lockfileVersion: 3,
+        packages: {},
+      }),
+    );
+  }
+
+  it("skips both gated checks silently in a non-tandem cwd (global-install user)", async () => {
+    // An end-user cwd with their OWN project's package.json — the exact case
+    // the gate exists for: no warn, no fail, no mention at all.
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "someones-app", version: "9.9.9" }),
+    );
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const names = report.results.map((res) => res.check);
+    expect(names).not.toContain("npm-staleness");
+    expect(names).not.toContain("orphaned-vite");
+  });
+
+  it("warns npm-staleness (fix: npm install) in a tandem cwd with a stale lockfile", async () => {
+    seedRepo({ pkg: "0.2.0", lock: "0.1.0", hidden: "0.1.0" });
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(result).toBeDefined();
+    expect(result?.status).toBe("warn");
+    expect(result?.fix).toBe("npm install");
+  });
+
+  it("passes npm-staleness in a tandem cwd with a fresh install", async () => {
+    seedRepo({ pkg: "0.2.0", lock: "0.2.0", hidden: "0.2.0" });
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(result).toBeDefined();
+    expect(result?.status).toBe("pass");
   });
 });

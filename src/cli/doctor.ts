@@ -130,6 +130,148 @@ function checkNodeModules(r: Recorder): void {
   }
 }
 
+// ── Dev-repo gate ───────────────────────────────────────────────────
+//
+// The npm-staleness and orphaned-Vite checks below diagnose the DEV checkout
+// only. `tandem doctor` ships globally and runs in arbitrary end-user cwds,
+// where `package.json` belongs to someone else's project — so both checks
+// gate on the cwd actually being the tandem-editor repo and skip SILENTLY
+// otherwise (not warn: the absence of a dev checkout is not a finding).
+
+/** True when `dir/package.json` parses and names the `tandem-editor` package. */
+export function isTandemEditorRepo(dir: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8")) as {
+      name?: unknown;
+    };
+    return parsed?.name === "tandem-editor";
+  } catch {
+    return false;
+  }
+}
+
+// ── Check: npm install staleness (dev repo only) ────────────────────
+//
+// Compares `package.json`/`package-lock.json` against the hidden lockfile npm
+// writes at install time (`node_modules/.package-lock.json`). Deliberately
+// NOT `npm ls` (this module is pure built-ins by design, and `npm ls` exits
+// non-zero on unrelated issues under `overrides`) and NOT mtimes (git churns
+// them on checkout, which would turn every branch switch into a false warn).
+
+interface LockfileJson {
+  version?: string;
+  packages?: Record<string, { version?: string; optional?: boolean }>;
+}
+
+/** Read + parse a JSON file, or null when missing/unreadable/malformed. */
+function readJsonOrNull(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pure decision step for the npm-staleness check (same split as
+ * {@link evaluateStaleGlobal} — directly unit-testable without touching the
+ * filesystem). Any null input means "can't compare here" and skips: a missing
+ * node_modules is already the node-modules check's finding, and a tree
+ * installed by something other than npm has no hidden lockfile to read.
+ */
+export function evaluateNpmStaleness(
+  pkg: { version?: string } | null,
+  lock: LockfileJson | null,
+  hiddenLock: LockfileJson | null,
+): {
+  status: "pass" | "warn";
+  message: string;
+  fix?: string;
+  data?: Record<string, unknown>;
+} | null {
+  if (!pkg || !lock || !hiddenLock) return null;
+
+  // package.json bumped without regenerating the lockfile (release-cut slip).
+  if (pkg.version && lock.version && pkg.version !== lock.version) {
+    return {
+      status: "warn",
+      message:
+        `package-lock.json (v${lock.version}) is out of date with ` +
+        `package.json (v${pkg.version})`,
+      fix: "npm install",
+      data: { packageVersion: pkg.version, lockVersion: lock.version },
+    };
+  }
+
+  // node_modules installed from a lockfile at a different root version.
+  if (lock.version && hiddenLock.version && lock.version !== hiddenLock.version) {
+    return {
+      status: "warn",
+      message:
+        "node_modules was installed from a different lockfile " +
+        `(v${hiddenLock.version} installed, v${lock.version} expected)`,
+      fix: "npm install",
+      data: { lockVersion: lock.version, installedVersion: hiddenLock.version },
+    };
+  }
+
+  // Content identity: the hidden lockfile records the tree npm actually
+  // installed. It is a SUBSET of package-lock's `packages` — it omits the
+  // root "" entry and optional deps whose os/cpu don't match this machine
+  // (platform binaries like @biomejs/cli-darwin-*) — so only a missing
+  // NON-optional entry, a version mismatch, or an extraneous installed
+  // package counts as drift. Never mtimes: content only.
+  const wanted = lock.packages ?? {};
+  const installed = hiddenLock.packages ?? {};
+  const drifted: string[] = [];
+  for (const [path, entry] of Object.entries(wanted)) {
+    if (path === "") continue;
+    const got = installed[path];
+    if (!got) {
+      if (!entry.optional) drifted.push(path);
+    } else if (entry.version !== got.version) {
+      drifted.push(path);
+    }
+  }
+  for (const path of Object.keys(installed)) {
+    if (path !== "" && !(path in wanted)) drifted.push(path);
+  }
+
+  if (drifted.length > 0) {
+    return {
+      status: "warn",
+      message:
+        `node_modules is stale — ${drifted.length} package(s) differ from ` +
+        "package-lock.json (e.g. after a pull or branch switch)",
+      fix: "npm install",
+      data: { driftCount: drifted.length, sample: drifted.slice(0, 5) },
+    };
+  }
+
+  return {
+    status: "pass",
+    message: "node_modules matches package-lock.json",
+    data: { packageCount: Object.keys(installed).length },
+  };
+}
+
+function checkNpmStaleness(r: Recorder, repoDir: string): void {
+  const pkg = readJsonOrNull(join(repoDir, "package.json")) as { version?: string } | null;
+  const lock = readJsonOrNull(join(repoDir, "package-lock.json")) as LockfileJson | null;
+  const hiddenLock = readJsonOrNull(
+    join(repoDir, "node_modules", ".package-lock.json"),
+  ) as LockfileJson | null;
+
+  const result = evaluateNpmStaleness(pkg, lock, hiddenLock);
+  if (!result) return;
+
+  if (result.status === "pass") {
+    r.pass(result.message, undefined, result.data);
+  } else {
+    r.warn(result.message, result.fix, result.data);
+  }
+}
+
 // ── Check: .mcp.json ────────────────────────────────────────────────
 
 function checkMcpJson(r: Recorder): void {
@@ -303,6 +445,76 @@ async function checkPorts(
   }
 
   return { ws, mcp };
+}
+
+// ── Check: orphaned Vite dev server (dev repo only) ─────────────────
+//
+// A crashed/half-killed `dev:standalone` can leave the Vite client process
+// serving :5173 while the backend (:3478/:3479) is gone — the editor loads
+// but nothing works, a confusing state worth naming. Gated behind
+// isTandemEditorRepo like npm-staleness: end users legitimately run other
+// things on :5173.
+
+/** Vite dev-server port (`server.port` in vite.config.ts). */
+const VITE_DEV_PORT = 5173;
+
+export interface OrphanedViteInput {
+  viteUp: boolean;
+  wsUp: boolean;
+  mcpUp: boolean;
+  wsPort: number;
+  mcpPort: number;
+}
+
+/**
+ * Pure decision step for the orphaned-Vite check. Null when no Vite server is
+ * listening — nothing to diagnose either way. A PARTIALLY up backend is the
+ * ports check's finding, not an orphan: Vite plus either backend port means a
+ * dev session is (at least trying to be) alive.
+ */
+export function evaluateOrphanedVite(input: OrphanedViteInput): {
+  status: "pass" | "warn";
+  message: string;
+  fix?: string;
+  data?: Record<string, unknown>;
+} | null {
+  const { viteUp, wsUp, mcpUp, wsPort, mcpPort } = input;
+  if (!viteUp) return null;
+
+  if (!wsUp && !mcpUp) {
+    return {
+      status: "warn",
+      message:
+        `Vite dev server on :${VITE_DEV_PORT} is running but the backend ` +
+        `(:${wsPort} + :${mcpPort}) is down — likely orphaned by a crashed dev session`,
+      fix: `Kill the process listening on :${VITE_DEV_PORT}, then restart: npm run dev:standalone`,
+      data: { vite: true, ws: wsUp, mcp: mcpUp },
+    };
+  }
+
+  return {
+    status: "pass",
+    message: `Vite dev server (:${VITE_DEV_PORT}) running alongside the backend`,
+    data: { vite: true, ws: wsUp, mcp: mcpUp },
+  };
+}
+
+async function checkOrphanedVite(
+  r: Recorder,
+  wsUp: boolean,
+  mcpUp: boolean,
+  wsPort: number,
+  mcpPort: number,
+): Promise<void> {
+  const viteUp = await probePort(VITE_DEV_PORT);
+  const result = evaluateOrphanedVite({ viteUp, wsUp, mcpUp, wsPort, mcpPort });
+  if (!result) return;
+
+  if (result.status === "pass") {
+    r.pass(result.message, undefined, result.data);
+  } else {
+    r.warn(result.message, result.fix, result.data);
+  }
 }
 
 // ── Check: /health endpoint ─────────────────────────────────────────
@@ -699,15 +911,27 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   const wsPort = opts.wsPort ?? DEFAULT_WS_PORT;
   const mcpPort = opts.mcpPort ?? DEFAULT_MCP_PORT;
   const r = new Recorder();
+  // Resolve the dev-repo gate once — both gated checks share the answer.
+  const cwd = process.cwd();
+  const devRepo = isTandemEditorRepo(cwd);
 
   await r.check("node-version", () => checkNodeVersion(r));
   await r.check("node-modules", () => checkNodeModules(r));
+  if (devRepo) {
+    await r.check("npm-staleness", () => checkNpmStaleness(r, cwd));
+  }
   await r.check("mcp-json", () => checkMcpJson(r));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("stale-global", () => checkStaleGlobal(r));
 
-  const { mcp } = await r.check("ports", () => checkPorts(r, wsPort, mcpPort));
+  const { ws, mcp } = await r.check("ports", () => checkPorts(r, wsPort, mcpPort));
+
+  if (devRepo) {
+    // Reuses the ws/mcp probe results from the ports check just above —
+    // only :5173 gets a fresh probe.
+    await r.check("orphaned-vite", () => checkOrphanedVite(r, ws, mcp, wsPort, mcpPort));
+  }
 
   if (mcp) {
     const healthy = await r.check("health", () => checkHealth(r, mcpPort));
