@@ -282,10 +282,11 @@
          but this rule also reaches the ONE transparent consumer, the
          selection-popup shell, where it painted a stray frosted rect in
          PRODUCTION ONLY. The shell's scoped `backdrop-filter: none` reset can't
-         be relied on to cancel it: lightningcss (Vite's default CSS minifier)
-         collapses a `backdrop-filter` + `-webkit-backdrop-filter` pair into the
-         `-webkit-` form alone, and Chromium does not treat that as an alias, so
-         the reset silently evaporates in a minified build (see #1188). Don't
+         be relied on to cancel it: lightningcss (Vite's default CSS minifier,
+         as of 1.32.0) collapses a `backdrop-filter` + `-webkit-backdrop-filter`
+         pair into the `-webkit-` form alone, and Chromium does not treat that
+         as an alias, so the reset silently evaporates in a minified build
+         (see #1188). Don't
          re-add a blur here — it buys nothing on an opaque surface and the
          override that would contain it does not survive minification. */
       .tandem-floating-pill {
