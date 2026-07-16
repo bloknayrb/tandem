@@ -281,14 +281,20 @@
          every theme, so a blur behind it never shows on the opaque consumers —
          but this rule also reaches the ONE transparent consumer, the
          selection-popup shell, where it painted a stray frosted rect in
-         PRODUCTION ONLY. The shell's scoped `backdrop-filter: none` reset can't
-         be relied on to cancel it: lightningcss (Vite's default CSS minifier,
-         as of 1.32.0) collapses a `backdrop-filter` + `-webkit-backdrop-filter`
-         pair into the `-webkit-` form alone, and Chromium does not treat that
-         as an alias, so the reset silently evaporates in a minified build
-         (see #1188). Don't
-         re-add a blur here — it buys nothing on an opaque surface and the
-         override that would contain it does not survive minification. */
+         PRODUCTION ONLY, and no scoped reset can be relied on to cancel it.
+         Why the asymmetry: THIS FILE'S inline <style> is emitted verbatim —
+         Vite never runs it through lightningcss — so a blur written here
+         reaches the browser exactly as typed. A component's `backdrop-filter:
+         none` reset does NOT: component CSS IS minified, and lightningcss
+         collapses a hand-written `backdrop-filter` + `-webkit-backdrop-filter`
+         pair (prefixed line last) into the `-webkit-` form alone, which
+         Chromium never implemented. So the recipe's blur survived while the
+         reset evaporated — the bug needed both halves. See #1188 and lesson 83.
+         Don't re-add a blur here: it buys nothing on an opaque surface, and the
+         override that would contain it cannot survive the other pipeline. If you
+         ever DO need a prefixed property in this file, hand-write the pair —
+         nothing autoprefixes index.html. That rule inverts in component CSS,
+         where hand-writing the pair is the bug. */
       .tandem-floating-pill {
         background: var(--tandem-surface);
         border: 1px solid var(--tandem-border);
