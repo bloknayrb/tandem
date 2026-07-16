@@ -243,8 +243,8 @@ onDestroy(() => {
     border: 1px solid var(--tandem-border);
     border-radius: var(--tandem-r-pill);
     box-shadow: var(--c7-pill-shadow);
-    backdrop-filter: saturate(140%) blur(8px);
-    -webkit-backdrop-filter: saturate(140%) blur(8px);
+    /* No backdrop-filter: --tandem-surface (the background above) is opaque, so
+       a blur behind it never shows. Mirrors the .tandem-floating-pill recipe. */
     display: flex;
     flex-direction: column;
     /* clip (not hidden) so it's not a scroll container (lesson #765). The clip
