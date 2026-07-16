@@ -17,23 +17,36 @@ import { describe, expect, it } from "vitest";
  *     narrower Annotate capsule. (The popup had consumed the recipe since #762
  *     without incident, precisely because it was an opaque card back then.)
  *  2. The `backdrop-filter: none` reset #798 wrote onto that shell to cancel the
- *     recipe's blur never worked in a real build: lightningcss (Vite's default
- *     CSS minifier — verified against 1.32.0, the version pinned today)
- *     collapses a `backdrop-filter` + `-webkit-backdrop-filter` pair into the
- *     `-webkit-` form ALONE — regardless of configured browser targets, and for
- *     any value, not just `none`. Chromium does not treat
- *     `-webkit-backdrop-filter` as an alias of the standard property, so the
- *     surviving declaration is inert there and the reset evaporated.
- *     That minifier hazard is tracked in #1188. If lightningcss ever stops
- *     collapsing the pair, that only makes this explanation stale — the
- *     assertions below stand on their own, since the recipe wants no blur
- *     either way.
+ *     recipe's blur never worked in a real build. `Toolbar.svelte`'s CSS goes
+ *     through lightningcss (Vite's default CSS minifier — measured against
+ *     1.32.0, the version pinned today), which collapses a hand-written
+ *     `backdrop-filter` + `-webkit-backdrop-filter` pair into the `-webkit-`
+ *     form ALONE when the prefixed line comes LAST. Chromium never implemented
+ *     `-webkit-backdrop-filter`, so the surviving declaration is inert there and
+ *     the reset evaporated.
  *
- * Dev never reproduced it: unminified CSS keeps the reset, so the popup looked
- * correct in `npm run dev` and broke only in the packaged app.
+ * The two facts are not independent — the bug needed BOTH, and the reason is an
+ * asymmetry worth knowing before you touch either file: **`index.html`'s inline
+ * `<style>` is not processed at all** (emitted verbatim, comments and all), while
+ * component `<style>` blocks and `src/client/**\/*.css` are. Pre-fix, the recipe
+ * and the reset were *identical* hand-written pairs — the recipe's survived
+ * because index.html is untouched, the reset's collapsed because Toolbar.svelte
+ * is not. Had both gone through the same pipeline there'd have been no bug at
+ * all. See #1188, the CLAUDE.md gotcha, and lesson 83.
  *
- * These two gates are source-level (no build required, so they stay fast):
- * one pins the specific regression, the other forbids the fragile pattern.
+ * Two corrections to what an earlier version of this comment claimed, both
+ * measured (#1188): the collapse is **order**-dependent, not value-dependent
+ * (reverse the two lines and both survive), and browser targets very much do
+ * matter — the standard property written ALONE is autoprefixed correctly for
+ * Safari. Writing the pair by hand is what breaks it; lightningcss is an
+ * autoprefixer and a hand-written pair fights it. `css-pipeline-contract.test.ts`
+ * pins that behaviour executably, so it can't rot back into prose.
+ *
+ * Dev never reproduced it: dev runs no lightningcss at all, so the reset
+ * survived and the popup looked correct in `npm run dev`.
+ *
+ * These gates are source-level (no build required, so they stay fast): one pins
+ * the specific regression, the other forbids the fragile pattern.
  */
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -88,7 +101,12 @@ function floatingPillRulesIn(css: string): { selector: string; body: string }[] 
     .filter((r) => RECIPE_SELECTOR.test(r.selector));
 }
 
-/** Every file whose CSS is processed by Vite's minifier. */
+/**
+ * Every file whose CSS Vite routes through lightningcss. Deliberately excludes
+ * `index.html`: its inline `<style>` is emitted verbatim, so it is NOT a bundled
+ * source and the collapse cannot reach it. The two obey different rules — see
+ * `allRecipeSources` and the `-webkit-` gate below.
+ */
 function bundledCssFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
@@ -99,17 +117,17 @@ function bundledCssFiles(dir: string, out: string[] = []): string[] {
 }
 
 /**
- * index.html plus every bundled stylesheet. The recipe lives in index.html
- * today, but nothing stops a future rule targeting it from a component or a
- * standalone .css — those go through the same minifier, so they get the same
- * scrutiny.
+ * Everywhere the recipe could be declared or overridden: index.html (its home)
+ * plus every bundled stylesheet. A blur re-added to the recipe is a bug wherever
+ * it is written — index.html's exemption from the minifier makes the collapse
+ * impossible there, not the blur.
  */
-function minifiedSources(): string[] {
+function allRecipeSources(): string[] {
   return [INDEX_HTML, ...bundledCssFiles(CLIENT_ROOT)];
 }
 
 function allFloatingPillRules(): { file: string; selector: string; body: string }[] {
-  const rules = minifiedSources().flatMap((f) =>
+  const rules = allRecipeSources().flatMap((f) =>
     floatingPillRulesIn(styleBlocks(f)).map((r) => ({ file: relative(ROOT, f), ...r })),
   );
   if (rules.length === 0) throw new Error("no .tandem-floating-pill rule found — parser desynced?");
@@ -167,14 +185,19 @@ describe("the recipe matcher itself", () => {
 
 describe("no bundled CSS declares a prefixed backdrop-filter", () => {
   it("declares no -webkit-backdrop-filter in any <style> block", () => {
-    // lightningcss collapses `backdrop-filter` + `-webkit-backdrop-filter` to
-    // the -webkit- form alone, which Chromium ignores. So in minifier-processed
-    // CSS the prefixed twin is never a safe companion — it silently converts
-    // the pair into a declaration that does nothing on our primary target
-    // (WebView2/Chromium). Write the standard property alone, or nothing.
-    // index.html is in scope deliberately: its inline <style> is the recipe's
-    // home and goes through the same minifier as the component styles.
-    const offenders = minifiedSources()
+    // In lightningcss-processed CSS the prefixed twin is never a safe companion:
+    // written last it collapses the pair into a declaration that does nothing on
+    // our primary target (WebView2/Chromium, which never implemented
+    // `-webkit-backdrop-filter`). Write the standard property alone — targets
+    // then add the Safari prefix for you. `css-pipeline-contract.test.ts` pins
+    // both halves of that against the real minifier.
+    //
+    // Scoped to BUNDLED CSS on purpose. index.html was previously in scope with
+    // the false rationale that it "goes through the same minifier" — it doesn't.
+    // Nothing autoprefixes it, so a hand-written pair there is *correct*
+    // authoring, and banning it would block correct code for a wrong reason. The
+    // recipe itself is covered in index.html regardless, by the gate above.
+    const offenders = bundledCssFiles(CLIENT_ROOT)
       .filter((f) => /-webkit-backdrop-filter\s*:/.test(styleBlocks(f)))
       .map((f) => relative(ROOT, f));
     expect(offenders).toEqual([]);
