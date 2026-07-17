@@ -843,7 +843,7 @@ Check if the user is actively editing and where their cursor is.
 
 ### tandem_checkInbox
 
-Check for user actions you haven't seen yet -- new comments, chat messages, and responses to your annotations. Low token cost. Call this after completing any task, between steps, and whenever you pause.
+Check for user actions you haven't seen yet -- new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Already-seen items are de-duplicated (see the channel-less note below), so frequent calls are cheap and never double-report. Low token cost.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

@@ -135,7 +135,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        "Check for user actions you haven't seen yet — new comments, chat messages, and responses to your annotations. Call after completing any task, between steps, and whenever you pause. Low token cost.",
+        "Check for user actions you haven't seen yet — new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Already-seen items are de-duplicated, so frequent calls are cheap and never double-report. Low token cost — when in doubt, call it.",
       inputSchema: {
         documentId: z
           .string()
