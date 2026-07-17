@@ -24,7 +24,8 @@ prevents them drifting.
 4. `src-tauri/tauri.conf.json` — `version` (drives desktop artifact names
    `Tandem_<version>_x64.dmg`, … AND the tauri-action `__VERSION__` that
    names/targets the GitHub release; stale = installers uploaded onto the
-   PREVIOUS release — this bit v0.15.0)
+   PREVIOUS release — this bit v0.15.0, clobbering v0.14.3's published
+   artifacts before the guard was added)
 5. `package-lock.json` — regenerate, never hand-edit:
    ```bash
    npm install --package-lock-only
@@ -33,7 +34,7 @@ prevents them drifting.
    tauri-release.yml hard-fails on a name/version mismatch with package.json.
 6. `src-tauri/Cargo.lock` — refresh and commit:
    ```bash
-   cargo update --manifest-path src-tauri/Cargo.toml -p tandem-desktop
+   cargo update --manifest-path src-tauri/Cargo.toml -p tandem-desktop --precise <version> --offline
    ```
    Hygiene only, NOT a breakage surface: no workflow passes `--locked`, so
    cargo silently regenerates a stale lock and CI stays green — but the tree
@@ -54,7 +55,9 @@ prevents them drifting.
    Changelog button serves this file).
 
 3. Verify the full test suite is green — `plugin-version-pin.test.ts` proves
-   surfaces 1–4 agree:
+   surfaces 1–4 agree (it also checks `plugin.json`'s pinned npx specs);
+   `tests/plugin-manifest.test.ts` additionally fails if `package.json` and
+   `plugin.json` diverge — treat either failure as "you bumped some, not all":
    ```bash
    npm run typecheck && npm test
    ```
