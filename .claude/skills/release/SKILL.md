@@ -30,45 +30,82 @@ prevents them drifting.
    ```bash
    npm install --package-lock-only
    ```
-   Unguarded by the version-pin test, but `npm ci` in ci.yml / publish.yml /
-   tauri-release.yml hard-fails on a name/version mismatch with package.json.
+   Unguarded, and **nothing in CI catches it** — `npm ci` will not. Its
+   lockfile-sync check covers **dependencies** only: with the lock left stale,
+   bumping the root `version` exits 0, and even changing the root `name` exits
+   0 (verified on npm 11.12.0; only an unlocked *dependency* makes it fail).
+   Regenerate anyway — the lock's root `version` is committed, so skipping it
+   ships a lockfile disagreeing with `package.json` and leaves the next local
+   `npm install` to rewrite the file and dirty the tree.
 6. `src-tauri/Cargo.lock` — refresh and commit:
    ```bash
-   cargo update --manifest-path src-tauri/Cargo.toml -p tandem-desktop --precise <version> --offline
+   cargo update --manifest-path src-tauri/Cargo.toml -p tandem-desktop
    ```
-   Hygiene only, NOT a breakage surface: no workflow passes `--locked`, so
-   cargo silently regenerates a stale lock and CI stays green — but the tree
-   goes dirty on the next local build if you skip this.
+   **Do not add `--precise <version>`.** `tandem-desktop` is a local package,
+   and for a local/workspace package `--precise` is silently ignored: asking
+   for a version the manifest doesn't have exits 0 and changes nothing. The
+   version comes from `Cargo.toml`, so bump the manifest (surface 3) and let
+   plain `-p` relock it.
+
+   Hygiene only, NOT a breakage surface: nothing verifies this lockfile —
+   `ci.yml` runs a bare `cargo test --manifest-path src-tauri/Cargo.toml` with
+   no `--locked`, so cargo silently regenerates a stale lock and CI stays
+   green. (`tauri-webdriver.yml` does pass `--locked`, but only to
+   `cargo install` for its own tooling — unrelated to `src-tauri/Cargo.lock`.)
+   The tree still goes dirty on the next local build if you skip this.
 
 ## Steps
 
 1. Bump all six surfaces (above), then run the catch-all: grep the tree for the
    OUTGOING version and confirm zero source stragglers remain:
    ```bash
-   git grep <old-version> -- ':!CHANGELOG.md' ':!*.lock' ':!package-lock.json' ':!tests/**'
+   git grep -F <old-version> -- ':!CHANGELOG.md' ':!*.lock' ':!package-lock.json' ':!tests/**' ':!docs/**'
    ```
-   (CHANGELOG keeps history; lockfiles carry dep versions; test fixtures use
-   literal version strings — all expected. Anything else is a missed surface.)
+   **`-F` is load-bearing:** unescaped, the dots are regex wildcards, so a
+   version like `0.15.0` also matches `oklch(0.15 0.01 …)` in `index.html` — a
+   pure false positive. On the most recent release, `-F` plus `':!docs/**'`
+   took this from 33 matching lines down to 9. (CHANGELOG keeps history;
+   lockfiles carry dep versions; test fixtures and docs cite versions as
+   prose — all expected.)
 
-2. Run the `changelog` skill to generate the Keep a Changelog entry, then
+   **Read the survivors, don't just count them — they are not all bugs.**
+   Expect three kinds: the six surfaces themselves (before you bump them);
+   deliberate prose naming the outgoing version as history (this skill's
+   header, CLAUDE.md's Status); and source comments, which the exclusions do
+   NOT hide — `src/server/license/gate-flag.ts` carries a
+   `Default: false (v<version>)` marker. Judge each one; a straggler is a hit
+   that still *pins* the old version rather than describing it.
+
+2. Ask Bryan to run `/changelog` to generate the Keep a Changelog entry, then
    finalize the `## [<version>]` section in `CHANGELOG.md` (the in-app View
-   Changelog button serves this file).
+   Changelog button serves this file). You cannot invoke it yourself — the
+   `changelog` skill sets `disable-model-invocation: true`, which makes it
+   user-invocable only.
 
 3. Verify the full test suite is green — `plugin-version-pin.test.ts` proves
    surfaces 1–4 agree (it also checks `plugin.json`'s pinned npx specs);
    `tests/plugin-manifest.test.ts` additionally fails if `package.json` and
    `plugin.json` diverge — treat either failure as "you bumped some, not all":
    ```bash
-   npm run typecheck && npm test
+   npm run typecheck && npm test -- --run
    ```
+   Pass `--run`. The `test` script is bare `vitest`, whose watch default is
+   `!isCI && process.stdin.isTTY && !isAgent` — so it exits on its own in CI,
+   when piped, and for an agent, but sits in watch mode in Bryan's interactive
+   terminal. `--run` makes that unconditional; `ci.yml` and `.husky/pre-push`
+   both pass it.
 
 4. Ship the bump through the normal flow: branch → PR → CI green → merge →
    verify master CI green on the **merge commit**.
 
 5. Tag the release on the master tip and push the tag:
    ```bash
-   git tag v<version> && git push origin v<version>
+   git tag -a v<version> -m "Tandem v<version>" && git push origin v<version>
    ```
+   Use `-a` (annotated). Bare `git tag v<version>` creates a *lightweight* tag
+   — `git cat-file -t` reports `commit`, not `tag` — which would break the
+   pattern: every release tag since v0.11.1 is annotated. (Older tags are
+   mostly lightweight; that is history, not the standard to copy.)
    The `v*` tag push triggers `.github/workflows/tauri-release.yml`: the signed
    desktop build matrix plus a `release-check` summary job, creating a **DRAFT**
    GitHub Release (`releaseDraft: true`) with artifacts + `latest.json`. The
