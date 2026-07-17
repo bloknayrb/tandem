@@ -38,6 +38,38 @@ declare const __TANDEM_VERSION__: string;
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
+/**
+ * Outcome of a pure decision step, before it reaches the wire.
+ *
+ * `"skip"` is deliberately NOT a {@link DoctorStatus} member: the status enum
+ * is an MCP wire contract (`z.enum(["pass","warn","fail"])` in
+ * `output-schemas.ts`) and the client's `STATUS_TAG` is a
+ * `Record<DoctorStatus, string>`, so adding a member is a breaking change.
+ *
+ * Instead a skip is recorded as a `pass` whose MESSAGE says it skipped and
+ * why, plus `data.skipped = true` for machine consumers. That is the point of
+ * the whole exercise: a check that could not compare anything must SAY so
+ * rather than report a green it never earned — but a skip is not a warning
+ * either (a fresh clone before `npm install` would warn-storm every run).
+ */
+type EvalOutcome = {
+  status: "pass" | "warn" | "skip";
+  message: string;
+  fix?: string;
+  data?: Record<string, unknown>;
+};
+
+/**
+ * Error identity WITHOUT the message. Follows the redaction precedent in
+ * {@link checkMcpJson}: doctor output gets pasted into public issues and an
+ * arbitrary error message can embed absolute paths or a V8 source snippet
+ * (which, for `.mcp.json`, carries auth-token headers).
+ */
+function errorClass(err: unknown): string {
+  if (err instanceof Error) return err.name;
+  return typeof err;
+}
+
 export interface DoctorResult {
   check: string;
   status: DoctorStatus;
@@ -68,11 +100,31 @@ class Recorder {
   readonly results: DoctorResult[] = [];
   private currentCheck = "";
 
-  async check<T>(name: string, fn: () => T | Promise<T>): Promise<T> {
+  /**
+   * Run one check under `name`. A throwing check is contained here and
+   * recorded as a `fail` rather than taking the whole report down.
+   *
+   * Returns `T | undefined` — NOT `T`. The `undefined` is load-bearing and
+   * must not be cast away: a crashed check produced no value, and the two
+   * callers that consume one (`ports` destructures `{ws, mcp}`; `health`
+   * gates the `sse` check) have to say what they want instead. Returning
+   * `undefined as T` would satisfy the compiler and then throw a TypeError
+   * on the destructure — converting a clear crash into a confusing one on
+   * the exact path this containment exists to protect.
+   */
+  async check<T>(name: string, fn: () => T | Promise<T>): Promise<T | undefined> {
     const prev = this.currentCheck;
     this.currentCheck = name;
     try {
       return await fn();
+    } catch (err) {
+      // `record` reads this.currentCheck, which the `finally` has not yet
+      // restored — so this fail is attributed to the crashed check.
+      this.fail(
+        `${name} check crashed (${errorClass(err)}) — the rest of the report is still valid`,
+        "Please report this at https://github.com/bloknayrb/tandem/issues",
+      );
+      return undefined;
     } finally {
       this.currentCheck = prev;
     }
@@ -128,6 +180,379 @@ function checkNodeModules(r: Recorder): void {
   } else {
     r.fail("node_modules/ not found", "npm install");
   }
+}
+
+// ── Dev-repo gate ───────────────────────────────────────────────────
+//
+// The npm-staleness and orphaned-Vite checks below diagnose the DEV checkout
+// only. `tandem doctor` ships globally and runs in arbitrary end-user cwds,
+// where `package.json` belongs to someone else's project — so both checks
+// gate on the cwd actually being the tandem-editor repo and skip SILENTLY
+// otherwise (not warn: the absence of a dev checkout is not a finding).
+
+/**
+ * Record an {@link EvalOutcome} on the recorder, mapping `"skip"` onto the
+ * `pass` wire status with a message that says it skipped. Single boundary so
+ * every check spells a skip the same way.
+ */
+function recordEvaluation(r: Recorder, result: EvalOutcome | null): void {
+  if (!result) return;
+  if (result.status === "warn") {
+    r.warn(result.message, result.fix, result.data);
+    return;
+  }
+  if (result.status === "skip") {
+    r.pass(`skipped — ${result.message}`, result.fix, { ...result.data, skipped: true });
+    return;
+  }
+  r.pass(result.message, result.fix, result.data);
+}
+
+/**
+ * Whether `dir` is the tandem-editor dev checkout.
+ *
+ * Tri-state on purpose. A single boolean made "this is not the repo" and "the
+ * repo's package.json is corrupt" the same silent answer — and the corrupt
+ * case is the one worth reporting, since it also silently disables the two
+ * dev-repo checks below.
+ */
+export type RepoProbe = "yes" | "no" | "unreadable";
+
+/** Classify `dir/package.json`: the tandem-editor repo, not it, or broken. */
+export function probeTandemEditorRepo(dir: string): RepoProbe {
+  const read = readJson(join(dir, "package.json"));
+  // Absent package.json is the overwhelmingly common end-user case (an
+  // arbitrary cwd) — emphatically not a finding.
+  if (read.kind === "absent") return "no";
+  if (read.kind === "unreadable") return "unreadable";
+  const parsed = read.value;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return "unreadable";
+  }
+  return (parsed as { name?: unknown }).name === "tandem-editor" ? "yes" : "no";
+}
+
+/** True when `dir/package.json` parses and names the `tandem-editor` package. */
+export function isTandemEditorRepo(dir: string): boolean {
+  return probeTandemEditorRepo(dir) === "yes";
+}
+
+// ── Check: npm install staleness (dev repo only) ────────────────────
+//
+// Compares `package.json`/`package-lock.json` against the hidden lockfile npm
+// writes at install time (`node_modules/.package-lock.json`). Deliberately
+// NOT `npm ls` (this module is pure built-ins by design, and `npm ls` exits
+// non-zero on unrelated issues under `overrides`) and NOT mtimes (git churns
+// them on checkout, which would turn every branch switch into a false warn).
+
+interface LockfileEntry {
+  version?: string;
+  optional?: boolean;
+}
+
+interface LockfileJson {
+  version?: string;
+  packages?: Record<string, LockfileEntry>;
+}
+
+/**
+ * Outcome of reading a JSON file. The three cases are deliberately distinct:
+ * collapsing them into `null` made "the file isn't there" (routine — a fresh
+ * clone before `npm install`) indistinguishable from "the file is there and
+ * broken", and the broken cases are the two highest-value findings this check
+ * has: a merge-conflicted `package-lock.json`, and a truncated
+ * `.package-lock.json` from an interrupted install.
+ */
+type JsonRead =
+  | { kind: "ok"; value: unknown }
+  | { kind: "absent" }
+  | { kind: "unreadable"; reason: string };
+
+/** Read + parse a JSON file, distinguishing absent from broken. */
+function readJson(path: string): JsonRead {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { kind: "absent" };
+    // EACCES, EISDIR, ELOOP… — the error CODE only, never the message: it
+    // embeds an absolute path.
+    return { kind: "unreadable", reason: code ?? errorClass(err) };
+  }
+  try {
+    return { kind: "ok", value: JSON.parse(raw) };
+  } catch {
+    // Deliberately no parse detail — same reasoning as checkMcpJson's
+    // redaction: V8 SyntaxErrors embed a snippet of the source text and
+    // doctor output gets pasted into public issues.
+    return { kind: "unreadable", reason: "not valid JSON" };
+  }
+}
+
+/** Narrow one `packages` entry, rejecting the `null` npm never writes but that a truncated/hand-edited file can carry. */
+function parseLockfileEntry(value: unknown): LockfileEntry | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  if (entry.version !== undefined && typeof entry.version !== "string") return null;
+  if (entry.optional !== undefined && typeof entry.optional !== "boolean") return null;
+  return {
+    version: entry.version as string | undefined,
+    optional: entry.optional as boolean | undefined,
+  };
+}
+
+/**
+ * Narrow an arbitrary parsed value to a {@link LockfileJson}, or null when the
+ * shape is wrong. Replaces the `as LockfileJson` casts this check used to
+ * carry: a cast is a promise the input never made, and
+ * `packages: { "node_modules/x": null }` cashed it as
+ * `TypeError: Cannot read properties of null (reading 'optional')` — which
+ * took down the ENTIRE report, not just this check.
+ *
+ * One malformed entry rejects the whole file: a lockfile that is structurally
+ * not a lockfile cannot be partially trusted to say what SHOULD be installed.
+ */
+function parseLockfileJson(value: unknown): LockfileJson | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  if (obj.version !== undefined && typeof obj.version !== "string") return null;
+  const version = obj.version as string | undefined;
+
+  // A lockfileVersion 1 lockfile has no `packages` key at all — a valid file
+  // this check simply cannot compare (handled as a skip downstream).
+  if (obj.packages === undefined) return { version };
+  if (typeof obj.packages !== "object" || obj.packages === null || Array.isArray(obj.packages)) {
+    return null;
+  }
+
+  const packages: Record<string, LockfileEntry> = {};
+  for (const [path, raw] of Object.entries(obj.packages)) {
+    const entry = parseLockfileEntry(raw);
+    if (!entry) return null;
+    packages[path] = entry;
+  }
+  return { version, packages };
+}
+
+/**
+ * Pure decision step for the npm-staleness check (same split as
+ * {@link evaluateStaleGlobal} — directly unit-testable without touching the
+ * filesystem). Any null input means "can't compare here" and skips: a missing
+ * node_modules is already the node-modules check's finding, and a tree
+ * installed by something other than npm has no hidden lockfile to read.
+ */
+export function evaluateNpmStaleness(
+  pkgInput: unknown,
+  lockInput: unknown,
+  hiddenLockInput: unknown,
+): EvalOutcome | null {
+  if (!pkgInput || !lockInput || !hiddenLockInput) return null;
+
+  // Validate shape HERE rather than trusting a cast at the read site: this is
+  // the boundary between "bytes someone else wrote" and this function's
+  // assumptions, and it is a public export that tests and probes call
+  // directly with hand-built input.
+  const lock = parseLockfileJson(lockInput);
+  if (!lock) {
+    return {
+      status: "skip",
+      message: "cannot compare (package-lock.json has an unexpected structure)",
+      fix: "Restore it from git: git checkout package-lock.json",
+      data: { reason: "malformed-lock" },
+    };
+  }
+  const hiddenLock = parseLockfileJson(hiddenLockInput);
+  if (!hiddenLock) {
+    return {
+      status: "skip",
+      message: "cannot compare (node_modules/.package-lock.json has an unexpected structure)",
+      fix: "npm install",
+      data: { reason: "malformed-hidden-lock" },
+    };
+  }
+  const pkg =
+    typeof pkgInput === "object" && !Array.isArray(pkgInput)
+      ? (pkgInput as { version?: unknown })
+      : {};
+  const pkgVersion = typeof pkg.version === "string" ? pkg.version : undefined;
+
+  // package.json bumped without regenerating the lockfile (release-cut slip).
+  if (pkgVersion && lock.version && pkgVersion !== lock.version) {
+    return {
+      status: "warn",
+      message:
+        `package-lock.json (v${lock.version}) is out of date with ` +
+        `package.json (v${pkgVersion})`,
+      fix: "npm install",
+      data: { packageVersion: pkgVersion, lockVersion: lock.version },
+    };
+  }
+
+  // node_modules installed from a lockfile at a different root version.
+  if (lock.version && hiddenLock.version && lock.version !== hiddenLock.version) {
+    return {
+      status: "warn",
+      message:
+        "node_modules was installed from a different lockfile " +
+        `(v${hiddenLock.version} installed, v${lock.version} expected)`,
+      fix: "npm install",
+      data: { lockVersion: lock.version, installedVersion: hiddenLock.version },
+    };
+  }
+
+  // Content identity: the hidden lockfile records the tree npm actually
+  // installed. It is a SUBSET of package-lock's `packages` — it omits the
+  // root "" entry and optional deps whose os/cpu don't match this machine
+  // (platform binaries like @biomejs/cli-darwin-*) — so only a missing
+  // NON-optional entry, a version mismatch, or an extraneous installed
+  // package counts as drift. Never mtimes: content only.
+  const wanted = lock.packages ?? {};
+  const installed = hiddenLock.packages ?? {};
+
+  // Only PASS after a comparison that actually compared something.
+  //
+  // package-lock.json is the source of truth for what SHOULD be installed, so
+  // an empty `wanted` leaves nothing to compare against and BOTH loops below
+  // degenerate: the drift loop inspects zero entries, and the extraneous loop
+  // would report every installed package as unexpected.
+  //
+  // Count NON-ROOT entries, not merely a non-empty object: the drift loop
+  // `continue`s on the root "" entry, so `{"": {...}}` is non-empty and still
+  // compares nothing. npm never emits `packages: {}` in v2/v3 and v1 has no
+  // `packages` key at all, so in practice this fires on a v1 lockfile or a
+  // hand-built/garbage one — both of which used to report a confident green.
+  const wantedCount = Object.keys(wanted).filter((path) => path !== "").length;
+  if (wantedCount === 0) {
+    return {
+      status: "skip",
+      message:
+        "cannot compare (package-lock.json lists no packages — a lockfileVersion 1 " +
+        "file, or one written by something other than npm)",
+      fix: "npm install",
+      // No inferred `lockfileVersion` here: we did not read that field, and
+      // guessing it from the presence of `packages` would put a fabricated
+      // value under a real npm field name.
+      data: { reason: "no-comparable-packages" },
+    };
+  }
+
+  const drifted: string[] = [];
+  for (const [path, entry] of Object.entries(wanted)) {
+    if (path === "") continue;
+    const got = installed[path];
+    if (!got) {
+      if (!entry.optional) drifted.push(path);
+    } else if (entry.version !== got.version) {
+      drifted.push(path);
+    }
+  }
+  for (const path of Object.keys(installed)) {
+    if (path !== "" && !(path in wanted)) drifted.push(path);
+  }
+
+  if (drifted.length > 0) {
+    return {
+      status: "warn",
+      message:
+        `node_modules is stale — ${drifted.length} package(s) differ from ` +
+        "package-lock.json (e.g. after a pull or branch switch)",
+      fix: "npm install",
+      data: { driftCount: drifted.length, sample: drifted.slice(0, 5) },
+    };
+  }
+
+  // The packages dimension compared clean. Before calling that a PASS, apply
+  // the same "compared something" rule to the VERSION dimension — the two
+  // version guards above are each `&&`-gated on their operands existing, so a
+  // missing version silently disables them and falls through to this green.
+  // A package.json with no `version` field is exactly the state in which the
+  // release-cut-slip guard matters most, and it was the state in which the
+  // guard was off.
+  const missingVersions: string[] = [];
+  if (!pkgVersion) missingVersions.push("package.json");
+  if (!lock.version) missingVersions.push("package-lock.json");
+  if (!hiddenLock.version) missingVersions.push("node_modules/.package-lock.json");
+  if (missingVersions.length > 0) {
+    return {
+      status: "skip",
+      message:
+        `node_modules matches package-lock.json, but the version check could not run — ` +
+        `no "version" field in ${missingVersions.join(", ")}`,
+      data: { reason: "no-comparable-version", missingVersions },
+    };
+  }
+
+  return {
+    status: "pass",
+    message: "node_modules matches package-lock.json",
+    data: { packageCount: Object.keys(installed).length },
+  };
+}
+
+/**
+ * Read one lockfile and report the read itself.
+ *
+ * Absent → skip: a fresh clone before `npm install` has no hidden lockfile,
+ * and the missing node_modules is already the node-modules check's finding.
+ * Anything else → warn NAMING THE PATH: that is a merge-conflicted or
+ * truncated lockfile, which is the whole reason to look.
+ *
+ * Returns a discriminated result rather than `unknown | null`: a null sentinel
+ * cannot be told apart from a file whose entire content is the valid JSON
+ * literal `null`, and the caller would then bail having recorded nothing —
+ * a silent skip, the exact thing this check is being fixed to stop doing.
+ */
+type LockfileRead = { ok: true; value: object } | { ok: false };
+
+function readLockfileOrReport(r: Recorder, path: string, label: string): LockfileRead {
+  const read = readJson(path);
+  if (read.kind === "absent") {
+    r.pass(`skipped — cannot compare (${label} not found)`, undefined, {
+      skipped: true,
+      reason: "absent",
+      path: label,
+    });
+    return { ok: false };
+  }
+  if (read.kind === "ok") {
+    // Parseable but not an object (`null`, `0`, `"…"`, `[…]`) is a broken
+    // lockfile, not a comparable one — same class as unparseable.
+    if (typeof read.value === "object" && read.value !== null && !Array.isArray(read.value)) {
+      return { ok: true, value: read.value };
+    }
+    r.warn(
+      `${label} is not a JSON object — npm install staleness cannot be checked`,
+      "Check for a truncated or hand-edited file, then: npm install",
+      { reason: "not-an-object", path: label },
+    );
+    return { ok: false };
+  }
+  r.warn(
+    `${label} could not be read (${read.reason}) — npm install staleness cannot be checked`,
+    "Check for merge-conflict markers or a truncated file, then: npm install",
+    { reason: read.reason, path: label },
+  );
+  return { ok: false };
+}
+
+function checkNpmStaleness(r: Recorder, repoDir: string): void {
+  // package.json needs no read-error branch: checkNpmStaleness only runs once
+  // probeTandemEditorRepo has already parsed this exact file and returned
+  // "yes", so an unreadable one cannot reach here.
+  const pkgRead = readJson(join(repoDir, "package.json"));
+  const pkg = pkgRead.kind === "ok" ? pkgRead.value : null;
+
+  const lock = readLockfileOrReport(r, join(repoDir, "package-lock.json"), "package-lock.json");
+  if (!lock.ok) return;
+  const hiddenLock = readLockfileOrReport(
+    r,
+    join(repoDir, "node_modules", ".package-lock.json"),
+    "node_modules/.package-lock.json",
+  );
+  if (!hiddenLock.ok) return;
+
+  recordEvaluation(r, evaluateNpmStaleness(pkg, lock.value, hiddenLock.value));
 }
 
 // ── Check: .mcp.json ────────────────────────────────────────────────
@@ -305,6 +730,106 @@ async function checkPorts(
   return { ws, mcp };
 }
 
+// ── Check: orphaned Vite dev server (dev repo only) ─────────────────
+//
+// A crashed/half-killed `dev:standalone` can leave the Vite client process
+// serving :5173 while the backend (:3478/:3479) is gone — the editor loads
+// but nothing works, a confusing state worth naming. Gated behind
+// isTandemEditorRepo like npm-staleness: end users legitimately run other
+// things on :5173.
+
+/** Vite dev-server port (`server.port` in vite.config.ts). */
+const VITE_DEV_PORT = 5173;
+
+export interface OrphanedViteInput {
+  viteUp: boolean;
+  /**
+   * Whether `/@vite/client` on :5173 answered 200 — i.e. the listener is
+   * really a Vite dev server and not merely something on Vite's port.
+   */
+  viteConfirmed: boolean;
+  wsUp: boolean;
+  mcpUp: boolean;
+  wsPort: number;
+  mcpPort: number;
+  /** The port probed — {@link VITE_DEV_PORT} in production. */
+  vitePort: number;
+}
+
+/**
+ * Pure decision step for the orphaned-Vite check. Null when nothing is
+ * listening on the Vite port — nothing to diagnose either way, and not a skip worth
+ * announcing.
+ */
+export function evaluateOrphanedVite(input: OrphanedViteInput): EvalOutcome | null {
+  const { viteUp, viteConfirmed, wsUp, mcpUp, wsPort, mcpPort, vitePort } = input;
+  if (!viteUp) return null;
+
+  // A TCP connect proves only that SOMETHING holds the port. Every branch
+  // below names the process ("Vite dev server") and one of them escalates to
+  // "kill it" — claims a TCP probe cannot support. :5173 is Vite's default,
+  // not Vite's property.
+  if (!viteConfirmed) {
+    return {
+      status: "skip",
+      message:
+        `cannot identify the process on :${vitePort} — it is listening but did not ` +
+        "answer /@vite/client, so it is probably not a Vite dev server",
+      data: { vite: false, ws: wsUp, mcp: mcpUp, reason: "unconfirmed-vite" },
+    };
+  }
+
+  if (!wsUp && !mcpUp) {
+    return {
+      status: "warn",
+      message:
+        `Vite dev server on :${vitePort} is running but the backend ` +
+        `(:${wsPort} + :${mcpPort}) is down — likely orphaned by a crashed dev session`,
+      fix:
+        `If you meant to run the client alone (npm run dev:client), this is expected. ` +
+        `Otherwise kill the process on :${vitePort} and restart: npm run dev:standalone`,
+      data: { vite: true, ws: wsUp, mcp: mcpUp },
+    };
+  }
+
+  // Half a backend is not "running alongside the backend". This used to
+  // report a confident green while :3478 or :3479 was down — the ports check
+  // warns about that, and this check must not contradict it with a pass.
+  if (wsUp !== mcpUp) {
+    return {
+      status: "skip",
+      message:
+        `cannot tell whether the Vite dev server on :${vitePort} is orphaned — ` +
+        `the backend is only partially up (:${wsPort} ${wsUp ? "up" : "down"}, ` +
+        `:${mcpPort} ${mcpUp ? "up" : "down"}); see the ports check`,
+      data: { vite: true, ws: wsUp, mcp: mcpUp, reason: "partial-backend" },
+    };
+  }
+
+  return {
+    status: "pass",
+    message: `Vite dev server (:${vitePort}) running alongside the backend`,
+    data: { vite: true, ws: wsUp, mcp: mcpUp },
+  };
+}
+
+async function checkOrphanedVite(
+  r: Recorder,
+  wsUp: boolean,
+  mcpUp: boolean,
+  wsPort: number,
+  mcpPort: number,
+  vitePort: number,
+): Promise<void> {
+  const viteUp = await probePort(vitePort);
+  // Only ask WHO is on the port once we know someone is.
+  const viteConfirmed = viteUp ? await isViteDevServer(vitePort) : false;
+  recordEvaluation(
+    r,
+    evaluateOrphanedVite({ viteUp, viteConfirmed, wsUp, mcpUp, wsPort, mcpPort, vitePort }),
+  );
+}
+
 // ── Check: /health endpoint ─────────────────────────────────────────
 
 interface HttpGetResult {
@@ -313,14 +838,40 @@ interface HttpGetResult {
   error?: string;
 }
 
+/**
+ * Response bodies are capped at 256 KB.
+ *
+ * This reader was written when `/health` on Tandem's own loopback server was
+ * its only target — a small, known, trusted JSON document. The orphaned-Vite
+ * check points it at whatever arbitrary process happens to hold :5173, so the
+ * body is now untrusted input and an unbounded `body += chunk` is a
+ * memory-exhaustion footgun in a diagnostic that is supposed to be the safe
+ * thing you run when something is already wrong. (Compare the existing
+ * `maxBuffer: 8MB` on the `npm ls` exec.) Every legitimate target is orders of
+ * magnitude under the cap; over it, we stop reading and report the status.
+ */
+const HTTP_MAX_BYTES = 256 * 1024;
+
 function httpGet(url: string, timeoutMs = 3000): Promise<HttpGetResult | null> {
   return new Promise((resolve) => {
     const req = request(url, { timeout: timeoutMs }, (res) => {
       let body = "";
-      res.on("data", (chunk) => {
+      let bytes = 0;
+      let truncated = false;
+      res.on("data", (chunk: Buffer | string) => {
+        if (truncated) return;
+        bytes += Buffer.byteLength(chunk);
+        if (bytes > HTTP_MAX_BYTES) {
+          truncated = true;
+          // Stop reading; the status line is all any caller needs at this size.
+          res.destroy();
+          resolve({ status: res.statusCode, data: null });
+          return;
+        }
         body += chunk;
       });
       res.on("end", () => {
+        if (truncated) return;
         try {
           resolve({ status: res.statusCode, data: JSON.parse(body) });
         } catch {
@@ -335,6 +886,26 @@ function httpGet(url: string, timeoutMs = 3000): Promise<HttpGetResult | null> {
     });
     req.end();
   });
+}
+
+/**
+ * Confirm the listener on `port` is actually a Vite dev server.
+ *
+ * Keys on the STATUS, not the body. `HttpGetResult.data` is typed for
+ * `/health`'s JSON and `httpGet` JSON-parses — but `/@vite/client` serves
+ * JavaScript, so `data` is unconditionally null here and testing it would
+ * reject every real Vite server. A 200 on Vite's own client-runtime module is
+ * the signal; anything else (404 from an unrelated server, a connection error,
+ * a timeout) is a no.
+ *
+ * `/@vite/client` is served under every config we ship: no `base` is set, and
+ * both `dev` and `dev:client` are bare `vite`. (`preview` is :4173 — out of
+ * scope.) A short timeout because this runs inside the synchronous
+ * Copy-Diagnostics path.
+ */
+async function isViteDevServer(port: number): Promise<boolean> {
+  const result = await httpGet(`http://127.0.0.1:${port}/@vite/client`, 2000);
+  return result?.status === 200;
 }
 
 async function checkHealth(r: Recorder, mcpPort: number): Promise<boolean> {
@@ -686,6 +1257,13 @@ export interface RunDoctorOptions {
   wsPort?: number;
   /** MCP HTTP port to probe. Defaults to {@link DEFAULT_MCP_PORT}. */
   mcpPort?: number;
+  /**
+   * Vite dev-server port to probe. Defaults to {@link VITE_DEV_PORT}. Same
+   * seam as wsPort/mcpPort: lets tests stand up a fake Vite on an ephemeral
+   * port instead of contending for the real :5173 (which a running
+   * `dev:client` would occupy).
+   */
+  vitePort?: number;
 }
 
 /**
@@ -698,19 +1276,53 @@ export interface RunDoctorOptions {
 export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorReport> {
   const wsPort = opts.wsPort ?? DEFAULT_WS_PORT;
   const mcpPort = opts.mcpPort ?? DEFAULT_MCP_PORT;
+  const vitePort = opts.vitePort ?? VITE_DEV_PORT;
   const r = new Recorder();
+  // Resolve the dev-repo gate once — both gated checks share the answer.
+  const cwd = process.cwd();
+  const repo = probeTandemEditorRepo(cwd);
+  const devRepo = repo === "yes";
 
   await r.check("node-version", () => checkNodeVersion(r));
   await r.check("node-modules", () => checkNodeModules(r));
+  if (repo === "unreadable") {
+    // A package.json we cannot read also silently disables both dev-repo
+    // checks below — so say so instead of skipping as if this were simply
+    // someone else's directory. This check is in DEV_REPO_CHECKS: it is
+    // cwd-dependent, so /api/diagnostics strips it from field reports.
+    await r.check("dev-repo", () =>
+      r.warn(
+        "package.json in the current directory could not be read — if this is the " +
+          "tandem-editor checkout, the npm-staleness and orphaned-Vite checks are being skipped",
+        "Check for merge-conflict markers or a truncated file: git checkout package.json",
+      ),
+    );
+  }
+  if (devRepo) {
+    await r.check("npm-staleness", () => checkNpmStaleness(r, cwd));
+  }
   await r.check("mcp-json", () => checkMcpJson(r));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("stale-global", () => checkStaleGlobal(r));
 
-  const { mcp } = await r.check("ports", () => checkPorts(r, wsPort, mcpPort));
+  // `check` returns undefined when the check crashed (it records its own
+  // fail). Treating both ports as down is the honest reading: we did not
+  // observe them up. Do NOT cast this away — see Recorder.check.
+  const ports = await r.check("ports", () => checkPorts(r, wsPort, mcpPort));
+  const ws = ports?.ws ?? false;
+  const mcp = ports?.mcp ?? false;
+
+  if (devRepo) {
+    // Reuses the ws/mcp probe results from the ports check just above —
+    // only :5173 gets a fresh probe.
+    await r.check("orphaned-vite", () => checkOrphanedVite(r, ws, mcp, wsPort, mcpPort, vitePort));
+  }
 
   if (mcp) {
-    const healthy = await r.check("health", () => checkHealth(r, mcpPort));
+    // A crashed health check means we never established health — don't run
+    // the SSE check on an unverified server.
+    const healthy = (await r.check("health", () => checkHealth(r, mcpPort))) ?? false;
     if (healthy) {
       await r.check("sse", () => checkSseEndpoint(r, mcpPort));
     }

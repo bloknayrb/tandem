@@ -130,6 +130,26 @@ describe("GET /api/diagnostics — dev-repo check filtering", () => {
     expect(filtered.failures).toBe(1);
     expect(filtered.summary).toBe("1 issue(s) found.");
   });
+
+  // ── Finding 13 ──
+  // These three read process.cwd(). They self-gate on the cwd being a
+  // tandem-editor checkout, but the gate is a property of the CWD, not of the
+  // caller: an end user whose cwd happens to be a checkout — or, for
+  // dev-repo, merely holds an unreadable package.json — would otherwise have
+  // cwd-dependent findings recomputed into /api/diagnostics and Copy
+  // Diagnostics. The self-gate is an optimization; this list is the contract.
+  it.each([
+    "npm-staleness",
+    "orphaned-vite",
+    "dev-repo",
+  ])("strips the cwd-dependent %s check from field reports", (check) => {
+    const filtered = filterDevRepoChecks(
+      makeReport([result("node-version", "pass"), result(check, "warn")]),
+    );
+    expect(filtered.results.map((r) => r.check)).toEqual(["node-version"]);
+    expect(filtered.warnings).toBe(0);
+    expect(filtered.summary).toBe("All checks passed. Tandem is ready.");
+  });
 });
 
 describe("GET /api/diagnostics — loopback gate", () => {

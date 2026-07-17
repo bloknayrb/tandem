@@ -1,16 +1,53 @@
 import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  evaluateNpmStaleness,
+  evaluateOrphanedVite,
   evaluateStaleGlobal,
   globalTandemEditorVersion,
+  isTandemEditorRepo,
+  probeTandemEditorRepo,
   runDoctor,
   runDoctorCli,
   summarizeDoctorResults,
 } from "../../src/cli/doctor.js";
 import { allocPort } from "../helpers/alloc-port.js";
+
+/**
+ * Stand up a server that answers `/@vite/client` with 200, like a real Vite
+ * dev server — on an EPHEMERAL port, so the suite never contends for the real
+ * :5173 (a running `npm run dev:client` would otherwise flip these tests).
+ *
+ * `serveViteClient: false` models the other case the identity probe exists
+ * for: something is listening on the port, but it is not Vite.
+ */
+async function fakeViteServer({
+  serveViteClient = true,
+}: {
+  serveViteClient?: boolean;
+} = {}): Promise<{ port: number; [Symbol.asyncDispose](): Promise<void> }> {
+  const server: Server = createServer((req, res) => {
+    if (serveViteClient && req.url === "/@vite/client") {
+      res.writeHead(200, { "content-type": "text/javascript" });
+      res.end("export const createHotContext = () => {};\n");
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  const port = await allocPort();
+  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+  return {
+    port,
+    async [Symbol.asyncDispose]() {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
 
 // checkStaleGlobal (which calls globalTandemEditorVersion, which calls
 // execFile) only runs its real logic when __TANDEM_VERSION__ is defined —
@@ -217,6 +254,48 @@ describe("runDoctor", () => {
   });
 });
 
+// ── Finding 3: one malformed lockfile entry took down the WHOLE report ──
+describe("a crashing check does not take down the report", () => {
+  let repoDir: string;
+  let cwdSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    cwdSpy = undefined;
+    if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it("still reports every other check when one check throws", async () => {
+    repoDir = mkdtempSync(join(tmpdir(), "tandem-crash-"));
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: "0.2.0" }),
+    );
+    mkdirSync(join(repoDir, "node_modules"), { recursive: true });
+    // A lockfile whose `packages` map has a null entry — the exact input that
+    // used to throw `TypeError: Cannot read properties of null` out of the
+    // pure evaluator, past runDoctor, and out of the CLI as "crashed", exit 2.
+    writeFileSync(
+      join(repoDir, "package-lock.json"),
+      JSON.stringify({
+        version: "0.2.0",
+        lockfileVersion: 3,
+        packages: { "": { version: "0.2.0" }, "node_modules/x": null },
+      }),
+    );
+    writeFileSync(
+      join(repoDir, "node_modules", ".package-lock.json"),
+      JSON.stringify({ version: "0.2.0", lockfileVersion: 3, packages: {} }),
+    );
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repoDir);
+
+    const report = await runDoctor();
+    expect(report.crashed).toBe(false);
+    expect(report.results.map((res) => res.check)).toContain("node-version");
+    expect(report.results.map((res) => res.check)).toContain("annotation-store");
+  });
+});
+
 describe("summarizeDoctorResults", () => {
   // Shared by the CLI summary AND /api/diagnostics' filtered recomputation —
   // the equivalence class that matters is failures-AND-warnings: failures must
@@ -355,5 +434,711 @@ describe("globalTandemEditorVersion", () => {
     });
 
     await expect(globalTandemEditorVersion()).resolves.toBeNull();
+  });
+});
+
+describe("probeTandemEditorRepo", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "tandem-repo-probe-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is "no" when package.json is absent — an arbitrary cwd is not a finding', () => {
+    expect(probeTandemEditorRepo(dir)).toBe("no");
+  });
+
+  it('is "no" for someone else\'s package.json', () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "someones-app" }));
+    expect(probeTandemEditorRepo(dir)).toBe("no");
+  });
+
+  it('is "yes" when package.json names tandem-editor', () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "tandem-editor" }));
+    expect(probeTandemEditorRepo(dir)).toBe("yes");
+  });
+
+  // ── Finding 6: "not the repo" and "the repo is corrupt" were the same answer ──
+  it('is "unreadable" (NOT "no") for malformed JSON', () => {
+    writeFileSync(join(dir, "package.json"), "{ not json");
+    expect(probeTandemEditorRepo(dir)).toBe("unreadable");
+  });
+
+  it('is "unreadable" when package.json is not an object', () => {
+    writeFileSync(join(dir, "package.json"), '"a string"');
+    expect(probeTandemEditorRepo(dir)).toBe("unreadable");
+  });
+
+  it('is "unreadable" for a merge-conflicted package.json', () => {
+    // The highest-value real case: the file exists, is obviously broken, and
+    // used to be reported as simply "not the repo".
+    writeFileSync(
+      join(dir, "package.json"),
+      '<<<<<<< HEAD\n{"name":"tandem-editor"}\n=======\n{"name":"tandem-editor"}\n>>>>>>> main\n',
+    );
+    expect(probeTandemEditorRepo(dir)).toBe("unreadable");
+  });
+});
+
+describe("isTandemEditorRepo", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "tandem-repo-gate-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is false when package.json is absent", () => {
+    expect(isTandemEditorRepo(dir)).toBe(false);
+  });
+
+  it("is false when package.json is malformed JSON", () => {
+    writeFileSync(join(dir, "package.json"), "{not json");
+    expect(isTandemEditorRepo(dir)).toBe(false);
+  });
+
+  it("is false for someone else's package.json (global-install end-user cwd)", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "left-pad" }));
+    expect(isTandemEditorRepo(dir)).toBe(false);
+  });
+
+  it("is true when package.json names tandem-editor", () => {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: "0.16.0" }),
+    );
+    expect(isTandemEditorRepo(dir)).toBe(true);
+  });
+});
+
+describe("evaluateNpmStaleness", () => {
+  const pkg = { version: "1.0.0" };
+  // Mirrors the real shape: the hidden lockfile omits the root "" entry AND
+  // optional deps whose os/cpu exclude this machine (platform binaries).
+  const freshLock = {
+    version: "1.0.0",
+    packages: {
+      "": { version: "1.0.0" },
+      "node_modules/foo": { version: "2.3.4" },
+      "node_modules/plat-other-os": { version: "1.1.1", optional: true },
+    },
+  };
+  const freshHidden = {
+    version: "1.0.0",
+    packages: { "node_modules/foo": { version: "2.3.4" } },
+  };
+
+  it("skips (null) when any input is missing or unreadable", () => {
+    expect(evaluateNpmStaleness(null, freshLock, freshHidden)).toBeNull();
+    expect(evaluateNpmStaleness(pkg, null, freshHidden)).toBeNull();
+    expect(evaluateNpmStaleness(pkg, freshLock, null)).toBeNull();
+  });
+
+  it("passes on a fresh install — absent platform-optional deps are not drift", () => {
+    const result = evaluateNpmStaleness(pkg, freshLock, freshHidden);
+    expect(result).toMatchObject({ status: "pass" });
+    expect(result?.fix).toBeUndefined();
+  });
+
+  it("warns with fix `npm install` when package.json outruns package-lock.json", () => {
+    const result = evaluateNpmStaleness({ version: "1.1.0" }, freshLock, freshHidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    expect(result?.message).toContain("1.1.0");
+    expect(result?.message).toContain("1.0.0");
+  });
+
+  it("warns when node_modules was installed from a different lockfile root version", () => {
+    const hidden = { ...freshHidden, version: "0.9.0" };
+    const result = evaluateNpmStaleness(pkg, freshLock, hidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    expect(result?.message).toContain("0.9.0");
+  });
+
+  it("warns when an installed package version drifts from the lockfile", () => {
+    const hidden = {
+      version: "1.0.0",
+      packages: { "node_modules/foo": { version: "2.0.0" } },
+    };
+    const result = evaluateNpmStaleness(pkg, freshLock, hidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    expect(result?.data?.driftCount).toBe(1);
+  });
+
+  it("warns when a NON-optional lockfile package is missing from the installed tree", () => {
+    const hidden = { version: "1.0.0", packages: {} };
+    const result = evaluateNpmStaleness(pkg, freshLock, hidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    expect(result?.data?.driftCount).toBe(1);
+  });
+
+  it("warns when an extraneous package remains installed after removal from the lockfile", () => {
+    const hidden = {
+      version: "1.0.0",
+      packages: {
+        "node_modules/foo": { version: "2.3.4" },
+        "node_modules/gone": { version: "0.1.0" },
+      },
+    };
+    const result = evaluateNpmStaleness(pkg, freshLock, hidden);
+    expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+  });
+
+  // ── Finding 1: PASS on a tree that compared nothing ──
+  describe("only passes after comparing something (packages dimension)", () => {
+    it("skips a lockfileVersion 1 lockfile instead of passing", () => {
+      // v1 lockfiles use `dependencies`, not `packages` — nothing to compare.
+      const result = evaluateNpmStaleness(pkg, { version: "1.0.0" }, { version: "1.0.0" });
+      expect(result?.status).toBe("skip");
+      expect(result?.message).toContain("cannot compare");
+      expect(result?.data?.reason).toBe("no-comparable-packages");
+    });
+
+    it("skips when both lockfiles are literally empty objects", () => {
+      const result = evaluateNpmStaleness({}, {}, {});
+      expect(result?.status).toBe("skip");
+    });
+
+    it("skips a ROOT-ONLY packages map — non-empty, but it compares nothing", () => {
+      // The drift loop `continue`s on the "" entry, so a non-empty check
+      // would let this exact shape through as a confident green.
+      const rootOnly = { version: "1.0.0", packages: { "": { version: "1.0.0" } } };
+      const result = evaluateNpmStaleness(pkg, rootOnly, { version: "1.0.0", packages: {} });
+      expect(result?.status).toBe("skip");
+      expect(result?.data?.reason).toBe("no-comparable-packages");
+    });
+
+    it("still WARNS on real drift — an empty installed tree is a finding, not a skip", () => {
+      // Guard against over-correcting: `wanted` is the source of truth, so an
+      // empty INSTALLED tree must stay the drift warn this check exists for.
+      const result = evaluateNpmStaleness(pkg, freshLock, { version: "1.0.0", packages: {} });
+      expect(result).toMatchObject({ status: "warn", fix: "npm install" });
+    });
+  });
+
+  // ── Finding 4: a missing version silently disabled the version guard ──
+  describe("only passes after comparing something (version dimension)", () => {
+    const pkgs = { "node_modules/foo": { version: "2.3.4" } };
+    const lock = { version: "1.0.0", packages: { "": { version: "1.0.0" }, ...pkgs } };
+    const hidden = { version: "1.0.0", packages: pkgs };
+
+    it("does not PASS when package.json has no version field", () => {
+      const result = evaluateNpmStaleness({}, lock, hidden);
+      expect(result?.status).toBe("skip");
+      expect(result?.data?.missingVersions).toEqual(["package.json"]);
+    });
+
+    it("does not PASS when neither lockfile carries a version", () => {
+      const result = evaluateNpmStaleness(
+        { version: "1.1.0" },
+        { packages: lock.packages },
+        { packages: pkgs },
+      );
+      expect(result?.status).toBe("skip");
+      expect(result?.data?.missingVersions).toEqual([
+        "package-lock.json",
+        "node_modules/.package-lock.json",
+      ]);
+    });
+
+    it("says WHICH file is missing its version", () => {
+      const result = evaluateNpmStaleness({}, lock, hidden);
+      expect(result?.message).toContain("package.json");
+      expect(result?.message).toContain("version");
+    });
+
+    it("the version guard still fires when the versions ARE comparable", () => {
+      // The control: the release-cut slip this guard exists to catch.
+      const result = evaluateNpmStaleness({ version: "1.1.0" }, lock, hidden);
+      expect(result).toMatchObject({ status: "warn" });
+      expect(result?.message).toContain("out of date");
+    });
+
+    it("package drift still WARNS even when a version is missing", () => {
+      // The version guard gates only the final green — it must not swallow a
+      // real packages finding on its way past.
+      const drifted = { version: "1.0.0", packages: { "node_modules/foo": { version: "9.9.9" } } };
+      const result = evaluateNpmStaleness({}, lock, drifted);
+      expect(result).toMatchObject({ status: "warn" });
+      expect(result?.data?.driftCount).toBe(1);
+    });
+  });
+
+  // ── Finding 3: a malformed entry took down the WHOLE report ──
+  describe("malformed input is rejected at the boundary, not cast past it", () => {
+    it("does not throw on a null packages entry", () => {
+      // Was: TypeError: Cannot read properties of null (reading 'optional'),
+      // thrown out of the 'pure' function and up through runDoctor.
+      const lock = { version: "1.0.0", packages: { "node_modules/x": null } };
+      expect(() => evaluateNpmStaleness(pkg, lock, freshHidden)).not.toThrow();
+      const result = evaluateNpmStaleness(pkg, lock, freshHidden);
+      expect(result?.status).toBe("skip");
+      expect(result?.data?.reason).toBe("malformed-lock");
+    });
+
+    it("does not throw on a null entry in the HIDDEN lockfile", () => {
+      const hidden = { version: "1.0.0", packages: { "node_modules/foo": null } };
+      expect(() => evaluateNpmStaleness(pkg, freshLock, hidden)).not.toThrow();
+      expect(evaluateNpmStaleness(pkg, freshLock, hidden)?.data?.reason).toBe(
+        "malformed-hidden-lock",
+      );
+    });
+
+    it.each([
+      ["a string", "not-a-lockfile"],
+      ["an array", []],
+      ["a number", 42],
+      ["packages as an array", { version: "1.0.0", packages: [] }],
+      ["a non-string version", { version: 3, packages: { "node_modules/x": {} } }],
+      ["an entry with a non-string version", { packages: { "node_modules/x": { version: 1 } } }],
+    ])("skips rather than throwing when the lockfile is %s", (_label, lock) => {
+      expect(() => evaluateNpmStaleness(pkg, lock, freshHidden)).not.toThrow();
+      expect(evaluateNpmStaleness(pkg, lock, freshHidden)?.status).toBe("skip");
+    });
+
+    it("does not leak a parse snippet or path into the skip message", () => {
+      const lock = { version: "1.0.0", packages: { "node_modules/x": null } };
+      const result = evaluateNpmStaleness(pkg, lock, freshHidden);
+      expect(result?.message).not.toContain("node_modules/x");
+    });
+  });
+
+  // ── Finding 9: every skip must SAY it skipped and why ──
+  describe("skips announce themselves", () => {
+    it.each([
+      ["v1 lockfile", { version: "1.0.0" }, { version: "1.0.0" }],
+      ["malformed lock", { packages: { a: null } }, { version: "1.0.0", packages: {} }],
+    ])("%s carries a human-readable reason", (_label, lock, hidden) => {
+      const result = evaluateNpmStaleness(pkg, lock, hidden);
+      expect(result?.status).toBe("skip");
+      expect(result?.message.length).toBeGreaterThan(0);
+      expect(result?.data?.reason).toBeTruthy();
+    });
+  });
+});
+
+describe("evaluateOrphanedVite", () => {
+  const ports = { wsPort: 3478, mcpPort: 3479, vitePort: 5173 };
+
+  it("reports nothing when no Vite server is listening", () => {
+    expect(
+      evaluateOrphanedVite({
+        viteUp: false,
+        viteConfirmed: false,
+        wsUp: false,
+        mcpUp: false,
+        ...ports,
+      }),
+    ).toBeNull();
+    expect(
+      evaluateOrphanedVite({
+        viteUp: false,
+        viteConfirmed: false,
+        wsUp: true,
+        mcpUp: true,
+        ...ports,
+      }),
+    ).toBeNull();
+  });
+
+  it("warns with a kill + restart fix when Vite is up but both backend ports are down", () => {
+    const result = evaluateOrphanedVite({
+      viteUp: true,
+      viteConfirmed: true,
+      wsUp: false,
+      mcpUp: false,
+      ...ports,
+    });
+    expect(result).toMatchObject({ status: "warn" });
+    expect(result?.message).toContain("5173");
+    expect(result?.message).toContain("3478");
+    expect(result?.message).toContain("3479");
+    expect(result?.fix).toContain("kill");
+    expect(result?.fix).toContain("npm run dev:standalone");
+  });
+
+  it("names dev:client in the fix — running the client alone is a documented script", () => {
+    const result = evaluateOrphanedVite({
+      viteUp: true,
+      viteConfirmed: true,
+      wsUp: false,
+      mcpUp: false,
+      ...ports,
+    });
+    expect(result?.fix).toContain("dev:client");
+  });
+
+  it("passes when Vite and the backend are both up", () => {
+    const result = evaluateOrphanedVite({
+      viteUp: true,
+      viteConfirmed: true,
+      wsUp: true,
+      mcpUp: true,
+      ...ports,
+    });
+    expect(result).toMatchObject({ status: "pass" });
+  });
+
+  // ── Finding 7: identity a TCP probe cannot support ──
+  it("skips rather than naming Vite when /@vite/client did not confirm", () => {
+    // Something holds :5173 and the backend is down — the exact shape of the
+    // orphan warn — but we never confirmed it is Vite. Must not warn, must
+    // not tell the user to kill an unidentified process.
+    const result = evaluateOrphanedVite({
+      viteUp: true,
+      viteConfirmed: false,
+      wsUp: false,
+      mcpUp: false,
+      ...ports,
+    });
+    expect(result?.status).toBe("skip");
+    expect(result?.message).toContain("/@vite/client");
+    expect(result?.fix).toBeUndefined();
+  });
+
+  it("does not claim Vite is 'running alongside the backend' when unconfirmed", () => {
+    const result = evaluateOrphanedVite({
+      viteUp: true,
+      viteConfirmed: false,
+      wsUp: true,
+      mcpUp: true,
+      ...ports,
+    });
+    expect(result?.status).toBe("skip");
+  });
+
+  // ── Finding 8: partial backend emitted a false green ──
+  it("skips (does NOT pass) while the backend is only partially up", () => {
+    // Half a backend is not "running alongside the backend" — the ports check
+    // warns about that, and this check must not contradict it with a green.
+    for (const [wsUp, mcpUp] of [
+      [true, false],
+      [false, true],
+    ] as const) {
+      const result = evaluateOrphanedVite({
+        viteUp: true,
+        viteConfirmed: true,
+        wsUp,
+        mcpUp,
+        ...ports,
+      });
+      expect(result?.status).toBe("skip");
+      expect(result?.message).toContain("partially up");
+      expect(result?.data?.reason).toBe("partial-backend");
+    }
+  });
+
+  it("reports the probed vitePort, not a hardcoded 5173", () => {
+    const result = evaluateOrphanedVite({
+      viteUp: true,
+      viteConfirmed: true,
+      wsUp: false,
+      mcpUp: false,
+      wsPort: 3478,
+      mcpPort: 3479,
+      vitePort: 6100,
+    });
+    expect(result?.message).toContain("6100");
+    expect(result?.message).not.toContain("5173");
+  });
+});
+
+describe("dev-repo gating in runDoctor", () => {
+  let repoDir: string;
+  let cwdSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    repoDir = mkdtempSync(join(tmpdir(), "tandem-gate-"));
+  });
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    cwdSpy = undefined;
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  function mockCwd(dir: string): void {
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(dir);
+  }
+
+  /**
+   * Seed a minimal checkout with a COMPLETE, CONSISTENT lockfile trio.
+   *
+   * The trio must contain a real `node_modules/*` entry on both sides. The
+   * original seed wrote `lock.packages = {"":{...}}` / `hidden.packages = {}`,
+   * which compares NOTHING (the drift loop skips the root entry) — so the
+   * "passes with a fresh install" test was ratifying the very false-PASS bug
+   * this branch is fixing, and the gate test below skipped for an unrelated
+   * reason. `name` is a parameter so the same complete seed can stand up a
+   * non-tandem cwd: that is what makes the gate test fail when the gate goes.
+   *
+   * Not marked `dev: true` on purpose — dev entries are NOT exempt from drift
+   * (409 of 795 real non-root entries are dev; exempting them would silently
+   * stop reporting a missing vitest/biome, the most common real drift).
+   */
+  function seedRepo(versions: {
+    pkg: string;
+    lock: string;
+    hidden: string;
+    name?: string;
+    installed?: string;
+  }): void {
+    const name = versions.name ?? "tandem-editor";
+    const installed = versions.installed ?? "2.3.4";
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ name, version: versions.pkg }));
+    writeFileSync(
+      join(repoDir, "package-lock.json"),
+      JSON.stringify({
+        name,
+        version: versions.lock,
+        lockfileVersion: 3,
+        packages: {
+          "": { version: versions.lock },
+          "node_modules/foo": { version: "2.3.4" },
+        },
+      }),
+    );
+    mkdirSync(join(repoDir, "node_modules"), { recursive: true });
+    writeFileSync(
+      join(repoDir, "node_modules", ".package-lock.json"),
+      JSON.stringify({
+        name,
+        version: versions.hidden,
+        lockfileVersion: 3,
+        packages: { "node_modules/foo": { version: installed } },
+      }),
+    );
+  }
+
+  it("skips both gated checks silently in a non-tandem cwd (global-install user)", async () => {
+    // An end-user cwd with their OWN project's package.json — the exact case
+    // the gate exists for: no warn, no fail, no mention at all.
+    //
+    // Seeded with a COMPLETE, CONSISTENT lockfile trio and a live Vite
+    // listener, so both gated checks would produce a result here if the gate
+    // were removed. Without that, this test passed with `if (devRepo)`
+    // deleted — the checks skipped for unrelated reasons (no lockfiles,
+    // nothing on the Vite port) and the gate was never actually exercised.
+    seedRepo({ pkg: "9.9.9", lock: "9.9.9", hidden: "9.9.9", name: "someones-app" });
+    mockCwd(repoDir);
+
+    await using vite = await fakeViteServer();
+
+    const report = await runDoctor({ vitePort: vite.port });
+    const names = report.results.map((res) => res.check);
+    expect(names).not.toContain("npm-staleness");
+    expect(names).not.toContain("orphaned-vite");
+  });
+
+  it("reports npm-staleness in a tandem cwd with the SAME seed — proving the gate is what silences it", async () => {
+    // The positive control for the test above. Identical seed, only `name`
+    // differs, so the sole reason the checks disappear up there is the gate.
+    seedRepo({ pkg: "9.9.9", lock: "9.9.9", hidden: "9.9.9", name: "tandem-editor" });
+    mockCwd(repoDir);
+
+    await using vite = await fakeViteServer();
+
+    const report = await runDoctor({ vitePort: vite.port });
+    const names = report.results.map((res) => res.check);
+    expect(names).toContain("npm-staleness");
+    expect(names).toContain("orphaned-vite");
+  });
+
+  // ── Finding 6 (gated): the tri-state warn ──
+  it("warns dev-repo when package.json exists but cannot be read", async () => {
+    writeFileSync(join(repoDir, "package.json"), "{ not json");
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "dev-repo");
+    expect(result?.status).toBe("warn");
+    expect(result?.message).toContain("could not be read");
+  });
+
+  it("stays silent about dev-repo in an ordinary end-user cwd", async () => {
+    // The false-warn this must never become: an end user with no package.json
+    // at all, or someone else's, hears nothing about "the repo".
+    mockCwd(repoDir);
+    expect((await runDoctor()).results.map((r) => r.check)).not.toContain("dev-repo");
+
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ name: "someones-app" }));
+    expect((await runDoctor()).results.map((r) => r.check)).not.toContain("dev-repo");
+  });
+
+  // ── Finding 5: absent vs broken lockfiles ──
+  it("skips npm-staleness with a reason when the hidden lockfile is absent (fresh clone)", async () => {
+    // Fresh clone before `npm install`: must SAY it skipped, must NOT warn.
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: "0.2.0" }),
+    );
+    writeFileSync(
+      join(repoDir, "package-lock.json"),
+      JSON.stringify({ version: "0.2.0", lockfileVersion: 3, packages: {} }),
+    );
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(result?.status).toBe("pass");
+    expect(result?.message).toContain("skipped");
+    expect(result?.message).toContain("not found");
+    expect(result?.data?.skipped).toBe(true);
+  });
+
+  it("warns (naming the file) when package-lock.json is present but broken", async () => {
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: "0.2.0" }),
+    );
+    // A merge-conflicted lockfile — one of the two findings this check exists
+    // for, and one it used to silently swallow as "absent".
+    writeFileSync(join(repoDir, "package-lock.json"), "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> x\n");
+    mkdirSync(join(repoDir, "node_modules"), { recursive: true });
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(result?.status).toBe("warn");
+    expect(result?.message).toContain("package-lock.json");
+    expect(result?.message).toContain("not valid JSON");
+  });
+
+  it.each([
+    ["the JSON literal null", "null"],
+    ["a JSON number", "0"],
+    ["a JSON array", "[]"],
+  ])("never skips SILENTLY when package-lock.json is %s", async (_label, content) => {
+    // Parseable JSON, but not a lockfile. The falsy cases are the trap: a
+    // `unknown | null` return cannot distinguish "nothing to report" from a
+    // file whose content IS null, so this used to bail having recorded
+    // nothing at all — a silent skip, the one thing this check must not do.
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: "0.2.0" }),
+    );
+    writeFileSync(join(repoDir, "package-lock.json"), content);
+    mkdirSync(join(repoDir, "node_modules"), { recursive: true });
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(result).toBeDefined();
+    expect(result?.message).toContain("package-lock.json");
+  });
+
+  it("does not echo a parse snippet into the warn (doctor output is pasted publicly)", async () => {
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: "0.2.0" }),
+    );
+    writeFileSync(join(repoDir, "package-lock.json"), '{ "authToken": "sk-secret-do-not-leak" ');
+    mkdirSync(join(repoDir, "node_modules"), { recursive: true });
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(JSON.stringify(result)).not.toContain("sk-secret-do-not-leak");
+  });
+
+  it("warns npm-staleness (fix: npm install) in a tandem cwd with a stale lockfile", async () => {
+    seedRepo({ pkg: "0.2.0", lock: "0.1.0", hidden: "0.1.0" });
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(result).toBeDefined();
+    expect(result?.status).toBe("warn");
+    expect(result?.fix).toBe("npm install");
+  });
+
+  it("passes npm-staleness in a tandem cwd with a fresh install", async () => {
+    seedRepo({ pkg: "0.2.0", lock: "0.2.0", hidden: "0.2.0" });
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(result).toBeDefined();
+    expect(result?.status).toBe("pass");
+    // An EARNED pass — not a skip wearing the pass wire status.
+    expect(result?.data?.skipped).toBeUndefined();
+    expect(result?.message).not.toContain("skipped");
+  });
+
+  it("warns npm-staleness when an installed package drifts from the lockfile", async () => {
+    // End-to-end through the real file reads, not just the pure function.
+    seedRepo({ pkg: "0.2.0", lock: "0.2.0", hidden: "0.2.0", installed: "9.9.9" });
+    mockCwd(repoDir);
+
+    const report = await runDoctor();
+    const result = report.results.find((res) => res.check === "npm-staleness");
+    expect(result?.status).toBe("warn");
+    expect(result?.data?.driftCount).toBe(1);
+  });
+});
+
+// ── Finding 11: orphaned-vite had ZERO integration coverage ──
+describe("orphaned-vite integration", () => {
+  let repoDir: string;
+  let cwdSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  beforeEach(() => {
+    repoDir = mkdtempSync(join(tmpdir(), "tandem-vite-"));
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: "tandem-editor", version: "0.2.0" }),
+    );
+    mkdirSync(join(repoDir, "node_modules"), { recursive: true });
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repoDir);
+  });
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    cwdSpy = undefined;
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it("warns about an orphan when a real Vite server outlives a dead backend", async () => {
+    await using vite = await fakeViteServer();
+    // Two ports nobody is listening on = the backend is down.
+    const wsPort = await allocPort();
+    const mcpPort = await allocPort();
+
+    const report = await runDoctor({ wsPort, mcpPort, vitePort: vite.port });
+    const result = report.results.find((res) => res.check === "orphaned-vite");
+    expect(result?.status).toBe("warn");
+    // Ports must be reported against the right service. Transposing the
+    // wsPort/mcpPort arguments at the call site left the suite green before
+    // this assertion existed.
+    expect(result?.message).toContain(String(vite.port));
+    expect(result?.message).toContain(`:${wsPort} + :${mcpPort}`);
+  });
+
+  it("does not name Vite when the listener on the port is not a Vite server", async () => {
+    // A TCP connect proves only that something holds the port. This is the
+    // end-user-shaped case: some other dev server on the same port.
+    await using notVite = await fakeViteServer({ serveViteClient: false });
+    const wsPort = await allocPort();
+    const mcpPort = await allocPort();
+
+    const report = await runDoctor({ wsPort, mcpPort, vitePort: notVite.port });
+    const result = report.results.find((res) => res.check === "orphaned-vite");
+    expect(result?.status).toBe("pass");
+    expect(result?.message).toContain("skipped");
+    expect(result?.data?.reason).toBe("unconfirmed-vite");
+    // Critically: no instruction to kill a process we could not identify.
+    expect(result?.fix).toBeUndefined();
+  });
+
+  it("reports nothing at all when the Vite port is free", async () => {
+    const freePort = await allocPort();
+    const report = await runDoctor({ vitePort: freePort });
+    expect(report.results.map((res) => res.check)).not.toContain("orphaned-vite");
   });
 });

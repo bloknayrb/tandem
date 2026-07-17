@@ -9,8 +9,23 @@ import type { Handler } from "./_shared.js";
  * For a Tauri/npm-global user the server's cwd is arbitrary, so these would
  * FAIL on every field report and bury the real signal under two false
  * failures. `tandem doctor` (CLI) keeps them — there the cwd is meaningful.
+ *
+ * `npm-staleness`, `orphaned-vite` and `dev-repo` self-gate on
+ * `probeTandemEditorRepo(cwd) === "yes"` and so are usually absent here
+ * anyway — but that is NOT a substitute for listing them. The self-gate is a
+ * property of the cwd, not of the caller: an end user whose cwd happens to be
+ * a tandem-editor checkout (or, for `dev-repo`, merely holds an unreadable
+ * package.json) would otherwise have cwd-dependent findings recomputed into
+ * /api/diagnostics and Copy Diagnostics. This list is the contract; the gate
+ * is an optimization.
  */
-const DEV_REPO_CHECKS = new Set(["node-modules", "mcp-json"]);
+const DEV_REPO_CHECKS = new Set([
+  "node-modules",
+  "mcp-json",
+  "npm-staleness",
+  "orphaned-vite",
+  "dev-repo",
+]);
 
 export interface DiagnosticsHandlerDeps {
   /** Running app version string (APP_VERSION from server.ts). */
