@@ -7,6 +7,7 @@ import FormattingToolbar from "../editor/toolbar/FormattingToolbar.svelte";
 import HighlightColorPicker from "../editor/toolbar/HighlightColorPicker.svelte";
 import { toggleHighlight } from "../editor/toolbar/highlight-toggle";
 import { pmPosToFlatOffset } from "../positions";
+import { createCoalescingTick } from "../utils/coalescing-tick";
 import DecorationsMenu from "./DecorationsMenu.svelte";
 
 interface Props {
@@ -60,9 +61,13 @@ let _tick = $state(0);
 $effect(() => {
   const ed = editor;
   if (!ed || ed.isDestroyed) return;
-  const handler = () => {
+  // Deferred: `transaction` fires synchronously from ProseMirror's dispatch,
+  // including the blur-meta transaction emitted while the DOM is being torn
+  // down. Writing $state inside Svelte's active reaction throws
+  // state_unsafe_mutation (prod too). See createCoalescingTick.
+  const handler = createCoalescingTick(() => {
     if (!ed.isDestroyed) _tick++;
-  };
+  });
   ed.on("selectionUpdate", handler);
   ed.on("transaction", handler);
   return () => {

@@ -3,6 +3,7 @@ import type { Editor } from "@tiptap/core";
 import { onDestroy } from "svelte";
 import * as Y from "yjs";
 import type { OpenTab } from "../../types.js";
+import { createCoalescingTick } from "../../utils/coalescing-tick";
 import {
   type FindReplaceOptions,
   getFindState,
@@ -185,7 +186,14 @@ $effect(() => {
   // (pre-existing bug, made loud by the no-match tint). `transaction` fires for
   // every transaction (a superset) and tick++ dispatches no PM transaction itself,
   // so there is no feedback loop with Editor.svelte's setEditable/readOnly guard.
-  const bumpTick = () => tick++;
+  //
+  // Deferred: `transaction` arrives synchronously from ProseMirror's dispatch,
+  // which a native blur can drive mid-render — writing $state inside Svelte's
+  // active reaction throws state_unsafe_mutation (prod too). Coalescing is
+  // harmless here: the match count only has to be right once per burst.
+  const bumpTick = createCoalescingTick(() => {
+    if (!ed.isDestroyed) tick++;
+  });
   ed.on("transaction", bumpTick);
   return () => {
     if (!ed.isDestroyed) {

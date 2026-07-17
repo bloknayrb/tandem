@@ -2,6 +2,7 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { yUndoPluginKey } from "y-prosemirror";
 import { clickOutside } from "../../actions/clickOutside.svelte";
+import { createCoalescingTick } from "../../utils/coalescing-tick";
 import { applyLink, getInitialLinkHref, withPreventDefault } from "./handlers.js";
 import ToolbarButton from "./ToolbarButton.svelte";
 
@@ -42,9 +43,13 @@ let linkInputEl = $state<HTMLInputElement | null>(null);
 $effect(() => {
   const ed = editor;
   if (!ed || ed.isDestroyed) return;
-  const handler = () => {
+  // Deferred: `transaction` is emitted synchronously from ProseMirror's
+  // dispatch, including the meta-only transaction a native blur triggers during
+  // teardown. Writing $state inside Svelte's active reaction throws
+  // state_unsafe_mutation (prod too). See createCoalescingTick.
+  const handler = createCoalescingTick(() => {
     if (!ed.isDestroyed) tick++;
-  };
+  });
   ed.on("transaction", handler);
   return () => {
     if (!ed.isDestroyed) ed.off("transaction", handler);
