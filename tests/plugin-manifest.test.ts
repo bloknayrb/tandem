@@ -68,13 +68,30 @@ describe("published Claude Code plugin manifest", () => {
     expect(tandem?.source).toEqual({ source: "github", repo: "bloknayrb/tandem" });
   });
 
-  it("the experimental monitor points at its built output", () => {
-    // The monitor command references a build artifact; if dist/monitor/index.js
-    // is renamed the channel-push monitor silently fails to launch. Guard the
-    // path coupling alongside the version drift guard.
-    const experimental = plugin.experimental as { monitors?: Array<{ command?: string }> };
+  it("the experimental monitor runs via the pinned npx subcommand", () => {
+    // The monitor ships as `npx -y tandem-editor@<version> monitor`, NOT
+    // `node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js` — dist/ is gitignored,
+    // so a github plugin-clone install (the marketplace path) carries no built
+    // monitor binary. npm ships dist (files:["dist/"]), so npx delivers it,
+    // matching the tandem / tandem-channel mcpServers entries. The version pin
+    // is guarded in tests/plugin/plugin-version-pin.test.ts.
+    const experimental = plugin.experimental as {
+      monitors?: Array<{ command?: string; env?: Record<string, string> }>;
+    };
     const monitor = experimental?.monitors?.[0];
-    expect(monitor?.command).toContain("dist/monitor/index.js");
+    const version = pkg.version as string;
+    expect(monitor?.command).toBe(`npx -y tandem-editor@${version} monitor`);
+    // The monitor entry carries NO `env` block, unlike the mcpServers entries.
+    // Two reasons: (1) ADR-028 records that the monitors[] manifest schema
+    // rejected `env` blocks (CLI 2.1.126) — until that's re-verified lifted,
+    // an `env` block risks making the whole entry uninstallable, which would
+    // regress the activation the B1 spike proved. (2) It's redundant anyway:
+    // resolveTandemUrl() (src/shared/cli-runtime.ts) already defaults to
+    // http://127.0.0.1:3479, and in Cowork the plugin host's
+    // CLAUDE_PLUGIN_OPTION_SERVER_URL takes precedence over TANDEM_URL. So the
+    // env would only ever match the default where it's harmless and be wrong
+    // where it matters. Guard that it stays absent.
+    expect(monitor?.env).toBeUndefined();
   });
 
   it("the README #cowork anchor the dialogs link to exists", () => {

@@ -37,6 +37,7 @@ const expected = pkg.version;
 const plugin = JSON.parse(readFileSync(join(repoRoot, ".claude-plugin/plugin.json"), "utf8")) as {
   version: string;
   mcpServers: Record<string, { command?: string; args?: string[] }>;
+  experimental?: { monitors?: Array<{ command?: string }> };
 };
 
 const cargoToml = readFileSync(join(repoRoot, "src-tauri/Cargo.toml"), "utf8");
@@ -56,6 +57,16 @@ function cargoPackageVersion(toml: string): string {
 function pinnedVersion(args: string[] | undefined): string | undefined {
   const spec = args?.find((a) => a.startsWith("tandem-editor@"));
   return spec?.slice("tandem-editor@".length);
+}
+
+/**
+ * Extract the `tandem-editor@<version>` pin from a shell-STRING command.
+ * `experimental.monitors[]` entries carry a single `command` string
+ * (`npx -y tandem-editor@<v> monitor`), NOT a `command`+`args[]` pair, so the
+ * `args`-array walker above can't see them — a monitor pin would silently rot.
+ */
+function pinnedVersionFromCommand(command: string | undefined): string | undefined {
+  return command?.match(/tandem-editor@(\S+)/)?.[1];
 }
 
 describe("plugin/version pin drift guard", () => {
@@ -85,6 +96,25 @@ describe("plugin/version pin drift guard", () => {
       expect(pinnedVersion(entry.args), `${name} must pin tandem-editor@${expected}`).toBe(
         expected,
       );
+    }
+  });
+
+  it("every plugin.json experimental.monitors npx entry pins the package.json version", () => {
+    // The monitor ships via `npx -y tandem-editor@<v> monitor` because dist/ is
+    // gitignored — a github plugin clone carries no built monitor binary, while
+    // npm ships dist, so npx delivers it. The pin lives in a shell-string
+    // `command`, invisible to the mcpServers args-walker above, so it needs its
+    // own guard or it silently rots on the next six-surface release bump.
+    const monitors = plugin.experimental?.monitors ?? [];
+    const npxMonitors = monitors.filter((m) => m.command?.includes("tandem-editor"));
+    // Guards against the pin being dropped to a bare `tandem-editor`, or the
+    // npx monitor entry disappearing entirely.
+    expect(npxMonitors.length).toBeGreaterThan(0);
+    for (const m of npxMonitors) {
+      expect(
+        pinnedVersionFromCommand(m.command),
+        `monitor command "${m.command}" must pin tandem-editor@${expected}`,
+      ).toBe(expected);
     }
   });
 });

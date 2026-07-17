@@ -9,7 +9,7 @@ import {
   sseResponse,
 } from "./fetch-harness.js";
 
-const MONITOR_PATH = fileURLToPath(new URL("../../src/monitor/index.ts", import.meta.url));
+const MONITOR_PATH = fileURLToPath(new URL("../../src/monitor/run.ts", import.meta.url));
 const SSE_CONSUMER_PATH = fileURLToPath(
   new URL("../../src/shared/sse-consumer.ts", import.meta.url),
 );
@@ -40,7 +40,8 @@ describe("monitor authenticated fetch surface", () => {
     // Post-#282 the SSE / awareness / mode / error-report fetches live in
     // src/shared/sse-consumer.ts. Assert on the shared module (where the
     // logic now is) for the bulk of the timeout coverage, and on
-    // src/monitor/index.ts only for the thin adapter surface.
+    // src/monitor/run.ts (the entry/runtime split moved the adapter out of
+    // index.ts) only for the thin adapter surface.
     const src = await readFile(SSE_CONSUMER_PATH, "utf8");
     expect(src).toContain('"./fetch-with-timeout.js"');
     expect(src).toMatch(

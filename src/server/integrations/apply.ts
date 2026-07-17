@@ -218,9 +218,11 @@ export class PathRejectedError extends Error {
 }
 
 export interface BuildMcpEntriesOptions {
-  /** Include the legacy stdio channel shim. Defaults to false — the plugin
-   *  monitor handles event push for modern installs. Users on older setups
-   *  can run `tandem setup --with-channel-shim` to preserve the shim. */
+  /** Include the stdio channel shim. This raw option defaults to false, but
+   *  `shouldIncludeChannelShim` turns it ON by default for the Claude Code
+   *  target — the shim is the default push transport. The plugin monitor is an
+   *  independent push path (activates on Claude Code 2.1.212+, no flag); the
+   *  two coexist pending a canonical-transport decision. */
   withChannelShim?: boolean;
   nodeBinary?: string;
   /** Auth token to embed in HTTP entry headers and stdio shim env.
@@ -1020,10 +1022,13 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
 /**
  * Single source of truth for "should this target get the stdio channel shim?".
  *
- * The channel shim is Claude Code's real-time push transport (the plugin
- * monitor it was meant to replace cannot activate via any path Tandem can
- * use — see Spike B / #985). So the default for the Claude Code target is
- * ON, gated only by the build artifact actually existing.
+ * The channel shim is Claude Code's default real-time push transport. The
+ * plugin also carries a monitor that activates on Claude Code 2.1.212+ and
+ * needs no flag — an independent push path (it was inactive on 2.1.143, the
+ * historical Spike B / #985 NO-GO, since reversed). Which of the two becomes
+ * canonical is an open decision — both active in one session double-deliver —
+ * so the default for the Claude Code target stays ON, gated only by the build
+ * artifact actually existing.
  *
  * - `claude-desktop` → always false (Cowork stdio path; the node-process
  *   shim does not apply there).

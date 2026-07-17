@@ -73,6 +73,10 @@ Usage:
                                     tandem server running on the host)
   tandem channel                    Run the Tandem channel shim (stdio MCP)
                                     (used by the plugin's tandem-channel entry)
+  tandem monitor                    Run the Tandem plugin monitor: stream event
+                                    lines to stdout for Claude Code to surface as
+                                    notifications (used by the plugin's
+                                    experimental.monitors entry; needs no flag)
   tandem --version
   tandem --help
 `);
@@ -88,7 +92,7 @@ if (args.includes("--version") || args.includes("-v")) {
 // subcommands — the output is machine-consumed by Claude Desktop's plugin
 // loader, and any incidental write risks corrupting the MCP wire or producing
 // log noise no human will ever read.
-const isStdioMode = args[0] === "mcp-stdio" || args[0] === "channel";
+const isStdioMode = args[0] === "mcp-stdio" || args[0] === "channel" || args[0] === "monitor";
 if (!isStdioMode) {
   const { default: updateNotifier } = await import("update-notifier");
   updateNotifier({ pkg: { name: "tandem-editor", version } }).notify();
@@ -137,6 +141,16 @@ try {
   } else if (args[0] === "channel") {
     const { runChannelCli } = await import("./channel.js");
     await runChannelCli();
+  } else if (args[0] === "monitor") {
+    // The plugin's experimental.monitors[] entry runs `npx -y
+    // tandem-editor@<v> monitor`. Import the RUNTIME (../monitor/run.js),
+    // NOT ../monitor/index.js — index.js carries the standalone auto-run
+    // whose isDirectRun guard resolves TRUE inside the bundled CLI, which
+    // would fire main() a SECOND time (a doubled SSE subscription emitting
+    // every event twice). Dynamic + in-branch so the monitor runtime's
+    // module-load console→stderr redirect never fires for other commands.
+    const { main } = await import("../monitor/run.js");
+    await main();
   } else if (args[0] === "doctor") {
     // The doctor logic is bundled into dist/cli (imported, not spawned):
     // scripts/ is NOT shipped in the npm package, so a spawn would have
