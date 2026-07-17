@@ -50,6 +50,7 @@ test-results/
 !.claude/skills/dev-server/
 !.claude/skills/e2e/
 !.claude/skills/e2e-debug/
+!.claude/skills/release/
 !.claude/skills/screenshots/
 
 # Developer-local Claude project memory (per its own header: "Gitignored.
