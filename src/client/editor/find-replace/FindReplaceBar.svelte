@@ -191,7 +191,9 @@ $effect(() => {
   // which a native blur can drive mid-render — writing $state inside Svelte's
   // active reaction throws state_unsafe_mutation (prod too). Coalescing is
   // harmless here: the match count only has to be right once per burst.
-  const bumpTick = createCoalescingTick(() => tick++);
+  const bumpTick = createCoalescingTick(() => {
+    if (!ed.isDestroyed) tick++;
+  });
   ed.on("transaction", bumpTick);
   return () => {
     if (!ed.isDestroyed) {
