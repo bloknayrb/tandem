@@ -4,6 +4,7 @@ import { untrack } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
+import { createCoalescingTick } from "../utils/coalescing-tick";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
 interface Props {
@@ -163,9 +164,14 @@ let editorTick = $state(0);
 $effect(() => {
   const ed = editor;
   if (!ed || ed.isDestroyed) return;
-  const handler = () => {
+  // Deferred, not direct: Tiptap fires these synchronously from ProseMirror's
+  // dispatch, which can re-enter while Svelte is mid-render — a native blur
+  // during teardown reaches us straight from `EditorView.dispatch`. Writing
+  // $state there throws state_unsafe_mutation (in prod too). See
+  // createCoalescingTick.
+  const handler = createCoalescingTick(() => {
     if (!ed.isDestroyed) editorTick++;
-  };
+  });
   ed.on("update", handler);
   ed.on("transaction", handler);
   return () => {
