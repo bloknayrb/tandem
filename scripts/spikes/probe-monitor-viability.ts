@@ -139,8 +139,11 @@ interface ClaudePrintJson {
 }
 
 // Read the two source files once; the three B1 checks all grep over them.
+// The monitor runtime (formatters, event-consumer loop) lives in run.ts since
+// the entry/runtime split — src/monitor/index.ts is now a thin re-export, so
+// the B1 greps must read run.ts to find the logic they assert on.
 const REPO_ROOT = resolvePath(__dirname, "..", "..");
-const MONITOR_SRC = readFileSync(joinPath(REPO_ROOT, "src/monitor/index.ts"), "utf8");
+const MONITOR_SRC = readFileSync(joinPath(REPO_ROOT, "src/monitor/run.ts"), "utf8");
 const CHANNEL_SRC = readFileSync(joinPath(REPO_ROOT, "src/channel/event-bridge.ts"), "utf8");
 
 // ─── B1: code-reading parity ───────────────────────────────────────────────

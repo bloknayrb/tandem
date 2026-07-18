@@ -172,9 +172,12 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
 
 function printPushStatus(): void {
   // Real-time push is delivered by the channel shim, registered by default
-  // above; the plugin monitor it was meant to replace cannot activate via any
-  // path Claude Code exposes today (Spike B / #985), so it's framed as
-  // forward-looking, not the path.
+  // above. The plugin also carries a monitor that activates on Claude Code
+  // 2.1.212+ interactive sessions and needs no flag (it was inactive on
+  // 2.1.143 — the historical Spike B / #985 NO-GO, since reversed). The two
+  // are independent push paths; which becomes canonical is an open decision
+  // (both active in one session double-deliver), so the shim stays the default
+  // here.
   const channelRegistered = validateChannelShimPrereq(CHANNEL_DIST);
   const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
   const devInstructions = existsSync(pluginManifest)
@@ -189,8 +192,8 @@ function printPushStatus(): void {
           "  Relaunch any Claude Code session you started manually so it picks up the new server.\n\n"
         : "  \x1b[33mUnavailable\x1b[0m — dist/channel/index.js not found; Claude Code will poll via tandem_checkInbox.\n" +
           "  Run 'npm run build' and re-run setup to enable push.\n\n") +
-      "  A Tandem plugin is also published (skill + MCP; the real-time monitor it carries is\n" +
-      "  forward-looking, pending Claude Code support):\n\n" +
+      "  A Tandem plugin is also published (skill + MCP + a real-time monitor that\n" +
+      "  activates on Claude Code 2.1.212+ and needs no --dangerously-... flag):\n\n" +
       "    claude plugin marketplace add bloknayrb/tandem\n" +
       "    claude plugin install tandem@tandem-editor\n\n" +
       devInstructions,

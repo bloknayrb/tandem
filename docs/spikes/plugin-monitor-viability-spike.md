@@ -1,6 +1,8 @@
 # Plugin Monitor Viability Spike (#477 Phase 0 / Spike B)
 
-**Status:** Spike complete — **NO-GO on dropping `--dangerously-load-development-channels` in v1.0.**
+> **⚠️ REVERSED on Claude Code 2.1.212 (2026-07-17).** This NO-GO was version-specific. Re-tested interactively on 2.1.212, `experimental.monitors[]` **does** activate via `--plugin-dir` and persistent installs, delivering an event to an idle session with **no** `--dangerously-...` flag. Two confounds invalidated the original verdict: (1) it was 2.1.143; (2) its probes ran in `-p` **print mode**, where monitors never activate by design. The monitor now ships installable via `npx -y tandem-editor@<version> monitor`. The channel shim remains the registered default; the canonical-transport decision is deferred. See `docs/decisions.md` ADR-028 update (2026-07-17) and the Plugin Monitor section of `docs/architecture.md`. The body below is preserved as the historical record.
+
+**Status:** Spike complete — **NO-GO on dropping `--dangerously-load-development-channels` in v1.0.** *(reversed on 2.1.212 — see banner above)*
 **Date:** 2026-05-17
 **Claude Code version tested:** 2.1.143
 **Refs:** [#477](https://github.com/bloknayrb/tandem/issues/477) PR 4 (auto-launch supervisor), [Spike A](./cli-session-resume-spike.md), `docs/roadmap.md:421–447` (locked decision: "Plugin monitor is canonical; launcher drops `--dangerously-load-development-channels`").
