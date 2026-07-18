@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 3
+version: 4
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
   document editing, or iterating on text collaboratively. Provides workflow
@@ -73,7 +73,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area.
 - Use `tandem_status({ text: "..." })` to show what you're working on — the user sees it in the editor status bar.
-- **Call `tandem_checkInbox` every 2-3 tool calls**, not just at the end of a task. The real-time channel is often not connected; polling is the reliable path.
+- **Call `tandem_checkInbox` every 2-3 tool calls**, not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and there is no signal that tells you it's off — so steady polling is the reliable path, always. It's cheap: if push *is* live, `tandem_checkInbox` de-duplicates items you've already seen, so frequent calls don't double-report or double-act (at worst a long-idle item re-surfaces once, harmlessly). When in doubt, poll.
 - Reply to chat messages with `tandem_reply`, not annotations.
 
 ## .docx Review Workflow
