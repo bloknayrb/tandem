@@ -15,9 +15,14 @@ prevents them drifting.
 ## The six version surfaces
 
 1. `package.json` — `version` (the reference value the CI guard compares against)
-2. `.claude-plugin/plugin.json` — THREE values in one file: the top-level
+2. `.claude-plugin/plugin.json` — FOUR values in one file: the top-level
    `version`, plus the `tandem-editor@<version>` npx pins in
-   `mcpServers.tandem.args` AND `mcpServers.tandem-channel.args`
+   `mcpServers.tandem.args`, `mcpServers.tandem-channel.args`, AND the
+   `experimental.monitors[].command` shell string
+   (`npx -y tandem-editor@<version> monitor` — added #1201; it lives in a
+   `command` string, invisible to the `args`-array walker, so it has its own
+   guard case in `plugin-version-pin.test.ts`. Miss it and the plugin monitor
+   stays pinned to the previous, dormant version)
 3. `src-tauri/Cargo.toml` — `[package].version` (the Cowork installer pins its
    npx spec via `env!("CARGO_PKG_VERSION")`; stale = ships a build pinning the
    WRONG published npm version)
