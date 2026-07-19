@@ -5,6 +5,22 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-07-19
+
+### Added
+
+- **Real-time push now works for manually-launched Claude Code sessions, through the plugin monitor (#1201).** Until now, a Claude Code session received live document events (annotations, chat, selections) only if Tandem's own auto-launcher started it with a special flag — a session you started yourself by hand got nothing and had to poll for changes. The Tandem plugin now ships a *monitor* that Claude Code 2.1.212+ activates at launch and that pushes those events with no flag required. Install it once — `claude plugin marketplace add bloknayrb/tandem`, then `claude plugin install tandem@tandem-editor` — and every `claude` you start afterward wakes on document changes. (This is a Claude Code plugin capability; the desktop app and Cowork keep using their existing transports and are unchanged by this release.)
+
+  One caveat: if you install the plugin *and* also launch with `--dangerously-load-development-channels server:tandem-channel`, both transports deliver each event and you'll see it twice. For a hand-launched session, install the plugin and drop the flag.
+
+### Fixed
+
+- **The server no longer crashes when an event subscriber's connection drops abruptly (#1202).** The `/api/events` push stream sends a periodic keepalive; if the client socket had already died, that write threw from inside a timer where nothing caught it, and the unhandled error took the whole server process down. The keepalive and event writes are now guarded and clean up the dead subscriber instead of crashing.
+
+### Internal
+
+- **The `tandem_checkInbox` tool description now explains why to poll steadily (#1200).** A session can't tell from the server whether real-time push is actually reaching it, so the guidance to poll at a steady cadence — plus the note that polling dedups against already-pushed items, making it cheap and safe — now lives in the tool description itself. That reaches every MCP client, not only the ones that installed the Tandem skill.
+
 ## [0.17.0] - 2026-07-17
 
 ### Changed
