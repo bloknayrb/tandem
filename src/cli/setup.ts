@@ -175,9 +175,9 @@ function printPushStatus(): void {
   // above. The plugin also carries a monitor that activates on Claude Code
   // 2.1.212+ interactive sessions and needs no flag (it was inactive on
   // 2.1.143 — the historical Spike B / #985 NO-GO, since reversed). The two
-  // are independent push paths; which becomes canonical is an open decision
-  // (both active in one session double-deliver), so the shim stays the default
-  // here.
+  // are independent push paths; the channel shim stays canonical by decision
+  // (2026-07-19), the monitor installable but not the default (both active in
+  // one session double-deliver), so the shim stays the default here.
   const channelRegistered = validateChannelShimPrereq(CHANNEL_DIST);
   const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
   const devInstructions = existsSync(pluginManifest)

@@ -1100,7 +1100,7 @@ The channel API endpoints expose real-time events from the editor as an SSE stre
 
 ### GET /api/events
 
-SSE (Server-Sent Events) stream of `TandemEvent` objects. The channel shim connects here and forwards events to Claude Code as `notifications/claude/channel`.
+SSE (Server-Sent Events) stream of `TandemEvent` objects. The channel shim connects here and forwards events to Claude Code as `notifications/claude/channel`; the plugin monitor is a second consumer of this same stream, writing each event to stdout as a plugin notification.
 
 **Headers:**
 - `Accept: text/event-stream`
@@ -1202,7 +1202,7 @@ Browser submits allow/deny verdict for a permission request.
 
 ### GET /api/notify-stream
 
-SSE (Server-Sent Events) stream of toast notifications for the editor. Separate from `GET /api/events` (which pushes Y.Map events to the channel shim). Used for ephemeral notifications like annotation range failures and save errors.
+SSE (Server-Sent Events) stream of toast notifications for the editor. Separate from `GET /api/events` (which pushes Y.Map events to the channel shim and the plugin monitor). Used for ephemeral notifications like annotation range failures and save errors.
 
 **Headers:**
 - `Accept: text/event-stream`

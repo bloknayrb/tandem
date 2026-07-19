@@ -349,9 +349,9 @@ When Claude Code asks for tool approval, it sends `notifications/claude/channel/
 
 ## Plugin Monitor
 
-> **Activates on Claude Code 2.1.212+; the channel shim is still the default (Spike B / #985 NO-GO, since reversed).** The plugin monitor was found inactive on Claude Code 2.1.143 (the historical Spike B NO-GO — `docs/spikes/plugin-monitor-viability-spike.md`, whose probes also ran in `-p` print mode, where monitors never activate by design). It **does** activate on 2.1.212+ interactive sessions via `--plugin-dir` and persistent installs (re-tested 2026-07-17), and it ships installable via `npx -y tandem-editor@<version> monitor` (the manifest previously ran `node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js`, but `dist/` is gitignored so a github-marketplace clone carried no monitor binary; npm ships `dist`, so npx delivers it). It is an independent push path needing no `--dangerously-...` flag. Which of the monitor and the channel shim becomes the *canonical* transport is an open decision — both active in one session double-deliver — so `tandem setup` still registers the channel shim by default for the Claude Code target. The design below describes the monitor's role.
+> **Activates on Claude Code 2.1.212+; the channel shim remains the default push transport by decision (2026-07-19).** The plugin monitor was found inactive on Claude Code 2.1.143 (the historical Spike B NO-GO — `docs/spikes/plugin-monitor-viability-spike.md`, whose probes also ran in `-p` print mode, where monitors never activate by design). It **does** activate on 2.1.212+ interactive sessions via `--plugin-dir` and persistent installs (re-tested 2026-07-17), and it ships installable via `npx -y tandem-editor@<version> monitor` (the manifest previously ran `node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js`, but `dist/` is gitignored so a github-marketplace clone carried no monitor binary; npm ships `dist`, so npx delivers it). It is an independent push path needing no `--dangerously-...` flag. The channel shim remains the canonical/default transport (decided 2026-07-19 — Tandem is not going monitor-canonical and not deprecating the channel); the monitor is an independent, installable alternative, not the default. Both active in one session double-deliver, so `tandem setup` still registers only the channel shim by default for the Claude Code target. The design below describes the monitor's role.
 
-The plugin monitor (`src/monitor/index.ts`) is the planned modern alternative to the channel shim for receiving real-time events from Tandem. It is installed as a Claude Code plugin rather than spawned as a stdio subprocess.
+The plugin monitor (`src/monitor/index.ts`) is a shipped, installable alternative to the channel shim (in-tree since #1201; reachable by end users once a release republishes `tandem-editor` with the `monitor` subcommand) for receiving real-time events from Tandem. It is installed as a Claude Code plugin rather than spawned as a stdio subprocess.
 
 ### Role
 
@@ -399,7 +399,7 @@ On SIGINT/SIGTERM, `finalClearAwareness()` drains any in-flight awareness POSTs 
 
 ### Fetch Timeouts
 
-The plugin monitor and legacy channel shim both bound their outbound HTTP calls so a half-open Tandem server cannot wedge the push bridge silently. The shared timeout helper lives in `src/shared/fetch-with-timeout.ts` and is used by `src/monitor/`, `src/channel/event-bridge.ts`, and `src/channel/run.ts`.
+The plugin monitor and channel shim both bound their outbound HTTP calls so a half-open Tandem server cannot wedge the push bridge silently. The shared timeout helper lives in `src/shared/fetch-with-timeout.ts` and is used by `src/monitor/`, `src/channel/event-bridge.ts`, and `src/channel/run.ts`.
 
 1. **`fetchWithTimeout(url, init, ms)`** — delegates through `authFetch`, applies `AbortSignal.timeout(ms)`, and composes it with any caller-provided abort signal. Used for all request-response routes.
 2. **Split handshake + inactivity watchdog** — used for the streaming `/api/events` route. A local `AbortController` bounds the handshake; once the response headers arrive the controller's timer is cleared, and a separate inactivity watchdog cancels the body stream if no bytes arrive for `SSE_INACTIVITY_TIMEOUT_MS`. See [lesson #42](./lessons-learned.md#42-abortsignal-passed-to-fetch-governs-the-response-body-too).
@@ -563,7 +563,7 @@ Server detects error (e.g., annotation range resolution failure)
     → Duplicate messages within the window get a count badge instead of new toasts
 ```
 
-This is intentionally separate from `GET /api/events` (channel push) which delivers Y.Map changes to Claude Code via the channel shim. The two SSE endpoints serve different consumers (browser vs. channel shim) with different data models.
+This is intentionally separate from `GET /api/events` (channel push) which delivers Y.Map changes to Claude Code via the channel shim. The two SSE endpoints serve different consumers (the browser here vs. the channel shim and the plugin monitor on `/api/events`) with different data models.
 
 ## Tab Overflow and Reorder
 
