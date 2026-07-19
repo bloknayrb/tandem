@@ -30,9 +30,13 @@ export function sseHandler(req: Request, res: Response): void {
   // Immediate flush so the client knows the connection is alive
   res.write(": connected\n\n");
 
-  // keepalive must be declared before onEvent so the error handler can clear it
+  // keepalive must be declared before cleanup/onEvent so they can clear it
   // eslint-disable-next-line prefer-const
   let keepalive: ReturnType<typeof setInterval>;
+  function cleanup(): void {
+    clearInterval(keepalive);
+    unsubscribe(onEvent);
+  }
   const onEvent = (event: TandemEvent) => {
     try {
       writeEvent(res, event);
@@ -41,21 +45,32 @@ export function sseHandler(req: Request, res: Response): void {
         "[SSE] Write failed, cleaning up subscriber:",
         err instanceof Error ? err.message : err,
       );
-      clearInterval(keepalive);
-      unsubscribe(onEvent);
+      cleanup();
     }
   };
   subscribe(onEvent);
 
-  // Keepalive to detect broken connections
+  // Keepalive to detect broken connections. The write MUST be guarded: on an
+  // abruptly-closed socket (client SIGKILL / network drop, before req "close"
+  // fires) it throws EPIPE/ECONNRESET, and an unwrapped throw inside a
+  // setInterval callback is an uncaught exception — EPIPE/ECONNRESET are not
+  // known-Hocuspocus errors, so handleFatalError would process.exit(1) the
+  // whole server. Mirror the browser notify-stream keepalive guard.
   keepalive = setInterval(() => {
-    res.write(": keepalive\n\n");
+    try {
+      if (!res.writableEnded) res.write(": keepalive\n\n");
+    } catch (err) {
+      console.error(
+        "[SSE] Keepalive write failed, cleaning up subscriber:",
+        err instanceof Error ? err.message : err,
+      );
+      cleanup();
+    }
   }, CHANNEL_SSE_KEEPALIVE_MS);
 
   // Cleanup on disconnect
   req.on("close", () => {
-    clearInterval(keepalive);
-    unsubscribe(onEvent);
+    cleanup();
     console.error("[SSE] Client disconnected from /api/events");
   });
 
