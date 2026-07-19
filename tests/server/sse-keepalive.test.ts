@@ -15,6 +15,7 @@
 import type { Request, Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../src/shared/constants.js";
+import type { TandemEvent } from "../../src/shared/events/types.js";
 
 const { subscribeSpy, unsubscribeSpy } = vi.hoisted(() => ({
   subscribeSpy: vi.fn(),
@@ -115,5 +116,78 @@ describe("/api/events keepalive is crash-safe", () => {
 
     vi.advanceTimersByTime(CHANNEL_SSE_KEEPALIVE_MS * 2);
     expect(write.mock.calls.some((c) => String(c[0]).includes("keepalive"))).toBe(false);
+  });
+
+  // The keepalive-write failure above and these two exercise the other call
+  // sites now routed through the shared cleanup() helper (onEvent's write
+  // failure and req "close"), so a refactor mistake in cleanup() itself
+  // (wrong closed-over `keepalive`/`onEvent`) would fail here too.
+
+  it("tears down the subscriber and clears the interval when onEvent's write fails", () => {
+    const write = vi.fn((chunk: string) => {
+      if (chunk.startsWith("id:")) {
+        const err = new Error("write EPIPE") as NodeJS.ErrnoException;
+        err.code = "EPIPE";
+        throw err;
+      }
+      return true;
+    });
+    const res = { writeHead: vi.fn(), write, writableEnded: false } as unknown as Response;
+    sseHandler(makeReq(), res);
+    expect(subscribeSpy).toHaveBeenCalledTimes(1);
+    const onEvent = subscribeSpy.mock.calls[0][0];
+
+    const event = {
+      id: "evt_1_a",
+      timestamp: 0,
+      type: "annotation:created",
+      payload: {
+        annotationId: "a1",
+        annotationType: "comment",
+        content: "hi",
+        textSnippet: "hi",
+      },
+    } as TandemEvent;
+
+    // A queued event delivered to a socket that has since gone bad must not
+    // throw out of the subscriber callback.
+    expect(() => onEvent(event)).not.toThrow();
+
+    expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+    expect(unsubscribeSpy).toHaveBeenCalledWith(onEvent);
+
+    // cleanup() must also have cleared the keepalive interval.
+    const before = write.mock.calls.filter((c) => String(c[0]).includes("keepalive")).length;
+    vi.advanceTimersByTime(CHANNEL_SSE_KEEPALIVE_MS * 3);
+    const after = write.mock.calls.filter((c) => String(c[0]).includes("keepalive")).length;
+    expect(after).toBe(before);
+  });
+
+  it("tears down the subscriber and clears the interval on req close", () => {
+    const write = vi.fn(() => true);
+    const res = { writeHead: vi.fn(), write, writableEnded: false } as unknown as Response;
+    let closeHandler: (() => void) | undefined;
+    const req = {
+      headers: {},
+      on: vi.fn((event: string, cb: () => void) => {
+        if (event === "close") closeHandler = cb;
+      }),
+    } as unknown as Request;
+
+    sseHandler(req, res);
+    expect(subscribeSpy).toHaveBeenCalledTimes(1);
+    const registered = subscribeSpy.mock.calls[0][0];
+    expect(closeHandler).toBeDefined();
+
+    closeHandler?.();
+
+    expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
+    expect(unsubscribeSpy).toHaveBeenCalledWith(registered);
+
+    // cleanup() must also have cleared the keepalive interval.
+    const before = write.mock.calls.filter((c) => String(c[0]).includes("keepalive")).length;
+    vi.advanceTimersByTime(CHANNEL_SSE_KEEPALIVE_MS * 3);
+    const after = write.mock.calls.filter((c) => String(c[0]).includes("keepalive")).length;
+    expect(after).toBe(before);
   });
 });
