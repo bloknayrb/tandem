@@ -90,6 +90,23 @@ describe("detectClaudeCli", () => {
     });
   });
 
+  it("detects an npm-global cmd-shim on win32 (claude.cmd, no claude.exe)", () => {
+    // `npm i -g @anthropic-ai/claude-code` on Windows writes `claude.cmd` /
+    // `claude.ps1` shims — never a `claude.exe`. Probing only `claude.exe`
+    // would report this usable install as NOT_INSTALLED. Regression guard.
+    const binDir = seedBin("pathdir", "claude.cmd");
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+
+    const presence = detectClaudeCli({
+      platformOverride: "win32",
+      pathOverride: binDir,
+      homeOverride: home,
+    });
+
+    expect(presence).toBe("INSTALLED_ON_PATH");
+  });
+
   it("ignores empty PATH segments without throwing", () => {
     const home = join(root, "home");
     mkdirSync(home, { recursive: true });

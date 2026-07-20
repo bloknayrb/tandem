@@ -41,7 +41,19 @@ export interface DetectClaudeCliOptions {
 export function detectClaudeCli(opts: DetectClaudeCliOptions = {}): ClaudeCliPresence {
   const platform = opts.platformOverride ?? process.platform;
   const home = opts.homeOverride ?? homedir();
-  const binName = platform === "win32" ? "claude.exe" : "claude";
+
+  // On Windows `claude` is exposed under several names depending on how it was
+  // installed: the native installer drops `claude.exe`, while
+  // `npm i -g @anthropic-ai/claude-code` writes cmd-shim wrappers
+  // (`claude.cmd` / `claude.ps1`) plus a bare `claude` bash shim. Probing
+  // `claude.exe` alone reported a perfectly usable npm-global install as
+  // NOT_INSTALLED — the exact false "not installed" warning this check exists to
+  // avoid — so we check every candidate. POSIX only ever has the bare `claude`.
+  const binNames =
+    platform === "win32"
+      ? ["claude.exe", "claude.cmd", "claude.bat", "claude.ps1", "claude"]
+      : ["claude"];
+  const foundIn = (dir: string): boolean => binNames.some((name) => existsSync(join(dir, name)));
 
   // `delimiter` is platform-specific (`;` on win32, `:` elsewhere). When a
   // platformOverride disagrees with the host, the override is for test
@@ -49,12 +61,12 @@ export function detectClaudeCli(opts: DetectClaudeCliOptions = {}): ClaudeCliPre
   const pathVar = opts.pathOverride ?? process.env.PATH ?? "";
   for (const dir of pathVar.split(delimiter)) {
     if (dir.length === 0) continue;
-    if (existsSync(join(dir, binName))) return "INSTALLED_ON_PATH";
+    if (foundIn(dir)) return "INSTALLED_ON_PATH";
   }
 
   // Native install location — same `~/.local/bin` on every platform per the
   // official installer's documented uninstall paths (Windows included).
-  if (existsSync(join(home, ".local", "bin", binName))) return "INSTALLED_NOT_ON_PATH";
+  if (foundIn(join(home, ".local", "bin"))) return "INSTALLED_NOT_ON_PATH";
 
   return "NOT_INSTALLED";
 }
