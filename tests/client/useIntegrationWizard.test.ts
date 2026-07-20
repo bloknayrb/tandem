@@ -580,6 +580,82 @@ describe("createIntegrationWizard", () => {
     expect(wizard.channelRegistered).toBeNull();
   });
 
+  it("save(): channelRegistered=false when a channel entry landed but failed validation (not push)", async () => {
+    // A tampered/stale shim entry can sit on disk while validation rejects it.
+    // Presence alone must NOT read as push — the status must be "valid".
+    const wizard = createIntegrationWizard({
+      fetchFn: pushModeStubs(() => ({
+        status: 200,
+        body: {
+          installs: [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
+              status: "ok",
+              channelEntry: { command: "node", args: ["/abs/dist/channel/index.js"] },
+              channelValidation: { status: "invalid-args" },
+            },
+          ],
+        },
+      })),
+    });
+    wizard.setPicked([ccPick]);
+    flushSync();
+    await wizard.save();
+    await settlePostApply();
+    expect(wizard.channelRegistered).toBe(false);
+  });
+
+  it("save(): a post-apply re-read resolving after reset() does not write a stale label", async () => {
+    // The close/reopen race: reset() moves step off "done" while the /existing
+    // re-read is still in flight. The `step !== "done"` guard must drop the late
+    // write — otherwise a valid channel entry would set channelRegistered=true
+    // onto a wizard the user has already dismissed.
+    let releaseExisting: (() => void) | undefined;
+    const existingGate = new Promise<void>((r) => {
+      releaseExisting = r;
+    });
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (method === "POST" && /\/api\/integrations$/.test(url)) {
+        return json({ ok: true, ids: ["cc-1"], confirmationNonce: "n1" });
+      }
+      if (method === "POST" && /\/api\/integrations\/apply$/.test(url)) {
+        return json({ results: [{ id: "cc-1", status: "applied" }], nextNonce: "n2" });
+      }
+      if (method === "GET" && /\/api\/integrations\/existing$/.test(url)) {
+        await existingGate;
+        return json({
+          installs: [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
+              status: "ok",
+              channelEntry: { command: "node", args: ["/abs/dist/channel/index.js"] },
+              channelValidation: { status: "valid" },
+            },
+          ],
+        });
+      }
+      return json({ error: "no-stub-match", url }, 500);
+    }) as unknown as typeof fetch;
+
+    const wizard = createIntegrationWizard({ fetchFn });
+    wizard.setPicked([ccPick]);
+    flushSync();
+    await wizard.save();
+    // Re-read is gated in-flight; the user closes/reopens before it resolves.
+    wizard.reset();
+    flushSync();
+    releaseExisting?.();
+    await settlePostApply();
+    expect(wizard.channelRegistered).toBeNull();
+  });
+
   it("save(): pre-sets apply:'skip' on picks whose existing entry failed validation", async () => {
     // The hand-edited / tampered case: existing tandem entry on disk has
     // a non-loopback URL, so server-side validation marked it invalid-url.
@@ -913,6 +989,7 @@ describe("createIntegrationWizard", () => {
     expect(wizard.existing).toEqual([]);
     expect(wizard.picked).toEqual([]);
     expect(wizard.errorMessage).toBeNull();
+    expect(wizard.channelRegistered).toBeNull();
   });
 
   describe("isSelectable", () => {

@@ -379,7 +379,7 @@ function chooseHelp() {
         class="model-chip ai-live ai-live-connected"
         data-testid="titlebar-ai-connected"
         data-ai-state="connected"
-        title="Claude is connected — it sees your selections, comments, and edits as you make them"
+        title="Claude is connected — it can see your selections, comments, and edits"
         aria-label="Claude is connected and receiving your work"
       >
         <span class="model-chip-dot" aria-hidden="true"></span>

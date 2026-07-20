@@ -48,6 +48,7 @@ import {
   type ReachabilityTarget,
 } from "../hooks/useReachabilityCheck.svelte.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
+import { computeDoneHeaderState } from "./integration-wizard-helpers.js";
 
 interface Props {
   open: boolean;
@@ -356,15 +357,11 @@ const errorLead = $derived.by(() => {
 
 const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "error"));
 
-// The Done header must not claim connection before it happens (WS-B). A
-// successful config WRITE is not a connection — Claude has to restart to load
-// the entry. Gate BOTH the headline and its success check on the actual
-// `claudeConnected` round-trip; until then say "waiting", with a neutral icon
-// (a green check above "waiting" copy would re-tell the very lie being fixed).
-const doneHeaderState = $derived.by((): "connected" | "waiting" | "partial" => {
-  if (anyApplyErrors) return "partial";
-  return reachability.claudeConnected ? "connected" : "waiting";
-});
+// See computeDoneHeaderState — the honesty contract lives in the pure helper
+// (unit-tested); this derived just feeds it the two live inputs.
+const doneHeaderState = $derived(
+  computeDoneHeaderState(anyApplyErrors, reachability.claudeConnected),
+);
 </script>
 
 {#snippet warningIcon(cls?: string)}
