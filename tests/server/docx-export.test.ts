@@ -217,6 +217,13 @@ describe("detectExportFidelityIssues", () => {
     expect(detectExportFidelityIssues(d)).toEqual([]);
   });
 
+  it("reports nothing for a document with hard breaks (#1206)", () => {
+    // The sibling hardBreak element is a descendant the walk now visits; it must
+    // read as supported (exported as <w:br/>), NOT an unsupported downgrade.
+    const d = docFromHtml("<p>alpha<br/>beta</p><p><strong>a<br/>b</strong></p>");
+    expect(detectExportFidelityIssues(d)).toEqual([]);
+  });
+
   it("flags a non-embedded image", () => {
     doc = new Y.Doc();
     const frag = doc.getXmlFragment("default");

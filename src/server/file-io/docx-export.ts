@@ -419,6 +419,12 @@ const KNOWN_BLOCK_NODES = new Set([
   "codeBlock",
   "horizontalRule",
   "image",
+  // Inline leaves the fidelity walk also descends into (it recurses every
+  // XmlElement child, not just top-level blocks). `hardBreak` is a supported
+  // inline node — imported breaks are sibling `hardBreak` elements (not embeds)
+  // and export emits `<w:br/>` for them, so it must not read as an unsupported
+  // downgrade. `image` above is the other inline-capable member.
+  "hardBreak",
   "table",
   "tableRow",
   "tableCell",
