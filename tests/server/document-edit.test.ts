@@ -131,7 +131,9 @@ describe("replacement text inline formatting (#1206)", () => {
     const err = applyEdit(doc, 1, 4, "low"); // "q[uic]k" → "q[low]k"
     expect(err).toBeNull();
     expect(extractText(doc)).toBe("qlowk");
-    const ops = ((doc.getXmlFragment("default").get(0) as Y.XmlElement).get(0) as Y.XmlText).toDelta();
+    const ops = (
+      (doc.getXmlFragment("default").get(0) as Y.XmlElement).get(0) as Y.XmlText
+    ).toDelta();
     // The whole run stays bold — the replacement did not terminate formatting.
     expect(ops.every((d: any) => d.attributes?.bold === true)).toBe(true);
     expect(ops.map((d: any) => d.insert).join("")).toBe("qlowk");
@@ -142,7 +144,9 @@ describe("replacement text inline formatting (#1206)", () => {
     const err = applyEdit(doc, 2, 2, "XX"); // insert mid-run
     expect(err).toBeNull();
     expect(extractText(doc)).toBe("quXXick");
-    const ops = ((doc.getXmlFragment("default").get(0) as Y.XmlElement).get(0) as Y.XmlText).toDelta();
+    const ops = (
+      (doc.getXmlFragment("default").get(0) as Y.XmlElement).get(0) as Y.XmlText
+    ).toDelta();
     expect(ops.every((d: any) => d.attributes?.bold === true)).toBe(true);
   });
 });

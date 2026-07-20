@@ -13,9 +13,7 @@ import * as Y from "yjs";
 import { normalizeHardBreaks } from "../../src/server/file-io/hardbreak-normalize.js";
 import { getElementText, getElementTextLength } from "../../src/server/mcp/document-model.js";
 
-type Seg =
-  | { text: string; marks?: Record<string, object> }
-  | { break: true };
+type Seg = { text: string; marks?: Record<string, object> } | { break: true };
 
 /**
  * Build a textblock element (attached to a fresh doc) whose single Y.XmlText child
@@ -105,7 +103,12 @@ describe("normalizeHardBreaks — flat invariance + sibling shape", () => {
   });
 
   it("consecutive breaks split with an empty text between them", () => {
-    const { el } = makeEmbedParagraph([{ text: "a" }, { break: true }, { break: true }, { text: "b" }]);
+    const { el } = makeEmbedParagraph([
+      { text: "a" },
+      { break: true },
+      { break: true },
+      { text: "b" },
+    ]);
     const textBefore = getElementText(el);
     const lenBefore = getElementTextLength(el);
     normalizeHardBreaks([el]);
