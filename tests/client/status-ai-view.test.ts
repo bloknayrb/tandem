@@ -8,30 +8,41 @@ import { aiIndicatorView } from "../../src/client/status/status-ai-view.js";
  * are the whole reason this logic is extracted and tested rather than inlined.
  */
 describe("aiIndicatorView", () => {
-  it("booting → nothing (never flash a state on boot)", () => {
+  it("booting with NO session → nothing (never flash a negative state on boot)", () => {
     expect(aiIndicatorView("booting", null, false)).toBeNull();
-    // booting outranks everything, even a (transiently) present liveIndicator
-    expect(aiIndicatorView("booting", "connected", false)).toBeNull();
   });
 
-  it("ready + connected (Tandem, session open) → AI connected, animatable", () => {
+  it("booting WITH a live session → still shows connected (proven fact outranks booting)", () => {
+    // Regression guard: a real MCP session is proven-connected independent of
+    // doc-sync/launcher state, so a doc-sync blip (which flips `state` to
+    // "booting") must NOT blank a genuinely-connected AI. The old titlebar pill
+    // rendered purely off liveIndicator; this preserves that.
+    expect(aiIndicatorView("booting", "connected", false)?.dataState).toBe("connected");
+    expect(aiIndicatorView("booting", "solo-paused", true)?.dataState).toBe("solo-paused");
+  });
+
+  it("ready + connected (Tandem, session open) → AI connected, animatable, has a11y copy", () => {
     const v = aiIndicatorView("ready", "connected", false);
-    expect(v).toEqual({
+    expect(v).toMatchObject({
       label: "AI connected",
       tone: "connected",
       dataState: "connected",
       canAnimate: true,
     });
+    expect(v?.title).toBeTruthy();
+    expect(v?.ariaLabel).toBeTruthy();
   });
 
-  it("ready + solo-paused (Solo, session open) → Solo · edits held, animatable", () => {
+  it("ready + solo-paused (Solo, session open) → Solo · edits held, animatable, has a11y copy", () => {
     const v = aiIndicatorView("ready", "solo-paused", true);
-    expect(v).toEqual({
+    expect(v).toMatchObject({
       label: "Solo · edits held",
       tone: "solo",
       dataState: "solo-paused",
       canAnimate: true,
     });
+    // The visible label is terse — the aria-label must explain what "held" means.
+    expect(v?.ariaLabel).toMatch(/won't see your edits/i);
   });
 
   it("ready + no session (launcher running, startup window) → nothing (no false alarm)", () => {
@@ -43,7 +54,7 @@ describe("aiIndicatorView", () => {
 
   it("unconfigured (Tandem) → AI not connected, never animates", () => {
     const v = aiIndicatorView("unconfigured", null, false);
-    expect(v).toEqual({
+    expect(v).toMatchObject({
       label: "AI not connected",
       tone: "not-connected",
       dataState: "not-connected",

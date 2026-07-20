@@ -321,6 +321,8 @@ function cycleWordMode() {
     <div
       data-testid="status-ai-indicator"
       data-ai-state={aiView.dataState}
+      title={aiView.title}
+      aria-label={aiView.ariaLabel}
       style="display: flex; align-items: center; gap: var(--tandem-space-2);"
     >
       <span
@@ -334,24 +336,23 @@ function cycleWordMode() {
       </span>
     </div>
   {/if}
-  {#if claudeWorkingTool}
-      <!--
-        #651: generic "Claude is {verb}…" indicator. Only renders for the
-        active document and only while a tool is in flight; per-card
-        indicators on AnnotationCard.svelte cover annotation-targeted tools.
-      -->
-      <span
-        data-testid="claude-working-indicator"
-        class="claude-working-pill"
-        role="status"
-        aria-live="polite"
-      >
-        <span class="claude-working-dot"></span>
-        <span class="claude-working-dot"></span>
-        <span class="claude-working-dot"></span>
-        <span style="margin-left: 4px;">{agentLabel.specific} is {claudeWorkingLabel(claudeWorkingTool)}…</span>
-      </span>
-    {/if}
+  <!-- #651 "Claude is {verb}…" pill. Gated on a live session (`aiView.canAnimate`)
+       as well as an in-flight tool so it can never render "working" while the
+       connection indicator shows nothing (an incoherent activity-without-
+       connection micro-state). -->
+  {#if claudeWorkingTool && aiView?.canAnimate}
+    <span
+      data-testid="claude-working-indicator"
+      class="claude-working-pill"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="claude-working-dot"></span>
+      <span class="claude-working-dot"></span>
+      <span class="claude-working-dot"></span>
+      <span style="margin-left: 4px;">{agentLabel.specific} is {claudeWorkingLabel(claudeWorkingTool)}…</span>
+    </span>
+  {/if}
 </div>
 
 <style>
