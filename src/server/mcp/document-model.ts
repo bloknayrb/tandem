@@ -448,24 +448,30 @@ function directChildSpans(element: Y.XmlElement): ChildSpan[] {
 }
 
 /**
- * Insert `text` (unformatted) at an element-relative flat `offset`, tolerating a
- * boundary that lands on a hardBreak. `findXmlTextAtOffset` returns null on a break
- * gap, so fall back to the text child ending at `offset` (the always-flush empties
- * from normalizeHardBreaks guarantee such a child exists next to every break). A
- * text child *starting* at `offset` never needs a separate case: if non-empty,
+ * Insert `text` at an element-relative flat `offset`, tolerating a boundary that
+ * lands on a hardBreak. `findXmlTextAtOffset` returns null on a break gap, so fall
+ * back to the text child ending at `offset` (the always-flush empties from
+ * normalizeHardBreaks guarantee such a child exists next to every break). A text
+ * child *starting* at `offset` never needs a separate case: if non-empty,
  * `findXmlTextAtOffset` already resolved it; if empty, it also ends at `offset` and
  * the first fallback catches it. Last resort: splice a fresh Y.XmlText.
+ *
+ * The inserted text INHERITS the inline formatting open at `offset` — `Y.Text.insert`
+ * with the attributes arg omitted copies the position's `currentAttributes`, whereas
+ * an explicit `{}` would terminate it. This preserves the pre-#1206 `tandem_edit`
+ * behavior (old path was a bare `textNode.insert(offset, newText)`): replacing text
+ * inside a bold/italic run keeps the replacement in that run's formatting.
  */
 function insertPlainTextAtOffset(element: Y.XmlElement, offset: number, text: string): void {
   const loc = findXmlTextAtOffset(element, offset);
   if (loc) {
-    loc.xmlText.insert(loc.offsetInXmlText, text, {});
+    loc.xmlText.insert(loc.offsetInXmlText, text);
     return;
   }
   const spans = directChildSpans(element);
   for (const s of spans) {
     if (s.kind === "text" && s.start + s.len === offset) {
-      (s.child as Y.XmlText).insert(s.len, text, {});
+      (s.child as Y.XmlText).insert(s.len, text);
       return;
     }
   }
@@ -480,7 +486,7 @@ function insertPlainTextAtOffset(element: Y.XmlElement, offset: number, text: st
   }
   const t = new Y.XmlText();
   element.insert(childIndex, [t]);
-  t.insert(0, text, {});
+  t.insert(0, text); // fresh node: no open formatting to inherit, but stay consistent
 }
 
 /**

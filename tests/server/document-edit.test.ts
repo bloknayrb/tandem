@@ -107,6 +107,46 @@ describe("same-element edits", () => {
   });
 });
 
+describe("replacement text inline formatting (#1206)", () => {
+  // Regression guard: the multi-XmlText edit primitive must insert replacement
+  // text INHERITING the formatting open at the insertion point (like typing),
+  // matching the pre-#1206 bare `textNode.insert(offset, newText)`. A stray `{}`
+  // attributes arg terminates inheritance and silently strips the run's bold/italic.
+  function boldWordDoc(word: string): Y.Doc {
+    const d = new Y.Doc();
+    const fragment = d.getXmlFragment("default");
+    d.transact(() => {
+      const p = new Y.XmlElement("paragraph");
+      fragment.insert(0, [p]);
+      const t = new Y.XmlText();
+      p.insert(0, [t]);
+      t.insert(0, word);
+      t.format(0, word.length, { bold: true });
+    });
+    return d;
+  }
+
+  it("replacing text inside a bold run keeps the replacement bold", () => {
+    doc = boldWordDoc("quick"); // fully bold
+    const err = applyEdit(doc, 1, 4, "low"); // "q[uic]k" → "q[low]k"
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("qlowk");
+    const ops = ((doc.getXmlFragment("default").get(0) as Y.XmlElement).get(0) as Y.XmlText).toDelta();
+    // The whole run stays bold — the replacement did not terminate formatting.
+    expect(ops.every((d: any) => d.attributes?.bold === true)).toBe(true);
+    expect(ops.map((d: any) => d.insert).join("")).toBe("qlowk");
+  });
+
+  it("inserting inside a bold run makes the inserted text bold", () => {
+    doc = boldWordDoc("quick");
+    const err = applyEdit(doc, 2, 2, "XX"); // insert mid-run
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("quXXick");
+    const ops = ((doc.getXmlFragment("default").get(0) as Y.XmlElement).get(0) as Y.XmlText).toDelta();
+    expect(ops.every((d: any) => d.attributes?.bold === true)).toBe(true);
+  });
+});
+
 describe("cross-element edits", () => {
   it("spanning two paragraphs merges them", () => {
     doc = makeDoc("First line\nSecond line");
@@ -477,6 +517,49 @@ describe("edits across sibling hardBreaks (#1206 corruption guard)", () => {
     const err = applyEdit(doc, 7, 7, "X"); // insert at start of "after"
     expect(err).toBeNull();
     expect(extractText(doc)).toBe("before\nXafter");
+  });
+
+  it("insertion exactly AT a break's flat offset appends before the break (fallback path)", () => {
+    // offset 6 lands ON the break (findXmlTextAtOffset returns null), exercising
+    // insertPlainTextAtOffset's "text child ending at offset" fallback.
+    doc = makeBrokenParagraphDoc("before", "after"); // "before\nafter", break at flat 6
+    const err = applyEdit(doc, 6, 6, "X");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("beforeX\nafter");
+  });
+
+  it("edit spanning MULTIPLE breaks in one paragraph deletes them all (back-to-front)", () => {
+    // paragraph [t"a", br, t"b", br, t"c"] → flat "a\nb\nc" (a=0,\n=1,b=2,\n=3,c=4).
+    // Exercises the back-to-front span deletion that removes 2+ break siblings in
+    // one range without index invalidation.
+    doc = new Y.Doc();
+    const frag = doc.getXmlFragment("default");
+    const para = new Y.XmlElement("paragraph");
+    const [t1, t2, t3] = [new Y.XmlText(), new Y.XmlText(), new Y.XmlText()];
+    frag.insert(0, [para]);
+    para.insert(0, [t1, new Y.XmlElement("hardBreak"), t2, new Y.XmlElement("hardBreak"), t3]);
+    t1.insert(0, "a");
+    t2.insert(0, "b");
+    t3.insert(0, "c");
+    expect(extractText(doc)).toBe("a\nb\nc");
+    const err = applyEdit(doc, 1, 4, "X"); // delete "\nb\n" across BOTH breaks
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("aXc");
+  });
+
+  it("edit deleting the first of two breaks keeps the second", () => {
+    doc = new Y.Doc();
+    const frag = doc.getXmlFragment("default");
+    const para = new Y.XmlElement("paragraph");
+    const [t1, t2, t3] = [new Y.XmlText(), new Y.XmlText(), new Y.XmlText()];
+    frag.insert(0, [para]);
+    para.insert(0, [t1, new Y.XmlElement("hardBreak"), t2, new Y.XmlElement("hardBreak"), t3]);
+    t1.insert(0, "a");
+    t2.insert(0, "b");
+    t3.insert(0, "c");
+    const err = applyEdit(doc, 0, 3, ""); // delete "a\nb" → leading break + "c" survive
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("\nc");
   });
 
   it("cross-element edit where both paragraphs contain breaks keeps surviving breaks", () => {

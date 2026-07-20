@@ -166,10 +166,16 @@ describe("normalizeHardBreaks — flat invariance + sibling shape", () => {
       xt.insertEmbed(xt.length, new Y.XmlElement("hardBreak"));
       xt.insert(xt.length, "b");
 
+      const textBefore = getElementText(para);
+      const lenBefore = getElementTextLength(para);
+
       normalizeHardBreaks([outer]);
 
       expect(childShape(para)).toEqual(["text:a", "hardBreak", "text:b"]);
       expect(noEmbeds(outer)).toBe(true);
+      // Offset-invariance guard also holds inside a container.
+      expect(getElementText(para)).toBe(textBefore);
+      expect(getElementTextLength(para)).toBe(lenBefore);
     }
   });
 

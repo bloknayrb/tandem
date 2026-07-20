@@ -447,6 +447,32 @@ describe("mdastToYDoc — inline marks", () => {
 });
 
 describe("yDocToMdast — reverse conversion", () => {
+  it("a sibling hardBreak round-trips back to an mdast break and survives save→reload (#1206)", () => {
+    // normalizeHardBreaks runs at import, so a break is a sibling element by the
+    // time it reaches export. deltaToPhrasingContent must convert that sibling back
+    // to {type:"break"} — the symmetric reverse of the docx <w:br/> export.
+    loadTree(
+      makeMdast([
+        {
+          type: "paragraph",
+          children: [
+            { type: "text", value: "before" },
+            { type: "break" },
+            { type: "text", value: "after" },
+          ],
+        },
+      ]),
+    );
+    const para = yDocToMdast(doc).children[0] as any;
+    expect(para.children.some((c: any) => c.type === "break")).toBe(true);
+
+    // Full import → save → reload keeps the hard break as a "\n" in flat text.
+    const reloaded = new Y.Doc();
+    loadMarkdown(reloaded, saveMarkdown(doc));
+    expect(extractText(reloaded)).toBe("before\nafter");
+    reloaded.destroy();
+  });
+
   it("heading", () => {
     loadTree(
       makeMdast([
