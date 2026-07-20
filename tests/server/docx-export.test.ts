@@ -107,11 +107,24 @@ describe("exportYDocToDocx — body round-trips through load → export → relo
   it("hardBreaks survive in order (#1068 fix: <w:br/> emitted after the preceding text)", async () => {
     const source = docFromHtml("<p>alpha<br/>beta</p>");
     expect(allText(source)).toBe("alpha\nbeta");
+    // #1206: the break is stored as a SIBLING hardBreak element (not a Y.XmlText
+    // embed), so export must emit <w:br/> from the sibling — else it silently drops.
+    const para = getFragment(source).get(0) as Y.XmlElement;
+    expect((para.get(1) as Y.XmlElement).nodeName).toBe("hardBreak");
     const buffer = await exportYDocToDocx(source);
     const back = await reimport(buffer);
     // Pre-#1068, TextRun({ text, break: 1 }) rendered the break BEFORE its
     // text, exporting "\nalphabeta" instead of "alpha\nbeta".
     expect(allText(back)).toBe("alpha\nbeta");
+    back.destroy();
+  });
+
+  it("a hardBreak inside a mark survives docx round-trip (#1206)", async () => {
+    const source = docFromHtml("<p><strong>a<br/>b</strong></p>");
+    expect(allText(source)).toBe("a\nb");
+    const buffer = await exportYDocToDocx(source);
+    const back = await reimport(buffer);
+    expect(allText(back)).toBe("a\nb");
     back.destroy();
   });
 

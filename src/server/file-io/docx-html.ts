@@ -5,6 +5,7 @@ import * as htmlparser2 from "htmlparser2";
 import * as Y from "yjs";
 import { DOCX_INLINE_MARKS } from "../../shared/constants.js";
 import type { FootnoteBody } from "../../shared/types.js";
+import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 
 /** All marks that can appear on inline text (superset of mdast-ydoc) */
 const ALL_MARKS = DOCX_INLINE_MARKS;
@@ -280,6 +281,11 @@ export function htmlToYDoc(
   for (const { xmlText, children, marks } of deferred) {
     processInlineNodes(xmlText, children, marks, approvedFootnotes);
   }
+
+  // Convert hardBreak embeds (which y-prosemirror renders as literal
+  // <hardbreak></hardbreak>) into sibling elements it can render. Runs inside the
+  // caller's origin-tagged transaction; operates only on the just-attached blocks.
+  normalizeHardBreaks(allElements);
 
   const reconciled: Record<string, FootnoteBody> = {};
   for (const id of approvedFootnotes) reconciled[id] = footnoteBodies[id];

@@ -88,6 +88,17 @@ export function populateYDoc(doc: Y.Doc, text: string): void {
 }
 
 /**
+ * True when a node is a sibling `hardBreak` inline-leaf element — the only inline
+ * leaf a textblock holds. It occupies exactly 1 flat char and REPLACES the
+ * between-block separator (matches the client, which counts every hardBreak as 1;
+ * `src/client/positions.ts`). Container children (list items, table cells) instead
+ * get a FLAT_SEPARATOR between siblings.
+ */
+export function isHardBreakElement(node: unknown): boolean {
+  return node instanceof Y.XmlElement && node.nodeName === "hardBreak";
+}
+
+/**
  * Extract plain text from a Y.XmlElement by recursively collecting Y.XmlText content.
  * Inserts FLAT_SEPARATOR between nested XmlElement children so offsets are consistent
  * with the document-level separator convention (e.g., list items and table cells
@@ -115,8 +126,17 @@ export function getElementText(element: Y.XmlElement): string {
       }
       hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
-      if (hasPriorContent) parts.push(FLAT_SEPARATOR);
-      parts.push(getElementText(child));
+      if (isHardBreakElement(child)) {
+        // Inline-leaf break: always contributes exactly one "\n" and REPLACES the
+        // between-block separator (never additive). Matches the client, which counts
+        // every hardBreak as 1 unconditionally (client/positions.ts) — so a
+        // paragraph-leading break counts 1 here too, even if a browser write-back
+        // later strips the empty leading Y.XmlText normalizeHardBreaks preserves.
+        parts.push("\n");
+      } else {
+        if (hasPriorContent) parts.push(FLAT_SEPARATOR);
+        parts.push(getElementText(child));
+      }
       hasPriorContent = true;
     }
   }
@@ -136,8 +156,12 @@ export function getElementTextLength(element: Y.XmlElement): number {
       len += child.length;
       hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
-      if (hasPriorContent) len += 1;
-      len += getElementTextLength(child);
+      if (isHardBreakElement(child)) {
+        len += 1; // inline-leaf: exactly 1, replaces the separator (see getElementText)
+      } else {
+        if (hasPriorContent) len += 1;
+        len += getElementTextLength(child);
+      }
       hasPriorContent = true;
     }
   }
@@ -165,19 +189,27 @@ export function findXmlTextAtOffset(
       accumulated += len;
       hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
-      if (hasPriorContent) {
-        if (textOffset === accumulated) {
-          // Offset lands ON the separator — return null (between-element gap)
-          return null;
-        }
+      if (isHardBreakElement(child)) {
+        // Inline-leaf break: 1 flat char, unaddressable like a separator. An offset
+        // landing ON it returns null so the caller's assoc fallback re-anchors.
+        if (textOffset === accumulated) return null;
         accumulated += 1;
+        hasPriorContent = true;
+      } else {
+        if (hasPriorContent) {
+          if (textOffset === accumulated) {
+            // Offset lands ON the separator — return null (between-element gap)
+            return null;
+          }
+          accumulated += 1;
+        }
+        const childTextLen = getElementTextLength(child);
+        if (accumulated + childTextLen > textOffset) {
+          return findXmlTextAtOffset(child, textOffset - accumulated);
+        }
+        accumulated += childTextLen;
+        hasPriorContent = true;
       }
-      const childTextLen = getElementTextLength(child);
-      if (accumulated + childTextLen > textOffset) {
-        return findXmlTextAtOffset(child, textOffset - accumulated);
-      }
-      accumulated += childTextLen;
-      hasPriorContent = true;
     }
   }
   // Handle end-of-element: offset equals total length
@@ -212,14 +244,18 @@ export function collectXmlTexts(
       accumulated += child.length;
       hasPriorContent = true;
     } else if (child instanceof Y.XmlElement) {
-      if (hasPriorContent) accumulated += 1;
-      for (const nested of collectXmlTexts(child)) {
-        results.push({
-          xmlText: nested.xmlText,
-          offsetFromStart: accumulated + nested.offsetFromStart,
-        });
+      if (isHardBreakElement(child)) {
+        accumulated += 1; // inline-leaf: 1 flat char, no nested XmlText to collect
+      } else {
+        if (hasPriorContent) accumulated += 1;
+        for (const nested of collectXmlTexts(child)) {
+          results.push({
+            xmlText: nested.xmlText,
+            offsetFromStart: accumulated + nested.offsetFromStart,
+          });
+        }
+        accumulated += getElementTextLength(child);
       }
-      accumulated += getElementTextLength(child);
       hasPriorContent = true;
     }
   }
@@ -316,16 +352,21 @@ export function findXmlText(element: Y.XmlElement): Y.XmlText | null {
 
 export const TEXTBLOCK_NODES = new Set(["paragraph", "heading", "codeBlock"]);
 
+type DeltaSegment = { insert: string | object; attributes?: Record<string, unknown> };
+
 /**
- * Merge all delta segments from `source` into `target` at `offset`,
- * preserving inline formatting and embeds. XmlElement embeds (hardBreak)
- * are cloned to avoid moving attached nodes out of `source`.
+ * Insert delta `segments` into an attached Y.XmlText starting at `pos`, preserving
+ * inline formatting and cloning XmlElement embeds (e.g. hardBreak) so attached nodes
+ * aren't moved out of their source. Pass {} (not undefined) for attributes — Y.js
+ * `insert(pos, str, undefined)` inherits formatting from the preceding character,
+ * while `insert(pos, str, {})` terminates it. The single home for this invariant.
  */
-export function mergeXmlTextDelta(target: Y.XmlText, source: Y.XmlText, offset: number): void {
-  let pos = offset;
-  for (const seg of source.toDelta()) {
-    // Pass {} (not undefined) — Y.js insert(pos, str, undefined) inherits
-    // formatting from the preceding character; insert(pos, str, {}) terminates it.
+export function insertDeltaSegments(
+  target: Y.XmlText,
+  segments: Iterable<DeltaSegment>,
+  pos = 0,
+): void {
+  for (const seg of segments) {
     if (typeof seg.insert === "string") {
       target.insert(pos, seg.insert, seg.attributes ?? {});
       pos += seg.insert.length;
@@ -335,6 +376,14 @@ export function mergeXmlTextDelta(target: Y.XmlText, source: Y.XmlText, offset: 
       pos += 1;
     }
   }
+}
+
+/**
+ * Merge all delta segments from `source` into `target` at `offset`,
+ * preserving inline formatting and embeds.
+ */
+export function mergeXmlTextDelta(target: Y.XmlText, source: Y.XmlText, offset: number): void {
+  insertDeltaSegments(target, source.toDelta(), offset);
 }
 
 /**
@@ -357,4 +406,153 @@ export function getOrCreateXmlText(element: Y.XmlElement): Y.XmlText {
       return textNode;
     })()
   );
+}
+
+/**
+ * Flat layout of a textblock's *immediate* children. A hardBreak-bearing paragraph
+ * has multiple Y.XmlText children interleaved with sibling `hardBreak` elements
+ * (see hardbreak-normalize.ts), so an element-relative flat offset can span several
+ * children. This walk gives each direct child its flat `[start, start+len)` range —
+ * text children by `length`, a `hardBreak` as the single flat char it occupies.
+ * Unlike `collectXmlTexts`, it does NOT recurse (a textblock's children are inline
+ * leaves) and it carries the child `index` needed to `element.delete(index, 1)`.
+ */
+type ChildSpan = {
+  index: number;
+  kind: "text" | "break" | "other";
+  start: number;
+  len: number;
+  child: Y.XmlText | Y.XmlElement;
+};
+
+function directChildSpans(element: Y.XmlElement): ChildSpan[] {
+  const spans: ChildSpan[] = [];
+  let acc = 0;
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (child instanceof Y.XmlText) {
+      spans.push({ index: i, kind: "text", start: acc, len: child.length, child });
+      acc += child.length;
+    } else if (isHardBreakElement(child)) {
+      spans.push({ index: i, kind: "break", start: acc, len: 1, child });
+      acc += 1;
+    } else if (child instanceof Y.XmlElement) {
+      // Not expected inside a textblock, but account for its flat length so offsets
+      // stay aligned and never delete it on a partial overlap.
+      const len = getElementTextLength(child);
+      spans.push({ index: i, kind: "other", start: acc, len, child });
+      acc += len;
+    }
+  }
+  return spans;
+}
+
+/**
+ * Insert `text` (unformatted) at an element-relative flat `offset`, tolerating a
+ * boundary that lands on a hardBreak. `findXmlTextAtOffset` returns null on a break
+ * gap, so fall back to the text child ending at `offset` (the always-flush empties
+ * from normalizeHardBreaks guarantee such a child exists next to every break). A
+ * text child *starting* at `offset` never needs a separate case: if non-empty,
+ * `findXmlTextAtOffset` already resolved it; if empty, it also ends at `offset` and
+ * the first fallback catches it. Last resort: splice a fresh Y.XmlText.
+ */
+function insertPlainTextAtOffset(element: Y.XmlElement, offset: number, text: string): void {
+  const loc = findXmlTextAtOffset(element, offset);
+  if (loc) {
+    loc.xmlText.insert(loc.offsetInXmlText, text, {});
+    return;
+  }
+  const spans = directChildSpans(element);
+  for (const s of spans) {
+    if (s.kind === "text" && s.start + s.len === offset) {
+      (s.child as Y.XmlText).insert(s.len, text, {});
+      return;
+    }
+  }
+  // No adjacent text child (e.g. a break with no surrounding text run). Splice a new
+  // Y.XmlText before the first child that starts at/after `offset`.
+  let childIndex = element.length;
+  for (const s of spans) {
+    if (s.start >= offset) {
+      childIndex = s.index;
+      break;
+    }
+  }
+  const t = new Y.XmlText();
+  element.insert(childIndex, [t]);
+  t.insert(0, text, {});
+}
+
+/**
+ * Replace the element-relative flat range `[from, to)` in a textblock with `newText`,
+ * correctly spanning multiple Y.XmlText children and the sibling `hardBreak` elements
+ * between them. Replaces the old first-XmlText-only edit path (`getOrCreateXmlText` +
+ * raw offset), which corrupted or threw once a paragraph held more than one XmlText.
+ * Deletes children back-to-front so `element.delete(index, 1)` on a break never
+ * invalidates a not-yet-processed index.
+ */
+export function replaceFlatRangeInElement(
+  element: Y.XmlElement,
+  from: number,
+  to: number,
+  newText: string,
+): void {
+  if (to > from) {
+    const spans = directChildSpans(element);
+    for (let k = spans.length - 1; k >= 0; k--) {
+      const s = spans[k];
+      const lo = Math.max(from, s.start);
+      const hi = Math.min(to, s.start + s.len);
+      if (lo >= hi) continue; // no overlap with [from, to)
+      if (s.kind === "text") {
+        (s.child as Y.XmlText).delete(lo - s.start, hi - lo);
+      } else if (s.kind === "break") {
+        element.delete(s.index, 1); // atomic 1-char leaf, fully covered
+      } else if (lo === s.start && hi === s.start + s.len) {
+        element.delete(s.index, 1); // unexpected nested element, fully covered
+      } else {
+        replaceFlatRangeInElement(s.child as Y.XmlElement, lo - s.start, hi - s.start, "");
+      }
+    }
+  }
+  if (newText.length > 0) {
+    insertPlainTextAtOffset(element, from, newText);
+  }
+}
+
+/** Append a fresh Y.XmlText to `target` carrying a copy of `source`'s delta. */
+function appendClonedXmlText(target: Y.XmlElement, source: Y.XmlText): void {
+  const t = new Y.XmlText();
+  target.insert(target.length, [t]);
+  mergeXmlTextDelta(t, source, 0);
+}
+
+/**
+ * Fold `source`'s surviving inline children onto the end of `target`, preserving
+ * marks and sibling `hardBreak` elements. Used by the cross-element `tandem_edit`
+ * merge to join the tail of the end paragraph onto the start paragraph.
+ *
+ * If both the join-adjacent children are Y.XmlText, their deltas are merged into ONE
+ * text node (canonical: y-prosemirror never leaves two adjacent Y.XmlText siblings),
+ * so a break-free merge stays a single XmlText exactly as before #1206. Any hardBreak
+ * siblings and later runs in the tail are then appended in order — which
+ * `mergeXmlTextDelta` alone (single-XmlText) could not carry.
+ */
+export function mergeInlineTail(target: Y.XmlElement, source: Y.XmlElement): void {
+  if (source.length === 0) return;
+  let startIdx = 0;
+  const targetLast = target.length > 0 ? target.get(target.length - 1) : undefined;
+  const sourceFirst = source.get(0);
+  if (targetLast instanceof Y.XmlText && sourceFirst instanceof Y.XmlText) {
+    mergeXmlTextDelta(targetLast, sourceFirst, targetLast.length);
+    startIdx = 1;
+  }
+  for (let i = startIdx; i < source.length; i++) {
+    const child = source.get(i);
+    if (child instanceof Y.XmlText) {
+      appendClonedXmlText(target, child);
+    } else if (child instanceof Y.XmlElement) {
+      target.insert(target.length, [child.clone()]);
+    }
+  }
 }

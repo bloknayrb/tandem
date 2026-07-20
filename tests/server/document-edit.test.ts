@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { extractText, resolveOffset } from "../../src/server/mcp/document.js";
 import {
-  extractText,
+  getElementTextLength,
   getOrCreateXmlText,
-  mergeXmlTextDelta,
-  resolveOffset,
-} from "../../src/server/mcp/document.js";
+  mergeInlineTail,
+  replaceFlatRangeInElement,
+} from "../../src/server/mcp/document-model.js";
 import { makeDoc } from "../helpers/ydoc-factory.js";
 
 let doc: Y.Doc;
@@ -15,7 +16,9 @@ afterEach(() => {
 });
 
 /**
- * Replicate tandem_edit logic for testing.
+ * Replicate tandem_edit logic for testing. MUST mirror the real branches in
+ * `mcp/document.ts` (the multi-Y.XmlText helpers), not the pre-#1206 first-XmlText
+ * path — otherwise these tests validate a stale copy instead of the fix.
  * Returns null on success, or an error string on failure.
  */
 function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): string | null {
@@ -34,11 +37,12 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
   if (startPos.elementIndex !== endPos.elementIndex) {
     doc.transact(() => {
       const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
-      const startText = getOrCreateXmlText(startNode);
-      const startLen = startText.length;
-      if (startPos.textOffset < startLen) {
-        startText.delete(startPos.textOffset, startLen - startPos.textOffset);
-      }
+      replaceFlatRangeInElement(
+        startNode,
+        startPos.textOffset,
+        getElementTextLength(startNode),
+        "",
+      );
 
       const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
       for (let i = 0; i < deleteCount; i++) {
@@ -46,26 +50,20 @@ function applyEdit(doc: Y.Doc, from: number, to: number, newText: string): strin
       }
 
       const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-      const endText = getOrCreateXmlText(endNode);
-      if (endPos.textOffset > 0) {
-        endText.delete(0, endPos.textOffset);
-      }
-      mergeXmlTextDelta(startText, endText, startPos.textOffset);
-      fragment.delete(startPos.elementIndex + 1, 1);
+      replaceFlatRangeInElement(endNode, 0, endPos.textOffset, "");
 
-      startText.insert(startPos.textOffset, newText);
+      if (newText.length > 0) {
+        const joinAt = startPos.textOffset;
+        replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
+      }
+      mergeInlineTail(startNode, endNode);
+
+      fragment.delete(startPos.elementIndex + 1, 1);
     });
   } else {
     doc.transact(() => {
       const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
-      const textNode = getOrCreateXmlText(node);
-      const deleteLen = endPos.textOffset - startPos.textOffset;
-      if (deleteLen > 0) {
-        textNode.delete(startPos.textOffset, deleteLen);
-      }
-      if (newText.length > 0) {
-        textNode.insert(startPos.textOffset, newText);
-      }
+      replaceFlatRangeInElement(node, startPos.textOffset, endPos.textOffset, newText);
     });
   }
 
@@ -400,4 +398,98 @@ describe("getOrCreateXmlText container guard", () => {
       testDoc.destroy();
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// #1206 — edits on paragraphs that contain sibling hardBreaks. Before the fix
+// these corrupted the doc (first-XmlText-only path threw mid-transaction on a
+// multi-XmlText paragraph, which Y.js does not roll back).
+// ---------------------------------------------------------------------------
+
+/** Build a doc whose single paragraph is [XmlText, hardBreak, XmlText] (sibling form). */
+function makeBrokenParagraphDoc(before: string, after: string): Y.Doc {
+  const d = new Y.Doc();
+  const frag = d.getXmlFragment("default");
+  const para = new Y.XmlElement("paragraph");
+  const t1 = new Y.XmlText();
+  const br = new Y.XmlElement("hardBreak");
+  const t2 = new Y.XmlText();
+  frag.insert(0, [para]);
+  para.insert(0, [t1, br, t2]);
+  t1.insert(0, before);
+  t2.insert(0, after);
+  return d;
+}
+
+/** Two paragraphs, each carrying a sibling hardBreak. */
+function makeTwoBrokenParagraphsDoc(): Y.Doc {
+  const d = new Y.Doc();
+  const frag = d.getXmlFragment("default");
+  for (const [a, b] of [
+    ["one", "two"],
+    ["three", "four"],
+  ]) {
+    const para = new Y.XmlElement("paragraph");
+    const t1 = new Y.XmlText();
+    const br = new Y.XmlElement("hardBreak");
+    const t2 = new Y.XmlText();
+    frag.insert(frag.length, [para]);
+    para.insert(0, [t1, br, t2]);
+    t1.insert(0, a);
+    t2.insert(0, b);
+  }
+  return d;
+}
+
+describe("edits across sibling hardBreaks (#1206 corruption guard)", () => {
+  it("edit fully after the break replaces the correct XmlText", () => {
+    doc = makeBrokenParagraphDoc("before", "after"); // "before\nafter"
+    // Replace "after" (offsets 7..12) with "AFTER".
+    const err = applyEdit(doc, 7, 12, "AFTER");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("before\nAFTER");
+  });
+
+  it("edit fully before the break replaces the correct XmlText", () => {
+    doc = makeBrokenParagraphDoc("before", "after");
+    const err = applyEdit(doc, 0, 6, "BEFORE");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("BEFORE\nafter");
+  });
+
+  it("edit spanning the break deletes it and joins the two runs", () => {
+    doc = makeBrokenParagraphDoc("before", "after"); // "before\nafter"
+    // Replace "re\naf" (offsets 4..9) with "X" → "befoXter".
+    const err = applyEdit(doc, 4, 9, "X");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("befoXter");
+  });
+
+  it("empty-newText delete spanning the break removes it", () => {
+    doc = makeBrokenParagraphDoc("before", "after");
+    const err = applyEdit(doc, 6, 7, ""); // delete just the "\n"
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("beforeafter");
+  });
+
+  it("insertion exactly at the break boundary does not throw or corrupt", () => {
+    doc = makeBrokenParagraphDoc("before", "after");
+    const err = applyEdit(doc, 7, 7, "X"); // insert at start of "after"
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("before\nXafter");
+  });
+
+  it("cross-element edit where both paragraphs contain breaks keeps surviving breaks", () => {
+    doc = makeTwoBrokenParagraphsDoc(); // "one\ntwo" + "\n" + "three\nfour"
+    expect(extractText(doc)).toBe("one\ntwo\nthree\nfour");
+    // Replace from inside para 1's second run ("tw|o") to inside para 2's first
+    // run ("thr|ee"): offsets 6..11 → "o\ntwo\nthr" ... compute precisely:
+    // flat: o(0)n(1)e(2) \n(3) t(4)w(5)o(6) \n(7=block sep) t(8)h(9)r(10)e(11)e(12) \n(13) f o u r
+    // Replace [6, 12) "o\nthre" with "X" → "one\ntwX" + "e\nfour" join → "one\ntwXe\nfour"
+    const err = applyEdit(doc, 6, 12, "X");
+    expect(err).toBeNull();
+    expect(extractText(doc)).toBe("one\ntwXe\nfour");
+    // The break inside the merged tail (before "four") survives.
+    expect(extractText(doc).endsWith("e\nfour")).toBe(true);
+  });
 });
