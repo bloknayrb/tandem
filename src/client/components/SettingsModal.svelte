@@ -579,9 +579,12 @@ async function handleReplayTutorial(): Promise<void> {
             {changelogError}
           </div>
         {/if}
-        <!-- Replay tutorial (WS-E). Hidden unless the server exposes welcomePath
-             (stripped prod builds may lack it — same contract as Changelog). -->
-        {#if appInfo.info?.welcomePath}
+        <!-- Replay tutorial (WS-E). Shown only when fully wired: the server
+             exposes welcomePath (stripped prod builds may lack it — same
+             contract as Changelog) AND a re-arm callback is provided. Gating on
+             onReplayTutorial too means a mount that forgets it can't show a
+             button that reopens the doc but silently fails to replay. -->
+        {#if appInfo.info?.welcomePath && onReplayTutorial}
           <button
             type="button"
             data-testid="settings-modal-replay-tutorial-btn"
