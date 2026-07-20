@@ -24,6 +24,12 @@ export interface InfoHandlerDeps {
    * Undefined if the file does not exist (e.g. stripped production builds).
    */
   workflowsPath?: string;
+  /**
+   * Absolute path to sample/welcome.md on disk, resolved at server startup.
+   * Undefined if the file does not exist (e.g. stripped production builds).
+   * Consumed by the "Replay tutorial" affordance to reopen the welcome doc.
+   */
+  welcomePath?: string;
   /** Active MCP transport mode. */
   transport?: "http" | "stdio";
   /**
@@ -88,6 +94,11 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
     // workflowsPath is not sensitive — include whenever the file exists on disk.
     if (deps.workflowsPath !== undefined) {
       body.workflowsPath = deps.workflowsPath;
+    }
+
+    // welcomePath is not sensitive — include whenever the file exists on disk.
+    if (deps.welcomePath !== undefined) {
+      body.welcomePath = deps.welcomePath;
     }
 
     if (loopback) {

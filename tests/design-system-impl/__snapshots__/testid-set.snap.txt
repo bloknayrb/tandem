@@ -335,6 +335,8 @@ settings-modal-mcp-status
 settings-modal-narrow-hamburger
 settings-modal-open-integration-wizard
 settings-modal-open-log-folder-btn
+settings-modal-replay-error
+settings-modal-replay-tutorial-btn
 settings-modal-report-bug-link
 settings-modal-scrim
 settings-modal-selection-toolbar-toggle

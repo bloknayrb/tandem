@@ -123,4 +123,7 @@ export interface AppInfoData {
   changelogPath?: string;
   /** Absolute path to docs/workflows.md on the server host. Undefined if not found at startup. */
   workflowsPath?: string;
+  /** Absolute path to sample/welcome.md on the server host. Undefined if not found at startup.
+   *  Consumed by the "Replay tutorial" affordance to reopen the welcome doc. */
+  welcomePath?: string;
 }
