@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  evaluateClaudeCli,
   evaluateNpmStaleness,
   evaluateOrphanedVite,
   evaluateStaleGlobal,
@@ -390,6 +391,28 @@ describe("evaluateStaleGlobal", () => {
     expect(result?.message).toContain("0.14.3");
     expect(result?.fix).toContain("npm uninstall -g tandem-editor");
     expect(result?.data).toEqual({ globalVersion: "0.2.11", bundledVersion: "0.14.3" });
+  });
+});
+
+describe("evaluateClaudeCli", () => {
+  it("passes when the CLI is on PATH", () => {
+    const result = evaluateClaudeCli("INSTALLED_ON_PATH");
+    expect(result.status).toBe("pass");
+    expect(result.fix).toBeUndefined();
+  });
+
+  it("warns with a PATH fix when installed but not on PATH", () => {
+    const result = evaluateClaudeCli("INSTALLED_NOT_ON_PATH");
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain("not on PATH");
+    expect(result.fix).toContain("PATH");
+  });
+
+  it("warns with an install fix when the CLI is absent", () => {
+    const result = evaluateClaudeCli("NOT_INSTALLED");
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain("not found");
+    expect(result.fix).toContain("claude.com/claude-code");
   });
 });
 
