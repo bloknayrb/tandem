@@ -370,6 +370,7 @@ source-view-copy-btn
 source-view-error
 source-view-exit-btn
 source-view-textarea
+status-ai-indicator
 status-word-count
 store-readonly-banner
 store-readonly-dismiss
@@ -385,7 +386,6 @@ text-size-{*}-btn
 theme-{*}-btn
 throw-on-render-ok
 title-bar
-titlebar-ai-connected
 titlebar-brand-menu
 titlebar-brand-menu-popover
 titlebar-connect-ai

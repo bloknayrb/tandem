@@ -1849,7 +1849,6 @@ const tutorial = createTutorial(
   <TitleBar
     tandemMode={modeState.tandemMode}
     onModeChange={modeState.setTandemMode}
-    claudeActive={yjsSync.claudeActive}
     theme={settingsState.settings.theme}
     onSetTheme={(t) => settingsState.updateSettings({ theme: t })}
     onOpenHelp={() => (showHelp = true)}
@@ -1859,7 +1858,6 @@ const tutorial = createTutorial(
     defaultModelLabel={BYO_MODELS_ENABLED ? defaultModelLabel : null}
     onOpenModelsSettings={openModelsSettings}
     aiChip={aiReadiness.chip}
-    aiLiveIndicator={aiReadiness.liveIndicator}
     onConnectAi={connectAi}
     onRestartClaude={restartClaude}
     sourceViewActive={inSourceView}
@@ -2125,6 +2123,9 @@ const tutorial = createTutorial(
       disconnectedSince={yjsSync.disconnectedSince}
       claudeStatus={yjsSync.claudeStatus}
       claudeActive={yjsSync.claudeActive}
+      aiLiveIndicator={aiReadiness.liveIndicator}
+      aiState={aiReadiness.state}
+      soloMode={modeState.tandemMode === "solo"}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
       saving={saveStore.saving}
