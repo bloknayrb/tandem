@@ -4,7 +4,7 @@ import type { Window as TauriWindow } from "@tauri-apps/api/window";
 import { onDestroy, onMount, type Snippet } from "svelte";
 import type { TandemMode } from "../../shared/types";
 import ModeToggle from "../editor/toolbar/ModeToggle.svelte";
-import type { AiChip } from "../hooks/useAiReadiness.svelte";
+import type { AiChip, AiLiveIndicator } from "../hooks/useAiReadiness.svelte";
 import { type ThemePreference } from "../hooks/useTandemSettings.svelte";
 import { onOutsideEvent } from "../utils/dismiss-outside";
 import { THEME_OPTIONS } from "./theme-options";
@@ -63,6 +63,16 @@ interface Props {
    * empty-state / chat panel where confused first-timers actually look.
    */
   aiChip?: AiChip;
+  /**
+   * Affirmative "an agent is connected" indicator (WS-B). `"connected"` → an
+   * MCP session is open and mode is Tandem (a persistent, honest positive
+   * signal — the titlebar previously showed NOTHING for ready, so silence was
+   * the only "it's working" cue). `"solo-paused"` → connected but Solo mode is
+   * holding the user's edits/comments back from the AI (chat still flows).
+   * `null` → nothing to affirm. Mutually exclusive with `aiChip` in practice
+   * (a CTA means no session; an indicator means a session).
+   */
+  aiLiveIndicator?: AiLiveIndicator;
   /** Opens AI setup (the Claude Code integration wizard). */
   onConnectAi?: () => void;
   /** Restarts the stopped/crashed Claude Code process. */
@@ -92,6 +102,7 @@ let {
   defaultModelLabel = null,
   onOpenModelsSettings,
   aiChip = null,
+  aiLiveIndicator = null,
   onConnectAi,
   onRestartClaude,
   sourceViewActive = false,
@@ -358,9 +369,33 @@ function chooseHelp() {
       <span
         class="status-dot"
         data-tauri-drag-region="false"
-        title="AI assistant is connected"
-        aria-label="AI assistant is connected"
+        title="AI assistant is active"
+        aria-label="AI assistant is active"
       ></span>
+    {/if}
+
+    {#if aiLiveIndicator === "connected"}
+      <span
+        class="model-chip ai-live ai-live-connected"
+        data-testid="titlebar-ai-connected"
+        data-ai-state="connected"
+        title="Claude is connected — it sees your selections, comments, and edits as you make them"
+        aria-label="Claude is connected and receiving your work"
+      >
+        <span class="model-chip-dot" aria-hidden="true"></span>
+        <span class="model-chip-label">AI connected</span>
+      </span>
+    {:else if aiLiveIndicator === "solo-paused"}
+      <span
+        class="model-chip ai-live ai-live-solo"
+        data-testid="titlebar-ai-connected"
+        data-ai-state="solo-paused"
+        title="Solo mode — the AI won't see your edits or comments (chat still works). Switch to Tandem to share them."
+        aria-label="Solo mode — the AI is connected but won't see your edits until you switch to Tandem"
+      >
+        <span class="model-chip-dot" aria-hidden="true"></span>
+        <span class="model-chip-label">Solo · edits held</span>
+      </span>
     {/if}
 
     {#if aiChip === "connect"}
@@ -820,6 +855,32 @@ function chooseHelp() {
     background: var(--tandem-info);
   }
   .ai-chip-restart .model-chip-dot {
+    background: var(--tandem-warning);
+  }
+
+  /* Affirmative "an agent is connected" indicator (WS-B). Composes .model-chip's
+     geometry (like .ai-chip-* above) but it's a status readout, not a CTA — so it
+     drops the border and hover/cursor affordance and tints by state. Success-green
+     when events flow (Tandem); warning-amber when Solo is holding the user's edits
+     back. The :hover pairs beat .model-chip:hover so the tint never flickers. */
+  .ai-live {
+    border-color: transparent;
+    cursor: default;
+  }
+  .ai-live.ai-live-connected,
+  .ai-live.ai-live-connected:hover {
+    background: var(--tandem-success-bg);
+    color: var(--tandem-success-fg-strong);
+  }
+  .ai-live-connected .model-chip-dot {
+    background: var(--tandem-success);
+  }
+  .ai-live.ai-live-solo,
+  .ai-live.ai-live-solo:hover {
+    background: var(--tandem-warning-bg);
+    color: var(--tandem-warning-fg-strong);
+  }
+  .ai-live-solo .model-chip-dot {
     background: var(--tandem-warning);
   }
 

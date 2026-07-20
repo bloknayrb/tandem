@@ -473,6 +473,113 @@ describe("createIntegrationWizard", () => {
     expect(wizard.applyResults).toEqual([{ id: "cc-1", status: "applied" }]);
   });
 
+  // --- channelRegistered (WS-B push-vs-polling readout) ---------------------
+
+  /** Persist + apply stubs shared by the channelRegistered cases (claude-code,
+   *  HTTP). The GET /existing handler is supplied per-case to model the
+   *  post-apply on-disk state. */
+  function pushModeStubs(existingHandler: () => { status: number; body: unknown }) {
+    return makeFetchStub([
+      {
+        method: "POST",
+        urlMatch: /\/api\/integrations$/,
+        handler: () => ({
+          status: 200,
+          body: { ok: true, ids: ["cc-1"], confirmationNonce: "n1" },
+        }),
+      },
+      {
+        method: "POST",
+        urlMatch: /\/api\/integrations\/apply$/,
+        handler: () => ({
+          status: 200,
+          body: { results: [{ id: "cc-1", status: "applied" }], nextNonce: "n2" },
+        }),
+      },
+      { method: "GET", urlMatch: /\/api\/integrations\/existing$/, handler: existingHandler },
+    ]);
+  }
+
+  const ccPick = {
+    id: "cc-1",
+    config: {
+      kind: "claude-code" as const,
+      id: "cc-1",
+      label: "Claude Code",
+      configPath: "/x",
+      transport: "http" as const,
+      url: "http://127.0.0.1:3479",
+    },
+    hasStoredSecret: false,
+    keychainUnavailable: false,
+  };
+
+  /** Let the fire-and-forget post-apply `/existing` re-read resolve. */
+  async function settlePostApply(): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+  }
+
+  it("save(): channelRegistered=true when a claude-code target has a valid channel entry post-apply", async () => {
+    const wizard = createIntegrationWizard({
+      fetchFn: pushModeStubs(() => ({
+        status: 200,
+        body: {
+          installs: [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
+              status: "ok",
+              channelEntry: { command: "node", args: ["/abs/dist/channel/index.js"] },
+              channelValidation: { status: "valid" },
+            },
+          ],
+        },
+      })),
+    });
+    wizard.setPicked([ccPick]);
+    flushSync();
+    await wizard.save();
+    await settlePostApply();
+    expect(wizard.channelRegistered).toBe(true);
+  });
+
+  it("save(): channelRegistered=false when the channel entry did not land (polling mode)", async () => {
+    const wizard = createIntegrationWizard({
+      fetchFn: pushModeStubs(() => ({
+        status: 200,
+        body: {
+          installs: [
+            {
+              // Push registration skipped (e.g. no dist/channel on disk) — the
+              // tandem entry exists but there is NO channel entry.
+              target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
+              status: "ok",
+              tandemEntry: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+              tandemValidation: { status: "valid" },
+            },
+          ],
+        },
+      })),
+    });
+    wizard.setPicked([ccPick]);
+    flushSync();
+    await wizard.save();
+    await settlePostApply();
+    expect(wizard.channelRegistered).toBe(false);
+  });
+
+  it("save(): channelRegistered stays null when the post-apply re-read fails (never a wrong label)", async () => {
+    const wizard = createIntegrationWizard({
+      fetchFn: pushModeStubs(() => ({ status: 500, body: { error: "boom" } })),
+    });
+    wizard.setPicked([ccPick]);
+    flushSync();
+    await wizard.save();
+    await settlePostApply();
+    expect(wizard.channelRegistered).toBeNull();
+  });
+
   it("save(): pre-sets apply:'skip' on picks whose existing entry failed validation", async () => {
     // The hand-edited / tampered case: existing tandem entry on disk has
     // a non-loopback URL, so server-side validation marked it invalid-url.

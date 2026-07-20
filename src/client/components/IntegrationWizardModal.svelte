@@ -355,6 +355,16 @@ const errorLead = $derived.by(() => {
 });
 
 const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "error"));
+
+// The Done header must not claim connection before it happens (WS-B). A
+// successful config WRITE is not a connection — Claude has to restart to load
+// the entry. Gate BOTH the headline and its success check on the actual
+// `claudeConnected` round-trip; until then say "waiting", with a neutral icon
+// (a green check above "waiting" copy would re-tell the very lie being fixed).
+const doneHeaderState = $derived.by((): "connected" | "waiting" | "partial" => {
+  if (anyApplyErrors) return "partial";
+  return reachability.claudeConnected ? "connected" : "waiting";
+});
 </script>
 
 {#snippet warningIcon(cls?: string)}
@@ -423,7 +433,9 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
       {#if status === "verifying"}
         Checking Tandem is reachable…
       {:else if status === "reachable"}
-        {reachability.claudeConnected ? "Claude connected just now" : "Tandem is responding"}
+        {reachability.claudeConnected
+          ? "Claude connected just now"
+          : "Server's up — restart Claude and run /mcp to connect it"}
       {:else if status === "unreachable"}
         Config written, but the Tandem MCP server isn't responding — start Tandem, then restart
         Claude.
@@ -694,20 +706,44 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
         {:else if wizard.step === "done"}
           <section class="iw-step" data-testid="integration-wizard-step-done">
             <div class="iw-done-header">
-              <svg
-                class="iw-done-check"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path class="iw-check-path" d="M4 13l5 5L20 7" />
-              </svg>
+              {#if doneHeaderState === "connected"}
+                <svg
+                  class="iw-done-check"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path class="iw-check-path" d="M4 13l5 5L20 7" />
+                </svg>
+              {:else if doneHeaderState === "waiting"}
+                <svg
+                  class="iw-done-waiting"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 7.5V12l3 2" />
+                </svg>
+              {:else}
+                {@render warningIcon("iw-done-waiting")}
+              {/if}
               <h3 class="iw-done-title">
-                {anyApplyErrors ? "Partly connected" : "Claude is connected to Tandem"}
+                {#if doneHeaderState === "connected"}
+                  Claude is connected to Tandem
+                {:else if doneHeaderState === "waiting"}
+                  Config written — waiting for Claude to connect
+                {:else}
+                  Partly connected
+                {/if}
               </h3>
             </div>
             {#if reachability.phase === "verifying"}
@@ -776,6 +812,20 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
                 {/if}
               </span>
             </div>
+            {#if wizard.channelRegistered !== null && whatsNext !== "stdio-only"}
+              <div
+                class="iw-push-mode iw-push-mode-{wizard.channelRegistered ? 'push' : 'polling'}"
+                data-testid="integration-wizard-push-mode"
+                data-push-mode={wizard.channelRegistered ? "push" : "polling"}
+              >
+                {#if wizard.channelRegistered}
+                  Real-time updates are configured — they start once you restart Claude.
+                {:else}
+                  Polling mode — Claude checks for your changes periodically rather than getting
+                  them pushed in real time.
+                {/if}
+              </div>
+            {/if}
           </section>
         {:else if wizard.step === "error"}
           <section class="iw-step iw-center" data-testid="integration-wizard-step-error">
@@ -1300,6 +1350,14 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
        the success badge / secret-stored text. */
     color: var(--tandem-success-fg-strong);
   }
+  /* The not-yet-connected / partial header glyph — deliberately NOT green, so a
+     "waiting" / "partly connected" headline never sits under a success check. */
+  .iw-done-waiting {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    color: var(--tandem-fg-muted);
+  }
   .iw-check-path {
     stroke-dasharray: 24;
     stroke-dashoffset: 0;
@@ -1411,6 +1469,24 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
     height: 18px;
     flex-shrink: 0;
     margin-top: 1px;
+  }
+
+  /* Push-vs-polling readout (WS-B). A config-truth line, not a live claim:
+     "configured" (success-tinted) vs "polling" (neutral/muted). */
+  .iw-push-mode {
+    margin-top: var(--tandem-space-2);
+    padding: var(--tandem-space-2) var(--tandem-space-3);
+    border-radius: var(--tandem-r-3);
+    font-size: var(--tandem-text-xs);
+    line-height: 1.5;
+  }
+  .iw-push-mode-push {
+    background: var(--tandem-success-bg);
+    color: var(--tandem-success-fg-strong);
+  }
+  .iw-push-mode-polling {
+    background: var(--tandem-surface-muted);
+    color: var(--tandem-fg-muted);
   }
 
   /* --- More integrations --- */

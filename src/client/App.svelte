@@ -1859,6 +1859,7 @@ const tutorial = createTutorial(
     defaultModelLabel={BYO_MODELS_ENABLED ? defaultModelLabel : null}
     onOpenModelsSettings={openModelsSettings}
     aiChip={aiReadiness.chip}
+    aiLiveIndicator={aiReadiness.liveIndicator}
     onConnectAi={connectAi}
     onRestartClaude={restartClaude}
     sourceViewActive={inSourceView}

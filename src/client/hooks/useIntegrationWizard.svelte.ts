@@ -74,6 +74,16 @@ export interface IntegrationWizardState {
    *  step === "done"; consult the `status === "error"` items to surface
    *  per-row error UX in the wizard's done step. */
   readonly applyResults: ApplyItemResult[];
+  /**
+   * Whether real-time push (the `tandem-channel` shim entry) actually landed on
+   * disk for an applied claude-code target, determined by a post-apply re-read
+   * of the detected entries (WS-B). `true` → push configured (Claude gets pushed
+   * events after a restart); `false` → polling only; `null` → not yet
+   * determined (or no claude-code target), so the done step shows nothing rather
+   * than flashing a wrong label. This is a CONFIG-presence fact, never a runtime
+   * "push is live now" claim — the shim still needs Claude to restart + connect.
+   */
+  readonly channelRegistered: boolean | null;
   /** Whether the keychain is known-unavailable on this server (set after first 503). */
   readonly keychainUnavailable: boolean;
   begin(): Promise<void>;
@@ -205,6 +215,9 @@ export function createIntegrationWizard(
   let picked = $state<PickedIntegration[]>([]);
   let errorMessage = $state<string | null>(null);
   let applyResults = $state<ApplyItemResult[]>([]);
+  // Post-apply push-vs-polling readout (WS-B). `null` until the post-apply
+  // re-read of detected entries resolves — never flash a wrong label.
+  let channelRegistered = $state<boolean | null>(null);
   let keychainUnavailable = $state(false);
   // Monotonic generation counter for `begin()` — a later run invalidates
   // earlier in-flight responses so rapid open/close/reopen can't have the
@@ -325,8 +338,34 @@ export function createIntegrationWizard(
    * — see ADR-038 §2b. The apply response flows back through
    * `applyResults` so the done step can surface per-integration failures.
    */
+  /**
+   * Post-apply re-read of detected entries, to report whether the channel-shim
+   * (real-time push) entry actually landed on disk. Best-effort: a failed read
+   * leaves `channelRegistered` null and the done step simply omits the line. The
+   * `step === "done"` guard stops a late resolve from writing after a
+   * close/reopen. NOT keyed per-target — an aggregate "any applied claude-code
+   * target got a valid channel entry" is enough for the single info line.
+   */
+  const refreshChannelRegistered = async () => {
+    try {
+      const res = await fetchFn(`${baseUrl}${API_INTEGRATIONS_EXISTING}`);
+      if (!res.ok) return;
+      const body = (await res.json()) as { installs: ExistingMcpInstall[] };
+      if (step !== "done") return;
+      channelRegistered = body.installs.some(
+        (i) =>
+          i.target.kind === "claude-code" &&
+          i.channelEntry !== undefined &&
+          i.channelValidation?.status === "valid",
+      );
+    } catch {
+      // best-effort — leave channelRegistered null
+    }
+  };
+
   const save = async () => {
     step = "applying";
+    channelRegistered = null;
     // Determine apply intent per picked integration. Failed-validation
     // existing entries pre-set to "skip" so re-validated entries don't
     // get overwritten with a wizard-generated shape that differs (the
@@ -398,6 +437,9 @@ export function createIntegrationWizard(
       const applyBody = (await applyRes.json()) as ApplyResponse;
       applyResults = applyBody.results;
       step = "done";
+      // Re-read entries so the done step can honestly report push-vs-polling —
+      // the pre-apply `existing` snapshot predates the channel-entry write.
+      void refreshChannelRegistered();
     } catch (err) {
       // Skip cleanup once persisted — see the comment above the try.
       if (!persisted) await cleanupStoredSecrets();
@@ -412,6 +454,7 @@ export function createIntegrationWizard(
     picked = [];
     errorMessage = null;
     applyResults = [];
+    channelRegistered = null;
     keychainUnavailable = false;
   };
 
@@ -447,6 +490,9 @@ export function createIntegrationWizard(
     },
     get applyResults() {
       return applyResults;
+    },
+    get channelRegistered() {
+      return channelRegistered;
     },
     get keychainUnavailable() {
       return keychainUnavailable;

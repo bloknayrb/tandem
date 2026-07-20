@@ -197,6 +197,7 @@ integration-wizard-install-success
 integration-wizard-keychain-fallback
 integration-wizard-more
 integration-wizard-pick-{*}
+integration-wizard-push-mode
 integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
@@ -384,6 +385,7 @@ text-size-{*}-btn
 theme-{*}-btn
 throw-on-render-ok
 title-bar
+titlebar-ai-connected
 titlebar-brand-menu
 titlebar-brand-menu-popover
 titlebar-connect-ai

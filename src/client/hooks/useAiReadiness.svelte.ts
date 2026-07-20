@@ -67,10 +67,32 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
 /** What the titlebar/empty-state CTA should offer, or `null` to show nothing. */
 export type AiChip = "connect" | "restart" | null;
 
+/**
+ * The affirmative "an agent is connected" indicator, or `null` when there's
+ * nothing positive to assert (no session, or still booting). Distinct from
+ * `chip` (which is the *negative*-state CTA): `chip` and `liveIndicator` are
+ * mutually exclusive in practice and MUST stay separate — folding an
+ * affirmative value into `chip` would break the `chip === null` guards that
+ * gate the "no AI is connected" send notice (App.svelte) and collide with the
+ * titlebar CTA/default-model branches.
+ *   - `connected`   — an MCP session is open and mode is Tandem: events flow.
+ *   - `solo-paused` — an MCP session is open but mode is Solo: chat still works,
+ *                     but the AI won't see the user's edits/comments
+ *                     (`sse-consumer.ts` drops non-`chat:message` events in Solo).
+ */
+export type AiLiveIndicator = "connected" | "solo-paused" | null;
+
 export interface AiReadiness {
   readonly state: AiReadinessState;
   /** The CTA to surface, with Solo-mode suppression already applied. */
   readonly chip: AiChip;
+  /**
+   * The affirmative connected indicator, keyed on the authoritative MCP-session
+   * signal (`hasSession`) — NOT on `state`, which also reaches `ready` from the
+   * launcher's `running: true` with no open session (auto-launched desktop
+   * startup window), where an "AI connected" badge would be a false green.
+   */
+  readonly liveIndicator: AiLiveIndicator;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
   /**
@@ -224,12 +246,27 @@ export function createAiReadiness(deps: {
     return null;
   });
 
+  // The affirmative indicator keys on `mcpSessionActive` (an open MCP transport,
+  // proven by a real `initialize` round-trip) — the honest subset of `ready`.
+  // `state === "ready"` also fires from the launcher `running: true` branch with
+  // no session, so keying on `state` would render "AI connected" with nothing
+  // connected. When no session is open there is nothing affirmative to say
+  // (`null`); Solo-with-no-session is still `null` — "AI won't see your edits"
+  // only makes sense once an AI is actually connected.
+  const liveIndicator = $derived.by((): AiLiveIndicator => {
+    if (!mcpSessionActive) return null;
+    return deps.soloMode() ? "solo-paused" : "connected";
+  });
+
   return {
     get state() {
       return state;
     },
     get chip() {
       return chip;
+    },
+    get liveIndicator() {
+      return liveIndicator;
     },
     refresh: () => poll(),
     probeSession,
