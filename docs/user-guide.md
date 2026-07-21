@@ -251,7 +251,7 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Alt+Left` / `Alt+Right` | Reorder the focused tab |
 | `Alt+Shift+Left` / `Alt+Shift+Right` | Toggle left / right panel |
 | `Ctrl+Shift+M` | Toggle Solo / Tandem mode |
-| `Ctrl+Shift+,` | Settings |
+| `Ctrl+,` | Settings |
 | `Enter` | Send message (chat panel) |
 | `?` | Show/hide keyboard shortcuts |
 

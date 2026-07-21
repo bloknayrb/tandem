@@ -43,7 +43,6 @@ export type ShortcutId =
   | "save"
   | "save-as"
   | "settings"
-  | "settings-modal"
   | "toggle-palette"
   | "new-scratchpad"
   | "close-tab"
@@ -162,13 +161,8 @@ export function matchShortcut(
   // unchanged from the original (intentional or not), so the existing E2E
   // suite still passes.
   if (mod) {
-    // Ctrl+Shift+, → new SettingsModal. Tested BEFORE Ctrl+, so a future edit
-    // to the popover predicate can't accidentally claim the shifted form.
-    // Legacy `isSettingsModalShortcut`: `code === "Comma" && shiftKey`.
-    if (e.shiftKey && e.code === "Comma") {
-      if (!isOverridden("settings-modal", overrides)) return { id: "settings-modal" };
-    }
-    // Ctrl+, → settings popover. Legacy `isSettingsShortcut`: rejects shift.
+    // Ctrl+, → Settings (the single consolidated modal). Rejects shift so the
+    // shifted form is left unbound. Legacy `isSettingsShortcut`: rejects shift.
     if (!e.shiftKey && e.code === "Comma") {
       if (!isOverridden("settings", overrides)) return { id: "settings" };
     }

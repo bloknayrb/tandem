@@ -41,7 +41,7 @@ Tandem is built for keyboard-first work:
 - **New tab / scratchpad** (Ctrl+N) — open a fresh scratchpad; Tandem keeps every open file in its own tab.
 - **Find & replace** (Ctrl+F) — search the current document or across every open tab, with regex, case, and whole-word options.
 - **Outline panel** — navigate by heading and collapse whole sections to focus.
-- **Keyboard shortcuts** (Ctrl+Shift+,) — customize any shortcut, or press ? to see them all.
+- **Keyboard shortcuts** (Ctrl+,) — customize any shortcut, or press ? to see them all.
 
 Want to connect your AI? Open Settings → AI Assistant and use the setup wizard — one click connects Claude Code, no API key needed. (Support for additional model providers is on the way.)
 

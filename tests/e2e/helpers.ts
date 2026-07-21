@@ -199,11 +199,11 @@ export async function nextFrames(page: Page, n = 3): Promise<void> {
 }
 
 /**
- * Open the Settings popover via the brand-menu dropdown (Wave M: the old
- * standalone gear button was replaced by a menu item inside the Tandem logo
+ * Open the consolidated Settings modal via the brand-menu dropdown (Wave M: the
+ * old standalone gear button was replaced by a menu item inside the Tandem logo
  * dropdown). Call this wherever tests previously clicked `[data-testid='settings-btn']`.
  */
-export async function openSettingsPopover(page: Page): Promise<void> {
+export async function openSettingsViaBrandMenu(page: Page): Promise<void> {
   await page.locator("[data-testid='titlebar-brand-menu']").click();
   await page.locator("[data-testid='brand-menu-settings']").click();
 }

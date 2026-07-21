@@ -11,13 +11,11 @@ import {
 // (Escape, scrim click, close button), tab switching, and the click-outside
 // exemption for clicks inside the modal container.
 //
-// The `Ctrl+Shift+,` shortcut wiring is verified via the dev-only
-// `__tandemTest.openSettingsModal()` hook installed in `App.svelte`.
-// Playwright's `page.keyboard.press` routes through the focused element
-// first, and Tiptap's default keymap binds `Mod-Shift-,` to subscript and
-// consumes the event before the App.svelte window-level handler sees it.
-// A `test.skip` placeholder below records the gap so the real-shortcut
-// path is restored when the upstream keymap is reconciled.
+// These tests open the modal via the dev-only
+// `__tandemTest.openSettingsModal()` hook installed in `App.svelte`, so they
+// exercise the modal behavior independent of the keyboard shortcut. The real
+// `Ctrl+,` keypress path is covered in `settings-and-filters.spec.ts`
+// ("Ctrl+, opens the Settings modal").
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -146,14 +144,17 @@ test("clicks inside the modal do NOT close it", async ({ page }) => {
   await expect(page.locator(MODAL)).toBeVisible();
 });
 
-// Real-shortcut path. Skipped because Playwright's `page.keyboard.press`
-// routes through the focused element first and Tiptap's default keymap
-// binds `Mod-Shift-,` to subscript, consuming the keydown before the
-// App.svelte window-level handler sees it. The shortcut works in regular
-// browser use; this gap is a Playwright-only artifact. The four tests
-// above cover the modal behavior via the dev-only `__tandemTest` hook.
-test.skip("Ctrl+Shift+, keypress opens the SettingsModal (manual path)", async () => {
-  // Intentionally empty — left as a documentation anchor for the gap.
+// Obsolete placeholder: the `Ctrl+Shift+,` binding this test anchored to was
+// removed entirely — the settings-UI refactor consolidated on a single
+// `Ctrl+,` binding (no Shift). That real-keypress path is exercised in
+// settings-and-filters.spec.ts ("Ctrl+, opens the Settings modal"), which
+// doesn't hit the Tiptap-keymap contention this placeholder used to document
+// (`Mod-Shift-,` collided with Tiptap's subscript binding; plain `Comma` with
+// Ctrl held does not). Left as `test.skip` rather than deleted so the history
+// of the gap stays visible.
+test.skip("Ctrl+, opens the SettingsModal (manual path) — superseded, see settings-and-filters.spec.ts", async () => {
+  // Intentionally empty — left as a documentation anchor. Real coverage lives
+  // in settings-and-filters.spec.ts.
 });
 
 // #821 PR review (L99) — coverage for the AI Assistant tab's working-directory

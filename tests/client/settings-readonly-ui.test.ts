@@ -14,14 +14,12 @@
  */
 
 import { cleanup, render } from "@testing-library/svelte";
-import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AccessibilitySettings from "../../src/client/components/AccessibilitySettings.svelte";
 import AppearanceSettings from "../../src/client/components/AppearanceSettings.svelte";
 import EditorSettings from "../../src/client/components/EditorSettings.svelte";
 import NetworkSettings from "../../src/client/components/NetworkSettings.svelte";
 import SettingsModal from "../../src/client/components/SettingsModal.svelte";
-import SettingsPopover from "../../src/client/components/SettingsPopover.svelte";
 import ShortcutEditorList from "../../src/client/components/ShortcutEditorList.svelte";
 import SettingsClaudeCodeTab from "../../src/client/components/settings-tabs/SettingsClaudeCodeTab.svelte";
 import SettingsCollaborationTab from "../../src/client/components/settings-tabs/SettingsCollaborationTab.svelte";
@@ -52,7 +50,7 @@ function makeCtx(readOnly: boolean) {
 const byTestId = (container: HTMLElement, id: string) =>
   container.querySelector<HTMLElement>(`[data-testid='${id}']`);
 
-// NetworkSettings, SettingsClaudeCodeTab, and SettingsPopover each fetch
+// NetworkSettings, SettingsClaudeCodeTab, and SettingsModal each fetch
 // app-info / integration state on mount (`open: true`). A never-resolving
 // stub keeps every case in this file from making a real network call
 // without needing per-suite fetch wiring — none of these tests assert on
@@ -240,60 +238,6 @@ describe("ShortcutEditorList under read-only", () => {
     expect((byTestId(container, "shortcuts-reset-all") as HTMLButtonElement | null)?.disabled).toBe(
       true,
     );
-  });
-});
-
-// SettingsPopover derives `readOnly` itself (not threaded via
-// SettingsTabContext — the popover predates the tabbed modal), so it needs
-// its own settings._readOnly-driven coverage rather than a makeCtx() case.
-describe("SettingsPopover — readOnly gating", () => {
-  function renderPopover(readOnlyStore: boolean) {
-    return render(SettingsPopover, {
-      props: {
-        open: true,
-        onClose: vi.fn(),
-        settings: makeSettings(readOnlyStore),
-        onUpdate: vi.fn(),
-      },
-    });
-  }
-
-  function goToCollaboration(container: HTMLElement) {
-    const btn = Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-nav-btn")).find(
-      (b) => b.textContent?.includes("Collaboration"),
-    );
-    expect(btn, "Collaboration nav button not found").toBeTruthy();
-    btn?.click();
-  }
-
-  it("banner present iff settings._readOnly === true", () => {
-    const { container } = renderPopover(true);
-    expect(byTestId(container, "settings-readonly-banner")).toBeTruthy();
-    cleanup();
-    const { container: rw } = renderPopover(false);
-    expect(byTestId(rw, "settings-readonly-banner")).toBeNull();
-  });
-
-  it("Collaboration section's default-mode button and solo-rail checkbox disabled when readOnly", async () => {
-    const { container } = renderPopover(true);
-    goToCollaboration(container);
-    await tick();
-    expect(
-      (byTestId(container, "default-mode-tandem-btn") as HTMLButtonElement | null)?.disabled,
-    ).toBe(true);
-    const soloRail = byTestId(container, "solo-rail-hidden-toggle");
-    expect(soloRail?.querySelector<HTMLInputElement>("input")?.disabled).toBe(true);
-  });
-
-  it("Collaboration section's controls enabled when not readOnly", async () => {
-    const { container } = renderPopover(false);
-    goToCollaboration(container);
-    await tick();
-    expect(
-      (byTestId(container, "default-mode-tandem-btn") as HTMLButtonElement | null)?.disabled,
-    ).toBe(false);
-    const soloRail = byTestId(container, "solo-rail-hidden-toggle");
-    expect(soloRail?.querySelector<HTMLInputElement>("input")?.disabled).toBe(false);
   });
 });
 

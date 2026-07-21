@@ -5,7 +5,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
-  openSettingsPopover,
+  openSettingsViaBrandMenu,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -124,13 +124,13 @@ test.describe("viewport layouts", () => {
     }
   });
 
-  test("1280×800 — standard desktop: settings popover stays within viewport", async ({ page }) => {
+  test("1280×800 — standard desktop: settings modal stays within viewport", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await openSample(page);
 
-    await openSettingsPopover(page);
+    await openSettingsViaBrandMenu(page);
 
-    const popover = page.locator("[data-testid='settings-popover']");
+    const popover = page.locator("[data-testid='settings-modal']");
     await expect(popover).toBeVisible({ timeout: 3_000 });
 
     const box = await popover.boundingBox();

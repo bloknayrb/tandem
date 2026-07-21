@@ -25,15 +25,8 @@ interface Props {
   onSetTheme?: (theme: ThemePreference) => void;
   /** Open Help modal. */
   onOpenHelp?: () => void;
-  /** Open Settings popover. */
+  /** Open Settings (the consolidated modal). */
   onOpenSettings?: () => void;
-  /**
-   * Stable prop slot reserved for the SettingsModal trigger. Currently
-   * unused inside this component (Ctrl+Shift+, is routed through
-   * `actions/builtin.svelte.ts`); destructured as `_onOpenSettingsModal`
-   * below so svelte-check accepts the declared-but-unread prop.
-   */
-  onOpenSettingsModal?: () => void;
   /** Bindable settings button reference (used for keyboard shortcut anchoring). */
   settingsBtn?: HTMLButtonElement | null;
   /**
@@ -83,7 +76,6 @@ let {
   onSetTheme,
   onOpenHelp,
   onOpenSettings,
-  onOpenSettingsModal: _onOpenSettingsModal,
   settingsBtn = $bindable(null),
   updateAvailable = false,
   defaultModelLabel = null,
