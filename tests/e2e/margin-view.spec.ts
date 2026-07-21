@@ -44,6 +44,14 @@ async function openSettingsAndGotoCowork(page: import("@playwright/test").Page):
   await openSettingsViaBrandMenu(page);
   const modal = page.locator("[data-testid='settings-modal']");
   await expect(modal).toBeVisible({ timeout: 2_000 });
+  // At <860px the nav sidebar collapses into an `inert` drawer (the scrim
+  // intercepts pointer events until it's opened via the hamburger). Several
+  // margin-view tests run below that breakpoint (e.g. the 750px stub band), so
+  // open the drawer first when it's present. Selecting a tab auto-closes it.
+  const hamburger = page.locator("[data-testid='settings-modal-narrow-hamburger']");
+  if (await hamburger.isVisible()) {
+    await hamburger.click();
+  }
   await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
 }
 
