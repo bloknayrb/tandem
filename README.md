@@ -100,7 +100,7 @@ The desktop app bundles the editor, the server it talks to, and storage for the 
 
 ### Other ways to install
 
-If you use a terminal, you can also install Tandem with `npm install -g tandem-editor`, then run `tandem` to launch — the first-run wizard connects Claude. (For a scripted, non-interactive setup, run `tandem setup --apply` once first.) This works the same as the desktop app and is mostly useful if you already have Node.js installed.
+If you use a terminal, you can also install Tandem with `npm install -g tandem-editor` (Node.js 22 or newer required), then run `tandem` — it starts the server and prints a `http://127.0.0.1:3479` URL to open the editor in your browser, where the first-run wizard connects Claude. (For a scripted, non-interactive setup, run `tandem setup --apply` once first.) This is mostly useful if you already have Node.js installed; the desktop app is the recommended experience.
 
 ### Got stuck
 

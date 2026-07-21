@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_MCP_PORT } from "../shared/constants.js";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_DIST = resolve(__dirname, "../server/index.js");
 
@@ -13,11 +15,18 @@ export function runStart(): void {
     process.exit(1);
   }
 
-  console.error(
-    "[Tandem] Browser distribution is deprecated; the Tauri desktop app is the primary form factor.",
-  );
-  console.error("[Tandem] See https://github.com/bloknayrb/tandem/issues/477 for context.");
+  // Lead with the actionable next step (the URL to open) — `tandem` starts the
+  // server but opens no window, so a new user needs to be told where the editor
+  // lives. The desktop-app recommendation follows as context, not as an alarming
+  // "deprecated" banner ahead of any instruction (#new-user-friction audit).
+  const editorUrl =
+    process.env.TANDEM_URL ?? `http://127.0.0.1:${process.env.TANDEM_MCP_PORT ?? DEFAULT_MCP_PORT}`;
   console.error("[Tandem] Starting server...");
+  console.error(`[Tandem] When it's ready, open the editor in your browser at ${editorUrl}`);
+  console.error(
+    "[Tandem] The desktop app is the primary way to run Tandem — running in a browser " +
+      "works but isn't the recommended experience (https://github.com/bloknayrb/tandem/issues/477).",
+  );
 
   const proc = spawn("node", [SERVER_DIST], {
     stdio: "inherit",

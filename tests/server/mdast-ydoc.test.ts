@@ -408,27 +408,71 @@ describe("mdastToYDoc — inline marks", () => {
     }
   });
 
-  it("hardBreak via insertEmbed", () => {
-    const xmlText = loadParagraphWithInline([
-      { type: "text", value: "before" },
-      { type: "break" },
-      { type: "text", value: "after" },
-    ]);
-    const delta = xmlText.toDelta();
-    // Should have 3 segments: two text and one embed
-    expect(delta.length).toBe(3);
+  it("hardBreak becomes a sibling element (not a Y.XmlText embed)", () => {
+    // normalizeHardBreaks (run at import) rewrites the embed into a standalone
+    // sibling hardBreak element, the only form y-prosemirror renders as a real
+    // <br> (an embed inside Y.XmlText stringifies to literal <hardbreak></hardbreak>).
+    loadTree(
+      makeMdast([
+        {
+          type: "paragraph",
+          children: [
+            { type: "text", value: "before" },
+            { type: "break" },
+            { type: "text", value: "after" },
+          ],
+        },
+      ]),
+    );
+    const para = getFragment(doc).get(0) as Y.XmlElement;
 
-    const textSegments = delta.filter((op: any) => typeof op.insert === "string");
-    const embedSegments = delta.filter((op: any) => typeof op.insert !== "string");
+    // Three sibling children: text, hardBreak element, text.
+    expect(para.length).toBe(3);
+    expect(para.get(0)).toBeInstanceOf(Y.XmlText);
+    expect((para.get(0) as Y.XmlText).toString()).toBe("before");
+    expect(para.get(1)).toBeInstanceOf(Y.XmlElement);
+    expect((para.get(1) as Y.XmlElement).nodeName).toBe("hardBreak");
+    expect((para.get(2) as Y.XmlText).toString()).toBe("after");
 
-    expect(textSegments.map((op: any) => op.insert).sort()).toEqual(["after", "before"]);
-    expect(embedSegments).toHaveLength(1);
-    expect(embedSegments[0].insert).toBeInstanceOf(Y.XmlElement);
-    expect((embedSegments[0].insert as Y.XmlElement).nodeName).toBe("hardBreak");
+    // No delta op anywhere is a hardBreak embed.
+    for (let i = 0; i < para.length; i++) {
+      const child = para.get(i);
+      if (child instanceof Y.XmlText) {
+        for (const op of child.toDelta()) {
+          expect(typeof op.insert).toBe("string");
+        }
+      }
+    }
   });
 });
 
 describe("yDocToMdast — reverse conversion", () => {
+  it("a sibling hardBreak round-trips back to an mdast break and survives save→reload (#1206)", () => {
+    // normalizeHardBreaks runs at import, so a break is a sibling element by the
+    // time it reaches export. deltaToPhrasingContent must convert that sibling back
+    // to {type:"break"} — the symmetric reverse of the docx <w:br/> export.
+    loadTree(
+      makeMdast([
+        {
+          type: "paragraph",
+          children: [
+            { type: "text", value: "before" },
+            { type: "break" },
+            { type: "text", value: "after" },
+          ],
+        },
+      ]),
+    );
+    const para = yDocToMdast(doc).children[0] as any;
+    expect(para.children.some((c: any) => c.type === "break")).toBe(true);
+
+    // Full import → save → reload keeps the hard break as a "\n" in flat text.
+    const reloaded = new Y.Doc();
+    loadMarkdown(reloaded, saveMarkdown(doc));
+    expect(extractText(reloaded)).toBe("before\nafter");
+    reloaded.destroy();
+  });
+
   it("heading", () => {
     loadTree(
       makeMdast([

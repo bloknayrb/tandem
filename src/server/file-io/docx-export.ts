@@ -361,10 +361,12 @@ function emitInlineRuns(runs: InlineRun[], emit: EmitCtx, out: ParagraphChild[])
 
 /**
  * Build the ParagraphChild list for a leaf inline container (paragraph,
- * heading, …). Direct Y.XmlText children are emitted; nested Y.XmlElement
- * children are NOT exported at inline level (pre-existing behavior) but the
- * cursor still advances past their flat text (+ the 1-char separator
- * `getElementText` would insert) so later comment anchors stay aligned.
+ * heading, …). Direct Y.XmlText children are emitted; a sibling `hardBreak`
+ * element becomes a dedicated `<w:br/>` run (normalizeHardBreaks stores imported
+ * breaks as siblings, so this is where docx→YDoc→docx keeps the line break).
+ * Any other nested Y.XmlElement is NOT exported at inline level (pre-existing
+ * behavior) but the cursor still advances past its flat text (+ the 1-char
+ * separator `getElementText` would insert) so later comment anchors stay aligned.
  */
 function inlineChildren(el: Y.XmlElement, emit: EmitCtx): ParagraphChild[] {
   const out: ParagraphChild[] = [];
@@ -373,6 +375,13 @@ function inlineChildren(el: Y.XmlElement, emit: EmitCtx): ParagraphChild[] {
     const c = el.get(i);
     if (c instanceof Y.XmlText) {
       emitInlineRuns(flattenXmlText(c), emit, out);
+      hasPrior = true;
+    } else if (c instanceof Y.XmlElement && c.nodeName === "hardBreak") {
+      // The break occupies exactly 1 flat char (unconditional, like getElementText);
+      // markers at its offset go before the <w:br/> run — mirrors emitInlineRuns.
+      flushCommentEvents(emit, out);
+      out.push(new TextRun({ break: 1 }));
+      emit.pos += 1;
       hasPrior = true;
     } else if (c instanceof Y.XmlElement) {
       if (hasPrior) emit.pos += 1;
@@ -410,6 +419,12 @@ const KNOWN_BLOCK_NODES = new Set([
   "codeBlock",
   "horizontalRule",
   "image",
+  // Inline leaves the fidelity walk also descends into (it recurses every
+  // XmlElement child, not just top-level blocks). `hardBreak` is a supported
+  // inline node — imported breaks are sibling `hardBreak` elements (not embeds)
+  // and export emits `<w:br/>` for them, so it must not read as an unsupported
+  // downgrade. `image` above is the other inline-capable member.
+  "hardBreak",
   "table",
   "tableRow",
   "tableCell",

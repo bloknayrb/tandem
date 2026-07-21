@@ -3,7 +3,9 @@
  *
  * Phase A replaces Y.XmlText.toString() with toDelta() iteration so that
  * inline formatting marks (bold, italic, etc.) are stripped from flat text
- * and hardBreak embeds emit \n to maintain XmlText index alignment.
+ * and a hardBreak emits \n to maintain flat-offset alignment. (Since #1206,
+ * importers store a hardBreak as a sibling element, not a Y.XmlText embed;
+ * getElementText emits the same \n either way — these tests pin that invariance.)
  */
 
 import type { Root } from "mdast";
@@ -159,9 +161,10 @@ describe("extractText — bold formatting via loadMarkdown", () => {
 // getElementText — hardBreak embeds emit \n for XmlText index alignment
 // ---------------------------------------------------------------------------
 
-describe("getElementText — hardBreak embed emits \\n", () => {
+describe("getElementText — hardBreak emits \\n", () => {
   it("paragraph with hardBreak emits \\n at break position", () => {
-    // Build mdast directly: type:"break" becomes insertEmbed(hardBreak) in Y.XmlText
+    // Build via mdast: type:"break" is imported then normalized to a sibling
+    // hardBreak element; getElementText emits \n at the break either way.
     loadTree(
       makeMdast([
         {
@@ -181,7 +184,7 @@ describe("getElementText — hardBreak embed emits \\n", () => {
   });
 
   it("offset of text after hardBreak aligns with validateRange", () => {
-    // Build via mdast so we get a real hardBreak embed in Y.XmlText
+    // Build via mdast: the break becomes a sibling hardBreak element (post-normalize)
     loadTree(
       makeMdast([
         {

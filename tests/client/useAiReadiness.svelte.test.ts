@@ -336,4 +336,62 @@ describe("createAiReadiness", () => {
     expect(h.get().state).toBe("booting");
     expect(h.get().chip).toBeNull();
   });
+
+  // --- liveIndicator (WS-B): the affirmative "an agent is connected" signal ---
+  describe("liveIndicator", () => {
+    const runningLauncher = {
+      available: true,
+      running: true,
+      reaperPid: 1,
+      cwd: "/tmp",
+      sessionId: "<set>",
+      resuming: false,
+    };
+
+    it("is 'connected' when an MCP session is open in Tandem mode", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: mkResponse(runningLauncher),
+        health: mkResponse({ status: "ok", hasSession: true }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().liveIndicator).toBe("connected");
+    });
+
+    it("is 'solo-paused' when a session is open but mode is Solo", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: mkResponse(runningLauncher),
+        health: mkResponse({ status: "ok", hasSession: true }),
+      });
+      const h = mount({ soloMode: true });
+      await settle();
+      expect(h.get().liveIndicator).toBe("solo-paused");
+    });
+
+    // The load-bearing negative assertion (review HIGH-2): `state === "ready"`
+    // is reachable from the launcher `running: true` branch with NO open MCP
+    // session (auto-launched desktop startup window). The affirmative indicator
+    // must NOT fire there — keying it on `state` would render a false "AI
+    // connected". It keys on `mcpSessionActive` instead.
+    it("does NOT claim connected when the launcher runs but no MCP session is open", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: mkResponse(runningLauncher),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().state).toBe("ready"); // launcher-running promotes state…
+      expect(h.get().liveIndicator).toBeNull(); // …but no session → no claim
+    });
+
+    it("is null when no MCP session is open (stopped launcher)", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: mkResponse({ available: true, running: false }),
+        health: mkResponse({ status: "ok", hasSession: false }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().liveIndicator).toBeNull();
+    });
+  });
 });

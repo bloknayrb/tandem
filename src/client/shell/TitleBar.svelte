@@ -19,8 +19,6 @@ interface Props {
   /** Current Tandem collaboration mode. */
   tandemMode?: TandemMode;
   onModeChange?: (mode: TandemMode) => void;
-  /** Whether Claude is currently active — drives the small status dot. */
-  claudeActive?: boolean;
   /** Theme preference (rendered with a checkmark in the brand menu). */
   theme?: ThemePreference;
   /** Set theme directly — wired from the brand menu's Color scheme section. */
@@ -81,7 +79,6 @@ let {
   center,
   tandemMode,
   onModeChange,
-  claudeActive = false,
   theme = "system",
   onSetTheme,
   onOpenHelp,
@@ -354,14 +351,9 @@ function chooseHelp() {
       <ModeToggle {tandemMode} {onModeChange} />
     {/if}
 
-    {#if claudeActive}
-      <span
-        class="status-dot"
-        data-tauri-drag-region="false"
-        title="AI assistant is connected"
-        aria-label="AI assistant is connected"
-      ></span>
-    {/if}
+    <!-- AI-connection state (connected / Solo-held / not-connected) now lives in
+         the status pill (StatusBar) as a single consolidated indicator; the
+         titlebar keeps only the setup CTA (connect/restart) below. -->
 
     {#if aiChip === "connect"}
       <button
@@ -736,16 +728,6 @@ function chooseHelp() {
        above decorum's overlay drag-region to receive clicks. */
     position: relative;
     z-index: var(--tandem-z-titlebar);
-  }
-
-  .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: var(--tandem-r-circle);
-    background: var(--tandem-author-claude);
-    display: inline-block;
-    flex-shrink: 0;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--tandem-author-claude) 18%, transparent);
   }
 
   /* #1021 raw-markdown source toggle. Monospace `</>` glyph; the active state
