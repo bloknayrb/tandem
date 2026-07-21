@@ -3,12 +3,25 @@ import { API_ANNOTATION_REPLY, API_REMOVE_ANNOTATION } from "../../shared/api-pa
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants";
 import { withBrowser } from "../../shared/origins";
 import { sanitizeAnnotation } from "../../shared/sanitize";
-import type { Annotation } from "../../shared/types";
+import type { Annotation, AnnotationType, TandemMode } from "../../shared/types";
 import { API_BASE } from "../utils/fileUpload";
 
 const warn = (event: unknown): void => {
   console.warn("[sanitize]", event);
 };
+
+/**
+ * WS-A2: whether a user-created annotation of `type` should be stamped
+ * `heldInSolo: true`. Only AI-visible comments qualify — notes and highlights
+ * are never sent to Claude (ADR-027), so they are not "held from the AI" and
+ * carry no held marker or badge. Hiding itself is server-authoritative
+ * (mode-based); this persisted marker is only the UI-badge / fail-closed-restart
+ * substrate. Shared by the toolbar create path and the note→comment promotion
+ * transform so the two can't drift on which writes count as held.
+ */
+export function heldInSoloOnCreate(type: AnnotationType, mode: TandemMode): boolean {
+  return type === "comment" && mode === "solo";
+}
 
 export function editAnnotation(ydoc: Y.Doc | null, id: string, newContent: string): void {
   if (!ydoc) return;
@@ -43,12 +56,16 @@ export function editAnnotation(ydoc: Y.Doc | null, id: string, newContent: strin
  * the two can't drift on the channel-event gate's invariants (note→comment,
  * author "import" → "user", audience → "outbound", `promotedFrom: "note"`).
  */
-function promotedAnnotation(ann: Annotation): Annotation {
+function promotedAnnotation(ann: Annotation, tandemMode: TandemMode): Annotation {
   // Strip note/highlight-specific fields when collapsing to the comment
-  // variant — the discriminated union rejects a `color` on a comment.
+  // variant — the discriminated union rejects a `color` on a comment. Also drop
+  // any inherited `heldInSolo` so the marker below is re-derived from the CURRENT
+  // mode (a clean strip when promoting in Tandem, without writing an explicit
+  // `undefined` key into CRDT state).
   const {
     color: _color,
     suggestedText: _suggestedText,
+    heldInSolo: _staleHeld,
     ...rest
   } = ann as Annotation & {
     color?: unknown;
@@ -61,10 +78,19 @@ function promotedAnnotation(ann: Annotation): Annotation {
     audience: "outbound" as const,
     promotedFrom: "note" as const,
     rev: (ann.rev ?? 0) + 1,
+    // WS-A2 (A-F2): a note promoted to a comment while in Solo is a held comment
+    // — mark it so the badge + fail-closed restart match a directly-created
+    // Solo comment. The result is always a comment, so pass "comment" to the
+    // shared predicate (keeps this and the toolbar create path from drifting).
+    ...(heldInSoloOnCreate("comment", tandemMode) ? { heldInSolo: true } : {}),
   };
 }
 
-export function sendNoteToClaude(ydoc: Y.Doc | null, annotationId: string): void {
+export function sendNoteToClaude(
+  ydoc: Y.Doc | null,
+  annotationId: string,
+  tandemMode: TandemMode = "tandem",
+): void {
   if (!ydoc) return;
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   const raw = map.get(annotationId) as Annotation | undefined;
@@ -76,7 +102,7 @@ export function sendNoteToClaude(ydoc: Y.Doc | null, annotationId: string): void
   // undefined-origin transact that the skip set's evolution could quietly
   // start dropping.
   withBrowser(ydoc, () => {
-    map.set(annotationId, promotedAnnotation(ann));
+    map.set(annotationId, promotedAnnotation(ann, tandemMode));
   });
 }
 
@@ -86,7 +112,11 @@ export function sendNoteToClaude(ydoc: Y.Doc | null, annotationId: string): void
  * mutations. The observer fans out to per-annotation channel events on its
  * own — batching here is purely a write-coalescing optimization.
  */
-export function promoteNotesToComments(ydoc: Y.Doc | null, annotationIds: string[]): number {
+export function promoteNotesToComments(
+  ydoc: Y.Doc | null,
+  annotationIds: string[],
+  tandemMode: TandemMode = "tandem",
+): number {
   if (!ydoc || annotationIds.length === 0) return 0;
   const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   let promoted = 0;
@@ -96,7 +126,7 @@ export function promoteNotesToComments(ydoc: Y.Doc | null, annotationIds: string
       if (!raw) continue;
       const ann = sanitizeAnnotation(raw, warn);
       if (ann.type !== "note") continue;
-      map.set(id, promotedAnnotation(ann));
+      map.set(id, promotedAnnotation(ann, tandemMode));
       promoted++;
     }
   });

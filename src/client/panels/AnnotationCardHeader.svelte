@@ -50,6 +50,15 @@ const dotColor = $derived(
       {displayType}
     </span>
     {#if extraPill}{@render extraPill()}{/if}
+    {#if annotation.heldInSolo}
+      <span
+        class="ach-held-pill"
+        data-testid="annotation-held-pill-{annotation.id}"
+        title="Held while you're in Solo mode. Your AI will see this when you switch back to Tandem."
+      >
+        Held
+      </span>
+    {/if}
     {#if !isPending}
       <span
         class="ach-status"
@@ -116,6 +125,19 @@ const dotColor = $derived(
     text-transform: uppercase;
     padding: 1px 7px;
     border-radius: var(--tandem-r-pill);
+  }
+  /* WS-A2: amber "Held" pill — matches the held-annotation banner token family
+     (--tandem-warning-*). Signals a Solo-created comment the AI hasn't seen yet. */
+  .ach-held-pill {
+    font-size: var(--tandem-text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 1px 7px;
+    border-radius: var(--tandem-r-pill);
+    color: var(--tandem-warning-fg-strong);
+    background: var(--tandem-warning-bg);
+    border: 1px solid var(--tandem-warning-border);
   }
   .ach-status {
     margin-left: 6px;

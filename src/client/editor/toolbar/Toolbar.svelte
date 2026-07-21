@@ -9,11 +9,12 @@ import {
 } from "../../../shared/constants";
 import { withBrowser } from "../../../shared/origins";
 import { toPmPos } from "../../../shared/positions/types";
-import type { Annotation, AnnotationType, HighlightColor } from "../../../shared/types";
+import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../../../shared/types";
 import { generateAnnotationId } from "../../../shared/utils";
 import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
 import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
+import { heldInSoloOnCreate } from "../../panels/annotation-actions";
 import { ENTER_POPUP_MS, motionOff, popupEnter, registerFlySource } from "../../panels/cardMotion";
 import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
@@ -65,6 +66,14 @@ interface Props {
   onToggleFormattingBar?: () => void;
   /** App `reduceMotion` setting, threaded to the A28 popup entrance transition. */
   reduceMotion?: boolean;
+  /**
+   * WS-A2: current Solo/Tandem mode, threaded from App's `modeState`. When
+   * "solo", a user-created comment is stamped `heldInSolo: true` so the held
+   * badge + fail-closed-restart hold have a persisted signal. Hiding itself is
+   * server-authoritative (mode-based) — this marker is the UI/restart substrate,
+   * not the hide gate.
+   */
+  tandemMode?: TandemMode;
 }
 
 let {
@@ -83,6 +92,7 @@ let {
   formattingBarVisible = true,
   onToggleFormattingBar,
   reduceMotion = false,
+  tandemMode = "tandem",
 }: Props = $props();
 
 const agentLabel = createAgentLabel(createTandemSettings());
@@ -603,6 +613,10 @@ function createAnnotation(
   const id = generateAnnotationId();
   // highlights and notes are user-private; comments are Claude-visible
   const audience = type === "highlight" || type === "note" ? "private" : "outbound";
+  // WS-A2: mark a comment created in Solo as held (shared predicate — see
+  // heldInSoloOnCreate). Only comments qualify; the server hides on live mode
+  // regardless, this is the persisted signal for the badge + fail-closed restart.
+  const heldInSolo = heldInSoloOnCreate(type, tandemMode);
   const annotation = {
     id,
     author: "user" as const,
@@ -613,6 +627,7 @@ function createAnnotation(
     status: "pending" as const,
     timestamp: Date.now(),
     ...(extras?.color ? { color: extras.color } : {}),
+    ...(heldInSolo ? { heldInSolo: true } : {}),
   } as Annotation;
 
   // ADR-031: browser-initiated user edit — must be origin-tagged.
