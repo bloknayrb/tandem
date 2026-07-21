@@ -32,8 +32,8 @@ import {
   getElementText,
   getElementTextLength,
   getHeadingPrefixLength,
-  getOrCreateXmlText,
-  mergeXmlTextDelta,
+  mergeInlineTail,
+  replaceFlatRangeInElement,
   TEXTBLOCK_NODES,
 } from "./document-model.js";
 // Document service (state management)
@@ -531,39 +531,47 @@ export function registerDocumentTools(server: McpServer): void {
 
           if (startPos.elementIndex !== endPos.elementIndex) {
             withMcp(r.doc, () => {
+              // Cross-element edit. Each textblock may hold multiple Y.XmlText
+              // children split by sibling hardBreaks, so trims/merges go through the
+              // multi-XmlText helpers — the old first-XmlText-only path dropped the
+              // tail's breaks and later runs (and could throw mid-transaction).
               const startNode = fragment.get(startPos.elementIndex) as Y.XmlElement;
-              const startText = getOrCreateXmlText(startNode);
-              const startLen = startText.length;
-              if (startPos.textOffset < startLen) {
-                startText.delete(startPos.textOffset, startLen - startPos.textOffset);
-              }
+              // 1. Trim the start element's tail: delete [startOffset, end).
+              replaceFlatRangeInElement(
+                startNode,
+                startPos.textOffset,
+                getElementTextLength(startNode),
+                "",
+              );
 
+              // 2. Delete the whole in-between elements.
               const deleteCount = endPos.elementIndex - startPos.elementIndex - 1;
               for (let i = 0; i < deleteCount; i++) {
                 fragment.delete(startPos.elementIndex + 1, 1);
               }
 
+              // 3. Trim the end element's head: delete [0, endOffset).
               const endNode = fragment.get(startPos.elementIndex + 1) as Y.XmlElement;
-              const endText = getOrCreateXmlText(endNode);
-              if (endPos.textOffset > 0) {
-                endText.delete(0, endPos.textOffset);
-              }
-              mergeXmlTextDelta(startText, endText, startPos.textOffset);
-              fragment.delete(startPos.elementIndex + 1, 1);
+              replaceFlatRangeInElement(endNode, 0, endPos.textOffset, "");
 
-              startText.insert(startPos.textOffset, newText);
+              // 4. Insert newText at the join (end of start), then fold the end
+              //    element's surviving children onto start → [start][newText][end].
+              //    Step 1 trimmed start down to [0, startOffset), and steps 2-3 don't
+              //    touch it, so its flat length is exactly startPos.textOffset — no
+              //    need to re-walk it.
+              if (newText.length > 0) {
+                const joinAt = startPos.textOffset;
+                replaceFlatRangeInElement(startNode, joinAt, joinAt, newText);
+              }
+              mergeInlineTail(startNode, endNode);
+
+              // 5. Remove the now-emptied end element.
+              fragment.delete(startPos.elementIndex + 1, 1);
             });
           } else {
             withMcp(r.doc, () => {
               const node = fragment.get(startPos.elementIndex) as Y.XmlElement;
-              const textNode = getOrCreateXmlText(node);
-              const deleteLen = endPos.textOffset - startPos.textOffset;
-              if (deleteLen > 0) {
-                textNode.delete(startPos.textOffset, deleteLen);
-              }
-              if (newText.length > 0) {
-                textNode.insert(startPos.textOffset, newText);
-              }
+              replaceFlatRangeInElement(node, startPos.textOffset, endPos.textOffset, newText);
             });
           }
 

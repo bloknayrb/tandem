@@ -65,13 +65,42 @@ If bind still fails after the timeout, the server logs `port {port} still not av
 
 The `tandem-channel` entry spawns a subprocess. Most failures fall into two buckets:
 
-- **`MODULE_NOT_FOUND`** with a production config (`node dist/channel/index.js`): the bundled channel shim is missing. For global installs, re-run `tandem setup` after upgrading; absolute paths get rewritten to the current install. For source checkouts using a production-style config, run `npm run build`. The default dev config uses `npx tsx` and skips the build step entirely.
+- **`MODULE_NOT_FOUND`** with a production config (`node dist/channel/index.js`): the bundled channel shim is missing. For global installs, re-run `tandem setup --apply` after upgrading; absolute paths get rewritten to the current install. For source checkouts using a production-style config, run `npm run build`. The default dev config uses `npx tsx` and skips the build step entirely.
 - **Timeouts** in the shim output:
   - `/api/events timed out after 10000ms` — initial SSE handshake never completed.
   - `SSE inactivity timeout` — connection accepted, then the server stopped sending events.
   - `/api/channel-reply timed out after 5000ms` — reply path stalled.
 
   All three mean the server accepted the connection but stopped responding on that path. Restart Tandem; the shim reports the timeout instead of hanging silently.
+
+## `claude plugin install` fails to clone (SSH vs HTTPS)
+
+Claude Code clones GitHub-hosted plugins over SSH (`git@github.com:…`) by default. If you haven't added an SSH key to your GitHub account, the clone fails with a permission/authentication error even though the repo is public and reachable over HTTPS in a browser.
+
+Two workarounds:
+
+- **Add an SSH key** to your GitHub account ([GitHub's guide](https://docs.github.com/en/authentication/connecting-to-github-with-ssh)), then retry the install.
+- **Rewrite SSH clones to HTTPS** globally, so no key is needed:
+
+  ```bash
+  git config --global url."https://github.com/".insteadOf git@github.com:
+  ```
+
+  This makes git transparently use `https://github.com/…` for any `git@github.com:…` URL. Retry the plugin install afterward.
+
+## Stale global `tandem-editor` shadows the pinned version
+
+Symptoms: after upgrading, Claude Code reports "Server disconnected" / "Could not attach," or Tandem behaves like an older build, even though the plugin manifest pins an exact version.
+
+Cause: a previously installed global (`npm install -g tandem-editor`) shadows the exact-pinned `npx -y tandem-editor@<version>` spec the plugin and generated config use — `npm exec` silently reuses the already-installed global instead of fetching the pinned version (#1177, [ADR context](decisions.md)).
+
+Fix — remove the stale global so `npx` fetches the pinned version:
+
+```bash
+npm uninstall -g tandem-editor
+```
+
+(If you deliberately run a global CLI, upgrade it to match instead: `npm install -g tandem-editor@latest`.) Confirm with `tandem doctor`, which warns when a shadowing global is present.
 
 ## Editor shows "Cannot reach the Tandem server"
 

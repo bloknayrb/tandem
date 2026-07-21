@@ -105,11 +105,16 @@ function structuralAttrs(el: Y.XmlElement): Record<string, unknown> {
 }
 
 function runsOf(el: Y.XmlElement): Run[] {
-  // Invariant: htmlToYDoc emits exactly ONE immediate Y.XmlText per text-bearing
-  // block (heading/paragraph/codeBlock/inline-wrap), so concatenating runs
-  // across siblings here is lossless. If a future import path ever produced
-  // adjacent XmlText siblings under one element, this would erase the inter-text
-  // boundary — insert a per-XmlText sentinel run then.
+  // A text-bearing block holds ONE immediate Y.XmlText per run, EXCEPT that
+  // normalizeHardBreaks splits a hard-break paragraph into multiple XmlText
+  // siblings separated by a `hardBreak` element. This walk skips the hardBreak
+  // element (line below) and concatenates the surrounding text runs, so the
+  // break's boundary drops out of the run list here — but the break is captured
+  // separately as a child NodeSnapshot by `walk()`, so no information is lost.
+  // Both fidelity generations normalize identically (import and re-import both run
+  // normalizeHardBreaks), so gen1/gen2 concatenate the same way and stay comparable.
+  // If a future path produced adjacent same-mark XmlText siblings with NO separating
+  // element, this would silently erase the boundary — add a per-XmlText sentinel then.
   const runs: Run[] = [];
   for (let i = 0; i < el.length; i++) {
     const child = el.get(i);

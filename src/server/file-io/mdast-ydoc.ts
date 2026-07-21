@@ -1,5 +1,6 @@
 import type { AlignType, PhrasingContent, Root, RootContent, Table } from "mdast";
 import * as Y from "yjs";
+import { normalizeHardBreaks } from "./hardbreak-normalize.js";
 import { serializeMdastBlock, serializeMdastInline } from "./markdown.js";
 
 const MARKDOWN_HTML_ATTR = "markdownHtml";
@@ -81,6 +82,11 @@ function insertBlocks(doc: Y.Doc, tree: Root, index: number): void {
       xmlText.insert(0, plainText);
     }
   }
+
+  // Convert hardBreak embeds into sibling elements y-prosemirror can render (else
+  // they surface as literal <hardbreak></hardbreak>). Covers both mdastToYDoc and
+  // appendMdast; scoped to the just-inserted blocks so append stays offset-safe.
+  normalizeHardBreaks(allElements);
 }
 
 /** Convert a block-level MDAST node to one or more Y.XmlElements */
@@ -391,6 +397,10 @@ function processInline(
         break;
 
       case "break": {
+        // Insert as an embed here; `normalizeHardBreaks` (run after this two-pass
+        // build completes) rewrites it into a sibling hardBreak element that
+        // y-prosemirror can render. Keeping the embed here lets the mark recursion
+        // stay a single-XmlText append.
         const embed = new Y.XmlElement("hardBreak");
         xmlText.insertEmbed(xmlText.length, embed);
         break;
@@ -619,7 +629,8 @@ function getElementPlainText(el: Y.XmlElement): string {
 
 /**
  * Convert Y.XmlText delta segments into MDAST phrasing content.
- * Handles marks (bold, italic, strike, code, link) and hardBreak embeds.
+ * Handles marks (bold, italic, strike, code, link) and hardBreaks in either
+ * representation — an embed inside a Y.XmlText or a sibling hardBreak element.
  */
 function deltaToPhrasingContent(el: Y.XmlElement): PhrasingContent[] {
   const result: PhrasingContent[] = [];

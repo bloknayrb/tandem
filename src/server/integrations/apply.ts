@@ -39,12 +39,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
-import type { ClaudeCliPresence } from "../../shared/integrations/contract.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
@@ -459,53 +458,14 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   return targets;
 }
 
-export interface DetectClaudeCliOptions {
-  /** Override `homedir()` — tests anchor the native-location probe under a tmpdir. */
-  homeOverride?: string;
-  /** Override `process.env.PATH` — tests inject a controlled PATH. */
-  pathOverride?: string;
-  /** Override `process.platform` — tests exercise the win32 `.exe` branch. */
-  platformOverride?: NodeJS.Platform;
-}
-
-/**
- * Probe whether the `claude` CLI binary is present, independent of any config
- * file. This is the **binary** detector; {@link detectTargets} is the separate
- * **config-presence** detector (it answers "has Claude ever written a config
- * here?", which stays true after an uninstall and is true on a machine that
- * only has Claude Desktop).
- *
- * Pure filesystem probe — deliberately no `execFile`/spawn (no shell-injection
- * surface, no hang on a wedged binary). Returns:
- *   - `INSTALLED_ON_PATH` — `claude[.exe]` found on the server process's PATH.
- *   - `INSTALLED_NOT_ON_PATH` — found only in `~/.local/bin` (the native
- *     installer's target, which is typically NOT on the server's PATH at
- *     install time → the usual immediately-post-install state).
- *   - `NOT_INSTALLED` — neither.
- *
- * PATH wins over `~/.local/bin`: if it's on PATH it's usable right now, which
- * is the more useful signal for the wizard.
- */
-export function detectClaudeCli(opts: DetectClaudeCliOptions = {}): ClaudeCliPresence {
-  const platform = opts.platformOverride ?? process.platform;
-  const home = opts.homeOverride ?? homedir();
-  const binName = platform === "win32" ? "claude.exe" : "claude";
-
-  // `delimiter` is platform-specific (`;` on win32, `:` elsewhere). When a
-  // platformOverride disagrees with the host, the override is for test
-  // ergonomics only — real callers never pass it, so host `delimiter` is fine.
-  const pathVar = opts.pathOverride ?? process.env.PATH ?? "";
-  for (const dir of pathVar.split(delimiter)) {
-    if (dir.length === 0) continue;
-    if (existsSync(join(dir, binName))) return "INSTALLED_ON_PATH";
-  }
-
-  // Native install location — same `~/.local/bin` on every platform per the
-  // official installer's documented uninstall paths (Windows included).
-  if (existsSync(join(home, ".local", "bin", binName))) return "INSTALLED_NOT_ON_PATH";
-
-  return "NOT_INSTALLED";
-}
+// The `claude` binary probe moved to a shared built-ins-only leaf so
+// `tandem doctor` can reuse it without importing apply.ts's server-coupled
+// deps. Re-exported here so existing importers (install-claude-cli, api-routes,
+// tests) keep their `./apply.js` import path.
+export {
+  type DetectClaudeCliOptions,
+  detectClaudeCli,
+} from "../../shared/integrations/detect-claude-cli.js";
 
 /**
  * Atomic write: write to a temp file in the SAME directory as the destination,

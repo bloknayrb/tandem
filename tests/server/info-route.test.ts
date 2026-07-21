@@ -361,3 +361,55 @@ describe("GET /api/info — changelogPath field (unit)", () => {
     expect("tokenRotatedAt" in body).toBe(false);
   });
 });
+
+describe("GET /api/info — welcomePath field (unit)", () => {
+  // welcomePath (WS-E) feeds the "Replay tutorial" affordance; same public,
+  // present-only-when-resolved contract as changelogPath/workflowsPath.
+  it("includes welcomePath in response when dep is set", async () => {
+    const handler = makeInfoHandler({ ...BASE_DEPS, welcomePath: "/tmp/sample/welcome.md" });
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect("welcomePath" in body).toBe(true);
+    expect(body.welcomePath).toBe("/tmp/sample/welcome.md");
+  });
+
+  it("omits welcomePath when the dep is undefined (stripped build)", async () => {
+    const handler = makeInfoHandler(BASE_DEPS); // no welcomePath
+    const req = makeMockReq("127.0.0.1");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect("welcomePath" in body).toBe(false);
+  });
+
+  it("includes welcomePath for non-loopback callers (not sensitive)", async () => {
+    const handler = makeInfoHandler({ ...BASE_DEPS, welcomePath: "/tmp/sample/welcome.md" });
+    const req = makeMockReq("192.168.1.100");
+    const res = makeMockRes();
+
+    await (handler as (req: unknown, res: unknown, next: unknown) => Promise<void>)(
+      req,
+      res,
+      () => {},
+    );
+
+    const body = res._body as Record<string, unknown>;
+    expect("welcomePath" in body).toBe(true);
+    expect(body.welcomePath).toBe("/tmp/sample/welcome.md");
+    expect("storagePath" in body).toBe(false);
+  });
+});

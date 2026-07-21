@@ -332,6 +332,8 @@ Closing a tab in the editor now actually closes the document on the server. Prev
 - **Doctor updated** — `npm run doctor` checks user-level MCP registration (`~/.claude/mcp_settings.json`)
 - **12 tests** for `buildMcpEntries`, `detectTargets`, and `applyConfig`
 
+> **Current CLI semantics (changed after this milestone):** as of v0.14.0 (#477 PR 3c-ii, ADR-038 §2b) bare `tandem setup` only *prints* guidance — the write path moved behind `tandem setup --apply` (and `tandem setup --apply --force` for the force variant). The `tandem setup` / `tandem setup --force` bullets above describe PR #161's original behavior.
+
 ---
 
 ## Tauri Desktop — DONE (v0.4.0, PR #257)

@@ -213,6 +213,13 @@ interface Props {
    * (and unit-test mounts) keep working without rewiring.
    */
   notify?: (severity: "info" | "warning" | "error", message: string) => void;
+  /**
+   * Re-arm the onboarding tutorial for replay (clears the completed flag +
+   * resets step). Wired to `useTutorial().restartTutorial` in App.svelte. The
+   * "Replay tutorial" button calls this AFTER the welcome doc reopens, then
+   * closes the modal so the (now-active) tutorial card is visible.
+   */
+  onReplayTutorial?: () => void;
 }
 
 let {
@@ -227,12 +234,15 @@ let {
   tabs = DEFAULT_SETTINGS_TABS,
   initialTabId = null,
   notify = () => {},
+  onReplayTutorial,
 }: Props = $props();
 
 let modalEl: HTMLDivElement | undefined = $state();
 const appInfo = createAppInfo(() => open);
 let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
+let replayLoading = $state(false);
+let replayError = $state<string | null>(null);
 // W9: narrow-viewport sidebar drawer. At <860px the sidebar collapses out
 // of the grid into an absolute drawer toggled by the header hamburger.
 // Reset to closed each time the modal opens.
@@ -412,10 +422,11 @@ $effect(() => {
   return () => window.removeEventListener("keydown", handler);
 });
 
-// Clear stale view-changelog errors when tab changes.
+// Clear stale view-changelog / replay-tutorial errors when tab changes.
 $effect(() => {
   activeTabId;
   changelogError = null;
+  replayError = null;
 });
 
 async function handleViewChangelog(): Promise<void> {
@@ -436,6 +447,34 @@ async function handleViewChangelog(): Promise<void> {
     onClose();
   } else {
     changelogError = result.error;
+  }
+}
+
+async function handleReplayTutorial(): Promise<void> {
+  const filePath = appInfo.info?.welcomePath;
+  if (!filePath) {
+    replayError = "Welcome document not found.";
+    return;
+  }
+  replayLoading = true;
+  replayError = null;
+  // force:true clears the doc so the server re-injects fresh seed annotations.
+  // (The server license-gates the force sub-path — dark today; a post-v1.0
+  // restricted user would see the gate's error here rather than a silent no-op.)
+  const result = await openServerPath(filePath, {
+    force: true,
+    notFoundMessage: "Welcome document not found.",
+    failureMessage: "Couldn't reopen the welcome tutorial.",
+  });
+  replayLoading = false;
+  if (result.ok) {
+    // Reset the completed flag + step only AFTER the doc actually reopened, so a
+    // failed open leaves tutorial state untouched. Then close so the tutorial
+    // card (now active on the reopened welcome.md) isn't hidden behind the modal.
+    onReplayTutorial?.();
+    onClose();
+  } else {
+    replayError = result.error;
   }
 }
 </script>
@@ -539,6 +578,31 @@ async function handleViewChangelog(): Promise<void> {
           >
             {changelogError}
           </div>
+        {/if}
+        <!-- Replay tutorial (WS-E). Shown only when fully wired: the server
+             exposes welcomePath (stripped prod builds may lack it — same
+             contract as Changelog) AND a re-arm callback is provided. Gating on
+             onReplayTutorial too means a mount that forgets it can't show a
+             button that reopens the doc but silently fails to replay. -->
+        {#if appInfo.info?.welcomePath && onReplayTutorial}
+          <button
+            type="button"
+            data-testid="settings-modal-replay-tutorial-btn"
+            onclick={() => void handleReplayTutorial()}
+            disabled={replayLoading || appInfo.loading}
+            class="settings-modal-sidebar-link"
+          >
+            {replayLoading ? "Reopening…" : "Replay tutorial"}
+          </button>
+          {#if replayError}
+            <div
+              role="alert"
+              data-testid="settings-modal-replay-error"
+              style="font-size: 11px; color: var(--tandem-error-fg); padding: 0 var(--tandem-space-2);"
+            >
+              {replayError}
+            </div>
+          {/if}
         {/if}
         <a
           href={TANDEM_ISSUES_NEW_URL}

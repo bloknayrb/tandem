@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  evaluateClaudeCli,
   evaluateNpmStaleness,
   evaluateOrphanedVite,
   evaluateStaleGlobal,
@@ -296,6 +297,54 @@ describe("a crashing check does not take down the report", () => {
   });
 });
 
+// ── "server not running" fix hint must match the install kind ──
+// A source checkout starts the server with `npm run dev:standalone`; a
+// global/desktop install has no such script. Pointing a global user at
+// `dev:standalone` is the dead-end this branch exists to prevent — so the
+// NEGATIVE assertion below (the global fix must NOT say dev:standalone) is the
+// load-bearing one. A future refactor that collapses/flips the ternary would
+// otherwise silently reintroduce the friction bug with green tests.
+describe("'server not running' fix hint is install-kind aware", () => {
+  let repoDir: string;
+  let cwdSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    cwdSpy = undefined;
+    if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Seed a cwd whose package.json `name` decides the dev-repo gate, then run
+   * doctor against two guaranteed-down ports (OS-assigned then immediately
+   * closed) so the ports check takes its fail path and exposes `.fix`.
+   */
+  async function portsFixInCwd(pkgName: string): Promise<string | undefined> {
+    repoDir = mkdtempSync(join(tmpdir(), "tandem-starthint-"));
+    writeFileSync(
+      join(repoDir, "package.json"),
+      JSON.stringify({ name: pkgName, version: "0.2.0" }),
+    );
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repoDir);
+
+    const [wsPort, mcpPort] = await Promise.all([allocPort(), allocPort()]);
+    const report = await runDoctor({ wsPort, mcpPort });
+    return report.results.find((res) => res.check === "ports")?.fix;
+  }
+
+  it("points a dev checkout at npm run dev:standalone", async () => {
+    const fix = await portsFixInCwd("tandem-editor");
+    expect(fix).toContain("dev:standalone");
+  });
+
+  it("points a global/desktop install at the app, NOT dev:standalone", async () => {
+    const fix = await portsFixInCwd("someones-app");
+    expect(fix).toBeDefined();
+    expect(fix).not.toContain("dev:standalone");
+    expect(fix).toContain("desktop app");
+  });
+});
+
 describe("summarizeDoctorResults", () => {
   // Shared by the CLI summary AND /api/diagnostics' filtered recomputation —
   // the equivalence class that matters is failures-AND-warnings: failures must
@@ -390,6 +439,28 @@ describe("evaluateStaleGlobal", () => {
     expect(result?.message).toContain("0.14.3");
     expect(result?.fix).toContain("npm uninstall -g tandem-editor");
     expect(result?.data).toEqual({ globalVersion: "0.2.11", bundledVersion: "0.14.3" });
+  });
+});
+
+describe("evaluateClaudeCli", () => {
+  it("passes when the CLI is on PATH", () => {
+    const result = evaluateClaudeCli("INSTALLED_ON_PATH");
+    expect(result.status).toBe("pass");
+    expect(result.fix).toBeUndefined();
+  });
+
+  it("warns with a PATH fix when installed but not on PATH", () => {
+    const result = evaluateClaudeCli("INSTALLED_NOT_ON_PATH");
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain("not on PATH");
+    expect(result.fix).toContain("PATH");
+  });
+
+  it("warns with an install fix when the CLI is absent", () => {
+    const result = evaluateClaudeCli("NOT_INSTALLED");
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain("not found");
+    expect(result.fix).toContain("claude.com/claude-code");
   });
 });
 

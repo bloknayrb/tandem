@@ -4,7 +4,7 @@ A complete guide to using Tandem — from first launch to advanced workflows.
 
 > **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same 28 tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
 
-> **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [README → Connecting other MCP clients](../README.md#connecting-other-mcp-clients) for the generic MCP path.
+> **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [README → The MCP integration policy](../README.md#the-mcp-integration-policy) for the generic MCP path.
 
 ## Overview
 

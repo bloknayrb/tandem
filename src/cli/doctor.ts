@@ -31,6 +31,8 @@ import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { parseLockfile } from "../server/annotations/lockfile.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
+import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
+import { detectClaudeCli } from "../shared/integrations/detect-claude-cli.js";
 
 // Injected by tsup into dist/cli. Absent in tsx dev / vitest (typeof-guarded at
 // use). This is the version the `npx` bridge entries are pinned to.
@@ -651,7 +653,7 @@ function checkUserMcpConfig(r: Recorder): void {
   if (!existsSync(claudeCodePath)) {
     r.warn(
       "~/.claude.json not found",
-      "Run: tandem setup  (or ignore if using project-local .mcp.json)",
+      "Run: tandem setup --apply  (or ignore if using project-local .mcp.json)",
     );
     return;
   }
@@ -664,23 +666,66 @@ function checkUserMcpConfig(r: Recorder): void {
     // source text, and ~/.claude.json carries bearer tokens / API keys. This
     // check survives the /api/diagnostics filter, so its message reaches the
     // Copy Diagnostics clipboard — destined for public issues.
-    r.warn("~/.claude.json is malformed JSON", "Run: tandem setup to rewrite it");
+    r.warn("~/.claude.json is malformed JSON", "Run: tandem setup --apply to rewrite it");
     return;
   }
 
   const servers = config?.mcpServers ?? {};
   if (!servers.tandem) {
-    r.warn("tandem not registered in ~/.claude.json", "Run: tandem setup");
+    r.warn("tandem not registered in ~/.claude.json", "Run: tandem setup --apply");
   } else {
     r.pass("tandem registered in ~/.claude.json");
   }
   if (!servers["tandem-channel"]) {
     r.warn(
       "tandem-channel not registered in ~/.claude.json — Claude Code will poll instead of receiving real-time push",
-      "Run: tandem setup",
+      "Run: tandem setup --apply",
     );
   } else {
     r.pass("tandem-channel registered in ~/.claude.json");
+  }
+}
+
+// ── Check: Claude CLI presence ──────────────────────────────────────
+//
+// A config-presence check (checkUserMcpConfig / checkMcpJson) can pass on a
+// machine where the `claude` binary was never installed — Tandem's AI features
+// then silently do nothing with no clue why. This binary probe names that gap.
+// Pure filesystem probe (no spawn); shares the wizard's detector via a leaf.
+
+/**
+ * Pure decision step, split out of {@link checkClaudeCli} so the
+ * presence→status mapping is directly unit-testable without probing the real
+ * filesystem — see tests/cli/doctor.test.ts.
+ */
+export function evaluateClaudeCli(presence: ClaudeCliPresence): {
+  status: "pass" | "warn";
+  message: string;
+  fix?: string;
+} {
+  if (presence === "INSTALLED_ON_PATH") {
+    return { status: "pass", message: "Claude Code CLI found on PATH" };
+  }
+  if (presence === "INSTALLED_NOT_ON_PATH") {
+    return {
+      status: "warn",
+      message: "Claude Code CLI installed but not on PATH (found in ~/.local/bin)",
+      fix: "Open a new terminal, or add ~/.local/bin to your PATH, then run `claude` once",
+    };
+  }
+  return {
+    status: "warn",
+    message: "Claude Code CLI not found — Tandem's AI collaboration needs an MCP client",
+    fix: "Install Claude Code from https://claude.com/claude-code (or connect another MCP client)",
+  };
+}
+
+function checkClaudeCli(r: Recorder): void {
+  const result = evaluateClaudeCli(detectClaudeCli());
+  if (result.status === "pass") {
+    r.pass(result.message);
+  } else {
+    r.warn(result.message, result.fix);
   }
 }
 
@@ -708,17 +753,17 @@ async function checkPorts(
   r: Recorder,
   wsPort: number,
   mcpPort: number,
+  startHint: string,
 ): Promise<{ ws: boolean; mcp: boolean }> {
   const [ws, mcp] = await Promise.all([probePort(wsPort), probePort(mcpPort)]);
 
   if (ws && mcp) {
     r.pass(`Ports ${wsPort} (WebSocket) + ${mcpPort} (MCP HTTP) in use`, undefined, { ws, mcp });
   } else if (!ws && !mcp) {
-    r.fail(
-      `Ports ${wsPort} + ${mcpPort} not listening — server not running`,
-      "npm run dev:standalone",
-      { ws, mcp },
-    );
+    r.fail(`Ports ${wsPort} + ${mcpPort} not listening — server not running`, startHint, {
+      ws,
+      mcp,
+    });
   } else {
     r.warn(
       `Partial: port ${wsPort} ${ws ? "up" : "down"}, port ${mcpPort} ${mcp ? "up" : "down"}`,
@@ -908,19 +953,16 @@ async function isViteDevServer(port: number): Promise<boolean> {
   return result?.status === 200;
 }
 
-async function checkHealth(r: Recorder, mcpPort: number): Promise<boolean> {
+async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Promise<boolean> {
   const result = await httpGet(`http://127.0.0.1:${mcpPort}/health`);
 
   if (!result) {
-    r.fail(`Server not responding on 127.0.0.1:${mcpPort}`, "npm run dev:standalone");
+    r.fail(`Server not responding on 127.0.0.1:${mcpPort}`, startHint);
     return false;
   }
 
   if (result.error) {
-    r.fail(
-      `Server not responding on 127.0.0.1:${mcpPort} (${result.error})`,
-      "npm run dev:standalone",
-    );
+    r.fail(`Server not responding on 127.0.0.1:${mcpPort} (${result.error})`, startHint);
     return false;
   }
 
@@ -1282,6 +1324,13 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   const cwd = process.cwd();
   const repo = probeTandemEditorRepo(cwd);
   const devRepo = repo === "yes";
+  // "Server not running" fixes differ by install kind: a source checkout starts
+  // the server with `npm run dev:standalone`; a global/desktop install has no
+  // such script — the user launches the app (or `tandem`). Pointing global-install
+  // users at `npm run dev:standalone` is a dead end (#new-user-friction audit).
+  const startHint = devRepo
+    ? "npm run dev:standalone"
+    : "Launch the Tandem desktop app, or run `tandem` in a terminal";
 
   await r.check("node-version", () => checkNodeVersion(r));
   await r.check("node-modules", () => checkNodeModules(r));
@@ -1303,13 +1352,14 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   }
   await r.check("mcp-json", () => checkMcpJson(r));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
+  await r.check("claude-cli", () => checkClaudeCli(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("stale-global", () => checkStaleGlobal(r));
 
   // `check` returns undefined when the check crashed (it records its own
   // fail). Treating both ports as down is the honest reading: we did not
   // observe them up. Do NOT cast this away — see Recorder.check.
-  const ports = await r.check("ports", () => checkPorts(r, wsPort, mcpPort));
+  const ports = await r.check("ports", () => checkPorts(r, wsPort, mcpPort, startHint));
   const ws = ports?.ws ?? false;
   const mcp = ports?.mcp ?? false;
 
@@ -1322,7 +1372,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   if (mcp) {
     // A crashed health check means we never established health — don't run
     // the SSE check on an unverified server.
-    const healthy = (await r.check("health", () => checkHealth(r, mcpPort))) ?? false;
+    const healthy = (await r.check("health", () => checkHealth(r, mcpPort, startHint))) ?? false;
     if (healthy) {
       await r.check("sse", () => checkSseEndpoint(r, mcpPort));
     }

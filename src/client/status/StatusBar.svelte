@@ -1,10 +1,13 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { untrack } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import type { AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
 import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
+import { debounce } from "../utils/debounce";
+import { type AiIndicatorTone, aiIndicatorView } from "./status-ai-view";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
 interface Props {
@@ -14,6 +17,18 @@ interface Props {
   disconnectedSince: number | null;
   claudeStatus: string | null;
   claudeActive: boolean;
+  /**
+   * The affirmative AI-connection indicator (from `useAiReadiness`). Consolidated
+   * here from the old titlebar pill (#1210 follow-up): the status pill is now the
+   * single home for AI-connection state.
+   */
+  aiLiveIndicator: AiLiveIndicator;
+  /** Full readiness state — needed to distinguish "running but no session yet"
+   *  (render nothing) from genuinely-down (`unconfigured`/`stopped` → "AI not
+   *  connected"). A boolean can't carry that; see `aiIndicatorView`. */
+  aiState: AiReadinessState;
+  /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
+  soloMode: boolean;
   /**
    * #651: name of the MCP tool Claude is currently executing on the active
    * document, or null when idle. Surfaces a generic "Claude is editing…"
@@ -50,6 +65,9 @@ let {
   disconnectedSince,
   claudeStatus,
   claudeActive,
+  aiLiveIndicator,
+  aiState,
+  soloMode,
   claudeWorkingTool = null,
   readOnly,
   saving = false,
@@ -170,6 +188,44 @@ const labelColor = $derived(
         : "var(--tandem-error-fg-strong)",
 );
 
+// Consolidated AI-connection indicator (replaces the old titlebar pill + the
+// former "Assistant · idle" segment). The view is a pure mapping — MUST be
+// `$derived` so it recomputes as the reactive props flip connected→solo→down.
+const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode));
+
+// Activity latch (D3): `claudeActive` flaps to false every few seconds while
+// Claude idles between tool calls. Animating the now-full-opacity dot straight
+// off it would strobe, so latch it — hold "recently active" for a trailing
+// window after each active pulse. The indicator animates only when it's a live
+// state (`aiView.canAnimate`) AND recently active, so a disconnected dot never
+// pulses "as if working".
+//
+// `debounce` IS the trailing-window pattern: each active pulse refreshes the
+// reset; on the active→idle edge we simply stop calling it so the pending reset
+// RIDES OUT (clearing it there would strand `recentlyActive` true forever). We
+// only cancel on unmount.
+const ACTIVE_LATCH_MS = 3_500;
+let recentlyActive = $state(false);
+const releaseLatch = debounce(() => {
+  recentlyActive = false;
+}, ACTIVE_LATCH_MS);
+$effect(() => {
+  if (!claudeActive) return; // idle: let the pending reset ride out
+  recentlyActive = true;
+  releaseLatch(); // (re)arm the trailing reset
+});
+onDestroy(() => releaseLatch.cancel());
+const aiAnimating = $derived((aiView?.canAnimate ?? false) && (claudeActive || recentlyActive));
+
+// Tone → CSS vars for the AI indicator's dot fill + text. A tone-keyed map
+// (single source of truth) mirrors the `dotColor`/`labelColor` convention above
+// and avoids repeating the 3-branch switch inline for dot and text separately.
+const AI_TONE: Record<AiIndicatorTone, { dot: string; text: string }> = {
+  connected: { dot: "var(--tandem-success)", text: "var(--tandem-success-fg-strong)" },
+  solo: { dot: "var(--tandem-warning)", text: "var(--tandem-warning-fg-strong)" },
+  "not-connected": { dot: "var(--tandem-fg-subtle)", text: "var(--tandem-fg-subtle)" },
+};
+
 // Word-count cycle (W5). Mode persists in localStorage. The chip click
 // advances the cycle; count is derived live from editor doc state via
 // the per-update tick handler so the chip stays accurate as the user types.
@@ -219,46 +275,55 @@ function cycleWordMode() {
   class="tandem-floating-pill tandem-status-pill"
   style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 6px var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"
 >
-  <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
-    <span
-      class="status-dot"
-      style="width: 7px; height: 7px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {connected && showReconnectedFlash ? 'tandem-conn-bloom 500ms var(--tandem-ease-out)' : isReconnecting ? 'tandem-conn-pulse 900ms ease-in-out infinite' : 'none'};"
-    ></span>
-    <span style="color: {labelColor}; transition: color 0.3s ease;">{connLabel}</span>
-    {#if editor}
-      <button
-        type="button"
-        data-testid="status-word-count"
-        onclick={cycleWordMode}
-        title={`Click to cycle: ${modeLabel(nextMode(wordMode))}`}
-        aria-label={`${wordCount} ${modeLabel(wordMode)} (click to change unit)`}
-        style="background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--tandem-fg-subtle); font: inherit; font-family: var(--tandem-font-mono);"
-      >
-        {wordCount.toLocaleString()} {modeLabel(wordMode)}
-      </button>
-    {/if}
-    {#if saving}
+  <!-- Left: document/sync fields, faint until the pill is hovered/focused.
+       The AI indicator (below) sits OUTSIDE this wrapper so it stays glanceable
+       at full opacity — a parent `opacity` composites its whole subtree, so the
+       faint treatment lives on this wrapper, not the pill. -->
+  <div
+    class="status-faint"
+    style="display: inline-flex; align-items: center; gap: var(--tandem-space-3);"
+  >
+    <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
       <span
-        data-testid="save-indicator"
-        style="color: var(--tandem-accent);"
-      >
-        Saving...
-      </span>
-    {:else if savedLabel}
-      <span
-        data-testid="saved-indicator"
-        style="color: var(--tandem-success-fg-strong);"
-      >
-        {savedLabel}
+        class="status-dot"
+        style="width: 7px; height: 7px; border-radius: 50%; background: {dotColor}; display: inline-block; animation: {connected && showReconnectedFlash ? 'tandem-conn-bloom 500ms var(--tandem-ease-out)' : isReconnecting ? 'tandem-conn-pulse 900ms ease-in-out infinite' : 'none'};"
+      ></span>
+      <span style="color: {labelColor}; transition: color 0.3s ease;">{connLabel}</span>
+      {#if editor}
+        <button
+          type="button"
+          data-testid="status-word-count"
+          onclick={cycleWordMode}
+          title={`Click to cycle: ${modeLabel(nextMode(wordMode))}`}
+          aria-label={`${wordCount} ${modeLabel(wordMode)} (click to change unit)`}
+          style="background: none; border: none; padding: 0; margin: 0; cursor: pointer; color: var(--tandem-fg-subtle); font: inherit; font-family: var(--tandem-font-mono);"
+        >
+          {wordCount.toLocaleString()} {modeLabel(wordMode)}
+        </button>
+      {/if}
+      {#if saving}
+        <span
+          data-testid="save-indicator"
+          style="color: var(--tandem-accent);"
+        >
+          Saving...
+        </span>
+      {:else if savedLabel}
+        <span
+          data-testid="saved-indicator"
+          style="color: var(--tandem-success-fg-strong);"
+        >
+          {savedLabel}
+        </span>
+      {/if}
+    </div>
+
+    {#if readOnly}
+      <span class="status-warning-pill">
+        Review Only
       </span>
     {/if}
   </div>
-
-  {#if readOnly}
-    <span class="status-warning-pill">
-      Review Only
-    </span>
-  {/if}
 
   {#if heldCount > 0}
     <!-- WS-A2: umbrella held signal. Amber like the per-card "Held" pill
@@ -275,33 +340,46 @@ function cycleWordMode() {
     </span>
   {/if}
 
-  <div style="display: flex; align-items: center; gap: var(--tandem-space-2);">
-    <span
-      class="claude-dot"
-      style="width: 7px; height: 7px; border-radius: 50%; background: var(--tandem-author-claude); opacity: {claudeActive ? 1 : 0.4}; display: inline-block; transition: opacity 0.3s ease; animation: {claudeActive ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
-    ></span>
-    <span style="transition: color 0.3s ease; color: {claudeActive ? 'var(--tandem-fg)' : 'var(--tandem-fg-subtle)'};">
-      {claudeStatus ? `${agentLabel.specific} · ${claudeStatus}` : `${agentLabel.specific} · idle`}
-    </span>
-    {#if claudeWorkingTool}
-      <!--
-        #651: generic "Claude is {verb}…" indicator. Only renders for the
-        active document and only while a tool is in flight; per-card
-        indicators on AnnotationCard.svelte cover annotation-targeted tools.
-      -->
+  <!-- Consolidated AI-connection indicator: the single home for AI-connection
+       state (replaces the old titlebar pill + the former "Assistant · idle"
+       segment). Full opacity so it's glanceable; the dot pulses only when a
+       live session is actively working (`aiAnimating`, latched to avoid strobe). -->
+  {#if aiView}
+    <div
+      data-testid="status-ai-indicator"
+      data-ai-state={aiView.dataState}
+      title={aiView.title}
+      aria-label={aiView.ariaLabel}
+      style="display: flex; align-items: center; gap: var(--tandem-space-2);"
+    >
       <span
-        data-testid="claude-working-indicator"
-        class="claude-working-pill"
-        role="status"
-        aria-live="polite"
+        class="claude-dot"
+        style="width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: {AI_TONE[aiView.tone].dot}; animation: {aiAnimating ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
+      ></span>
+      <span
+        style="transition: color 0.3s ease; color: {AI_TONE[aiView.tone].text};"
       >
-        <span class="claude-working-dot"></span>
-        <span class="claude-working-dot"></span>
-        <span class="claude-working-dot"></span>
-        <span style="margin-left: 4px;">{agentLabel.specific} is {claudeWorkingLabel(claudeWorkingTool)}…</span>
+        {aiView.label}{#if claudeStatus && aiView.canAnimate} · {claudeStatus}{/if}
       </span>
-    {/if}
-  </div>
+    </div>
+  {/if}
+  <!-- #651 "Claude is {verb}…" pill. Gated on a live session (`aiView.canAnimate`)
+       as well as an in-flight tool so it can never render "working" while the
+       connection indicator shows nothing (an incoherent activity-without-
+       connection micro-state). -->
+  {#if claudeWorkingTool && aiView?.canAnimate}
+    <span
+      data-testid="claude-working-indicator"
+      class="claude-working-pill"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="claude-working-dot"></span>
+      <span class="claude-working-dot"></span>
+      <span class="claude-working-dot"></span>
+      <span style="margin-left: 4px;">{agentLabel.specific} is {claudeWorkingLabel(claudeWorkingTool)}…</span>
+    </span>
+  {/if}
 </div>
 
 <style>
@@ -325,13 +403,19 @@ function cycleWordMode() {
     }
   }
 
-  /* Faint until hover/focus-within. */
-  .tandem-status-pill {
+  /* Faint until hover/focus-within. The faint treatment lives on this wrapper
+     (the document/sync fields) — NOT the whole pill — so the AI indicator, a
+     sibling OUTSIDE the wrapper, stays glanceable at full opacity. A parent
+     `opacity` composites its whole subtree, so a child can't opt back out; the
+     wrapper split is what keeps the indicator bright. Hover/focus anywhere on
+     the pill lifts the wrapper (`:focus-within` keeps the word-count button
+     reachable by keyboard). */
+  .status-faint {
     opacity: 0.4;
     transition: opacity 180ms ease;
   }
-  .tandem-status-pill:hover,
-  .tandem-status-pill:focus-within {
+  .tandem-status-pill:hover .status-faint,
+  .tandem-status-pill:focus-within .status-faint {
     opacity: 1;
   }
 

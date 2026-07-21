@@ -1,8 +1,13 @@
 <script lang="ts">
 /**
  * First-run model picker: pick a provider, store the key in the OS
- * keychain, set as default. Runs ahead of the integration wizard. The
- * caller's `onComplete` fires on save or skip.
+ * keychain, set as default. The caller's `onComplete` fires on save or skip.
+ *
+ * NOT CURRENTLY MOUNTED. This is intentional scaffolding for the BYO-models
+ * first-run flow that lights up when `BYO_MODELS_ENABLED` flips at v1.0 — it
+ * has no mount site today (the flag also strips the Settings → Models tab and
+ * suppresses the titlebar model chip). Do not delete; wire it into the
+ * first-run choreography when BYO ships.
  */
 import { untrack } from "svelte";
 import { createModels } from "../hooks/useModels.svelte.js";
