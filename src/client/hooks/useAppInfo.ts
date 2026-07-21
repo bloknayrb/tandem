@@ -3,8 +3,8 @@ import type { AppInfoData } from "../types";
 import { API_BASE } from "../utils/fileUpload";
 
 // ---------------------------------------------------------------------------
-// Module-level cache — avoids repeated fetches across popover open/close cycles
-// within a single session. Reset is only needed in tests.
+// Module-level cache — avoids repeated fetches across Settings-modal open/close
+// cycles within a single session. Reset is only needed in tests.
 // ---------------------------------------------------------------------------
 let cachedInfo: AppInfoData | null = null;
 
