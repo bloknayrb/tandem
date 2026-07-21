@@ -1539,7 +1539,7 @@ $effect(() => {
 // the deselect doesn't piggyback, no per-overlay protocol needed.
 // Belt-and-suspenders for overlays that DO leave focus in the editing surface,
 // via two distinct mechanisms: (1) overlays with a capture-phase window listener
-// + stopPropagation (selection toolbar, settings popover, Help) halt Escape
+// + stopPropagation (selection toolbar, Help) halt Escape
 // before this bubble-phase listener ever runs — `e.defaultPrevented` is moot for
 // them; (2) the slash menu calls preventDefault() in its ProseMirror keydown
 // handler without stopping propagation, so this listener DOES run and the

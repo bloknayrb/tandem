@@ -117,7 +117,6 @@ beforeEach(() => {
     getActiveDocumentPath: () => "/home/user/project/notes.md",
     notify,
     openSettings: vi.fn(),
-    openSettingsModal: vi.fn(),
     toggleSoloMode: vi.fn(),
     openFindBar: vi.fn(),
     openFindBarTabs: vi.fn(),

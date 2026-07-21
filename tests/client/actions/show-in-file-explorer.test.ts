@@ -45,7 +45,6 @@ function depsBag(docPath: string | null, notify: ReturnType<typeof vi.fn>) {
     getActiveDocumentPath: () => docPath,
     notify,
     openSettings: vi.fn(),
-    openSettingsModal: vi.fn(),
     toggleSoloMode: vi.fn(),
     openFindBar: vi.fn(),
     openFindBarTabs: vi.fn(),

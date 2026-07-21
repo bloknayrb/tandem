@@ -21,7 +21,7 @@ export function readStoredName(): string {
 
 /**
  * Persist a display name to localStorage and broadcast the change so other
- * hook instances (StatusBar, Settings popover, Editor cursor) pick it up
+ * hook instances (StatusBar, Settings modal, Editor cursor) pick it up
  * in-tab. Pure — no React — so the write+notify contract is testable.
  * Returns the trimmed value actually written.
  */

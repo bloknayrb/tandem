@@ -29,7 +29,6 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
       getActiveDocumentPath: () => "/tmp/doc.md",
       notify,
       openSettings: () => {},
-      openSettingsModal: () => {},
       toggleSoloMode: () => {},
       openFindBar: () => {},
       openFindBarTabs: () => {},

@@ -21,8 +21,10 @@ interface Props {
 
 // Destructure directly off $props() so each stays a live getter (capturing
 // into a local then re-destructuring freezes the getters — see SettingsModal
-// gotcha). `notify` is optional with a noop default because the popover
-// surface has no toast channel; conflict feedback is shown inline regardless.
+// gotcha). `notify` is optional with a noop default so the component renders
+// standalone (svelte-harness, read-only-UI tests) without a toast channel; its
+// real host `SettingsShortcutsTab` threads a live `notify`. Conflict feedback
+// is shown inline regardless.
 let { settings, onUpdate, notify = () => {} }: Props = $props();
 
 let recordingId = $state<RemappableShortcutId | null>(null);
