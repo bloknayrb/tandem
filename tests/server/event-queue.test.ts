@@ -21,6 +21,7 @@ import {
   Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_CHAT,
+  Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../src/shared/origins.js";
@@ -1279,6 +1280,128 @@ describe("chat attaches buffered selection", () => {
     // Should have text but no offsets
     expect(chatEvents[0].payload.selection).toEqual({ selectedText: "stale text" });
 
+    cleanup();
+  });
+});
+
+// --- WS-A2: pushEvent Solo privacy hold (mode read hits the mocked _ctrlTestDoc) ---
+
+describe("WS-A2 Solo privacy hold (pushEvent)", () => {
+  let doc: Y.Doc;
+
+  function setMode(mode: "solo" | "tandem" | undefined) {
+    // readModeState() reads CTRL_ROOM via the hoisted provider mock (_ctrlTestDoc).
+    const awareness = _ctrlTestDoc.getMap(Y_MAP_USER_AWARENESS);
+    if (mode === undefined) awareness.delete(Y_MAP_MODE);
+    else awareness.set(Y_MAP_MODE, mode);
+  }
+
+  beforeEach(() => {
+    _ctrlTestDoc = new Y.Doc();
+    doc = new Y.Doc();
+    attachObservers("wsa2-doc", doc);
+  });
+
+  afterEach(() => {
+    detachObservers("wsa2-doc");
+    doc.destroy();
+    _ctrlTestDoc.destroy();
+  });
+
+  function createUserComment(id: string) {
+    doc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+      id,
+      type: "comment",
+      author: "user",
+      content: "held thought",
+      status: "pending",
+      textSnapshot: "hello",
+      range: { from: 0, to: 5 },
+    });
+  }
+
+  it("holds a user comment in Solo — no fan-out, no buffer, no dedup tracking", () => {
+    setMode("solo");
+    const { events, cleanup } = collectEvents();
+
+    createUserComment("ann_solo");
+
+    expect(events).toHaveLength(0);
+    expect(replaySince("")).toHaveLength(0); // never buffered
+    expect(wasEmittedViaChannel("ann_solo")).toBe(false); // never tracked (release-safe)
+    cleanup();
+  });
+
+  it("emits + tracks a user comment in Tandem (hold is Solo-only)", () => {
+    setMode("tandem");
+    const { events, cleanup } = collectEvents();
+
+    createUserComment("ann_tandem");
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("annotation:created");
+    expect(wasEmittedViaChannel("ann_tandem")).toBe(true);
+    cleanup();
+  });
+
+  it("holds a user reply in Solo", () => {
+    setMode("solo");
+    // Parent comment seeded via MCP origin so it emits nothing itself.
+    doc.getMap(Y_MAP_ANNOTATIONS).set(
+      "parent",
+      {
+        id: "parent",
+        type: "comment",
+        author: "user",
+        content: "parent",
+        status: "pending",
+        textSnapshot: "hello",
+        range: { from: 0, to: 5 },
+      },
+      MCP_ORIGIN,
+    );
+    const { events, cleanup } = collectEvents();
+
+    doc.getMap(Y_MAP_ANNOTATION_REPLIES).set("reply_solo", {
+      id: "reply_solo",
+      annotationId: "parent",
+      author: "user",
+      text: "my private reply",
+      timestamp: Date.now(),
+    });
+
+    expect(events).toHaveLength(0);
+    expect(wasEmittedViaChannel("reply_solo")).toBe(false);
+    cleanup();
+  });
+
+  it("does NOT hold accept/dismiss of a Claude annotation in Solo (narrow scope)", () => {
+    setMode("solo");
+    // Seed a Claude annotation via MCP (no event), then the user accepts it.
+    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    map.set(
+      "claude_ann",
+      {
+        id: "claude_ann",
+        type: "comment",
+        author: "claude",
+        content: "suggestion",
+        status: "pending",
+        textSnapshot: "hello",
+        range: { from: 0, to: 5 },
+      },
+      MCP_ORIGIN,
+    );
+    const { events, cleanup } = collectEvents();
+
+    // User accepts (browser-origin status flip) — must still fan out even in Solo,
+    // because accept/dismiss are suppressed from the external monitor downstream,
+    // not held here.
+    const ann = map.get("claude_ann") as Record<string, unknown>;
+    map.set("claude_ann", { ...ann, status: "accepted" });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("annotation:accepted");
     cleanup();
   });
 });

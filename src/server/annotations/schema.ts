@@ -150,6 +150,10 @@ export const AnnotationReplyRecordSchemaV1 = z
     private: z.boolean().optional(),
     // #1000: original Word reviewer name for `author: "import"` replies.
     importAuthor: z.string().max(IMPORT_AUTHOR_MAX).optional(),
+    // WS-A2: Solo-hold marker (badge + fail-closed-restart tiebreaker). Already
+    // preserved by `.passthrough()`; listed explicitly for parity with the
+    // annotation record and type-safety at the write site.
+    heldInSolo: z.boolean().optional(),
   })
   .passthrough();
 

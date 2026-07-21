@@ -10,13 +10,14 @@
  * decides whether to project events, persist to disk, record tombstones,
  * etc.
  *
- * | Origin     | Channel event queue | Durable-sync observer | Tombstone observer |
- * |------------|---------------------|-----------------------|--------------------|
- * | `mcp`      | skip                | persist               | record             |
- * | `file-sync`| skip                | skip                  | record             |
- * | `internal` | skip                | skip                  | record             |
- * | `reload`   | skip                | persist               | record             |
- * | `browser`  | emit                | persist               | record             |
+ * | Origin        | Channel event queue | Durable-sync observer | Tombstone observer |
+ * |---------------|---------------------|-----------------------|--------------------|
+ * | `mcp`         | skip                | persist               | record             |
+ * | `file-sync`   | skip                | skip                  | record             |
+ * | `internal`    | skip                | skip                  | record             |
+ * | `reload`      | skip                | persist               | record             |
+ * | `browser`     | emit                | persist               | record             |
+ * | `mode-release`| skip                | persist               | record             |
  *
  * Picking the wrong helper is a silent bug. See ADR-031 for the full
  * "how to choose" enumeration with worked examples.
@@ -53,12 +54,31 @@ export const RELOAD_ORIGIN = "reload";
  * filters on this — explicit label preserves the universal rule). */
 export const BROWSER_ORIGIN = "browser";
 
+/**
+ * Origin for the WS-A2 Solo→Tandem release pass, which clears the persisted
+ * `heldInSolo` markers across open docs. Channel SKIPS (this is not a fresh user
+ * action — the underlying annotations/replies are released via the checkInbox
+ * pull path, not a re-emitted edit event; a channel `annotation:edited` here
+ * would be a spurious duplicate). Durable-sync PERSISTS (the cleared marker MUST
+ * reach disk, else a restart right after release re-reads a stale
+ * `heldInSolo:true` and, under indeterminate mode, re-holds an already-released
+ * item). Tombstone observer records, like every other origin.
+ *
+ * NOTE: this profile (channel-skip / durable-persist / tombstone) currently
+ * mirrors `mcp`'s exactly — but a server-owned mode-release sweep is NOT a
+ * Claude-initiated MCP write, so it carries its own semantic identity (per
+ * ADR-031 the helper choice IS the contract, and `audit:origins` reads it).
+ * Keeping it distinct also lets the profile diverge later without touching mcp.
+ */
+export const MODE_RELEASE_ORIGIN = "mode-release";
+
 export type TandemOrigin =
   | typeof MCP_ORIGIN
   | typeof FILE_SYNC_ORIGIN
   | typeof INTERNAL_ORIGIN
   | typeof RELOAD_ORIGIN
-  | typeof BROWSER_ORIGIN;
+  | typeof BROWSER_ORIGIN
+  | typeof MODE_RELEASE_ORIGIN;
 
 // ---------------------------------------------------------------------------
 // Skip-set predicates
@@ -73,6 +93,7 @@ const CHANNEL_SKIP: ReadonlySet<unknown> = new Set([
   FILE_SYNC_ORIGIN,
   INTERNAL_ORIGIN,
   RELOAD_ORIGIN,
+  MODE_RELEASE_ORIGIN,
 ]);
 
 /** Origins that the durable-annotation sync observer must skip. */
@@ -133,6 +154,13 @@ export function withReload<T>(doc: Y.Doc, fn: () => T): T {
 /** Wrap user edits originating in the browser. */
 export function withBrowser<T>(doc: Y.Doc, fn: () => T): T {
   return runTransact(doc, fn, BROWSER_ORIGIN);
+}
+
+/** Wrap the WS-A2 Solo→Tandem release marker-clear. Channel skips (no spurious
+ * edit events), durable-sync persists (the cleared marker must survive restart).
+ * See the `MODE_RELEASE_ORIGIN` doc comment. */
+export function withModeRelease<T>(doc: Y.Doc, fn: () => T): T {
+  return runTransact(doc, fn, MODE_RELEASE_ORIGIN);
 }
 
 // ---------------------------------------------------------------------------

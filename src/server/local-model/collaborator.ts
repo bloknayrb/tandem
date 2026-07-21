@@ -22,22 +22,15 @@
  *    (M1.1) is the only one. The chat write-back is intentionally ungated (the
  *    read-only/chat escape hatch).
  */
-import {
-  BYO_MODELS_ENABLED,
-  CTRL_ROOM,
-  TANDEM_MODE_DEFAULT,
-  Y_MAP_MODE,
-  Y_MAP_USER_AWARENESS,
-} from "../../shared/constants.js";
+import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
-import { TandemModeSchema } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { getActiveDocId, requireDocument } from "../documents/registry.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
 import { appendClaudeChatMessage, updateClaudeChatMessage } from "../mcp/awareness.js";
 import { extractText } from "../mcp/document.js";
+import { readLiveMode } from "../mode.js";
 import { pushNotification } from "../notifications.js";
-import { getOrCreateDocument } from "../yjs/provider.js";
 import type { LocalModelConfig } from "./config.js";
 import { resolveLocalModelConfig } from "./config-source.js";
 import { type LoopMetrics, type LoopResult, type RunTurnOpts, runLocalModelTurn } from "./index.js";
@@ -51,8 +44,6 @@ const STREAM_FLUSH_CHARS = 80;
  *  can't inflate token usage unboundedly; 500 chars captures any reasonable
  *  user-selected excerpt (a paragraph or two). */
 const SELECTION_TEXT_CAP = 500;
-
-type Mode = "solo" | "tandem";
 
 /** Injectable seams so the controller is unit-testable without a live model or
  *  the real event queue. Production uses the defaults. */
@@ -82,13 +73,6 @@ interface RunSlot {
   abort: AbortController;
   docName: string;
   token: object;
-}
-
-/** Read the canonical Solo/Tandem mode from CTRL_ROOM (per mcp/routes/mode.ts). */
-function readMode(): Mode {
-  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-  return TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
 }
 
 function composeTask(text: string, selection?: ChatMessagePayload["selection"]): string {
@@ -314,7 +298,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
 
     const task = event.payload.text?.trim();
     if (!task) return;
-    if (readMode() !== "tandem") return; // hold in Solo (D-D)
+    if (readLiveMode() !== "tandem") return; // hold in Solo (D-D)
     // TODO(M1a): once config is dynamic, a config that resolves null AFTER a
     // successful boot is indistinguishable from the dark no-op here — the boot
     // breadcrumb in wire() fires only once. Re-resolve and/or log (rate-limited)

@@ -1,23 +1,8 @@
 import type { Request, Response } from "express";
-import {
-  CTRL_ROOM,
-  TANDEM_MODE_DEFAULT,
-  Y_MAP_MODE,
-  Y_MAP_USER_AWARENESS,
-} from "../../../shared/constants.js";
-import { TandemModeSchema } from "../../../shared/types.js";
-import { getOrCreateDocument } from "../../yjs/provider.js";
+import { readLiveMode } from "../../mode.js";
 
 export function handleMode(_req: Request, res: Response): void {
-  const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-  const awareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-  const raw = awareness.get(Y_MAP_MODE);
-  const parsed = TandemModeSchema.safeParse(raw);
-  if (raw !== undefined && !parsed.success) {
-    console.warn(
-      `[Tandem] Invalid mode value in awareness, falling back to default. raw=${JSON.stringify(raw)}`,
-    );
-  }
-  const mode = parsed.success ? parsed.data : TANDEM_MODE_DEFAULT;
-  res.json({ mode });
+  // The reported (two-state) mode from the single authority in `mode.ts`:
+  // indeterminate/absent and malformed values both collapse to the default.
+  res.json({ mode: readLiveMode() });
 }

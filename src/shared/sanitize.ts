@@ -98,6 +98,13 @@ export function sanitizeAnnotation(
     ...(ann.textSnapshot !== undefined ? { textSnapshot: ann.textSnapshot } : {}),
     ...(ann.editedAt !== undefined ? { editedAt: ann.editedAt } : {}),
     ...(typeof ann.rev === "number" ? { rev: ann.rev } : {}),
+    // WS-A2: preserve the Solo-hold marker through sanitize. Like `rev`, this
+    // is stripped by the allowlist unless listed here — and every Claude-facing
+    // read routes through sanitize, so without this the client badge and the
+    // fail-closed-restart tiebreaker (which read `heldInSolo` on the sanitized
+    // record) would see it as always-undefined. The marker gates the badge +
+    // restart hold, NOT live hiding (that is server-authoritative mode-based).
+    ...(typeof ann.heldInSolo === "boolean" ? { heldInSolo: ann.heldInSolo } : {}),
     audience: derivedAudience,
     ...(ann.promotedFrom !== undefined ? { promotedFrom: ann.promotedFrom } : {}),
     ...(ann.importSource !== undefined ? { importSource: ann.importSource } : {}),

@@ -17,6 +17,7 @@ import {
   resetForTesting as dirtyResetForTesting,
   registerDirtyObserver,
 } from "../documents/dirty.js";
+import { readModeState } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import {
   clearFileSyncContext,
@@ -30,6 +31,7 @@ import { makeCtrlChatObserver } from "./observers/ctrl-chat.js";
 import { makeCtrlMetaObserver } from "./observers/ctrl-meta.js";
 import { makeRepliesObserver } from "./observers/replies.js";
 import type { BufferedSelection, TandemEvent } from "./types.js";
+import { generateEventId } from "./types.js";
 
 export { clearFileSyncContext, setFileSyncContext };
 
@@ -72,6 +74,30 @@ function trackPayloadId(event: TandemEvent): void {
   if (id) emittedPayloadIds.set(id, (emittedPayloadIds.get(id) ?? 0) + 1);
 }
 
+/**
+ * WS-A2: is this event the user's own annotation/reply CONTENT — the thing the
+ * AI must not see in Solo? The three event types below are, by their observers'
+ * own guards, only ever emitted for `author:"user"` (annotations.ts gates
+ * created/edited on `author === "user"`; replies.ts gates on `reply.author ===
+ * "user"`). The `replyAuthor` re-check is defensive, not load-bearing.
+ *
+ * Deliberately NARROW: accept/dismiss (status flips on Claude's OWN annotations)
+ * and `document:*` lifecycle are NOT held here — they must still reach the
+ * in-process collaborator (which uses `document:*` to abort in-flight runs) and
+ * are suppressed from the external monitor at the SSE forwarder instead.
+ */
+function isUserPrivacyHeld(event: TandemEvent): boolean {
+  switch (event.type) {
+    case "annotation:created":
+    case "annotation:edited":
+      return true;
+    case "annotation:reply":
+      return event.payload.replyAuthor === "user";
+    default:
+      return false;
+  }
+}
+
 function untrackPayloadId(event: TandemEvent): void {
   const id = getTrackableId(event);
   if (!id) return;
@@ -81,6 +107,15 @@ function untrackPayloadId(event: TandemEvent): void {
 }
 
 function pushEvent(event: TandemEvent): void {
+  // WS-A2 privacy hold: in Solo, drop the user's own annotation/reply content
+  // BEFORE buffering, tracking, or fan-out — it reaches neither the SSE forwarder
+  // nor the local-model collaborator, and (critically) `trackPayloadId` never
+  // runs for it. Skipping the track is the load-bearing half: a tracked-but-
+  // undelivered id would make `checkInbox`'s `wasEmittedViaChannel` wrongly
+  // suppress the item after release (silent loss). Release is pull-driven —
+  // `checkInbox` re-surfaces these once live mode reads tandem (see mode.ts).
+  if (isUserPrivacyHeld(event) && readModeState() === "solo") return;
+
   buffer.push(event);
   trackPayloadId(event);
 
@@ -124,6 +159,34 @@ export function replaySince(lastEventId: string): TandemEvent[] {
 /** O(1) check if an annotation/message was already pushed via channel. Used for checkInbox dedup. */
 export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);
+}
+
+/** Content of the WS-A2 Solo→Tandem release wake — a nudge to pull the inbox. */
+const MODE_RELEASE_WAKE_CONTENT =
+  "Solo mode ended. Call tandem_checkInbox to see the comments and replies the user made while in Solo.";
+
+/**
+ * WS-A2: emit ONE synthetic wake so a version-pinned push monitor pulls the
+ * inbox after a Solo→Tandem release. Modeled as `annotation:created` (a
+ * VALID_EVENT_TYPES member so pinned monitors parse it) with a `wake_…`
+ * annotationId in a DISJOINT namespace from real annotation ids — so
+ * `trackPayloadId` records only the synthetic id and can't collide with / dedup
+ * a real held item out of the checkInbox pull. The caller MUST have already set
+ * mode to Tandem (the release route does this first); otherwise the pushEvent
+ * Solo-hold would drop this `annotation:created`.
+ */
+export function emitModeReleaseWake(): void {
+  pushEvent({
+    id: generateEventId(),
+    type: "annotation:created",
+    timestamp: Date.now(),
+    payload: {
+      annotationId: `wake_${generateEventId()}`,
+      annotationType: "comment",
+      content: MODE_RELEASE_WAKE_CONTENT,
+      textSnippet: "",
+    },
+  });
 }
 
 /** Read the buffered selection for a document. For tests and checkInbox. */

@@ -2,20 +2,19 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   CTRL_ROOM,
-  TANDEM_MODE_DEFAULT,
   Y_MAP_ACTIVITY,
   Y_MAP_CHAT,
-  Y_MAP_MODE,
   Y_MAP_SELECTION,
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
-import type { Annotation, ChatMessage, FlatOffset } from "../../shared/types.js";
-import { TandemModeSchema } from "../../shared/types.js";
+import type { Annotation, AnnotationReply, ChatMessage, FlatOffset } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
+import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import { channelVisibleReplies } from "./annotations.js";
 import { extractText, getCurrentDoc } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
 import { checkInboxOutputShape } from "./output-schemas.js";
@@ -33,9 +32,15 @@ import { withTypingPresence } from "./typing-presence.js";
 // Allows re-surfacing when an annotation has been edited since last surfaced.
 const surfacedIds = new Map<string, number>();
 
+// WS-A2: separate ledger for user replies surfaced via the checkInbox
+// userReplies bucket. Kept distinct from surfacedIds because reply IDs and
+// annotation IDs share no namespace guarantee and their surfacing rules differ.
+const replySurfacedIds = new Set<string>();
+
 /** Reset surfaced IDs (exported for testing) */
 export function resetInbox(): void {
   surfacedIds.clear();
+  replySurfacedIds.clear();
 }
 
 /**
@@ -152,6 +157,12 @@ export function registerAwarenessTools(server: McpServer): void {
         const allAnnotations = store.listAnnotations();
         const fullText = extractText(doc);
 
+        // WS-A2: single live read of the three-state mode, used both to gate
+        // the Solo privacy hold (`hideFromAI` in the surfacer) and to report
+        // the two-state `mode` below. Read once so the gate and the reported
+        // value can never disagree within a single poll.
+        const modeState = readModeState();
+
         // Refresh only unsurfaced annotations; batch Y.Map writes.
         // refreshAnnotation returns the refreshed annotation (the underlying
         // refreshRange yields a tagged RefreshResult per ADR-032); the inbox
@@ -178,6 +189,19 @@ export function registerAwarenessTools(server: McpServer): void {
           unsurfaced,
           fullText,
           surfacedIds,
+          modeState,
+          wasEmittedViaChannel,
+        );
+
+        // WS-A2 userReplies bucket — new user replies on comment threads, held in
+        // Solo and released on the flip. Uses the full annotation set (not just
+        // `unsurfaced`) since a reply can arrive on a long-surfaced comment.
+        const userReplies = collectInboxUserReplies(
+          allAnnotations,
+          fullText,
+          (id) => store.listReplies(id),
+          replySurfacedIds,
+          modeState,
           wasEmittedViaChannel,
         );
 
@@ -215,10 +239,10 @@ export function registerAwarenessTools(server: McpServer): void {
             }
           | undefined;
 
-        const ctrlAwareness = ctrlDoc.getMap(Y_MAP_USER_AWARENESS);
-        const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(
-          ctrlAwareness.get(Y_MAP_MODE),
-        );
+        // Reported mode is the two-state view of the same live read used for
+        // the hold gate: indeterminate (mode key absent, e.g. restart) collapses
+        // to the default, matching the pre-WS-A2 `.catch(TANDEM_MODE_DEFAULT)`.
+        const mode = reportedMode(modeState);
 
         const hasSelection = selection && selection.from !== selection.to;
         const selectedText = hasSelection
@@ -247,6 +271,9 @@ export function registerAwarenessTools(server: McpServer): void {
             .join(", ");
           parts.push(statusList);
         }
+        if (userReplies.length > 0) {
+          parts.push(`${userReplies.length} new repl${userReplies.length > 1 ? "ies" : "y"}`);
+        }
         if (chatMessages.length > 0) {
           parts.push(
             `${chatMessages.length} new chat message${chatMessages.length > 1 ? "s" : ""}`,
@@ -255,7 +282,10 @@ export function registerAwarenessTools(server: McpServer): void {
         const summary = parts.length > 0 ? parts.join(". ") + "." : "No new actions.";
 
         const hasNew =
-          userActions.length > 0 || userResponses.length > 0 || chatMessages.length > 0;
+          userActions.length > 0 ||
+          userResponses.length > 0 ||
+          userReplies.length > 0 ||
+          chatMessages.length > 0;
 
         return mcpStructured({
           summary,
@@ -264,6 +294,7 @@ export function registerAwarenessTools(server: McpServer): void {
           storeReadOnly: isStoreReadOnly(),
           userActions,
           userResponses,
+          userReplies,
           chatMessages,
           activity: {
             isTyping: activity?.isTyping ?? false,
@@ -324,6 +355,10 @@ export function processInboxAnnotations(
   fullText: string,
   surfaced: Map<string, number>,
   refreshFn: (ann: Annotation) => Annotation,
+  // Privacy gate: default to the fail-CLOSED value, not "tandem". The real
+  // caller always passes live mode; a caller that forgets should hold held
+  // items, never surface them.
+  modeState: ModeState = "indeterminate",
   wasChannelEmitted: (payloadId: string) => boolean = () => false,
 ): {
   userActions: Array<Annotation & { textSnippet: string; edited?: boolean }>;
@@ -339,13 +374,20 @@ export function processInboxAnnotations(
     }
   }
 
-  return processUnsurfacedInboxAnnotations(unsurfaced, fullText, surfaced, wasChannelEmitted);
+  return processUnsurfacedInboxAnnotations(
+    unsurfaced,
+    fullText,
+    surfaced,
+    modeState,
+    wasChannelEmitted,
+  );
 }
 
 function processUnsurfacedInboxAnnotations(
   unsurfaced: Annotation[],
   fullText: string,
   surfaced: Map<string, number>,
+  modeState: ModeState,
   wasChannelEmitted: (payloadId: string) => boolean,
 ): {
   userActions: Array<Annotation & { textSnippet: string; edited?: boolean }>;
@@ -355,6 +397,13 @@ function processUnsurfacedInboxAnnotations(
   const userResponses: Array<Annotation & { textSnippet: string }> = [];
 
   for (const ann of unsurfaced) {
+    // WS-A2 Solo hold — the gate-before-ledger. A held user record must be
+    // skipped BEFORE any `surfaced.set` below; otherwise the dedup ledger is
+    // poisoned and the item would be permanently dedup-skipped after release.
+    // Held items stay "unsurfaced" and re-appear on the first poll once mode
+    // reads tandem (pull-driven release — no explicit replay needed here).
+    if (hideFromAI(ann, modeState)) continue;
+
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
     if (ann.author === "user" && ann.type === "comment") {
       const lastSurfacedEditedAt = surfaced.get(ann.id);
@@ -376,4 +425,59 @@ function processUnsurfacedInboxAnnotations(
   }
 
   return { userActions, userResponses };
+}
+
+export interface InboxUserReply {
+  id: string;
+  annotationId: string;
+  author: "user";
+  text: string;
+  timestamp: number;
+  textSnippet: string;
+}
+
+/**
+ * WS-A2: collect NEW user replies for the checkInbox userReplies bucket — the
+ * pull-release path for a reply that was held from the push channel in Solo.
+ * Exported for testing.
+ *
+ * Routes through `channelVisibleReplies` so the ADR-027 private/note-thread gate
+ * is enforced exactly as the getAnnotations read and the SSE observer do — this
+ * bucket can't drift from them. Mirrors the annotation surfacer's discipline:
+ * `hideFromAI` holds in Solo BEFORE the ledger write (poison-free release), and
+ * `wasChannelEmitted` dedups a reply already delivered in real time.
+ */
+export function collectInboxUserReplies(
+  allAnnotations: Annotation[],
+  fullText: string,
+  loadReplies: (annotationId: string) => AnnotationReply[],
+  replySurfaced: Set<string>,
+  modeState: ModeState,
+  wasChannelEmitted: (payloadId: string) => boolean = () => false,
+): InboxUserReply[] {
+  const out: InboxUserReply[] = [];
+  for (const ann of allAnnotations) {
+    const visible = channelVisibleReplies(ann, loadReplies);
+    if (visible.length === 0) continue;
+    const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
+    for (const reply of visible) {
+      if (reply.author !== "user") continue; // Claude's own replies aren't inbox items
+      if (hideFromAI(reply, modeState)) continue; // Solo hold — no ledger write
+      if (replySurfaced.has(reply.id)) continue; // already surfaced via this bucket
+      if (wasChannelEmitted(reply.id)) {
+        replySurfaced.add(reply.id); // delivered in real time — mark, don't re-surface
+        continue;
+      }
+      out.push({
+        id: reply.id,
+        annotationId: ann.id,
+        author: "user",
+        text: reply.text,
+        timestamp: reply.timestamp,
+        textSnippet: snippet,
+      });
+      replySurfaced.add(reply.id);
+    }
+  }
+  return out;
 }

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { getAnnotationEditedChannelKey } from "../../src/server/events/queue.js";
 import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
 import {
+  collectInboxUserReplies,
   isUserActive,
   processInboxAnnotations,
   resetInbox,
@@ -24,7 +25,7 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
-import type { Annotation, ChatMessage } from "../../src/shared/types.js";
+import type { Annotation, AnnotationReply, ChatMessage } from "../../src/shared/types.js";
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
@@ -183,6 +184,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (a) => a,
+      "tandem",
       (payloadId) => payloadId === getAnnotationEditedChannelKey(id, 2000),
     );
 
@@ -248,6 +250,222 @@ describe("processInboxAnnotations", () => {
 
     const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
     expect(result.userActions[0].textSnippet).toBe("quick");
+  });
+});
+
+describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () => {
+  // The load-bearing invariant: in Solo, a user comment must NOT surface AND
+  // must NOT poison the dedup ledger. On the Solo→Tandem flip, the same
+  // annotation surfaces on the next poll (pull-driven release). A ledger poison
+  // would silently strand it forever — the failure this whole workstream fixes.
+
+  it("holds a user comment in Solo — no surface, no ledger write", () => {
+    const ydoc = setupDoc("inbox-solo-hold", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "held", {
+      author: "user",
+    });
+
+    const allAnns = collectAnnotations(map, DOC_HASH);
+    const fullText = extractText(ydoc);
+    const surfaced = new Map<string, number>();
+
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "solo");
+    expect(result.userActions).toHaveLength(0);
+    // Ledger must be untouched — the item stays "unsurfaced" for release.
+    expect(surfaced.has(id)).toBe(false);
+  });
+
+  it("releases the held comment on the Solo→Tandem flip (surfaces on next poll)", () => {
+    const ydoc = setupDoc("inbox-solo-release", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "held", {
+      author: "user",
+    });
+
+    const allAnns = collectAnnotations(map, DOC_HASH);
+    const fullText = extractText(ydoc);
+    const surfaced = new Map<string, number>();
+
+    // Solo poll: held.
+    const solo = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "solo");
+    expect(solo.userActions).toHaveLength(0);
+
+    // Flip to Tandem: same annotation, same ledger — must now surface exactly once.
+    const released = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "tandem");
+    expect(released.userActions).toHaveLength(1);
+    expect(released.userActions[0].id).toBe(id);
+    expect(surfaced.get(id)).toBe(0);
+
+    // A subsequent Tandem poll dedups normally (proves the release wrote the ledger).
+    const again = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "tandem");
+    expect(again.userActions).toHaveLength(0);
+  });
+
+  it("does not hold Claude responses in Solo (only user-authored records are held)", () => {
+    const ydoc = setupDoc("inbox-solo-claude", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "claude note", {
+      author: "claude",
+    });
+    const ann = map.get(id) as Annotation;
+    map.set(id, { ...ann, status: "accepted" });
+
+    const allAnns = collectAnnotations(map, DOC_HASH);
+    const fullText = extractText(ydoc);
+    const surfaced = new Map<string, number>();
+
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "solo");
+    expect(result.userResponses).toHaveLength(1);
+  });
+
+  it("indeterminate mode holds ONLY the persisted heldInSolo marker (fail-closed restart)", () => {
+    const ydoc = setupDoc("inbox-indeterminate", "Hello world again");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const heldId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "was held", {
+      author: "user",
+      heldInSolo: true,
+    });
+    const freshId = createAnnotation(map, ydoc, "comment", rangeOf(6, 11), "not held", {
+      author: "user",
+    });
+
+    const allAnns = collectAnnotations(map, DOC_HASH);
+    const fullText = extractText(ydoc);
+    const surfaced = new Map<string, number>();
+
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "indeterminate");
+    // Marked-held stays held; the unmarked user comment surfaces normally.
+    const surfacedIds = result.userActions.map((a) => a.id);
+    expect(surfacedIds).toContain(freshId);
+    expect(surfacedIds).not.toContain(heldId);
+    expect(surfaced.has(heldId)).toBe(false);
+  });
+});
+
+describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
+  const commentParent: Annotation = {
+    id: "parent-comment",
+    author: "user",
+    type: "comment",
+    range: { from: 0, to: 5 },
+    content: "parent",
+    status: "pending",
+    timestamp: 1000,
+  };
+  const noteParent: Annotation = { ...commentParent, id: "parent-note", type: "note" };
+  const fullText = "Hello world";
+
+  function reply(over: Partial<AnnotationReply>): AnnotationReply {
+    return {
+      id: "r1",
+      annotationId: "parent-comment",
+      author: "user",
+      text: "a reply",
+      timestamp: 2000,
+      ...over,
+    };
+  }
+
+  it("surfaces a user reply once in Tandem, then dedups", () => {
+    const replies = [reply({})];
+    const ledger = new Set<string>();
+    const first = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      ledger,
+      "tandem",
+    );
+    expect(first).toHaveLength(1);
+    expect(first[0].id).toBe("r1");
+    expect(first[0].textSnippet).toBe("Hello");
+
+    const second = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      ledger,
+      "tandem",
+    );
+    expect(second).toHaveLength(0);
+  });
+
+  it("holds a user reply in Solo (no surface, no ledger write) and releases on flip", () => {
+    const replies = [reply({})];
+    const ledger = new Set<string>();
+    const solo = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, "solo");
+    expect(solo).toHaveLength(0);
+    expect(ledger.has("r1")).toBe(false);
+
+    const released = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      ledger,
+      "tandem",
+    );
+    expect(released).toHaveLength(1);
+  });
+
+  it("never surfaces a Claude reply (Claude doesn't need its own replies echoed)", () => {
+    const replies = [reply({ id: "rc", author: "claude" })];
+    const out = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      new Set(),
+      "tandem",
+    );
+    expect(out).toHaveLength(0);
+  });
+
+  it("never surfaces a private reply or a note-thread reply (ADR-027)", () => {
+    const privateOnComment = [reply({ id: "rp", private: true })];
+    expect(
+      collectInboxUserReplies(
+        [commentParent],
+        fullText,
+        () => privateOnComment,
+        new Set(),
+        "tandem",
+      ),
+    ).toHaveLength(0);
+
+    // A reply on a note parent must never surface even without the private flag.
+    const noteReply = [reply({ id: "rn", annotationId: "parent-note" })];
+    expect(
+      collectInboxUserReplies([noteParent], fullText, () => noteReply, new Set(), "tandem"),
+    ).toHaveLength(0);
+  });
+
+  it("dedups a reply already delivered via the push channel", () => {
+    const replies = [reply({})];
+    const ledger = new Set<string>();
+    const out = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      ledger,
+      "tandem",
+      (id) => id === "r1",
+    );
+    expect(out).toHaveLength(0);
+    expect(ledger.has("r1")).toBe(true); // marked so it stays deduped
+  });
+
+  it("indeterminate mode holds only replies carrying the persisted marker", () => {
+    const replies = [reply({ id: "held", heldInSolo: true }), reply({ id: "fresh" })];
+    const out = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      new Set(),
+      "indeterminate",
+    );
+    const ids = out.map((r) => r.id);
+    expect(ids).toContain("fresh");
+    expect(ids).not.toContain("held");
   });
 });
 

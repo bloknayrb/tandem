@@ -92,6 +92,14 @@ export interface AnnotationReply {
    * lacking `rev` are treated as `rev: 0` on merge.
    */
   rev?: number;
+  /**
+   * WS-A2: when true, this reply was authored while in Solo mode and is pending
+   * release to Claude. Server-stamped in `addReplyToAnnotation` (replies are
+   * created via an HTTP POST, not a client Y.Map write). Like the annotation
+   * marker, it drives the held-count badge + the fail-closed-restart tiebreaker,
+   * NOT live hiding (that is server-authoritative, mode-based).
+   */
+  heldInSolo?: boolean;
 }
 
 // --- Annotation types ---

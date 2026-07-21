@@ -32,6 +32,7 @@ import { nextRev } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
+import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange } from "../positions.js";
 import { extractText, getCurrentDoc } from "./document.js";
@@ -193,6 +194,13 @@ export function addReplyToAnnotation(
     // user-private forever (even if the note is later promoted to a comment);
     // comment replies omit the flag and surface to Claude normally (#1000).
     ...(ann.type === "comment" ? {} : { private: true }),
+    // WS-A2: server-stamp the Solo-hold marker on a user reply created in Solo.
+    // Replies are created server-side (this function is the sole write path), so
+    // unlike browser annotation writes the stamp lives here. Live hiding is still
+    // mode-based (Phase 2 pushEvent + the checkInbox/getAnnotations reply gates);
+    // this persisted marker drives the held-badge and the fail-closed-restart
+    // hold (indeterminate mode). Claude/import replies never carry it.
+    ...(author === "user" && readModeState() === "solo" ? { heldInSolo: true } : {}),
   };
 
   const repliesMap = getRepliesMap(ydoc);
@@ -508,13 +516,24 @@ export function registerAnnotationTools(server: McpServer): void {
         const notesExcluded = results.filter((a) => a.type === "note").length;
         results = results.filter((a) => a.type !== "note");
 
+        // WS-A2: in Solo, hide the user's own annotations (and, below, their
+        // replies) — this pull surface is one of the four the hold spans.
+        // Server-authoritative live read; released implicitly once mode reads
+        // tandem (no per-item flag needed). Read once for both filters.
+        const modeState = readModeState();
+        results = results.filter((a) => !hideFromAI(a, modeState));
+
         // ADR-027 + #1000: only comment parents expose replies, and `private`
         // replies (note-authored or imported Word threads) are stripped even
         // after a note→comment promotion. `channelVisibleReplies` enforces both
         // gates so this read site can't drift from the export path / observer.
+        // The trailing Solo filter hides a user's own reply on a Claude comment
+        // (the parent survives the annotation-level filter; the reply must not).
         const annotationsWithReplies = results.map((ann) => ({
           ...ann,
-          replies: channelVisibleReplies(ann, (id) => store.listReplies(id)),
+          replies: channelVisibleReplies(ann, (id) => store.listReplies(id)).filter(
+            (r) => !hideFromAI(r, modeState),
+          ),
         }));
 
         return mcpStructured({
