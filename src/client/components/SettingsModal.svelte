@@ -401,7 +401,15 @@ $effect(() => {
   if (!open) return;
   const handler = (e: KeyboardEvent) => {
     if (e.key !== "Tab" || !modalEl) return;
-    const focusables = modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+    // Exclude the narrow drawer's nav buttons while it's closed: the sidebar is
+    // translated off-canvas AND marked `inert` (not `display:none`), so it still
+    // matches FOCUSABLE_SELECTOR. Without this filter, `first`/`last` can be an
+    // inert button whose `.focus()` is a silent no-op — after a 1280→600 reflow
+    // drops focus off the now-inert tab, the trap would fail to pull focus back
+    // into the dialog and it escapes behind the modal.
+    const focusables = Array.from(
+      modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+    ).filter((el) => !el.closest("[inert]"));
     if (focusables.length === 0) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
