@@ -16,10 +16,19 @@ export type OpenServerPathResult = { ok: true } | { ok: false; error: string };
 
 export async function openServerPath(
   filePath: string,
-  options: { readOnly?: boolean; notFoundMessage?: string; failureMessage?: string } = {},
+  options: {
+    readOnly?: boolean;
+    /** Force-reload from disk, clearing existing doc state (annotations,
+     *  awareness, content). Used by "Replay tutorial" so the welcome doc
+     *  re-seeds fresh. NOTE: the server license-gates the force sub-path. */
+    force?: boolean;
+    notFoundMessage?: string;
+    failureMessage?: string;
+  } = {},
 ): Promise<OpenServerPathResult> {
   const {
     readOnly = false,
+    force = false,
     notFoundMessage = "File not found.",
     failureMessage = "Failed to open file.",
   } = options;
@@ -27,7 +36,7 @@ export async function openServerPath(
     const res = await fetch(`${API_BASE}${API_OPEN}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath, readOnly }),
+      body: JSON.stringify({ filePath, readOnly, force }),
     });
     if (!res.ok) {
       let msg = failureMessage;

@@ -2167,6 +2167,7 @@ const tutorial = createTutorial(
           message,
           timestamp: Date.now(),
         })}
+      onReplayTutorial={tutorial.restartTutorial}
     />
 
     <!-- #1116: restricted-mode activation wall. Self-gates on `ui.showWall`
@@ -2235,7 +2236,16 @@ const tutorial = createTutorial(
       <CoworkAdminDeclinedModal />
     {/if}
 
-    {#if tutorial.tutorialActive}
+    {#if tutorial.tutorialActive && !shouldShowWizard}
+      <!-- Sequenced behind the first-run wizard: the wizard scrim (z=100000)
+           buries the tutorial card (z=900) AND the welcome doc it points at, so
+           on a true first run the card waits until the wizard is dismissed
+           (shouldShowWizard→false). Mirrors the CoworkAdminDeclinedModal gate
+           above. Nothing harmful happens while buried: the user can't drive any
+           step forward under the scrim, and the only auto-advancing step (the
+           completion timer) is unreachable from the step-0 start state. (Claude
+           could in theory resolve a seed annotation via MCP and nudge step 0,
+           but that's real progress, not a lost step.) -->
       <OnboardingTutorial
         currentStep={tutorial.currentStep}
         onNext={tutorial.nextStep}

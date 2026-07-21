@@ -38,6 +38,7 @@ describe("openServerPath", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       filePath: "/path/to/file.md",
       readOnly: false,
+      force: false,
     });
   });
 
@@ -46,6 +47,13 @@ describe("openServerPath", () => {
     await openServerPath("/changelog.md", { readOnly: true });
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string).readOnly).toBe(true);
+  });
+
+  it("threads force option through to the body (Replay tutorial)", async () => {
+    fetchMock.mockResolvedValue(makeResponse({ ok: true }));
+    await openServerPath("/sample/welcome.md", { force: true });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).force).toBe(true);
   });
 
   it("returns server-provided message on non-2xx with JSON body", async () => {

@@ -98,6 +98,9 @@ export function findChangelogPath(startDir: string): string | undefined {
 }
 const CHANGELOG_PATH: string | undefined = findRepoFile(__dirname, "CHANGELOG.md");
 const WORKFLOWS_PATH: string | undefined = findRepoFile(__dirname, "docs/workflows.md");
+// Exposed via /api/info so the "Replay tutorial" affordance can reopen the
+// welcome doc (force-reload → server re-injects the seed annotations).
+const WELCOME_PATH: string | undefined = findRepoFile(__dirname, "sample/welcome.md");
 
 // McpServer is long-lived (tool registrations survive close/reconnect).
 // Transport is ephemeral — rotated on each new initialize request.
@@ -417,6 +420,7 @@ export async function startMcpServerHttp(
       getTokenFilePath,
       changelogPath: CHANGELOG_PATH,
       workflowsPath: WORKFLOWS_PATH,
+      welcomePath: WELCOME_PATH,
       transport: "http",
       bindHost: host,
       bindPort: port,

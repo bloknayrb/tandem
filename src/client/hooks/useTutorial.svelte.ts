@@ -15,6 +15,18 @@ export interface TutorialState {
   readonly coworkStatus: CoworkStatus | null;
   dismissTutorial: () => void;
   nextStep: () => void;
+  /** Re-arm the tutorial for replay: clears the completed flag + resets step.
+   *  The caller must also (re)open welcome.md so the basename gate re-activates
+   *  and the server re-injects the seed annotations. */
+  restartTutorial: () => void;
+}
+
+function clearCompleted(): void {
+  try {
+    localStorage.removeItem(TUTORIAL_COMPLETED_KEY);
+  } catch {
+    // Storage unavailable — the in-memory reset below still re-arms this session
+  }
 }
 
 function readCompleted(): boolean {
@@ -83,7 +95,9 @@ export function createTutorial(
   );
   const completionStep = $derived(coworkStatusSettled ? (includeCoworkStep ? 4 : 3) : Infinity);
 
-  // Step 0: detect any tutorial annotation resolved, or auto-skip if none exist
+  // Step 0: advance once any seeded tutorial annotation is resolved. If no seeds
+  // exist yet (still injecting, or a doc with none) this holds at step 0 — it
+  // does NOT auto-skip forward.
   $effect(() => {
     if (!tutorialActive || currentStep !== 0) return;
     const annotations = getAnnotations();
@@ -150,6 +164,13 @@ export function createTutorial(
     completed = true;
   };
 
+  const restartTutorial = () => {
+    clearCompleted();
+    completed = false;
+    currentStep = 0;
+    stepAdvancedAt = 0;
+  };
+
   const nextStep = () => {
     stepAdvancedAt = Date.now();
     currentStep = Math.min(currentStep + 1, completionStep);
@@ -167,5 +188,6 @@ export function createTutorial(
     },
     dismissTutorial,
     nextStep,
+    restartTutorial,
   };
 }
