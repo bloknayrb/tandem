@@ -5,8 +5,9 @@ import type { TandemSettings } from "../hooks/useTandemSettings.svelte";
 /**
  * Context passed to every settings tab body component.
  *
- * Wave 2 retires `SettingsPopover.svelte` and consolidates onto this modal.
- * Tab body components must accept this prop shape. Treat this contract as
+ * This modal is the single consolidated settings surface (the legacy
+ * SettingsPopover was retired). Tab body components must accept this prop
+ * shape. Treat this contract as
  * stable: new fields should be added with defaults rather than breaking
  * existing tab implementations.
  *
@@ -60,11 +61,11 @@ export type SettingsTabId = (typeof SETTINGS_TAB_IDS)[keyof typeof SETTINGS_TAB_
  * Registry entry for one tab in the SettingsModal sidebar.
  *
  * `icon` is an SVG path `d` attribute string, rendered in a 24x24 viewBox
- * with `stroke="currentColor"` (matches the existing `SettingsPopover` shape).
+ * with `stroke="currentColor"`.
  *
  * Wave 2 (e.g. Network 2.0 panel, integrations registry) ships additional
  * tabs by passing an extended array to the `tabs` prop. The defaults from
- * `DEFAULT_SETTINGS_TABS` cover the same sections the popover renders.
+ * `DEFAULT_SETTINGS_TABS` cover the full settings surface.
  */
 export interface SettingsTab {
   id: string;
@@ -104,10 +105,10 @@ const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
- * Default tabs — mirror the sections exposed by `SettingsPopover.svelte`.
+ * Default tabs — the full set of settings sections.
  *
- * Wave 2 will retire the popover; any Wave 2 additions land here as new
- * entries (or via the `tabs` prop) without touching this default array.
+ * New sections land here as new entries (or via the `tabs` prop) without
+ * touching this default array.
  *
  * Every tab body declares its `Props` as `SettingsTabContext` and destructures
  * the subset it reads directly off `$props()`. The uniform shape lets the
@@ -400,7 +401,15 @@ $effect(() => {
   if (!open) return;
   const handler = (e: KeyboardEvent) => {
     if (e.key !== "Tab" || !modalEl) return;
-    const focusables = modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+    // Exclude the narrow drawer's nav buttons while it's closed: the sidebar is
+    // translated off-canvas AND marked `inert` (not `display:none`), so it still
+    // matches FOCUSABLE_SELECTOR. Without this filter, `first`/`last` can be an
+    // inert button whose `.focus()` is a silent no-op — after a 1280→600 reflow
+    // drops focus off the now-inert tab, the trap would fail to pull focus back
+    // into the dialog and it escapes behind the modal.
+    const focusables = Array.from(
+      modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+    ).filter((el) => !el.closest("[inert]"));
     if (focusables.length === 0) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];

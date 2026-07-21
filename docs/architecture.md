@@ -775,7 +775,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `panel-layout.ts` -- Panel width constants (`PANEL_DEFAULT_WIDTH`, `PANEL_MIN_WIDTH`, `PANEL_MAX_WIDTH`) and `loadPanelWidth()`. `PanelLayout` type and `getRightWidth` were removed with the layout-mode refactor
 - `DocListEntry`, `OpenTab`, and `AppInfoData` types live in `src/client/types.ts`
 - `DocumentTabs` -- Tab bar + "+" button (opens `NewTabMenu` with recent files, New Scratchpad, and Browse). In the desktop app, "Browse files…" (and the Ctrl+O `open-file` shortcut / palette command) opens the native OS file picker directly via `browseNativeFile` (`src/client/utils/browse-file.ts`); the `FileOpenDialog` modal only appears in the browser distribution, which has no native picker. Tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
-- `hooks/useAppInfo.svelte.ts` -- Fetches `/api/info` with module-level cache, timeout, and AbortController cleanup. Used by SettingsPopover's ABOUT footer and View Changelog button
+- `hooks/useAppInfo.svelte.ts` -- Fetches `/api/info` with module-level cache, timeout, and AbortController cleanup. Used by the Settings modal's ABOUT footer and View Changelog button
 - `hooks/useDragResize.svelte.ts` -- Drag-resize handler for the panel divider: pointer event listeners, layout state updates, cleanup. Explicit arm-per-kind handling for all three layout variants
 - `hooks/useTandemModeBroadcast.svelte.ts` -- Solo/Tandem mode toggle: localStorage persistence of dwell-ms setting + Y.Map broadcast on `CTRL_ROOM`
 - `hooks/useConnectionBanner.svelte.ts` -- Disconnect banner state: tracks prolonged disconnect (>30s), auto-clears on reconnect
@@ -787,9 +787,9 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `components/EmptyState.svelte` -- "No document open" placeholder rendered when no tab is active
 - `components/ConnectionBanner.svelte` -- Prolonged-disconnect banner (>30s); auto-clears on reconnect
 - `components/PanelSlot.svelte` -- `ChatSlot`, `AnnotationSlot`, and `SlotWrapper` — deduplicated panel render sites used in App.svelte's three-column layout
-- `components/AppearanceSettings.svelte` -- Theme, text size, and panel order controls (extracted from SettingsPopover)
-- `components/EditorSettings.svelte` -- User name and dwell-time controls (extracted from SettingsPopover)
-- `components/AccessibilitySettings.svelte` -- Accessibility preference controls (extracted from SettingsPopover)
+- `components/AppearanceSettings.svelte` -- Theme, text size, and panel order controls (shared Settings-modal tab body)
+- `components/EditorSettings.svelte` -- User name and dwell-time controls (shared Settings-modal tab body)
+- `components/AccessibilitySettings.svelte` -- Accessibility preference controls (shared Settings-modal tab body)
 - `AnnotationExtension` -- Renders highlights, comments, and notes as ProseMirror Decorations from Y.Map('annotations')
 - `AwarenessExtension` -- Renders Claude's focus paragraph + broadcasts user selection to Y.Map('userAwareness')
 - `editor/toolbar/Toolbar.svelte` -- Main toolbar (branding, Comment/Note buttons, Settings, ModeToggle) + unified selection popup (AR3): appears on text selection, textarea + "Note to self" / "Comment" submit buttons + B/I formatting + highlight swatches; no mode switching

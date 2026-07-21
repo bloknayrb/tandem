@@ -8,7 +8,7 @@ import {
   McpTestClient,
   nextFrames,
   openAnnotatePopup,
-  openSettingsPopover,
+  openSettingsViaBrandMenu,
 } from "./helpers";
 
 /**
@@ -41,10 +41,18 @@ test.afterEach(async () => {
 });
 
 async function openSettingsAndGotoCowork(page: import("@playwright/test").Page): Promise<void> {
-  await openSettingsPopover(page);
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).toBeVisible({ timeout: 2_000 });
-  await popover.getByRole("button", { name: "AI Assistant" }).click();
+  await openSettingsViaBrandMenu(page);
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).toBeVisible({ timeout: 2_000 });
+  // At <860px the nav sidebar collapses into an `inert` drawer (the scrim
+  // intercepts pointer events until it's opened via the hamburger). Several
+  // margin-view tests run below that breakpoint (e.g. the 750px stub band), so
+  // open the drawer first when it's present. Selecting a tab auto-closes it.
+  const hamburger = page.locator("[data-testid='settings-modal-narrow-hamburger']");
+  if (await hamburger.isVisible()) {
+    await hamburger.click();
+  }
+  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
 }
 
 /**
@@ -78,13 +86,12 @@ async function setMarginView(
 ): Promise<void> {
   if (enabled) await closeBothRails(page);
   await openSettingsAndGotoCowork(page);
-  const popover = page.locator("[data-testid='settings-popover']");
-  const toggleInput = popover.locator("[data-testid='margin-view-toggle'] input");
+  const toggleInput = page.locator("[data-testid='settings-modal-margin-view-toggle'] input");
   if ((await toggleInput.isChecked()) !== enabled) {
     await toggleInput.click();
   }
   await expect(toggleInput).toBeChecked({ checked: enabled });
-  // Close popover so it doesn't intercept later interactions.
+  // Close modal so it doesn't intercept later interactions.
   await page.keyboard.press("Escape");
 }
 
@@ -181,7 +188,7 @@ test("toggle state persists across reload", async ({ page }) => {
 
   await openSettingsAndGotoCowork(page);
   const reloadedToggleInput = page.locator(
-    "[data-testid='settings-popover'] [data-testid='margin-view-toggle'] input",
+    "[data-testid='settings-modal'] [data-testid='settings-modal-margin-view-toggle'] input",
   );
   await expect(reloadedToggleInput).toBeChecked();
 });

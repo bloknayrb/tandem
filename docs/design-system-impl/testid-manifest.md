@@ -151,7 +151,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   `palette-item-new-scratchpad`
 - `onboarding-tutorial`, `tutorial-{dismiss,next}-btn`
 
-### Settings — popover (legacy, still shipped)
+### Settings — popover (REMOVED 2026-07-21 — consolidated into the modal below; testids deleted)
 - `settings-popover`, `settings-content`, `settings-sidebar-{version,footer}`,
   `settings-mcp-status`, `settings-display-name`, `settings-shortcuts-list`
 - `default-mode-{tandem,solo}-btn`, `solo-rail-hidden-toggle`,

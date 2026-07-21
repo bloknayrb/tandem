@@ -174,15 +174,13 @@ describe("matchShortcut — ctrl/meta letter shortcuts", () => {
   });
 });
 
-describe("matchShortcut — settings shortcuts (Ctrl+, vs Ctrl+Shift+,)", () => {
-  it("Ctrl+, → settings (popover)", () => {
+describe("matchShortcut — settings shortcut (Ctrl+,)", () => {
+  it("Ctrl+, → settings (the consolidated modal)", () => {
     expect(matchShortcut(evt({ code: "Comma", ctrlKey: true }))).toEqual({ id: "settings" });
   });
 
-  it("Ctrl+Shift+, → settings-modal (new modal — tested BEFORE popover)", () => {
-    expect(matchShortcut(evt({ code: "Comma", ctrlKey: true, shiftKey: true }))).toEqual({
-      id: "settings-modal",
-    });
+  it("Ctrl+Shift+, → unbound (the legacy settings-modal chord was removed)", () => {
+    expect(matchShortcut(evt({ code: "Comma", ctrlKey: true, shiftKey: true }))).toBeNull();
   });
 });
 

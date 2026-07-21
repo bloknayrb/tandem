@@ -18,7 +18,6 @@ annotation-select-checkbox-{*}
 annotation-snippet-{*}
 annotation-sort-toggle
 annotations-tab
-app-info-footer
 appearance-formatting-bar
 appearance-rail-hover-reveal
 appearance-show-raw-markdown
@@ -36,7 +35,6 @@ bulk-accept-btn
 bulk-cancel-btn
 bulk-confirm-btn
 bulk-dismiss-btn
-changelog-error
 chat-anchor-quote-{*}
 chat-send-btn
 chat-tab
@@ -82,7 +80,6 @@ cowork-rescan-btn
 cowork-settings
 cowork-settings-error
 cowork-settings-loading
-cowork-settings-suspense-fallback
 cowork-settings-undetected
 cowork-settings-unsupported
 cowork-toggle
@@ -99,8 +96,6 @@ decorations-row-comments
 decorations-row-highlights
 decorations-row-notes
 decorations-settings-link
-default-mode-solo-btn
-default-mode-tandem-btn
 default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
@@ -108,7 +103,6 @@ dismiss-btn-{*}
 docx-conflict-banner
 docx-conflict-keep-btn
 docx-conflict-reload-btn
-dwell-time-slider
 edit-btn-{*}
 edit-cancel-btn-{*}
 edit-newtext-{*}
@@ -222,8 +216,6 @@ margin-anchor-dot
 margin-bubble-{*}
 margin-column-{*}
 margin-leaders-{*}
-margin-view-hint
-margin-view-toggle
 mode-solo-btn
 mode-tandem-btn
 mode-toggle
@@ -295,12 +287,10 @@ reply-input-{*}
 reply-send-btn-{*}
 reply-toggle-{*}
 reply-{*}
-report-bug-link
 review-only-banner
 review-only-dismiss
 save-indicator
 saved-indicator
-selection-toolbar-toggle
 send-to-claude-btn-{*}
 session-delete
 session-reopen
@@ -311,13 +301,10 @@ sessions-error
 sessions-loading
 sessions-section
 sessions-toggle
-settings-content
 settings-default-save-folder
 settings-default-save-folder-input
 settings-default-save-folder-pick
 settings-default-save-folder-reset
-settings-display-name
-settings-mcp-status
 settings-modal
 settings-modal-app-info-footer
 settings-modal-changelog-error
@@ -355,18 +342,13 @@ settings-modal-working-directory-load-error
 settings-modal-working-directory-pick
 settings-modal-working-directory-reset
 settings-modal-working-directory-save
-settings-popover
 settings-readonly-banner
-settings-shortcuts-list
-settings-sidebar-footer
-settings-sidebar-version
 shortcut-conflict-{*}
 shortcut-edit-{*}
 shortcut-recording-{*}
 shortcut-reset-{*}
 shortcut-row-{*}
 shortcuts-reset-all
-solo-rail-hidden-toggle
 source-view-annotation-warning
 source-view-container
 source-view-copy-btn
@@ -414,6 +396,4 @@ updater-banner
 updater-banner-dismiss
 updater-banner-install
 updater-banner-visible
-view-changelog-btn
-view-documentation-btn
 {*}-{*}

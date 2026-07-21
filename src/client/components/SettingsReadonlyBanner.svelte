@@ -1,8 +1,7 @@
 <script lang="ts">
 import { warningStateColors } from "../utils/colors";
 
-// Surface-wide forward-compat read-only notice, shared by SettingsModal and
-// SettingsPopover (same copy, same testid — the snapshot set dedups). Hosts
+// Surface-wide forward-compat read-only notice, used by SettingsModal. Hosts
 // gate rendering on their own `readOnly`; this component is presentational.
 </script>
 

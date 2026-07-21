@@ -37,7 +37,6 @@ import OnboardingTutorial from "./components/OnboardingTutorial.svelte";
 import PanelSlot from "./components/PanelSlot.svelte";
 import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsModal, { SETTINGS_TAB_IDS } from "./components/SettingsModal.svelte";
-import SettingsPopover from "./components/SettingsPopover.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import UpdaterBanner from "./components/UpdaterBanner.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
@@ -425,7 +424,6 @@ if (isTauriRuntime()) {
   });
 }
 
-let settingsOpen = $state(false);
 let settingsModalOpen = $state(false);
 
 const firstRun = createFirstRunNeeded();
@@ -591,10 +589,7 @@ $effect(() => {
 let settingsBtnEl = $state<HTMLButtonElement | null>(null);
 
 // Dev-only test hook for E2E specs that need to open the SettingsModal
-// without going through the keyboard shortcut. The `Ctrl+Shift+,` path is
-// covered by other tests but is unreliable to drive from Playwright because
-// Tiptap's default keymap binds `Mod-Shift-,` to subscript and consumes the
-// event before App.svelte's window-level handler sees it. Exposed only in
+// deterministically, independent of the keyboard shortcut. Exposed only in
 // dev/test builds — stripped by `import.meta.env.DEV` in production.
 if (import.meta.env.DEV) {
   (
@@ -644,17 +639,9 @@ function requestOpenFile(): Promise<void> {
 }
 
 // Issue #660 — titlebar settings-icon update-available dot. Acknowledged
-// whenever the user opens settings (popover OR modal — any tab counts). Do
-// NOT destructure: the `showDot` getter loses reactivity when pulled out.
+// whenever the user opens Settings (any tab counts). Do NOT destructure:
+// the `showDot` getter loses reactivity when pulled out.
 const updateAvailable = createUpdateAvailable();
-
-function toggleSettings() {
-  // Acknowledge on the false→true transition only (closing settings via the
-  // gear shouldn't re-clear an already-acknowledged dot, but acknowledge() is
-  // idempotent so this is defence-in-depth).
-  if (!settingsOpen) updateAvailable.acknowledge();
-  settingsOpen = !settingsOpen;
-}
 
 function openSettingsModalWithAck() {
   updateAvailable.acknowledge();
@@ -677,11 +664,6 @@ function openModelsSettings() {
   openSettingsModalWithAck();
 }
 
-function openSettingsPopoverWithAck() {
-  updateAvailable.acknowledge();
-  settingsOpen = true;
-}
-
 // Wire action dependencies for builtin actions (save, settings, find, mode)
 // after the reactive state they depend on is available.
 wireActionDeps({
@@ -699,8 +681,7 @@ wireActionDeps({
       timestamp: Date.now(),
     });
   },
-  openSettings: openSettingsPopoverWithAck,
-  openSettingsModal: openSettingsModalWithAck,
+  openSettings: openSettingsModalWithAck,
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
   openFindBar: () => {
@@ -1332,13 +1313,9 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
         }),
     });
   },
-  "settings-modal": (e) => {
-    e.preventDefault();
-    openSettingsModalWithAck();
-  },
   settings: (e) => {
     e.preventDefault();
-    openSettingsPopoverWithAck();
+    openSettingsModalWithAck();
   },
   "toggle-palette": (e) => {
     e.preventDefault();
@@ -1562,7 +1539,7 @@ $effect(() => {
 // the deselect doesn't piggyback, no per-overlay protocol needed.
 // Belt-and-suspenders for overlays that DO leave focus in the editing surface,
 // via two distinct mechanisms: (1) overlays with a capture-phase window listener
-// + stopPropagation (selection toolbar, settings popover, Help) halt Escape
+// + stopPropagation (selection toolbar, Help) halt Escape
 // before this bubble-phase listener ever runs — `e.defaultPrevented` is moot for
 // them; (2) the slash menu calls preventDefault() in its ProseMirror keydown
 // handler without stopping propagation, so this listener DOES run and the
@@ -1870,8 +1847,7 @@ const tutorial = createTutorial(
     theme={settingsState.settings.theme}
     onSetTheme={(t) => settingsState.updateSettings({ theme: t })}
     onOpenHelp={() => (showHelp = true)}
-    onOpenSettings={toggleSettings}
-    onOpenSettingsModal={openSettingsModalWithAck}
+    onOpenSettings={openSettingsModalWithAck}
     updateAvailable={updateAvailable.showDot}
     defaultModelLabel={BYO_MODELS_ENABLED ? defaultModelLabel : null}
     onOpenModelsSettings={openModelsSettings}
@@ -1930,7 +1906,7 @@ const tutorial = createTutorial(
       showNotes={settingsState.settings.showNotes}
       decorationsMuted={settingsState.settings.decorationsMuted}
       onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
-      onOpenSettings={toggleSettings}
+      onOpenSettings={openSettingsModalWithAck}
       formattingBarVisible={settingsState.settings.formattingBarVisible}
       onToggleFormattingBar={() =>
         settingsState.updateSettings({
@@ -1950,7 +1926,7 @@ const tutorial = createTutorial(
         showNotes={settingsState.settings.showNotes}
         decorationsMuted={settingsState.settings.decorationsMuted}
         onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
-        onOpenSettings={toggleSettings}
+        onOpenSettings={openSettingsModalWithAck}
         onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
       />
     {/if}
@@ -2152,17 +2128,6 @@ const tutorial = createTutorial(
       lastSaveOk={saveStore.lastSaveOk}
       {editor}
       {heldCount}
-    />
-
-    <SettingsPopover
-      open={settingsOpen}
-      onClose={() => (settingsOpen = false)}
-      settings={settingsState.settings}
-      onUpdate={settingsState.updateSettings}
-      returnFocusEl={settingsBtnEl}
-      anchorEl={settingsBtnEl}
-      connected={yjsSync.connected}
-      reconnectAttempts={yjsSync.reconnectAttempts}
     />
 
     <SettingsModal

@@ -291,7 +291,7 @@ export function writeCoworkOnboardingSkipped(): void {
 /**
  * Synchronous Tauri-runtime detection. Tauri v2 exposes `__TAURI_INTERNALS__`
  * on `window`; v1's `__TAURI__` global is legacy. This check is intentionally
- * sync so `<SettingsPopover>` can decide at render time whether to load the
+ * sync so the settings UI can decide at render time whether to load the
  * Cowork section without a round-trip.
  */
 export function isTauriRuntime(): boolean {

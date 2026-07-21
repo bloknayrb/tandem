@@ -73,13 +73,10 @@ describe("matchShortcut — override layer", () => {
     });
   });
 
-  it("Comma-pair asymmetry: remapping settings-modal leaves Ctrl+Shift+, inert (not settings)", () => {
-    const chord: ShortcutChord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
-    const overrides = overridesOf([["settings-modal", chord]]);
-    // settings branch requires !shift, so the shifted Comma does NOT fall to it.
-    expect(
-      matchShortcut(evt({ code: "Comma", ctrlKey: true, shiftKey: true }), overrides),
-    ).toBeNull();
+  it("Ctrl+Shift+, is inert (settings requires !shift; the legacy settings-modal chord was removed)", () => {
+    // settings branch requires !shift, so the shifted Comma does NOT fall to it,
+    // and there is no longer any shifted-Comma binding to claim it.
+    expect(matchShortcut(evt({ code: "Comma", ctrlKey: true, shiftKey: true }))).toBeNull();
   });
 
   it("unrelated defaults are unaffected by an override", () => {

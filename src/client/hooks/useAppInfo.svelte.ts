@@ -13,8 +13,8 @@ export interface AppInfoState {
  * Svelte 5 port of `useAppInfo`.
  *
  * Fetches app metadata from GET /api/info each time `open` transitions to
- * true. The result is cached at module scope (shared with the React version)
- * so repeated popover opens after the first are instant.
+ * true. The result is cached at module scope so repeated Settings-modal
+ * opens after the first are instant.
  *
  * Accepts a getter for `open` so callers with `$state` values propagate
  * reactively.

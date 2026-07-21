@@ -18,6 +18,7 @@ import { fileURLToPath } from "url";
 import {
   cleanupAllOpenDocuments,
   McpTestClient,
+  openSettingsViaBrandMenu,
   switchToAnnotationsTab,
 } from "../../tests/e2e/helpers";
 
@@ -145,16 +146,16 @@ test("04-toolbar-actions", async ({ page }) => {
   });
 });
 
-test("09-settings-popover", async ({ page }) => {
+test("09-settings-modal", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: welcomePath });
   await page.goto("/");
   await expect(page.locator(".ProseMirror")).toBeVisible({ timeout: 15_000 });
-  await page.locator("[data-testid='settings-btn']").click();
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).toBeVisible({ timeout: 3_000 });
+  await openSettingsViaBrandMenu(page);
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).toBeVisible({ timeout: 3_000 });
   await page.waitForTimeout(300);
   await page.screenshot({
-    path: path.join(screenshotsDir, "09-settings-popover.png"),
+    path: path.join(screenshotsDir, "09-settings-modal.png"),
     fullPage: false,
   });
 });

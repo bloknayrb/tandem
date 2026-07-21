@@ -14,7 +14,7 @@ let nameInput = $state(userNameState.userName);
 let inputEl: HTMLInputElement | undefined = $state();
 
 // Idle-sync: keep nameInput aligned with the underlying store when the user
-// isn't actively editing. Same pattern as SettingsPopover.
+// isn't actively editing.
 $effect(() => {
   const currentUserName = userNameState.userName;
   if (nameInput !== currentUserName && document.activeElement !== inputEl) {

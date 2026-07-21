@@ -7,7 +7,7 @@ import {
   createFixtureDir,
   McpTestClient,
   openAnnotatePopup,
-  openSettingsPopover,
+  openSettingsViaBrandMenu,
   switchToAnnotationsTab,
 } from "./helpers";
 
@@ -48,35 +48,33 @@ test.afterEach(async ({ page }) => {
   cleanupFixtureDir(tmpDir);
 });
 
-test("settings popover opens via settings-btn and exposes dwell slider", async ({ page }) => {
+test("settings modal opens via brand menu and exposes dwell slider", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await openSettingsPopover(page);
+  await openSettingsViaBrandMenu(page);
 
-  // Popover mounts with its own testid
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).toBeVisible({ timeout: 2_000 });
-  await expect(popover.getByRole("button", { name: "Appearance" })).toHaveAttribute(
+  // Modal mounts with its own testid
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).toBeVisible({ timeout: 2_000 });
+  await expect(page.locator("[data-testid='settings-modal-tab-appearance']")).toHaveAttribute(
     "aria-current",
     "page",
   );
 
-  await popover.getByRole("button", { name: "AI Assistant" }).click();
+  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
   // Dwell slider is present and adjustable — proves the new slider and its
   // testid are wired up. The actual broadcast into CTRL_ROOM is covered by
   // the event-queue-dwell unit test; here we just verify the UI surface.
-  const dwellSlider = popover.locator("[data-testid='dwell-time-slider']");
+  const dwellSlider = modal.locator("[data-testid='settings-modal-dwell-time-slider']");
   await expect(dwellSlider).toBeVisible();
   await expect(dwellSlider).toHaveAttribute("type", "range");
 
-  await popover.getByRole("button", { name: "Appearance" }).click();
-
-  await popover.getByRole("button", { name: "Editor" }).click();
+  await page.locator("[data-testid='settings-modal-tab-editor']").click();
   // Reading-measure preset control (Phase 3.5 Stage B; replaced the % slider).
-  await expect(popover.locator("[data-testid='editor-measure-comfortable']")).toBeVisible();
+  await expect(modal.locator("[data-testid='editor-measure-comfortable']")).toBeVisible();
 });
 
 test("editor-measure presets thread through to the stage's --editor-measure CSS var", async ({
@@ -111,18 +109,18 @@ test("editor-measure presets thread through to the stage's --editor-measure CSS 
     { preset: "comfortable", expected: "68ch" },
   ];
 
-  const popover = page.locator("[data-testid='settings-popover']");
+  const modal = page.locator("[data-testid='settings-modal']");
   for (const { preset, expected } of cases) {
-    await openSettingsPopover(page);
-    await expect(popover).toBeVisible({ timeout: 2_000 });
-    await popover.getByRole("button", { name: "Editor" }).click();
-    await popover.locator(`[data-testid='editor-measure-${preset}']`).click();
-    // Dismiss the popover and gate the next iteration's reopen on the
-    // popover ACTUALLY unmounting — without `toHaveCount(0)` the next
-    // `openSettingsPopover` can race the Svelte exit transition on slow CI
+    await openSettingsViaBrandMenu(page);
+    await expect(modal).toBeVisible({ timeout: 2_000 });
+    await page.locator("[data-testid='settings-modal-tab-editor']").click();
+    await modal.locator(`[data-testid='editor-measure-${preset}']`).click();
+    // Dismiss the modal and gate the next iteration's reopen on the
+    // modal ACTUALLY unmounting — without `toHaveCount(0)` the next
+    // `openSettingsViaBrandMenu` can race the Svelte exit transition on slow CI
     // (the old node lingers a frame, the open click misses).
     await page.keyboard.press("Escape");
-    await expect(popover).toHaveCount(0, { timeout: 2_000 });
+    await expect(modal).toHaveCount(0, { timeout: 2_000 });
     await expect.poll(readMeasureVar, { timeout: 3_000 }).toBe(expected);
   }
 });
@@ -133,12 +131,12 @@ test("settings dialog surfaces default mode and persists it", async ({ page }) =
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await openSettingsPopover(page);
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).toBeVisible({ timeout: 2_000 });
+  await openSettingsViaBrandMenu(page);
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).toBeVisible({ timeout: 2_000 });
 
-  await popover.getByRole("button", { name: "Collaboration" }).click();
-  const soloDefault = popover.locator("[data-testid='default-mode-solo-btn']");
+  await page.locator("[data-testid='settings-modal-tab-collaboration']").click();
+  const soloDefault = modal.locator("[data-testid='settings-modal-default-mode-solo-btn']");
   await expect(soloDefault).toBeVisible();
   await soloDefault.click();
   await expect(soloDefault).toHaveAttribute("aria-checked", "true");
@@ -151,13 +149,12 @@ test("settings dialog surfaces default mode and persists it", async ({ page }) =
 
   await page.reload();
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
-  await openSettingsPopover(page);
-  const reloadedPopover = page.locator("[data-testid='settings-popover']");
-  await reloadedPopover.getByRole("button", { name: "Collaboration" }).click();
-  await expect(reloadedPopover.locator("[data-testid='default-mode-solo-btn']")).toHaveAttribute(
-    "aria-checked",
-    "true",
-  );
+  await openSettingsViaBrandMenu(page);
+  const reloadedModal = page.locator("[data-testid='settings-modal']");
+  await reloadedModal.locator("[data-testid='settings-modal-tab-collaboration']").click();
+  await expect(
+    reloadedModal.locator("[data-testid='settings-modal-default-mode-solo-btn']"),
+  ).toHaveAttribute("aria-checked", "true");
 });
 
 test("settings dialog sections and About panel reflect the redesign closeout", async ({ page }) => {
@@ -187,35 +184,37 @@ test("settings dialog sections and About panel reflect the redesign closeout", a
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await openSettingsPopover(page);
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).toBeVisible({ timeout: 2_000 });
+  await openSettingsViaBrandMenu(page);
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).toBeVisible({ timeout: 2_000 });
 
-  for (const section of [
-    "Appearance",
-    "Editor",
-    "Accessibility",
-    "Collaboration",
-    "AI Assistant",
-    "Shortcuts",
-    "About",
+  for (const id of [
+    "appearance",
+    "editor",
+    "accessibility",
+    "collaboration",
+    "claude-code",
+    "shortcuts",
+    "about",
   ]) {
-    await expect(popover.getByRole("button", { name: section })).toBeVisible();
+    await expect(page.locator(`[data-testid='settings-modal-tab-${id}']`)).toBeVisible();
   }
 
-  await popover.getByRole("button", { name: "Shortcuts" }).click();
-  await expect(popover.locator("[data-testid='settings-shortcuts-list']")).toContainText("Ctrl+,");
+  await page.locator("[data-testid='settings-modal-tab-shortcuts']").click();
+  await expect(modal.locator("[data-testid='settings-modal-shortcuts-list']")).toContainText(
+    "Ctrl+,",
+  );
 
-  await popover.getByRole("button", { name: "About" }).click();
-  const about = popover.locator("[data-testid='app-info-footer']");
+  await page.locator("[data-testid='settings-modal-tab-about']").click();
+  const about = modal.locator("[data-testid='settings-modal-app-info-footer']");
   await expect(about).toContainText("Tandem v9.9.9");
   await expect(about).toContainText("31 tools");
   await expect(about).toContainText("MCP SDK 1.17.0");
   await expect(about).toContainText("HTTP");
   await expect(about).toContainText("sessions");
   await expect(about).toContainText("Token rotated");
-  await expect(popover.locator("[data-testid='view-changelog-btn']")).toBeVisible();
-  await expect(popover.getByRole("link", { name: "Report a bug" })).toBeVisible();
+  await expect(modal.locator("[data-testid='settings-modal-view-changelog-btn']")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Report a bug" })).toBeVisible();
 });
 
 test("selection toolbar toggle persists and drives toolbar visibility", async ({ page }) => {
@@ -235,12 +234,12 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
 
   const toolbar = page.getByRole("toolbar", { name: "Selection tools" });
 
-  await openSettingsPopover(page);
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).toBeVisible({ timeout: 2_000 });
-  await popover.getByRole("button", { name: "AI Assistant" }).click();
+  await openSettingsViaBrandMenu(page);
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).toBeVisible({ timeout: 2_000 });
+  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
 
-  const toggle = popover.locator("[data-testid='selection-toolbar-toggle'] input");
+  const toggle = modal.locator("[data-testid='settings-modal-selection-toolbar-toggle'] input");
   if (await toggle.isChecked()) {
     await toggle.uncheck();
   }
@@ -261,10 +260,12 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
   await selectFirstParagraph();
   await expect(toolbar).toHaveCount(0, { timeout: 2_000 });
 
-  await openSettingsPopover(page);
-  const reopenedPopover = page.locator("[data-testid='settings-popover']");
-  await reopenedPopover.getByRole("button", { name: "AI Assistant" }).click();
-  const reopenedToggle = reopenedPopover.locator("[data-testid='selection-toolbar-toggle'] input");
+  await openSettingsViaBrandMenu(page);
+  const reopenedModal = page.locator("[data-testid='settings-modal']");
+  await reopenedModal.locator("[data-testid='settings-modal-tab-claude-code']").click();
+  const reopenedToggle = reopenedModal.locator(
+    "[data-testid='settings-modal-selection-toolbar-toggle'] input",
+  );
   if (!(await reopenedToggle.isChecked())) {
     await reopenedToggle.check();
   }
@@ -285,20 +286,20 @@ test("selection toolbar toggle persists and drives toolbar visibility", async ({
   await expect(toolbar).toBeVisible({ timeout: 5_000 });
 });
 
-test("Ctrl+, opens Settings popover", async ({ page }) => {
+test("Ctrl+, opens the Settings modal", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).not.toBeVisible();
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).not.toBeVisible();
 
   // Playwright maps "Control+," to the Comma key with Ctrl held — matches
   // the hook's `e.code === "Comma" && e.ctrlKey` gate.
   await page.keyboard.press("Control+Comma");
 
-  await expect(popover).toBeVisible({ timeout: 2_000 });
+  await expect(modal).toBeVisible({ timeout: 2_000 });
 });
 
 test("bulk-confirm resets when a filter changes (issue #199 regression)", async ({ page }) => {
@@ -563,11 +564,11 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await openSettingsPopover(page);
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).toBeVisible();
-  await popover.getByRole("button", { name: "AI Assistant" }).click();
-  const slider = popover.locator("[data-testid='dwell-time-slider']");
+  await openSettingsViaBrandMenu(page);
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).toBeVisible();
+  await page.locator("[data-testid='settings-modal-tab-claude-code']").click();
+  const slider = modal.locator("[data-testid='settings-modal-dwell-time-slider']");
   await expect(slider).toBeVisible({ timeout: 2_000 });
 
   // Set the range input value and fire a React-compatible change event.
@@ -594,33 +595,36 @@ test("dwell-time slider value persists across reload", async ({ page }) => {
   // Reload and confirm the slider shows the saved value.
   await page.reload();
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
-  await openSettingsPopover(page);
-  const reloadedPopover = page.locator("[data-testid='settings-popover']");
-  await reloadedPopover.getByRole("button", { name: "AI Assistant" }).click();
-  const reloadedSlider = reloadedPopover.locator("[data-testid='dwell-time-slider']");
+  await openSettingsViaBrandMenu(page);
+  const reloadedModal = page.locator("[data-testid='settings-modal']");
+  await reloadedModal.locator("[data-testid='settings-modal-tab-claude-code']").click();
+  const reloadedSlider = reloadedModal.locator("[data-testid='settings-modal-dwell-time-slider']");
   await expect(reloadedSlider).toHaveValue("2000");
 });
 
-test("settings popover stays within viewport on short screens (#306)", async ({ page }) => {
+test("settings modal stays within viewport on short screens", async ({ page }) => {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
 
   await page.setViewportSize({ width: 1024, height: 400 }); // 400px guarantees maxHeight overflow
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
 
-  await openSettingsPopover(page);
+  await openSettingsViaBrandMenu(page);
 
-  const popover = page.locator("[data-testid='settings-popover']");
-  await expect(popover).toBeVisible();
+  const modal = page.locator("[data-testid='settings-modal']");
+  await expect(modal).toBeVisible();
 
-  const box = await popover.boundingBox();
+  const box = await modal.boundingBox();
   const viewport = page.viewportSize();
   expect(box).not.toBeNull();
   expect(viewport).not.toBeNull();
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
 
-  const scrollRegion = popover.locator("section > div").first();
+  // Target the modal's scroll body directly (rather than a positional
+  // `section > div` selector) — the tab content panel is where overflow
+  // is expected to kick in on short screens.
+  const scrollRegion = page.locator("[data-testid='settings-modal'] .settings-modal-content-body");
   const { overflowed, overflowY } = await scrollRegion.evaluate((el) => ({
     overflowed: el.scrollHeight > el.clientHeight,
     overflowY: window.getComputedStyle(el).overflowY,
@@ -760,8 +764,8 @@ async function openSettingsDialog(
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
-  await openSettingsPopover(page);
-  const dialog = page.locator("[data-testid='settings-popover']");
+  await openSettingsViaBrandMenu(page);
+  const dialog = page.locator("[data-testid='settings-modal']");
   await expect(dialog).toBeVisible({ timeout: 3_000 });
   return dialog;
 }
@@ -770,6 +774,10 @@ test("settings dialog at 600x800 viewport — section nav reachable without hori
   page,
 }) => {
   const dialog = await openSettingsDialog(page);
+
+  // Below 860px the sidebar collapses into an off-screen drawer; open it via
+  // the hamburger before the nav buttons are reachable.
+  await page.locator("[data-testid='settings-modal-narrow-hamburger']").click();
 
   // Nav buttons should all be within the dialog bounds (no horizontal overflow).
   // overflow:hidden on the dialog means scrollWidth === clientWidth, but we
@@ -780,7 +788,7 @@ test("settings dialog at 600x800 viewport — section nav reachable without hori
 
   // Collect all button rects in a single round-trip to avoid N serial calls.
   const { dialogRight, buttonRects } = await page.evaluate(() => {
-    const dlg = document.querySelector("[data-testid='settings-popover']")!;
+    const dlg = document.querySelector("[data-testid='settings-modal']")!;
     const btns = Array.from(dlg.querySelectorAll("nav[aria-label='Settings sections'] button"));
     const dr = dlg.getBoundingClientRect();
     return {
@@ -850,7 +858,7 @@ test("settings dialog at 600x800 viewport — section content readable, no clipp
   // Single-column layout at 600px means content spans the full dialog width.
   // A width under 200px indicates the two-column grid is still active and
   // content is crushed into an unusable strip.
-  const contentBox = await dialog.locator("[data-testid='settings-content']").boundingBox();
+  const contentBox = await dialog.locator("[data-testid='settings-modal-content']").boundingBox();
   expect(contentBox).not.toBeNull();
   expect(contentBox!.width).toBeGreaterThanOrEqual(200);
 });

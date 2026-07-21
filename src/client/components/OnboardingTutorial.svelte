@@ -49,7 +49,7 @@ const BASE_STEPS = [
   {
     id: "complete",
     title: "You're ready!",
-    text: "You've learned the basics. Press ? anytime for keyboard shortcuts, or Ctrl+Shift+, to customize them.",
+    text: "You've learned the basics. Press ? anytime for keyboard shortcuts, or open Settings (Ctrl+,) to customize them.",
   },
 ] as const;
 

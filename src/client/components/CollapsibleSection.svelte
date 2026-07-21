@@ -5,7 +5,7 @@ interface Props {
   /** Label shown in the disclosure header. */
   label: string;
   /** Initial open state. Disclosure resets each mount (Svelte unmounts/remounts the
-   *  section when the parent re-renders, e.g. on settings popover close→open), so
+   *  section when the parent re-renders, e.g. on settings modal close→open), so
    *  there's no persistent open state — intentional per the PR 6 plan. */
   defaultOpen?: boolean;
   /** Forwarded to the underlying `<details>` element as `data-testid`. Used for

@@ -29,7 +29,6 @@ export const registry: Record<string, () => Promise<{ default: Component<any> }>
   AccessibilitySettings: () => import("../components/AccessibilitySettings.svelte"),
   AppearanceSettings: () => import("../components/AppearanceSettings.svelte"),
   EditorSettings: () => import("../components/EditorSettings.svelte"),
-  SettingsPopover: () => import("../components/SettingsPopover.svelte"),
   SettingsModal: () => import("../components/SettingsModal.svelte"),
   CoworkSettings: () => import("../components/CoworkSettings.svelte"),
   CoworkOnboardingStep: () => import("../components/CoworkOnboardingStep.svelte"),
