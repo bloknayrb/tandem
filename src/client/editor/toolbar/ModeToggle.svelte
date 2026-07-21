@@ -26,14 +26,14 @@ const { tandemMode, onModeChange }: Props = $props();
   <button
     data-testid="mode-solo-btn"
     class={tandemMode === "solo" ? "on" : ""}
-    title="Write undisturbed — your AI only responds when you message"
+    title="Write undisturbed — your AI pauses and won't see your comments or edits until you switch back to Tandem"
     aria-pressed={tandemMode === "solo"}
     onclick={() => onModeChange("solo")}
   >Solo</button>
   <button
     data-testid="mode-tandem-btn"
     class={tandemMode === "tandem" ? "on" : ""}
-    title="Full collaboration — your AI reacts to selections and document changes"
+    title="Full collaboration — your AI sees your selections, comments, and edits as you make them"
     aria-pressed={tandemMode === "tandem"}
     onclick={() => onModeChange("tandem")}
   >Tandem</button>
