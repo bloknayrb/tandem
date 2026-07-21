@@ -5,6 +5,34 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-07-21
+
+### Added
+
+- **Solo mode now genuinely holds your comments and replies back from the AI until you switch to Tandem (#1212).** Solo has always described itself as a private drafting mode, but the annotations you wrote in it could still reach the AI through the inbox and annotation-read paths. The server is now the authority: while you're in Solo, the comments and replies you author are hidden from the AI's inbox, its annotation reads, and the real-time push it receives, so nothing surfaces to it by accident. Each held item shows an amber **Held** pill and the status bar shows a running held count, so you can see exactly what's being withheld. Switching back to Tandem releases the whole set at once — the AI picks them up on its next check, and a one-time wake nudges a push-connected session to look. (Personal notes stay private in both modes, unchanged.)
+
+- **First-run onboarding no longer makes the setup wizard and the tutorial fight for your attention (#1211).** On a fresh install the integration wizard and the welcome tutorial could both demand step-one attention at the same time. The tutorial card now yields while the wizard is open, so you finish connecting your AI first and then start the walkthrough. Settings also gains a **Replay tutorial** button that reopens the welcome document and restarts the walkthrough whenever you want it again.
+
+- **A single, honest AI-connection indicator in the status bar (#1210).** Three overlapping signals used to hint at whether your AI was connected — a titlebar dot, a separate pill, and an "Assistant · idle" status segment whose "idle" was indistinguishable from "not connected." They're now one status-pill indicator that reads *connected*, *Solo · edits held*, or *AI not connected*, pulses while the AI is actively working, and — crucially — stays green off a proven live session even during a document-sync blip instead of falsely blanking. The titlebar keeps only the connect/restart setup prompt.
+
+### Changed
+
+- **Settings is now one unified modal (#1214).** The separate settings popover and the settings modal have been consolidated into a single surface, opened with `Ctrl+,`. The redundant secondary shortcut is gone and the internal registries and test identifiers were scrubbed to match.
+
+### Fixed
+
+- **`.docx` import renders hard breaks as real line breaks instead of literal `<hardbreak>` text (#1209).** Imported Word documents containing hard line breaks showed the placeholder tag as visible text in the editor, and a hard break sitting beside other content was wrongly reported as an unsupported-block downgrade in the fidelity report. Both are fixed — hard breaks render as breaks and no longer inflate the downgrade count.
+
+- **`tandem_edit` replacement text now inherits the formatting around it (#1206).** Text the AI inserted through an edit could land unformatted even when it replaced content inside a bold, italic, or otherwise-styled run. Replacements now adopt the surrounding formatting so the edited passage matches its neighbours.
+
+- **Honest setup guidance for people installing from npm (#1207).** The `doctor` command's "Fix:" hints now point at `tandem setup --apply`, the CLI banner leads with the editor URL rather than a deprecation notice, the README states the Node 22 floor, the start hint is tailored to how you installed (dev checkout vs. global), and a new `claude-cli` check detects the Claude CLI — including the `.cmd`/`.ps1` shims a global npm install leaves on Windows, which the old probe missed.
+
+- **Solo/Tandem mode copy now tells the truth about held work (#1206).** The mode toggle's wording and tooltips implied Solo simply muted notifications; they now say plainly that in Solo the AI won't see the comments and replies you write until you switch back to Tandem, matching the hold the release above enforces.
+
+### Internal
+
+- **New-user documentation snag fixes (#1208).** Corrected setup-command semantics that had drifted from shipped behaviour, repaired a dead cross-reference in the user guide, and added troubleshooting entries for the SSH-vs-HTTPS plugin-clone default and the stale global-install shadow.
+
 ## [0.18.0] - 2026-07-19
 
 ### Added
