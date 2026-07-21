@@ -199,8 +199,12 @@ export function addReplyToAnnotation(
     // unlike browser annotation writes the stamp lives here. Live hiding is still
     // mode-based (Phase 2 pushEvent + the checkInbox/getAnnotations reply gates);
     // this persisted marker drives the held-badge and the fail-closed-restart
-    // hold (indeterminate mode). Claude/import replies never carry it.
-    ...(author === "user" && readModeState() === "solo" ? { heldInSolo: true } : {}),
+    // hold (indeterminate mode). Gated on `ann.type === "comment"` to match the
+    // comment-only annotation path (heldInSoloOnCreate): a private note-reply is
+    // never sent to Claude, so it is not "held from the AI" and carries no marker.
+    ...(author === "user" && ann.type === "comment" && readModeState() === "solo"
+      ? { heldInSolo: true }
+      : {}),
   };
 
   const repliesMap = getRepliesMap(ydoc);

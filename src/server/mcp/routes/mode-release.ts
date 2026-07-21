@@ -84,9 +84,21 @@ export function handleModeRelease(req: Request, res: Response): void {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   withModeRelease(ctrlDoc, () => ctrlDoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, "tandem"));
 
+  // Sweep only OPEN docs. A doc closed while it still holds markers is not
+  // visited, so its `heldInSolo` markers persist — harmless because mode is now
+  // tandem (hideFromAI ignores the marker) so the items surface normally on
+  // reopen; the only residue is a stale "Held" pill until the next
+  // release-while-that-doc-is-open. Per-doc try/catch isolates a bad doc: it
+  // must not abort the loop (starving later docs of their clear), suppress the
+  // wake, or 500 the response — mode is already tandem, so the pull path
+  // delivers everything regardless of marker state.
   let released = 0;
   for (const docId of getOpenDocs().keys()) {
-    released += clearHeldMarkersForDoc(getOrCreateDocument(docId));
+    try {
+      released += clearHeldMarkersForDoc(getOrCreateDocument(docId));
+    } catch (err) {
+      console.warn(`[mode-release] failed to clear held markers for ${docId}:`, err);
+    }
   }
 
   if (released > 0) emitModeReleaseWake();

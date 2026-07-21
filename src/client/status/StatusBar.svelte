@@ -35,6 +35,10 @@ interface Props {
    * server restart and matches the per-card "Held" pill. Zero → not rendered.
    * This is the umbrella signal for held items whose surface has no card
    * (a reply with no card of its own, items created before a doc switch).
+   * Scoped to the ACTIVE document only — the caller derives it from the
+   * visible annotations of the current tab, not across all open docs. A held
+   * item in a background tab isn't counted here (its markers still clear on
+   * release; only the count is active-doc-local).
    */
   heldCount?: number;
 }
