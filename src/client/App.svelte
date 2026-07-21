@@ -1819,6 +1819,24 @@ const marginReplies = createAnnotationReplies({
   getYdoc: () => activeTab?.ydoc ?? null,
 });
 
+// WS-A2: umbrella held-count for the StatusBar signal. Counts every item the
+// AI hasn't seen yet because the user is in Solo — held comments plus held
+// replies ON comments (note/highlight replies never reach the AI, so a held
+// marker there is not "held from the AI" and must not inflate the count).
+// Derived from the persisted `heldInSolo` field, NEVER from live mode, so it
+// matches the per-card "Held" pill and survives a server restart.
+const heldCount = $derived.by(() => {
+  let n = 0;
+  for (const a of visibleAnnotations) {
+    if (a.heldInSolo === true) n++;
+    if (a.type === "comment") {
+      const replies = marginReplies.byId.get(a.id);
+      if (replies) for (const r of replies) if (r.heldInSolo === true) n++;
+    }
+  }
+  return n;
+});
+
 // All six handlers + ydoc/docId in one $derived so closures capture the same
 // activeTab snapshot. Per-property access at call sites preserves reactivity
 // (destructuring would freeze the values at template-instantiation time).
@@ -1831,7 +1849,7 @@ const marginHandlers = $derived.by(() => {
     onEdit: (id: string, c: string) => marginEditAnnotation(ydoc, id, c),
     onReply: (id: string, t: string) => marginReplyToAnnotation(id, t, docId),
     onRemove: (id: string) => marginRemoveAnnotation(id, docId),
-    onSendToClaude: (id: string) => marginSendNoteToClaude(ydoc, id),
+    onSendToClaude: (id: string) => marginSendNoteToClaude(ydoc, id, modeState.tandemMode),
   };
 });
 
@@ -1919,6 +1937,7 @@ const tutorial = createTutorial(
           formattingBarVisible: !settingsState.settings.formattingBarVisible,
         })}
       reduceMotion={settingsState.settings.reduceMotion}
+      tandemMode={modeState.tandemMode}
     />
 
     {#if settingsState.settings.formattingBarVisible}
@@ -2102,6 +2121,7 @@ const tutorial = createTutorial(
             reduceMotion={settingsState.settings.reduceMotion}
             storeReadOnly={yjsSync.storeReadOnly}
             claudeWorkingAnnotationId={yjsSync.claudeWorking?.annotationId ?? null}
+            tandemMode={modeState.tandemMode}
             {review}
             visible={activeRailTab === "annotations"}
           />
@@ -2131,6 +2151,7 @@ const tutorial = createTutorial(
       saving={saveStore.saving}
       lastSaveOk={saveStore.lastSaveOk}
       {editor}
+      {heldCount}
     />
 
     <SettingsPopover

@@ -4,7 +4,7 @@ import { untrack } from "svelte";
 import * as Y from "yjs";
 import { API_STORE_RECLAIM_LOCK } from "../../shared/api-paths";
 import { Y_MAP_ANNOTATION_REPLIES } from "../../shared/constants";
-import type { Annotation, AnnotationReply } from "../../shared/types";
+import type { Annotation, AnnotationReply, TandemMode } from "../../shared/types";
 import { isPendingReviewTarget } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
@@ -65,6 +65,9 @@ interface Props {
    * + getReviewTargets for the bulk-confirm UI.
    */
   review: UseAnnotationReviewReturn;
+  /** WS-A2: current mode, so a note promoted to a comment while in Solo is
+   * stamped held (badge + fail-closed-restart parity with a Solo-created comment). */
+  tandemMode?: TandemMode;
 }
 
 let {
@@ -84,6 +87,7 @@ let {
   storeReadOnly = false,
   claudeWorkingAnnotationId = null,
   review,
+  tandemMode = "tandem",
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
@@ -387,7 +391,7 @@ $effect(() => {
 });
 
 const handleEdit = (id: string, newContent: string) => editAnnotation(ydoc, id, newContent);
-const handleSendToClaude = (id: string) => sendNoteToClaude(ydoc, id);
+const handleSendToClaude = (id: string) => sendNoteToClaude(ydoc, id, tandemMode);
 const handleRemove = (id: string) => removeAnnotation(id, documentId);
 const handleReply = (id: string, text: string) => replyToAnnotation(id, text, documentId);
 
@@ -511,7 +515,7 @@ function toggleImportSelection(id: string) {
 
 function handleBatchPromote() {
   const ids = Array.from(selectedImportIds);
-  promoteNotesToComments(ydoc, ids);
+  promoteNotesToComments(ydoc, ids, tandemMode);
   selectedImportIds = new Set();
 }
 

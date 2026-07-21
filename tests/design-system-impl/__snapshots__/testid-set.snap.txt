@@ -9,6 +9,7 @@ activity-row-{*}
 activity-tray
 ai-readiness-harness
 annotation-card-{*}
+annotation-held-pill-{*}
 annotation-import-byline-{*}
 annotation-list-scroll-container
 annotation-patterns-toggle
@@ -373,6 +374,7 @@ source-view-error
 source-view-exit-btn
 source-view-textarea
 status-ai-indicator
+status-held-count
 status-word-count
 store-readonly-banner
 store-readonly-dismiss

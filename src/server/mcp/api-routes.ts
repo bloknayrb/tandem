@@ -15,6 +15,7 @@ import {
   API_LICENSE_ACTIVATE,
   API_LICENSE_STATUS,
   API_MODE,
+  API_MODE_RELEASE,
   API_NOTIFY_STREAM,
   API_OPEN,
   API_REMOVE_ANNOTATION,
@@ -44,6 +45,7 @@ import { handleResolveDocxConflict } from "./routes/docx-conflict.js";
 import { makeInfoHandler } from "./routes/info.js";
 import { handleActivateLicense, handleGetLicenseStatus } from "./routes/license.js";
 import { handleMode } from "./routes/mode.js";
+import { handleModeRelease } from "./routes/mode-release.js";
 import { handleNotifyStream } from "./routes/notify-stream.js";
 import { handleOpen } from "./routes/open.js";
 import { handleRemoveAnnotation } from "./routes/remove-annotation.js";
@@ -177,6 +179,11 @@ export function registerApiRoutes(
 
   // NOTE: /api/mode is GET-only — no OPTIONS registration
   app.get(API_MODE, mw, handleMode);
+
+  // WS-A2 Solo→Tandem release. Gated on origin allowlist + loopback inside the
+  // handler (mutates mode + annotation markers).
+  app.options(API_MODE_RELEASE, mw);
+  app.post(API_MODE_RELEASE, mw, largeBody, handleModeRelease);
 
   // License status (#1116). GET-only; loopback callers get the full state
   // (licensee name + licenseId), non-loopback gets a PII-scrubbed subset.

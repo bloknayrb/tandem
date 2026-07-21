@@ -179,6 +179,18 @@ const inboxChatMessageSchema = z.object({
   replyTo: z.string().optional(),
 });
 
+// WS-A2: user replies surfaced via checkInbox (the pull-release path for a
+// reply held in Solo). `author` is always "user" — Claude's own replies and
+// private/note-thread replies are filtered out (ADR-027, via channelVisibleReplies).
+const inboxUserReplySchema = z.object({
+  id: z.string(),
+  annotationId: z.string(),
+  author: z.literal("user"),
+  text: z.string(),
+  timestamp: z.number(),
+  textSnippet: z.string().describe("Parent comment's anchored text (≤100 chars)"),
+});
+
 export const checkInboxOutputShape = {
   summary: z.string(),
   hasNew: z.boolean(),
@@ -188,6 +200,9 @@ export const checkInboxOutputShape = {
   userResponses: z
     .array(userResponseSchema)
     .describe("User accept/dismiss decisions on Claude's annotations"),
+  userReplies: z
+    .array(inboxUserReplySchema)
+    .describe("New user replies on comment threads (held in Solo, released on flip to Tandem)"),
   chatMessages: z.array(inboxChatMessageSchema),
   activity: z.object({
     isTyping: z.boolean(),

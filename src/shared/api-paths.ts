@@ -17,6 +17,9 @@ export const API_LAUNCH_CLAUDE = "/api/launch-claude";
 
 // --- Mode / metadata --------------------------------------------------------
 export const API_MODE = "/api/mode";
+/** WS-A2: Solo→Tandem release. Flips mode server-side, clears held markers,
+ * wakes the push monitor. Mutating → origin-allowlist + loopback gated. */
+export const API_MODE_RELEASE = "/api/mode/release";
 export const API_INFO = "/api/info";
 // Embedded `tandem doctor` report for the client's "Copy diagnostics" button.
 // Loopback-only (the report embeds absolute paths / PIDs).

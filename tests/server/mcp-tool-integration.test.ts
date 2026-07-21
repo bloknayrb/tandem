@@ -29,8 +29,14 @@ import {
   resetForTesting as resetNotifications,
 } from "../../src/server/notifications.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
-import { Y_MAP_ANNOTATIONS, Y_MAP_AUTHORSHIP } from "../../src/shared/constants.js";
-import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_AUTHORSHIP,
+  Y_MAP_MODE,
+  Y_MAP_USER_AWARENESS,
+} from "../../src/shared/constants.js";
+import { MCP_ORIGIN, withInternal } from "../../src/shared/origins.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
@@ -84,8 +90,16 @@ beforeEach(async () => {
   resetInbox();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
+  // Clear CTRL_ROOM mode so a Solo-hold test can't bleed into the next test.
+  const ctrl = getOrCreateDocument(CTRL_ROOM);
+  withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE));
   client = await setupMcpClient();
 });
+
+function setMode(mode: "solo" | "tandem") {
+  const ctrl = getOrCreateDocument(CTRL_ROOM);
+  withInternal(ctrl, () => ctrl.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, mode));
+}
 
 describe("MCP tool integration — document tools", () => {
   it("tandem_getTextContent returns text for open document", async () => {
@@ -235,6 +249,92 @@ describe("MCP tool integration — annotation tools", () => {
     const parsed = parseResult(result);
     expect(parsed.error).toBe(false);
     expect(parsed.data.count).toBe(2);
+  });
+
+  it("tandem_getAnnotations hides the user's own comment in Solo, keeps Claude's, releases on flip (WS-A2)", async () => {
+    const ydoc = setupDoc("mcp-ann-solo", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Claude comment via MCP tool (author "claude" — must stay visible in Solo).
+    await client.callTool({
+      name: "tandem_comment",
+      arguments: { from: 0, to: 5, text: "Claude comment" },
+    });
+    // User comment seeded directly (browser-origin analog) — must be hidden in Solo.
+    const userComment: Annotation = {
+      id: "ann_user_solo",
+      author: "user",
+      type: "comment",
+      range: { from: 6, to: 11 },
+      content: "my private WIP comment",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    ydoc.transact(() => map.set(userComment.id, userComment), MCP_ORIGIN);
+
+    setMode("solo");
+    const soloResult = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(soloResult.error).toBe(false);
+    const soloIds = soloResult.data.annotations.map((a: Annotation) => a.id);
+    expect(soloIds).not.toContain("ann_user_solo"); // held
+    expect(soloResult.data.annotations.some((a: Annotation) => a.author === "claude")).toBe(true);
+
+    // Flip to Tandem — the held user comment is now visible (pull-driven release).
+    setMode("tandem");
+    const tandemResult = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    const tandemIds = tandemResult.data.annotations.map((a: Annotation) => a.id);
+    expect(tandemIds).toContain("ann_user_solo");
+  });
+
+  it("tandem_getAnnotations fails closed after a restart mid-Solo — keeps held markers hidden (WS-A2 Phase 8)", async () => {
+    // Restart mid-Solo loses the in-memory mode; the CTRL_ROOM mode key is absent
+    // (beforeEach cleared it), so readModeState() is "indeterminate". The ONLY
+    // thing keeping a Solo comment hidden across that restart is the PERSISTED
+    // heldInSolo marker — hideFromAI(indeterminate) hides exactly the marked
+    // records. A held comment must stay hidden; an ordinary (unmarked) user
+    // comment must NOT be over-hidden.
+    const ydoc = setupDoc("mcp-ann-restart", "Hello world test content");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const held: Annotation = {
+      id: "ann_held_restart",
+      author: "user",
+      type: "comment",
+      range: { from: 0, to: 5 },
+      content: "held across restart",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+      heldInSolo: true,
+    };
+    const ordinary: Annotation = {
+      id: "ann_ordinary_restart",
+      author: "user",
+      type: "comment",
+      range: { from: 6, to: 11 },
+      content: "ordinary comment",
+      status: "pending",
+      timestamp: Date.now(),
+      rev: 1,
+    };
+    ydoc.transact(() => {
+      map.set(held.id, held);
+      map.set(ordinary.id, ordinary);
+    }, MCP_ORIGIN);
+
+    // No setMode call → mode key absent → indeterminate (the restart state).
+    const result = parseResult(
+      await client.callTool({ name: "tandem_getAnnotations", arguments: {} }),
+    );
+    expect(result.error).toBe(false);
+    const ids = result.data.annotations.map((a: Annotation) => a.id);
+    expect(ids).not.toContain("ann_held_restart"); // fail-closed: stays hidden
+    expect(ids).toContain("ann_ordinary_restart"); // unmarked → not over-hidden
   });
 
   it("tandem_getAnnotations excludes notes by default and reports notesExcluded", async () => {

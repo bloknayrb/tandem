@@ -4,14 +4,31 @@ import {
   collectRepliesForAnnotation,
   createAnnotation,
 } from "../../src/server/mcp/annotations.js";
-import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
-import { MCP_ORIGIN, withMcp } from "../../src/shared/origins.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATION_REPLIES,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_MODE,
+  Y_MAP_USER_AWARENESS,
+} from "../../src/shared/constants.js";
+import { MCP_ORIGIN, withInternal, withMcp } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
+function setMode(mode: string | undefined) {
+  const ctrl = getOrCreateDocument(CTRL_ROOM);
+  withInternal(ctrl, () => {
+    const aw = ctrl.getMap(Y_MAP_USER_AWARENESS);
+    if (mode === undefined) aw.delete(Y_MAP_MODE);
+    else aw.set(Y_MAP_MODE, mode);
+  });
+}
+
 beforeEach(() => {
   clearOpenDocs();
+  setMode(undefined);
 });
 
 describe("addReplyToAnnotation", () => {
@@ -115,6 +132,59 @@ describe("event emission on reply", () => {
     // The transaction IS tagged with MCP_ORIGIN, so the real event queue would skip it
     expect(mcpEvents).toHaveLength(1);
     expect(mcpEvents[0].origin).toBe(MCP_ORIGIN);
+  });
+});
+
+describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
+  it("stamps heldInSolo on a user reply to a COMMENT while in Solo", () => {
+    const ydoc = setupDoc("held-reply-1", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
+    setMode("solo");
+
+    const result = addReplyToAnnotation(ydoc, map, annId, "held reply", "user");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+
+    const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
+      heldInSolo?: boolean;
+    };
+    expect(stored.heldInSolo).toBe(true);
+  });
+
+  it("does NOT stamp heldInSolo on a user reply to a NOTE (private, never sent to Claude)", () => {
+    const ydoc = setupDoc("held-reply-2", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "note", rangeOf(0, 5, ydoc), "parent note");
+    setMode("solo");
+
+    const result = addReplyToAnnotation(ydoc, map, annId, "note reply", "user");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+
+    const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
+      heldInSolo?: boolean;
+      private?: boolean;
+    };
+    // A note reply is private forever, so it is never "held from the AI".
+    expect(stored.heldInSolo).toBeUndefined();
+    expect(stored.private).toBe(true);
+  });
+
+  it("does NOT stamp heldInSolo on a comment reply in Tandem mode", () => {
+    const ydoc = setupDoc("held-reply-3", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
+    setMode("tandem");
+
+    const result = addReplyToAnnotation(ydoc, map, annId, "live reply", "user");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+
+    const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
+      heldInSolo?: boolean;
+    };
+    expect(stored.heldInSolo).toBeUndefined();
   });
 });
 

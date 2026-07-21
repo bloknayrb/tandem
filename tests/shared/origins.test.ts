@@ -11,6 +11,7 @@ import {
   FILE_SYNC_ORIGIN,
   INTERNAL_ORIGIN,
   MCP_ORIGIN,
+  MODE_RELEASE_ORIGIN,
   RELOAD_ORIGIN,
   shouldSkipChannel,
   shouldSkipDurableSync,
@@ -19,6 +20,7 @@ import {
   withFileSync,
   withInternal,
   withMcp,
+  withModeRelease,
   withReload,
 } from "../../src/shared/origins.js";
 
@@ -68,6 +70,14 @@ describe("origin wrappers tag transactions", () => {
     expect(origin).toBe(BROWSER_ORIGIN);
   });
 
+  it("withModeRelease tags with 'mode-release'", () => {
+    const doc = new Y.Doc();
+    const { origin } = captureOrigin(doc, () =>
+      withModeRelease(doc, () => doc.getMap("a").set("k", 1)),
+    );
+    expect(origin).toBe(MODE_RELEASE_ORIGIN);
+  });
+
   it("returns the callback's value", () => {
     const doc = new Y.Doc();
     expect(withMcp(doc, () => 42)).toBe(42);
@@ -87,22 +97,25 @@ describe("origin wrappers tag transactions", () => {
 });
 
 describe("skip-set predicates match the ADR-031 matrix", () => {
-  it("channel skip = {mcp, file-sync, internal, reload}", () => {
+  it("channel skip = {mcp, file-sync, internal, reload, mode-release}", () => {
     expect(shouldSkipChannel(MCP_ORIGIN)).toBe(true);
     expect(shouldSkipChannel(FILE_SYNC_ORIGIN)).toBe(true);
     expect(shouldSkipChannel(INTERNAL_ORIGIN)).toBe(true);
     expect(shouldSkipChannel(RELOAD_ORIGIN)).toBe(true);
+    expect(shouldSkipChannel(MODE_RELEASE_ORIGIN)).toBe(true);
     expect(shouldSkipChannel(BROWSER_ORIGIN)).toBe(false);
     expect(shouldSkipChannel(undefined)).toBe(false);
     expect(shouldSkipChannel(null)).toBe(false);
   });
 
-  it("durable-sync skip = {file-sync, internal}", () => {
+  it("durable-sync skip = {file-sync, internal} — mode-release PERSISTS", () => {
     expect(shouldSkipDurableSync(MCP_ORIGIN)).toBe(false);
     expect(shouldSkipDurableSync(FILE_SYNC_ORIGIN)).toBe(true);
     expect(shouldSkipDurableSync(INTERNAL_ORIGIN)).toBe(true);
     expect(shouldSkipDurableSync(RELOAD_ORIGIN)).toBe(false);
     expect(shouldSkipDurableSync(BROWSER_ORIGIN)).toBe(false);
+    // The cleared heldInSolo marker must reach disk so a restart won't re-hold.
+    expect(shouldSkipDurableSync(MODE_RELEASE_ORIGIN)).toBe(false);
   });
 
   // Tombstone observer records for ALL origins — no skip predicate. The

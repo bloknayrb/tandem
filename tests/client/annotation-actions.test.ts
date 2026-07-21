@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 
 import {
+  heldInSoloOnCreate,
   promoteNotesToComments,
   sendNoteToClaude,
 } from "../../src/client/panels/annotation-actions.js";
@@ -147,6 +148,59 @@ describe("AR5 promote transform — promoteNotesToComments (batch)", () => {
     const { doc } = makeDocWithAnnotations({ n1: makeImportNote({ id: "n1" }) });
     expect(promoteNotesToComments(doc, [])).toBe(0);
     expect(promoteNotesToComments(null, ["n1"])).toBe(0);
+    doc.destroy();
+  });
+});
+
+describe("WS-A2 held-on-create predicate — heldInSoloOnCreate", () => {
+  it("marks only a comment created in Solo", () => {
+    expect(heldInSoloOnCreate("comment", "solo")).toBe(true);
+  });
+
+  it("never marks a note or highlight, even in Solo (ADR-027: not sent to Claude)", () => {
+    expect(heldInSoloOnCreate("note", "solo")).toBe(false);
+    expect(heldInSoloOnCreate("highlight", "solo")).toBe(false);
+  });
+
+  it("never marks anything in Tandem", () => {
+    expect(heldInSoloOnCreate("comment", "tandem")).toBe(false);
+    expect(heldInSoloOnCreate("note", "tandem")).toBe(false);
+  });
+});
+
+describe("WS-A2 promotion marker — sendNoteToClaude / promoteNotesToComments threading", () => {
+  it("stamps heldInSolo on a note promoted while in Solo", () => {
+    const { doc, map } = makeDocWithAnnotations({ n1: makeImportNote({ id: "n1" }) });
+    sendNoteToClaude(doc, "n1", "solo");
+    expect(readBack(map, "n1").heldInSolo).toBe(true);
+    doc.destroy();
+  });
+
+  it("strips heldInSolo on a note promoted while in Tandem (it surfaces now)", () => {
+    // Seed with a stale marker so we pin the STRIP, not merely the absence.
+    const { doc, map } = makeDocWithAnnotations({
+      n1: makeImportNote({ id: "n1", heldInSolo: true }),
+    });
+    sendNoteToClaude(doc, "n1", "tandem");
+    expect(readBack(map, "n1").heldInSolo).toBeUndefined();
+    doc.destroy();
+  });
+
+  it("defaults to Tandem (no marker) when no mode is passed", () => {
+    const { doc, map } = makeDocWithAnnotations({ n1: makeImportNote({ id: "n1" }) });
+    sendNoteToClaude(doc, "n1");
+    expect(readBack(map, "n1").heldInSolo).toBeUndefined();
+    doc.destroy();
+  });
+
+  it("stamps every batch-promoted note when in Solo", () => {
+    const { doc, map } = makeDocWithAnnotations({
+      n1: makeImportNote({ id: "n1" }),
+      n2: makeImportNote({ id: "n2", author: "user", importSource: undefined }),
+    });
+    expect(promoteNotesToComments(doc, ["n1", "n2"], "solo")).toBe(2);
+    expect(readBack(map, "n1").heldInSolo).toBe(true);
+    expect(readBack(map, "n2").heldInSolo).toBe(true);
     doc.destroy();
   });
 });

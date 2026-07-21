@@ -43,6 +43,19 @@ interface Props {
   lastSaveOk?: boolean;
   /** Editor for the active document — drives the word-count cycle. */
   editor?: TiptapEditor | null;
+  /**
+   * WS-A2: number of annotations/replies currently held from the AI because
+   * the user is in Solo mode. Derived by the caller from the persisted
+   * `heldInSolo` field (NEVER from live mode) so the signal survives a
+   * server restart and matches the per-card "Held" pill. Zero → not rendered.
+   * This is the umbrella signal for held items whose surface has no card
+   * (a reply with no card of its own, items created before a doc switch).
+   * Scoped to the ACTIVE document only — the caller derives it from the
+   * visible annotations of the current tab, not across all open docs. A held
+   * item in a background tab isn't counted here (its markers still clear on
+   * release; only the count is active-doc-local).
+   */
+  heldCount?: number;
 }
 
 let {
@@ -60,6 +73,7 @@ let {
   saving = false,
   lastSaveOk = false,
   editor,
+  heldCount = 0,
 }: Props = $props();
 
 /**
@@ -305,13 +319,26 @@ function cycleWordMode() {
     </div>
 
     {#if readOnly}
-      <span
-        style="padding: 1px 8px; font-size: var(--tandem-text-2xs); font-weight: 600; color: var(--tandem-warning-fg-strong); background: var(--tandem-warning-bg); border-radius: var(--tandem-r-pill); border: 1px solid var(--tandem-warning-border);"
-      >
+      <span class="status-warning-pill">
         Review Only
       </span>
     {/if}
   </div>
+
+  {#if heldCount > 0}
+    <!-- WS-A2: umbrella held signal. Amber like the per-card "Held" pill
+         (--tandem-warning-*). Covers held items with no card of their own
+         (replies, pre-doc-switch items). Count comes from the persisted
+         `heldInSolo` field, not live mode. -->
+    <span
+      class="status-warning-pill"
+      data-testid="status-held-count"
+      style="white-space: nowrap;"
+      title="Held while you're in Solo mode. Your AI will see {heldCount === 1 ? 'this' : 'these'} when you switch back to Tandem."
+    >
+      {heldCount} held
+    </span>
+  {/if}
 
   <!-- Consolidated AI-connection indicator: the single home for AI-connection
        state (replaces the old titlebar pill + the former "Assistant · idle"
@@ -390,6 +417,18 @@ function cycleWordMode() {
   .tandem-status-pill:hover .status-faint,
   .tandem-status-pill:focus-within .status-faint {
     opacity: 1;
+  }
+
+  /* Shared amber warning-pill recipe — used by the "Review Only" and the WS-A2
+     "N held" pills so a token/padding tweak lands in one place. */
+  .status-warning-pill {
+    padding: 1px 8px;
+    font-size: var(--tandem-text-2xs);
+    font-weight: 600;
+    color: var(--tandem-warning-fg-strong);
+    background: var(--tandem-warning-bg);
+    border-radius: var(--tandem-r-pill);
+    border: 1px solid var(--tandem-warning-border);
   }
 
   /* A9 (#798): reduced-motion guard for the connection + claude-presence dots
