@@ -197,6 +197,7 @@ integration-wizard-install-success
 integration-wizard-keychain-fallback
 integration-wizard-more
 integration-wizard-pick-{*}
+integration-wizard-push-mode
 integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
@@ -369,6 +370,7 @@ source-view-copy-btn
 source-view-error
 source-view-exit-btn
 source-view-textarea
+status-ai-indicator
 status-word-count
 store-readonly-banner
 store-readonly-dismiss
