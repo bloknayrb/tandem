@@ -246,13 +246,17 @@ async function main() {
     }
 
     // Comment on the timeline slip mention
-    const flagText = "the dashboard timeline slipped due to an unexpected API redesign in May";
+    // Anchored on an exact substring of sample/welcome.md. `findRange` returns
+    // null when the prose changes, and the `if` below then drops the annotation
+    // silently -- the screenshot just comes out missing a comment. If you edit
+    // that sentence, edit this string with it.
+    const flagText = "the dashboard slipped to Q4 after an unexpected API redesign in May";
     const flRange = findRange(flagText);
     if (flRange) {
       await mcp.addAnnotation("tandem_comment", {
         from: flRange.from,
         to: flRange.to,
-        text: "This needs a mitigation plan or updated timeline before sharing externally.",
+        text: "A new date without a recovery plan still reads as a slip. Say what changed before sharing externally.",
         textSnapshot: flagText,
       });
       console.log("   + comment added (was flag)");
