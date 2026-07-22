@@ -17,13 +17,19 @@
  * the `createAgentLabel` rune wrapper (`hooks/useAgentLabel.svelte.ts`).
  */
 
-import type {
-  ModelProvider,
-  ModelRegistryEntry,
-  TandemSettings,
-} from "../hooks/useTandemSettings.js";
+import type { ModelProvider, ModelRegistryEntry } from "../hooks/useTandemSettings.js";
 
 export type AgentLabelStyle = "family" | "model";
+
+/**
+ * The registry projection this module resolves against — the Models store's
+ * synchronous snapshot (`getModelsSnapshot()`), server-authoritative since M2.
+ * `readonly` because the store hands out its live `$state` array.
+ */
+export interface AgentLabelSource {
+  models: readonly ModelRegistryEntry[];
+  defaultModelId: string | null;
+}
 
 /**
  * Brand/family name per provider. Small fixed map — deliberately NOT a
@@ -47,14 +53,12 @@ export const FALLBACK_AGENT_LABEL = "Assistant";
  * is already coerced to `null` by `mergeAndClampSettings`, so a missing match
  * here genuinely means "none / ambiguous".
  */
-function activeEntry(
-  settings: Pick<TandemSettings, "models" | "defaultModelId">,
-): ModelRegistryEntry | undefined {
-  const byDefault = settings.defaultModelId
-    ? settings.models.find((m) => m.id === settings.defaultModelId)
+function activeEntry(source: AgentLabelSource): ModelRegistryEntry | undefined {
+  const byDefault = source.defaultModelId
+    ? source.models.find((m) => m.id === source.defaultModelId)
     : undefined;
   if (byDefault) return byDefault;
-  return settings.models.length === 1 ? settings.models[0] : undefined;
+  return source.models.length === 1 ? source.models[0] : undefined;
 }
 
 /**
@@ -64,11 +68,8 @@ function activeEntry(
  * `model`   → the entry's `displayName`, falling back to `modelId`, then family.
  * No model  → `"Assistant"`.
  */
-export function resolveAgentLabel(
-  settings: Pick<TandemSettings, "models" | "defaultModelId">,
-  style: AgentLabelStyle,
-): string {
-  const entry = activeEntry(settings);
+export function resolveAgentLabel(source: AgentLabelSource, style: AgentLabelStyle): string {
+  const entry = activeEntry(source);
   if (!entry) return FALLBACK_AGENT_LABEL;
   const family = PROVIDER_FAMILY[entry.provider] || FALLBACK_AGENT_LABEL;
   if (style === "family") return family;

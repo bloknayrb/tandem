@@ -1,6 +1,5 @@
 <script lang="ts">
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import ChipGroup, { type ChipOption } from "./ChipGroup.svelte";
 
 export type FilterType = "highlight" | "comment" | "note" | "all" | "with-replacement";
@@ -33,7 +32,7 @@ let {
   onClearFilters,
 }: Props = $props();
 
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 
 // A15 (#798): the 3 native <select>s become compact icon-chip groups (REPLACE,
 // canon decision 5). Reset chip = text; type/status = inline glyphs; author =

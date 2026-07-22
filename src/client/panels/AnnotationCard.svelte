@@ -2,7 +2,6 @@
 import type { Annotation, AnnotationReply } from "../../shared/types";
 import { getVisibleReplies } from "../annotations/replies";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { activationKeydown } from "../utils/keyboard-activate";
 import AnnotationCardActions from "./AnnotationCardActions.svelte";
 import AnnotationEditForm from "./AnnotationEditForm.svelte";
@@ -94,7 +93,7 @@ let {
   openRequest = null,
 }: Props = $props();
 
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 
 // Shared edit-mode state owned by the dispatcher; variants are presentational
 // and never own state. The edit form replaces the variant body when isEditing.

@@ -1,5 +1,5 @@
 import { mount } from "svelte";
-import { migrateModelsRegistryOnce } from "./actions/migrate-models-registry";
+import { initializeStore } from "./hooks/useModels.svelte";
 import Root from "./Root.svelte";
 import { initCrashReporting } from "./sentry";
 import "./actions/scroll-fade.css";
@@ -9,10 +9,11 @@ import "./actions/scroll-fade.css";
 // when telemetry is disabled. Fire-and-forget so it never delays first paint.
 void initCrashReporting();
 
-// One-time Models-registry relocation to the server (#1123 M1a). No-ops for
-// users with no configured models (the dark common case) and after it has run
-// once. Fire-and-forget: only a cheap localStorage check runs synchronously;
-// the network POST is deferred and never blocks first paint.
-void migrateModelsRegistryOnce();
+// Models registry (#1123 M2): reconcile localStorage → the server authority once,
+// settle the CRUD gate, then load the store. Un-gated reconcile runs while dark
+// exactly like the M1a seeder (R2-A); the load is `BYO_MODELS_ENABLED`-gated so a
+// dark boot fetches nothing. Fire-and-forget: only a cheap localStorage check
+// runs synchronously; the network round-trips never block first paint.
+void initializeStore();
 
 mount(Root, { target: document.getElementById("root")! });

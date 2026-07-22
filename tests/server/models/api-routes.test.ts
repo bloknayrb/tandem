@@ -14,7 +14,14 @@ import {
   type ModelsRoutesDeps,
   registerModelsRoutes,
 } from "../../../src/server/models/api-routes.js";
-import { __resetModelRegistryForTests } from "../../../src/server/models/registry.js";
+import {
+  __resetModelRegistryForTests,
+  getModelsEtag,
+  hashModelsFile,
+  persistModelsFile,
+  persistModelsFileIfMatch,
+  primeModelStoreCache,
+} from "../../../src/server/models/registry.js";
 import { createModelStore } from "../../../src/server/models/store.js";
 import {
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
@@ -75,7 +82,7 @@ function makeAppWithRemoteAddress(deps: ModelsRoutesDeps, addr: string): Express
 
 async function request(
   app: Express,
-  method: "POST" | "DELETE",
+  method: "GET" | "POST" | "DELETE",
   url: string,
   body?: unknown,
   extraHeaders?: Record<string, string>,
@@ -219,7 +226,7 @@ describe("models API routes", () => {
   });
 });
 
-describe(`POST ${API_MODELS} (registry relocation, #1123 M1a)`, () => {
+describe(`POST ${API_MODELS} (ETag write-through, #1123 M1a/M2)`, () => {
   let tmpDir: string;
   let deps: ModelsRoutesDeps;
 
@@ -238,6 +245,9 @@ describe(`POST ${API_MODELS} (registry relocation, #1123 M1a)`, () => {
     defaultModelId: "m-1",
   };
 
+  /** Envelope with the CURRENT server etag as ifMatch (the client always GETs first). */
+  const withCurrentEtag = (file: unknown) => ({ file, ifMatch: getModelsEtag() });
+
   beforeEach(async () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-models-route-"));
     __resetModelRegistryForTests(tmpDir);
@@ -253,17 +263,56 @@ describe(`POST ${API_MODELS} (registry relocation, #1123 M1a)`, () => {
     if (tmpDir) await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("persists a valid registry file and returns 200; disk round-trips", async () => {
+  it("persists a valid file with a matching ifMatch and returns the new etag; disk round-trips", async () => {
     const app = makeApp(deps);
-    const res = await request(app, "POST", API_MODELS, validFile);
+    const res = await request(app, "POST", API_MODELS, withCurrentEtag(validFile));
     expect(res.status).toBe(200);
-    expect((res.body as { ok?: boolean }).ok).toBe(true);
+    expect((res.body as { etag?: string }).etag).toBe(getModelsEtag());
     expect(await createModelStore(tmpDir).read()).toEqual(validFile);
   });
 
-  it("rejects a malformed body with 400 INVALID_MODELS_FILE (no disk write)", async () => {
+  it("single-flights concurrent writes: the second in-flight writer gets busy (→ 429)", async () => {
+    // The single-flight `busy` check is SYNCHRONOUS and runs before the write's
+    // `await`, so two overlapping calls are deterministic: call 1 sets the flag
+    // and suspends on the disk write; call 2 sees the flag still set and returns
+    // busy without racing the compare-and-write. Guards the TOCTOU the whole
+    // optimistic-concurrency model rests on (a dropped flag → double-commit).
+    const etag = getModelsEtag(); // empty baseline; matches for both callers
+    const [r1, r2] = await Promise.all([
+      persistModelsFileIfMatch(validFile, etag),
+      persistModelsFileIfMatch(validFile, etag),
+    ]);
+    const results = [r1, r2];
+    expect(results.filter((r) => r.ok).length).toBe(1); // exactly one committed
+    expect(results.filter((r) => !r.ok && r.reason === "busy").length).toBe(1); // the other, busy
+  });
+
+  it("rejects a stale ifMatch with 409 MODELS_STALE and does NOT write", async () => {
     const app = makeApp(deps);
-    const res = await request(app, "POST", API_MODELS, { schemaVersion: 1 });
+    const stale = getModelsEtag(); // etag of the empty baseline
+    await request(app, "POST", API_MODELS, { file: validFile, ifMatch: stale }); // advances etag
+    const before = getModelsEtag();
+    const res = await request(app, "POST", API_MODELS, {
+      file: { ...validFile, defaultModelId: null },
+      ifMatch: stale, // now stale
+    });
+    expect(res.status).toBe(409);
+    expect((res.body as { code?: string }).code).toBe("MODELS_STALE");
+    expect((res.body as { etag?: string }).etag).toBe(before); // current etag, for reconcile
+    expect((res.body as { file?: unknown }).file).toBeUndefined(); // no file body leaked
+    expect(getModelsEtag()).toBe(before); // unchanged — no write happened
+  });
+
+  it("rejects a missing ifMatch with 400", async () => {
+    const app = makeApp(deps);
+    const res = await request(app, "POST", API_MODELS, { file: validFile });
+    expect(res.status).toBe(400);
+    expect((res.body as { code?: string }).code).toBe("INVALID_MODELS_FILE");
+  });
+
+  it("rejects a malformed file with 400 INVALID_MODELS_FILE (no disk write)", async () => {
+    const app = makeApp(deps);
+    const res = await request(app, "POST", API_MODELS, withCurrentEtag({ schemaVersion: 1 }));
     expect(res.status).toBe(400);
     expect((res.body as { code?: string }).code).toBe("INVALID_MODELS_FILE");
     expect(await createModelStore(tmpDir).read()).toEqual({
@@ -279,13 +328,24 @@ describe(`POST ${API_MODELS} (registry relocation, #1123 M1a)`, () => {
       ...validFile,
       models: [{ ...validFile.models[0], apiKey: "sk-PLAINTEXT" }],
     };
-    const res = await request(app, "POST", API_MODELS, dirty);
+    const res = await request(app, "POST", API_MODELS, withCurrentEtag(dirty));
     expect(res.status).toBe(400);
+  });
+
+  it("etag is stable across a write→read cycle (no 409 on the first post-restart write)", async () => {
+    const app = makeApp(deps);
+    await request(app, "POST", API_MODELS, withCurrentEtag(validFile));
+    const afterPost = getModelsEtag();
+    // Simulate a restart: drop the cache, re-read from disk (Zod reorders keys),
+    // and re-derive the etag. It MUST match, else a client's stored etag 409s.
+    __resetModelRegistryForTests(tmpDir);
+    await primeModelStoreCache();
+    expect(getModelsEtag()).toBe(afterPost);
   });
 
   it("rejects a non-allowlisted Origin with 403", async () => {
     const app = makeApp(deps);
-    const res = await request(app, "POST", API_MODELS, validFile, {
+    const res = await request(app, "POST", API_MODELS, withCurrentEtag(validFile), {
       Origin: "https://evil.example",
     });
     expect(res.status).toBe(403);
@@ -294,8 +354,95 @@ describe(`POST ${API_MODELS} (registry relocation, #1123 M1a)`, () => {
   it("with TANDEM_ALLOW_UNAUTHENTICATED_LAN=1, non-loopback callers are still rejected", async () => {
     await withEnvOverride(TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV, "1", async () => {
       const app = makeAppWithRemoteAddress(deps, "10.0.0.5");
-      const res = await request(app, "POST", API_MODELS, validFile);
+      const res = await request(app, "POST", API_MODELS, withCurrentEtag(validFile));
       expect(res.status).toBe(403);
     });
+  });
+});
+
+describe(`GET ${API_MODELS} (load source, #1123 M2)`, () => {
+  let tmpDir: string;
+  let deps: ModelsRoutesDeps;
+
+  const seedFile = {
+    schemaVersion: 1 as const,
+    models: [
+      {
+        id: "m-local",
+        provider: "local-ollama" as const,
+        displayName: "Local Qwen",
+        modelId: "qwen2.5:14b-instruct",
+        endpoint: "http://127.0.0.1:11434",
+        enabled: true,
+      },
+      {
+        id: "m-cloud",
+        provider: "anthropic" as const,
+        displayName: "Claude",
+        modelId: "claude-opus-4-8",
+        apiKeyRef: "ref-secret-handle",
+        enabled: false,
+      },
+    ],
+    defaultModelId: "m-local",
+  };
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-models-get-"));
+    __resetModelRegistryForTests(tmpDir);
+    deps = {
+      keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await persistModelsFile(seedFile); // warms cache + writes disk
+  });
+
+  afterEach(async () => {
+    __resetModelRegistryForTests();
+    vi.restoreAllMocks();
+    if (tmpDir) await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("loopback caller gets the full file + the current etag", async () => {
+    const app = makeApp(deps);
+    const res = await request(app, "GET", API_MODELS);
+    expect(res.status).toBe(200);
+    const body = res.body as { file: typeof seedFile; etag: string };
+    expect(body.file).toEqual(seedFile); // endpoint + apiKeyRef present for loopback
+    expect(body.etag).toBe(getModelsEtag());
+    expect(body.etag).toMatch(/^[0-9a-f]{64}$/); // sha-256 hex
+  });
+
+  it("non-loopback caller gets an allowlist-scrubbed file (no endpoint / apiKeyRef)", async () => {
+    const app = makeAppWithRemoteAddress(deps, "10.0.0.5");
+    const res = await request(app, "GET", API_MODELS);
+    expect(res.status).toBe(200);
+    const body = res.body as { file: typeof seedFile; etag: string };
+    // Same identity fields, but endpoint (host/port disclosure) + apiKeyRef stripped.
+    for (const entry of body.file.models) {
+      expect(entry).not.toHaveProperty("endpoint");
+      expect(entry).not.toHaveProperty("apiKeyRef");
+      expect(entry).toHaveProperty("id");
+      expect(entry).toHaveProperty("provider");
+      expect(entry).toHaveProperty("enabled");
+    }
+    expect(JSON.stringify(body)).not.toContain("11434");
+    expect(JSON.stringify(body)).not.toContain("ref-secret-handle");
+    expect(body.file.defaultModelId).toBe("m-local"); // non-sensitive, retained
+    // Q5: the LAN etag is hashed over the SCRUBBED file, so it does NOT equal the
+    // full-file etag — otherwise it would leak that a hidden field changed.
+    expect(body.etag).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.etag).not.toBe(getModelsEtag());
+    expect(body.etag).toBe(hashModelsFile(body.file)); // hash of exactly what LAN received
+  });
+
+  it("etag is deterministic and changes when the registry changes", async () => {
+    const app = makeApp(deps);
+    const first = (await request(app, "GET", API_MODELS)).body as { etag: string };
+    const second = (await request(app, "GET", API_MODELS)).body as { etag: string };
+    expect(first.etag).toBe(second.etag); // same content → same etag
+    await persistModelsFile({ ...seedFile, defaultModelId: null });
+    const third = (await request(app, "GET", API_MODELS)).body as { etag: string };
+    expect(third.etag).not.toBe(first.etag); // content changed → etag changed
   });
 });

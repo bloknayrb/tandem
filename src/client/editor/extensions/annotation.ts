@@ -11,7 +11,7 @@ import {
 } from "../../../shared/constants";
 import { sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
-import { loadSettings } from "../../hooks/useTandemSettings";
+import { agentLabelSource } from "../../hooks/useModels.svelte";
 import { annotationToPmRange } from "../../positions";
 import { resolveAgentLabel } from "../../utils/agentLabel";
 
@@ -59,15 +59,15 @@ export function parseStoredVisibility(): DecorationVisibility {
 
 /**
  * Agent family label ("Claude"/"GPT"/…) for the agent-comment aria-label (#438).
- * Reuses `loadSettings()` (the canonical localStorage reader — runs the same
- * migration/clamp, returns DEFAULTS on failure) rather than re-parsing the blob,
- * keeping the plugin decoupled from the Svelte *store* while staying the single
- * source of truth for settings parsing. Picked up on the next decoration rebuild
- * after a model change; staleness on a screen-reader-only label is acceptable
- * given users pick one model and keep it.
+ * Reads `agentLabelSource()` — the server-authoritative store when lit,
+ * localStorage settings while dark — a subscription-free read on every
+ * ProseMirror decoration pass (this runs outside the Svelte tree). Picked up on
+ * the next rebuild after a model change; staleness on a screen-reader-only label
+ * is acceptable given users pick one model and keep it. The dark branch keeps the
+ * label byte-identical to pre-M2 for users who configured a model under v0.13.x.
  */
 function readAgentFamilyLabel(): string {
-  return resolveAgentLabel(loadSettings(), "family");
+  return resolveAgentLabel(agentLabelSource(), "family");
 }
 
 /**

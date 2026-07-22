@@ -11,7 +11,6 @@ import ApplyChangesButton from "../components/ApplyChangesButton.svelte";
 import { isTauriRuntime } from "../cowork/cowork-helpers";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { type AnnotationSortMode, sortAnnotations } from "../hooks/useAnnotationOrder.js";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { warningStateColors } from "../utils/colors";
 import { API_BASE } from "../utils/fileUpload";
 import AnnotationCard from "./AnnotationCard.svelte";
@@ -276,7 +275,7 @@ const filteredData = $derived.by(() => {
   return { filtered, pending, reviewPending, resolved, allPending, reviewAllPending };
 });
 
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 
 const hasFilters = $derived(
   filterType !== "all" || filterAuthor !== "all" || filterStatus !== "all",

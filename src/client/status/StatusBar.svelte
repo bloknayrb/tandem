@@ -3,7 +3,6 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import type { AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
@@ -94,7 +93,7 @@ function claudeWorkingLabel(tool: string): string {
 const RECONNECTED_FLASH_MS = 2_000;
 
 // #438: the status pill is the one surface that shows the specific model name.
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 
 const SAVED_FLASH_MS = 4_000;
 

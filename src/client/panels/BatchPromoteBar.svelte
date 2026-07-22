@@ -1,6 +1,5 @@
 <script lang="ts">
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { barIn, barOut } from "./cardMotion";
 
 interface Props {
@@ -13,7 +12,7 @@ interface Props {
 
 let { selectedCount, onPromote, onClear, reduceMotion = false }: Props = $props();
 
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 </script>
 
 {#if selectedCount > 0}

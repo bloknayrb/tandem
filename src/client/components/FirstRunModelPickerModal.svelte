@@ -12,7 +12,6 @@
 import { untrack } from "svelte";
 import { createModels } from "../hooks/useModels.svelte.js";
 import type { ModelProvider } from "../hooks/useTandemSettings.svelte.js";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte.js";
 
 interface Props {
   /** Fires after Save (success) or Skip. Caller should advance its state. */
@@ -21,8 +20,7 @@ interface Props {
 
 const { onComplete }: Props = $props();
 
-const settingsState = createTandemSettings();
-const models = createModels(settingsState);
+const models = createModels();
 
 interface ProviderOption {
   value: ModelProvider;

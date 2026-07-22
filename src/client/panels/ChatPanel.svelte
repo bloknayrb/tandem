@@ -9,13 +9,12 @@ import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { renderMarkdown } from "./chat-markdown";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 
 interface Props {
   ctrlYdoc: Y.Doc | null;
