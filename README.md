@@ -42,9 +42,9 @@ Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md]
 
 ## What Tandem does
 
-Most people use AI on a document by copying a passage into a chat window, asking a question, and pasting the answer back. Tandem closes that loop. The AI sits beside the document you are editing and reads from it directly.
+Most people use AI on a document by copying a passage into a chat window, asking a question, and pasting the answer back. Tandem closes that loop: the AI sits beside the document you are editing and reads from it directly, so there is nothing to copy and nothing to paste back.
 
-When you highlight text, the AI sees the selection as you make it. You can ask it for a rewrite, a summary, a check on tone, or a second opinion. Its suggestions appear as cards next to the document. Accept them, reject them, or reply to ask for something different.
+Ask it for a rewrite, a summary, a check on tone, or a second opinion. Its suggestions arrive as cards next to the document — accept them, reject them, or reply to ask for something different.
 
 Tandem is built to work with Anthropic's Claude out of the box. Other AI tools can also connect. See [the developer section](#the-mcp-integration-policy) below for the details of which clients work and which are tested first.
 
@@ -72,7 +72,7 @@ Tandem is built to work with Anthropic's Claude out of the box. Other AI tools c
   <img src="docs/screenshots/04-toolbar-actions.png" alt="The top of the editor showing several documents open in tabs, the formatting toolbar, a text selection, and the Solo and Tandem mode toggle" width="800">
 </p>
 
-*Several documents open in tabs, with the formatting toolbar above the text. Highlight a passage and the AI sees the selection as you make it. The Solo / Tandem toggle on the right controls whether the AI's annotations appear live or wait until you are ready.*
+*Several documents open in tabs, with the formatting toolbar above the text. Highlight a passage and the AI sees the selection as you make it. The Solo / Tandem toggle on the right decides whether you are working alongside the AI or on your own — see [Privacy and trust](#privacy-and-trust) for what Solo holds back.*
 
 ## Who Tandem is for
 
@@ -93,25 +93,30 @@ Windows 10 version 22H2 or Windows 11. macOS 12 (Monterey) or later. Linux with 
 
 Pick the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest). Windows, macOS, and Linux builds are available.
 
-The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.txt`, or `.html` file opens it directly in Tandem.
+The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.markdown`, `.txt`, `.html`, or `.docx` file opens it directly in Tandem.
 
 ### What you get
 
 - Multiple documents open in tabs, with `.md`, `.txt`, `.html`, and `.docx` support (Word files are editable; the original is only written when you explicitly save).
 - A scratchpad (`Ctrl+N`) for drafts you do not want to save to disk.
-- A command palette (`Ctrl+Shift+P`) for quick actions.
+- A command palette (`Ctrl+Shift+P`) with fuzzy search, ranked by how well each result matches.
 - Find and replace, including across all open tabs.
 - An outline panel for navigating long documents.
+- Paste that keeps its structure: Markdown tables and images arrive as real tables and images, and a URL pasted over selected text becomes a link.
+- Suggestions shown as word-level diffs, so you can see exactly which words change.
+- Optional smart typography (curly quotes, em dashes) and a spellcheck toggle, in Settings (`Ctrl+,`).
 - Light and dark themes.
 - Keyboard navigation through pending suggestions: `Alt+]` and `Alt+[` to move between them, `Ctrl+Enter` to accept, `Ctrl+Shift+Enter` to reject.
 
 ### Other ways to install
 
-If you use a terminal, you can also install Tandem with `npm install -g tandem-editor` (Node.js 22 or newer required), then run `tandem` — it starts the server and prints a `http://127.0.0.1:3479` URL to open the editor in your browser, where the first-run wizard connects Claude. (For a scripted, non-interactive setup, run `tandem setup --apply` once first.) This is mostly useful if you already have Node.js installed; the desktop app is the recommended experience.
+If you use a terminal, you can also install Tandem with `npm install -g tandem-editor` (Node.js 22.12 or newer required), then run `tandem` — it starts the server and prints a `http://127.0.0.1:3479` URL to open the editor in your browser, where the first-run wizard connects Claude. (For a scripted, non-interactive setup, run `tandem setup --apply` once first.) This is mostly useful if you already have Node.js installed; the desktop app is the recommended experience.
 
 ### Got stuck
 
-See [docs/troubleshooting.md](docs/troubleshooting.md) for common problems and how to resolve them.
+Run the built-in diagnostics first — they check the setup problems that cause most first-launch failures. In the desktop app, that is **Settings → About → Copy Diagnostics**. If you installed from npm, run `tandem doctor` instead. (The desktop app does not install the `tandem` command, so use the button rather than the CLI.)
+
+Then see [docs/troubleshooting.md](docs/troubleshooting.md) for common problems and how to resolve them.
 
 ## How you work with Tandem
 
@@ -128,14 +133,15 @@ See [docs/workflows.md](docs/workflows.md) for examples of how this looks in dai
 - Tandem itself runs on your computer and stores your documents on your disk. We do not operate any servers that hold your files.
 - When you ask the AI to do something, the text you share with it goes to whichever AI service you are using. For example, if you connect Claude, the text goes to Anthropic under their terms. Tandem does not relay or copy your document anywhere else.
 - Tandem includes a private notes feature. Notes you mark as private are stripped from every response the AI sees ([ADR-027](docs/decisions.md)).
-- Tandem does not collect telemetry or analytics by default — no usage data, and **crash reporting is off unless you turn it on**. Crash reporting is strictly opt-in: it activates only when you set the `TANDEM_SENTRY_DSN` environment variable to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) DSN of your own. With that variable unset (the default), no crash data ever leaves your machine. When enabled, Tandem ships Rust panics, native crash minidumps, JavaScript errors, and unhandled rejections to *your* configured endpoint, scrubbing home-directory paths (to `~`), obvious API keys/bearer tokens, and request/document payloads before anything is sent. Self-hosting GlitchTip keeps the data fully under your control, in keeping with Tandem's local-first posture.
+- **Solo mode holds your work back from the AI.** The Solo / Tandem toggle in the title bar (`Ctrl+Shift+M`) is not just a notification setting: while you are in Solo, the comments and replies *you* write are withheld from what the AI is told and from what it can look up — its inbox, its reads of the annotation list, and the live updates pushed to it. Each held item shows an amber **Held** pill, the status bar keeps a running count, and switching back to Tandem releases the set together. One limit worth knowing: exporting an annotation report is a deliberate "give the AI everything" action and includes held comments. See [the user guide](docs/user-guide.md#solo--tandem-mode) for exactly what the hold does and does not cover.
+- Tandem does not collect telemetry or analytics by default — no usage data, and **crash reporting is off unless you turn it on**. It activates only if you set `TANDEM_SENTRY_DSN` to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) endpoint of your own; unset (the default), no crash data ever leaves your machine. Sent reports are scrubbed of home-directory paths, API keys, and document payloads — see [docs/security.md](docs/security.md) for the details.
 - When paid licensing arrives at v1.0, running the app will validate a signed license file on your own machine (no network call required); update checks will remain network-only, carry no analytics, and the update service will log only what it needs to authorize the download.
 
 See [docs/security.md](docs/security.md) for the full security model.
 
 ## Where Tandem is headed
 
-Tandem is on the way to a v1.0 release. Today the supported AI integration is Claude (Claude Code / Claude Desktop) over MCP, set up with a one-click in-app wizard. Local models (Ollama, LM Studio) are committed for v1.0 and in active development (#1123) — they'll use the same one-time license as everything else; cloud API-key providers (OpenAI, Gemini) follow in v1.1. Recent releases added Word document write-back (edit a `.docx` and save it back as a real Word file — comments you've sent to your AI are written back as native Word comments) and pre-overwrite backups with in-product restore. Work still in progress covers turnkey setup on macOS and Linux, licensing, and final polish. Tandem is free during the public beta; at v1.0 it moves to a one-time paid license, and beta users are grandfathered with a free license. The full plan lives in [docs/roadmap.md](docs/roadmap.md).
+Tandem is on the way to a v1.0 release. Today the supported AI integration is Claude (Claude Code / Claude Desktop) over MCP, set up with a one-click in-app wizard. Local models (Ollama, LM Studio) are committed for v1.0 and in active development (#1123) — they'll use the same one-time license as everything else; cloud API-key providers (OpenAI, Gemini) follow in v1.1. Word documents round-trip: edit a `.docx` and save it back as a real Word file, with the comments you sent your AI written back as native Word comments — and Tandem snapshots a file before its first write, so you can restore the original from inside the app. Work still in progress covers turnkey setup on macOS and Linux, licensing, and final polish; pricing is covered under [License](#license) below. The full plan lives in [docs/roadmap.md](docs/roadmap.md), and [CHANGELOG.md](CHANGELOG.md) records what landed in each release.
 
 ## Documentation
 
@@ -171,7 +177,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open s
 
 The integration policy is set by [ADR-038](docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration):
 
-> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same 28 tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
+> Tandem's integration contract is **MCP**. The default integration is **Claude** (Claude Code + Claude Desktop) — it's what we recommend, what we test against, and it ships with the channel push, cowork, plugin monitor, and auto-launcher features. Any MCP-capable client can connect to the same MCP HTTP endpoint and use the same MCP tools, but the Claude-specific transports don't apply. Other clients are **best-effort, MCP-contract-compatible, not validated** today.
 >
 > **Integration setup** runs through the integration setup wizard (#477 PR 3). The earlier transitional behavior — Tandem auto-writing its MCP entry to Claude's config files on Tauri startup — was **removed in #477 PR 3c-ii-c**. Every integration (Claude included) is now configured via the wizard, never silently; `tandem setup --apply` is the scriptable non-interactive equivalent.
 
@@ -192,7 +198,7 @@ Client compatibility:
 - **How to enable (Windows desktop app):** open the integration wizard (Settings → AI Assistant, or "Set up" next to Cowork) and click **Enable Cowork**, or toggle it on in Settings → Network. Tandem writes the plugin entry into every detected Cowork workspace and adds a Windows firewall rule so the VM can reach the Tandem server on this computer. That firewall step needs admin once — without it, the VM can't connect.
 - **Why it's automated, not a manual marketplace install:** inside the VM the plugin must point at `host.docker.internal:3479` and carry a per-machine secret auth token. A published marketplace plugin can't carry that token, so Tandem provisions the workspace entries directly. (The published `tandem@tandem-editor` marketplace plugin is for Claude Code running *on the host*, over `127.0.0.1` — see below.)
 - **Verify:** in a Cowork session, ask Claude to open or list your documents — Tandem's tools should appear. If they don't, re-run Enable.
-- **Real-time updates:** live annotation/chat push needs the Tandem desktop app and Claude Code's channel flag (see [Channel push](#channel-push-and-real-time-updates)); the Cowork connection itself is request/response.
+- **Real-time updates:** live annotation/chat push needs the Tandem desktop app plus one of the push transports (see [Channel push](#channel-push-and-real-time-updates)); the Cowork connection itself is request/response.
 - **macOS / Linux:** not yet — tracked in #316 / #317.
 
 For Claude Code on the host, the published plugin can be added from the marketplace instead of the wizard:
@@ -202,11 +208,11 @@ claude plugin marketplace add bloknayrb/tandem
 claude plugin install tandem@tandem-editor
 ```
 
-This activates the MCP tools and the bundled skill. It does **not** auto-enable channel push (that still needs `--dangerously-load-development-channels`, see below).
+This activates the MCP tools, the bundled skill, and — on Claude Code 2.1.212 or newer — a monitor that delivers real-time events with no extra flag. See [Channel push](#channel-push-and-real-time-updates) for how that compares to the channel shim.
 
 ### MCP tools at a glance
 
-28 active tools across five capability areas. Full reference: [docs/mcp-tools.md](docs/mcp-tools.md).
+Tandem's MCP tools span five capability areas. Full reference: [docs/mcp-tools.md](docs/mcp-tools.md).
 
 - **Document.** Open, switch, list, close, and convert documents; read text content and outlines; save back to disk.
 - **Annotation.** Create, resolve, remove, and edit annotations; query the annotation list; export a review report.
@@ -216,7 +222,9 @@ This activates the MCP tools and the bundled skill. It does **not** auto-enable 
 
 ### Channel push and real-time updates
 
-Channel push delivers events (selections, annotation actions, chat messages) to the AI client over Server-Sent Events the moment they happen, so the AI does not have to poll. Two install options:
+Real-time push delivers events (selections, annotation actions, chat messages) to the AI client over Server-Sent Events the moment they happen, so the AI does not have to poll. There are two transports.
+
+**The channel shim** is the default and the one Tandem tests against ([ADR-028](docs/decisions.md)). Sessions the desktop app launches for you already have it. To wire it up yourself:
 
 ```bash
 tandem setup --apply --with-channel-shim                   # persistent setup
@@ -225,7 +233,11 @@ claude --dangerously-load-development-channels server:tandem-channel   # one-off
 
 The `--dangerously-load-development-channels` flag is Claude Code's marker for unstable APIs; it becomes unnecessary when the Channels API stabilizes.
 
-Without channel push, the AI uses `tandem_checkInbox` to pull the same events on demand. You can also ask Claude to poll periodically with `/loop 30s check tandem inbox and respond to any new messages`.
+**The plugin monitor** is the alternative for sessions you start by hand, and it needs no flag. Installing the plugin (above) registers it, and every `claude` you start afterwards wakes on document changes. It requires **Claude Code 2.1.212 or newer** — on older versions the install still succeeds and the monitor simply never runs, with nothing to tell you so, which is why the version matters. Do not enable both: each transport delivers independently, so a session running the plugin *and* the channel flag receives every event twice.
+
+Note that Solo mode suppresses annotation events on both transports by design — chat still comes through. If you are testing push and only chat arrives, check the mode toggle before debugging the transport.
+
+Without either, the AI uses `tandem_checkInbox` to pull the same events on demand. You can also ask Claude to poll periodically with `/loop 30s check tandem inbox and respond to any new messages`.
 
 ### Development setup
 
