@@ -3,13 +3,14 @@
  * First-run model picker: pick a provider, store the key in the OS
  * keychain, set as default. The caller's `onComplete` fires on save or skip.
  *
- * NOT CURRENTLY MOUNTED. This is intentional scaffolding for the BYO-models
- * first-run flow that lights up when `BYO_MODELS_ENABLED` flips at v1.0 — it
- * has no mount site today (the flag also strips the Settings → Models tab and
- * suppresses the titlebar model chip). Do not delete; wire it into the
- * first-run choreography when BYO ships.
+ * Mounted by `App.svelte` behind `shouldShowModelPicker` (an optional,
+ * skippable step after the integration wizard, before the tutorial), which is
+ * gated on `BYO_MODELS_ENABLED` — so this stays DARK (never mounts) until the
+ * flag flips at v1.0, when the Settings → Models tab and the titlebar model chip
+ * light up alongside it. Final first-run choreography copy is M4-owned.
  */
 import { untrack } from "svelte";
+import { isLocalProvider } from "../../shared/models/contract.js";
 import { createModels } from "../hooks/useModels.svelte.js";
 import type { ModelProvider } from "../hooks/useTandemSettings.svelte.js";
 
@@ -27,47 +28,40 @@ interface ProviderOption {
   label: string;
   /** Default model ID surfaced as input placeholder + initial value. */
   defaultModelId: string;
-  /** Provider-specific copy: "API key" for cloud, "Endpoint URL" for local. */
-  isCloud: boolean;
 }
 
+// Local-first, matching ModelEditModal (§3.4): v1.0 ships local providers only,
+// so a fresh first run defaults to Ollama and cloud rows render disabled (their
+// BYO key support is v1.1). Cloud rows stay listed — disabled + "coming soon" —
+// so the roadmap is visible; M4 finalizes first-run copy. The cloud/local split
+// is derived from the contract's `isLocalProvider` (single source of truth,
+// same as ModelEditModal) rather than a hand-maintained per-option flag.
 const PROVIDER_OPTIONS: ProviderOption[] = [
-  {
-    value: "anthropic",
-    label: "Anthropic (Claude)",
-    defaultModelId: "claude-sonnet-4-6",
-    isCloud: true,
-  },
-  { value: "openai", label: "OpenAI", defaultModelId: "gpt-4o", isCloud: true },
-  { value: "gemini", label: "Gemini (Google)", defaultModelId: "gemini-2.0-flash", isCloud: true },
-  {
-    value: "local-ollama",
-    label: "Ollama (local)",
-    defaultModelId: "llama3.1:70b",
-    isCloud: false,
-  },
-  {
-    value: "local-llamacpp",
-    label: "llama.cpp (local)",
-    defaultModelId: "local-model",
-    isCloud: false,
-  },
+  { value: "local-ollama", label: "Ollama (local)", defaultModelId: "llama3.1:70b" },
+  { value: "local-llamacpp", label: "llama.cpp (local)", defaultModelId: "local-model" },
+  { value: "anthropic", label: "Anthropic (Claude)", defaultModelId: "claude-sonnet-4-6" },
+  { value: "openai", label: "OpenAI", defaultModelId: "gpt-4o" },
+  { value: "gemini", label: "Gemini (Google)", defaultModelId: "gemini-2.0-flash" },
 ];
 
-let provider = $state<ModelProvider>("anthropic");
+let provider = $state<ModelProvider>("local-ollama");
 let displayName = $state("");
 let modelId = $state(PROVIDER_OPTIONS[0].defaultModelId);
 let apiKey = $state("");
 let endpoint = $state("http://localhost:11434");
 let saving = $state(false);
 let saveError = $state<string | null>(null);
+// Set once the add COMMITS. A retry after a setDefault failure re-attempts only
+// setDefault against this id — never a second addModel (which would duplicate the
+// entry). Lives for the modal's lifetime.
+let addedId = $state<string | null>(null);
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
 
 const currentProvider = $derived(
   PROVIDER_OPTIONS.find((p) => p.value === provider) ?? PROVIDER_OPTIONS[0],
 );
-const isCloud = $derived(currentProvider.isCloud);
+const isCloud = $derived(!isLocalProvider(provider));
 
 const canSave = $derived(
   modelId.trim().length > 0 && (isCloud ? apiKey.trim().length > 0 : endpoint.trim().length > 0),
@@ -100,17 +94,40 @@ async function handleSave(e: SubmitEvent) {
   saving = true;
   saveError = null;
   try {
-    const id = await models.addModel(
-      {
-        provider,
-        displayName: displayName.trim() || currentProvider.label,
-        modelId: modelId.trim(),
-        enabled: true,
-        ...(isCloud ? {} : { endpoint: endpoint.trim() }),
-      },
-      isCloud ? apiKey.trim() : undefined,
-    );
-    models.setDefault(id);
+    // Add the model once. If a prior attempt already committed the add but its
+    // setDefault failed, `addedId` is set — retry ONLY setDefault below.
+    if (addedId === null) {
+      const id = await models.addModel(
+        {
+          provider,
+          displayName: displayName.trim() || currentProvider.label,
+          modelId: modelId.trim(),
+          enabled: true,
+          ...(isCloud ? {} : { endpoint: endpoint.trim() }),
+        },
+        isCloud ? apiKey.trim() : undefined,
+      );
+      // `addModel` returns null when the write did NOT commit (rolled back /
+      // reconciled away) — do NOT finish onboarding with a phantom default, keep
+      // the modal open and surface the store's error.
+      if (id === null) {
+        saveError = models.saveError ?? "Failed to save model changes.";
+        return;
+      }
+      addedId = id;
+    }
+    // The model committed. Setting it as default can still roll back (a
+    // concurrent writer / blip). That is non-fatal — the model exists — but the
+    // store's list banner does NOT render in first-run, so surface it locally and
+    // let the user proceed via Skip rather than silently onboarding with no
+    // default. (Do NOT reuse `models.saveError` here: its "failed to save"
+    // wording would wrongly imply the model itself didn't save.)
+    const defaulted = await models.setDefault(addedId);
+    if (!defaulted) {
+      saveError =
+        "Model saved, but couldn't set it as the default. You can choose a default later in Settings.";
+      return;
+    }
     onComplete();
   } catch (err) {
     saveError = err instanceof Error ? err.message : "Failed to save";
@@ -120,6 +137,9 @@ async function handleSave(e: SubmitEvent) {
 }
 
 function handleSkip() {
+  // Drop any error left on the shared store singleton (e.g. a rolled-back add or
+  // setDefault) so it can't co-show on the next Settings → Models open.
+  models.clearError();
   onComplete();
 }
 </script>
@@ -164,16 +184,18 @@ function handleSkip() {
       <fieldset class="frm-providers" data-testid="first-run-providers">
         <legend class="frm-label">Provider</legend>
         {#each PROVIDER_OPTIONS as opt (opt.value)}
-          <label class="frm-provider-row">
+          {@const optDisabled = !isLocalProvider(opt.value)}
+          <label class="frm-provider-row" class:frm-provider-row-disabled={optDisabled}>
             <input
               type="radio"
               name="first-run-provider"
               value={opt.value}
               checked={provider === opt.value}
+              disabled={optDisabled}
               data-testid={`first-run-provider-${opt.value}`}
               onchange={() => selectProvider(opt.value)}
             />
-            <span>{opt.label}</span>
+            <span>{opt.label}{optDisabled ? " — coming soon" : ""}</span>
           </label>
         {/each}
       </fieldset>
@@ -347,6 +369,14 @@ function handleSkip() {
 }
 .frm-provider-row:hover {
   background: var(--tandem-surface-muted);
+}
+/* Cloud providers are disabled until v1.1 (their BYO key support ships then). */
+.frm-provider-row-disabled {
+  color: var(--tandem-fg-subtle);
+  cursor: not-allowed;
+}
+.frm-provider-row-disabled:hover {
+  background: none;
 }
 .frm-field {
   display: flex;

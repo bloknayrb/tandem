@@ -106,8 +106,9 @@ describe("reconcileModelsToServerOnce", () => {
     seedSettings();
     vi.stubGlobal("fetch", stubFetch());
     await initializeStore();
-    // If the gate were still pending, this write would never resolve.
-    await expect(createModels().setDefault(null)).resolves.toBeUndefined();
+    // If the gate were still pending, this write would never resolve. It commits
+    // (server 200) → `true`.
+    await expect(createModels().setDefault(null)).resolves.toBe(true);
   });
 
   it("preserves apiKeyRef and params in the projection", async () => {
@@ -145,7 +146,7 @@ describe("reconcileModelsToServerOnce", () => {
     _resetModelsReconcileGuardForTests();
     _resetModelsStoreForTests();
     await initializeStore();
-    await expect(createModels().setDefault(null)).resolves.toBeUndefined();
+    await expect(createModels().setDefault(null)).resolves.toBe(true);
   });
 
   it("does NOT fetch when there are no models", async () => {
@@ -185,8 +186,9 @@ describe("reconcileModelsToServerOnce", () => {
     // The mutator awaits the gate, then its own POST fails (500) and rolls back —
     // but it RESOLVES rather than hanging forever on a never-settled gate. A
     // permanent-pending gate would deadlock every CRUD op at M4.
+    // Its POST 500s → rollback → `false`, but it RESOLVES rather than hanging.
     const mutate = createModels().setDefault(null);
-    await expect(mutate).resolves.toBeUndefined();
+    await expect(mutate).resolves.toBe(false);
   });
 
   it("adopts the server and sets the flag on a 409 (a concurrent writer won)", async () => {

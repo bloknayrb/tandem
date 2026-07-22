@@ -54,31 +54,42 @@ import {
 export interface ModelsState {
   readonly models: readonly ModelRegistryEntry[];
   readonly defaultModelId: string | null;
-  /** Last write/load failure message, or null. Cleared on the next success. */
+  /** Last write/load failure message, or null. Cleared on the next success or `clearError()`. */
   readonly saveError: string | null;
+  /** True while a server load is in flight (drives the Settings tab loading state). */
+  readonly loading: boolean;
+  /**
+   * True when the last server load threw (network / non-OK / bad JSON). Lets the
+   * Models tab render a "couldn't load — retry" state instead of asserting "No
+   * models configured" over an empty `_models` that is empty only because the
+   * load failed. Cleared on the next successful load.
+   */
+  readonly loadFailed: boolean;
+  /**
+   * Add a model. Returns the generated id when the write **committed**, or `null`
+   * when it did not (rolled back / reconciled away) — so an imperative caller
+   * (first-run picker, Settings save) can branch on success instead of reading the
+   * shared reactive `saveError` after the await (§3.3). The declarative tab banner
+   * still surfaces `saveError` for fire-and-forget mutators.
+   */
   addModel: (
     entry: Omit<ModelRegistryEntry, "id" | "apiKeyRef" | "_legacyApiKey">,
     plaintextApiKey?: string,
-  ) => Promise<string>;
+  ) => Promise<string | null>;
+  /** Update a model. Returns `true` when the write committed, `false` otherwise. */
   updateModel: (
     id: string,
     patch: Partial<Omit<ModelRegistryEntry, "id" | "apiKeyRef" | "_legacyApiKey">>,
     plaintextApiKey?: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   deleteModel: (id: string) => Promise<void>;
   toggleEnabled: (id: string) => Promise<void>;
-  setDefault: (id: string | null) => Promise<void>;
-  /**
-   * Legacy-key migration is vestigial now that the store loads from the server:
-   * the server schema is `.strict()` and never carries `_legacyApiKey`, so the
-   * store's entries never do either. Kept as a no-op so `SettingsModelsTab`'s
-   * legacy-migration banner still compiles; the banner + these methods are
-   * removed together in M2b when the Models UI is unhidden. (Legacy plaintext
-   * keys in localStorage are dropped by the reconcile's `projectEntry` — a
-   * pre-existing silent drop while the Models UI is dark; R2-D.)
-   */
-  migrateLegacyKeys: () => Promise<{ migrated: number; failed: number }>;
-  readonly hasLegacyKeys: boolean;
+  /** Set (or clear) the default model. Returns `true` when the write committed. */
+  setDefault: (id: string | null) => Promise<boolean>;
+  /** Re-fetch the registry from the server (user-triggered after a 409 notice). Flag-gated. */
+  reload: () => Promise<void>;
+  /** Clear a sticky `saveError` without a write (called on modal-open / mutation-start). */
+  clearError: () => void;
 }
 
 // --- Module-level singleton state -------------------------------------------
@@ -87,6 +98,12 @@ let _models = $state<ModelRegistryEntry[]>([]);
 let _defaultModelId = $state<string | null>(null);
 let _etag: string | null = null; // last-seen server ETag (not reactive — no UI reads it)
 let _saveError = $state<string | null>(null);
+let _loading = $state(false);
+// Distinct from `_saveError`: a load failure must not be confused with a
+// write/rollback error. The Models tab keys its "couldn't load" state on this so
+// its empty-state never asserts "No models configured" when the truth is the
+// fetch failed. Single writer: `loadFromServer` (true on catch, false on success).
+let _loadFailed = $state(false);
 let _loadInFlight: Promise<void> | null = null;
 
 // Reconcile gate (R2-B): every mutator awaits this before its POST, so a CRUD
@@ -346,19 +363,36 @@ async function fetchAndApply(): Promise<void> {
 export function loadFromServer(): Promise<void> {
   if (!BYO_MODELS_ENABLED) return Promise.resolve();
   if (_loadInFlight) return _loadInFlight;
+  _loading = true;
   _loadInFlight = (async () => {
     try {
       await fetchAndApply();
       _saveError = null;
-    } catch {
-      // Surface a load error; `_loadInFlight` clears in `finally` so a later
-      // load retries.
+      _loadFailed = false;
+    } catch (err) {
+      // Log the actual cause (network drop / non-OK status / bad JSON) — the
+      // user-facing string below collapses them all, and the sibling
+      // `writeThrough` path logs the same way. `_loadInFlight` clears in
+      // `finally` so a later load (or `reload()`) retries.
+      console.warn("[models] load failed", err);
       _saveError = "Failed to load models from the server.";
+      _loadFailed = true;
     } finally {
+      _loading = false;
       _loadInFlight = null;
     }
   })();
   return _loadInFlight;
+}
+
+/**
+ * User-triggered re-fetch (e.g. after a "changed elsewhere — reloaded" notice).
+ * Clears the in-flight dedup so it always hits the server. Flag-gated via
+ * `loadFromServer`, so it is a no-op while dark.
+ */
+export function reload(): Promise<void> {
+  _loadInFlight = null;
+  return loadFromServer();
 }
 
 /**
@@ -423,9 +457,11 @@ export function createModels(): ModelsState {
     get saveError() {
       return _saveError;
     },
-    get hasLegacyKeys() {
-      // Server-backed entries never carry `_legacyApiKey`; always false. See interface doc.
-      return _models.some((m) => typeof m._legacyApiKey === "string");
+    get loading() {
+      return _loading;
+    },
+    get loadFailed() {
+      return _loadFailed;
     },
     async addModel(entry, plaintextApiKey) {
       assertValidPatch(entry);
@@ -446,12 +482,14 @@ export function createModels(): ModelsState {
       // delete (never throws). Keying on the outcome (not reconstructed side
       // effects) also covers the reconcile-adopt orphan the old guard missed.
       if (apiKeyRef && outcome !== "committed") await keychain.delete(apiKeyRef);
-      return id;
+      // Return the id ONLY on commit so a branch-on-success caller (first-run
+      // picker, Settings save) never proceeds with an id whose entry didn't land.
+      return outcome === "committed" ? id : null;
     },
     async updateModel(id, patch, plaintextApiKey) {
       assertValidPatch(patch);
       const existing = _models.find((m) => m.id === id);
-      if (!existing) return;
+      if (!existing) return false;
       let newRef: string | undefined;
       if (plaintextApiKey !== undefined && plaintextApiKey.length > 0) {
         // Store the NEW secret but do NOT delete the old ref yet — a failed write
@@ -480,6 +518,13 @@ export function createModels(): ModelsState {
           await keychain.delete(newRef);
         }
       }
+      // Report commit, not `landed`: in the rare `committed && !landed` window (a
+      // concurrent delete of `id` adopted on the stale-reload path), the write
+      // itself succeeded, so the caller closes the editor as "saved" — and the
+      // reactive list, now missing the concurrently-deleted row, already tells the
+      // honest story. Returning `false` here would reopen the editor with a
+      // misleading "save failed" when nothing the user did failed.
+      return outcome === "committed";
     },
     async deleteModel(id) {
       const ref = _models.find((m) => m.id === id)?.apiKeyRef;
@@ -500,14 +545,14 @@ export function createModels(): ModelsState {
       });
     },
     async setDefault(id) {
-      await writeThrough(() => {
+      const outcome = await writeThrough(() => {
         _defaultModelId = id;
       });
+      return outcome === "committed";
     },
-    async migrateLegacyKeys() {
-      // No-op: the store loads from the `.strict()` server, which never carries
-      // `_legacyApiKey`. Kept for interface stability (SettingsModelsTab wiring).
-      return { migrated: 0, failed: 0 };
+    reload,
+    clearError() {
+      _saveError = null;
     },
   };
 }
@@ -521,6 +566,8 @@ export function _resetModelsStoreForTests(): void {
   _defaultModelId = null;
   _etag = null;
   _saveError = null;
+  _loading = false;
+  _loadFailed = false;
   _loadInFlight = null;
   // Reset the write queue too — a test that leaves a mock fetch permanently
   // pending would otherwise gate every subsequent test's writeThrough calls on

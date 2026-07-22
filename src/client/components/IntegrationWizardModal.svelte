@@ -53,9 +53,16 @@ import { computeDoneHeaderState } from "./integration-wizard-helpers.js";
 interface Props {
   open: boolean;
   onClose: () => void;
+  /**
+   * Close the wizard and open the Models settings path. Wired by App.svelte to
+   * `openModelsSettings`. Only invoked from the flag-ON "AI models" row, which
+   * never renders while `BYO_MODELS_ENABLED` is false — so this stays unused
+   * (and undefined-safe via `?.`) while dark.
+   */
+  onSetupModels?: () => void;
 }
 
-let { open, onClose }: Props = $props();
+let { open, onClose, onSetupModels }: Props = $props();
 
 // Absolute base URL because the Vite dev server does not proxy /api/* —
 // other client modules (yjsSync, useNotifications, fileUpload) follow the
@@ -876,6 +883,25 @@ const doneHeaderState = $derived(
                     <span class="iw-more-row-name">AI models</span>
                     <span class="iw-more-row-detail">Bring your own model — coming soon</span>
                   </div>
+                </div>
+              {:else}
+                <div class="iw-more-row">
+                  <div class="iw-more-row-text">
+                    <span class="iw-more-row-name">AI models</span>
+                    <span class="iw-more-row-detail">Set up a local AI model (Ollama or llama.cpp)</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="iw-btn iw-btn-secondary iw-more-btn"
+                    onclick={() => {
+                      onClose();
+                      onSetupModels?.();
+                    }}
+                    aria-label="Set up a local AI model"
+                    data-testid="integration-wizard-models-setup"
+                  >
+                    Set up
+                  </button>
                 </div>
               {/if}
             </section>
