@@ -577,6 +577,7 @@ describe("AR2: annotation decoration attrs — five visual languages", () => {
       author: string;
       suggestedText?: string;
       color?: string;
+      agentIdentity?: { provider: string; displayName: string };
     },
   ) {
     const id = fields.id ?? "ann-1";
@@ -591,6 +592,7 @@ describe("AR2: annotation decoration attrs — five visual languages", () => {
       range: { from: 1, to: 5 },
       ...(fields.suggestedText !== undefined ? { suggestedText: fields.suggestedText } : {}),
       ...(fields.color !== undefined ? { color: fields.color } : {}),
+      ...(fields.agentIdentity !== undefined ? { agentIdentity: fields.agentIdentity } : {}),
     });
   }
 
@@ -620,6 +622,32 @@ describe("AR2: annotation decoration attrs — five visual languages", () => {
     expect(dec.attrs.class).toBe("tandem-comment tandem-comment--claude");
     expect(dec.attrs.style).toContain("solid");
     expect(dec.attrs["data-annotation-author"]).toBe("claude");
+  });
+
+  // #1123 M4: per-agent underline color. A claude comment with NO agentIdentity
+  // must emit the EXACT pre-M4 style string (byte-identical while dark); one WITH
+  // an agentIdentity swaps in the per-agent token and must not carry the claude one.
+  it("claude comment WITHOUT agentIdentity emits the exact pre-M4 style string", () => {
+    const ydoc = new Y.Doc();
+    addAnnotationEntry(ydoc, { type: "comment", author: "claude" });
+    const [dec] = getDecorations(ydoc);
+    expect(dec.attrs.style).toBe(
+      "border-bottom: 2px solid var(--tandem-author-claude); padding-bottom: 1px;",
+    );
+  });
+
+  it("claude comment WITH agentIdentity uses the per-agent token, not the claude token", () => {
+    const ydoc = new Y.Doc();
+    addAnnotationEntry(ydoc, {
+      type: "comment",
+      author: "claude",
+      agentIdentity: { provider: "local-ollama", displayName: "Qwen 2.5" },
+    });
+    const [dec] = getDecorations(ydoc);
+    expect(dec.attrs.style).toBe(
+      "border-bottom: 2px solid var(--tandem-agent-local-ollama); padding-bottom: 1px;",
+    );
+    expect(dec.attrs.style).not.toContain("var(--tandem-author-claude)");
   });
 
   it("import comment → tandem-comment (not --claude), data-annotation-author=import", () => {

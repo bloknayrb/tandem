@@ -6,9 +6,10 @@ import {
 } from "../../src/client/panels/marginLeaderGeometry";
 
 describe("leaderColorForAuthor", () => {
-  // Equivalence classes cover every value of Annotation["author"]. The
-  // assertNever branch is unreachable under TS; coverage proof is that all
-  // three cases below resolve to distinct CSS variables.
+  // Equivalence classes cover every value of Annotation["author"] with NO
+  // agentIdentity (the dark case). The assertNever branch is unreachable under
+  // TS; coverage proof is that all three cases below resolve to distinct CSS
+  // variables. The claude case pins the exact pre-M4 token (byte-identical dark).
   it.each([
     {
       author: "claude" as const,
@@ -25,8 +26,29 @@ describe("leaderColorForAuthor", () => {
       expected: "var(--tandem-fg-subtle)",
       why: ".docx Word-comment-derived → neutral subtle tone, distinct from Claude",
     },
-  ])("maps $author → $expected ($why)", ({ author, expected }) => {
-    expect(leaderColorForAuthor(author)).toBe(expected);
+  ])("maps $author (no identity) → $expected ($why)", ({ author, expected }) => {
+    expect(leaderColorForAuthor(author, undefined)).toBe(expected);
+  });
+
+  // #1123 M4: a claude leader with an agentIdentity takes the per-agent token.
+  it("claude + agentIdentity → the per-agent token, not the claude token", () => {
+    const color = leaderColorForAuthor("claude", {
+      provider: "local-ollama",
+      displayName: "Qwen 2.5",
+    });
+    expect(color).toBe("var(--tandem-agent-local-ollama)");
+    expect(color).not.toBe("var(--tandem-author-claude)");
+  });
+
+  // Identity is ignored on non-claude leaders — a silent regression here would
+  // leak agent color onto user/import connectors.
+  it.each([
+    { author: "user" as const, expected: "var(--tandem-author-user)" },
+    { author: "import" as const, expected: "var(--tandem-fg-subtle)" },
+  ])("$author ignores agentIdentity → $expected", ({ author, expected }) => {
+    expect(
+      leaderColorForAuthor(author, { provider: "local-ollama", displayName: "Qwen 2.5" }),
+    ).toBe(expected);
   });
 });
 

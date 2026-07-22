@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
-import { dispatch, TOOLS } from "../../../src/server/local-model/tools.js";
-import { Y_MAP_ANNOTATION_REPLIES } from "../../../src/shared/constants.js";
+import { dispatch, MUTATING_TOOLS, TOOLS } from "../../../src/server/local-model/tools.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_AUTHORSHIP } from "../../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../../src/shared/origins.js";
 import type { Annotation } from "../../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
@@ -47,6 +47,45 @@ describe("local-model tool registry (ADR-027 lock)", () => {
     expect(
       TOOLS.some((t) => /^(get|list|read|view|fetch)_?(annotation|comment|note)/i.test(t.name)),
     ).toBe(false);
+  });
+});
+
+// #1123 M4 tripwire. Per-agent AuthorshipRange color was EXCLUDED from M4 on the
+// grounds that the loop writes zero authorship ranges (its edits are proposals,
+// not body text; accepted text is attributed author:"user" client-side). This
+// pins that premise by iterating the WHOLE mutating-tool set — so a future
+// body-editing tool that stamps authorship is dispatched here and breaks the
+// assertion, pointing straight back at the exclusion decision.
+describe("dispatch — no mutating tool writes an authorship range (M4 (d) tripwire)", () => {
+  // Best-effort valid args per current mutating tool so each dispatch actually
+  // reaches its write path; an unknown future tool falls back to {} (still
+  // dispatched, so it's at least exercised — tighten its args when it lands).
+  function argsFor(name: string, annotationId: string): Record<string, unknown> {
+    switch (name) {
+      case "comment_on_quote":
+        return { quoted_text: "the first phase", comment: "note" };
+      case "propose_replacement":
+        return { quoted_text: "We proceeded carefully", suggested_text: "x", rationale: "y" };
+      case "reply_to_annotation":
+        return { annotation_id: annotationId, text: "reply body" };
+      default:
+        return {};
+    }
+  }
+
+  it("every tool in MUTATING_TOOLS leaves the authorship map empty", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    // Seed one real annotation so reply_to_annotation has a valid target.
+    const seed = dispatch(
+      "comment_on_quote",
+      { quoted_text: "The team agreed", comment: "seed" },
+      { ydoc: doc },
+    );
+    const annotationId = (seed.result as { annotation_id?: string }).annotation_id ?? "";
+    for (const name of MUTATING_TOOLS) {
+      dispatch(name, argsFor(name, annotationId), { ydoc: doc });
+    }
+    expect(doc.getMap(Y_MAP_AUTHORSHIP).size).toBe(0);
   });
 });
 

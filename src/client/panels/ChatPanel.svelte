@@ -10,6 +10,7 @@ import { generateMessageId } from "../../shared/utils";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { flatOffsetToPmPos } from "../positions";
+import { agentColor } from "../utils/agent-color";
 import { renderMarkdown } from "./chat-markdown";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
@@ -218,9 +219,13 @@ async function clearChat() {
       >
         <!-- Author + doc badge -->
         <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+          <!-- #1123 M4: a local-model chat author gets its per-agent color; a
+               real-Claude / dark message (no agentIdentity) keeps the accent
+               token unchanged, so this is byte-identical while dark. -->
           <span
+            data-testid="chat-author-{msg.id}"
             style="font-weight: 600; font-size: 11px; color: {msg.author === 'claude'
-              ? 'var(--tandem-accent)'
+              ? (msg.agentIdentity ? agentColor(msg.agentIdentity) : 'var(--tandem-accent)')
               : 'var(--tandem-fg-muted)'}; text-transform: uppercase;"
           >
             {msg.author === "claude"

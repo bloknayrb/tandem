@@ -107,6 +107,8 @@ import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import { tabIdsToCloseOthers, tabIdsToCloseRight } from "./tabs/tab-context-menu.js";
 import { isRenamable } from "./types.js";
 import { openFileForRuntime } from "./utils/browse-file";
+import { resolveDefaultModelChip } from "./utils/model-chip";
+import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "./utils/recentFiles";
 import { openServerPath } from "./utils/server-paths";
 
@@ -653,12 +655,16 @@ function openSettingsModalWithAck() {
   settingsModalOpen = true;
 }
 
-const defaultModelLabel = $derived.by(() => {
-  const id = modelsStore.defaultModelId;
-  if (id === null) return null;
-  const entry = modelsStore.models.find((m) => m.id === id);
-  return entry ? entry.displayName : null;
-});
+// #1123 M4: the loading gate (returns null while a registry load is in flight)
+// lives in `resolveDefaultModelChip` so it's unit-testable; the `? : null`
+// BYO wrapper at the prop keeps the chip dark-hidden.
+const defaultModelLabel = $derived(
+  resolveDefaultModelChip({
+    defaultModelId: modelsStore.defaultModelId,
+    models: modelsStore.models,
+    loading: modelsStore.loading,
+  }),
+);
 
 // `initialTabId` is applied only on the closed → open transition, so a
 // mid-open chip click leaves the user's current tab alone.
@@ -1841,28 +1847,47 @@ const tutorial = createTutorial(
   () => activeTab?.fileName,
 );
 
-// First-run model picker (#1123 M2b) — an OPTIONAL, skippable step sequenced
-// AFTER the integration wizard and BEFORE the tutorial. Dismissed for the
-// session once completed or skipped. Declared after `createTutorial` so the
-// derived doesn't reference `tutorial` before it is assigned.
+// First-run model picker (#1123) — an OPTIONAL, skippable step sequenced AFTER
+// the integration wizard and BEFORE the tutorial.
 //
-// Deliberate coupling (M4 revisits): the picker BORROWS the tutorial's first-run
-// signal (`tutorial.tutorialActive`) as its own existence condition rather than
-// introducing a parallel "first-run needed" state. That equivalence has two
-// known edges M4 owns: (a) a user who has no/disabled/already-completed tutorial
-// never sees the picker even though "connect a model on first run" is
-// conceptually orthogonal to the welcome tutorial; (b) `modelPickerDismissed` is
-// session-scoped, so a tutorial *replay* in a later session (with BYO on) would
-// re-summon the picker. Both are acceptable for the dark M2b mount — final
-// first-run choreography is M4 — but the coupling is a choice, not an accident.
+// M4 decoupled the picker from the tutorial: M2b borrowed `tutorial.tutorialActive`
+// as its existence condition, which meant a no/completed-tutorial user never saw
+// it and a tutorial *replay* re-summoned it. The signal now keys on the model
+// registry's own state (`resolveModelFirstRunNeeded`, which takes NO tutorial
+// input) — show once BYO is on, the wizard isn't showing, the registry has
+// settled with no configured default, and the user hasn't dismissed it. Dismissal
+// is PERSISTED (localStorage) so a skip isn't re-nagged on the next launch.
 //
-// Dark guarantee: `BYO_MODELS_ENABLED` short-circuits the derived, so while dark
-// `shouldShowModelPicker` is always false — the picker never mounts and the
-// tutorial gate (`!shouldShowModelPicker`) reduces to today's exact
-// `tutorial.tutorialActive && !shouldShowWizard`.
-let modelPickerDismissed = $state(false);
+// Dark guarantee: `BYO_MODELS_ENABLED &&` remains the leading short-circuit
+// conjunct, so while dark `shouldShowModelPicker` is always false and the
+// registry reads never evaluate — the tutorial gate (`!shouldShowModelPicker`)
+// reduces to today's exact `tutorial.tutorialActive && !shouldShowWizard`.
+const MODEL_PICKER_DISMISSED_KEY = "tandem:modelPickerDismissed";
+function loadModelPickerDismissed(): boolean {
+  try {
+    return localStorage.getItem(MODEL_PICKER_DISMISSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+let modelPickerDismissed = $state(loadModelPickerDismissed());
+function dismissModelPicker() {
+  modelPickerDismissed = true;
+  try {
+    localStorage.setItem(MODEL_PICKER_DISMISSED_KEY, "1");
+  } catch {
+    // Storage-disabled (incognito) — a session-scoped dismissal is an acceptable
+    // fallback; the picker still won't re-open within this session.
+  }
+}
 const shouldShowModelPicker = $derived(
-  BYO_MODELS_ENABLED && !shouldShowWizard && tutorial.tutorialActive && !modelPickerDismissed,
+  BYO_MODELS_ENABLED &&
+    resolveModelFirstRunNeeded({
+      wizardShowing: shouldShowWizard,
+      hasConfiguredDefault: modelsStore.defaultModelId !== null,
+      dismissed: modelPickerDismissed,
+      loading: modelsStore.loading,
+    }),
 );
 </script>
 
@@ -2209,7 +2234,7 @@ const shouldShowModelPicker = $derived(
       <!-- Optional post-wizard model step (#1123 M2b, dark until M4). Skip or
            complete dismisses it for the session, revealing the tutorial (gated
            on `!shouldShowModelPicker` below). Never mounts while dark. -->
-      <FirstRunModelPickerModal onComplete={() => (modelPickerDismissed = true)} />
+      <FirstRunModelPickerModal onComplete={dismissModelPicker} />
     {/if}
 
     {#if fileOpenDialogOpen}

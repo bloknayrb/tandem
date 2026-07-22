@@ -8,6 +8,7 @@ activity-pill
 activity-row-{*}
 activity-tray
 ai-readiness-harness
+annotation-author-dot-{*}
 annotation-card-{*}
 annotation-held-pill-{*}
 annotation-import-byline-{*}
@@ -36,6 +37,7 @@ bulk-cancel-btn
 bulk-confirm-btn
 bulk-dismiss-btn
 chat-anchor-quote-{*}
+chat-author-{*}
 chat-send-btn
 chat-tab
 claude-typing-indicator-{*}
@@ -263,6 +265,7 @@ palette-input
 palette-item-new-scratchpad
 palette-item-{*}
 panel-edge-collapse-{*}
+peek-dot-{*}
 peek-strip-{*}
 popup-annotate-btn
 popup-annotate-row
