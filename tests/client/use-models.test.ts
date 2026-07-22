@@ -515,4 +515,187 @@ describe("models store — keychain ordering on failed writes (terminal-only del
     expect(rec.ops).not.toContainEqual({ method: "DELETE", ref });
     expect(models.models.map((m) => m.id)).toEqual([id]);
   });
+
+  it("updateModel COMMITTED rotation deletes the OLD ref and keeps the NEW ref", async () => {
+    // Add succeeds (old ref minted); rotate the key with an all-200 stub so the
+    // rotation commits and the new ref is live → the old ref must be cleaned up.
+    vi.stubGlobal("fetch", stubFetch());
+    const models = createModels();
+    const id = await models.addModel(
+      { provider: "anthropic", displayName: "A", modelId: "claude-opus-4-7", enabled: true },
+      "old-secret",
+    );
+    const oldRef = models.models[0].apiKeyRef!;
+
+    const rec = recordingFetch(false); // committed
+    vi.stubGlobal("fetch", rec.fn);
+    await models.updateModel(id, {}, "new-secret");
+
+    const newRef = rec.stored()[0];
+    expect(newRef).not.toBe(oldRef);
+    expect(models.models[0].apiKeyRef).toBe(newRef); // new ref is live on the entry
+    expect(rec.ops).toContainEqual({ method: "DELETE", ref: oldRef }); // old cleaned up
+    expect(rec.ops).not.toContainEqual({ method: "DELETE", ref: newRef }); // new kept
+  });
+
+  it("deleteModel COMMITTED drops the entry's ref", async () => {
+    vi.stubGlobal("fetch", stubFetch());
+    const models = createModels();
+    const id = await models.addModel(
+      { provider: "anthropic", displayName: "A", modelId: "claude-opus-4-7", enabled: true },
+      "secret",
+    );
+    const ref = models.models[0].apiKeyRef!;
+
+    const rec = recordingFetch(false); // committed
+    vi.stubGlobal("fetch", rec.fn);
+    await models.deleteModel(id);
+
+    expect(models.models.length).toBe(0);
+    expect(rec.ops).toContainEqual({ method: "DELETE", ref }); // committed delete cleans the secret
+  });
+});
+
+describe("models store — concurrency (busy retry, persistent stale, adopt-orphan)", () => {
+  type SecretOp = { method: "POST" | "DELETE"; ref: string };
+
+  /**
+   * Recording fetch driven by a per-POST status sequence (last entry repeats).
+   * 200 → `{etag}`; 409 → `MODELS_STALE`; 429 → `MODELS_BUSY`; else generic fail.
+   * GETs return `serverFile` (a test can reseed it to model a concurrent delete).
+   */
+  function seqFetch(postStatuses: number[]) {
+    const ops: SecretOp[] = [];
+    let postN = 0;
+    const fn = vi.fn(async (url: string, init?: { method?: string }) => {
+      const u = String(url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      const secret = u.match(/\/secrets\/([^/?#]+)/);
+      if (secret) {
+        ops.push({ method: method as "POST" | "DELETE", ref: secret[1] });
+        return new Response(method === "DELETE" ? '{"existed":true}' : null, {
+          status: method === "DELETE" ? 200 : 204,
+        });
+      }
+      if (method === "POST") {
+        const status = postStatuses[Math.min(postN, postStatuses.length - 1)];
+        postN++;
+        if (status === 200) {
+          return new Response(JSON.stringify({ etag: `etag-${++etagSeq}` }), { status: 200 });
+        }
+        const code =
+          status === 409 ? "MODELS_STALE" : status === 429 ? "MODELS_BUSY" : "MODELS_WRITE_FAILED";
+        return new Response(JSON.stringify({ code, etag: "srv-cur" }), { status });
+      }
+      return new Response(JSON.stringify({ file: serverFile, etag: "srv-cur" }), { status: 200 });
+    });
+    return {
+      fn,
+      ops,
+      stored: () => ops.filter((o) => o.method === "POST").map((o) => o.ref),
+      deleted: () => ops.filter((o) => o.method === "DELETE").map((o) => o.ref),
+      postCount: () => postN,
+    };
+  }
+
+  it("a 429 MODELS_BUSY is transient — re-POSTs and commits (not treated as data loss)", async () => {
+    const rec = seqFetch([429, 200]); // busy once, then wins
+    vi.stubGlobal("fetch", rec.fn);
+    const models = createModels();
+    const id = await models.addModel({
+      provider: "openai",
+      displayName: "G",
+      modelId: "gpt-4o",
+      enabled: true,
+    });
+
+    expect(rec.postCount()).toBe(2); // retried through the busy
+    expect(models.models.map((m) => m.id)).toEqual([id]); // committed, not rolled back
+    expect(models.saveError).toBeNull();
+  });
+
+  it("a sustained 429 (retries exhausted) rolls back with a 'busy, try again' message", async () => {
+    const rec = seqFetch([429]); // busy forever
+    vi.stubGlobal("fetch", rec.fn);
+    const models = createModels();
+    await models.addModel({
+      provider: "openai",
+      displayName: "G",
+      modelId: "gpt-4o",
+      enabled: true,
+    });
+
+    expect(rec.postCount()).toBe(3); // BUSY_RETRY_LIMIT attempts
+    expect(models.models.length).toBe(0); // rolled back — the edit did not land
+    expect(models.saveError).toMatch(/busy/i);
+  });
+
+  it("a PERSISTENT 409 adopts the server state and surfaces a reconcile message", async () => {
+    // The server already holds an entry the reload surfaces; BOTH the initial POST
+    // and the post-reload retry 409, so the write can't land → adopt, don't diverge.
+    serverFile = {
+      schemaVersion: 1,
+      models: [
+        {
+          id: "srv-entry",
+          provider: "anthropic",
+          displayName: "Server",
+          modelId: "claude-opus-4-7",
+          enabled: true,
+        },
+      ],
+      defaultModelId: null,
+    };
+    const rec = seqFetch([409, 409]); // stale on both attempts
+    vi.stubGlobal("fetch", rec.fn);
+    const models = createModels();
+    await models.setDefault("srv-entry");
+
+    expect(rec.postCount()).toBe(2);
+    expect(models.models.map((m) => m.id)).toEqual(["srv-entry"]); // adopted server
+    expect(models.defaultModelId).toBeNull(); // optimistic setDefault NOT left standing
+    expect(models.saveError).toMatch(/changed elsewhere/i);
+  });
+
+  it("addModel under a persistent 409 (reconcile-adopt) deletes the minted ref (no orphan)", async () => {
+    // The user's add never lands (both POSTs 409, server has no such entry) → the
+    // minted secret backs nothing and must be cleaned up — the adopt-orphan the
+    // outcome-keyed cleanup was designed to catch.
+    serverFile = { schemaVersion: 1, models: [], defaultModelId: null };
+    const rec = seqFetch([409, 409]);
+    vi.stubGlobal("fetch", rec.fn);
+    const models = createModels();
+    await models.addModel(
+      { provider: "anthropic", displayName: "A", modelId: "claude-opus-4-7", enabled: true },
+      "secret",
+    );
+
+    const minted = rec.stored();
+    expect(minted.length).toBe(1);
+    expect(rec.deleted()).toContain(minted[0]); // adopt-orphan cleaned up
+    expect(models.models.length).toBe(0); // adopted the (empty) server state
+  });
+
+  it("updateModel that COMMITS but whose entry vanished server-side deletes the NEW ref (no orphan)", async () => {
+    // Add locally, then rotate the key. The first POST 409s; the reload returns a
+    // server file WITHOUT the entry (a concurrent delete), so the re-applied update
+    // is a no-op and the retry 200s "committed" — but the new ref now backs nothing.
+    vi.stubGlobal("fetch", stubFetch());
+    const models = createModels();
+    const id = await models.addModel(
+      { provider: "anthropic", displayName: "A", modelId: "claude-opus-4-7", enabled: true },
+      "old-secret",
+    );
+    const oldRef = models.models[0].apiKeyRef!;
+
+    serverFile = { schemaVersion: 1, models: [], defaultModelId: null }; // entry deleted elsewhere
+    const rec = seqFetch([409, 200]); // stale, reload (empty), retry commits
+    vi.stubGlobal("fetch", rec.fn);
+    await models.updateModel(id, {}, "new-secret");
+
+    const newRef = rec.stored()[0];
+    expect(newRef).not.toBe(oldRef);
+    expect(models.models.length).toBe(0); // adopted the entry-less server state
+    expect(rec.deleted()).toContain(newRef); // committed-but-not-landed → new ref cleaned up
+  });
 });

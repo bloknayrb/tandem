@@ -19,6 +19,7 @@ import {
   getModelsEtag,
   hashModelsFile,
   persistModelsFile,
+  persistModelsFileIfMatch,
   primeModelStoreCache,
 } from "../../../src/server/models/registry.js";
 import { createModelStore } from "../../../src/server/models/store.js";
@@ -268,6 +269,22 @@ describe(`POST ${API_MODELS} (ETag write-through, #1123 M1a/M2)`, () => {
     expect(res.status).toBe(200);
     expect((res.body as { etag?: string }).etag).toBe(getModelsEtag());
     expect(await createModelStore(tmpDir).read()).toEqual(validFile);
+  });
+
+  it("single-flights concurrent writes: the second in-flight writer gets busy (→ 429)", async () => {
+    // The single-flight `busy` check is SYNCHRONOUS and runs before the write's
+    // `await`, so two overlapping calls are deterministic: call 1 sets the flag
+    // and suspends on the disk write; call 2 sees the flag still set and returns
+    // busy without racing the compare-and-write. Guards the TOCTOU the whole
+    // optimistic-concurrency model rests on (a dropped flag → double-commit).
+    const etag = getModelsEtag(); // empty baseline; matches for both callers
+    const [r1, r2] = await Promise.all([
+      persistModelsFileIfMatch(validFile, etag),
+      persistModelsFileIfMatch(validFile, etag),
+    ]);
+    const results = [r1, r2];
+    expect(results.filter((r) => r.ok).length).toBe(1); // exactly one committed
+    expect(results.filter((r) => !r.ok && r.reason === "busy").length).toBe(1); // the other, busy
   });
 
   it("rejects a stale ifMatch with 409 MODELS_STALE and does NOT write", async () => {

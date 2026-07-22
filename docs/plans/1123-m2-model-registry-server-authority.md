@@ -1,6 +1,6 @@
 # #1123 M2 — Client read-authority relocation + Models UI unhide (server-authoritative registry)
 
-**Status:** M2a IMPLEMENTED + reviewed (7 agents: 4 cleanup + Svelte/security/general-correctness). Round 1 found a **data-loss-grade flaw** and a **5×-underscoped reader graph**; round 2 bound R2-A…R2-G. The **implementation review corrected R2-F** (see below) — a genuine dark-guarantee hole — plus applied a keychain-ordering fix, a reconcile-gate altitude fix, and a LAN-ETag hardening. M2b/M3/M4 still to come.
+**Status:** M2a IMPLEMENTED + reviewed, PR #1220 open. Round 1 found a **data-loss-grade flaw** and a **5×-underscoped reader graph**; round 2 bound R2-A…R2-G. The implementation review (round 3) corrected R2-F — a genuine dark-guarantee hole — plus keychain-ordering, reconcile-gate altitude, and LAN-ETag hardening. PR review (round 4, 5 agents) added a 429-retry taxonomy, a reconcile-gate-deadlock fix, and an updateModel orphan guard; server side reviewed clean; the review's CRITICAL is carried as a hard **M2b-BLOCKING** gate (see below). M2b/M3/M4 still to come.
 
 ### Implementation-review corrections (round 3 — applied in the M2a PR)
 
@@ -9,6 +9,24 @@
 - **Reconcile gate hoisted to `initializeStore()` (altitude).** The "settle on success-or-skip, stay pending on failure" rule was re-encoded at ~5 reconcile early-returns reaching back into the store via `_settleReconcile`. `reconcileModelsToServerOnce()` now returns a `ReconcileOutcome`; `initializeStore` maps it to the gate in ONE place, removing the cross-module obligation + import direction.
 - **LAN GET ETag hashed over the scrubbed file (security Q5).** The etag was hashed over the full cache even for LAN callers, acting as a weak change-detector for hidden fields. LAN now gets `hashModelsFile(scrubbedFile)`.
 - **Deferred (noted):** dead `loading`/`reload` store surface removed (M2b re-adds with its skeleton); legacy-key no-ops kept until M2b removes the SettingsModelsTab banner as one unit; M4-offline reconcile deadlock surfaces the blocked state (follow-up).
+
+### PR-review corrections (round 4 — applied in the M2a PR, PR #1220)
+
+Five parallel PR-review agents (security / Svelte / silent-failure / test-coverage / general-correctness). Server side came back clean (gating order, LAN allowlist-scrub fails-closed, ETag scoped to returned bytes, single-flight has no check→set await). Store-layer fixes applied:
+
+- **429 `MODELS_BUSY` was collapsed into terminal failure (silent-failure HIGH, corroborated by security + general).** The server emits 429 as an explicit "retry" for a single-flight collision, but `postCurrent` mapped every non-409 to a rollback → a two-window collision became silent data loss. `postCurrent` now returns a `stale | busy | failed` taxonomy and `postCurrentWithBusyRetry` re-POSTs through `busy` (bounded `BUSY_RETRY_LIMIT`, short backoff); only an exhausted busy rolls back, with a distinct "busy, try again" message.
+- **Reconcile-fail → permanent CRUD deadlock (silent-failure MED + general, converging).** The gate settled only on `outcome !== "failed"`, so a non-transient reconcile failure (e.g. a 400 from the `.strict()` server rejecting a legacy blob) left every mutator awaiting `_reconcileSettled` forever at M4. The gate's only job is to not race an *in-flight* reconcile POST — which is over once reconcile returns — so `initializeStore` now settles it in a `finally` on **any** completion (success/skip/fail/throw). Retry-next-boot stays governed by the separate reconcile flag. Also removes the "borrowed safety" fragility (LOW).
+- **`writeThrough` bare `catch{}` (silent-failure MED).** Bound the caught cause + `console.warn` (client-side; Rule #3 is server-stdout only) so an M4 write failure isn't undebuggable.
+- **updateModel-vs-concurrent-delete secret orphan (security suggestion).** If the target entry vanishes server-side between the optimistic apply and the retry, a `committed` outcome no longer implies "the entry landed", so deleting the old ref while keeping the new one orphaned the new secret. The committed old-ref cleanup now gates on the entry+ref actually being present in `_models` after the write.
+- **agentLabelSource dark-branch reactivity note (Svelte info).** Added a guard-rail comment: the dark branch reads non-reactive `loadSettings()`, an intentional, currently-unobservable reactivity downgrade that relies on the Models UI being unmounted — a future dark writer of `settings.models` must surface it reactively.
+- **Tests added:** client — 429-retry-commits, exhausted-429 rollback, persistent-409 adopt (`reconciled`), reconcile-adopt minted-ref cleanup, committed rotation old-ref delete, committed delete ref cleanup, committed-but-vanished new-ref cleanup; server — single-flight `busy`; reconcile gate test inverted to assert it OPENS on failure.
+
+### M2b-BLOCKING (deferred with intent — do NOT ship the flag-flip without these)
+
+The silent-failure review's **CRITICAL** is real but its home is M2b, whose defined scope already includes "loading/error surfaces" — wiring throwaway error UI onto components that are unmounted while dark, before M2b reworks them, would violate one-concern. Carried forward as a hard M2b gate:
+
+- **The store's `saveError` channel is dead-wired.** `SettingsModelsTab` / `FirstRunModelPickerModal` each carry a *local* `saveError` set only in a `catch`, and the mutators don't throw on a write-through rollback — so at M4 a failed write would roll back and vanish with no user feedback. **M2b must** bind `models.saveError` (or have mutators surface `WriteOutcome`) in both consumers.
+- **FirstRun sets a rolled-back default.** On a rolled-back `addModel`, `addModel` still returns an id, then `setDefault(id)` (unawaited) points `defaultModelId` at a non-existent entry and `onComplete()` finishes onboarding as if configured. **M2b must** check the add succeeded before `setDefault`/`onComplete`.
 
 **Issue:** #1123 (local-model collaborator), phase **M2**. ADR-039 canonical. Builds on M1a (PR #1219, merged) — which relocated the *resolver* to the server file but left the *client* reading/writing localStorage. Ships **DARK** (`BYO_MODELS_ENABLED=false`) through all of M2; runtime byte-identical to today. The flag flips in **M4**.
 

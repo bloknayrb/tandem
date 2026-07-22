@@ -3,9 +3,11 @@
 /**
  * Tests for the localStorage→server reconcile (#1123 M2), which replaces the M1a
  * seeder. It GETs the current server ETag, POSTs the projected localStorage
- * registry as `{ file, ifMatch }`, sets a NEW flag on success/409-adopt, and
- * settles the store's reconcile gate on success or a *confirmed skip* (not on a
- * real POST failure — R2-B).
+ * registry as `{ file, ifMatch }`, and sets a NEW flag on success/409-adopt (not
+ * on a real POST failure — that retries next boot). `initializeStore` settles the
+ * store's CRUD gate whenever reconcile COMPLETES — success, skip, OR failure —
+ * so a failed reconcile can never deadlock CRUD (the gate only guards against
+ * racing an in-flight reconcile POST, which is over once reconcile returns).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -176,21 +178,15 @@ describe("reconcileModelsToServerOnce", () => {
     expect(localStorage.getItem(MODELS_RECONCILED_FLAG_KEY)).toBeNull();
   });
 
-  it("a failed reconcile leaves the CRUD gate CLOSED (initializeStore does not open it)", async () => {
+  it("a failed reconcile OPENS the CRUD gate (no permanent deadlock)", async () => {
     seedSettings();
     vi.stubGlobal("fetch", stubFetch(500));
-    await initializeStore(); // reconcile fails → gate must stay pending
-    // The write blocks on the never-settled gate; assert it does NOT resolve
-    // within a turn of the event loop (Promise.race against a microtask sentinel).
-    let resolved = false;
-    void createModels()
-      .setDefault(null)
-      .then(() => {
-        resolved = true;
-      });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(resolved).toBe(false);
+    await initializeStore(); // reconcile fails → gate must STILL settle (finally)
+    // The mutator awaits the gate, then its own POST fails (500) and rolls back —
+    // but it RESOLVES rather than hanging forever on a never-settled gate. A
+    // permanent-pending gate would deadlock every CRUD op at M4.
+    const mutate = createModels().setDefault(null);
+    await expect(mutate).resolves.toBeUndefined();
   });
 
   it("adopts the server and sets the flag on a 409 (a concurrent writer won)", async () => {

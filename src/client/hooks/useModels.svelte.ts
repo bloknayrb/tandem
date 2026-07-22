@@ -2,6 +2,7 @@ import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../../shared/constants.js"
 import { apiModelsSecretPath } from "../../shared/integrations/contract.js";
 import {
   API_MODELS,
+  ERROR_CODE_MODELS_BUSY,
   ERROR_CODE_MODELS_STALE,
   type ModelsGetResponse,
   type ModelsPostBody,
@@ -90,10 +91,13 @@ let _loadInFlight: Promise<void> | null = null;
 
 // Reconcile gate (R2-B): every mutator awaits this before its POST, so a CRUD
 // write can never precede the localStorage→server reconcile at M4 (which would
-// let the reconcile clobber a fresh edit). Resolved by `initializeStore` ONLY on
-// reconcile success-or-confirmed-skip; stays pending on failure (→ read-only
-// until a boot where reconcile succeeds, consistent with `loadFromServer` also
-// failing offline).
+// let the reconcile clobber a fresh edit). Settled by `initializeStore` when the
+// reconcile COMPLETES — success, confirmed skip, OR failure alike — because the
+// gate's only job is to keep a CRUD POST from racing an IN-FLIGHT reconcile POST;
+// once reconcile has returned there is nothing left to race. Leaving it pending
+// on failure would strand every mutator on this await forever (a permanent CRUD
+// deadlock at M4). Whether to re-attempt the reconcile next boot is governed
+// separately by the reconcile FLAG (per-session gate vs cross-boot flag).
 let _resolveReconcile: (() => void) | null = null;
 let _reconcileSettled: Promise<void> = new Promise<void>((resolve) => {
   _resolveReconcile = resolve;
@@ -144,7 +148,26 @@ async function storeSecret(ref: string, plaintext: string): Promise<void> {
   throw new Error(`Failed to store model key (${code})`);
 }
 
-type PostOutcome = { ok: true; etag: string } | { ok: false; stale: boolean }; // stale=true → 409; false → other failure
+/**
+ * The server distinguishes three write failures the client must NOT collapse
+ * (contract §"HTTP error codes"):
+ *   - `stale` (409 MODELS_STALE)  — our `ifMatch` lost a race; re-GET + reconcile;
+ *   - `busy`  (429 MODELS_BUSY)   — a concurrent write held the single-flight;
+ *                                   TRANSIENT, a re-POST clears it (do NOT reload);
+ *   - `failed` (400/500/network)  — terminal; roll back.
+ * Folding `busy` into `failed` (the pre-review behavior) turned a retryable
+ * two-window collision into silent data loss.
+ */
+type PostFailure = "stale" | "busy" | "failed";
+type PostOutcome = { ok: true; etag: string } | { ok: false; kind: PostFailure };
+
+/** How many times to re-POST through a `busy` (single-flight) collision before giving up. */
+const BUSY_RETRY_LIMIT = 3;
+const BUSY_RETRY_DELAY_MS = 25;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** POST the current `$state` to the server with the last-seen ETag as `ifMatch`. */
 async function postCurrent(): Promise<PostOutcome> {
@@ -161,11 +184,34 @@ async function postCurrent(): Promise<PostOutcome> {
     const parsed = (await res.json()) as ModelsPostResponse;
     return { ok: true, etag: parsed.etag };
   }
-  if (res.status === 409) {
-    const parsed = (await res.json().catch(() => ({}))) as { code?: string };
-    return { ok: false, stale: parsed.code === ERROR_CODE_MODELS_STALE };
+  const parsed = (await res.json().catch(() => ({}))) as { code?: string };
+  if (res.status === 409 && parsed.code === ERROR_CODE_MODELS_STALE) {
+    return { ok: false, kind: "stale" };
   }
-  return { ok: false, stale: false };
+  if (res.status === 429 && parsed.code === ERROR_CODE_MODELS_BUSY) {
+    return { ok: false, kind: "busy" };
+  }
+  return { ok: false, kind: "failed" };
+}
+
+/**
+ * `postCurrent` with a bounded retry through `busy` (429) collisions. A `busy`
+ * means another writer holds the single-flight; the same body + `ifMatch` is
+ * still valid, so a short backoff + re-POST wins once the other write clears —
+ * no reload needed. Returns the final outcome (which may itself be `busy` if the
+ * limit is exhausted, so the caller can surface a distinct "try again" message).
+ */
+async function postCurrentWithBusyRetry(): Promise<PostOutcome> {
+  let outcome = await postCurrent();
+  for (
+    let attempt = 1;
+    attempt < BUSY_RETRY_LIMIT && !outcome.ok && outcome.kind === "busy";
+    attempt++
+  ) {
+    await delay(BUSY_RETRY_DELAY_MS);
+    outcome = await postCurrent();
+  }
+  return outcome;
 }
 
 /**
@@ -184,11 +230,13 @@ type WriteOutcome = "committed" | "reconciled" | "rolledback";
  * user's single intent as an **absolute** (idempotent) mutation of the live
  * `$state` — it runs synchronously FIRST (before any `await`; kills the
  * controlled-input bounce), then the POST is gated on `_reconcileSettled`.
- *   200 → adopt the new etag, clear the error (`committed`);
- *   409 → reload fresh server state, re-apply the intent once, re-POST; if that
- *         still fails → adopt the reconciled server state (never leave the
- *         optimistic mutation standing) + surface the error (`reconciled`);
- *   other → rollback to the pre-mutation snapshot + surface the error (`rolledback`).
+ *   200        → adopt the new etag, clear the error (`committed`);
+ *   409 stale  → reload fresh server state, re-apply the intent once, re-POST; if
+ *                that still fails → adopt the reconciled server state (never leave
+ *                the optimistic mutation standing) + surface the error (`reconciled`);
+ *   429 busy   → bounded re-POST in `postCurrentWithBusyRetry`; only if the limit
+ *                is exhausted does it fall through to a rollback;
+ *   400/500/network → rollback to the pre-mutation snapshot + surface the error.
  */
 async function writeThrough(apply: () => void): Promise<WriteOutcome> {
   const commit = (etag: string): "committed" => {
@@ -197,29 +245,41 @@ async function writeThrough(apply: () => void): Promise<WriteOutcome> {
     return "committed";
   };
   const snapshot = { models: _models, defaultModelId: _defaultModelId, etag: _etag };
+  const rollback = (message: string): "rolledback" => {
+    _models = snapshot.models;
+    _defaultModelId = snapshot.defaultModelId;
+    _etag = snapshot.etag;
+    _saveError = message;
+    return "rolledback";
+  };
   apply(); // optimistic — synchronous, before any await
   await _reconcileSettled; // R2-B: never POST before reconcile settles
   try {
-    const first = await postCurrent();
+    const first = await postCurrentWithBusyRetry();
     if (first.ok) return commit(first.etag);
-    if (first.stale) {
+    if (first.kind === "stale") {
       await fetchAndApply(); // adopt fresh server state + etag (ungated — see below)
       apply(); // re-apply the user's single intent against fresh state
-      const retry = await postCurrent();
+      const retry = await postCurrentWithBusyRetry();
       if (retry.ok) return commit(retry.etag);
-      // Still stale/failed — adopt the reconciled server state, don't diverge.
+      // Still stale/busy/failed after a reload+retry — adopt the reconciled
+      // server state, don't diverge.
       await fetchAndApply();
       _saveError = "Model registry changed elsewhere; reloaded.";
       return "reconciled";
     }
-    throw new Error("write failed");
-  } catch {
-    // Network/other failure — roll back to the pre-mutation snapshot.
-    _models = snapshot.models;
-    _defaultModelId = snapshot.defaultModelId;
-    _etag = snapshot.etag;
-    _saveError = "Failed to save model changes.";
-    return "rolledback";
+    // `busy` (retries exhausted) is transient — tell the user to retry rather
+    // than implying their change was rejected. `failed` is terminal.
+    return rollback(
+      first.kind === "busy"
+        ? "Model registry is busy; please try again."
+        : "Failed to save model changes.",
+    );
+  } catch (err) {
+    // A thrown fetch/JSON error (network drop, unparseable body) — log the cause
+    // (the generic `_saveError` string alone is undebuggable) and roll back.
+    console.warn("[models] write-through failed", err);
+    return rollback("Failed to save model changes.");
   }
 }
 
@@ -267,16 +327,18 @@ export function loadFromServer(): Promise<void> {
 }
 
 /**
- * Boot orchestration (owns the reconcile→gate→load ordering in ONE place, so the
- * "settle the gate only on success-or-confirmed-skip" rule lives at a single site
- * instead of being re-encoded at every reconcile early-return). Runs the
- * localStorage→server reconcile (un-gated — see the reconcile action), settles
- * the CRUD gate unless the reconcile genuinely FAILED, then loads the store
- * (BYO-gated, no-op while dark). Fire-and-forget from `main.ts`.
+ * Boot orchestration (owns the reconcile→gate→load ordering in ONE place). Runs
+ * the localStorage→server reconcile (un-gated — see the reconcile action),
+ * settles the CRUD gate in a `finally` so it opens whenever reconcile COMPLETES
+ * (any outcome, or even a throw) — never a permanent CRUD deadlock — then loads
+ * the store (BYO-gated, no-op while dark). Fire-and-forget from `main.ts`.
  */
 export async function initializeStore(): Promise<void> {
-  const outcome = await reconcileModelsToServerOnce();
-  if (outcome !== "failed") _settleReconcile();
+  try {
+    await reconcileModelsToServerOnce();
+  } finally {
+    _settleReconcile();
+  }
   await loadFromServer();
 }
 
@@ -296,6 +358,14 @@ export function getModelsSnapshot(): AgentLabelSource {
  * server-authoritative store only when lit. This is the load-bearing dark
  * invariant: an empty store must NOT blank a v0.13.x cohort's "GPT"/"Claude"
  * byline to "Assistant".
+ *
+ * The dark branch reads `loadSettings()` (a plain, NON-reactive localStorage
+ * read), so a `$derived` over `agentLabelSource()` does not track settings
+ * changes while dark — a deliberate reactivity downgrade from pre-M2. It is
+ * unobservable ONLY because every Models edit surface is unmounted while dark
+ * (nothing mutates `settings.models` in-session). If a future dark surface writes
+ * `settings.models` live, the byline would go stale until remount — surface it
+ * through a reactive read then, don't reintroduce a silent staleness.
  */
 export function agentLabelSource(): AgentLabelSource {
   if (!BYO_MODELS_ENABLED) {
@@ -361,10 +431,15 @@ export function createModels(): ModelsState {
         );
       });
       if (newRef) {
-        // Committed → the new ref is live; drop the old one. Otherwise (rollback
-        // or reconcile-adopt) the entry does NOT reference the new ref → drop it,
-        // keep the old. Best-effort (never throws).
-        if (outcome === "committed") {
+        // The new ref is live only if the entry actually persisted REFERENCING it.
+        // `committed` usually implies that — but a concurrent delete of `id`
+        // (adopted on the stale-reload path) makes the retry POST an entry-less
+        // registry that still 200s "committed", leaving `newRef` referenced by
+        // nothing. So confirm the entry+ref survived the write before dropping the
+        // old ref; otherwise drop `newRef` (no orphan) and keep the old. Best-effort.
+        const landed =
+          outcome === "committed" && _models.some((m) => m.id === id && m.apiKeyRef === newRef);
+        if (landed) {
           if (existing.apiKeyRef) await keychain.delete(existing.apiKeyRef);
         } else {
           await keychain.delete(newRef);
