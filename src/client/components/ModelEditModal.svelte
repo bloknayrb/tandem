@@ -1,5 +1,6 @@
 <script lang="ts">
 import { untrack } from "svelte";
+import { isLocalProvider } from "../../shared/models/contract.js";
 import type { ModelProvider, ModelRegistryEntry } from "../hooks/useTandemSettings.svelte.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
 
@@ -41,13 +42,20 @@ interface Props {
 
 const { entry, error, onCancel, onSave }: Props = $props();
 
-const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string }> = [
-  { value: "anthropic", label: "Anthropic" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "local-ollama", label: "Ollama (local)" },
-  { value: "local-llamacpp", label: "llama.cpp (local)" },
-];
+// v1.0 ships LOCAL providers only; cloud BYO keys are v1.1. `disabled` is
+// derived from the contract's `isLocalProvider` (single source of truth for the
+// local/cloud split) so the picker can never drift from what the collaborator
+// loop will actually resolve. Cloud options render disabled + a "coming soon"
+// note rather than being hidden, so the roadmap stays visible. Local-first order.
+const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string; disabled: boolean }> = (
+  [
+    { value: "local-ollama", label: "Ollama (local)" },
+    { value: "local-llamacpp", label: "llama.cpp (local)" },
+    { value: "anthropic", label: "Anthropic" },
+    { value: "openai", label: "OpenAI" },
+    { value: "gemini", label: "Gemini" },
+  ] satisfies Array<{ value: ModelProvider; label: string }>
+).map((opt) => ({ ...opt, disabled: !isLocalProvider(opt.value) }));
 
 // Discrete $state per field, hydrated ONCE from the `entry` prop snapshot.
 // We deliberately don't track `entry` reactively: the parent unmounts and
@@ -57,7 +65,9 @@ const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string }> = [
 // in the per-field $state below.
 const initialEntry = untrack(() => entry);
 
-let provider = $state<ModelProvider>(initialEntry?.provider ?? "anthropic");
+// Default a NEW entry to the first local provider (cloud is disabled below); an
+// existing entry keeps its stored provider even if it's a now-disabled cloud one.
+let provider = $state<ModelProvider>(initialEntry?.provider ?? "local-ollama");
 let displayName = $state(initialEntry?.displayName ?? "");
 let modelId = $state(initialEntry?.modelId ?? "");
 let endpoint = $state(initialEntry?.endpoint ?? "");
@@ -73,10 +83,10 @@ const hasExistingKey = initialEntry !== undefined && Boolean(initialEntry.apiKey
 let replacingKey = $state(initialEntry === undefined || !hasExistingKey);
 
 const isEditing = initialEntry !== undefined;
-const isCloud = $derived(
-  provider === "anthropic" || provider === "openai" || provider === "gemini",
-);
-const isLocal = $derived(provider.startsWith("local-"));
+// Derive both off the contract helper so the key/endpoint field gating and the
+// picker's disabled split can never disagree about what "cloud" means.
+const isLocal = $derived(isLocalProvider(provider));
+const isCloud = $derived(!isLocal);
 
 // Last 4 chars of the opaque `apiKeyRef` for the masked preview. The ref
 // is not sensitive (no read path exposes the plaintext from it), but it
@@ -160,9 +170,17 @@ function startReplacingKey() {
         bind:value={provider}
       >
         {#each PROVIDER_OPTIONS as opt (opt.value)}
-          <option value={opt.value}>{opt.label}</option>
+          <option value={opt.value} disabled={opt.disabled}>
+            {opt.label}{opt.disabled ? " — coming soon" : ""}
+          </option>
         {/each}
       </select>
+      {#if isCloud}
+        <span class="mem-provider-note" data-testid="model-edit-provider-note">
+          Cloud providers are coming in a future release. For now, choose a local
+          provider (Ollama or llama.cpp).
+        </span>
+      {/if}
     </label>
 
     <label class="mem-field">
@@ -404,6 +422,14 @@ function startReplacingKey() {
     font-size: 11px;
     color: var(--tandem-fg-subtle);
     margin: 0;
+  }
+
+  /* Shown when a now-disabled cloud provider is selected (an existing entry can
+     still carry one). Points the user back at the local providers. */
+  .mem-provider-note {
+    font-size: 11px;
+    color: var(--tandem-fg-subtle);
+    margin-top: 2px;
   }
 
   .mem-error {

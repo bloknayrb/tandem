@@ -190,6 +190,7 @@ integration-wizard-install-claude
 integration-wizard-install-error
 integration-wizard-install-success
 integration-wizard-keychain-fallback
+integration-wizard-models-setup
 integration-wizard-more
 integration-wizard-pick-{*}
 integration-wizard-push-mode
@@ -233,6 +234,7 @@ model-edit-error
 model-edit-modal
 model-edit-modelid
 model-edit-provider
+model-edit-provider-note
 model-edit-save
 model-row-{*}
 model-toggle-{*}

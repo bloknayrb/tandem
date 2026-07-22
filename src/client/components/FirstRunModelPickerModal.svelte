@@ -10,6 +10,7 @@
  * first-run choreography when BYO ships.
  */
 import { untrack } from "svelte";
+import { isLocalProvider } from "../../shared/models/contract.js";
 import { createModels } from "../hooks/useModels.svelte.js";
 import type { ModelProvider } from "../hooks/useTandemSettings.svelte.js";
 
@@ -27,34 +28,23 @@ interface ProviderOption {
   label: string;
   /** Default model ID surfaced as input placeholder + initial value. */
   defaultModelId: string;
-  /** Provider-specific copy: "API key" for cloud, "Endpoint URL" for local. */
-  isCloud: boolean;
 }
 
+// Local-first, matching ModelEditModal (§3.4): v1.0 ships local providers only,
+// so a fresh first run defaults to Ollama and cloud rows render disabled (their
+// BYO key support is v1.1). Cloud rows stay listed — disabled + "coming soon" —
+// so the roadmap is visible; M4 finalizes first-run copy. The cloud/local split
+// is derived from the contract's `isLocalProvider` (single source of truth,
+// same as ModelEditModal) rather than a hand-maintained per-option flag.
 const PROVIDER_OPTIONS: ProviderOption[] = [
-  {
-    value: "anthropic",
-    label: "Anthropic (Claude)",
-    defaultModelId: "claude-sonnet-4-6",
-    isCloud: true,
-  },
-  { value: "openai", label: "OpenAI", defaultModelId: "gpt-4o", isCloud: true },
-  { value: "gemini", label: "Gemini (Google)", defaultModelId: "gemini-2.0-flash", isCloud: true },
-  {
-    value: "local-ollama",
-    label: "Ollama (local)",
-    defaultModelId: "llama3.1:70b",
-    isCloud: false,
-  },
-  {
-    value: "local-llamacpp",
-    label: "llama.cpp (local)",
-    defaultModelId: "local-model",
-    isCloud: false,
-  },
+  { value: "local-ollama", label: "Ollama (local)", defaultModelId: "llama3.1:70b" },
+  { value: "local-llamacpp", label: "llama.cpp (local)", defaultModelId: "local-model" },
+  { value: "anthropic", label: "Anthropic (Claude)", defaultModelId: "claude-sonnet-4-6" },
+  { value: "openai", label: "OpenAI", defaultModelId: "gpt-4o" },
+  { value: "gemini", label: "Gemini (Google)", defaultModelId: "gemini-2.0-flash" },
 ];
 
-let provider = $state<ModelProvider>("anthropic");
+let provider = $state<ModelProvider>("local-ollama");
 let displayName = $state("");
 let modelId = $state(PROVIDER_OPTIONS[0].defaultModelId);
 let apiKey = $state("");
@@ -67,7 +57,7 @@ let prevFocus: Element | null = null;
 const currentProvider = $derived(
   PROVIDER_OPTIONS.find((p) => p.value === provider) ?? PROVIDER_OPTIONS[0],
 );
-const isCloud = $derived(currentProvider.isCloud);
+const isCloud = $derived(!isLocalProvider(provider));
 
 const canSave = $derived(
   modelId.trim().length > 0 && (isCloud ? apiKey.trim().length > 0 : endpoint.trim().length > 0),
@@ -173,16 +163,18 @@ function handleSkip() {
       <fieldset class="frm-providers" data-testid="first-run-providers">
         <legend class="frm-label">Provider</legend>
         {#each PROVIDER_OPTIONS as opt (opt.value)}
-          <label class="frm-provider-row">
+          {@const optDisabled = !isLocalProvider(opt.value)}
+          <label class="frm-provider-row" class:frm-provider-row-disabled={optDisabled}>
             <input
               type="radio"
               name="first-run-provider"
               value={opt.value}
               checked={provider === opt.value}
+              disabled={optDisabled}
               data-testid={`first-run-provider-${opt.value}`}
               onchange={() => selectProvider(opt.value)}
             />
-            <span>{opt.label}</span>
+            <span>{opt.label}{optDisabled ? " — coming soon" : ""}</span>
           </label>
         {/each}
       </fieldset>
@@ -356,6 +348,14 @@ function handleSkip() {
 }
 .frm-provider-row:hover {
   background: var(--tandem-surface-muted);
+}
+/* Cloud providers are disabled until v1.1 (their BYO key support ships then). */
+.frm-provider-row-disabled {
+  color: var(--tandem-fg-subtle);
+  cursor: not-allowed;
+}
+.frm-provider-row-disabled:hover {
+  background: none;
 }
 .frm-field {
   display: flex;

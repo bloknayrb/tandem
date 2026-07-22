@@ -29,6 +29,7 @@ import DocxConflictBanner from "./components/DocxConflictBanner.svelte";
 import EmptyState from "./components/EmptyState.svelte";
 import FidelityReportBanner from "./components/FidelityReportBanner.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
+import FirstRunModelPickerModal from "./components/FirstRunModelPickerModal.svelte";
 import HelpModal from "./components/HelpModal.svelte";
 import IntegrationWizardModal from "./components/IntegrationWizardModal.svelte";
 import LicenseBanner from "./components/LicenseBanner.svelte";
@@ -1839,6 +1840,30 @@ const tutorial = createTutorial(
   () => editor,
   () => activeTab?.fileName,
 );
+
+// First-run model picker (#1123 M2b) — an OPTIONAL, skippable step sequenced
+// AFTER the integration wizard and BEFORE the tutorial. Dismissed for the
+// session once completed or skipped. Declared after `createTutorial` so the
+// derived doesn't reference `tutorial` before it is assigned.
+//
+// Deliberate coupling (M4 revisits): the picker BORROWS the tutorial's first-run
+// signal (`tutorial.tutorialActive`) as its own existence condition rather than
+// introducing a parallel "first-run needed" state. That equivalence has two
+// known edges M4 owns: (a) a user who has no/disabled/already-completed tutorial
+// never sees the picker even though "connect a model on first run" is
+// conceptually orthogonal to the welcome tutorial; (b) `modelPickerDismissed` is
+// session-scoped, so a tutorial *replay* in a later session (with BYO on) would
+// re-summon the picker. Both are acceptable for the dark M2b mount — final
+// first-run choreography is M4 — but the coupling is a choice, not an accident.
+//
+// Dark guarantee: `BYO_MODELS_ENABLED` short-circuits the derived, so while dark
+// `shouldShowModelPicker` is always false — the picker never mounts and the
+// tutorial gate (`!shouldShowModelPicker`) reduces to today's exact
+// `tutorial.tutorialActive && !shouldShowWizard`.
+let modelPickerDismissed = $state(false);
+const shouldShowModelPicker = $derived(
+  BYO_MODELS_ENABLED && !shouldShowWizard && tutorial.tutorialActive && !modelPickerDismissed,
+);
 </script>
 
 <div
@@ -2173,7 +2198,18 @@ const tutorial = createTutorial(
     />
 
     {#if shouldShowWizard}
-      <IntegrationWizardModal open={true} onClose={closeIntegrationWizard} />
+      <IntegrationWizardModal
+        open={true}
+        onClose={closeIntegrationWizard}
+        onSetupModels={openModelsSettings}
+      />
+    {/if}
+
+    {#if shouldShowModelPicker}
+      <!-- Optional post-wizard model step (#1123 M2b, dark until M4). Skip or
+           complete dismisses it for the session, revealing the tutorial (gated
+           on `!shouldShowModelPicker` below). Never mounts while dark. -->
+      <FirstRunModelPickerModal onComplete={() => (modelPickerDismissed = true)} />
     {/if}
 
     {#if fileOpenDialogOpen}
@@ -2226,16 +2262,19 @@ const tutorial = createTutorial(
       <CoworkAdminDeclinedModal />
     {/if}
 
-    {#if tutorial.tutorialActive && !shouldShowWizard}
-      <!-- Sequenced behind the first-run wizard: the wizard scrim (z=100000)
-           buries the tutorial card (z=900) AND the welcome doc it points at, so
-           on a true first run the card waits until the wizard is dismissed
-           (shouldShowWizard→false). Mirrors the CoworkAdminDeclinedModal gate
-           above. Nothing harmful happens while buried: the user can't drive any
-           step forward under the scrim, and the only auto-advancing step (the
-           completion timer) is unreachable from the step-0 start state. (Claude
-           could in theory resolve a seed annotation via MCP and nudge step 0,
-           but that's real progress, not a lost step.) -->
+    {#if tutorial.tutorialActive && !shouldShowWizard && !shouldShowModelPicker}
+      <!-- Sequenced behind the first-run wizard AND the optional model picker
+           (#1123 M2b): the wizard scrim (z=100000) buries the tutorial card
+           (z=900) AND the welcome doc it points at, so on a true first run the
+           card waits until the wizard is dismissed (shouldShowWizard→false) and
+           the model picker is completed/skipped (shouldShowModelPicker→false).
+           While dark `shouldShowModelPicker` is always false, so this gate is
+           byte-identical to the pre-M2b wizard-only sequencing. Mirrors the
+           CoworkAdminDeclinedModal gate above. Nothing harmful happens while
+           buried: the user can't drive any step forward under the scrim, and the
+           only auto-advancing step (the completion timer) is unreachable from the
+           step-0 start state. (Claude could in theory resolve a seed annotation
+           via MCP and nudge step 0, but that's real progress, not a lost step.) -->
       <OnboardingTutorial
         currentStep={tutorial.currentStep}
         onNext={tutorial.nextStep}
