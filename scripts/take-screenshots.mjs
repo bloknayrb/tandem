@@ -294,6 +294,19 @@ async function main() {
       console.warn("   WARNING: No annotation cards visible — proceeding anyway");
     }
 
+    // Dismiss the store-read-only banner if it is up. It appears whenever a
+    // second Tandem instance (typically the installed desktop app) holds the
+    // annotations lock — which is the normal state on a dev machine, so
+    // without this every panel screenshot ships with an amber warning across
+    // the top. The lock only affects PERSISTENCE; annotations still render,
+    // which is all a screenshot needs.
+    const readOnlyDismiss = page.getByTestId("store-readonly-dismiss");
+    if (await readOnlyDismiss.isVisible().catch(() => false)) {
+      await readOnlyDismiss.click();
+      await sleep(400);
+      console.log("   + dismissed store-read-only banner (another instance holds the lock)");
+    }
+
     // ── Screenshot 1: Editor overview ────────────────────────────────────
     console.log("\n2. Taking 01-editor-overview.png...");
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, "01-editor-overview.png") });
@@ -301,11 +314,14 @@ async function main() {
 
     // ── Screenshot 3: Side panel (cropped) ───────────────────────────────
     console.log("\n3. Taking 03-side-panel.png...");
-    // Crop to the right side of the page where the side panel lives
-    // The side panel is typically ~350px wide on the right
-    await page.screenshot({
+    // Anchored to the annotation list itself rather than a hardcoded clip.
+    // The old `{x:940,y:40,w:460,h:750}` predated the floating-chrome redesign
+    // and had drifted: it caught a sliver of the toolbar and the panel header
+    // instead of framing the cards. An element screenshot cannot drift, and
+    // the list is exactly what this shot is meant to show.
+    const annotationList = page.getByTestId("annotation-list-scroll-container");
+    await annotationList.screenshot({
       path: path.join(SCREENSHOTS_DIR, "03-side-panel.png"),
-      clip: { x: 940, y: 40, width: 460, height: 750 },
     });
     console.log("   DONE");
 
@@ -344,10 +360,17 @@ async function main() {
     }
 
     console.log("   Taking 04-toolbar-actions.png...");
-    // Capture the top portion: tab bar + toolbar + start of editor
+    // Height derived from the formatting bar rather than the old fixed 180px,
+    // which had become a thin strip that cut the selected line mid-glyph.
+    // Take the bar's bottom edge and add a few lines of editor beneath it so
+    // the selection this shot exists to show is fully in frame.
+    const formattingBar = await page.getByTestId("formatting-bar").boundingBox();
+    const topStripHeight = formattingBar
+      ? Math.round(formattingBar.y + formattingBar.height + 190)
+      : 300;
     await page.screenshot({
       path: path.join(SCREENSHOTS_DIR, "04-toolbar-actions.png"),
-      clip: { x: 0, y: 0, width: 1400, height: 180 },
+      clip: { x: 0, y: 0, width: 1400, height: topStripHeight },
     });
     console.log("   DONE");
 
@@ -382,18 +405,38 @@ async function main() {
       await chatTabBtn.click();
       await sleep(500);
     }
-    // Send a user message via the chat input so it appears in the conversation.
-    // The composer textarea (ChatPanel.svelte) carries no testid — target its
-    // stable class instead (the prior `chat-input` testid never existed).
-    const chatInput = page.locator("textarea.chat-composer-input").first();
-    if (await chatInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await chatInput.click();
-      await chatInput.fill(
-        "Can you look at the sample content section? The timeline details feel vague.",
-      );
-      await page.keyboard.press("Enter");
-      await sleep(800);
+    // Clear whatever conversation is already in the panel BEFORE seeding the
+    // demo exchange. Chat history persists across runs, so without this the
+    // shot captures the operator's real prior conversation — a genuine
+    // privacy leak, since this image ships in a public README. Observed: a
+    // run picked up an unrelated personal document name in a stale message.
+    const clearChatBtn = page.getByTestId("clear-chat-btn");
+    if (await clearChatBtn.isVisible().catch(() => false)) {
+      await clearChatBtn.click();
+      await sleep(600);
+      console.log("   + cleared pre-existing chat history");
     }
+
+    // Send a user message via the chat input so it appears in the conversation.
+    // Targeted by testid: this previously used `textarea.chat-composer-input`,
+    // a class that the redesign renamed to `chat-textarea`. The locator stopped
+    // matching, the `.catch(() => false)` below swallowed it, and the block was
+    // skipped SILENTLY on every run — the user turn visible in past screenshots
+    // was leftover chat history, not anything this script produced. Hence the
+    // hard failure rather than another quiet skip.
+    const chatInput = page.getByTestId("chat-composer-input");
+    if (!(await chatInput.isVisible({ timeout: 2000 }).catch(() => false))) {
+      throw new Error(
+        "Chat composer not found (data-testid=chat-composer-input) — 02-chat-sidebar would " +
+          "capture no user turn. Check ChatPanel.svelte before re-running.",
+      );
+    }
+    await chatInput.click();
+    await chatInput.fill(
+      "Can you look at the sample content section? The timeline details feel vague.",
+    );
+    await page.getByTestId("chat-send-btn").click();
+    await sleep(800);
     // Add a Claude reply via MCP
     await mcp.call("tandem_reply", {
       text: "The sample content section uses passive constructions and buries the timeline slip. I've added a suggestion to tighten the opening sentence — active voice makes the goals land harder. For the slip mention, I flagged it: it needs a concrete mitigation plan before this goes external.",
@@ -405,9 +448,10 @@ async function main() {
       await chatInput.fill("Makes sense. Accept the suggestion and let's move on.");
       await sleep(300);
     }
-    await page.screenshot({
+    // Anchored to the panel, like 03 — the old fixed clip caught a sliver of
+    // the toolbar above the panel and cut the composer off the bottom.
+    await page.getByTestId("chat-panel").screenshot({
       path: path.join(SCREENSHOTS_DIR, "02-chat-sidebar.png"),
-      clip: { x: 940, y: 40, width: 460, height: 650 },
     });
     console.log("   DONE");
     // Clear the input and switch back to Annotations tab

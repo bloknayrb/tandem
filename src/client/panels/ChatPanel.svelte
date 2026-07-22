@@ -167,6 +167,7 @@ async function clearChat() {
 </script>
 
 <div
+  data-testid="chat-panel"
   style="width: 100%; display: flex; flex-direction: column; background: var(--tandem-surface-muted); flex: 1; min-height: 0;"
 >
   <!-- Header -->
@@ -320,6 +321,7 @@ async function clearChat() {
       placeholder="Message your AI…"
       rows={1}
       class="chat-textarea"
+      data-testid="chat-composer-input"
     ></textarea>
     <button
       onclick={sendMessage}

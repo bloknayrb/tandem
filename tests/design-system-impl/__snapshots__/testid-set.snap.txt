@@ -38,6 +38,8 @@ bulk-confirm-btn
 bulk-dismiss-btn
 chat-anchor-quote-{*}
 chat-author-{*}
+chat-composer-input
+chat-panel
 chat-send-btn
 chat-tab
 claude-typing-indicator-{*}
