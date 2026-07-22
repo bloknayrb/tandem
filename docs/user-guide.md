@@ -2,7 +2,7 @@
 
 A complete guide to using Tandem — from first launch to advanced workflows.
 
-> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same 28 tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
+> **Scope:** Examples use Claude Code as the default AI, per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). The editor itself is AI-client-agnostic — any MCP-capable client connecting to `http://127.0.0.1:3479/mcp` gets the same MCP tools. The Claude-specific transports (channel push, cowork, auto-launcher) don't apply to other clients.
 
 > **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [README → The MCP integration policy](../README.md#the-mcp-integration-policy) for the generic MCP path.
 
@@ -178,12 +178,26 @@ You can also enable the **margin view** (decorations menu) to see annotation car
 
 ### Solo / Tandem Mode
 
-The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`) that controls whether Claude's annotations appear as they arrive.
+The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`). It holds work back in *both* directions — Claude's annotations are held from you, and your own comments are held from Claude.
 
-- **Tandem** (default) — Claude's annotations appear immediately as they arrive.
-- **Solo** — Claude's pending annotations are held back. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
+- **Tandem** (default) — Claude's annotations appear immediately as they arrive, and the comments and replies you write are visible to Claude.
+- **Solo** — Claude's pending annotations are held back from the document. Resolved annotations (accepted/dismissed) are always visible regardless of mode.
 
-Use **Solo** during focused writing to avoid interruption. Switch to **Tandem** when you're ready to see Claude's suggestions — all held annotations appear at once.
+Since v0.19.0 the server, not the client, enforces the other direction: while you are in Solo, the comments and replies **you** author are withheld from Claude. Each held item shows an amber **Held** pill, and the status bar shows a running count of what is being withheld. Switching back to Tandem releases the whole set at once — Claude picks them up on its next check, and a one-time nudge wakes a push-connected session to look.
+
+**Exactly what the Solo hold covers.** Held comments and replies are withheld from three surfaces:
+
+| Surface | Held in Solo? |
+|---|---|
+| `tandem_checkInbox` (what Claude is told) | Yes |
+| `tandem_getAnnotations` (Claude reading the annotation list) | Yes |
+| Real-time push (channel shim and plugin monitor) | Yes — annotation events only; chat messages always deliver |
+| `tandem_exportAnnotations` (generating a review report) | **No** — an export is an explicit "give Claude everything" action and includes held comments |
+| `tandem_getTextContent`, `tandem_getContext`, `tandem_search` | Not applicable — these return document text only, never annotation records |
+
+Personal **notes** are private in both modes and are never surfaced to Claude through any tool ([ADR-027](decisions.md)).
+
+Use **Solo** during focused writing to avoid interruption, or when you want to mark up a draft without Claude reacting to each comment. Switch to **Tandem** when you're ready — all held annotations appear at once, in both directions.
 
 ## Chat
 
@@ -257,7 +271,7 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 
 ## Working with Claude Code
 
-Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets 31 tools (28 active, 3 deprecated stubs) for reading documents, creating annotations, searching text, managing files, and communicating with you.
+Tandem connects to Claude Code through MCP (Model Context Protocol). Claude gets Tandem's full MCP tool surface for reading documents, creating annotations, searching text, managing files, and communicating with you.
 
 ### Connection
 

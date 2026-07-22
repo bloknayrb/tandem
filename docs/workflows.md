@@ -1,6 +1,6 @@
 # Workflows
 
-> **Scope:** Real-world usage patterns. Examples use Claude Code as the default AI integration per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration); patterns generalize to any MCP-capable client speaking the same 28 tools at `http://127.0.0.1:3479/mcp`.
+> **Scope:** Real-world usage patterns. Examples use Claude Code as the default AI integration per [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration); patterns generalize to any MCP-capable client speaking the same MCP tools at `http://127.0.0.1:3479/mcp`.
 
 > **Looking for editor UI help?** See the [User Guide](user-guide.md) for how to use the editor, annotations, chat, and keyboard shortcuts. This document covers Claude Code workflows with MCP tool examples.
 
@@ -36,7 +36,7 @@ Then in Claude, your tandem_* tools will be available.
 
 Bare `tandem setup` (no flags) prints this guidance instead of writing anything — setup is wizard-driven; `--apply` is the explicit opt-in to write config.
 
-The skill teaches Claude how to use Tandem's 31 MCP tools (28 active, 3 deprecated stubs) effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
+The skill teaches Claude how to use Tandem's MCP tools effectively — workflow patterns, annotation strategy, Solo/Tandem mode respect, and error recovery. It auto-activates when Claude detects `tandem_*` tools.
 
 Start Tandem from any directory:
 ```bash
