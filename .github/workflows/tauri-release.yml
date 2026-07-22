@@ -268,8 +268,13 @@ jobs:
       # Runs after tauri-action so it tests the bytes that were actually
       # uploaded. The release is a DRAFT at this point, so failing here fails
       # `release-check` before anything is publishable.
+      # `success()`, unlike the macOS/Windows verify steps' `always()`. Those run
+      # unconditionally because tauri-action can exit 0 having produced an
+      # unsigned/un-notarized bundle, so the build "succeeding" proves nothing.
+      # Here, if the build failed there are simply no artifacts, and running
+      # anyway just stacks a confusing second error on top of the real one.
       - name: Verify Linux packages install and load
-        if: always() && matrix.platform == 'ubuntu-22.04'
+        if: success() && matrix.platform == 'ubuntu-22.04'
         shell: bash
         run: |
           shopt -s nullglob
@@ -291,11 +296,17 @@ jobs:
             # distro mirrors resolve AAAA-first, which apt reports as
             # "Depends: X but it is not going to be installed" -- identical to
             # a real missing dependency. The harness also pins IPv4 itself.
+            # `if`, not a bare call: GitHub runs `shell: bash` as
+            # `bash --noprofile --norc -eo pipefail`, so a bare failing command
+            # aborts the step before `$?` is ever read -- which would silently
+            # skip the exit-3 branch below AND the second distro. The whole
+            # point of this step is classifying the exit code, so it must
+            # survive a non-zero one.
+            local rc=0
             docker run --rm --network host \
               -v "$PWD/scripts/smoke:/smoke:ro" \
               -v "$artdir:/art:ro" \
-              "$image" bash /smoke/linux-package-smoke.sh "$mode"
-            local rc=$?
+              "$image" bash /smoke/linux-package-smoke.sh "$mode" || rc=$?
             case "$rc" in
               0) echo "::notice::Linux smoke ($mode/$image): PASS" ;;
               # The harness reports an unreachable mirror as 3 and evaluates
@@ -305,8 +316,20 @@ jobs:
               *) echo "::error::Linux smoke ($mode/$image): $rc packaging defect(s)"; errors=1 ;;
             esac
           }
+          # ubuntu:22.04 matches this leg's own runner pin and the v1.0 exit
+          # criteria -- deliberately the OLDEST supported target, since that is
+          # where a dependency is most likely to be missing.
+          #
+          # fedora:44 is a SUPPORTED release and must be rotated as Fedora ages
+          # out (N-1 is the rule of thumb). The spike originally used fedora:39,
+          # which was already ~20 months EOL: EOL Fedora loses its mirror
+          # metadata, so the gate would have started reporting ENVIRONMENT
+          # faults forever against a distro no user runs. Verified 2026-07-22
+          # that the harness runs clean on 44's dnf5 and that `libxdo` is still
+          # the right package name there (same soname as on 39, which is why
+          # tauri.conf.json pins no version).
           run_smoke deb ubuntu:22.04
-          run_smoke rpm fedora:39
+          run_smoke rpm fedora:44
           exit "$errors"
 
       # Mirror of "Verify Windows signatures" for macOS: tauri-action does not
