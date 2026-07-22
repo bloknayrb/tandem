@@ -11,6 +11,7 @@ import type { Server } from "http";
 import { createRequire } from "module";
 
 import { API_HEALTH } from "../../shared/api-paths.js";
+import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
 import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
@@ -21,6 +22,7 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 import { handleLicenseWebhook } from "../license/webhook.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
+import { runWithMcpContext } from "../sessions/context.js";
 import { registerAnnotationTools } from "./annotations.js";
 import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
@@ -30,6 +32,8 @@ import { registerDocumentTools } from "./document.js";
 import { getGenerationId } from "./document-service.js";
 import { registerApplyTools } from "./docx-apply.js";
 import { registerNavigationTools } from "./navigation.js";
+import type { DiagnosticsHandlerDeps } from "./routes/diagnostics.js";
+import { createMcpSessionRegistry, type McpSessionRegistry } from "./transport-registry.js";
 
 // Injected by tsup at build time; absent in tsx dev and vitest, where createRequire
 // reads ../../package.json. Tauri pkg has no package.json — define is the only source.
@@ -102,11 +106,18 @@ const WORKFLOWS_PATH: string | undefined = findRepoFile(__dirname, "docs/workflo
 // welcome doc (force-reload → server re-injects the seed annotations).
 const WELCOME_PATH: string | undefined = findRepoFile(__dirname, "sample/welcome.md");
 
-// McpServer is long-lived (tool registrations survive close/reconnect).
-// Transport is ephemeral — rotated on each new initialize request.
-let mcpServer: McpServer | null = null;
-let currentTransport: StreamableHTTPServerTransport | null = null;
-let connectingPromise: Promise<void> | null = null;
+// One McpServer per live transport session, keyed by Mcp-Session-Id (#438
+// §3.2). The SDK's Protocol.connect() throws if a server already has a
+// transport, so servers cannot be shared across sessions — see
+// transport-registry.ts for why this is "Shape 2" and not a singleton.
+//
+// Module-level because the exported closeMcpSession/getMcpSessionCount are
+// called from index.ts and the /health route. Null in stdio mode, which has no
+// registry. `idleReaper` is held alongside so closeMcpSession can undo
+// everything startMcpServerHttp set up — an interval nobody can clear outlives
+// every server it was created for.
+let sessions: McpSessionRegistry<McpServer, StreamableHTTPServerTransport> | null = null;
+let idleReaper: ReturnType<typeof setInterval> | null = null;
 
 /** Create an McpServer with all tool groups registered (no transport). */
 function createMcpServer(diagnostics: DiagnosticsToolDeps = {}): McpServer {
@@ -132,6 +143,28 @@ export function jsonrpcId(body: unknown): unknown {
     : null;
 }
 
+/** Read the SDK's session id from a request. Header names are lower-cased by Node. */
+function readMcpSessionHeader(req: import("express").Request): string | undefined {
+  const raw = req.headers["mcp-session-id"];
+  return typeof raw === "string" ? raw : undefined;
+}
+
+/**
+ * Read the calling Claude Code session id, if the transport carries one.
+ *
+ * Only the stdio-bridge config path does: it runs as a Claude Code subprocess,
+ * so `CLAUDE_CODE_SESSION_ID` is in its environment and `mcp-stdio.ts` forwards
+ * it. A direct-HTTP `.mcp.json` entry has no subprocess and only static headers,
+ * so this returns undefined there — callers must degrade, not assume.
+ *
+ * The value is re-validated rather than trusted: it arrives over HTTP and only
+ * the *sending* side (`resolveClaudeSessionId`) applied the guards. Anything
+ * oversized or non-printable is dropped rather than stored as a map key.
+ */
+function readClaudeSessionHeader(req: import("express").Request): string | undefined {
+  return normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
+}
+
 /** Send a JSON-RPC error response. */
 function sendJsonRpcError(
   res: import("express").Response,
@@ -144,43 +177,70 @@ function sendJsonRpcError(
 }
 
 /**
- * Tear down the current transport (if any) and connect a fresh one.
- * Serialized via connectingPromise so concurrent initialize requests
- * don't double-rotate.
+ * Build a server + transport for one new client session, connect them, and run
+ * the initialize request through it.
+ *
+ * Deliberately does NOT touch any other session — that non-eviction is the
+ * whole point of #438 §3.2. Registration is driven by `onsessioninitialized`
+ * rather than by this function, because the SDK mints `transport.sessionId`
+ * while *handling* the initialize request, not at construction.
+ *
+ * Owning the handshake (rather than returning the parts for a caller to
+ * assemble) keeps the leak cleanup with the code that creates the thing being
+ * leaked: a handshake that ends without initializing leaves a connected server
+ * nothing holds a key to, and the registry cannot reap an entry it never
+ * received.
  */
-async function connectFreshTransport(): Promise<void> {
-  if (!mcpServer) throw new Error("mcpServer not initialized");
+async function openSession(
+  registry: McpSessionRegistry<McpServer, StreamableHTTPServerTransport>,
+  buildServer: () => McpServer,
+  claudeSessionId: string | undefined,
+  handshake: (transport: StreamableHTTPServerTransport) => Promise<void>,
+): Promise<void> {
+  const server = buildServer();
 
-  const doConnect = async () => {
-    if (currentTransport) {
-      console.error("[Tandem] Closing previous MCP transport session");
-      await mcpServer!.close();
-      currentTransport = null;
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    onsessioninitialized: async (sessionId) => {
+      await registry.add({ sessionId, server, transport, claudeSessionId });
+      console.error(
+        `[Tandem] MCP session established: ${sessionId}` +
+          `${claudeSessionId ? ` (claude session ${claudeSessionId})` : ""} — ${registry.size} live`,
+      );
+    },
+    // Fires on DELETE /mcp. Dropping the entry here (rather than only in the
+    // DELETE route) also covers session closes the SDK initiates itself.
+    onsessionclosed: async (sessionId) => {
+      await registry.close(sessionId);
+      console.error(`[Tandem] MCP session closed: ${sessionId} — ${registry.size} live`);
+    },
+  });
+
+  await server.connect(transport);
+  try {
+    await handshake(transport);
+  } finally {
+    if (transport.sessionId === undefined) {
+      await server.close().catch(() => {});
     }
-
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-
-    await mcpServer!.connect(transport);
-    currentTransport = transport;
-    console.error("[Tandem] New MCP session established");
-  };
-
-  // Chain behind any in-flight rotation to prevent races
-  const promise = (connectingPromise ?? Promise.resolve()).then(doConnect);
-  connectingPromise = promise;
-  await promise;
-  // Release the lock once settled so the resolved promise can be GC'd
-  if (connectingPromise === promise) connectingPromise = null;
+  }
 }
 
-/** Close the active MCP session (for graceful shutdown). */
+/**
+ * Close every active MCP session and stop the idle reaper (graceful shutdown).
+ * Named singular for backwards compatibility with its callers in `index.ts`.
+ */
 export async function closeMcpSession(): Promise<void> {
-  if (currentTransport && mcpServer) {
-    await mcpServer.close();
-    currentTransport = null;
+  if (idleReaper) {
+    clearInterval(idleReaper);
+    idleReaper = null;
   }
+  await sessions?.closeAll();
+}
+
+/** Live MCP session count. Exported for `/health`'s loopback-only `hasSession`. */
+export function getMcpSessionCount(): number {
+  return sessions?.size ?? 0;
 }
 
 /** Start the MCP server on stdio (legacy, used as fallback via TANDEM_TRANSPORT=stdio). */
@@ -244,10 +304,38 @@ export async function startMcpServerHttp(
    */
   shutdownWiring?: import("./routes/shutdown.js").ShutdownRouteDeps,
 ): Promise<Server> {
-  mcpServer = createMcpServer({ version: APP_VERSION, transport: "http", wsPort, mcpPort: port });
-  // Snapshot tool count now — all registrations are unconditional in createMcpServer(),
-  // so this is stable for the lifetime of the process.
-  const toolCount = snapshotToolCount(mcpServer);
+  // Typed as the stricter of the two consumers' shapes (the handler requires
+  // `version`; the tool deps make it optional), so one literal can feed both
+  // the per-session MCP servers and the /api/diagnostics route.
+  const diagnosticsDeps: DiagnosticsHandlerDeps = {
+    version: APP_VERSION,
+    transport: "http",
+    wsPort,
+    mcpPort: port,
+  };
+  const buildServer = () => createMcpServer(diagnosticsDeps);
+  const registry = createMcpSessionRegistry<McpServer, StreamableHTTPServerTransport>();
+  sessions = registry;
+
+  // Snapshot the tool count from a throwaway instance. There is no longer a
+  // boot-time singleton server to read it from (each client session owns its
+  // own), but registrations are unconditional in createMcpServer(), so any
+  // instance yields the same count for the process lifetime. The instance is
+  // never connected, so it holds no transport, timer, or listener to clean up.
+  const toolCount = snapshotToolCount(buildServer());
+
+  // Idle reaper (#438 §6.4). Required, not optional: without it the map grows
+  // for every client that vanishes without a DELETE (crash, SIGKILL, closed
+  // laptop). unref() so it never holds the process open; closeMcpSession()
+  // clears it so a repeated start/stop (tests) doesn't accumulate intervals.
+  if (idleReaper) clearInterval(idleReaper);
+  idleReaper = setInterval(
+    () => {
+      void registry.reapIdle();
+    },
+    5 * 60 * 1000,
+  );
+  idleReaper.unref();
 
   // We need two different body parser limits: 100kb for MCP (SDK default)
   // and 70MB for file upload API. createMcpExpressApp applies express.json()
@@ -289,46 +377,74 @@ export async function startMcpServerHttp(
     : undefined;
   const mcpApp = createMcpExpressApp({ host, ...(allowedHosts ? { allowedHosts } : {}) });
 
+  /**
+   * Route a non-initialize request to its existing session.
+   *
+   * Every `handleRequest` on this server runs inside `runWithMcpContext` — one
+   * uniform rule rather than "only where a tool call can be dispatched today",
+   * so a future SDK that dispatches over another verb can't silently lose the
+   * caller's identity. Returns the entry so callers that need post-dispatch
+   * work (DELETE) can act on it; returns undefined when it already answered 404.
+   */
+  async function dispatchToSession(
+    req: import("express").Request,
+    res: import("express").Response,
+    body: unknown,
+    errorId: unknown = null,
+  ) {
+    const entry = registry.get(readMcpSessionHeader(req));
+    if (!entry) {
+      // 404, not 503: the old single-transport code answered "No active
+      // session" for a *stale* id, which reads as "server is down" when the
+      // truth is "that session is gone, re-initialize".
+      sendJsonRpcError(res, 404, -32001, "Session not found", errorId);
+      return undefined;
+    }
+    registry.touch(entry.sessionId);
+    await runWithMcpContext(
+      { claudeSessionId: entry.claudeSessionId, mcpSessionId: entry.sessionId },
+      () => entry.transport.handleRequest(req, res, body),
+    );
+    return entry;
+  }
+
   mcpApp.post("/mcp", async (req: import("express").Request, res: import("express").Response) => {
     const body = req.body as unknown;
     const isInit =
       isInitializeRequest(body) || (Array.isArray(body) && body.some(isInitializeRequest));
 
     if (isInit) {
-      console.error("[Tandem] Received initialize request, rotating transport");
+      const claudeSessionId = readClaudeSessionHeader(req);
       try {
-        await connectFreshTransport();
+        // handleRequest is what mints the session id and fires
+        // onsessioninitialized, so the registry entry appears during this call.
+        await openSession(registry, buildServer, claudeSessionId, (transport) =>
+          runWithMcpContext({ claudeSessionId }, () => transport.handleRequest(req, res, body)),
+        );
       } catch (err) {
-        console.error("[Tandem] Failed to create new transport:", err);
-        sendJsonRpcError(res, 500, -32603, "Internal error", jsonrpcId(body));
-        return;
+        console.error("[Tandem] Failed to create new MCP session:", err);
+        if (!res.headersSent) {
+          sendJsonRpcError(res, 500, -32603, "Internal error", jsonrpcId(body));
+        }
       }
-    }
-
-    if (!currentTransport) {
-      sendJsonRpcError(res, 503, -32000, "No active session", jsonrpcId(body));
       return;
     }
 
-    await currentTransport.handleRequest(req, res, body);
+    await dispatchToSession(req, res, body, jsonrpcId(body));
   });
 
   mcpApp.get("/mcp", async (req: import("express").Request, res: import("express").Response) => {
-    if (!currentTransport) {
-      sendJsonRpcError(res, 503, -32000, "No active session");
-      return;
-    }
-    await currentTransport.handleRequest(req, res, req.body);
+    await dispatchToSession(req, res, req.body);
   });
 
-  // DELETE — SDK handles session teardown internally
+  // DELETE — the SDK tears the session down and fires onsessionclosed, which
+  // is what removes the registry entry (see openSession).
   mcpApp.delete("/mcp", async (req: import("express").Request, res: import("express").Response) => {
-    if (!currentTransport) {
-      sendJsonRpcError(res, 404, -32001, "Session not found");
-      return;
-    }
-    await currentTransport.handleRequest(req, res, req.body);
-    currentTransport = null;
+    const entry = await dispatchToSession(req, res, req.body);
+    // Belt-and-braces: onsessionclosed normally does this, but a DELETE the SDK
+    // rejects before closing would otherwise strand the entry. close() is a
+    // no-op for an id already removed.
+    if (entry) await registry.close(entry.sessionId);
   });
 
   // Public webhook endpoint for Polar/Paddle license generation (auth-exempt).
@@ -366,7 +482,7 @@ export async function startMcpServerHttp(
         transport: "http",
       };
       if (isLoopback(req.socket.remoteAddress)) {
-        body.hasSession = currentTransport !== null;
+        body.hasSession = getMcpSessionCount() > 0;
       }
       res.json(body);
     },
@@ -426,12 +542,7 @@ export async function startMcpServerHttp(
       bindPort: port,
       getGenerationId,
     },
-    {
-      version: APP_VERSION,
-      transport: "http",
-      wsPort,
-      mcpPort: port,
-    },
+    diagnosticsDeps,
     shutdownWiring,
   );
 
