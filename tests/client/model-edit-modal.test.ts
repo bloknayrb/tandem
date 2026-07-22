@@ -12,7 +12,7 @@
  * disappearing.
  */
 
-import { cleanup, render } from "@testing-library/svelte";
+import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ModelEditModal from "../../src/client/components/ModelEditModal.svelte";
@@ -71,6 +71,20 @@ describe("ModelEditModal — per-provider gating (§3.4)", () => {
     // Local providers use the endpoint field, not an API key.
     expect(queryByTestId("model-edit-endpoint")).not.toBeNull();
     expect(queryByTestId("model-edit-apikey")).toBeNull();
+  });
+
+  it("requires an endpoint before a new local model can be saved", async () => {
+    const { getByTestId } = mountAdd();
+    const save = () => getByTestId("model-edit-save") as HTMLButtonElement;
+    // Default provider is local-ollama → endpoint field is present and empty.
+    await fireEvent.input(getByTestId("model-edit-displayname"), { target: { value: "My local" } });
+    await fireEvent.input(getByTestId("model-edit-modelid"), { target: { value: "qwen2.5:14b" } });
+    // displayName + modelId filled but endpoint still blank → save stays disabled.
+    expect(save().disabled).toBe(true);
+    await fireEvent.input(getByTestId("model-edit-endpoint"), {
+      target: { value: "http://127.0.0.1:11434" },
+    });
+    expect(save().disabled).toBe(false);
   });
 
   it("keeps an existing cloud entry's provider selected and surfaces the note (no silent hide)", () => {

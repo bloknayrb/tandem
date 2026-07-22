@@ -100,7 +100,11 @@ const canSave = $derived(
     modelId.trim().length > 0 &&
     // Cloud providers require either the existing key (not replacing) OR a
     // freshly-entered key (replacing). Local providers don't need a key.
-    (!isCloud || !replacingKey || apiKey.trim().length > 0),
+    (!isCloud || !replacingKey || apiKey.trim().length > 0) &&
+    // Local providers require an endpoint (the loop can't resolve an endpoint-less
+    // local model) — matches FirstRunModelPickerModal's canSave so the two pickers
+    // can't diverge on what a saveable local entry is.
+    (isCloud || endpoint.trim().length > 0),
 );
 
 function handleSubmit(e: SubmitEvent) {

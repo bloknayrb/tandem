@@ -114,7 +114,40 @@ async function confirmDelete(id: string) {
 </script>
 
 <div style="display: flex; flex-direction: column; gap: var(--tandem-space-3);">
-  {#if models.models.length === 0}
+  {#if models.loading}
+    <!-- Load in flight: a skeleton, NOT the "No models configured" empty state —
+         `_models` is still [] mid-load and asserting "none" would be a lie. -->
+    <div
+      data-testid="models-loading"
+      aria-busy="true"
+      aria-label="Loading models"
+      style="display: flex; flex-direction: column; gap: 4px;"
+    >
+      {#each [0, 1, 2] as i (i)}
+        <div
+          style="height: 44px; border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface-muted);"
+        ></div>
+      {/each}
+    </div>
+  {:else if models.loadFailed}
+    <!-- Load threw: distinct from the empty state so we never claim "no models"
+         when the truth is the fetch failed. Offers a retry via `reload`. -->
+    <div
+      role="alert"
+      data-testid="models-load-error"
+      style="padding: var(--tandem-space-5) var(--tandem-space-3); text-align: center; border: 1px dashed var(--tandem-error-border); border-radius: var(--tandem-r-3); color: var(--tandem-fg-muted); font-size: 13px;"
+    >
+      <p style="margin: 0 0 var(--tandem-space-3) 0;">Couldn't load your models from the server.</p>
+      <button
+        type="button"
+        data-testid="models-reload-btn"
+        onclick={() => models.reload()}
+        style="padding: 6px var(--tandem-space-3); font-size: 13px; font-weight: 500; border: 1px solid var(--tandem-accent-border); border-radius: var(--tandem-r-2); cursor: pointer; background: var(--tandem-surface); color: var(--tandem-accent);"
+      >
+        Retry
+      </button>
+    </div>
+  {:else if models.models.length === 0}
     <div
       data-testid="models-empty-state"
       style="padding: var(--tandem-space-5) var(--tandem-space-3); text-align: center; border: 1px dashed var(--tandem-border-strong); border-radius: var(--tandem-r-3); color: var(--tandem-fg-muted); font-size: 13px;"
@@ -243,9 +276,11 @@ async function confirmDelete(id: string) {
 </div>
 
 <!-- List-level banner: the store's reactive `saveError`, set by a rolled-back
-     fire-and-forget mutator (default/toggle/delete). Save-flow errors show inside
-     the modal (see `modalError`), which sits above this. -->
-{#if models.saveError}
+     fire-and-forget mutator (default/toggle/delete). Suppressed while the editor
+     is open (the modal owns error display via `modalError` — else the same
+     message co-shows here behind the scrim) and while `loadFailed` (that state
+     renders its own message + retry above). -->
+{#if models.saveError && !editorOpen && !models.loadFailed}
   <div
     role="alert"
     data-testid="models-save-error"

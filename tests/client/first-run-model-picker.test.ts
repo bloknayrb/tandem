@@ -23,12 +23,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const addModel = vi.fn<(...args: unknown[]) => Promise<string | null>>();
 const setDefault = vi.fn<(...args: unknown[]) => Promise<boolean>>();
+const clearError = vi.fn();
 let storeSaveError: string | null = null;
 
 vi.mock("../../src/client/hooks/useModels.svelte", () => ({
   createModels: () => ({
     addModel,
     setDefault,
+    clearError,
     get saveError() {
       return storeSaveError;
     },
@@ -42,6 +44,7 @@ const { default: FirstRunModelPickerModal } = await import(
 beforeEach(() => {
   addModel.mockReset();
   setDefault.mockReset();
+  clearError.mockReset();
   setDefault.mockResolvedValue(true);
   storeSaveError = null;
 });
@@ -117,21 +120,7 @@ describe("FirstRunModelPickerModal — rolled-back-add guard (§3.3)", () => {
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
 
-  it("completes onboarding even when setDefault rolls back (non-fatal)", async () => {
-    addModel.mockResolvedValue("new-id");
-    setDefault.mockResolvedValue(false);
-    const onComplete = vi.fn();
-    const { getByTestId } = render(FirstRunModelPickerModal, {
-      props: { onComplete },
-    });
-
-    await fireEvent.click(getByTestId("first-run-save"));
-
-    expect(setDefault).toHaveBeenCalledWith("new-id");
-    expect(onComplete).toHaveBeenCalledTimes(1);
-  });
-
-  it("skip completes onboarding with no write", async () => {
+  it("skip completes onboarding with no write and clears any store error", async () => {
     const onComplete = vi.fn();
     const { getByTestId } = render(FirstRunModelPickerModal, {
       props: { onComplete },
@@ -140,6 +129,41 @@ describe("FirstRunModelPickerModal — rolled-back-add guard (§3.3)", () => {
     await fireEvent.click(getByTestId("first-run-skip-secondary"));
 
     expect(addModel).not.toHaveBeenCalled();
+    expect(clearError).toHaveBeenCalledTimes(1); // don't leak a store error onto the singleton
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rolled-back setDefault keeps the modal open with a local error and does NOT complete", async () => {
+    addModel.mockResolvedValue("new-id");
+    setDefault.mockResolvedValue(false);
+    const onComplete = vi.fn();
+    const { getByTestId, findByTestId } = render(FirstRunModelPickerModal, {
+      props: { onComplete },
+    });
+
+    await fireEvent.click(getByTestId("first-run-save"));
+
+    expect(setDefault).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+    const err = await findByTestId("first-run-error");
+    expect(err.textContent).toMatch(/couldn't set it as the default/i);
+    expect(getByTestId("first-run-model-modal")).toBeTruthy();
+  });
+
+  it("retrying after a setDefault failure re-attempts ONLY setDefault (no duplicate add)", async () => {
+    addModel.mockResolvedValue("new-id");
+    setDefault.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const onComplete = vi.fn();
+    const { getByTestId } = render(FirstRunModelPickerModal, {
+      props: { onComplete },
+    });
+
+    await fireEvent.click(getByTestId("first-run-save")); // add commits, setDefault fails
+    await fireEvent.click(getByTestId("first-run-save")); // retry
+
+    expect(addModel).toHaveBeenCalledTimes(1); // NOT re-added
+    expect(setDefault).toHaveBeenCalledTimes(2);
+    expect(setDefault).toHaveBeenLastCalledWith("new-id");
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
 });

@@ -56,8 +56,15 @@ export interface ModelsState {
   readonly defaultModelId: string | null;
   /** Last write/load failure message, or null. Cleared on the next success or `clearError()`. */
   readonly saveError: string | null;
-  /** True while a server load is in flight (drives the Settings tab skeleton). */
+  /** True while a server load is in flight (drives the Settings tab loading state). */
   readonly loading: boolean;
+  /**
+   * True when the last server load threw (network / non-OK / bad JSON). Lets the
+   * Models tab render a "couldn't load — retry" state instead of asserting "No
+   * models configured" over an empty `_models` that is empty only because the
+   * load failed. Cleared on the next successful load.
+   */
+  readonly loadFailed: boolean;
   /**
    * Add a model. Returns the generated id when the write **committed**, or `null`
    * when it did not (rolled back / reconciled away) — so an imperative caller
@@ -92,6 +99,11 @@ let _defaultModelId = $state<string | null>(null);
 let _etag: string | null = null; // last-seen server ETag (not reactive — no UI reads it)
 let _saveError = $state<string | null>(null);
 let _loading = $state(false);
+// Distinct from `_saveError`: a load failure must not be confused with a
+// write/rollback error. The Models tab keys its "couldn't load" state on this so
+// its empty-state never asserts "No models configured" when the truth is the
+// fetch failed. Single writer: `loadFromServer` (true on catch, false on success).
+let _loadFailed = $state(false);
 let _loadInFlight: Promise<void> | null = null;
 
 // Reconcile gate (R2-B): every mutator awaits this before its POST, so a CRUD
@@ -321,10 +333,15 @@ export function loadFromServer(): Promise<void> {
     try {
       await fetchAndApply();
       _saveError = null;
-    } catch {
-      // Surface a load error; `_loadInFlight` clears in `finally` so a later
-      // load retries.
+      _loadFailed = false;
+    } catch (err) {
+      // Log the actual cause (network drop / non-OK status / bad JSON) — the
+      // user-facing string below collapses them all, and the sibling
+      // `writeThrough` path logs the same way. `_loadInFlight` clears in
+      // `finally` so a later load (or `reload()`) retries.
+      console.warn("[models] load failed", err);
       _saveError = "Failed to load models from the server.";
+      _loadFailed = true;
     } finally {
       _loading = false;
       _loadInFlight = null;
@@ -408,6 +425,9 @@ export function createModels(): ModelsState {
     get loading() {
       return _loading;
     },
+    get loadFailed() {
+      return _loadFailed;
+    },
     async addModel(entry, plaintextApiKey) {
       assertValidPatch(entry);
       const id = generateModelId();
@@ -463,6 +483,12 @@ export function createModels(): ModelsState {
           await keychain.delete(newRef);
         }
       }
+      // Report commit, not `landed`: in the rare `committed && !landed` window (a
+      // concurrent delete of `id` adopted on the stale-reload path), the write
+      // itself succeeded, so the caller closes the editor as "saved" — and the
+      // reactive list, now missing the concurrently-deleted row, already tells the
+      // honest story. Returning `false` here would reopen the editor with a
+      // misleading "save failed" when nothing the user did failed.
       return outcome === "committed";
     },
     async deleteModel(id) {
@@ -506,6 +532,7 @@ export function _resetModelsStoreForTests(): void {
   _etag = null;
   _saveError = null;
   _loading = false;
+  _loadFailed = false;
   _loadInFlight = null;
   _reconcileSettled = new Promise<void>((resolve) => {
     _resolveReconcile = resolve;

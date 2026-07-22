@@ -77,4 +77,29 @@ describe("models store — loading / reload (flag mocked ON)", () => {
     expect(getCount).toBe(2); // a second GET actually hit the server
     expect(models.loading).toBe(false);
   });
+
+  it("sets loadFailed (and saveError) on a failed load; a successful reload clears both", async () => {
+    // First GET fails (500), second (reload) succeeds.
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        call++;
+        if (call === 1) return new Response("nope", { status: 500 });
+        return new Response(JSON.stringify({ file: serverFile, etag: "e-ok" }), { status: 200 });
+      }),
+    );
+    const models = createModels();
+
+    await loadFromServer();
+    expect(models.loadFailed).toBe(true);
+    expect(models.loading).toBe(false);
+    expect(models.saveError).toBeTruthy();
+    expect(models.models).toEqual([]); // empty ONLY because the load failed
+
+    await models.reload();
+    expect(models.loadFailed).toBe(false);
+    expect(models.saveError).toBeNull();
+    expect(models.models.map((m) => m.id)).toEqual(["srv-1"]);
+  });
 });

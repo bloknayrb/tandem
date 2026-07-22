@@ -3,11 +3,11 @@
  * First-run model picker: pick a provider, store the key in the OS
  * keychain, set as default. The caller's `onComplete` fires on save or skip.
  *
- * NOT CURRENTLY MOUNTED. This is intentional scaffolding for the BYO-models
- * first-run flow that lights up when `BYO_MODELS_ENABLED` flips at v1.0 — it
- * has no mount site today (the flag also strips the Settings → Models tab and
- * suppresses the titlebar model chip). Do not delete; wire it into the
- * first-run choreography when BYO ships.
+ * Mounted by `App.svelte` behind `shouldShowModelPicker` (an optional,
+ * skippable step after the integration wizard, before the tutorial), which is
+ * gated on `BYO_MODELS_ENABLED` — so this stays DARK (never mounts) until the
+ * flag flips at v1.0, when the Settings → Models tab and the titlebar model chip
+ * light up alongside it. Final first-run choreography copy is M4-owned.
  */
 import { untrack } from "svelte";
 import { isLocalProvider } from "../../shared/models/contract.js";
@@ -51,6 +51,10 @@ let apiKey = $state("");
 let endpoint = $state("http://localhost:11434");
 let saving = $state(false);
 let saveError = $state<string | null>(null);
+// Set once the add COMMITS. A retry after a setDefault failure re-attempts only
+// setDefault against this id — never a second addModel (which would duplicate the
+// entry). Lives for the modal's lifetime.
+let addedId = $state<string | null>(null);
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
 
@@ -90,26 +94,40 @@ async function handleSave(e: SubmitEvent) {
   saving = true;
   saveError = null;
   try {
-    const id = await models.addModel(
-      {
-        provider,
-        displayName: displayName.trim() || currentProvider.label,
-        modelId: modelId.trim(),
-        enabled: true,
-        ...(isCloud ? {} : { endpoint: endpoint.trim() }),
-      },
-      isCloud ? apiKey.trim() : undefined,
-    );
-    // `addModel` returns null when the write did NOT commit (rolled back /
-    // reconciled away) — do NOT finish onboarding with a phantom default, keep
-    // the modal open and surface the store's error.
-    if (id === null) {
-      saveError = models.saveError ?? "Failed to save model changes.";
+    // Add the model once. If a prior attempt already committed the add but its
+    // setDefault failed, `addedId` is set — retry ONLY setDefault below.
+    if (addedId === null) {
+      const id = await models.addModel(
+        {
+          provider,
+          displayName: displayName.trim() || currentProvider.label,
+          modelId: modelId.trim(),
+          enabled: true,
+          ...(isCloud ? {} : { endpoint: endpoint.trim() }),
+        },
+        isCloud ? apiKey.trim() : undefined,
+      );
+      // `addModel` returns null when the write did NOT commit (rolled back /
+      // reconciled away) — do NOT finish onboarding with a phantom default, keep
+      // the modal open and surface the store's error.
+      if (id === null) {
+        saveError = models.saveError ?? "Failed to save model changes.";
+        return;
+      }
+      addedId = id;
+    }
+    // The model committed. Setting it as default can still roll back (a
+    // concurrent writer / blip). That is non-fatal — the model exists — but the
+    // store's list banner does NOT render in first-run, so surface it locally and
+    // let the user proceed via Skip rather than silently onboarding with no
+    // default. (Do NOT reuse `models.saveError` here: its "failed to save"
+    // wording would wrongly imply the model itself didn't save.)
+    const defaulted = await models.setDefault(addedId);
+    if (!defaulted) {
+      saveError =
+        "Model saved, but couldn't set it as the default. You can choose a default later in Settings.";
       return;
     }
-    // A failed setDefault is non-fatal for onboarding (the model was added); its
-    // error surfaces via the store banner. Complete regardless.
-    await models.setDefault(id);
     onComplete();
   } catch (err) {
     saveError = err instanceof Error ? err.message : "Failed to save";
@@ -119,6 +137,9 @@ async function handleSave(e: SubmitEvent) {
 }
 
 function handleSkip() {
+  // Drop any error left on the shared store singleton (e.g. a rolled-back add or
+  // setDefault) so it can't co-show on the next Settings → Models open.
+  models.clearError();
   onComplete();
 }
 </script>
