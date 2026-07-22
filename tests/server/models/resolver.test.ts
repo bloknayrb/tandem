@@ -99,4 +99,16 @@ describe("resolveLocalModelConfig (via server-side registry)", () => {
     await persistModelsFile(fileWith([local], "m-local"));
     expect(resolveLocalModelConfig()?.modelId).toBe("qwen2.5:14b-instruct");
   });
+
+  it("selects the default by id, not by position (cloud entry first, local default second)", async () => {
+    // A `models[0]` regression would resolve the cloud entry here → null,
+    // instead of finding the local default at index 1. The single-entry cases
+    // above cannot catch that; this one can.
+    await persistModelsFile(fileWith([cloud, local], "m-local"));
+    expect(resolveLocalModelConfig()).toEqual({
+      endpoint: "http://127.0.0.1:11434",
+      modelId: "qwen2.5:14b-instruct",
+      transport: "v1",
+    });
+  });
 });

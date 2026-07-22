@@ -36,7 +36,16 @@ function getStore(): ModelStore {
 export async function primeModelStoreCache(): Promise<void> {
   try {
     cache = await getStore().read();
-  } catch {
+  } catch (err) {
+    // read() is contractually non-throwing, so reaching here means a genuine
+    // failure (e.g. createModelStore rejecting a bad appData path). Log it —
+    // the boot-site catch in index.ts only sees dynamic-import failures, so
+    // swallowing silently here would leave the empty cache unexplained.
+    console.error(
+      `[tandem] Failed to prime model-registry cache (${
+        err instanceof Error ? err.message : String(err)
+      }); using an empty registry.`,
+    );
     cache = emptyModelsFile();
   }
 }

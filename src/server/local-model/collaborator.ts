@@ -299,10 +299,11 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     const task = event.payload.text?.trim();
     if (!task) return;
     if (readLiveMode() !== "tandem") return; // hold in Solo (D-D)
-    // TODO(M1a): once config is dynamic, a config that resolves null AFTER a
-    // successful boot is indistinguishable from the dark no-op here — the boot
-    // breadcrumb in wire() fires only once. Re-resolve and/or log (rate-limited)
-    // so a post-boot misconfig isn't silent across many chat messages.
+    // TODO(M4): once config re-resolution is dynamic, a config that resolves
+    // null AFTER a successful boot is indistinguishable from the dark no-op here
+    // — the boot breadcrumb in resolveLocalModelConfig() fires only once.
+    // Re-resolve and/or log (rate-limited) so a post-boot misconfig isn't silent
+    // across many chat messages.
     if (!cachedConfig) return; // inert when unconfigured (M1a)
     const docName = event.documentId ?? getActiveDocId();
     if (!docName) return;

@@ -11,10 +11,10 @@
  * because its reads are always inside an HTTP try/catch; this store is not.
  *
  * Read recovery (all lossy-to-stderr, never throwing):
- *   ENOENT / empty              → empty config
- *   malformed JSON              → backup + empty
+ *   ENOENT (no file)            → empty config (no backup — nothing to preserve)
+ *   malformed / empty JSON      → backup + empty  (a 0-byte file fails JSON.parse)
  *   missing/newer schemaVersion → backup + empty  (NOT a throw)
- *   migration or Zod failure    → backup + empty
+ *   Zod validation failure      → backup + empty  (no migrateUp step exists yet)
  *   dangling defaultModelId     → cleared with stderr warning
  */
 

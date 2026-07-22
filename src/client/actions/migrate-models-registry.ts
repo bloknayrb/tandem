@@ -69,10 +69,25 @@ export async function migrateModelsRegistryOnce(): Promise<void> {
     });
     if (res.ok) {
       localStorage.setItem(MODELS_MIGRATED_FLAG_KEY, "1");
+    } else {
+      // Non-2xx (e.g. the server schema rejecting legacy localStorage) leaves the
+      // flag unset → this POSTs again every boot. Without a breadcrumb that retry
+      // loop is invisible; warn so "my models won't sync" is debuggable.
+      const code = await res
+        .json()
+        .then((b: { code?: string }) => b?.code)
+        .catch(() => undefined);
+      console.warn(
+        `[tandem] model-registry migration POST failed (status ${res.status}${
+          code ? `, ${code}` : ""
+        }); will retry next boot.`,
+      );
     }
-  } catch {
+  } catch (err) {
     // Fire-and-forget: a failed migration leaves the flag unset → retried next
-    // boot. localStorage unavailable (incognito) also lands here — harmless.
+    // boot. localStorage unavailable (incognito) also lands here — harmless, but
+    // warn so a real network/exception failure isn't wholly silent.
+    console.warn("[tandem] model-registry migration errored; will retry next boot.", err);
   }
 }
 

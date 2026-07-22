@@ -25,12 +25,43 @@ import { type LocalModelConfig, validateEndpoint } from "./config.js";
 export function resolveLocalModelConfig(): LocalModelConfig | null {
   try {
     const file = getCachedModelsFile();
+    // "No default configured" is a legitimate resting state → stay silent.
     if (!file.defaultModelId) return null;
+    // Every branch below is a *present-but-broken* default: the user asked for a
+    // collaborator and won't get one. The resolver has no return channel for a
+    // reason, so log one to stderr (this runs only under BYO_MODELS_ENABLED, so
+    // it never fires when dark) — otherwise the loop is silently inert at M4.
     const entry = file.models.find((m) => m.id === file.defaultModelId);
-    if (!entry || !entry.enabled) return null;
-    if (!isLocalProvider(entry.provider)) return null; // cloud default → inert (v1.1)
-    if (!entry.endpoint) return null;
-    if (!validateEndpoint(entry.endpoint).ok) return null;
+    if (!entry) {
+      console.error(
+        `[tandem] local-model: defaultModelId "${file.defaultModelId}" matches no registry entry; loop inert.`,
+      );
+      return null;
+    }
+    if (!entry.enabled) {
+      console.error(`[tandem] local-model: default entry "${entry.id}" is disabled; loop inert.`);
+      return null;
+    }
+    if (!isLocalProvider(entry.provider)) {
+      // Cloud BYO keys are v1.1 — the loop only drives local endpoints for now.
+      console.error(
+        `[tandem] local-model: default entry "${entry.id}" is a cloud provider (${entry.provider}); cloud collaborators are not yet supported, loop inert.`,
+      );
+      return null;
+    }
+    if (!entry.endpoint) {
+      console.error(
+        `[tandem] local-model: default entry "${entry.id}" has no endpoint; loop inert.`,
+      );
+      return null;
+    }
+    const check = validateEndpoint(entry.endpoint);
+    if (!check.ok) {
+      console.error(
+        `[tandem] local-model: default entry "${entry.id}" endpoint rejected (${check.code}); loop inert.`,
+      );
+      return null;
+    }
     return {
       endpoint: entry.endpoint,
       modelId: entry.modelId,
@@ -39,8 +70,15 @@ export function resolveLocalModelConfig(): LocalModelConfig | null {
       // `/api/chat` can become an optional per-entry transport later (M2/M4).
       transport: "v1",
     };
-  } catch {
-    // No error channel on this seam — a resolution failure means "inert".
+  } catch (err) {
+    // No error channel on this seam — a resolution failure means "inert". Today
+    // every call above is non-throwing, so reaching here means a real bug, not a
+    // config problem: log it rather than resolving null indistinguishably.
+    console.error(
+      `[tandem] local-model: unexpected error resolving config (${
+        err instanceof Error ? err.message : String(err)
+      }); loop inert.`,
+    );
     return null;
   }
 }

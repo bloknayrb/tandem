@@ -3,12 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BROKEN_BACKUPS_DIR_NAME } from "../../../src/server/integrations/storage.js";
+import {
+  BROKEN_BACKUPS_DIR_NAME,
+  MAX_BROKEN_BACKUPS,
+} from "../../../src/server/integrations/storage.js";
 import { emptyModelsFile } from "../../../src/server/models/schema.js";
 import {
   createModelStore,
   MODELS_BROKEN_BACKUP_PREFIX,
   MODELS_FILE_NAME,
+  sweepBrokenModelsBackupsOnStartup,
 } from "../../../src/server/models/store.js";
 import type { ModelsFile } from "../../../src/shared/models/contract.js";
 
@@ -65,6 +69,13 @@ describe("createModelStore", () => {
     expect(backups.some((n) => n.startsWith(MODELS_BROKEN_BACKUP_PREFIX))).toBe(true);
   });
 
+  async function backupCount(): Promise<number> {
+    const backups = await fs.promises
+      .readdir(path.join(tmpDir, BROKEN_BACKUPS_DIR_NAME))
+      .catch(() => [] as string[]);
+    return backups.filter((n) => n.startsWith(MODELS_BROKEN_BACKUP_PREFIX)).length;
+  }
+
   it("version-too-new → backup + empty, does NOT throw (resolver has no error channel)", async () => {
     await fs.promises.writeFile(
       path.join(tmpDir, MODELS_FILE_NAME),
@@ -73,6 +84,18 @@ describe("createModelStore", () => {
     );
     const store = createModelStore(tmpDir);
     await expect(store.read()).resolves.toEqual(emptyModelsFile());
+    expect(await backupCount()).toBe(1); // the malformed file was preserved
+  });
+
+  it("missing schemaVersion → backup + empty (never throws)", async () => {
+    await fs.promises.writeFile(
+      path.join(tmpDir, MODELS_FILE_NAME),
+      JSON.stringify({ models: [], defaultModelId: null }),
+      "utf8",
+    );
+    const store = createModelStore(tmpDir);
+    await expect(store.read()).resolves.toEqual(emptyModelsFile());
+    expect(await backupCount()).toBe(1);
   });
 
   it("post-parse Zod failure → backup + empty (never throws)", async () => {
@@ -83,6 +106,7 @@ describe("createModelStore", () => {
     );
     const store = createModelStore(tmpDir);
     await expect(store.read()).resolves.toEqual(emptyModelsFile());
+    expect(await backupCount()).toBe(1); // the malformed file was preserved
   });
 
   it("write() rejects an unknown key (.strict) — no plaintext key can persist", async () => {
@@ -93,6 +117,27 @@ describe("createModelStore", () => {
       defaultModelId: "m-1",
     } as unknown as ModelsFile;
     await expect(store.write(dirty)).rejects.toThrow();
+  });
+
+  it("sweepBrokenModelsBackupsOnStartup prunes models- backups to the cap and leaves integrations- alone", async () => {
+    const dir = path.join(tmpDir, BROKEN_BACKUPS_DIR_NAME);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const total = MAX_BROKEN_BACKUPS + 2;
+    for (let i = 0; i < total; i++) {
+      await fs.promises.writeFile(path.join(dir, `${MODELS_BROKEN_BACKUP_PREFIX}${i}.json`), "x");
+    }
+    // Two integrations- backups the models sweep must NOT touch (wrong-prefix
+    // regression would prune these — or leave models- unbounded).
+    await fs.promises.writeFile(path.join(dir, "integrations-a.json"), "x");
+    await fs.promises.writeFile(path.join(dir, "integrations-b.json"), "x");
+
+    await sweepBrokenModelsBackupsOnStartup(tmpDir);
+
+    const remaining = await fs.promises.readdir(dir);
+    expect(remaining.filter((n) => n.startsWith(MODELS_BROKEN_BACKUP_PREFIX))).toHaveLength(
+      MAX_BROKEN_BACKUPS,
+    );
+    expect(remaining.filter((n) => n.startsWith("integrations-"))).toHaveLength(2);
   });
 
   it("dangling defaultModelId is cleared to null on read", async () => {

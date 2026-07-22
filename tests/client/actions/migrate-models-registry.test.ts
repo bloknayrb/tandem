@@ -55,9 +55,25 @@ describe("migrateModelsRegistryOnce", () => {
     expect(String(url)).toContain("/api/models");
     expect((init as RequestInit).method).toBe("POST");
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.models[0].id).toBe("m-1");
+    // Assert the WHOLE projected entry, not just `id`. A dropped field in
+    // projectEntry (e.g. `endpoint`, load-bearing for local-model resolution)
+    // would otherwise ship green here and only 400 against the real server.
+    expect(body.models[0]).toEqual(localModel);
+    expect(body.schemaVersion).toBe(1);
     expect(body.defaultModelId).toBe("m-1");
     expect(localStorage.getItem(MODELS_MIGRATED_FLAG_KEY)).toBe("1");
+  });
+
+  it("preserves apiKeyRef and params in the projection (optional fields don't get dropped)", async () => {
+    const rich = { ...localModel, apiKeyRef: "ref-xyz", params: { temperature: 0.4 } };
+    seedSettings({ models: [rich] });
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await migrateModelsRegistryOnce();
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.models[0]).toEqual(rich);
   });
 
   it("drops the transient _legacyApiKey from the projection", async () => {

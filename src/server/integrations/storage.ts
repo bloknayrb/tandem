@@ -205,7 +205,7 @@ function warnIfWindowsDataDirOutsideLocalAppData(dir: string, name: string): voi
  * substitute a symlink. Node does not expose O_NOFOLLOW or openat(2); closing
  * the window fully would require a native addon. In practice the data dir is
  * under `%LOCALAPPDATA%` / `~/.local/share/` and writable only by the current
- * user. The outer `chmod 0o600` at the end of `writeIntegrationsFile` is the
+ * user. The outer `chmod 0o600` at the end of `atomicWriteConfigFile` is the
  * cross-process backstop; the in-function chmod here closes the transient
  * window between fh.close() and that outer chmod where an existing-file "w"
  * open would otherwise inherit the prior mode bits.
@@ -311,7 +311,7 @@ export async function backupBrokenJsonFile(filePath: string, prefix: string): Pr
       `[tandem] ${name} was malformed; backed up to ${path.join(
         BROKEN_BACKUPS_DIR_NAME,
         backupName,
-      )} and replaced with an empty config.`,
+      )}. The original is left in place; an empty config is used for this read.`,
     );
   } catch (err) {
     // Best-effort cleanup of any partial backup. The outer catch is the

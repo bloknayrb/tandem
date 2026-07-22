@@ -104,8 +104,15 @@ function makePostModelsHandler(): Handler {
     try {
       await persistModelsFile(parsed.data);
       res.status(200).json({ ok: true });
-    } catch {
-      // No path/detail leak — the registry write failed on disk.
+    } catch (err) {
+      // Log the real cause server-side (stderr is safe) — a persistent failure
+      // (ENOSPC, read-only store) is otherwise undebuggable. The client response
+      // stays generic: no path/detail leak to a possibly-LAN caller.
+      console.error(
+        `[tandem] POST ${API_MODELS} write failed (${
+          err instanceof Error ? err.message : String(err)
+        }).`,
+      );
       res.status(500).json({ error: "INTERNAL", code: ERROR_CODE_MODELS_WRITE_FAILED });
     }
   };
