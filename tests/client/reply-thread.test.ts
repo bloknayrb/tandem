@@ -91,6 +91,36 @@ describe("ReplyThread — A13 disclosure", () => {
     // The specific model name renders; the generic family fallback ("Assistant"
     // when no model is configured in this test's store) does not.
     expect(container.textContent).toContain("Qwen 2.5");
+    // #1123 M4: the byline is tinted with the per-agent color (inline override).
+    const author = container.querySelector(".ct-author.is-claude");
+    expect(author?.getAttribute("style") ?? "").toContain(
+      "color: var(--tandem-agent-local-ollama);",
+    );
+    const dot = container.querySelector(".ct-author-dot--claude");
+    expect(dot?.getAttribute("style") ?? "").toContain(
+      "background: var(--tandem-agent-local-ollama);",
+    );
+  });
+
+  it("#1123 M4: a claude reply WITHOUT agentIdentity adds no inline color (byte-identical dark)", async () => {
+    const replies = [makeReply({ text: "vanilla claude reply" })];
+    const { container } = render(ReplyThread, {
+      props: {
+        annotation: makeAnnotation(),
+        replies,
+        isPending: false,
+        isEditing: false,
+      },
+    });
+    await fireEvent.click(
+      container.querySelector("[data-testid='reply-toggle-annotation-1']") as Element,
+    );
+    // No agentIdentity ⇒ no inline style attribute at all ⇒ the CSS class's
+    // --tandem-author-claude renders exactly as before M4.
+    const author = container.querySelector(".ct-author.is-claude");
+    expect(author?.getAttribute("style")).toBeNull();
+    const dot = container.querySelector(".ct-author-dot--claude");
+    expect(dot?.getAttribute("style")).toBeNull();
   });
 
   it("pluralises the toggle count", () => {

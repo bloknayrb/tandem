@@ -8,6 +8,7 @@ activity-pill
 activity-row-{*}
 activity-tray
 ai-readiness-harness
+annotation-author-dot-{*}
 annotation-card-{*}
 annotation-held-pill-{*}
 annotation-import-byline-{*}

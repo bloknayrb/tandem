@@ -269,7 +269,7 @@ $effect(() => subscribeAnnotationActions());
       {@const isActive = ann.id === activeAnnotationId}
       {@const adjTop = adjTopRaw ?? rawTop}
       {@const endY = adjTop + LEADER_BUBBLE_INSET_PX}
-      {@const color = leaderColorForAuthor(ann.author)}
+      {@const color = leaderColorForAuthor(ann.author, ann.agentIdentity)}
       {@const d = bezierLeaderPath({
         startX: editorX,
         startY: rawTop,

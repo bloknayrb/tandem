@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { Annotation } from "../../shared/types.js";
+import { agentTintColor } from "../utils/agent-color.js";
 
 interface Props {
   side: "left" | "right";
@@ -80,7 +81,15 @@ function dotClass(a: Annotation): string {
       <span class="peek-tick h2"></span>
     {:else}
       {#each annotations as a (a.id)}
-        <span class="peek-dot {dotClass(a)}"></span>
+        {@const cls = dotClass(a)}
+        {@const tint = agentTintColor(a.agentIdentity)}
+        <!-- #1123 M4: per-agent dot color for a plain claude comment carrying an
+             agentIdentity; absent (dark / suggest / highlight) ⇒ no inline style
+             ⇒ the CSS class color renders unchanged. -->
+        <span
+          class="peek-dot {cls}"
+          style={cls === "claude" && tint ? `background: ${tint};` : undefined}
+        ></span>
       {/each}
     {/if}
   </div>

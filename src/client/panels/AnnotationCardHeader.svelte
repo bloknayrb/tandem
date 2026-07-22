@@ -2,6 +2,7 @@
 import type { Snippet } from "svelte";
 import type { Annotation } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { agentColor } from "../utils/agent-color";
 import { formatRelativeTime, getAuthorLabel, getDisplayType } from "./annotation-card-helpers";
 
 interface Props {
@@ -34,11 +35,15 @@ const displayType = $derived(getDisplayType(annotation));
 const authorLabel = $derived(
   getAuthorLabel(annotation.author, agentLabel.family, annotation.agentIdentity),
 );
-// 6px authorship dot before the author label. Only user/claude carry an
-// author color (the two --tandem-author-* tokens); imports show the byline
+// 6px authorship dot before the author label. `user` carries the fixed user
+// token; `claude` carries the per-agent color (#1123 M4) — `agentColor` falls
+// back to the exact --tandem-author-claude token when no agentIdentity is
+// present, so this is byte-identical while dark. Imports show the byline
 // instead, so the dot is omitted for them in the markup below.
 const dotColor = $derived(
-  annotation.author === "claude" ? "var(--tandem-author-claude)" : "var(--tandem-author-user)",
+  annotation.author === "claude"
+    ? agentColor(annotation.agentIdentity)
+    : "var(--tandem-author-user)",
 );
 </script>
 
@@ -88,7 +93,12 @@ const dotColor = $derived(
       <span class="ach-edited">(edited)</span>
     {/if}
     {#if annotation.author !== "import"}
-      <span class="ach-dot" aria-hidden="true" style="background: {dotColor};"></span>
+      <span
+        class="ach-dot"
+        data-testid="annotation-author-dot-{annotation.id}"
+        aria-hidden="true"
+        style="background: {dotColor};"
+      ></span>
     {/if}
     {authorLabel}
     <span class="ach-time" title={new Date(annotation.timestamp).toLocaleString()}>

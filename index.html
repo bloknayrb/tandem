@@ -94,6 +94,15 @@
         --tandem-author-claude-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, var(--tandem-surface));
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* Per-agent authorship colors (#1123 M4, ADR-039). Keyed to the closed
+           `provider` enum; `anthropic` reuses --tandem-author-claude (Claude
+           family). Distinct, well-spaced hues avoiding author-user (245) and
+           author-claude coral (~40). Dark until the BYO_MODELS_ENABLED flip, so
+           these are only ever consumed once an annotation carries agentIdentity. */
+        --tandem-agent-openai: oklch(0.60 0.12 160);
+        --tandem-agent-gemini: oklch(0.55 0.15 285);
+        --tandem-agent-local-ollama: oklch(0.58 0.11 200);
+        --tandem-agent-local-llamacpp: oklch(0.58 0.15 330);
         /* #1006 A8 composer — text- and border-grade coral for controls keyed
            to the Claude/annotation action (the annotate composer's Send
            button). Hand-picked hex rather than color-mix because they must
@@ -488,6 +497,12 @@
         --tandem-author-claude-bg: #4d2419;
         --tandem-claude-focus-bg: color-mix(in srgb, var(--tandem-author-claude) 10%, transparent);
         --tandem-claude-focus-border: color-mix(in srgb, var(--tandem-author-claude) 40%, transparent);
+        /* Per-agent authorship colors — dark (#1123 M4). Light seeds lifted for
+           dark legibility (higher L, slightly lower C), hues fixed. */
+        --tandem-agent-openai: oklch(0.72 0.11 160);
+        --tandem-agent-gemini: oklch(0.70 0.13 285);
+        --tandem-agent-local-ollama: oklch(0.70 0.10 200);
+        --tandem-agent-local-llamacpp: oklch(0.72 0.13 330);
         /* #1006 dark coral grades — see the :root counterparts for ratios. */
         --tandem-author-claude-fg-strong: #f0a988;
         --tandem-author-claude-border: #b56a4b;
@@ -621,6 +636,10 @@
           --tandem-accent-fg-strong: HighlightText;
           --tandem-author-user: CanvasText;
           --tandem-author-claude: CanvasText;
+          --tandem-agent-openai: CanvasText;
+          --tandem-agent-gemini: CanvasText;
+          --tandem-agent-local-ollama: CanvasText;
+          --tandem-agent-local-llamacpp: CanvasText;
           --tandem-author-claude-fg-strong: CanvasText;
           --tandem-author-claude-border: ButtonText;
           --tandem-author-user-bg: Canvas;

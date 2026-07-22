@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { AnnotationReply } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
+import { agentTintColor } from "../utils/agent-color";
 import { formatRelativeTime } from "./annotation-card-helpers";
 
 interface Props {
@@ -17,6 +18,10 @@ const agentLabel = createAgentLabel();
     {#each replies as reply (reply.id)}
       {@const kind =
         reply.author === "claude" ? "claude" : reply.author === "import" ? "import" : "user"}
+      <!-- #1123 M4: per-agent color override, applied ONLY when a local-model
+           reply carries an agentIdentity. Absent (dark / real-Claude) ⇒ no inline
+           style ⇒ the CSS class's --tandem-author-claude renders unchanged. -->
+      {@const agentTint = agentTintColor(reply.agentIdentity)}
       <div class="ct-reply" data-testid="reply-{reply.id}">
         <div class="ct-reply-head">
           <span
@@ -24,9 +29,14 @@ const agentLabel = createAgentLabel();
             class:is-claude={kind === "claude"}
             class:is-import={kind === "import"}
             class:is-user={kind === "user"}
+            style={kind === "claude" && agentTint ? `color: ${agentTint};` : undefined}
           >
             {#if kind === "claude"}
-              <span class="ct-author-dot ct-author-dot--claude" aria-hidden="true"></span>
+              <span
+                class="ct-author-dot ct-author-dot--claude"
+                style={agentTint ? `background: ${agentTint};` : undefined}
+                aria-hidden="true"
+              ></span>
               <!-- #1123 M3: a local-model reply bylines with its specific model
                    name, matching the card + chat surfaces; else the active
                    family label. Dark ⇒ agentIdentity absent ⇒ family label. -->

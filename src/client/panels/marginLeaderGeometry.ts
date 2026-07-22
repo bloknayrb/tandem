@@ -15,7 +15,8 @@
  * both `.svelte` template and vitest.
  */
 
-import type { Annotation } from "../../shared/types.js";
+import type { AgentIdentity, Annotation } from "../../shared/types.js";
+import { agentColor } from "../utils/agent-color.js";
 
 export interface LeaderEndpoints {
   /** SVG-local X at the text-edge endpoint (= dot center X). */
@@ -77,11 +78,20 @@ function assertNever(value: never): never {
  * future fourth `Annotation.author` value breaks the build rather than
  * silently bucketing into the import treatment (which would be the wrong
  * default for whatever the new value would mean).
+ *
+ * `agentIdentity` (#1123 M4) is REQUIRED — not optional — so a call site that
+ * forgets to thread it fails typecheck rather than silently reverting the claude
+ * branch to the generic token. Pass `undefined` for the (dark) no-identity case;
+ * `agentColor(undefined)` returns the exact `var(--tandem-author-claude)` token,
+ * keeping the claude leader byte-identical while dark.
  */
-export function leaderColorForAuthor(author: Annotation["author"]): string {
+export function leaderColorForAuthor(
+  author: Annotation["author"],
+  agentIdentity: AgentIdentity | undefined,
+): string {
   switch (author) {
     case "claude":
-      return "var(--tandem-author-claude)";
+      return agentColor(agentIdentity);
     case "user":
       return "var(--tandem-author-user)";
     case "import":

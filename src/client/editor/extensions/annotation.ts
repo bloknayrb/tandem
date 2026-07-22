@@ -13,6 +13,7 @@ import { sanitizeAnnotation } from "../../../shared/sanitize";
 import type { Annotation } from "../../../shared/types";
 import { agentLabelSource } from "../../hooks/useModels.svelte";
 import { annotationToPmRange } from "../../positions";
+import { agentColor } from "../../utils/agent-color";
 import { resolveAgentLabel } from "../../utils/agentLabel";
 
 export const annotationPluginKey = new PluginKey("tandemAnnotations");
@@ -156,7 +157,10 @@ function buildDecorations(
           // Claude comment → solid underline (distinguishable from user's dashed)
           attrs = {
             class: "tandem-comment tandem-comment--claude",
-            style: "border-bottom: 2px solid var(--tandem-author-claude); padding-bottom: 1px;",
+            // #1123 M4: per-agent underline color. `agentColor` returns the
+            // exact `var(--tandem-author-claude)` token when no agentIdentity is
+            // present, so this string is byte-identical while dark.
+            style: `border-bottom: 2px solid ${agentColor(ann.agentIdentity)}; padding-bottom: 1px;`,
             "data-annotation-id": ann.id,
             "data-annotation-type": ann.type,
             "data-annotation-author": ann.author,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
 import { dispatch, TOOLS } from "../../../src/server/local-model/tools.js";
-import { Y_MAP_ANNOTATION_REPLIES } from "../../../src/shared/constants.js";
+import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_AUTHORSHIP } from "../../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../../src/shared/origins.js";
 import type { Annotation } from "../../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
@@ -47,6 +47,41 @@ describe("local-model tool registry (ADR-027 lock)", () => {
     expect(
       TOOLS.some((t) => /^(get|list|read|view|fetch)_?(annotation|comment|note)/i.test(t.name)),
     ).toBe(false);
+  });
+});
+
+// #1123 M4 tripwire. Per-agent AuthorshipRange color was EXCLUDED from M4 on the
+// grounds that the loop writes zero authorship ranges (its edits are proposals,
+// not body text; accepted text is attributed author:"user" client-side). This
+// pins that premise: if a future body-editing tool is added and starts stamping
+// authorship, this breaks and points straight back at the exclusion decision.
+describe("dispatch — writes NO authorship ranges (M4 (d) exclusion tripwire)", () => {
+  it("comment / replacement / reply leave the authorship map empty", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "note" },
+      { ydoc: doc },
+    );
+    dispatch(
+      "propose_replacement",
+      { quoted_text: "the first phase", suggested_text: "phase one", rationale: "shorter" },
+      { ydoc: doc },
+    );
+    const created = dispatch(
+      "comment_on_quote",
+      { quoted_text: "We proceeded carefully", comment: "another" },
+      { ydoc: doc },
+    );
+    const annotationId = (created.result as { annotation_id?: string }).annotation_id;
+    if (annotationId) {
+      dispatch(
+        "reply_to_annotation",
+        { annotation_id: annotationId, text: "reply body" },
+        { ydoc: doc },
+      );
+    }
+    expect(doc.getMap(Y_MAP_AUTHORSHIP).size).toBe(0);
   });
 });
 
