@@ -366,9 +366,11 @@ describe("sweepBrokenIntegrationsBackupsOnStartup", () => {
       path.join(import.meta.dirname, "../../../src/server/integrations/storage.ts"),
       "utf8",
     );
-    // Find the backupBrokenFile function body; assert it does not call
-    // setRestrictiveAcl on backupPath.
-    const fnMatch = source.match(/async function backupBrokenFile[\s\S]+?^}/m);
+    // Find the backup function body; assert it does not call setRestrictiveAcl
+    // on backupPath. The ACL/copy logic lives in the prefix-parameterized
+    // `backupBrokenJsonFile` (the thin `backupBrokenFile` just delegates), which
+    // the Models store reuses — one copy of the TOCTOU-hardened path.
+    const fnMatch = source.match(/async function backupBrokenJsonFile[\s\S]+?^}/m);
     expect(fnMatch).not.toBeNull();
     const body = fnMatch![0];
     expect(body).not.toMatch(/setRestrictiveAcl\(backupPath\)/);

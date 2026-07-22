@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import express, { type Express } from "express";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createKeychain,
@@ -11,10 +14,13 @@ import {
   type ModelsRoutesDeps,
   registerModelsRoutes,
 } from "../../../src/server/models/api-routes.js";
+import { __resetModelRegistryForTests } from "../../../src/server/models/registry.js";
+import { createModelStore } from "../../../src/server/models/store.js";
 import {
   TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
   TAURI_HOSTNAME,
 } from "../../../src/shared/constants.js";
+import { API_MODELS } from "../../../src/shared/models/contract.js";
 import { withEnvOverride } from "../../helpers/env-override.js";
 
 /**
@@ -209,6 +215,87 @@ describe("models API routes", () => {
         });
         expect(res.status).toBe(403);
       });
+    });
+  });
+});
+
+describe(`POST ${API_MODELS} (registry relocation, #1123 M1a)`, () => {
+  let tmpDir: string;
+  let deps: ModelsRoutesDeps;
+
+  const validFile = {
+    schemaVersion: 1,
+    models: [
+      {
+        id: "m-1",
+        provider: "local-ollama",
+        displayName: "Local",
+        modelId: "qwen2.5:14b-instruct",
+        endpoint: "http://127.0.0.1:11434",
+        enabled: true,
+      },
+    ],
+    defaultModelId: "m-1",
+  };
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-models-route-"));
+    __resetModelRegistryForTests(tmpDir);
+    deps = {
+      keychain: createKeychain({ service: KEYCHAIN_SERVICE_MODELS, backend: memoryBackend() }),
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    __resetModelRegistryForTests();
+    vi.restoreAllMocks();
+    if (tmpDir) await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("persists a valid registry file and returns 200; disk round-trips", async () => {
+    const app = makeApp(deps);
+    const res = await request(app, "POST", API_MODELS, validFile);
+    expect(res.status).toBe(200);
+    expect((res.body as { ok?: boolean }).ok).toBe(true);
+    expect(await createModelStore(tmpDir).read()).toEqual(validFile);
+  });
+
+  it("rejects a malformed body with 400 INVALID_MODELS_FILE (no disk write)", async () => {
+    const app = makeApp(deps);
+    const res = await request(app, "POST", API_MODELS, { schemaVersion: 1 });
+    expect(res.status).toBe(400);
+    expect((res.body as { code?: string }).code).toBe("INVALID_MODELS_FILE");
+    expect(await createModelStore(tmpDir).read()).toEqual({
+      schemaVersion: 1,
+      models: [],
+      defaultModelId: null,
+    });
+  });
+
+  it("rejects an unknown key (.strict) — a plaintext apiKey can never persist", async () => {
+    const app = makeApp(deps);
+    const dirty = {
+      ...validFile,
+      models: [{ ...validFile.models[0], apiKey: "sk-PLAINTEXT" }],
+    };
+    const res = await request(app, "POST", API_MODELS, dirty);
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a non-allowlisted Origin with 403", async () => {
+    const app = makeApp(deps);
+    const res = await request(app, "POST", API_MODELS, validFile, {
+      Origin: "https://evil.example",
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("with TANDEM_ALLOW_UNAUTHENTICATED_LAN=1, non-loopback callers are still rejected", async () => {
+    await withEnvOverride(TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV, "1", async () => {
+      const app = makeAppWithRemoteAddress(deps, "10.0.0.5");
+      const res = await request(app, "POST", API_MODELS, validFile);
+      expect(res.status).toBe(403);
     });
   });
 });

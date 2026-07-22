@@ -126,13 +126,23 @@ async function readIntegrationsFile(filePath: string): Promise<IntegrationsFile>
 
 async function writeIntegrationsFile(filePath: string, file: IntegrationsFile): Promise<void> {
   IntegrationsFileSchema.parse(file);
+  await atomicWriteConfigFile(filePath, JSON.stringify(file, null, 2) + "\n");
+}
 
+/**
+ * Atomic write for a small config file under the app-data dir: temp file
+ * (`wx`, 0o600) → rename, with an EXDEV fallback and a POSIX chmod backstop.
+ * Exported so sibling stores (Models registry) reuse this ONE copy of the
+ * temp-rename + symlink-refusal logic instead of duplicating it. Callers
+ * validate/serialize their own payload before calling.
+ */
+export async function atomicWriteConfigFile(filePath: string, content: string): Promise<void> {
   const dir = path.dirname(filePath);
+  const name = path.basename(filePath);
   await fs.promises.mkdir(dir, { recursive: true });
-  warnIfWindowsDataDirOutsideLocalAppData(dir);
+  warnIfWindowsDataDirOutsideLocalAppData(dir, name);
 
-  const content = JSON.stringify(file, null, 2) + "\n";
-  const tmp = path.join(dir, `.${INTEGRATIONS_FILE_NAME}.${randomUUID()}.tmp`);
+  const tmp = path.join(dir, `.${name}.${randomUUID()}.tmp`);
 
   const fh = await fs.promises.open(tmp, "wx", 0o600);
   try {
@@ -172,7 +182,7 @@ async function writeIntegrationsFile(filePath: string, file: IntegrationsFile): 
  * available; the warning is the user-visible signal. Issue #643 tracks
  * a deeper ACL solution.
  */
-function warnIfWindowsDataDirOutsideLocalAppData(dir: string): void {
+function warnIfWindowsDataDirOutsideLocalAppData(dir: string, name: string): void {
   if (process.platform !== "win32") return;
   const localAppData = process.env.LOCALAPPDATA;
   if (!localAppData) return;
@@ -180,7 +190,7 @@ function warnIfWindowsDataDirOutsideLocalAppData(dir: string): void {
   const normalizedLocal = path.resolve(localAppData).toLowerCase();
   if (!normalizedDir.startsWith(normalizedLocal)) {
     console.warn(
-      `[tandem] integrations.json dir is outside %LOCALAPPDATA% (${dir}); NTFS ACL inheritance may not restrict access to current user`,
+      `[tandem] ${name} dir is outside %LOCALAPPDATA% (${dir}); NTFS ACL inheritance may not restrict access to current user`,
     );
   }
 }
@@ -257,8 +267,20 @@ function brokenBackupsDir(appDataDir: string): string {
  * reintroduce the TOCTOU window the dir-hardening step closes).
  */
 async function backupBrokenFile(filePath: string): Promise<void> {
+  await backupBrokenJsonFile(filePath, BROKEN_BACKUP_PREFIX);
+}
+
+/**
+ * Prefix-parameterized twin of `backupBrokenFile`, exported so sibling stores
+ * (e.g. the Models registry, `src/server/models/store.ts`) reuse this ONE copy
+ * of the ACL/TOCTOU-hardened backup logic instead of duplicating a security
+ * path that could drift. The console messages key on `path.basename(filePath)`
+ * so the integrations call site's output is byte-identical to before.
+ */
+export async function backupBrokenJsonFile(filePath: string, prefix: string): Promise<void> {
+  const name = path.basename(filePath);
   const dir = brokenBackupsDir(path.dirname(filePath));
-  const backupName = `${BROKEN_BACKUP_PREFIX}${Date.now()}-${randomUUID().slice(0, 8)}${BROKEN_BACKUP_SUFFIX}`;
+  const backupName = `${prefix}${Date.now()}-${randomUUID().slice(0, 8)}${BROKEN_BACKUP_SUFFIX}`;
   const backupPath = path.join(dir, backupName);
 
   try {
@@ -286,20 +308,20 @@ async function backupBrokenFile(filePath: string): Promise<void> {
     }
 
     console.error(
-      `[tandem] integrations.json was malformed; backed up to ${path.join(
+      `[tandem] ${name} was malformed; backed up to ${path.join(
         BROKEN_BACKUPS_DIR_NAME,
         backupName,
       )} and replaced with an empty config.`,
     );
   } catch (err) {
     // Best-effort cleanup of any partial backup. The outer catch is the
-    // single user-visible signal — `readIntegrationsFile` returns an
-    // empty config regardless, so a corrupt config never crashes startup.
+    // single user-visible signal — the caller returns an empty config
+    // regardless, so a corrupt config never crashes startup.
     await fs.promises.rm(backupPath, { force: true }).catch(() => {
       /* nothing more to do — the throw below is the signal */
     });
     console.error(
-      `[tandem] integrations.json was malformed and the backup at ${backupPath} failed (${
+      `[tandem] ${name} was malformed and the backup at ${backupPath} failed (${
         err instanceof Error ? err.message : String(err)
       }). The malformed file remains in place; an empty config is returned for this read.`,
     );
@@ -313,15 +335,34 @@ async function backupBrokenFile(filePath: string): Promise<void> {
  * via `pruneOldBackups`' aggregate path and do not throw.
  */
 export async function sweepBrokenIntegrationsBackupsOnStartup(appDataDir: string): Promise<void> {
+  await sweepBrokenBackupsOnStartup(appDataDir, BROKEN_BACKUP_PREFIX);
+}
+
+/**
+ * Prefix-parameterized sweep, exported so sibling stores prune their own
+ * broken-backups (which share the one `.broken-backups/` dir, distinguished by
+ * filename prefix) to the same `MAX_BROKEN_BACKUPS` cap. `pruneOldBackups`
+ * filters by prefix, so each store touches only its own files.
+ */
+export async function sweepBrokenBackupsOnStartup(
+  appDataDir: string,
+  prefix: string,
+): Promise<void> {
   await pruneOldBackups(
     brokenBackupsDir(appDataDir),
-    BROKEN_BACKUP_PREFIX,
+    prefix,
     BROKEN_BACKUP_SUFFIX,
     MAX_BROKEN_BACKUPS,
   );
 }
 
-function readSchemaVersion(parsed: unknown): number | null {
+/**
+ * Read a numeric `schemaVersion` off an unknown parsed config blob, or null if
+ * absent/non-numeric. Domain-neutral — exported so sibling config stores (Models
+ * registry) share it rather than copy it. (A deeper cleanup would lift the config
+ * IO helpers to a neutral floor; see #1123 M1a follow-up.)
+ */
+export function readSchemaVersion(parsed: unknown): number | null {
   if (
     typeof parsed === "object" &&
     parsed !== null &&
