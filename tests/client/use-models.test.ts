@@ -220,7 +220,9 @@ describe("models store — CRUD", () => {
       enabled: true,
     });
 
-    await expect(models.updateModel("nonexistent", { displayName: "X" })).resolves.toBeUndefined();
+    // updateModel on an unknown id short-circuits to `false` (nothing committed);
+    // toggle/delete stay void no-ops. None throws.
+    await expect(models.updateModel("nonexistent", { displayName: "X" })).resolves.toBe(false);
     await expect(models.toggleEnabled("nonexistent")).resolves.toBeUndefined();
     await expect(models.deleteModel("nonexistent")).resolves.toBeUndefined();
     expect(models.models.length).toBe(1);
@@ -419,14 +421,6 @@ describe("models store — snapshot + dark gate", () => {
     // Dark build: the flag is a literal const false, so the load short-circuits.
     expect(fetchMock).not.toHaveBeenCalled();
     expect(getModelsSnapshot().models).toEqual([]);
-  });
-});
-
-describe("models store — legacy keys (vestigial)", () => {
-  it("hasLegacyKeys is false and migrateLegacyKeys is a no-op (server never carries _legacyApiKey)", async () => {
-    const models = createModels();
-    expect(models.hasLegacyKeys).toBe(false);
-    expect(await models.migrateLegacyKeys()).toEqual({ migrated: 0, failed: 0 });
   });
 });
 
@@ -697,5 +691,87 @@ describe("models store — concurrency (busy retry, persistent stale, adopt-orph
     expect(newRef).not.toBe(oldRef);
     expect(models.models.length).toBe(0); // adopted the entry-less server state
     expect(rec.deleted()).toContain(newRef); // committed-but-not-landed → new ref cleaned up
+  });
+});
+
+describe("models store — M2b outcome returns + clearError", () => {
+  it("addModel returns the id on commit and null on a rolled-back write", async () => {
+    // Commit: default stub 200s → a string id.
+    const models = createModels();
+    const okId = await models.addModel({
+      provider: "openai",
+      displayName: "G",
+      modelId: "gpt-4o",
+      enabled: true,
+    });
+    expect(typeof okId).toBe("string");
+
+    // Rollback: every models POST 500s → null (the entry didn't land).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string }) => {
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (String(url).includes("/secrets/")) return new Response(null, { status: 204 });
+        if (method === "POST") return new Response("nope", { status: 500 });
+        return new Response(JSON.stringify({ file: serverFile, etag: "e" }), { status: 200 });
+      }),
+    );
+    const nullId = await models.addModel({
+      provider: "openai",
+      displayName: "H",
+      modelId: "gpt-4o",
+      enabled: true,
+    });
+    expect(nullId).toBeNull();
+  });
+
+  it("updateModel and setDefault return true on commit, false on a rolled-back write", async () => {
+    const models = createModels();
+    const id = await models.addModel({
+      provider: "anthropic",
+      displayName: "A",
+      modelId: "claude-opus-4-7",
+      enabled: true,
+    });
+
+    expect(await models.updateModel(id as string, { displayName: "A2" })).toBe(true);
+    expect(await models.setDefault(id)).toBe(true);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string }) => {
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (String(url).includes("/secrets/")) return new Response(null, { status: 204 });
+        if (method === "POST") return new Response("nope", { status: 500 });
+        return new Response(JSON.stringify({ file: serverFile, etag: "e" }), { status: 200 });
+      }),
+    );
+    expect(await models.updateModel(id as string, { displayName: "A3" })).toBe(false);
+    expect(await models.setDefault(null)).toBe(false);
+  });
+
+  it("clearError() clears a sticky saveError without a write", async () => {
+    const models = createModels();
+    const id = await models.addModel({
+      provider: "anthropic",
+      displayName: "A",
+      modelId: "claude-opus-4-7",
+      enabled: true,
+    });
+    // Force a rollback to set saveError.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string }) => {
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (String(url).includes("/secrets/")) return new Response(null, { status: 204 });
+        if (method === "POST") return new Response("nope", { status: 500 });
+        return new Response(JSON.stringify({ file: serverFile, etag: "e" }), { status: 200 });
+      }),
+    );
+    await models.setDefault(id);
+    expect(models.saveError).not.toBeNull();
+
+    models.clearError();
+    expect(models.saveError).toBeNull();
   });
 });

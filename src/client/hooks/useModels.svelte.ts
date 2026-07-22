@@ -54,31 +54,35 @@ import {
 export interface ModelsState {
   readonly models: readonly ModelRegistryEntry[];
   readonly defaultModelId: string | null;
-  /** Last write/load failure message, or null. Cleared on the next success. */
+  /** Last write/load failure message, or null. Cleared on the next success or `clearError()`. */
   readonly saveError: string | null;
+  /** True while a server load is in flight (drives the Settings tab skeleton). */
+  readonly loading: boolean;
+  /**
+   * Add a model. Returns the generated id when the write **committed**, or `null`
+   * when it did not (rolled back / reconciled away) — so an imperative caller
+   * (first-run picker, Settings save) can branch on success instead of reading the
+   * shared reactive `saveError` after the await (§3.3). The declarative tab banner
+   * still surfaces `saveError` for fire-and-forget mutators.
+   */
   addModel: (
     entry: Omit<ModelRegistryEntry, "id" | "apiKeyRef" | "_legacyApiKey">,
     plaintextApiKey?: string,
-  ) => Promise<string>;
+  ) => Promise<string | null>;
+  /** Update a model. Returns `true` when the write committed, `false` otherwise. */
   updateModel: (
     id: string,
     patch: Partial<Omit<ModelRegistryEntry, "id" | "apiKeyRef" | "_legacyApiKey">>,
     plaintextApiKey?: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   deleteModel: (id: string) => Promise<void>;
   toggleEnabled: (id: string) => Promise<void>;
-  setDefault: (id: string | null) => Promise<void>;
-  /**
-   * Legacy-key migration is vestigial now that the store loads from the server:
-   * the server schema is `.strict()` and never carries `_legacyApiKey`, so the
-   * store's entries never do either. Kept as a no-op so `SettingsModelsTab`'s
-   * legacy-migration banner still compiles; the banner + these methods are
-   * removed together in M2b when the Models UI is unhidden. (Legacy plaintext
-   * keys in localStorage are dropped by the reconcile's `projectEntry` — a
-   * pre-existing silent drop while the Models UI is dark; R2-D.)
-   */
-  migrateLegacyKeys: () => Promise<{ migrated: number; failed: number }>;
-  readonly hasLegacyKeys: boolean;
+  /** Set (or clear) the default model. Returns `true` when the write committed. */
+  setDefault: (id: string | null) => Promise<boolean>;
+  /** Re-fetch the registry from the server (user-triggered after a 409 notice). Flag-gated. */
+  reload: () => Promise<void>;
+  /** Clear a sticky `saveError` without a write (called on modal-open / mutation-start). */
+  clearError: () => void;
 }
 
 // --- Module-level singleton state -------------------------------------------
@@ -87,6 +91,7 @@ let _models = $state<ModelRegistryEntry[]>([]);
 let _defaultModelId = $state<string | null>(null);
 let _etag: string | null = null; // last-seen server ETag (not reactive — no UI reads it)
 let _saveError = $state<string | null>(null);
+let _loading = $state(false);
 let _loadInFlight: Promise<void> | null = null;
 
 // Reconcile gate (R2-B): every mutator awaits this before its POST, so a CRUD
@@ -311,6 +316,7 @@ async function fetchAndApply(): Promise<void> {
 export function loadFromServer(): Promise<void> {
   if (!BYO_MODELS_ENABLED) return Promise.resolve();
   if (_loadInFlight) return _loadInFlight;
+  _loading = true;
   _loadInFlight = (async () => {
     try {
       await fetchAndApply();
@@ -320,10 +326,21 @@ export function loadFromServer(): Promise<void> {
       // load retries.
       _saveError = "Failed to load models from the server.";
     } finally {
+      _loading = false;
       _loadInFlight = null;
     }
   })();
   return _loadInFlight;
+}
+
+/**
+ * User-triggered re-fetch (e.g. after a "changed elsewhere — reloaded" notice).
+ * Clears the in-flight dedup so it always hits the server. Flag-gated via
+ * `loadFromServer`, so it is a no-op while dark.
+ */
+export function reload(): Promise<void> {
+  _loadInFlight = null;
+  return loadFromServer();
 }
 
 /**
@@ -388,9 +405,8 @@ export function createModels(): ModelsState {
     get saveError() {
       return _saveError;
     },
-    get hasLegacyKeys() {
-      // Server-backed entries never carry `_legacyApiKey`; always false. See interface doc.
-      return _models.some((m) => typeof m._legacyApiKey === "string");
+    get loading() {
+      return _loading;
     },
     async addModel(entry, plaintextApiKey) {
       assertValidPatch(entry);
@@ -411,12 +427,14 @@ export function createModels(): ModelsState {
       // delete (never throws). Keying on the outcome (not reconstructed side
       // effects) also covers the reconcile-adopt orphan the old guard missed.
       if (apiKeyRef && outcome !== "committed") await keychain.delete(apiKeyRef);
-      return id;
+      // Return the id ONLY on commit so a branch-on-success caller (first-run
+      // picker, Settings save) never proceeds with an id whose entry didn't land.
+      return outcome === "committed" ? id : null;
     },
     async updateModel(id, patch, plaintextApiKey) {
       assertValidPatch(patch);
       const existing = _models.find((m) => m.id === id);
-      if (!existing) return;
+      if (!existing) return false;
       let newRef: string | undefined;
       if (plaintextApiKey !== undefined && plaintextApiKey.length > 0) {
         // Store the NEW secret but do NOT delete the old ref yet — a failed write
@@ -445,6 +463,7 @@ export function createModels(): ModelsState {
           await keychain.delete(newRef);
         }
       }
+      return outcome === "committed";
     },
     async deleteModel(id) {
       const ref = _models.find((m) => m.id === id)?.apiKeyRef;
@@ -465,14 +484,14 @@ export function createModels(): ModelsState {
       });
     },
     async setDefault(id) {
-      await writeThrough(() => {
+      const outcome = await writeThrough(() => {
         _defaultModelId = id;
       });
+      return outcome === "committed";
     },
-    async migrateLegacyKeys() {
-      // No-op: the store loads from the `.strict()` server, which never carries
-      // `_legacyApiKey`. Kept for interface stability (SettingsModelsTab wiring).
-      return { migrated: 0, failed: 0 };
+    reload,
+    clearError() {
+      _saveError = null;
     },
   };
 }
@@ -486,6 +505,7 @@ export function _resetModelsStoreForTests(): void {
   _defaultModelId = null;
   _etag = null;
   _saveError = null;
+  _loading = false;
   _loadInFlight = null;
   _reconcileSettled = new Promise<void>((resolve) => {
     _resolveReconcile = resolve;

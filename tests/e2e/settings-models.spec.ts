@@ -291,58 +291,10 @@ test("default selection persists across reload and the titlebar chip surfaces it
   expect(reloaded?.defaultModelId).toBe(rowId);
 });
 
-test("legacy plaintext key migration banner — appears, migrates, then disappears", async ({
-  page,
-}) => {
-  // Pre-seed a pre-v7 blob with a plaintext `apiKey` to drive the migration
-  // banner. The `_legacyApiKey` field is the in-memory marker `parseModels`
-  // sets; the banner triggers off `models.hasLegacyKeys`.
-  const LEGACY_KEY = "sk-test-DO-NOT-USE-anthropic-legacy";
-  await page.evaluate(
-    ({ key, legacy }) => {
-      localStorage.setItem(
-        key,
-        JSON.stringify({
-          schemaVersion: 6,
-          leftPanelVisible: false,
-          rightPanelVisible: true,
-          models: [
-            {
-              id: "legacy-1",
-              provider: "anthropic",
-              displayName: "Legacy entry",
-              modelId: "claude-opus-4-7",
-              apiKey: legacy,
-              enabled: true,
-            },
-          ],
-        }),
-      );
-    },
-    { key: TANDEM_SETTINGS_KEY, legacy: LEGACY_KEY },
-  );
-  await page.reload();
-  await gotoModelsTab(page);
-
-  // Banner is visible — the entry was loaded with a transient `_legacyApiKey`.
-  const banner = page.locator("[data-testid='models-legacy-migration-banner']");
-  await expect(banner).toBeVisible();
-
-  await page.locator("[data-testid='models-legacy-migrate-btn']").click();
-
-  // After migration the banner disappears and the entry now carries
-  // `apiKeyRef` instead of `_legacyApiKey`/`apiKey`.
-  await expect(banner).toHaveCount(0);
-  const persisted = await page.evaluate((key) => {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  }, TANDEM_SETTINGS_KEY);
-  expect(persisted?.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
-  expect(persisted?.models?.[0]?.apiKey).toBeUndefined();
-  expect(persisted?.models?.[0]?.apiKeyRef).toBeDefined();
-  // The plaintext must NEVER appear in localStorage post-migration.
-  expect(JSON.stringify(persisted)).not.toContain(LEGACY_KEY);
-});
+// The legacy plaintext-key migration banner was removed in #1123 M2b: the store
+// loads from the `.strict()` server (never carries `_legacyApiKey`), so
+// `hasLegacyKeys` could never be true. Legacy plaintext in localStorage is
+// dropped by the reconcile's `projectEntry` (R2-D). No banner, no test.
 
 test("v2 → current schema migration boot — Models tab renders with empty list, settings survive", async ({
   page,

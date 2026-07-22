@@ -6,6 +6,12 @@ import CollapsibleSection from "./CollapsibleSection.svelte";
 interface Props {
   /** Existing entry when editing; `undefined` when adding. */
   entry?: ModelRegistryEntry;
+  /**
+   * Save-failure message to surface inside the dialog (pre-write keychain error,
+   * or a write that rolled back). Null when there's no error. Shown here rather
+   * than the tab banner because the modal is the active surface during a save.
+   */
+  error?: string | null;
   onCancel: () => void;
   /**
    * Save handler.
@@ -33,7 +39,7 @@ interface Props {
   }) => void;
 }
 
-const { entry, onCancel, onSave }: Props = $props();
+const { entry, error, onCancel, onSave }: Props = $props();
 
 const PROVIDER_OPTIONS: Array<{ value: ModelProvider; label: string }> = [
   { value: "anthropic", label: "Anthropic" },
@@ -240,6 +246,12 @@ function startReplacingKey() {
       </p>
     </CollapsibleSection>
 
+    {#if error}
+      <div role="alert" data-testid="model-edit-error" class="mem-error">
+        {error}
+      </div>
+    {/if}
+
     <div class="mem-actions">
       <button type="button" class="mem-btn mem-btn--ghost" onclick={onCancel}>
         Cancel
@@ -392,6 +404,15 @@ function startReplacingKey() {
     font-size: 11px;
     color: var(--tandem-fg-subtle);
     margin: 0;
+  }
+
+  .mem-error {
+    padding: var(--tandem-space-2) var(--tandem-space-3);
+    border: 1px solid var(--tandem-error-border);
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-error-bg);
+    color: var(--tandem-error-fg-strong);
+    font-size: 12px;
   }
 
   .mem-actions {

@@ -229,6 +229,7 @@ model-edit-btn-{*}
 model-edit-cancel
 model-edit-displayname
 model-edit-endpoint
+model-edit-error
 model-edit-modal
 model-edit-modelid
 model-edit-provider
@@ -236,9 +237,6 @@ model-edit-save
 model-row-{*}
 model-toggle-{*}
 models-empty-state
-models-legacy-migrate-btn
-models-legacy-migration-banner
-models-legacy-migration-status
 models-save-error
 network-degraded-delay-slider
 network-restart-sidecar

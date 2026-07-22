@@ -110,7 +110,16 @@ async function handleSave(e: SubmitEvent) {
       },
       isCloud ? apiKey.trim() : undefined,
     );
-    models.setDefault(id);
+    // `addModel` returns null when the write did NOT commit (rolled back /
+    // reconciled away) — do NOT finish onboarding with a phantom default, keep
+    // the modal open and surface the store's error.
+    if (id === null) {
+      saveError = models.saveError ?? "Failed to save model changes.";
+      return;
+    }
+    // A failed setDefault is non-fatal for onboarding (the model was added); its
+    // error surfaces via the store banner. Complete regardless.
+    await models.setDefault(id);
     onComplete();
   } catch (err) {
     saveError = err instanceof Error ? err.message : "Failed to save";
