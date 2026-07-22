@@ -366,7 +366,7 @@ Make sure Claude Code is running and connected. Check `tandem_status` from Claud
 
 If using channels, the server must be running before Claude Code starts. If you restarted the server, restart Claude Code or run `/mcp`. Channel timeout messages such as `/api/events timed out after 10000ms`, `SSE inactivity timeout`, or `/api/channel-reply timed out after 5000ms` mean the server accepted a connection but stopped responding; restart Tandem and reconnect Claude.
 
-For server-side and MCP troubleshooting, see the [README](../README.md#troubleshooting).
+For server-side and MCP troubleshooting, see [troubleshooting.md](troubleshooting.md).
 
 ### Desktop app: server won't start
 

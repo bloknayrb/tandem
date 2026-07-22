@@ -15,7 +15,7 @@
 
 Tandem is a document editor that lets you and an AI work on the same file together. You highlight a passage. The AI sees what you highlighted and can ask about it, comment on it, or propose changes that appear as cards beside your document. You decide what to keep.
 
-One thing to know up front: the AI side requires an MCP-capable AI client — [Claude Code](https://claude.com/claude-code) is the default — and the subscription behind it (for Claude, a paid Anthropic plan). Without one connected, Tandem is a capable local document editor and nothing more.
+One thing to know up front: the AI side needs an AI client running on your own computer, plus the subscription behind it. [Claude Code](https://claude.com/claude-code) is the default, and a Claude Pro or Max subscription includes it. Clients connect over [MCP](https://modelcontextprotocol.io) — an open standard for letting an AI reach tools and files — so others can be used too. [Connect your AI](#connect-your-ai) below covers the setup, which is a wizard rather than a config file. Without a client connected, Tandem is a capable local document editor and nothing more.
 
 Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md](CHANGELOG.md) for what is in the latest release.
 
@@ -76,9 +76,9 @@ Tandem is built to work with Anthropic's Claude out of the box. Other AI tools c
 
 ## Who Tandem is for
 
-- If you draft long-form writing and want a second reader for tone and structure.
-- If you review documents — an essay, a thesis chapter, a report, or a contract — and want a faster pass.
-- When a colleague hands you a document to mark up.
+- If you draft long-form writing — an essay, a report, a proposal, a design doc — and want a second reader for tone and structure.
+- If you review what someone else wrote — a thesis chapter, a contract, a spec, an RFC — and want a faster pass.
+- When a colleague hands you a document to mark up, or a design lands in your queue for sign-off.
 - When the AI wrote a draft and you need to decide what to keep.
 
 Tandem is built for individuals working on their own documents. The example document types above are just that — examples; the workflow is the same whatever you are writing or reviewing. The interface is English-only for now.
@@ -94,6 +94,18 @@ Windows 10 version 22H2 or Windows 11. macOS 12 (Monterey) or later. Linux with 
 Pick the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest). Windows, macOS, and Linux builds are available.
 
 The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.markdown`, `.txt`, `.html`, or `.docx` file opens it directly in Tandem.
+
+### Connect your AI
+
+Installing Tandem gives you the editor. The AI half needs one more thing: an AI client running on your machine, and the subscription behind it.
+
+The default — and the one Tandem is tested against — is [Claude Code](https://claude.com/claude-code), Anthropic's Claude that runs on your own computer rather than in a browser tab. **A Claude Pro or Max subscription includes it**, so if you already pay for Claude you are most likely already covered; pay-as-you-go API billing works too. See [Anthropic's pricing](https://claude.com/pricing) for what each plan costs.
+
+One thing worth knowing before you start: **the Claude you use at claude.ai in a browser cannot connect to Tandem.** A web page has no way to reach a document sitting on your disk. So a subscription is necessary but not sufficient — you also need Claude Code, or Claude Desktop, installed locally.
+
+You do not have to configure any of this by hand. Tandem opens a setup wizard the first time you run it: if Claude Code is not installed, the wizard can install it for you in one click on Windows, macOS, and Linux, and it then writes the connection settings itself. You can reopen it any time from **Settings → AI Assistant**.
+
+Prefer a different AI? Any MCP-capable client can connect to the same endpoint — see the [compatibility table](#the-mcp-integration-policy) for what is supported and what is untested, and [Cowork](#cowork) for connecting Claude Desktop on Windows.
 
 ### What you get
 
@@ -121,7 +133,7 @@ Then see [docs/troubleshooting.md](docs/troubleshooting.md) for common problems 
 ## How you work with Tandem
 
 1. Open a document in Tandem.
-2. Start Claude. Tandem and Claude connect automatically once you have run setup once.
+2. Start your AI client — Claude Code, in the default setup. Once you have been through [Connect your AI](#connect-your-ai), Tandem and Claude find each other automatically; you do not reconnect them each time.
 3. Type a question in the chat panel, or highlight text in the document to focus the AI on a passage. The AI sees what you highlight as you highlight it.
 4. The AI's suggestions appear as cards beside the document. You decide what to accept.
 5. Save when you are finished.
