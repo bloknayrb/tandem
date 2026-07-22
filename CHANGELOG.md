@@ -5,6 +5,12 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The Linux `.deb` and `.rpm` packages now declare the `libxdo` library they need, so the installed app actually launches (#1227).** Both packages installed without complaint and then failed to start with `error while loading shared libraries: libxdo.so.3`, on every release since v0.13.6. Tandem links that library for native Cut/Copy/Paste menu items, but neither package listed it as a dependency, so a machine without it got a silent install and a dead application. Anyone who already had `xdotool` installed never saw it, which is how it went unnoticed. The AppImage was never affected — it bundles the library itself.
+
 ## [0.19.0] - 2026-07-21
 
 ### Added

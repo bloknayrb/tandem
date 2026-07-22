@@ -50,23 +50,33 @@ Mechanism, confirmed from source:
   muda can synthesize native Cut/Copy/Paste menu items.
 - `ci.yml` and `tauri-release.yml` both install `libxdo-dev` — as a **build**
   dependency only.
-- `tauri.conf.json` `bundle.linux` is `{}` — no `deb.depends`, no `rpm.depends`.
+- `tauri.conf.json` had **no `bundle.linux` key at all** — no `deb.depends`, no
+  `rpm.depends`. (An earlier draft of this doc said the key was present but
+  empty. It wasn't: that reading came from a probe whose own `.get('linux', {})`
+  default was being printed back.)
 
 So the binary acquires a hard `DT_NEEDED` on `libxdo.so.3` that no package
 metadata carries. The declared deps are only `libappindicator3`, `libgtk-3`,
 `libwebkit2gtk-4.1`. `node-sidecar` and `tandem-reaper` link cleanly; it is
 specific to `tandem-desktop`.
 
-`linux-libxdo` landed in **v0.13.6**, so every Linux package from v0.13.6
-through v0.19.0 is affected. Users with `xdotool` already installed won't see
-it, which is a good way for it to stay hidden.
+`linux-libxdo` landed in **v0.13.6**, so nine published releases ship the broken
+packages (v0.13.6 through v0.19.0; v0.18.0 is excluded only because its
+published release carries no Linux artifacts at all — a separate bug, #1228).
+Users with `xdotool` already installed won't see it, which is a good way for it
+to stay hidden. The **AppImage is unaffected** — it bundles `libxdo.so.3` at
+`squashfs-root/usr/lib/` (verified via `--appimage-extract`).
 
-Fix: populate `bundle.linux.rpm.depends` with **`libxdo`** — that is the Fedora
-package name (`dnf provides` → `libxdo-1:3.20211022.1-4.fc39`). Note the
-plausible-sounding `xdotool-libs` does **not** exist on Fedora 39; verify the
-Debian/Ubuntu name (`libxdo3`) the same way rather than assuming it. Not yet
-applied — needs its own issue, plus an assessment of whether the AppImage
-(which bundles libs) is affected.
+**Filed as #1227 and fixed in this branch**: `bundle.linux.deb.depends` is now
+`["libxdo3"]` and `rpm.depends` is `["libxdo"]`. Both package names were
+verified by installing them, not guessed — the plausible-sounding
+`xdotool-libs` does **not** exist on Fedora 39, and `dnf provides
+'libxdo.so.3()(64bit)'` gives `libxdo-1:3.20211022.1-4.fc39`. User-supplied
+`depends` append to Tauri's auto-injected list rather than replacing it, so
+this cannot strip the existing three.
+
+Per maintainer decision, no patch release: the fix rides the next minor, given
+16 total Linux downloads across all releases.
 
 ### Fedora 39 `.rpm` — install/uninstall PASS, linkage FAIL
 
@@ -117,6 +127,14 @@ tandem : Depends: libappindicator3-1 but it is not installable
 which is indistinguishable from a genuine packaging defect, and was nearly
 filed as a v1.0 finding. Both harness modes now pin IPv4
 (`Acquire::ForceIPv4` / `ip_resolve=4`) with the reason in a comment.
+
+The deeper fix is that the harness now refuses to guess. Metadata refresh
+(`apt-get update` / `dnf makecache`) is a separate step with its own verdict,
+and a failure there exits **3 — ENVIRONMENT** and stops, rather than letting
+every later check misreport an unreachable mirror as a broken package. The exit
+contract is `0` pass, `1..N` that many real defects, `2` usage, `3`
+environment. A gate that cannot say "I learned nothing" gets muted the first
+week it flakes.
 
 Swapping in a "more reliable" mirror made it worse — `us.archive.ubuntu.com`
 doesn't resolve inside the container at all, so apt silently fell back to stale

@@ -47,6 +47,14 @@
     "macOS": {
       "entitlements": "entitlements.plist"
     },
+    "linux": {
+      "deb": {
+        "depends": ["libxdo3"]
+      },
+      "rpm": {
+        "depends": ["libxdo"]
+      }
+    },
     "resources": {
       "../dist/server/": "dist/server/",
       "../dist/channel/": "dist/channel/",

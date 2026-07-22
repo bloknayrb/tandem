@@ -50,7 +50,9 @@ exactly this residual).
 ## 3. Linux (best effort, any box or VM)
 
 - [ ] AppImage: `chmod +x`, launch, sidecar healthy via Copy Diagnostics.
-- [ ] `.deb` or `.rpm` installs without dependency errors on its target distro.
+- [ ] `.deb` and `.rpm`: run `scripts/smoke/linux-package-smoke.sh deb` and `... rpm` (Docker, no VM needed — see [spikes/linux-container-install-smoke.md](spikes/linux-container-install-smoke.md)). It installs the artifact in a clean container and **loads** every shipped binary.
+
+  Installing cleanly is not the bar. #1227 installed with exit 0 on both distros and then failed to launch on a missing `libxdo.so.3` — for nine releases. An undeclared runtime library is invisible to `dpkg`/`rpm` and only shows up when the dynamic loader runs, so the check that matters is `ldd` after a real install, not the installer's exit code.
 
 ## 4. npm path (any platform)
 

@@ -11,7 +11,15 @@
 #   docker run --rm -v "<dir-with-artifacts>:/art" fedora:39 \
 #     bash /art/linux-package-smoke.sh rpm
 #
-# Exits non-zero if a step that matters fails, so it can gate CI later.
+# Exit codes are distinct on purpose, because this is meant to gate CI and a
+# gate that cannot tell "the package is broken" from "the network is down"
+# will be muted the first week it flakes:
+#
+#   0    all checks passed
+#   1..N that many real package defects
+#   2    usage / no artifact
+#   3    ENVIRONMENT fault -- repository metadata could not be fetched.
+#        Nothing was learned about the package. Retry; do not read as a defect.
 set -u
 
 MODE="${1:?usage: linux-package-smoke.sh <deb|rpm> [artifact-path]}"
@@ -20,6 +28,15 @@ FAILURES=0
 
 fail() { echo "  !! FAIL: $*"; FAILURES=$((FAILURES + 1)); }
 pass() { echo "  ok: $*"; }
+# Bail immediately rather than accumulating: every check after this point would
+# report a fault of the harness as a fault of the package.
+envfail() {
+  echo
+  echo "  ENVIRONMENT FAULT: $*"
+  echo "  The package was NOT evaluated. This is not a packaging defect."
+  echo "RESULT: ENVIRONMENT (exit 3)"
+  exit 3
+}
 
 # Docker's default bridge has no IPv6 route, but the distro mirrors resolve
 # AAAA-first. Without pinning IPv4, apt reports every dependency as
@@ -63,12 +80,19 @@ fi
 
 echo
 echo "=== [2] install ==="
+# Refresh metadata as its own step with its own verdict. Folded into the
+# install it is invisible: apt reports an unreachable mirror as
+# "Depends: X but it is not going to be installed", which is indistinguishable
+# from a genuinely missing dependency and is how this harness first lied.
 if [ "$MODE" = deb ]; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq 2>&1 | tail -2
+  [ "${PIPESTATUS[0]}" -eq 0 ] || envfail "apt-get update failed (mirror unreachable?). Try TANDEM_APT_MIRROR=<mirror>."
   apt-get install -y --no-install-recommends "$ART" 2>&1 | tail -8
   rc=${PIPESTATUS[0]}
 else
+  dnf makecache -q 2>&1 | tail -2
+  [ "${PIPESTATUS[0]}" -eq 0 ] || envfail "dnf makecache failed (mirror unreachable?)."
   dnf install -y --setopt=install_weak_deps=False "$ART" 2>&1 | tail -4
   rc=${PIPESTATUS[0]}
 fi
@@ -96,6 +120,9 @@ echo
 echo "=== [4] dynamic linkage ==="
 # A dependency that resolves at install time can still leave an unresolved
 # soname at run time; ldd is the check that actually proves the binary loads.
+# This is the check that found #1227: tandem-desktop linked libxdo.so.3, which
+# no package declared, so nine releases installed cleanly and then refused to
+# start. Install-time success says nothing about whether the loader is happy.
 for b in tandem-desktop node-sidecar tandem-reaper; do
   p="/usr/bin/$b"
   [ -x "$p" ] || continue
