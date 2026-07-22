@@ -242,11 +242,34 @@ async function postCurrentWithBusyRetry(): Promise<PostOutcome> {
  */
 type WriteOutcome = "committed" | "reconciled" | "rolledback";
 
+// All mutations funnel through ONE module-level promise chain so overlapping
+// `writeThrough` calls execute their full snapshot->apply->network->settle cycle
+// STRICTLY one at a time (M2a PR-review round 5). Without this, a failing
+// mutation's `rollback()` (or the stale-409 path's `fetchAndApply` adopt)
+// unconditionally overwrites `_models`/`_defaultModelId` wholesale — if a SECOND
+// mutation's `apply()` had landed in between (even one that already committed
+// server-side), the overwrite silently discarded it. A reference-identity guard
+// (only revert if nobody else touched `_models` since this call's own `apply()`)
+// was considered and rejected: it would need mirroring at every state-overwriting
+// site (`rollback`, both stale-path `fetchAndApply` calls, AND `commit()` itself,
+// which assumes `_models` is untouched between `apply()` and its own return) to
+// be airtight, and still leaves a false-negative when two concurrent mutations
+// coincidentally produce the same `_defaultModelId`. Full serialization is
+// simpler to verify correct and closes the whole bug class in one place.
+// Trade-off: a mutation issued while a prior one is still network-pending no
+// longer applies instantly — it queues behind the prior mutation's full
+// round-trip. Acceptable for a Settings-style CRUD surface (discrete
+// checkbox/save actions, never per-keystroke) that is also unreached at runtime
+// today (`BYO_MODELS_ENABLED=false`).
+let _writeQueue: Promise<void> = Promise.resolve();
+
 /**
- * Optimistic-then-reconcile server write-through (§3.2). `apply` expresses the
- * user's single intent as an **absolute** (idempotent) mutation of the live
- * `$state` — it runs synchronously FIRST (before any `await`; kills the
- * controlled-input bounce), then the POST is gated on `_reconcileSettled`.
+ * Optimistic-then-reconcile server write-through (§3.2), serialized against
+ * overlapping mutations via `_writeQueue`. `apply` expresses the user's single
+ * intent as an **absolute** (idempotent) mutation of the live `$state` — once
+ * this call's turn in the queue arrives, `apply()` runs synchronously FIRST
+ * (before any `await`; kills the controlled-input bounce for THIS call), then
+ * the POST is gated on `_reconcileSettled`.
  *   200        → adopt the new etag, clear the error (`committed`);
  *   409 stale  → reload fresh server state, re-apply the intent once, re-POST; if
  *                that still fails → adopt the reconciled server state (never leave
@@ -256,48 +279,60 @@ type WriteOutcome = "committed" | "reconciled" | "rolledback";
  *   400/500/network → rollback to the pre-mutation snapshot + surface the error.
  */
 async function writeThrough(apply: () => void): Promise<WriteOutcome> {
-  const commit = (etag: string): "committed" => {
-    _etag = etag;
-    _saveError = null;
-    return "committed";
-  };
-  const snapshot = { models: _models, defaultModelId: _defaultModelId, etag: _etag };
-  const rollback = (message: string): "rolledback" => {
-    _models = snapshot.models;
-    _defaultModelId = snapshot.defaultModelId;
-    _etag = snapshot.etag;
-    _saveError = message;
-    return "rolledback";
-  };
-  apply(); // optimistic — synchronous, before any await
-  await _reconcileSettled; // R2-B: never POST before reconcile settles
-  try {
-    const first = await postCurrentWithBusyRetry();
-    if (first.ok) return commit(first.etag);
-    if (first.kind === "stale") {
-      await fetchAndApply(); // adopt fresh server state + etag (ungated — see below)
-      apply(); // re-apply the user's single intent against fresh state
-      const retry = await postCurrentWithBusyRetry();
-      if (retry.ok) return commit(retry.etag);
-      // Still stale/busy/failed after a reload+retry — adopt the reconciled
-      // server state, don't diverge.
-      await fetchAndApply();
-      _saveError = "Model registry changed elsewhere; reloaded.";
-      return "reconciled";
+  const runExclusive = async (): Promise<WriteOutcome> => {
+    const commit = (etag: string): "committed" => {
+      _etag = etag;
+      _saveError = null;
+      return "committed";
+    };
+    const snapshot = { models: _models, defaultModelId: _defaultModelId, etag: _etag };
+    const rollback = (message: string): "rolledback" => {
+      _models = snapshot.models;
+      _defaultModelId = snapshot.defaultModelId;
+      _etag = snapshot.etag;
+      _saveError = message;
+      return "rolledback";
+    };
+    apply(); // optimistic — synchronous, before any await, once this call's turn arrives
+    await _reconcileSettled; // R2-B: never POST before reconcile settles
+    try {
+      const first = await postCurrentWithBusyRetry();
+      if (first.ok) return commit(first.etag);
+      if (first.kind === "stale") {
+        await fetchAndApply(); // adopt fresh server state + etag (ungated — see below)
+        apply(); // re-apply the user's single intent against fresh state
+        const retry = await postCurrentWithBusyRetry();
+        if (retry.ok) return commit(retry.etag);
+        // Still stale/busy/failed after a reload+retry — adopt the reconciled
+        // server state, don't diverge.
+        await fetchAndApply();
+        _saveError = "Model registry changed elsewhere; reloaded.";
+        return "reconciled";
+      }
+      // `busy` (retries exhausted) is transient — tell the user to retry rather
+      // than implying their change was rejected. `failed` is terminal.
+      return rollback(
+        first.kind === "busy"
+          ? "Model registry is busy; please try again."
+          : "Failed to save model changes.",
+      );
+    } catch (err) {
+      // A thrown fetch/JSON error (network drop, unparseable body) — log the cause
+      // (the generic `_saveError` string alone is undebuggable) and roll back.
+      console.warn("[models] write-through failed", err);
+      return rollback("Failed to save model changes.");
     }
-    // `busy` (retries exhausted) is transient — tell the user to retry rather
-    // than implying their change was rejected. `failed` is terminal.
-    return rollback(
-      first.kind === "busy"
-        ? "Model registry is busy; please try again."
-        : "Failed to save model changes.",
-    );
-  } catch (err) {
-    // A thrown fetch/JSON error (network drop, unparseable body) — log the cause
-    // (the generic `_saveError` string alone is undebuggable) and roll back.
-    console.warn("[models] write-through failed", err);
-    return rollback("Failed to save model changes.");
-  }
+  };
+
+  // Queue this call behind whatever is currently in flight. `_writeQueue` is
+  // always rebuilt via a two-arg `.then` below, so it never itself rejects —
+  // only `turn` (returned to the caller) can carry `runExclusive`'s outcome.
+  const turn = _writeQueue.then(runExclusive);
+  _writeQueue = turn.then(
+    () => undefined,
+    () => undefined,
+  );
+  return turn;
 }
 
 // --- Load -------------------------------------------------------------------
@@ -534,6 +569,10 @@ export function _resetModelsStoreForTests(): void {
   _loading = false;
   _loadFailed = false;
   _loadInFlight = null;
+  // Reset the write queue too — a test that leaves a mock fetch permanently
+  // pending would otherwise gate every subsequent test's writeThrough calls on
+  // that never-resolving promise (module-level singleton state).
+  _writeQueue = Promise.resolve();
   _reconcileSettled = new Promise<void>((resolve) => {
     _resolveReconcile = resolve;
   });

@@ -396,6 +396,63 @@ describe("models store — write-through semantics", () => {
     expect(models.models[0].displayName).toBe("Keep"); // reverted
     expect(models.saveError).not.toBeNull();
   });
+
+  it("serializes overlapping mutations — a failing write cannot clobber a concurrent committed one", async () => {
+    const models = createModels();
+    const idA = await models.addModel({
+      provider: "anthropic",
+      displayName: "A",
+      modelId: "claude-opus-4-7",
+      enabled: true,
+    });
+    const idB = await models.addModel({
+      provider: "anthropic",
+      displayName: "B",
+      modelId: "claude-opus-4-7",
+      enabled: true,
+    });
+
+    let releaseAPost!: (res: Response) => void;
+    const aPostGate = new Promise<Response>((resolve) => {
+      releaseAPost = resolve;
+    });
+    let postCallCount = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string }) => {
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (String(url).includes("/secrets/")) return new Response(null, { status: 204 });
+        if (method === "POST") {
+          postCallCount++;
+          if (postCallCount === 1) return aPostGate; // A's write — held pending
+          return new Response(JSON.stringify({ etag: `etag-${postCallCount}` }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ file: serverFile, etag: "e" }), { status: 200 });
+      }),
+    );
+
+    const aPromise = models.toggleEnabled(idA); // starts; its POST is held pending
+    const bPromise = models.toggleEnabled(idB); // must queue behind A, not interleave
+
+    // Flush all pending microtasks. If overlapping writes were NOT serialized,
+    // B's optimistic apply() would already be visible here (it's synchronous
+    // and doesn't depend on A). Proves B's turn hasn't started yet.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(postCallCount).toBe(1); // only A's write has reached the network
+    expect(models.models.find((m) => m.id === idB)!.enabled).toBe(true); // B still queued
+
+    // Fail A's write.
+    releaseAPost(new Response("nope", { status: 500 }));
+    await aPromise;
+    expect(models.models.find((m) => m.id === idA)!.enabled).toBe(true); // A rolled back to its OWN prior value
+
+    // B now runs its full cycle and commits — untouched by A's rollback.
+    await bPromise;
+    expect(postCallCount).toBe(2);
+    expect(models.models.find((m) => m.id === idB)!.enabled).toBe(false); // B's toggle committed
+    expect(models.models.find((m) => m.id === idA)!.enabled).toBe(true); // still correct after B settles
+  });
 });
 
 describe("models store — snapshot + dark gate", () => {
