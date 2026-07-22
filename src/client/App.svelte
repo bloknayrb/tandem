@@ -68,6 +68,7 @@ import { createFirstRunNeeded } from "./hooks/useFirstRunNeeded.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { licenseStore } from "./hooks/useLicense.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
+import { createModels } from "./hooks/useModels.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
@@ -251,6 +252,9 @@ $effect(() => {
 });
 
 const settingsState = createTandemSettings();
+// Models registry is the server-authoritative store singleton since M2 (#1123);
+// the chip reads its `$state` getters, not `settingsState.settings.models`.
+const modelsStore = createModels();
 const modeState = createTandemModeBroadcast(
   () => yjsSync.bootstrapYdoc,
   () => settingsState.settings.selectionDwellMs,
@@ -649,9 +653,9 @@ function openSettingsModalWithAck() {
 }
 
 const defaultModelLabel = $derived.by(() => {
-  const id = settingsState.settings.defaultModelId;
+  const id = modelsStore.defaultModelId;
   if (id === null) return null;
-  const entry = settingsState.settings.models.find((m) => m.id === id);
+  const entry = modelsStore.models.find((m) => m.id === id);
   return entry ? entry.displayName : null;
 });
 

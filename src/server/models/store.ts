@@ -37,7 +37,8 @@ export const MODELS_BROKEN_BACKUP_PREFIX = "models-";
 
 export interface ModelStore {
   read(): Promise<ModelsFile>;
-  write(file: ModelsFile): Promise<void>;
+  /** Writes `file` and returns the Zod-canonical form actually persisted. */
+  write(file: ModelsFile): Promise<ModelsFile>;
   readonly filePath: string;
 }
 
@@ -100,9 +101,27 @@ async function readModelsFile(filePath: string): Promise<ModelsFile> {
   return enforceReferentialIntegrity(result.data);
 }
 
-async function writeModelsFile(filePath: string, file: ModelsFile): Promise<void> {
-  ModelsFileSchema.parse(file);
-  await atomicWriteConfigFile(filePath, JSON.stringify(file, null, 2) + "\n");
+/**
+ * Canonical on-disk serialization for a `ModelsFile`. The ONE source of the
+ * exact bytes written to disk, so the content-hash ETag (`getModelsEtag`, #1123
+ * M2) hashes precisely what a client would read back. Deterministic key order:
+ * callers pass a Zod-parsed file, whose keys follow schema definition order
+ * regardless of input order, so two logically-equal files serialize identically.
+ */
+export function serializeModelsFile(file: ModelsFile): string {
+  return JSON.stringify(file, null, 2) + "\n";
+}
+
+async function writeModelsFile(filePath: string, file: ModelsFile): Promise<ModelsFile> {
+  // Parse to the Zod-CANONICAL form (schema key order, independent of the
+  // caller's input order), then run the SAME referential-integrity pass `read()`
+  // applies — so a dangling `defaultModelId` is cleared identically on write and
+  // read, and the cached bytes hash identically to a fresh read cycle
+  // (JSON.parse→safeParse→schema order→integrity). Without either, the ETag would
+  // differ between GET-after-POST and GET-after-restart, 409-ing every first write.
+  const canonical = enforceReferentialIntegrity(ModelsFileSchema.parse(file));
+  await atomicWriteConfigFile(filePath, serializeModelsFile(canonical));
+  return canonical;
 }
 
 /** Server-startup hook — prune models broken-backups to the shared cap. */

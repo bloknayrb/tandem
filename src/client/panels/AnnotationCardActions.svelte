@@ -1,7 +1,6 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 
 interface Props {
   annotationId: string;
@@ -29,7 +28,7 @@ let {
   onSendToClaude,
 }: Props = $props();
 
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 
 let undoError = $state(false);
 let undoTimer: ReturnType<typeof setTimeout> | null = null;

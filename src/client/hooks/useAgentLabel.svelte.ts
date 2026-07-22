@@ -14,7 +14,7 @@
  */
 
 import { resolveAgentLabel } from "../utils/agentLabel.js";
-import type { TandemSettingsState } from "./useTandemSettings.svelte.js";
+import { agentLabelSource } from "./useModels.svelte.js";
 
 export interface AgentLabel {
   /** Brand/family ("Claude", "GPT", …). Inline identity + action buttons. */
@@ -23,9 +23,16 @@ export interface AgentLabel {
   readonly specific: string;
 }
 
-export function createAgentLabel(settingsState: TandemSettingsState): AgentLabel {
-  const family = $derived(resolveAgentLabel(settingsState.settings, "family"));
-  const specific = $derived(resolveAgentLabel(settingsState.settings, "model"));
+/**
+ * No-arg since M2: the label sources from `agentLabelSource()` — the
+ * server-authoritative store when lit, localStorage settings while dark (so a
+ * v0.13.x cohort's configured-model byline stays byte-identical; see the store
+ * doc). Reading the store's `$state` inside `$derived` keeps the ~10
+ * always-mounted consumers reactive to model changes when lit.
+ */
+export function createAgentLabel(): AgentLabel {
+  const family = $derived(resolveAgentLabel(agentLabelSource(), "family"));
+  const specific = $derived(resolveAgentLabel(agentLabelSource(), "model"));
   return {
     get family() {
       return family;

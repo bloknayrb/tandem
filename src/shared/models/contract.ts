@@ -87,9 +87,45 @@ export interface ModelsFile {
   defaultModelId: string | null;
 }
 
+// --- HTTP envelopes (#1123 M2) -----------------------------------------------
+
+/**
+ * `GET /api/models` response. `etag` is a content hash of the current registry
+ * (see `getModelsEtag`); the client echoes it as `ifMatch` on the next write so
+ * a stale write is rejected (409) rather than clobbering. For a non-loopback
+ * (LAN) caller, `file`'s entries are allowlist-scrubbed — `endpoint`/`apiKeyRef`
+ * (and any non-safe field) are omitted — so `file` is still a structurally
+ * valid `ModelsFile` (those fields are optional), just less disclosed.
+ */
+export interface ModelsGetResponse {
+  file: ModelsFile;
+  etag: string;
+}
+
+/**
+ * `POST /api/models` request body (#1123 M2). `ifMatch` is the ETag the client
+ * last saw from `GET`; the server rejects the write (409) if it no longer
+ * matches, so a stale writer reconciles instead of clobbering. `ifMatch` is a
+ * sibling of `file` on the envelope — never a field on the persisted
+ * `.strict()` `ModelsFile`.
+ */
+export interface ModelsPostBody {
+  file: ModelsFile;
+  ifMatch: string;
+}
+
+/** `POST /api/models` success response — the new ETag after the write. */
+export interface ModelsPostResponse {
+  etag: string;
+}
+
 // --- HTTP error codes --------------------------------------------------------
 
 /** Returned when a POST /api/models body fails Zod validation. */
 export const ERROR_CODE_INVALID_MODELS_FILE = "INVALID_MODELS_FILE";
 /** Returned when persisting the models registry to disk fails. */
 export const ERROR_CODE_MODELS_WRITE_FAILED = "MODELS_WRITE_FAILED";
+/** 409 — the client's `ifMatch` ETag is stale; re-GET and reconcile. */
+export const ERROR_CODE_MODELS_STALE = "MODELS_STALE";
+/** 429 — a concurrent write is in flight; retry. */
+export const ERROR_CODE_MODELS_BUSY = "MODELS_BUSY";

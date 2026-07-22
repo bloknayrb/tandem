@@ -14,56 +14,19 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createModels } from "../../src/client/hooks/useModels.svelte.js";
-import type {
-  ModelRegistryEntry,
-  TandemSettings,
-  TandemSettingsState,
-} from "../../src/client/hooks/useTandemSettings.svelte.js";
-
-function makeStubState(initialModels: ModelRegistryEntry[] = []): TandemSettingsState {
-  let inner: TandemSettings = {
-    leftPanelVisible: false,
-    rightPanelVisible: true,
-    schemaVersion: 7,
-    primaryTab: "annotations",
-    panelOrder: "chat-editor-annotations",
-    editorMeasure: "comfortable",
-    selectionDwellMs: 1000,
-    showAuthorship: true,
-    reduceMotion: false,
-    textSize: "m",
-    theme: "system",
-    accentHue: 275,
-    editorFont: "serif",
-    density: "cozy",
-    defaultMode: "tandem",
-    highContrast: false,
-    annotationPatterns: false,
-    selectionToolbar: true,
-    soloRailHidden: true,
-    degradedBannerDelayMs: 30000,
-    sidecarRetryStrategy: "exponential",
-    marginView: false,
-    models: initialModels,
-    defaultModelId: null,
-  };
-  return {
-    get settings() {
-      return inner;
-    },
-    updateSettings(partial) {
-      if (inner._readOnly) return;
-      inner = { ...inner, ...partial };
-    },
-  };
-}
+import {
+  _resetModelsStoreForTests,
+  _settleReconcile,
+  createModels,
+} from "../../src/client/hooks/useModels.svelte.js";
 
 // Distinctive sentinel values — easy to grep for in error strings.
 const LEAKY_KEY = "SECRETSENTINEL_apikey_abcdef1234567890";
 const LEAKY_ENDPOINT = "https://SECRETSENTINEL.example/v1";
 
 beforeEach(() => {
+  _resetModelsStoreForTests();
+  _settleReconcile(); // ungate mutators (no reconcile in these error-path tests)
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new Response(null, { status: 503 })),
@@ -76,8 +39,7 @@ afterEach(() => {
 
 describe("createModels — error messages never leak apiKey or endpoint values", () => {
   it("addModel with bad provider — error stringifies without the plaintext key", async () => {
-    const state = makeStubState();
-    const models = createModels(state);
+    const models = createModels();
     let caught: unknown = null;
     try {
       await models.addModel(
@@ -100,8 +62,7 @@ describe("createModels — error messages never leak apiKey or endpoint values",
   });
 
   it("addModel with bad provider — error stringifies without the endpoint", async () => {
-    const state = makeStubState();
-    const models = createModels(state);
+    const models = createModels();
     let caught: unknown = null;
     try {
       await models.addModel({
@@ -121,17 +82,16 @@ describe("createModels — error messages never leak apiKey or endpoint values",
   });
 
   it("updateModel with bad provider — error stringifies without the plaintext", async () => {
-    const state = makeStubState();
-    // First call: succeed by returning 204.
-    let storeCalls = 0;
+    // Keychain secret POST → 204; models registry POST → 200 {etag}. Distinguished
+    // by the `/secrets/` path segment.
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        storeCalls++;
-        return new Response(null, { status: 204 });
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/secrets/")) return new Response(null, { status: 204 });
+        return new Response(JSON.stringify({ etag: "e1" }), { status: 200 });
       }),
     );
-    const models = createModels(state);
+    const models = createModels();
     const id = await models.addModel(
       {
         provider: "anthropic",
@@ -141,7 +101,6 @@ describe("createModels — error messages never leak apiKey or endpoint values",
       },
       LEAKY_KEY,
     );
-    expect(storeCalls).toBe(1);
 
     let caught: unknown = null;
     try {
@@ -162,8 +121,7 @@ describe("createModels — error messages never leak apiKey or endpoint values",
   });
 
   it("storeSecret 503 error does not include the plaintext", async () => {
-    const state = makeStubState();
-    const models = createModels(state);
+    const models = createModels();
     let caught: unknown = null;
     try {
       await models.addModel(

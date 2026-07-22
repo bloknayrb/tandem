@@ -1,25 +1,22 @@
 <script lang="ts">
 import { createModels } from "../../hooks/useModels.svelte";
 import type { ModelProvider, ModelRegistryEntry } from "../../hooks/useTandemSettings.svelte";
-import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
 import { disabledControlStyle } from "../../utils/colors";
 import ModelEditModal from "../ModelEditModal.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
 // `SettingsTabContext` is the registry's uniform Props contract; besides
 // `readOnly` this tab reads none of its fields directly (the Models
-// registry hangs off the shared `createTandemSettings()` singleton,
-// mutated via `models` below). Direct destructure off `$props()` keeps
-// `readOnly` a live getter (never capture-then-destructure — see the
-// SettingsTabContext doc-comment).
+// registry is the server-authoritative store singleton, mutated via
+// `models` below). Direct destructure off `$props()` keeps `readOnly` a
+// live getter (never capture-then-destructure — see the SettingsTabContext
+// doc-comment).
 const { readOnly }: SettingsTabContext = $props();
 
-// `createTandemSettings()` is a module-level singleton — calling it
-// here returns the same instance App.svelte uses. Mutations propagate
-// via shared `$state` reactivity, and serial localStorage writes
-// accumulate instead of clobbering across consumers.
-const settingsState = createTandemSettings();
-const models = createModels(settingsState);
+// `createModels()` is a facade over the module-level store singleton —
+// every caller shares the same server-loaded `$state`, so mutations
+// propagate across consumers via shared reactivity.
+const models = createModels();
 
 const PROVIDER_LABEL: Record<ModelProvider, string> = {
   anthropic: "Anthropic",

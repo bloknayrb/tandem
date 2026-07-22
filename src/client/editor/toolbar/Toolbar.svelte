@@ -13,7 +13,6 @@ import type { Annotation, AnnotationType, HighlightColor, TandemMode } from "../
 import { generateAnnotationId } from "../../../shared/utils";
 import { isMacPlatform } from "../../actions/keybindings";
 import { createAgentLabel } from "../../hooks/useAgentLabel.svelte";
-import { createTandemSettings } from "../../hooks/useTandemSettings.svelte";
 import { heldInSoloOnCreate } from "../../panels/annotation-actions";
 import { ENTER_POPUP_MS, motionOff, popupEnter, registerFlySource } from "../../panels/cardMotion";
 import { pmPosToFlatOffset } from "../../positions";
@@ -95,7 +94,7 @@ let {
   tandemMode = "tandem",
 }: Props = $props();
 
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 
 let hasSelection = $state(false);
 let selectionPosition = $state<{

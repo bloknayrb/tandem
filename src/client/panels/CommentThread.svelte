@@ -1,7 +1,6 @@
 <script lang="ts">
 import type { AnnotationReply } from "../../shared/types";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
-import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { formatRelativeTime } from "./annotation-card-helpers";
 
 interface Props {
@@ -10,7 +9,7 @@ interface Props {
 
 let { replies }: Props = $props();
 
-const agentLabel = createAgentLabel(createTandemSettings());
+const agentLabel = createAgentLabel();
 </script>
 
 {#if replies.length > 0}
