@@ -223,6 +223,7 @@ async function clearChat() {
                real-Claude / dark message (no agentIdentity) keeps the accent
                token unchanged, so this is byte-identical while dark. -->
           <span
+            data-testid="chat-author-{msg.id}"
             style="font-weight: 600; font-size: 11px; color: {msg.author === 'claude'
               ? (msg.agentIdentity ? agentColor(msg.agentIdentity) : 'var(--tandem-accent)')
               : 'var(--tandem-fg-muted)'}; text-transform: uppercase;"

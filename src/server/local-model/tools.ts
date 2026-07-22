@@ -147,7 +147,7 @@ export const TOOLS: ToolSchema[] = [
 ];
 
 /** Tools that write to the Y.Doc — gated by the license check. Reads + chat aren't. */
-const MUTATING_TOOLS: ReadonlySet<string> = new Set([
+export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "comment_on_quote",
   "propose_replacement",
   "reply_to_annotation",

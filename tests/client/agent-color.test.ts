@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentColor } from "../../src/client/utils/agent-color";
+import { agentColor, agentTintColor } from "../../src/client/utils/agent-color";
 import type { AgentIdentity, ModelProvider } from "../../src/shared/types";
 
 function id(provider: ModelProvider, displayName = "Model"): AgentIdentity {
@@ -36,6 +36,19 @@ describe("agentColor (#1123 M4)", () => {
     expect(agentColor(id("local-ollama", "Qwen 2.5"))).toBe(
       agentColor(id("local-ollama", "Renamed Later")),
     );
+  });
+
+  // agentTintColor drives the class-driven surfaces (reply byline, peek dot):
+  // it must return `undefined` when no identity is present so NO inline style is
+  // emitted and the CSS class keeps rendering the claude token (byte-identical
+  // DOM while dark) — and the concrete tint otherwise.
+  it("agentTintColor returns undefined for an absent identity (emits no inline style)", () => {
+    expect(agentTintColor(undefined)).toBeUndefined();
+  });
+
+  it("agentTintColor returns the same token as agentColor when identity is present", () => {
+    expect(agentTintColor(id("local-ollama"))).toBe(agentColor(id("local-ollama")));
+    expect(agentTintColor(id("local-ollama"))).toBe("var(--tandem-agent-local-ollama)");
   });
 
   it("emits only var() tokens, never a raw hex/rgba literal (token-lint safe)", () => {

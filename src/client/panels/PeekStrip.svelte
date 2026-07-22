@@ -88,6 +88,7 @@ function dotClass(a: Annotation): string {
              ⇒ the CSS class color renders unchanged. -->
         <span
           class="peek-dot {cls}"
+          data-testid="peek-dot-{a.id}"
           style={cls === "claude" && tint ? `background: ${tint};` : undefined}
         ></span>
       {/each}
