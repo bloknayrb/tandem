@@ -247,6 +247,68 @@ jobs:
         shell: bash
         run: rm -f "$RUNNER_TEMP/private_keys/"*.p8 || true
 
+      # The Linux twin of the macOS/Windows signature gates: install the REAL
+      # built package in the REAL target distro and load every shipped binary.
+      #
+      # This exists because compile, package, and install are three different
+      # questions from LOAD, and nothing in this pipeline ever loaded the
+      # binary. #1227 shipped for nine releases behind a fully green matrix:
+      # `tandem-desktop` hard-links libxdo.so.3, no package declared it, both
+      # formats installed with exit 0, and the app then refused to start. An
+      # undeclared runtime library is invisible to dpkg/rpm and only surfaces
+      # when the dynamic loader runs.
+      #
+      # Deliberately NOT a static readelf check against a checked-in soname
+      # list: that inspects a debug binary on a floating runner image, and its
+      # failure mode ("regenerate the baseline") is indistinguishable from the
+      # lazy path. This runs the shipped artifact against the real distro
+      # package repos, so a wrong soname->package mapping shows up as a real
+      # ldd failure rather than an assertion nobody verified.
+      #
+      # Runs after tauri-action so it tests the bytes that were actually
+      # uploaded. The release is a DRAFT at this point, so failing here fails
+      # `release-check` before anything is publishable.
+      - name: Verify Linux packages install and load
+        if: always() && matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          artdir="$RUNNER_TEMP/linux-artifacts"
+          mkdir -p "$artdir"
+          debs=(src-tauri/target/release/bundle/deb/*.deb)
+          rpms=(src-tauri/target/release/bundle/rpm/*.rpm)
+          if [ ${#debs[@]} -eq 0 ] || [ ${#rpms[@]} -eq 0 ]; then
+            echo "::error::Linux smoke: expected a .deb and a .rpm under src-tauri/target/release/bundle/ (found ${#debs[@]} deb, ${#rpms[@]} rpm)"
+            exit 1
+          fi
+          cp "${debs[@]}" "${rpms[@]}" "$artdir/"
+
+          errors=0
+          run_smoke() {
+            local mode="$1" image="$2"
+            echo "--- $mode on $image"
+            # --network host: the default bridge has no IPv6 route while the
+            # distro mirrors resolve AAAA-first, which apt reports as
+            # "Depends: X but it is not going to be installed" -- identical to
+            # a real missing dependency. The harness also pins IPv4 itself.
+            docker run --rm --network host \
+              -v "$PWD/scripts/smoke:/smoke:ro" \
+              -v "$artdir:/art:ro" \
+              "$image" bash /smoke/linux-package-smoke.sh "$mode"
+            local rc=$?
+            case "$rc" in
+              0) echo "::notice::Linux smoke ($mode/$image): PASS" ;;
+              # The harness reports an unreachable mirror as 3 and evaluates
+              # nothing. Failing a release on that would be blaming the package
+              # for the network, and is how a gate earns its way to being muted.
+              3) echo "::warning::Linux smoke ($mode/$image): ENVIRONMENT fault (repo metadata unreachable). The package was NOT evaluated -- re-run before trusting this build." ;;
+              *) echo "::error::Linux smoke ($mode/$image): $rc packaging defect(s)"; errors=1 ;;
+            esac
+          }
+          run_smoke deb ubuntu:22.04
+          run_smoke rpm fedora:39
+          exit "$errors"
+
       # Mirror of "Verify Windows signatures" for macOS: tauri-action does not
       # reliably fail the job when notarization is skipped or fails, so assert
       # the produced .app is both code-signed and carries a STAPLED notarization

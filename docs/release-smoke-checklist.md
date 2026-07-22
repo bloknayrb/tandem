@@ -50,9 +50,11 @@ exactly this residual).
 ## 3. Linux (best effort, any box or VM)
 
 - [ ] AppImage: `chmod +x`, launch, sidecar healthy via Copy Diagnostics.
-- [ ] `.deb` and `.rpm`: run `scripts/smoke/linux-package-smoke.sh deb` and `... rpm` (Docker, no VM needed — see [spikes/linux-container-install-smoke.md](spikes/linux-container-install-smoke.md)). It installs the artifact in a clean container and **loads** every shipped binary.
+- [x] `.deb` and `.rpm` — **automated.** `tauri-release.yml`'s "Verify Linux packages install and load" step runs `scripts/smoke/linux-package-smoke.sh` against the freshly built artifacts in `ubuntu:22.04` and `fedora:39` containers, on every tag. Nothing to do by hand; read the step's output. A `::warning::` about an ENVIRONMENT fault means the mirror was unreachable and the package was **not** evaluated — re-run before trusting the build.
 
-  Installing cleanly is not the bar. #1227 installed with exit 0 on both distros and then failed to launch on a missing `libxdo.so.3` — for nine releases. An undeclared runtime library is invisible to `dpkg`/`rpm` and only shows up when the dynamic loader runs, so the check that matters is `ldd` after a real install, not the installer's exit code.
+  To run it yourself earlier (e.g. against a local `cargo tauri build`), see [spikes/linux-container-install-smoke.md](spikes/linux-container-install-smoke.md). Docker, no VM.
+
+  Installing cleanly is not the bar. #1227 installed with exit 0 on both distros and then failed to launch on a missing `libxdo.so.3` — for nine releases, behind a fully green matrix. An undeclared runtime library is invisible to `dpkg`/`rpm` and only shows up when the dynamic loader runs, so the check that matters is `ldd` after a real install, not the installer's exit code.
 
 ## 4. npm path (any platform)
 
