@@ -4,6 +4,7 @@ import {
   SELECTION_DWELL_MIN_MS,
   TANDEM_SETTINGS_KEY,
 } from "../../shared/constants";
+import { type ModelProvider, VALID_MODEL_PROVIDERS } from "../../shared/models/contract.js";
 import type { TandemMode } from "../../shared/types.js";
 import type { ShortcutChord } from "../actions/keybindings.js";
 import { parseCustomShortcuts } from "../actions/shortcut-conflicts.js";
@@ -52,23 +53,16 @@ export type SystemLightVariant = "light" | "warm";
 export type SidecarRetryStrategy = "exponential" | "constant-2s";
 
 /**
- * Provider tag for entries in the local Models registry (#659).
+ * Provider tag for entries in the Models registry (#659). The source of truth
+ * moved to `src/shared/models/contract.ts` (#1123 M1a) so the server-side
+ * registry (`src/server/models/`) and the client agree on one enum; re-exported
+ * here so every existing `from "./useTandemSettings.js"` import still resolves.
  *
- * The registry tracks AI providers Tandem can call OUT to (Anthropic API,
- * OpenAI API, local Ollama, etc.). It is orthogonal to the
- * `IntegrationConfig` schema in `src/server/integrations/schema.ts`, which
- * tracks MCP clients that connect IN to Tandem (Claude Code, Claude Desktop,
- * other MCP clients). The two concepts don't compete.
+ * The registry tracks AI providers Tandem calls OUT to; it is orthogonal to the
+ * `IntegrationConfig` schema (MCP clients that connect IN). The two don't compete.
  */
-export type ModelProvider = "anthropic" | "openai" | "gemini" | "local-ollama" | "local-llamacpp";
-
-export const VALID_MODEL_PROVIDERS: readonly ModelProvider[] = [
-  "anthropic",
-  "openai",
-  "gemini",
-  "local-ollama",
-  "local-llamacpp",
-];
+export type { ModelProvider };
+export { VALID_MODEL_PROVIDERS };
 
 /**
  * Models registry entry shape.

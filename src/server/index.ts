@@ -3,6 +3,7 @@ import { isIP } from "net";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
+  BYO_MODELS_ENABLED,
   CTRL_ROOM,
   DEFAULT_BIND_HOST,
   DEFAULT_MCP_PORT,
@@ -232,10 +233,12 @@ async function main() {
   try {
     const { sweepBackupsOnStartup } = await import("./integrations/backup.js");
     const { sweepBrokenIntegrationsBackupsOnStartup } = await import("./integrations/storage.js");
+    const { sweepBrokenModelsBackupsOnStartup } = await import("./models/store.js");
     const { resolveAppDataDir } = await import("./platform.js");
     const appDataDir = resolveAppDataDir();
     await sweepBackupsOnStartup(appDataDir);
     await sweepBrokenIntegrationsBackupsOnStartup(appDataDir);
+    await sweepBrokenModelsBackupsOnStartup(appDataDir);
   } catch (err) {
     console.error(
       `[Tandem] Warning: backup sweep failed: ${err instanceof Error ? err.message : err}`,
@@ -416,6 +419,25 @@ async function main() {
 
   // Attach event queue observers to CTRL_ROOM for channel push notifications
   attachCtrlObservers();
+
+  // Warm the model-registry cache from disk BEFORE the collaborator resolves
+  // its config (#1123 M1a). The collaborator resolves once, synchronously, at
+  // start; without this a fresh boot with a valid models.json would read a cold
+  // cache and resolve null. Gated on the SAME flag as the collaborator: while
+  // dark, `start()` early-returns before `wire()` (collaborator.ts) so nothing
+  // reads the cache — priming would be wasted boot-time disk I/O and would break
+  // byte-identical-when-dark. At M4 both light up together, preserving the
+  // "prime before wire" ordering. Awaited (like the session/doc restores above).
+  if (BYO_MODELS_ENABLED) {
+    try {
+      const { primeModelStoreCache } = await import("./models/registry.js");
+      await primeModelStoreCache();
+    } catch (err) {
+      console.error(
+        `[Tandem] Failed to prime model-registry cache: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
 
   // Wire the local-model collaborator (#1123 M1.2). DARK: this is a no-op while
   // BYO_MODELS_ENABLED is false (it never subscribes) — the gate lives inside.
