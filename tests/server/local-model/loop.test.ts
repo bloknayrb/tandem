@@ -4,7 +4,12 @@ import { runLoop } from "../../../src/server/local-model/loop.js";
 import { TOOLS } from "../../../src/server/local-model/tools.js";
 import { makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
 
-const CONFIG = { endpoint: "http://127.0.0.1:11434", modelId: "m", transport: "v1" } as const;
+const CONFIG = {
+  endpoint: "http://127.0.0.1:11434",
+  modelId: "m",
+  transport: "v1",
+  agentIdentity: { provider: "local-ollama", displayName: "Test Model" },
+} as const;
 
 function v1ToolCall(name: string): Response {
   return new Response(

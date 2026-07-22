@@ -13,16 +13,12 @@ import { z } from "zod";
 import {
   MODELS_ENTRY_MAX,
   MODELS_SCHEMA_VERSION,
-  type ModelProvider,
   type ModelsFile,
-  VALID_MODEL_PROVIDERS,
 } from "../../shared/models/contract.js";
-
-// Cast preserves the literal `ModelProvider` union (a bare `[string, ...]` cast
-// would widen `provider` to `string` and break assignability to `ModelsFile`).
-const ProviderSchema = z.enum(
-  VALID_MODEL_PROVIDERS as unknown as [ModelProvider, ...ModelProvider[]],
-);
+// Single source for the provider enum (#1123 M3): the same `z.enum` over
+// `VALID_MODEL_PROVIDERS`, defined once in shared/types.ts. Reused here rather
+// than re-constructed so the two can't drift.
+import { ModelProviderSchema } from "../../shared/types.js";
 
 /** Opaque keychain ref: base64url, ≤64. Matches the client + secrets-route shape. */
 const ApiKeyRef = z
@@ -40,7 +36,7 @@ const ParamsSchema = z.record(z.union([z.number(), z.string(), z.boolean()]));
 export const ModelsEntrySchema = z
   .object({
     id: z.string().min(1),
-    provider: ProviderSchema,
+    provider: ModelProviderSchema,
     displayName: z.string(),
     modelId: z.string(),
     apiKeyRef: ApiKeyRef.optional(),

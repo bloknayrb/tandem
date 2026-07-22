@@ -538,6 +538,34 @@ describe("AnnotationRecordSchemaV1 — per-record shape", () => {
     expect(ann.relRange).toEqual(withRel.relRange);
   });
 
+  it("accepts and round-trips an agentIdentity (#1123 M3)", () => {
+    const withIdentity = {
+      ...baseAnnotation,
+      agentIdentity: { provider: "local-ollama", displayName: "Qwen 2.5" },
+    };
+    const result = AnnotationRecordSchemaV1.safeParse(withIdentity);
+    expect(result.success).toBe(true);
+    const parsed = parseAnnotationDoc({ ...validDoc, annotations: [withIdentity] });
+    if (!parsed.ok) throw new Error("expected success");
+    expect((parsed.doc.annotations[0] as Record<string, unknown>).agentIdentity).toEqual(
+      withIdentity.agentIdentity,
+    );
+  });
+
+  it("rejects an agentIdentity with an unknown provider (#1123 M3)", () => {
+    const bad = {
+      ...baseAnnotation,
+      agentIdentity: { provider: "not-a-provider", displayName: "x" },
+    };
+    const result = AnnotationRecordSchemaV1.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it("validates a record with no agentIdentity (backward-compat / dark)", () => {
+    const result = AnnotationRecordSchemaV1.safeParse(baseAnnotation);
+    expect(result.success).toBe(true);
+  });
+
   it("rejects a record that still carries directedAt (ADR-027 regression)", () => {
     // Production paths (parseAnnotationDoc, migrateToV1) strip directedAt via
     // migrateFlagAndDirectedAt before reaching safeParse. This test verifies

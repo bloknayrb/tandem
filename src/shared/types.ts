@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { type ModelProvider, VALID_MODEL_PROVIDERS } from "./models/contract.js";
 import type { DocumentRange, RelativeRange } from "./positions/types.js";
 
 // Canonical definitions live in the positions module; re-exported for backward compatibility.
@@ -22,6 +23,24 @@ export const TandemModeSchema = z.enum(["solo", "tandem"]);
 export const AuthorSchema = z.enum(["user", "claude", "import"]);
 /** Reply authors. `import` carries Word-comment reply threads (#1000); such replies are user-private. */
 export const ReplyAuthorSchema = z.enum(["user", "claude", "import"]);
+/**
+ * Provider enum as a Zod schema, sourced from the models contract's
+ * `VALID_MODEL_PROVIDERS` so the two can't drift (#1123 M3). `z.enum` needs a
+ * non-empty tuple; the contract array is non-empty by construction.
+ */
+export const ModelProviderSchema = z.enum(
+  VALID_MODEL_PROVIDERS as unknown as [ModelProvider, ...ModelProvider[]],
+);
+/**
+ * Runtime schema for {@link AgentIdentity}. Bounded `displayName` (the value is
+ * user-chosen in the Models registry); `provider` is the closed enum. Used by
+ * the durable annotation/reply record schemas so a persisted identity
+ * round-trips through validation rather than surviving only on `.passthrough()`.
+ */
+export const AgentIdentitySchema = z.object({
+  provider: ModelProviderSchema,
+  displayName: z.string().max(120),
+});
 export const AnnotationActionSchema = z.enum(["accept", "dismiss"]);
 export const ExportFormatSchema = z.enum(["markdown", "json"]);
 export const DocumentFormatSchema = z.enum(["md", "txt", "html", "docx"]);
@@ -58,6 +77,22 @@ export type TandemMode = z.infer<typeof TandemModeSchema>;
 export type HighlightColor = z.infer<typeof HighlightColorSchema>;
 export type Severity = z.infer<typeof SeveritySchema>;
 export type ReplyAuthor = z.infer<typeof ReplyAuthorSchema>;
+
+/**
+ * Identity of the specific AI agent that authored a record (#1123 M3, ADR-039).
+ *
+ * Present ONLY on agent-authored records the local-model collaborator loop
+ * writes (`author: "claude"` annotations/replies/chat messages); absent for
+ * real Claude-via-MCP writes and everything that predates M3. A self-contained
+ * snapshot — NOT a reference into the mutable Models registry — so it survives a
+ * registry edit/delete and freezes who authored at the time. Carries NO secret:
+ * the closed `provider` enum plus the user-chosen `displayName` only, never an
+ * endpoint or key ref. See {@link AgentIdentitySchema} for the runtime shape.
+ */
+export interface AgentIdentity {
+  provider: ModelProvider;
+  displayName: string;
+}
 
 // --- Reply types ---
 
@@ -100,12 +135,24 @@ export interface AnnotationReply {
    * NOT live hiding (that is server-authoritative, mode-based).
    */
   heldInSolo?: boolean;
+  /**
+   * The specific AI agent that authored this reply (#1123 M3). Set only by the
+   * local-model collaborator loop; absent on user, import, and real-Claude
+   * replies. Drives the byline; the parent's `author` still governs privacy.
+   */
+  agentIdentity?: AgentIdentity;
 }
 
 // --- Annotation types ---
 
 interface AnnotationBase {
   id: string;
+  /**
+   * Author ROLE, not literal identity: `"claude"` marks any AI agent (real
+   * Claude via MCP *or* the local-model collaborator loop), which is what every
+   * privacy/gating branch keys on. The specific agent, when it's a local model,
+   * is carried separately in {@link agentIdentity} (#1123 M3).
+   */
   author: "user" | "claude" | "import";
   range: DocumentRange;
   /** CRDT-anchored range that survives edits. Falls back to `range` if absent. */
@@ -140,6 +187,14 @@ interface AnnotationBase {
    * across save → re-open (deterministic `importAnnotationId` dedup).
    */
   importSource?: { author: string; file: string; commentId?: string };
+  /**
+   * The specific AI agent that authored this annotation (#1123 M3). Set only by
+   * the local-model collaborator loop on its `author: "claude"` comments; absent
+   * on user/import annotations and real Claude-via-MCP writes. Drives the card
+   * byline. MUST be listed in `sanitizeAnnotation`'s allowlist or it is stripped
+   * on every Claude-facing read (see `src/shared/sanitize.ts`).
+   */
+  agentIdentity?: AgentIdentity;
 }
 
 /**
@@ -405,6 +460,13 @@ export interface ChatMessage {
   anchor?: CapturedAnchor;
   replyTo?: string;
   read: boolean;
+  /**
+   * The specific AI agent that authored this message (#1123 M3). Set only by the
+   * local-model collaborator's streamed reply; absent on user messages and real
+   * Claude (`tandem_reply`). Chat is read raw from the Y.Map (NOT allowlist-
+   * sanitized), so this needs no sanitize change to reach the byline.
+   */
+  agentIdentity?: AgentIdentity;
 }
 
 /** Server-to-client ephemeral notification (toast). Not persisted via CRDT. */

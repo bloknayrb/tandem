@@ -12,6 +12,8 @@
  * we compare the literal hostname the URL parser produced, not a resolved IP.
  */
 
+import type { AgentIdentity } from "../../shared/types.js";
+
 export type LocalModelTransport = "v1" | "native";
 
 export interface LocalModelConfig {
@@ -21,6 +23,15 @@ export interface LocalModelConfig {
   modelId: string;
   /** Wire transport — OpenAI-compatible `/v1` or Ollama-native `/api/chat`. */
   transport: LocalModelTransport;
+  /**
+   * The authoring agent's identity (#1123 M3) — the registry entry's provider +
+   * display name, built ONCE by the resolver (which previously read and
+   * discarded these). Threaded whole to the two write paths that stamp the
+   * byline: the tool dispatch (annotations/replies, via loop.ts) and the chat
+   * streaming sink (via collaborator.ts). A prebuilt snapshot, so it freezes who
+   * authored at the time and never re-bundles the same fields downstream.
+   */
+  agentIdentity: AgentIdentity;
 }
 
 export type EndpointValidation =

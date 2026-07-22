@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 import {
+  AgentIdentitySchema,
   AnnotationStatusSchema,
   AnnotationTypeSchema,
   AuthorSchema,
@@ -120,6 +121,10 @@ export const AnnotationRecordSchemaV1 = z
     // New for v1 envelope: monotonically-increasing revision counter used for
     // last-writer-wins merge between in-memory Y.Map state and on-disk state.
     rev: z.number().int().nonnegative(),
+    // #1123 M3: authoring agent identity (local-model collaborator only).
+    // Preserved by `.passthrough()`; listed for parity + type-safety at the
+    // write site, mirroring the `heldInSolo` precedent on the reply record.
+    agentIdentity: AgentIdentitySchema.optional(),
   })
   .passthrough()
   // ADR-027: directedAt is removed from the model. All production read paths
@@ -154,6 +159,8 @@ export const AnnotationReplyRecordSchemaV1 = z
     // preserved by `.passthrough()`; listed explicitly for parity with the
     // annotation record and type-safety at the write site.
     heldInSolo: z.boolean().optional(),
+    // #1123 M3: authoring agent identity (local-model collaborator replies only).
+    agentIdentity: AgentIdentitySchema.optional(),
   })
   .passthrough();
 

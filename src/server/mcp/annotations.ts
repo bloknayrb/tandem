@@ -9,6 +9,7 @@ import type { AnchoredRangeResult, RangeValidation } from "../../shared/position
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type {
+  AgentIdentity,
   Annotation,
   AnnotationReply,
   AnnotationType,
@@ -146,6 +147,14 @@ export function addReplyToAnnotation(
    * `withBrowser` so the lone HTTP caller doesn't need to pass it explicitly.
    */
   wrap: (doc: Y.Doc, fn: () => void) => void = withBrowser,
+  /**
+   * #1123 M3: the authoring agent's identity, stamped on the reply so the
+   * client byline names the specific local model. Passed ONLY by the
+   * local-model collaborator loop; the MCP `tandem_annotationReply` caller and
+   * the HTTP user-reply route leave it undefined, so their replies are
+   * byte-identical to pre-M3.
+   */
+  agentIdentity?: AgentIdentity,
 ): { ok: true; replyId: string } | { ok: false; error: string; code?: string } {
   const raw = annotationsMap.get(annotationId) as Annotation | undefined;
   if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
@@ -205,6 +214,8 @@ export function addReplyToAnnotation(
     ...(author === "user" && ann.type === "comment" && readModeState() === "solo"
       ? { heldInSolo: true }
       : {}),
+    // #1123 M3: agent byline (local-model collaborator only). Absent ⇒ omitted.
+    ...(agentIdentity ? { agentIdentity } : {}),
   };
 
   const repliesMap = getRepliesMap(ydoc);

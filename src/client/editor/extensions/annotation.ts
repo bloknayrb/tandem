@@ -160,7 +160,10 @@ function buildDecorations(
             "data-annotation-id": ann.id,
             "data-annotation-type": ann.type,
             "data-annotation-author": ann.author,
-            "aria-label": `${agentLabel} comment annotation`,
+            // #1123 M3: prefer the specific authoring model's name when the
+            // local-model loop stamped one (survives sanitize via the allowlist
+            // add); else the active-model family label. Dark ⇒ always the latter.
+            "aria-label": `${ann.agentIdentity?.displayName ?? agentLabel} comment annotation`,
           };
         } else {
           // User/import comment → dashed blue underline

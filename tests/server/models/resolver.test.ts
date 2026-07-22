@@ -60,6 +60,8 @@ describe("resolveLocalModelConfig (via server-side registry)", () => {
       endpoint: "http://127.0.0.1:11434",
       modelId: "qwen2.5:14b-instruct",
       transport: "v1",
+      // #1123 M3: identity carried through for the byline.
+      agentIdentity: { provider: "local-ollama", displayName: "Local" },
     });
   });
 
@@ -109,6 +111,19 @@ describe("resolveLocalModelConfig (via server-side registry)", () => {
       endpoint: "http://127.0.0.1:11434",
       modelId: "qwen2.5:14b-instruct",
       transport: "v1",
+      agentIdentity: { provider: "local-ollama", displayName: "Local" },
+    });
+  });
+
+  it("carries the resolved entry's provider + displayName (#1123 M3 byline source)", async () => {
+    // The identity previously read-and-discarded is now surfaced so the loop can
+    // stamp `agentIdentity`. Distinct displayName so a hardcoded default can't
+    // pass this by accident.
+    await persistModelsFile(fileWith([{ ...local, displayName: "Qwen 2.5 (14B)" }], "m-local"));
+    const config = resolveLocalModelConfig();
+    expect(config?.agentIdentity).toEqual({
+      provider: "local-ollama",
+      displayName: "Qwen 2.5 (14B)",
     });
   });
 });

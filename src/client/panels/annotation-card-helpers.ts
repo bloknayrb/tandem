@@ -1,14 +1,21 @@
 import { HIGHLIGHT_COLOR_VARS, normalizeHighlightColor } from "../../shared/constants";
-import type { Annotation } from "../../shared/types";
+import type { AgentIdentity, Annotation } from "../../shared/types";
 
 /**
- * Author label for an annotation. The agent ("claude") branch renders the
- * user's configured model name (#438): pass `agentLabel` (the family label,
- * e.g. "Claude"/"GPT"). Falls back to a neutral "Assistant" when none is given.
- * `import` and `user` are author roles, not the agent, and are unaffected.
+ * Author label for an annotation. The agent ("claude") branch prefers the
+ * specific authoring model's `agentIdentity.displayName` (#1123 M3 — the
+ * local-model collaborator stamps it per record), then the user's active model
+ * family label (#438, e.g. "Claude"/"GPT"), then a neutral "Assistant". While
+ * BYO models are dark, `agentIdentity` is always absent so this is byte-
+ * identical to the pre-M3 label. `import` and `user` are author roles, not the
+ * agent, and are unaffected.
  */
-export function getAuthorLabel(author: Annotation["author"], agentLabel?: string): string {
-  if (author === "claude") return agentLabel ?? "Assistant";
+export function getAuthorLabel(
+  author: Annotation["author"],
+  agentLabel?: string,
+  agentIdentity?: AgentIdentity,
+): string {
+  if (author === "claude") return agentIdentity?.displayName ?? agentLabel ?? "Assistant";
   if (author === "import") return "Imported";
   return "You";
 }

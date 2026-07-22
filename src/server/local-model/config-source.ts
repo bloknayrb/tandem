@@ -69,6 +69,10 @@ export function resolveLocalModelConfig(): LocalModelConfig | null {
       // `/v1/chat/completions`, so `v1` is uniform for now. Ollama-native
       // `/api/chat` can become an optional per-entry transport later (M2/M4).
       transport: "v1",
+      // #1123 M3: build the byline identity ONCE here (the entry's provider +
+      // displayName were previously read and discarded). Threaded whole to both
+      // write paths so the fields are never re-bundled downstream.
+      agentIdentity: { provider: entry.provider, displayName: entry.displayName },
     };
   } catch (err) {
     // No error channel on this seam — a resolution failure means "inert". Today

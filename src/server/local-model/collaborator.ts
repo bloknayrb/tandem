@@ -24,6 +24,7 @@
  */
 import { BYO_MODELS_ENABLED } from "../../shared/constants.js";
 import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.js";
+import type { AgentIdentity } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { getActiveDocId, requireDocument } from "../documents/registry.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
@@ -116,6 +117,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     replyTo?: string;
     token: object;
     abort: AbortController;
+    /** #1123 M3: stamped on the streamed chat reply so the bubble bylines the
+     *  specific local model. Absent ⇒ no stamp (byte-identical to pre-M3). */
+    agentIdentity?: AgentIdentity;
   }) {
     let liveId: string | null = null;
     let buffer = "";
@@ -145,6 +149,7 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         liveId = appendClaudeChatMessage(buffer, {
           documentId: ctx.docName,
           ...(ctx.replyTo ? { replyTo: ctx.replyTo } : {}),
+          ...(ctx.agentIdentity ? { agentIdentity: ctx.agentIdentity } : {}),
         });
       } else {
         updateClaudeChatMessage(liveId, buffer);
@@ -195,7 +200,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     const ydoc = open.doc;
     const includeFullText = extractText(ydoc).length <= INLINE_CHAR_LIMIT;
     const task = composeTask(req.task, req.selection);
-    const sink = makeSink({ docName: req.docName, replyTo: req.replyTo, token, abort });
+    // #1123 M3: the streamed chat reply is bylined with the config's prebuilt
+    // identity (the loop's annotation/reply writes get the same one in dispatch).
+    const sink = makeSink({
+      docName: req.docName,
+      replyTo: req.replyTo,
+      token,
+      abort,
+      agentIdentity: config.agentIdentity,
+    });
 
     try {
       const result = await deps.runTurn({
