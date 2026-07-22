@@ -5,6 +5,7 @@ import {
   type AnnotationDocV1,
   AnnotationRecordSchemaV1,
   type AnnotationRecordV1,
+  AnnotationReplyRecordSchemaV1,
   migrateToV1,
   parseAnnotationDoc,
   SCHEMA_VERSION,
@@ -577,6 +578,50 @@ describe("AnnotationRecordSchemaV1 — per-record shape", () => {
       const paths = result.error.issues.map((i) => i.path.join("."));
       expect(paths).toContain("directedAt");
     }
+  });
+});
+
+describe("AnnotationReplyRecordSchemaV1 — agentIdentity (#1123 M3)", () => {
+  const baseReply = {
+    id: "rep_ai",
+    annotationId: "ann_1_abc",
+    author: "claude" as const,
+    text: "a local-model reply",
+    timestamp: 1_700_000_000_100,
+    rev: 0,
+  };
+
+  it("accepts and round-trips an agentIdentity on a reply record", () => {
+    const withIdentity = {
+      ...baseReply,
+      agentIdentity: { provider: "local-ollama", displayName: "Qwen 2.5" },
+    };
+    expect(AnnotationReplyRecordSchemaV1.safeParse(withIdentity).success).toBe(true);
+    const parsed = parseAnnotationDoc({ ...validDoc, replies: [withIdentity] });
+    if (!parsed.ok) throw new Error("expected success");
+    expect((parsed.doc.replies[0] as Record<string, unknown>).agentIdentity).toEqual(
+      withIdentity.agentIdentity,
+    );
+  });
+
+  it("rejects a reply agentIdentity with an unknown provider", () => {
+    const bad = {
+      ...baseReply,
+      agentIdentity: { provider: "not-a-provider", displayName: "x" },
+    };
+    expect(AnnotationReplyRecordSchemaV1.safeParse(bad).success).toBe(false);
+  });
+
+  it("rejects a reply agentIdentity.displayName over the durable bound (corruption guard)", () => {
+    const bad = {
+      ...baseReply,
+      agentIdentity: { provider: "local-ollama", displayName: "M".repeat(121) },
+    };
+    expect(AnnotationReplyRecordSchemaV1.safeParse(bad).success).toBe(false);
+  });
+
+  it("validates a reply with no agentIdentity (backward-compat / dark)", () => {
+    expect(AnnotationReplyRecordSchemaV1.safeParse(baseReply).success).toBe(true);
   });
 });
 

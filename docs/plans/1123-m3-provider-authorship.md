@@ -52,10 +52,13 @@ Identity shape `{provider, displayName}` (not a registry `modelId` ref): records
 - **Real Claude-via-MCP writes leave `agentIdentity` undefined** (the MCP tools don't set it) → today's behavior preserved. Origin/self-wake unchanged (guards are origin-based `shouldSkipChannel`, not identity).
 
 ### 4.3 Byline read resolution (`src/client/`)
-- `annotation-card-helpers.ts:10-13` `getAuthorLabel(author, agentLabel, agentIdentity?)`: `author==="claude"` AND `agentIdentity` present → `agentIdentity.displayName`; else today's `agentLabel.family`. Update the one call site (`AnnotationCardHeader.svelte:34`).
-- `ChatPanel.svelte:226`: per-message byline — `msg.agentIdentity?.displayName ?? agentLabel.family` when `author==="claude"`.
-- `annotation.ts:69-71` aria-label: same fallback (thread `agentIdentity` into the decoration read).
+- `annotation-card-helpers.ts` `getAuthorLabel(author, agentLabel, agentIdentity?)`: `author==="claude"` AND `agentIdentity` present → `agentIdentity.displayName`; else today's `agentLabel.family`. Update the call site (`AnnotationCardHeader.svelte`).
+- `ChatPanel.svelte`: per-message byline — `msg.agentIdentity?.displayName ?? agentLabel.family` when `author==="claude"`.
+- `CommentThread.svelte`: reply byline — `reply.agentIdentity?.displayName ?? agentLabel.family` (added post-review so the reply *render* matches the card + chat; without it a local-model reply showed the generic family label while its comment showed the model name — a visible inconsistency once lit).
+- `annotation.ts` aria-label: same fallback (thread `agentIdentity` into the decoration read).
 - No other label site changes; absent identity = byte-identical today.
+
+**displayName bound (post-review, 4/5 reviewers converged).** `AgentIdentitySchema.displayName` caps at `AGENT_DISPLAY_NAME_MAX` (120), but the Models registry is more permissive (client ≤256, server `ModelsEntrySchema` unbounded). An over-long name snapshotted onto a durable record fails `AnnotationRecordSchemaV1` on reload — and `parseAnnotationDoc` fails the WHOLE annotations array → the file is quarantined to `.corrupt` (replies drop individually). Fix: **clamp `displayName` to `AGENT_DISPLAY_NAME_MAX` at the single snapshot site** (`resolveLocalModelConfig`), the only place an `agentIdentity` is built — zero blast radius, and the shared constant keeps the clamp and the schema from drifting. Bounding `ModelsEntrySchema` at the source is left as a follow-up (its `.max()` could reject a pre-existing migrated registry entry — M2a's domain).
 
 ## 5. Privacy invariants (ADR-027 — confirmed by review, must not regress)
 - Keeping `author:"claude"` preserves every privacy gate (agent can't write into note threads `annotations.ts:170`; note defense-in-depth `observers/annotations.ts:94`; Solo hold keys on `author==="user"` `mode.ts:83` and the loop self-holds in Solo `collaborator.ts:301`; note filters key on `type` not author). `agentIdentity` rides only on already-agent-authored records; never on a user note/comment; contains NO secret (provider enum + user-chosen displayName; never endpoint/apiKeyRef).

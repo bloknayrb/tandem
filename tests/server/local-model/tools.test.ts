@@ -331,6 +331,26 @@ describe("dispatch — agent identity stamping (#1123 M3)", () => {
     const ann = getAnnotationsMap(doc).get(id) as Annotation;
     expect(ann.agentIdentity).toBeUndefined();
   });
+
+  it("leaves agentIdentity absent on a replacement and a reply when ctx has none", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const repl = dispatch(
+      "propose_replacement",
+      { quoted_text: "the first phase", suggested_text: "phase one", rationale: "r" },
+      { ydoc: doc },
+    );
+    const replId = (repl.result as { annotation_id: string }).annotation_id;
+    expect((getAnnotationsMap(doc).get(replId) as Annotation).agentIdentity).toBeUndefined();
+
+    const reply = dispatch(
+      "reply_to_annotation",
+      { annotation_id: replId, text: "t" },
+      { ydoc: doc },
+    );
+    const replyId = (reply.result as { reply_id: string }).reply_id;
+    const stored = doc.getMap(Y_MAP_ANNOTATION_REPLIES).get(replyId) as { agentIdentity?: unknown };
+    expect(stored.agentIdentity).toBeUndefined();
+  });
 });
 
 describe("dispatch — malformed input", () => {

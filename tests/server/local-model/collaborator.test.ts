@@ -214,6 +214,10 @@ describe("collaborator — dispatch", () => {
     expect(msgs[0].author).toBe("claude");
     expect(msgs[0].text).toBe("Sure, done.");
     expect(msgs[0].documentId).toBe("doc-dispatch");
+    // #1123 M3: the streamed reply is bylined with the config's identity — proves
+    // collaborator.ts threads config.agentIdentity into the sink (not just that
+    // appendClaudeChatMessage can carry one, which the unit test covers).
+    expect(msgs[0].agentIdentity).toEqual(CONFIG.agentIdentity);
   });
 
   it("appends the selection context to the task", async () => {

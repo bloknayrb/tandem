@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as Y from "yjs";
 import { runLoop } from "../../../src/server/local-model/loop.js";
 import { TOOLS } from "../../../src/server/local-model/tools.js";
-import { makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
+import type { Annotation } from "../../../src/shared/types.js";
+import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
 
 const CONFIG = {
   endpoint: "http://127.0.0.1:11434",
@@ -106,6 +107,22 @@ describe("runLoop — metric tallies", () => {
     stubFetch(() => v1ToolCallArgs("reply_to_annotation", { annotation_id: "nope", text: "hi" }));
     const r = await runLoop(base({ maxToolCalls: 1, maxTurns: 99 }));
     expect(r.metrics.replyFailures).toBe(1);
+  });
+});
+
+describe("runLoop — agent identity threading (#1123 M3)", () => {
+  it("stamps config.agentIdentity onto an annotation the loop produces", async () => {
+    // The PRODUCTION path is runLoop → dispatch (not a direct dispatch call).
+    // Deleting `agentIdentity: config.agentIdentity` in loop.ts must fail here.
+    stubFetch(() =>
+      v1ToolCallArgs("comment_on_quote", { quoted_text: "body text here", comment: "x" }),
+    );
+    const opts = base({ maxToolCalls: 1, maxTurns: 99 });
+    await runLoop(opts);
+    const map = getAnnotationsMap(opts.ydoc);
+    expect(map.size).toBe(1);
+    const ann = [...map.values()][0] as Annotation;
+    expect(ann.agentIdentity).toEqual(CONFIG.agentIdentity);
   });
 });
 

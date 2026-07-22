@@ -32,6 +32,17 @@ export const ModelProviderSchema = z.enum(
   VALID_MODEL_PROVIDERS as unknown as [ModelProvider, ...ModelProvider[]],
 );
 /**
+ * Max length of an agent `displayName` as persisted on a durable record. The
+ * Models registry's own `displayName` is more permissive (client caps at 256,
+ * the server `ModelsEntrySchema` is unbounded), so the resolver that builds an
+ * `agentIdentity` snapshot MUST clamp to this bound — otherwise an over-long
+ * registry name fails this schema on the durable round-trip and takes the whole
+ * annotations file down with it (`parseAnnotationDoc` → corrupt). Shared here so
+ * the clamp site and the schema can't drift (mirrors why `ModelProviderSchema`
+ * is shared). See `resolveLocalModelConfig`.
+ */
+export const AGENT_DISPLAY_NAME_MAX = 120;
+/**
  * Runtime schema for {@link AgentIdentity}. Bounded `displayName` (the value is
  * user-chosen in the Models registry); `provider` is the closed enum. Used by
  * the durable annotation/reply record schemas so a persisted identity
@@ -39,7 +50,7 @@ export const ModelProviderSchema = z.enum(
  */
 export const AgentIdentitySchema = z.object({
   provider: ModelProviderSchema,
-  displayName: z.string().max(120),
+  displayName: z.string().max(AGENT_DISPLAY_NAME_MAX),
 });
 export const AnnotationActionSchema = z.enum(["accept", "dismiss"]);
 export const ExportFormatSchema = z.enum(["markdown", "json"]);
