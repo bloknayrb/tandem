@@ -70,6 +70,29 @@ describe("ReplyThread — A13 disclosure", () => {
     expect(container.textContent).toContain("Existing reply");
   });
 
+  it("#1123 M3: a claude reply with agentIdentity bylines with the model name, not the family label", async () => {
+    const replies = [
+      makeReply({
+        text: "local model reply",
+        agentIdentity: { provider: "local-ollama", displayName: "Qwen 2.5" },
+      }),
+    ];
+    const { container } = render(ReplyThread, {
+      props: {
+        annotation: makeAnnotation(),
+        replies,
+        isPending: false,
+        isEditing: false,
+      },
+    });
+    await fireEvent.click(
+      container.querySelector("[data-testid='reply-toggle-annotation-1']") as Element,
+    );
+    // The specific model name renders; the generic family fallback ("Assistant"
+    // when no model is configured in this test's store) does not.
+    expect(container.textContent).toContain("Qwen 2.5");
+  });
+
   it("pluralises the toggle count", () => {
     const replies = [makeReply({ id: "r1" }), makeReply({ id: "r2" })];
     const { container } = render(ReplyThread, {

@@ -12,6 +12,7 @@ import {
 } from "../../../src/server/models/registry.js";
 import { createModelStore } from "../../../src/server/models/store.js";
 import type { ModelsEntry, ModelsFile } from "../../../src/shared/models/contract.js";
+import { AgentIdentitySchema } from "../../../src/shared/types.js";
 
 const local: ModelsEntry = {
   id: "m-local",
@@ -60,6 +61,8 @@ describe("resolveLocalModelConfig (via server-side registry)", () => {
       endpoint: "http://127.0.0.1:11434",
       modelId: "qwen2.5:14b-instruct",
       transport: "v1",
+      // #1123 M3: identity carried through for the byline.
+      agentIdentity: { provider: "local-ollama", displayName: "Local" },
     });
   });
 
@@ -109,6 +112,33 @@ describe("resolveLocalModelConfig (via server-side registry)", () => {
       endpoint: "http://127.0.0.1:11434",
       modelId: "qwen2.5:14b-instruct",
       transport: "v1",
+      agentIdentity: { provider: "local-ollama", displayName: "Local" },
     });
+  });
+
+  it("carries the resolved entry's provider + displayName (#1123 M3 byline source)", async () => {
+    // The identity previously read-and-discarded is now surfaced so the loop can
+    // stamp `agentIdentity`. Distinct displayName so a hardcoded default can't
+    // pass this by accident.
+    await persistModelsFile(fileWith([{ ...local, displayName: "Qwen 2.5 (14B)" }], "m-local"));
+    const config = resolveLocalModelConfig();
+    expect(config?.agentIdentity).toEqual({
+      provider: "local-ollama",
+      displayName: "Qwen 2.5 (14B)",
+    });
+  });
+
+  it("clamps an over-long displayName to the durable bound (#1123 M3 corruption guard)", async () => {
+    // The registry permits a longer displayName (client ≤256, server unbounded)
+    // than AgentIdentitySchema (120). Without the clamp, a stamped over-long name
+    // fails AnnotationRecordSchemaV1 on reload and quarantines the WHOLE
+    // annotations file. The resolver is the sole builder, so it must clamp.
+    const longName = "M".repeat(200);
+    await persistModelsFile(fileWith([{ ...local, displayName: longName }], "m-local"));
+    const config = resolveLocalModelConfig();
+    expect(config?.agentIdentity?.displayName.length).toBe(120);
+    expect(config?.agentIdentity?.displayName).toBe("M".repeat(120));
+    // And the clamped value validates against the durable schema.
+    expect(AgentIdentitySchema.safeParse(config?.agentIdentity).success).toBe(true);
   });
 });

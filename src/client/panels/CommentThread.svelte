@@ -27,7 +27,10 @@ const agentLabel = createAgentLabel();
           >
             {#if kind === "claude"}
               <span class="ct-author-dot ct-author-dot--claude" aria-hidden="true"></span>
-              {agentLabel.family}
+              <!-- #1123 M3: a local-model reply bylines with its specific model
+                   name, matching the card + chat surfaces; else the active
+                   family label. Dark ⇒ agentIdentity absent ⇒ family label. -->
+              {reply.agentIdentity?.displayName ?? agentLabel.family}
             {:else if kind === "import"}
               <span data-testid="reply-import-byline-{reply.id}">
                 {reply.importAuthor ?? "Imported"}

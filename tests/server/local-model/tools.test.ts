@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type * as Y from "yjs";
 import { dispatch, TOOLS } from "../../../src/server/local-model/tools.js";
+import { Y_MAP_ANNOTATION_REPLIES } from "../../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../../src/shared/origins.js";
 import type { Annotation } from "../../../src/shared/types.js";
 import { getAnnotationsMap, makeMarkdownDoc } from "../../helpers/ydoc-factory.js";
@@ -269,6 +270,86 @@ describe("dispatch — license gate", () => {
       { ydoc: doc, isLicenseRestricted: () => false },
     );
     expect((out.result as { ok?: boolean }).ok).toBe(true);
+  });
+});
+
+describe("dispatch — agent identity stamping (#1123 M3)", () => {
+  const identity = { provider: "local-ollama" as const, displayName: "Qwen 2.5" };
+
+  it("stamps agentIdentity on a comment when ctx carries one", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "x" },
+      { ydoc: doc, agentIdentity: identity },
+    );
+    const id = (out.result as { annotation_id: string }).annotation_id;
+    const ann = getAnnotationsMap(doc).get(id) as Annotation;
+    expect(ann.agentIdentity).toEqual(identity);
+  });
+
+  it("stamps agentIdentity on a replacement", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(
+      "propose_replacement",
+      { quoted_text: "the first phase", suggested_text: "phase one", rationale: "shorter" },
+      { ydoc: doc, agentIdentity: identity },
+    );
+    const id = (out.result as { annotation_id: string }).annotation_id;
+    const ann = getAnnotationsMap(doc).get(id) as Annotation;
+    expect(ann.agentIdentity).toEqual(identity);
+    expect(ann.suggestedText).toBe("phase one");
+  });
+
+  it("stamps agentIdentity on a reply", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const created = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "needs detail" },
+      { ydoc: doc, agentIdentity: identity },
+    );
+    const annotationId = (created.result as { annotation_id: string }).annotation_id;
+    const out = dispatch(
+      "reply_to_annotation",
+      { annotation_id: annotationId, text: "detail here" },
+      { ydoc: doc, agentIdentity: identity },
+    );
+    const replyId = (out.result as { reply_id: string }).reply_id;
+    const replies = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
+    const reply = replies.get(replyId) as { agentIdentity?: unknown };
+    expect(reply.agentIdentity).toEqual(identity);
+  });
+
+  it("leaves agentIdentity absent when ctx has none (byte-identical to pre-M3 / MCP path)", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const out = dispatch(
+      "comment_on_quote",
+      { quoted_text: "the first phase", comment: "x" },
+      { ydoc: doc },
+    );
+    const id = (out.result as { annotation_id: string }).annotation_id;
+    const ann = getAnnotationsMap(doc).get(id) as Annotation;
+    expect(ann.agentIdentity).toBeUndefined();
+  });
+
+  it("leaves agentIdentity absent on a replacement and a reply when ctx has none", () => {
+    doc = makeMarkdownDoc(FIXTURE);
+    const repl = dispatch(
+      "propose_replacement",
+      { quoted_text: "the first phase", suggested_text: "phase one", rationale: "r" },
+      { ydoc: doc },
+    );
+    const replId = (repl.result as { annotation_id: string }).annotation_id;
+    expect((getAnnotationsMap(doc).get(replId) as Annotation).agentIdentity).toBeUndefined();
+
+    const reply = dispatch(
+      "reply_to_annotation",
+      { annotation_id: replId, text: "t" },
+      { ydoc: doc },
+    );
+    const replyId = (reply.result as { reply_id: string }).reply_id;
+    const stored = doc.getMap(Y_MAP_ANNOTATION_REPLIES).get(replyId) as { agentIdentity?: unknown };
+    expect(stored.agentIdentity).toBeUndefined();
   });
 });
 

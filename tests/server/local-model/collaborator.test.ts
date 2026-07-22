@@ -44,6 +44,7 @@ const CONFIG: LocalModelConfig = {
   endpoint: "http://127.0.0.1:11434",
   modelId: "m",
   transport: "v1",
+  agentIdentity: { provider: "local-ollama", displayName: "Test Model" },
 };
 
 function cleanResult(finalContent: string): LoopResult {
@@ -213,6 +214,10 @@ describe("collaborator — dispatch", () => {
     expect(msgs[0].author).toBe("claude");
     expect(msgs[0].text).toBe("Sure, done.");
     expect(msgs[0].documentId).toBe("doc-dispatch");
+    // #1123 M3: the streamed reply is bylined with the config's identity — proves
+    // collaborator.ts threads config.agentIdentity into the sink (not just that
+    // appendClaudeChatMessage can carry one, which the unit test covers).
+    expect(msgs[0].agentIdentity).toEqual(CONFIG.agentIdentity);
   });
 
   it("appends the selection context to the task", async () => {
@@ -802,6 +807,22 @@ describe("updateClaudeChatMessage — shape preservation", () => {
   it("is a no-op when the message id is absent", () => {
     expect(() => updateClaudeChatMessage("does-not-exist", "x")).not.toThrow();
     expect(chatMap().has("does-not-exist")).toBe(false);
+  });
+
+  it("#1123 M3: stamps agentIdentity on append and preserves it across a streamed update", () => {
+    const identity = { provider: "local-ollama" as const, displayName: "Qwen 2.5" };
+    const id = appendClaudeChatMessage("partial", { documentId: "d3", agentIdentity: identity });
+    expect((chatMap().get(id) as ChatMessage).agentIdentity).toEqual(identity);
+    // The `{...existing, text}` re-set must carry the byline through every delta.
+    updateClaudeChatMessage(id, "partial + more");
+    const after = chatMap().get(id) as ChatMessage;
+    expect(after.text).toBe("partial + more");
+    expect(after.agentIdentity).toEqual(identity);
+  });
+
+  it("#1123 M3: omits agentIdentity when none is passed (tandem_reply / dark byte-identical)", () => {
+    const id = appendClaudeChatMessage("plain", { documentId: "d4" });
+    expect((chatMap().get(id) as ChatMessage).agentIdentity).toBeUndefined();
   });
 });
 

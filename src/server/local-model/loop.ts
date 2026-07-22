@@ -163,6 +163,9 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         const outcome = dispatch(tc.name, tc.args, {
           ydoc,
           isLicenseRestricted: opts.isLicenseRestricted,
+          // #1123 M3: the byline identity is prebuilt on the config (one source,
+          // no extra RunLoopOpts field, no per-dispatch allocation).
+          agentIdentity: config.agentIdentity,
         });
         const eff = outcome.effect;
         if (eff.kind === "blocked") metrics.blockedByLicense += 1;

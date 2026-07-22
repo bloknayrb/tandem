@@ -223,7 +223,9 @@ async function clearChat() {
               ? 'var(--tandem-accent)'
               : 'var(--tandem-fg-muted)'}; text-transform: uppercase;"
           >
-            {msg.author === "claude" ? agentLabel.family : "You"}
+            {msg.author === "claude"
+              ? (msg.agentIdentity?.displayName ?? agentLabel.family)
+              : "You"}
           </span>
           {#if msg.documentId}
             <span

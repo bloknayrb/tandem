@@ -19,6 +19,7 @@
  * (validate-at-use / TOCTOU); this resolve-time check is defense-in-depth.
  */
 import { isLocalProvider } from "../../shared/models/contract.js";
+import { AGENT_DISPLAY_NAME_MAX } from "../../shared/types.js";
 import { getCachedModelsFile } from "../models/registry.js";
 import { type LocalModelConfig, validateEndpoint } from "./config.js";
 
@@ -69,6 +70,19 @@ export function resolveLocalModelConfig(): LocalModelConfig | null {
       // `/v1/chat/completions`, so `v1` is uniform for now. Ollama-native
       // `/api/chat` can become an optional per-entry transport later (M2/M4).
       transport: "v1",
+      // #1123 M3: build the byline identity ONCE here (the entry's provider +
+      // displayName were previously read and discarded). Threaded whole to both
+      // write paths so the fields are never re-bundled downstream. CLAMP the
+      // displayName: the registry permits longer names (client ≤256, server
+      // schema unbounded) than the durable-record bound, and an over-long
+      // agentIdentity fails AnnotationRecordSchemaV1 on reload — corrupting the
+      // WHOLE annotations file (parseAnnotationDoc → corrupt → quarantine), not
+      // just the one record. Clamping here is the sole guard, since this is the
+      // only site that builds an agentIdentity.
+      agentIdentity: {
+        provider: entry.provider,
+        displayName: entry.displayName.slice(0, AGENT_DISPLAY_NAME_MAX),
+      },
     };
   } catch (err) {
     // No error channel on this seam — a resolution failure means "inert". Today

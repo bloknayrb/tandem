@@ -8,7 +8,13 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
-import type { Annotation, AnnotationReply, ChatMessage, FlatOffset } from "../../shared/types.js";
+import type {
+  AgentIdentity,
+  Annotation,
+  AnnotationReply,
+  ChatMessage,
+  FlatOffset,
+} from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
@@ -54,7 +60,7 @@ export function resetInbox(): void {
  */
 export function appendClaudeChatMessage(
   text: string,
-  opts: { documentId?: string; replyTo?: string } = {},
+  opts: { documentId?: string; replyTo?: string; agentIdentity?: AgentIdentity } = {},
 ): string {
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
@@ -66,6 +72,10 @@ export function appendClaudeChatMessage(
     timestamp: Date.now(),
     ...(opts.documentId ? { documentId: opts.documentId } : {}),
     ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+    // #1123 M3: agent byline (local-model collaborator only). `tandem_reply`
+    // omits it ⇒ real-Claude chat is byte-identical. updateClaudeChatMessage's
+    // `{...existing, text}` re-set carries it through every streamed delta.
+    ...(opts.agentIdentity ? { agentIdentity: opts.agentIdentity } : {}),
     read: true,
   };
   withMcp(ctrlDoc, () => chatMap.set(id, msg));

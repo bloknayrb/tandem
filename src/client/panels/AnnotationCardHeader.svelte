@@ -31,7 +31,9 @@ let {
 
 const agentLabel = createAgentLabel();
 const displayType = $derived(getDisplayType(annotation));
-const authorLabel = $derived(getAuthorLabel(annotation.author, agentLabel.family));
+const authorLabel = $derived(
+  getAuthorLabel(annotation.author, agentLabel.family, annotation.agentIdentity),
+);
 // 6px authorship dot before the author label. Only user/claude carry an
 // author color (the two --tandem-author-* tokens); imports show the byline
 // instead, so the dot is omitted for them in the markup below.

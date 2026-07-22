@@ -105,6 +105,11 @@ export function sanitizeAnnotation(
     // record) would see it as always-undefined. The marker gates the badge +
     // restart hold, NOT live hiding (that is server-authoritative mode-based).
     ...(typeof ann.heldInSolo === "boolean" ? { heldInSolo: ann.heldInSolo } : {}),
+    // #1123 M3: the authoring agent's identity (local-model collaborator only).
+    // sanitize is a strict allowlist, so without this line agentIdentity is
+    // stripped on EVERY Claude-facing read and the provider byline silently
+    // no-ops on the client. Dark-safe: absent ⇒ nothing added.
+    ...(ann.agentIdentity !== undefined ? { agentIdentity: ann.agentIdentity } : {}),
     audience: derivedAudience,
     ...(ann.promotedFrom !== undefined ? { promotedFrom: ann.promotedFrom } : {}),
     ...(ann.importSource !== undefined ? { importSource: ann.importSource } : {}),

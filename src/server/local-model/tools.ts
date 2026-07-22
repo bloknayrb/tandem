@@ -29,6 +29,7 @@ import type * as Y from "yjs";
 
 import { Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
+import type { AgentIdentity } from "../../shared/types.js";
 import { addReplyToAnnotation, createAnnotation } from "../mcp/annotations.js";
 import { getOutline, getSection } from "../mcp/document.js";
 import { extractText } from "../mcp/document-model.js";
@@ -42,6 +43,10 @@ export interface DispatchCtx {
   /** True when editing must be blocked (trial expired). Defaults to the live
    *  license gate; injectable so tests don't touch the filesystem. */
   isLicenseRestricted?: () => boolean;
+  /** #1123 M3: the authoring agent's identity, stamped onto every annotation /
+   *  reply this dispatch writes so the client byline names the specific model.
+   *  Undefined ⇒ no stamp (byte-identical to pre-M3 + the MCP path). */
+  agentIdentity?: AgentIdentity;
 }
 
 export interface ToolOutcome {
@@ -218,6 +223,7 @@ function annotateFromQuote(
   args: Record<string, unknown>,
   body: string,
   extra?: Parameters<typeof createAnnotation>[5],
+  agentIdentity?: AgentIdentity,
 ): ToolOutcome {
   const quoted = asString(args.quoted_text);
   const occ = asOccurrence(args.occurrence_index);
@@ -233,7 +239,10 @@ function annotateFromQuote(
       },
     };
   }
-  const id = createAnnotation(annotations, ydoc, "comment", r.anchored, body, extra);
+  // #1123 M3: stamp the authoring agent. When absent, pass `extra` unchanged so
+  // the created record is byte-identical to pre-M3.
+  const mergedExtra = agentIdentity ? { ...extra, agentIdentity } : extra;
+  const id = createAnnotation(annotations, ydoc, "comment", r.anchored, body, mergedExtra);
   return {
     result: { ok: true, annotation_id: id },
     effect: {
@@ -290,7 +299,15 @@ export function dispatch(
       };
     }
     case "comment_on_quote":
-      return annotateFromQuote("comment", ydoc, annotations, args, asString(args.comment));
+      return annotateFromQuote(
+        "comment",
+        ydoc,
+        annotations,
+        args,
+        asString(args.comment),
+        undefined,
+        ctx.agentIdentity,
+      );
     case "propose_replacement":
       return annotateFromQuote(
         "replacement",
@@ -299,6 +316,7 @@ export function dispatch(
         args,
         asString(args.rationale) || "Suggested replacement.",
         { suggestedText: asString(args.suggested_text) },
+        ctx.agentIdentity,
       );
     case "reply_to_annotation": {
       const annotationId = asString(args.annotation_id);
@@ -309,6 +327,7 @@ export function dispatch(
         asString(args.text),
         "claude",
         withMcp,
+        ctx.agentIdentity,
       );
       return {
         result: reply.ok
