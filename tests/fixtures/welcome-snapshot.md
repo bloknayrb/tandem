@@ -47,6 +47,6 @@ Want to connect your AI? Open Settings → AI Assistant and use the setup wizard
 
 ## Sample Content
 
-The project launched in early 2025 with three core goals: simplify onboarding, reduce support tickets by 40%, and ship a self-service dashboard by Q3. The team completed the first two milestones ahead of schedule, but the dashboard timeline slipped due to an unexpected API redesign in May.
+The project launched in early 2025 with three core goals: simplify onboarding, reduce support tickets by 40% in Q2, and ship a self-service dashboard by Q3. The team hit both Q2 goals a month early, but the dashboard slipped to Q4 after an unexpected API redesign in May.
 
 > Once your AI connects, try asking it to help you improve this text — you'll see highlights and suggestions appear in the side panel.
