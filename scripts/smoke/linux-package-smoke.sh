@@ -8,7 +8,7 @@
 #
 #   docker run --rm -v "<dir-with-artifacts>:/art" ubuntu:22.04 \
 #     bash /art/linux-package-smoke.sh deb
-#   docker run --rm -v "<dir-with-artifacts>:/art" fedora:39 \
+#   docker run --rm -v "<dir-with-artifacts>:/art" fedora:44 \
 #     bash /art/linux-package-smoke.sh rpm
 #
 # Exit codes are distinct on purpose, because this is meant to gate CI and a

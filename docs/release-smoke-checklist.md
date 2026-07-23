@@ -50,7 +50,7 @@ exactly this residual).
 ## 3. Linux (best effort, any box or VM)
 
 - [ ] AppImage: `chmod +x`, launch, sidecar healthy via Copy Diagnostics.
-- [x] `.deb` and `.rpm` — **automated.** `tauri-release.yml`'s "Verify Linux packages install and load" step runs `scripts/smoke/linux-package-smoke.sh` against the freshly built artifacts in `ubuntu:22.04` and `fedora:39` containers, on every tag. Nothing to do by hand; read the step's output. A `::warning::` about an ENVIRONMENT fault means the mirror was unreachable and the package was **not** evaluated — re-run before trusting the build.
+- [x] `.deb` and `.rpm` — **automated.** `tauri-release.yml`'s "Verify Linux packages install and load" step runs `scripts/smoke/linux-package-smoke.sh` against the freshly built artifacts in `ubuntu:22.04` and `fedora:44` containers, on every tag. Nothing to do by hand; read the step's output. A `::warning::` about an ENVIRONMENT fault means the mirror was unreachable and the package was **not** evaluated — re-run before trusting the build.
 
   To run it yourself earlier (e.g. against a local `cargo tauri build`), see [spikes/linux-container-install-smoke.md](spikes/linux-container-install-smoke.md). Docker, no VM.
 
