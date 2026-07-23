@@ -155,7 +155,7 @@
     "@types/node": "^25.5.0",
     "@types/update-notifier": "^6.0.8",
     "cross-env": "^10.1.0",
-    "eslint": "^9.39.4",
+    "eslint": "^10.7.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "happy-dom": "^20.9.0",
     "husky": "^9.1.7",
