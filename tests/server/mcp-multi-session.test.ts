@@ -147,6 +147,30 @@ describe("concurrent MCP sessions", () => {
     expect((await toolsList(b.sessionId)).status).toBe(200);
   });
 
+  it("leaves the session alive when the SDK rejects the DELETE", async () => {
+    // A DELETE carrying a valid session id but a stale/unsupported
+    // Mcp-Protocol-Version fails the SDK's own validateProtocolVersion check,
+    // which responds 4xx *without* tearing the session down. The route must
+    // not force-close it anyway -- that would strand a client that still
+    // holds a perfectly valid session.
+    const a = await openSession("client-a");
+
+    const del = await fetch(`${baseUrl}/mcp`, {
+      method: "DELETE",
+      headers: {
+        Accept: MCP_ACCEPT,
+        "mcp-session-id": a.sessionId,
+        "mcp-protocol-version": "1999-01-01",
+      },
+    });
+    expect(del.status).toBeGreaterThanOrEqual(400);
+    expect(del.status).toBeLessThan(500);
+
+    const res = await toolsList(a.sessionId);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain("tandem_");
+  });
+
   it("reports hasSession on loopback /health once a session exists", async () => {
     const before = (await (await fetch(`${baseUrl}/health`)).json()) as { hasSession?: boolean };
     expect(before.hasSession).toBe(false);

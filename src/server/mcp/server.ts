@@ -437,14 +437,23 @@ export async function startMcpServerHttp(
     await dispatchToSession(req, res, req.body);
   });
 
-  // DELETE — the SDK tears the session down and fires onsessionclosed, which
-  // is what removes the registry entry (see openSession).
+  // DELETE — on success the SDK tears the session down and fires
+  // onsessionclosed, which is what removes the registry entry (see
+  // openSession). On a *rejected* delete (unknown session, stale
+  // Mcp-Protocol-Version) the SDK's webStandardStreamableHttp responds 4xx
+  // without calling onsessionclosed and leaves the session exactly as it
+  // was -- confirmed against the installed SDK's handleDeleteRequest, which
+  // this Node transport reaches via @hono/node-server's request adapter, so
+  // `res.statusCode` reflects the real outcome by the time handleRequest
+  // resolves.
   mcpApp.delete("/mcp", async (req: import("express").Request, res: import("express").Response) => {
     const entry = await dispatchToSession(req, res, req.body);
-    // Belt-and-braces: onsessionclosed normally does this, but a DELETE the SDK
-    // rejects before closing would otherwise strand the entry. close() is a
-    // no-op for an id already removed.
-    if (entry) await registry.close(entry.sessionId);
+    // Belt-and-braces: onsessionclosed normally does this, so this is a no-op
+    // in the success path. Gated on the delete having actually succeeded (200)
+    // -- otherwise a rejected delete would force-close a session the SDK
+    // deliberately chose to keep alive, stranding a client that still holds a
+    // valid session id.
+    if (entry && res.statusCode === 200) await registry.close(entry.sessionId);
   });
 
   // Public webhook endpoint for Polar/Paddle license generation (auth-exempt).
