@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Linux `.deb` and `.rpm` packages now declare the `libxdo` library they need, so the installed app actually launches (#1227).** Both packages installed without complaint and then failed to start with `error while loading shared libraries: libxdo.so.3`, on every release since v0.13.6. Tandem links that library for native Cut/Copy/Paste menu items, but neither package listed it as a dependency, so a machine without it got a silent install and a dead application. Anyone who already had `xdotool` installed never saw it, which is how it went unnoticed. The AppImage was never affected — it bundles the library itself.
 - **Two Claude sessions can now use Tandem at the same time without knocking each other offline (#438).** Connecting a second AI session used to silently disconnect the first one's tool channel: the first session's Tandem tools would start failing until it reconnected, which then broke the second session, and so on. Each session now gets its own connection, so several can work against the same Tandem instance concurrently — a terminal session and a Cowork session, or two terminal sessions in different projects. Abandoned connections are cleaned up automatically instead of accumulating. Note that the *notifications* Tandem pushes are still broadcast to every connected session; scoping those to the relevant session is separate, still-open work.
 
 ## [0.19.0] - 2026-07-21

@@ -33,6 +33,9 @@ tauri-plugin-sentry = "0.5"
 # linux-libxdo: makes native Cut/Copy/Paste/Select All PredefinedMenuItems work
 # on Linux (muda uses libxdo to synthesize them); off by default. Required by
 # the editor context menu (#923).
+# This adds a hard DT_NEEDED on libxdo.so.3, which the bundler does NOT infer:
+# the matching deb/rpm `depends` live in tauri.conf.json and must stay in sync.
+# Shipping without them made the app unlaunchable for 9 releases (#1227).
 tauri = { version = "2.11.1", features = ["tray-icon", "linux-libxdo"] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
