@@ -107,6 +107,25 @@ const MAX_SESSION_ID_LEN = 256;
 const SESSION_ID_RE = /^[\x21-\x7e]+$/;
 
 /**
+ * Normalize and validate a candidate Claude session id, returning `undefined`
+ * when it fails the guards.
+ *
+ * Shared by the *sending* side (`resolveClaudeSessionId`, reading the env var)
+ * and the *receiving* side (the Tandem server, reading the header off the
+ * wire). Both ends must agree: this is a header-injection guard, and a sender
+ * and receiver that drift apart on what counts as valid is exactly how such a
+ * guard silently stops guarding. Keep it as the single definition rather than
+ * re-inlining the length bound and regex at either end.
+ */
+export function normalizeSessionId(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.length > MAX_SESSION_ID_LEN) return undefined;
+  if (!SESSION_ID_RE.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+/**
  * Resolve the Claude Code session id from the process environment.
  *
  * Claude Code injects `CLAUDE_CODE_SESSION_ID` (and `CLAUDECODE=1`) into the
@@ -127,12 +146,7 @@ export function resolveClaudeSessionId(): string | undefined {
   // set alongside CLAUDE_CODE_SESSION_ID by the same CLI release; gating on it
   // avoids forwarding a value a user happened to export in their own shell.
   if (process.env.CLAUDECODE !== "1") return undefined;
-  const raw = process.env.CLAUDE_CODE_SESSION_ID;
-  if (raw === undefined) return undefined;
-  const trimmed = raw.trim();
-  if (trimmed === "" || trimmed.length > MAX_SESSION_ID_LEN) return undefined;
-  if (!SESSION_ID_RE.test(trimmed)) return undefined;
-  return trimmed;
+  return normalizeSessionId(process.env.CLAUDE_CODE_SESSION_ID);
 }
 
 /**

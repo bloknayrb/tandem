@@ -5,6 +5,12 @@ All notable changes to Tandem will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Two Claude sessions can now use Tandem at the same time without knocking each other offline (#438).** Connecting a second AI session used to silently disconnect the first one's tool channel: the first session's Tandem tools would start failing until it reconnected, which then broke the second session, and so on. Each session now gets its own connection, so several can work against the same Tandem instance concurrently — a terminal session and a Cowork session, or two terminal sessions in different projects. Abandoned connections are cleaned up automatically instead of accumulating. Note that the *notifications* Tandem pushes are still broadcast to every connected session; scoping those to the relevant session is separate, still-open work.
+
 ## [0.19.0] - 2026-07-21
 
 ### Added
