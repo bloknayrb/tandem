@@ -167,6 +167,7 @@ Tandem is on the way to a v1.0 release. Today the supported AI integration is Cl
 - [docs/architecture.md](docs/architecture.md) for diagrams and the file map.
 - [docs/mcp-tools.md](docs/mcp-tools.md) for the MCP tool reference.
 - [docs/security.md](docs/security.md) for the security model.
+- [docs/licensing-explained.md](docs/licensing-explained.md) for how licensing will work at v1.0 — in plain English first, then in detail.
 - [docs/configuration.md](docs/configuration.md) for advanced configuration.
 - [docs/cli.md](docs/cli.md) for CLI command reference.
 - [CHANGELOG.md](CHANGELOG.md) for release notes.
