@@ -1,10 +1,28 @@
 import fs from "fs";
 import { atomicWrite } from "../file-io/index.js";
 import { resolveAppDataDir } from "../platform.js";
+import { LicenseActivationError } from "./errors.js";
 import { GATE_ENABLED } from "./gate-flag.js";
 import type { LicenseFile, LicenseState, SignatureVerified, TrialFile } from "./license-types.js";
 import { licenseFilePath, TRIAL_MS, trialFilePath } from "./paths.js";
-import { verifyLicenseSignature } from "./verifier.js";
+import { LicenseVerifyError, verifyLicenseSignature } from "./verifier.js";
+
+export type { LicenseActivationCode } from "./errors.js";
+export { LicenseActivationError } from "./errors.js";
+
+/**
+ * Ensure the app-data directory exists before writing into it.
+ *
+ * Every other app-data writer (auth/token-store, session/manager,
+ * annotations/store, integrations/storage) does this; `license/` was the only
+ * one that didn't. It matters because `tandem activate ./jane.license` — the
+ * command the license email itself recommends — is frequently the FIRST thing a
+ * buyer runs, before Tandem has ever launched and created the directory. The
+ * resulting ENOENT surfaced as "your license could not be verified".
+ */
+function ensureAppDataDir(appDataDir: string): void {
+  fs.mkdirSync(appDataDir, { recursive: true });
+}
 
 // Known license schema majors. The signed `version` field becomes load-bearing:
 // an unknown major is rejected rather than silently honored (review §12 L3).
@@ -52,6 +70,16 @@ export function resolveLicenseState(deps: {
   const nowMs = now();
 
   // 1. A signature-valid license of a known version ⇒ licensed (runs forever).
+  //
+  // `licenseUnverifiable` records the case where a license file EXISTS but does
+  // not verify — a tester holding a pre-key-rotation license, a corrupted file,
+  // or a license from a newer schema. Enforcement is unchanged (an unverified
+  // license must never unlock, so we still fall through to the trial clock),
+  // but the state has to say so: without it, all three surfaces tell a person
+  // with a license sitting on disk that their *trial* ended — a trial they may
+  // never have had. It was previously swallowed by a bare `catch {}` with no
+  // log, no status and no UI.
+  let licenseUnverifiable: true | undefined;
   const lf = readJson<LicenseFile>(licenseFilePath(appDataDir));
   if (lf?.blob) {
     try {
@@ -67,8 +95,19 @@ export function resolveLicenseState(deps: {
           updateWindowCurrent,
         };
       }
-    } catch {
-      // malformed / bad signature / unknown version — fall through to trial/restricted
+      licenseUnverifiable = true;
+      console.error(
+        `[license] license.json holds an unsupported schema version (${meta.version}) — ` +
+          "treating this device as unlicensed. A newer Tandem may be required.",
+      );
+    } catch (err) {
+      licenseUnverifiable = true;
+      // Code only — never the message, which can embed blob bytes.
+      const code = err instanceof LicenseVerifyError ? err.code : "UNKNOWN";
+      console.error(
+        `[license] license.json failed verification (${code}) — treating this device as ` +
+          "unlicensed. If this license was issued before a signing-key rotation it must be reissued.",
+      );
     }
   }
 
@@ -82,6 +121,7 @@ export function resolveLicenseState(deps: {
       gateActive: true,
       status: "trial",
       updateWindowCurrent: false,
+      licenseUnverifiable,
       trial: {
         firstRunAt: new Date(firstRunAt).toISOString(),
         expiresAt: new Date(expiresAt).toISOString(),
@@ -91,7 +131,12 @@ export function resolveLicenseState(deps: {
   }
 
   // 3. Trial expired, no license ⇒ restricted (read-only escape hatch).
-  return { gateActive: true, status: "restricted", updateWindowCurrent: false };
+  return {
+    gateActive: true,
+    status: "restricted",
+    updateWindowCurrent: false,
+    licenseUnverifiable,
+  };
 }
 
 /**
@@ -125,9 +170,13 @@ export async function ensureTrialStarted(
   if (fs.existsSync(filePath)) return;
   const body: TrialFile = { version: 1, firstRunAt: new Date(now()).toISOString() };
   try {
+    ensureAppDataDir(appDataDir);
     fs.writeFileSync(filePath, JSON.stringify(body), { flag: "wx" });
   } catch {
     // Lost the race to a concurrently-starting process — its file stands.
+    // (Or the directory is unwritable, in which case the trial fails OPEN by
+    // design: a missing trial.json reads as "day 0 = now" on every call. That's
+    // consistent with ADR-040's deliberately-soft clock.)
   }
 }
 
@@ -144,11 +193,34 @@ export async function activateLicense(
   // resolveLicenseState. Production uses the pinned-key signature verifier.
   verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
 ): Promise<LicenseState> {
-  const meta = verify(blob); // throws on malformed / bad signature
-  if (!knownVersion(meta.version)) {
-    throw new Error(`Unsupported license version: ${meta.version}`);
+  let meta: SignatureVerified;
+  try {
+    meta = verify(blob);
+  } catch (err) {
+    if (err instanceof LicenseVerifyError) {
+      throw new LicenseActivationError(err.code, err.message, { cause: err });
+    }
+    throw new LicenseActivationError("MALFORMED", "License could not be read", { cause: err });
   }
+  if (!knownVersion(meta.version)) {
+    throw new LicenseActivationError(
+      "UNSUPPORTED_VERSION",
+      `Unsupported license version: ${meta.version}`,
+    );
+  }
+
+  // Persist. Kept in its OWN try so a filesystem failure can never be reported
+  // as a bad license — the blob above is already proven good at this point.
   const body: LicenseFile = { version: 1, blob };
-  await atomicWrite(licenseFilePath(appDataDir), JSON.stringify(body));
+  try {
+    ensureAppDataDir(appDataDir);
+    await atomicWrite(licenseFilePath(appDataDir), JSON.stringify(body));
+  } catch (err) {
+    throw new LicenseActivationError(
+      "WRITE_FAILED",
+      `Could not save the license to ${appDataDir}`,
+      { cause: err },
+    );
+  }
   return resolveLicenseState({ appDataDir, now: () => Date.now(), gateEnabled: true, verify });
 }

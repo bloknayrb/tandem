@@ -1,13 +1,20 @@
 /**
- * Cloudflare KV entitlement writer (#1116, ADR-040 §7) — the bridge from the
- * issuance webhook to the L3 update Worker. After a real purchase the webhook
- * records `KV[licenseId] = { updateWindowEnd, status, version }`; the Worker
- * reads that key to decide whether to serve an update manifest.
+ * Cloudflare KV entitlement writer (#1116, ADR-040 §7) — the bridge to the L3
+ * update Worker. `KV[licenseId] = { updateWindowEnd, status, version }`; the
+ * Worker reads that key to decide whether to serve an update manifest.
  *
- * NON-FATAL by contract: the signed license blob is the source of truth and is
- * always delivered. A KV write failure only means the updater falls back to the
- * public endpoint — it never blocks or fails license delivery. This module
- * therefore never throws; it logs and returns `{ ok }`.
+ * Two writers exist, and they are NOT interchangeable:
+ *  - The **paid** path writes its own entitlement inside the Cloudflare issuance
+ *    Worker (`infra/license-issuance-worker/`), using its native KV binding.
+ *  - This module is the **out-of-band** path: `scripts/sign-license.ts`, which
+ *    runs on the operator's machine and so must reach KV over the REST API.
+ *
+ * Never throws — it logs and returns `{ ok }` — but do NOT read that as
+ * "failure is harmless". The caller must treat `!ok` as fatal: a license with
+ * no entitlement is served `204` by the update Worker, which the desktop app
+ * reports to the user as **"You're up to date."** forever. The public manifest
+ * is not a fallback (`build_updater()` REPLACES the endpoint list), so a missed
+ * write is a permanently and silently un-updatable install.
  */
 import type { LicenseEntitlement } from "./license-types.js";
 

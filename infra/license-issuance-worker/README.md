@@ -4,10 +4,11 @@ The public seam that turns a paid **Polar** checkout into an Ed25519-signed
 license: verify the webhook, mint + sign the license, record it, email it. Part
 of the licensing system (#1116, ADR-040).
 
-This **supersedes** the loopback-only server handler `src/server/license/webhook.ts`
-(which Polar can never reach, and whose `verifyPolarSignature` used a wrong
-`t=,v1=` scheme). Stripping that server handler from the shipped bundle is a
-separate follow-up.
+This **replaced** the loopback-only server handler `src/server/license/webhook.ts`
+(which Polar could never reach, and whose `verifyPolarSignature` used a wrong
+`t=,v1=` scheme). That handler and its `/webhooks/license` route are now deleted
+— issuance lives here and nowhere else. Do not re-add a payment-processor
+endpoint to a server that binds to loopback.
 
 - **Source:** `src/worker.ts` (pure `handleIssuance` + default `fetch` export),
   `src/crypto.ts` (canonicalize parity + svix verify + Ed25519 signing).
@@ -98,20 +99,10 @@ same-shape change to the existing pure-handler design.
 - The Durable-Object-based fix for the concurrent-delivery race above.
 - A rate-limited **"resend my license"** endpoint (needs an email index +
   rate-limit store).
-- Stripping the superseded server `webhook.ts` from the shipped bundle — it is
-  **still mounted** at `/webhooks/license` (`src/server/mcp/server.ts`) pending
-  that follow-up, so it is not dead code yet. That route is deliberately exempt
-  from the app's usual DNS-rebinding Host check and Bearer auth (an external
-  webhook caller can't carry either), so its only protection is its own
-  signature check — which uses the wrong (non-svix) scheme Polar doesn't send,
-  and returns the license blob directly in its HTTP response (this Worker
-  deliberately never does either). Practical exposure today is low (it 503s
-  without `POLAR_WEBHOOK_SECRET`/`TANDEM_PRIVATE_KEY` configured, which a stock
-  install doesn't set, and Polar can't reach a loopback-bound server) — but
-  this Worker should replace it before enabling non-loopback binding with real
-  licensing secrets in play.
-- Confirming whether `webhook.ts`'s route could ever be wired to the *same*
-  live Polar webhook subscription as this Worker (it still speaks both Polar's
-  and Paddle's schemes) — if so, that's a second, independent
-  duplicate-issuance path entirely outside this Worker's ledger, separate from
-  the concurrency race above.
+- Confirming Polar's exact webhook-endpoint auto-disable threshold (~10
+  consecutive failures) and whether it notifies the account on disable. This is
+  the dominant sale-loss mode: `sendEmail` failing returns a retryable 500, so a
+  single misconfiguration (e.g. an unverified `RESEND_FROM` → 422) can retry its
+  way to a disabled endpoint, after which **every subsequent sale never
+  arrives** and produces no ledger record at all. See
+  `docs/licensing-operations.md` §5 for the reconcile that detects it.

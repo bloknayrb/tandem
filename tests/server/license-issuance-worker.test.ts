@@ -10,6 +10,7 @@ import {
   webCryptoSigner,
 } from "../../infra/license-issuance-worker/src/crypto.js";
 import issuanceWorker, {
+  _resetAlertThrottleForTests,
   EVENT_TTL_S,
   handleIssuance,
   type IssuanceDeps,
@@ -941,6 +942,13 @@ describe("default fetch wiring (env → deps)", () => {
     };
   }
 
+  beforeEach(() => {
+    // The alert throttle is per-isolate module state. Without this reset the
+    // second test to provoke a given (result, stage) is silently suppressed,
+    // and every "does not alert" assertion would pass vacuously.
+    _resetAlertThrottleForTests();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -962,7 +970,103 @@ describe("default fetch wiring (env → deps)", () => {
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer re_test");
     const sent = JSON.parse(init.body as string);
     expect(sent.to).toBe("buyer@example.com");
-    expect(blobVerifies(sent.text.match(/^[A-Za-z0-9+/=]{40,}$/m)?.[0] as string)).toBe(true);
+
+    // The ATTACHMENT is the primary delivery path. Its `content` must be base64
+    // of the file's BYTES — and the blob is already base64 text, so it is
+    // double-encoded. Passing the blob straight through would produce a
+    // `.license` file containing raw JSON, which `activateLicense` rejects.
+    const attachment = sent.attachments[0];
+    expect(attachment.filename).toBe("tandem.license");
+    const fileBytes = Buffer.from(attachment.content, "base64").toString("utf-8");
+    expect(blobVerifies(fileBytes)).toBe(true);
+
+    // The inline copy is hard-wrapped so an MTA doesn't re-encode the body as
+    // quoted-printable (whose soft line breaks silently truncate base64). It
+    // must still rejoin to exactly the same blob.
+    const inline = (sent.text as string)
+      .split("\n")
+      .filter((l: string) => /^[A-Za-z0-9+/=]{20,}$/.test(l))
+      .join("");
+    expect(inline).toBe(fileBytes);
+    expect(blobVerifies(inline)).toBe(true);
+    for (const line of (sent.text as string).split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it("alerts the operator when an event is dropped", async () => {
+    // `dropped` means a payload we couldn't fulfil — a paid sale may be behind
+    // it, and nothing durable was written. It is the result worth waking for.
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/xyz" });
+    const body = JSON.stringify({ type: "order.paid", data: { id: "ord_d" } }); // no email
+    await issuanceWorker.fetch(makeRequest(body, { id: "evt_drop_1", ts: nowTs() }), env as never);
+    const alert = fetchMock.mock.calls.find(
+      ([u]) => u === "https://hooks.example.com/xyz",
+    ) as unknown as [string, RequestInit] | undefined;
+    expect(alert).toBeDefined();
+    expect(JSON.parse(alert![1].body as string).text).toMatch(/could not be fulfilled/);
+  });
+
+  it("routes an EMAIL failure away from Resend — the channel that just failed", async () => {
+    // Alerting a Resend outage through Resend is a no-op exactly when it matters.
+    const fetchMock = vi.fn(async (url: string) =>
+      url === "https://api.resend.com/emails"
+        ? new Response("unverified sender", { status: 422 })
+        : new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({
+      ALERT_WEBHOOK_URL: "https://hooks.example.com/xyz",
+      ALERT_EMAIL: "ops@example.com",
+    });
+    const res = await issuanceWorker.fetch(
+      makeRequest(paidBody("ord_mailfail"), { id: "evt_mailfail", ts: nowTs() }),
+      env as never,
+    );
+    // Retryable for THIS order...
+    expect(res.status).toBe(500);
+    // ...and the alert went to the webhook, not to Resend.
+    const urls = fetchMock.mock.calls.map(([u]) => u);
+    expect(urls).toContain("https://hooks.example.com/xyz");
+    expect(urls.filter((u) => u === "https://api.resend.com/emails")).toHaveLength(1);
+  });
+
+  it("does not alert on an ordinary successful issuance", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 200 })),
+    );
+    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/quiet" });
+    await issuanceWorker.fetch(
+      makeRequest(paidBody("ord_quiet"), { id: "evt_quiet", ts: nowTs() }),
+      env as never,
+    );
+    const urls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([u]: [string]) => u,
+    );
+    expect(urls).not.toContain("https://hooks.example.com/quiet");
+  });
+
+  it("alert bodies carry no PII — not the buyer's email, not the license id", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url === "https://api.resend.com/emails"
+        ? new Response("nope", { status: 422 })
+        : new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({ ALERT_WEBHOOK_URL: "https://hooks.example.com/pii" });
+    await issuanceWorker.fetch(
+      makeRequest(paidBody("ord_pii"), { id: "evt_pii", ts: nowTs() }),
+      env as never,
+    );
+    const alert = fetchMock.mock.calls.find(
+      ([u]) => u === "https://hooks.example.com/pii",
+    ) as unknown as [string, RequestInit];
+    const text = JSON.parse(alert[1].body as string).text as string;
+    expect(text).not.toContain("buyer@example.com");
+    expect(text).not.toContain("ord_pii");
   });
 
   it("TANDEM_ISSUANCE_ENV=sandbox → test-mode ledger keys and NO entitlement", async () => {

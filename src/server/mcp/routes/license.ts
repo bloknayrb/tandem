@@ -5,8 +5,11 @@ import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
+import { LicenseActivationError } from "../../license/errors.js";
 import { activateLicense, resolveLiveLicenseState } from "../../license/license-state.js";
 import type { LicenseState, LicenseStatus } from "../../license/license-types.js";
+import { activationErrorMessage } from "../../license/messages.js";
+import { normalizePastedLicense } from "../../license/paste.js";
 import { resolveAppDataDir } from "../../platform.js";
 
 /**
@@ -34,6 +37,7 @@ export function scrubForNonLoopback(s: LicenseState): {
   status: LicenseStatus;
   daysRemaining: number | undefined;
   updateWindowCurrent: boolean;
+  licenseUnverifiable?: true;
 } {
   if (!s.gateActive) {
     return {
@@ -48,6 +52,9 @@ export function scrubForNonLoopback(s: LicenseState): {
     status: s.status,
     daysRemaining: s.status === "trial" ? s.trial.daysRemaining : undefined,
     updateWindowCurrent: s.updateWindowCurrent,
+    // Not PII — a boolean about this device's own license file. The client needs
+    // it to avoid telling a license holder that their trial ended.
+    licenseUnverifiable: s.status === "licensed" ? undefined : s.licenseUnverifiable,
   };
 }
 
@@ -88,13 +95,17 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
   }
 
   try {
-    const state = await activateLicense(resolveAppDataDir(), rawLicense.trim());
+    const state = await activateLicense(resolveAppDataDir(), normalizePastedLicense(rawLicense));
     res.json(state);
-  } catch {
-    // Generic message by design: the verify/parse error can embed blob bytes.
-    res.status(400).json({
-      error: "INVALID_LICENSE",
-      message: "License could not be verified. Check that you pasted the full license.",
+  } catch (err) {
+    const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
+    // A write failure is OUR fault, not the caller's — 500, not 400. The
+    // status code is the difference between "fix your input" and "retry".
+    const status = code === "WRITE_FAILED" ? 500 : 400;
+    res.status(status).json({
+      error: code === "WRITE_FAILED" ? "LICENSE_WRITE_FAILED" : "INVALID_LICENSE",
+      // Static per-code copy; the underlying error message never reaches the wire.
+      message: activationErrorMessage(code),
     });
   }
 }

@@ -17,11 +17,30 @@ compatibility_date = "2024-09-23"
 # (so you can inspect issuance) but NOT the update entitlement.
 TANDEM_ISSUANCE_ENV = "production"
 # The verified Resend sender, e.g. "Tandem <noreply@yourdomain.com>".
+# MUST be on a domain verified in Resend with SPF/DKIM/DMARC, or Resend returns
+# 422 and every license email fails. See the auto-disable warning below.
 RESEND_FROM = "REPLACE_WITH_VERIFIED_SENDER"
+# Monitored inbox used as the license email's reply_to. Keep in sync with
+# TANDEM_SUPPORT_EMAIL in src/shared/constants.ts. Without it a buyer whose
+# activation fails has no inbound channel except the public issue tracker —
+# where they will paste a key carrying their own name and email.
+SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"
+# Operator alerting. `dropped` results and email-delivery failures are the two
+# outcomes that lose sales silently.
+#   ALERT_WEBHOOK_URL — any incoming webhook (Slack/Discord/ntfy). REQUIRED to be
+#     alerted about EMAIL failures: those cannot be reported through Resend,
+#     which is the thing that just failed. Without it, an email-stage alert is
+#     deliberately dropped rather than sent down the broken path.
+#   ALERT_EMAIL — operator inbox for everything else, sent via Resend.
+# ALERT_WEBHOOK_URL = "REPLACE_WITH_INCOMING_WEBHOOK_URL"
+# ALERT_EMAIL = "REPLACE_WITH_OPERATOR_INBOX"
 
 # Update entitlements: licenseId -> { updateWindowEnd, status, version }. This
 # MUST be the SAME namespace the license-update Worker reads (paste the same id
-# you used in infra/license-update-worker/wrangler.toml). Contains NO PII.
+# you used in infra/license-update-worker/wrangler.toml — the placeholder name
+# is identical in both files so a copy/paste mismatch is obvious). Contains NO
+# PII. A mismatch here is silent: issuance succeeds and buyers get working
+# licenses that are never offered an update.
 [[kv_namespaces]]
 binding = "LICENSE_KV"
 id = "REPLACE_WITH_LICENSE_KV_NAMESPACE_ID"

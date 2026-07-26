@@ -169,13 +169,46 @@ describe("Licensing Core", () => {
       expect(TANDEM_PUBLIC_KEY).toContain("-----END PUBLIC KEY-----");
     });
 
+    /**
+     * Pin the exact shipped verification key.
+     *
+     * Everything else in this describe block is structural — the PEM check
+     * passes for ANY well-formed key, and the round-trip below `return`s early
+     * whenever `keys/` is absent, which in CI is always (it's gitignored and
+     * never checked in). So before this test, a silent skip read as a pass and
+     * NOTHING verified which key the product actually ships. Swapping the key
+     * — by a bad merge, a stray paste from a dev keypair, or a rebase that
+     * resurrected an old line — would have been invisible until customers'
+     * licenses stopped verifying in the field.
+     *
+     * Update `EXPECTED_PUBLIC_KEY_SHA256` deliberately, in the same commit as a
+     * real key rotation, never to make a red test green.
+     *
+     * The hash is over the base64 body with all whitespace stripped, so it is
+     * immune to CRLF/LF checkout differences (see the `core.autocrlf` gotcha in
+     * CLAUDE.md) and to reflowing the PEM.
+     */
+    it("ships the pinned production public key (fingerprint)", () => {
+      const EXPECTED_PUBLIC_KEY_SHA256 =
+        "d896ad7b41bfab69a5c356bbd0e68576201ac2fd5a0f90f9eddfa4f7d78a688b";
+      const body = TANDEM_PUBLIC_KEY.replace(/-----(BEGIN|END) PUBLIC KEY-----/g, "").replace(
+        /\s+/g,
+        "",
+      );
+      const actual = crypto.createHash("sha256").update(body).digest("hex");
+      expect(actual).toBe(EXPECTED_PUBLIC_KEY_SHA256);
+    });
+
     it("should verify a license signed by the local private key using verifyLicense", () => {
       let privateKey: string;
       try {
         const privKeyPath = path.join(process.cwd(), "keys", "tandem-private-key.pem");
         privateKey = fs.readFileSync(privKeyPath, "utf8");
       } catch {
-        // Skip if private key is not present (e.g. in CI environment)
+        // Skip if the private key is absent — always the case in CI, and the
+        // reason the fingerprint test above exists. This one only adds value on
+        // an operator's machine, where it proves the checked-in public key and
+        // the local private key are actually a pair.
         return;
       }
 

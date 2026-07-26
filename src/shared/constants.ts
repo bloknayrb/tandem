@@ -5,6 +5,33 @@ export const TANDEM_REPO_URL = "https://github.com/bloknayrb/tandem";
 export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 
 /**
+ * Where to buy a license. Referenced by every surface that can tell a user their
+ * trial has ended — the wall, the trial banner, the MCP `RESTRICTED_MESSAGE`,
+ * `tandem license`, and the HTTP 403 body. Telling someone to "activate a
+ * license" without saying where to get one is the most avoidable dead end in the
+ * whole flow.
+ *
+ * Replace with the real Polar checkout URL at the v1.0 gate flip. Until then it
+ * points at the repo, which at least explains what Tandem is.
+ */
+export const TANDEM_PURCHASE_URL = `${TANDEM_REPO_URL}#pricing`;
+
+/**
+ * Where a buyer with a licensing problem should write. Deliberately NOT the
+ * public issue tracker: an activation failure funnels people toward pasting
+ * their license blob for help, and that blob carries their own name and email.
+ *
+ * Keep this in sync with the issuance Worker's `reply_to`
+ * (`infra/license-issuance-worker/src/worker.ts`) — they are the same promise
+ * made in two places.
+ *
+ * PRE-LAUNCH: confirm this mailbox actually exists and is monitored. It is
+ * printed to buyers at their most frustrated moment; an address that bounces is
+ * worse than the GitHub tracker it replaces.
+ */
+export const TANDEM_SUPPORT_EMAIL = "support@tandem.chat";
+
+/**
  * Feature flag for the in-app "bring your own API key" Models registry UI
  * (#1018/#1022). The registry stores provider keys in the OS keychain, but no
  * server-side LLM client consumes them yet (see `src/server/models/api-routes.ts`

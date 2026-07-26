@@ -17,6 +17,14 @@ export interface LicenseStatusResponse {
   trial?: { daysRemaining: number };
   updateWindowCurrent: boolean;
   license?: { name: string; type: string };
+  /**
+   * A `license.json` exists on this device but did not verify (bad signature,
+   * unknown schema, damaged file). Present on the trial/restricted payloads
+   * only. Not PII — a boolean about this machine's own file — so it survives
+   * the LAN scrub. Without it every surface tells a license holder that their
+   * *trial* ended, which for a beta tester is a trial they never had.
+   */
+  licenseUnverifiable?: boolean;
 }
 
 export interface LicenseUi {
@@ -55,7 +63,7 @@ export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi 
       showWall: true,
       showTrialBanner: false,
       trialDaysRemaining: null,
-      statusLabel: "Trial ended",
+      statusLabel: state.licenseUnverifiable ? "License not verified" : "Trial ended",
     };
   }
 

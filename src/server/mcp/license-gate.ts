@@ -11,15 +11,25 @@
  * broadcast — ever runs.
  */
 import type { NextFunction, Request, Response } from "express";
+import { TANDEM_PURCHASE_URL } from "../../shared/constants.js";
 import { resolveLiveLicenseState } from "../license/license-state.js";
 import type { LicenseState } from "../license/license-types.js";
 import { mcpError, withErrorBoundary } from "./response.js";
 
 type McpToolResult = ReturnType<typeof mcpError>;
 
-/** Shared user-facing copy for both the MCP envelope and the HTTP 403 body. */
+/**
+ * Shared user-facing copy for both the MCP envelope and the HTTP 403 body.
+ *
+ * Its primary reader is Claude, not a human — so it has to be specific about
+ * what is actually blocked (Tandem's own editing tools, not the file) and it has
+ * to carry the purchase URL. Without one, Claude improvises a plausible-looking
+ * link, which is worse than no link at all.
+ */
 export const RESTRICTED_MESSAGE =
-  "Your Tandem trial has ended. Activate a license to keep editing — your documents stay open for reading and export.";
+  "Your Tandem trial has ended, so Tandem's editing and annotation tools are unavailable. " +
+  "Reading, opening and exporting still work, and the document itself is untouched. " +
+  `Activate a license to re-enable editing: ${TANDEM_PURCHASE_URL}`;
 
 /**
  * Pure gate decision. Given a resolved license state, return an `mcpError`

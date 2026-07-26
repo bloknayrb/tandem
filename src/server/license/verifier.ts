@@ -32,6 +32,36 @@ export function canonicalize(obj: any): string {
 }
 
 /**
+ * Why a license failed to verify. The distinction is the whole point: a buyer
+ * who pasted their entire confirmation email, one holding a license signed by a
+ * retired key, and one on a Tandem too old to understand their license all get
+ * "License could not be verified" today, and all three read it as "your key is
+ * bad" and open a support ticket.
+ *
+ * These codes are the ONLY thing that crosses the boundary — never the input
+ * bytes, never the underlying parse/crypto message (which can embed blob
+ * content). `routes/license.ts` and `cli/license.ts` map them to copy.
+ */
+export type LicenseVerifyCode =
+  /** Input longer than any real license — almost always a pasted email body. */
+  | "TOO_LONG"
+  /** Not base64, not JSON, or missing metadata/signature. */
+  | "MALFORMED"
+  /** Well-formed, but not signed by the key this build trusts. */
+  | "BAD_SIGNATURE";
+
+export class LicenseVerifyError extends Error {
+  constructor(
+    readonly code: LicenseVerifyCode,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "LicenseVerifyError";
+  }
+}
+
+/**
  * Verifies the Ed25519 signature of a base64-encoded signed license against the
  * embedded public key — signature ONLY, no expiry check.
  *
@@ -44,7 +74,10 @@ export function canonicalize(obj: any): string {
 export function verifyLicenseSignature(licenseString: string): SignatureVerified {
   // Bound the input before any allocation — license blobs are small (<2KB).
   if (licenseString.length > 10_000) {
-    throw new Error("License verification failed: input exceeds maximum length");
+    throw new LicenseVerifyError(
+      "TOO_LONG",
+      "License verification failed: input exceeds maximum length",
+    );
   }
   try {
     // 1. Decode base64
@@ -54,12 +87,18 @@ export function verifyLicenseSignature(licenseString: string): SignatureVerified
     // blobs are <2KB; 4KB is a generous ceiling that rejects the pathological
     // case before any parse/recurse.
     if (decoded.length > 4096) {
-      throw new Error("License verification failed: payload exceeds maximum length");
+      throw new LicenseVerifyError(
+        "TOO_LONG",
+        "License verification failed: payload exceeds maximum length",
+      );
     }
     const signedLicense = JSON.parse(decoded) as SignedLicense;
 
     if (!signedLicense.metadata || !signedLicense.signature) {
-      throw new Error("Invalid license format: missing metadata or signature");
+      throw new LicenseVerifyError(
+        "MALFORMED",
+        "License verification failed: missing metadata or signature",
+      );
     }
 
     // 2. Verify signature
@@ -69,17 +108,20 @@ export function verifyLicenseSignature(licenseString: string): SignatureVerified
     const verified = crypto.verify(null, data, TANDEM_PUBLIC_KEY, signature);
 
     if (!verified) {
-      throw new Error("Signature verification failed");
+      throw new LicenseVerifyError("BAD_SIGNATURE", "License verification failed: bad signature");
     }
 
     // Brand: this metadata is now signature-verified (run-gate may trust it).
     return signedLicense.metadata as SignatureVerified;
   } catch (error: any) {
-    // Preserve already-wrapped messages to avoid double-wrapping.
-    if (error instanceof Error && error.message.startsWith("License verification failed")) {
-      throw error;
-    }
-    throw new Error(`License verification failed: ${error.message}`, { cause: error });
+    // Preserve an already-classified error rather than re-wrapping it.
+    if (error instanceof LicenseVerifyError) throw error;
+    // Everything reaching here is a decode/parse failure (bad base64 → garbage
+    // UTF-8 → JSON.parse throws) or a malformed hex signature that made
+    // crypto.verify throw. Both mean "this isn't a license blob".
+    throw new LicenseVerifyError("MALFORMED", `License verification failed: ${error.message}`, {
+      cause: error,
+    });
   }
 }
 

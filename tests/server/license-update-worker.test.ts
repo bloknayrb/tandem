@@ -3,6 +3,7 @@ import {
   handleUpdateRequest,
   type KvGetter,
   LICENSE_HEADER,
+  type LogEntry,
 } from "../../infra/license-update-worker/src/worker.js";
 import type { LicenseEntitlement } from "../../src/server/license/license-types.js";
 
@@ -175,5 +176,103 @@ describe("handleUpdateRequest (license-update Worker)", () => {
       now: () => NOW,
     });
     expect(res.status).toBe(200);
+  });
+});
+
+/**
+ * The no-update `reason` is the ONLY detector for the worst failure mode in the
+ * licensing system: a license with no KV entitlement is served 204, the Tauri
+ * updater early-returns `Ok(None)`, and the app reports "You're up to date"
+ * forever while starved. From every layer above this Worker, that is
+ * indistinguishable from health.
+ */
+describe("no-update reasons (the silent-failure detector)", () => {
+  async function reasonFor(
+    lid: string | undefined,
+    kv: Record<string, string>,
+    fetchFn: typeof fetch = okFetch(),
+  ): Promise<{ status: number; body: string; reason: string | undefined }> {
+    const entries: LogEntry[] = [];
+    const res = await handleUpdateRequest(req(lid), {
+      kv: kvWith(kv),
+      latestJsonUrl: URL_LATEST,
+      fetchFn,
+      now: () => NOW,
+      log: (e) => entries.push(e),
+    });
+    return { status: res.status, body: await res.text(), reason: entries.at(-1)?.reason };
+  }
+
+  const IN_WINDOW = JSON.stringify({ updateWindowEnd: new Date(NOW + DAY).toISOString() });
+
+  it("no-header — an unlicensed/public updater client", async () => {
+    expect((await reasonFor(undefined, {})).reason).toBe("no-header");
+  });
+
+  it("unknown-id — a license with NO entitlement. This is the alertable one", async () => {
+    expect((await reasonFor("lic-missing", {})).reason).toBe("unknown-id");
+  });
+
+  it("unparseable — a corrupt KV value", async () => {
+    expect((await reasonFor("lic-1", { "lic-1": "not json" })).reason).toBe("unparseable");
+  });
+
+  it("expired — entitled but past the update window (expected and benign)", async () => {
+    const past = JSON.stringify({ updateWindowEnd: new Date(NOW - DAY).toISOString() });
+    expect((await reasonFor("lic-1", { "lic-1": past })).reason).toBe("expired");
+  });
+
+  it("upstream — entitled and in-window, but the manifest fetch failed", async () => {
+    const boom = vi.fn(async () => {
+      throw new Error("ECONNRESET");
+    }) as unknown as typeof fetch;
+    expect((await reasonFor("lic-1", { "lic-1": IN_WINDOW }, boom)).reason).toBe("upstream");
+  });
+
+  it("logs a reason on `served` too — as undefined, not a value", async () => {
+    const entries: LogEntry[] = [];
+    await handleUpdateRequest(req("lic-1"), {
+      kv: kvWith({ "lic-1": IN_WINDOW }),
+      latestJsonUrl: URL_LATEST,
+      fetchFn: okFetch(),
+      now: () => NOW,
+      log: (e) => entries.push(e),
+    });
+    expect(entries.at(-1)).toMatchObject({ result: "served" });
+    expect(entries.at(-1)?.reason).toBeUndefined();
+  });
+
+  it("NEVER leaks the reason to the caller — all rejections stay byte-identical", async () => {
+    // The privacy invariant this Worker exists to hold: unknown-id and expired
+    // must not be distinguishable from outside, or the endpoint becomes an
+    // entitlement oracle. The reason is an operator-side log field only.
+    const boom = vi.fn(async () => {
+      throw new Error("ECONNRESET");
+    }) as unknown as typeof fetch;
+    const past = JSON.stringify({ updateWindowEnd: new Date(NOW - DAY).toISOString() });
+    const results = [
+      await reasonFor(undefined, {}),
+      await reasonFor("lic-missing", {}),
+      await reasonFor("lic-1", { "lic-1": "not json" }),
+      await reasonFor("lic-1", { "lic-1": past }),
+      await reasonFor("lic-1", { "lic-1": IN_WINDOW }, boom),
+    ];
+    // Five distinct reasons...
+    expect(new Set(results.map((r) => r.reason)).size).toBe(5);
+    // ...one indistinguishable response.
+    expect(new Set(results.map((r) => `${r.status}:${r.body}`)).size).toBe(1);
+    expect(results[0].status).toBe(204);
+  });
+
+  it("logs no license id — a per-customer update log would be telemetry", async () => {
+    const entries: LogEntry[] = [];
+    await handleUpdateRequest(req("lic-secret-id"), {
+      kv: kvWith({}),
+      latestJsonUrl: URL_LATEST,
+      fetchFn: okFetch(),
+      now: () => NOW,
+      log: (e) => entries.push(e),
+    });
+    expect(JSON.stringify(entries)).not.toContain("lic-secret-id");
   });
 });

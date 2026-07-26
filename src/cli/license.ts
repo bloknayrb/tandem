@@ -6,10 +6,14 @@
  * here takes effect on the running server's next tool call / reconnect.
  */
 import fs from "fs";
+import { LicenseActivationError } from "../server/license/errors.js";
 import { GATE_ENABLED } from "../server/license/gate-flag.js";
 import { activateLicense, resolveLicenseState } from "../server/license/license-state.js";
 import type { LicenseState } from "../server/license/license-types.js";
+import { activationErrorMessage } from "../server/license/messages.js";
+import { normalizePastedLicense } from "../server/license/paste.js";
 import { resolveAppDataDir } from "../server/platform.js";
+import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../shared/constants.js";
 
 /**
  * Resolve the activate argument to a license blob. If it names a readable file
@@ -23,8 +27,10 @@ export function resolveLicenseInput(
   fileExists: (p: string) => boolean,
   readFile: (p: string) => string,
 ): string {
-  if (fileExists(arg)) return readFile(arg).trim();
-  return arg.trim();
+  // `normalizePastedLicense` (not a bare trim) so a blob copied out of a
+  // quoted-printable-encoded email still activates — see paste.ts.
+  if (fileExists(arg)) return normalizePastedLicense(readFile(arg));
+  return normalizePastedLicense(arg);
 }
 
 /**
@@ -35,9 +41,10 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
   const lines: string[] = ["", "Tandem license", ""];
   lines.push(`  Enforcement:   ${enforcementOn ? "on" : "off (activates at v1.0)"}`);
   if (state.gateActive && state.status === "trial") {
-    lines.push(`  Status:        trial (${state.trial.daysRemaining} days remaining)`);
+    lines.push(`  Status:        trial (${state.trial.daysRemaining} of 14 days remaining)`);
   } else if (state.gateActive && state.status === "restricted") {
     lines.push("  Status:        restricted — trial ended; activate a license to keep editing");
+    lines.push(`  Buy a license: ${TANDEM_PURCHASE_URL}`);
   } else {
     // licensed (gate-active) — or the dark arm, which `tandem license` never
     // produces (it forces gateEnabled:true), but the union requires the branch.
@@ -49,7 +56,21 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
         ? ` (through ${state.license.expiresAt.slice(0, 10)})`
         : "";
       lines.push(`  Update window: ${window}${through}`);
+      if (!state.updateWindowCurrent) {
+        // The single most confusing state in the whole system: the app keeps
+        // saying "You're up to date" because the update endpoint is returning
+        // no-update, not because there is nothing to install.
+        lines.push("                 (Tandem keeps running; new releases are no longer offered.)");
+      }
     }
+  }
+  // A license file exists but doesn't verify. Without this line all three
+  // surfaces tell the holder of a license that their *trial* ended.
+  if (state.gateActive && state.status !== "licensed" && state.licenseUnverifiable) {
+    lines.push("");
+    lines.push("  A license file is installed but could not be verified.");
+    lines.push("  It may have been issued before a signing-key change, or the file may be");
+    lines.push(`  damaged. Re-activate it, or email ${TANDEM_SUPPORT_EMAIL} to have it reissued.`);
   }
   lines.push("");
   return lines;
@@ -90,11 +111,10 @@ export async function runActivate(args: string[]): Promise<void> {
       console.log(`  Updates included through ${lic.expiresAt.slice(0, 10)}.`);
     }
     console.log("");
-  } catch {
-    console.error(
-      "\n[Tandem] License activation failed: the license could not be verified.\n" +
-        "Check that you pasted the full license string (or gave the correct file path).\n",
-    );
+  } catch (err) {
+    // Same per-cause copy the HTTP route uses — one taxonomy, two transports.
+    const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
+    console.error(`\n[Tandem] License activation failed.\n${activationErrorMessage(code)}\n`);
     process.exit(1);
   }
 }

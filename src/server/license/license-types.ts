@@ -58,11 +58,29 @@ export interface LicenseFile {
  *  - trial / restricted — `updateWindowCurrent` is always `false`.
  *  - licensed — carries the signature-verified `license` + opaque `licenseId`;
  *    `updateWindowCurrent` governs ONLY the update window (run-forever otherwise).
+ *
+ * `licenseUnverifiable` marks the trial/restricted arms reached DESPITE a
+ * `license.json` being present (bad signature, unknown schema, corrupt file).
+ * It changes no enforcement — an unverified license must not unlock — but every
+ * user-facing surface needs it, or someone holding a license is told their
+ * trial ended. Only ever set on the non-licensed arms; the licensed arm is by
+ * construction verified.
  */
 export type LicenseState =
   | { gateActive: false }
-  | { gateActive: true; status: "trial"; trial: TrialInfo; updateWindowCurrent: false }
-  | { gateActive: true; status: "restricted"; updateWindowCurrent: false }
+  | {
+      gateActive: true;
+      status: "trial";
+      trial: TrialInfo;
+      updateWindowCurrent: false;
+      licenseUnverifiable?: true;
+    }
+  | {
+      gateActive: true;
+      status: "restricted";
+      updateWindowCurrent: false;
+      licenseUnverifiable?: true;
+    }
   | {
       gateActive: true;
       status: "licensed";
@@ -73,7 +91,8 @@ export type LicenseState =
 
 /**
  * What the Worker needs to gate an update check, written to Cloudflare KV by the
- * issuance webhook. Canonical shape shared by the writer (`kv-store.ts`); the
+ * issuance Worker (paid path) or `scripts/sign-license.ts` via `kv-store.ts`
+ * (out-of-band path). Canonical shape shared by the REST writer; the
  * update Worker (`infra/license-update-worker/`) keeps a structurally-identical
  * local copy (separate Cloudflare build) kept in lockstep by a parity test.
  * `updateWindowEnd: null` ⇒ never expires (grandfathered).
