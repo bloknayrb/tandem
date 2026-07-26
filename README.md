@@ -175,6 +175,8 @@ Tandem is on the way to a v1.0 release. Today the supported AI integration is Cl
 
 Tandem is free during the public beta. At v1.0 it moves to a one-time paid license; existing beta users are grandfathered with a free license. It is licensed under the Business Source License 1.1 (BUSL-1.1); see [LICENSE](LICENSE) for the terms.
 
+**Claiming the beta license:** Tandem has no telemetry, analytics, or signup, so there is no list of beta users to work from — we can only grandfather people who tell us they're here. If you've been using the beta, email <support@tandem.chat> with roughly when you first installed it, and you'll be sent a free license before enforcement turns on. Activate it as soon as it arrives (Settings → License) rather than filing it away: the pre-v1.0 build says licensing isn't enforced yet, which is true, and is exactly why an unactivated key is easy to lose.
+
 ---
 
 ## For developers and contributors
