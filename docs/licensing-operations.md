@@ -166,15 +166,25 @@ Before flipping, decide and do:
 
 ## 2. Issuing a paid license manually (fallback)
 
-Same script, default type, with a one-year update window:
+Same script, default type. A one-year update window is now the **default**, so
+`--expires` is only needed to override it:
 
 ```bash
-npx tsx scripts/sign-license.ts --name "Buyer" --email "buyer@example.com" --type personal --expires 365
+npx tsx scripts/sign-license.ts --name "Buyer" --email "buyer@example.com"
 ```
 
 `personal`/`commercial` licenses run the current version forever; `--expires`
 sets only the **update window** (`expiresAt`). After it lapses the app keeps
 running; it simply stops being offered new updates until renewal.
+
+> **`--expires never` is almost always wrong for a paid license.** It's the
+> flag's honest spelling of "no update window ever ends", and it is only correct
+> for a genuinely perpetual grant (which is what `--type grandfathered` gives
+> you by default). Omitting `--expires` used to *silently* mean `never` — that
+> was D1, and it made every manually-issued license permanently un-updatable.
+
+Same KV requirement as §1a: the script writes the update entitlement and exits
+non-zero if it can't. Don't deliver a key it refused to entitle.
 
 ## 3. The L3 update endpoint (Cloudflare — owner-deployed)
 
@@ -307,11 +317,26 @@ npx wrangler secret put GRANDFATHER_EMAILS        # optional (§1b)
 npx wrangler deploy
 ```
 
+Also set in `[vars]`: `SUPPORT_EMAIL` (the license email's `reply_to` — without
+it a buyer whose activation fails has no inbound channel but the public issue
+tracker, where they will paste a key carrying their own name and email), and
+`ALERT_WEBHOOK_URL` / `ALERT_EMAIL` (§5c).
+
 Point the Polar webhook endpoint (subscribed to `order.paid` + `order.refunded`)
-at the deployed URL. Deploy a **separate sandbox instance**
-(`TANDEM_ISSUANCE_ENV=sandbox`, the sandbox Polar secret) to test end-to-end
-without writing production entitlements — the sandbox needs no Polar KYC, so
-this is unblocked before any LLC/payout setup.
+at the deployed URL. Deploy a **separate sandbox instance** (the sandbox Polar
+secret, its own namespaces) to test end-to-end — the sandbox needs no Polar KYC,
+so this is unblocked before any LLC/payout setup.
+
+> **Which `TANDEM_ISSUANCE_ENV` the sandbox gets depends on what you're testing.**
+> `sandbox` writes the ledger but suppresses the entitlement `put`, which is
+> right for exercising issuance/dedup/refund logic — but it makes the
+> "is this license actually served a manifest?" check (§5a step 4) structurally
+> incapable of failing, because there was never going to be an entitlement.
+> **For the pre-launch end-to-end gate, deploy the sandbox with
+> `TANDEM_ISSUANCE_ENV=production` and its own KV namespaces.** Separate
+> namespaces are required because the test/live mode segment lives only in
+> *ledger* keys — entitlement keys are a bare `licenseId` and would collide with
+> production.
 
 ### 3.5c. Recovery & monitoring
 
@@ -320,11 +345,15 @@ this is unblocked before any LLC/payout setup.
   a retryable `500` and Polar's retry re-drives (re-asserts the entitlement,
   resends the email). Records with `emailSent: false` are the "who didn't get
   their license" worklist.
-- Entitlement-write failure is likewise retryable (`500`), unlike §3b's
-  fire-and-forget server write — the issuance Worker owns the KV binding
-  directly, so it can afford to block-and-retry.
+- Entitlement-write failure is likewise retryable (`500`) — the issuance Worker
+  owns the KV binding directly, so it can afford to block-and-retry.
 - Resend needs a **verified sending domain** with SPF, DKIM, and DMARC, or mail
-  lands in spam.
+  lands in spam — **and an unverified sender is not merely a spam problem**: it
+  returns 422, which becomes a retryable 500, which is how a webhook endpoint
+  retries its way to being disabled. See §5b.
+- Alerting is covered in §5c. Note that `emailSent: false` is only the worklist
+  for orders that produced a ledger record at all; §5b explains why that is not
+  the same as "every order that failed".
 - **Known gap — concurrent-delivery races.** Workers KV has no
   compare-and-swap; two genuinely concurrent deliveries for the same order
   (e.g. an ordinary Polar retry landing on a different edge PoP, not just an

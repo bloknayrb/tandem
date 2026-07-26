@@ -7,9 +7,6 @@ import type { LicenseFile, LicenseState, SignatureVerified, TrialFile } from "./
 import { licenseFilePath, TRIAL_MS, trialFilePath } from "./paths.js";
 import { LicenseVerifyError, verifyLicenseSignature } from "./verifier.js";
 
-export type { LicenseActivationCode } from "./errors.js";
-export { LicenseActivationError } from "./errors.js";
-
 /**
  * Ensure the app-data directory exists before writing into it.
  *
