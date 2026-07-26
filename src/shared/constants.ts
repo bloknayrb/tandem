@@ -15,6 +15,9 @@ export const TRIAL_DAYS = 14;
 export const TANDEM_REPO_URL = "https://github.com/bloknayrb/tandem";
 export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
 
+/** Tandem's website. The public face — distinct from the source repo. */
+export const TANDEM_SITE_URL = "https://tandem.ink";
+
 /**
  * Where to buy a license. Referenced by every surface that can tell a user their
  * trial has ended — the wall, the trial banner, the MCP `RESTRICTED_MESSAGE`,
@@ -22,10 +25,11 @@ export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
  * license" without saying where to get one is the most avoidable dead end in the
  * whole flow.
  *
- * Replace with the real Polar checkout URL at the v1.0 gate flip. Until then it
- * points at the repo, which at least explains what Tandem is.
+ * Points at the site root rather than a checkout path, because the path doesn't
+ * exist yet and a 404 at the moment of purchase is worse than one extra click.
+ * Repoint at the real Polar checkout URL at the v1.0 gate flip.
  */
-export const TANDEM_PURCHASE_URL = `${TANDEM_REPO_URL}#license`;
+export const TANDEM_PURCHASE_URL = TANDEM_SITE_URL;
 
 /**
  * Where a buyer with a licensing problem should write. Deliberately NOT the
@@ -36,11 +40,12 @@ export const TANDEM_PURCHASE_URL = `${TANDEM_REPO_URL}#license`;
  * (`infra/license-issuance-worker/src/worker.ts`) — they are the same promise
  * made in two places.
  *
- * PRE-LAUNCH: confirm this mailbox actually exists and is monitored. It is
- * printed to buyers at their most frustrated moment; an address that bounces is
- * worse than the GitHub tracker it replaces.
+ * PRE-LAUNCH: confirm this mailbox exists and is monitored. It is printed to
+ * buyers at their most frustrated moment, and `docs/security.md` also routes
+ * *security reports* here — an address that bounces is worse than the GitHub
+ * tracker it replaces.
  */
-export const TANDEM_SUPPORT_EMAIL = "support@tandem.chat";
+export const TANDEM_SUPPORT_EMAIL = "support@tandem.ink";
 
 /**
  * Feature flag for the in-app "bring your own API key" Models registry UI
