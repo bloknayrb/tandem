@@ -232,7 +232,27 @@ describe("Licensing Core", () => {
 
       const base64License = Buffer.from(JSON.stringify(signedLicense)).toString("base64");
 
-      const verified = verifyLicense(base64License);
+      // Explain the failure rather than surfacing a bare "bad signature".
+      // The likeliest cause is benign and self-inflicted: the runbook tells you
+      // to run `generate-keys.ts`, and the moment you do, this previously-
+      // skipped test starts running against a keypair that is NOT the pair of
+      // the pinned public key. Without this message that reads as a broken
+      // checkout rather than an unfinished key ceremony.
+      let verified: LicenseMetadata;
+      try {
+        verified = verifyLicense(base64License);
+      } catch (err) {
+        throw new Error(
+          "The keypair in keys/ does not match the public key shipped in " +
+            "src/server/license/public-key.ts.\n" +
+            "If you just ran `npx tsx scripts/generate-keys.ts`, that is expected: finish the " +
+            "ceremony by pasting the new PUBLIC key into public-key.ts and updating " +
+            "EXPECTED_PUBLIC_KEY_SHA256 above, in the same commit (docs/licensing-operations.md §0).\n" +
+            "If you did NOT intend to rotate the signing key, delete keys/ — it is gitignored " +
+            "scratch, and every license already issued was signed by the pinned key.\n" +
+            `Underlying: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
       expect(verified.name).toBe("Production User");
       expect(verified.email).toBe("prod@example.com");
     });

@@ -455,6 +455,15 @@ command**.
   scheduled GitHub Action running `wrangler` with a scoped read token, writing
   NDJSON to a **private** destination. At ~2,000 records a daily export is
   inside the free read tier.
+
+> **No backup job is checked into this repository, deliberately.** The export
+> contains every customer's name and email in plaintext, and the obvious
+> zero-infra destination for a scheduled GitHub Action — a workflow artifact —
+> is readable by anyone who can read a **public** repository. This one is
+> checked in as a decision rather than a script: pick a genuinely private
+> destination (an R2 bucket, a private repo, encrypted object storage) and wire
+> the job there. A convenient backup that publishes your customer list is worse
+> than no backup.
 - The export contains plaintext `email` and `name`. Whatever destination you
   choose becomes a PII store, so `docs/security.md` and `docs/data-locations.md`
   must stay true about where PII lives.
