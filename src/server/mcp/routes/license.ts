@@ -10,7 +10,11 @@ import {
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { LicenseActivationError } from "../../license/activation.js";
-import { activateLicense, resolveLiveLicenseState } from "../../license/license-state.js";
+import {
+  activateLicense,
+  resolveLicenseState,
+  resolveLiveLicenseState,
+} from "../../license/license-state.js";
 import type { LicenseState, LicenseStatus } from "../../license/license-types.js";
 import { resolveAppDataDir } from "../../platform.js";
 
@@ -22,11 +26,50 @@ import { resolveAppDataDir } from "../../platform.js";
  * `!gateActive`) stay byte-identical to the pre-union build. The active arms
  * serialize exactly as before (full license + licenseId on the licensed arm).
  */
-export function toLicenseStatusWire(state: LicenseState): Record<string, unknown> {
+export function toLicenseStatusWire(
+  state: LicenseState,
+  /**
+   * Dark-build only: is a verifiable license already installed, and for whom?
+   * Resolved separately (see `darkInstallInfo`) because the dark arm returns
+   * before touching disk.
+   */
+  darkInstall?: { installed: boolean; licenseeName?: string },
+): Record<string, unknown> {
   if (!state.gateActive) {
-    return { gateActive: false, status: "licensed", updateWindowCurrent: true };
+    return {
+      gateActive: false,
+      status: "licensed",
+      updateWindowCurrent: true,
+      // Additive, and NOT a gate signal — `gateActive` stays false so nothing
+      // gate-only renders. Without it a dark build has no way to tell a user
+      // their activation worked: the pill reads "Not enforced in this version"
+      // and the hint keeps saying "activate it now" whether or not they just
+      // did. The README sends every beta user down exactly that path.
+      licenseInstalled: darkInstall?.installed ?? false,
+      ...(darkInstall?.licenseeName ? { licenseeName: darkInstall.licenseeName } : {}),
+    };
   }
   return state;
+}
+
+/**
+ * Does this device hold a license that WOULD verify once the gate is on?
+ *
+ * Re-resolves with `gateEnabled: true` — the same thing `tandem license` does
+ * so a beta tester can confirm an installed license before the flip. Only
+ * called on the dark path, where the client polls once and then rests, so the
+ * extra file read + Ed25519 verify is not on any hot path.
+ */
+export function darkInstallInfo(): { installed: boolean; licenseeName?: string } {
+  const full = resolveLicenseState({
+    appDataDir: resolveAppDataDir(),
+    now: () => Date.now(),
+    gateEnabled: true,
+  });
+  if (full.gateActive && full.status === "licensed") {
+    return { installed: true, licenseeName: full.license.name };
+  }
+  return { installed: false };
 }
 
 /**
@@ -40,6 +83,7 @@ export function scrubForNonLoopback(s: LicenseState): {
   daysRemaining: number | undefined;
   updateWindowCurrent: boolean;
   licenseUnverifiable?: LicenseUnverifiableCode;
+  licenseInstalled?: boolean;
 } {
   if (!s.gateActive) {
     return {
@@ -47,6 +91,8 @@ export function scrubForNonLoopback(s: LicenseState): {
       status: "licensed",
       daysRemaining: undefined,
       updateWindowCurrent: true,
+      // Boolean only — the licensee NAME stays on the loopback path.
+      licenseInstalled: darkInstallInfo().installed,
     };
   }
   return {
@@ -70,7 +116,7 @@ export function scrubForNonLoopback(s: LicenseState): {
 export function handleGetLicenseStatus(req: Request, res: Response): void {
   const state = resolveLiveLicenseState();
   if (isLoopback(req.socket.remoteAddress)) {
-    res.json(toLicenseStatusWire(state));
+    res.json(toLicenseStatusWire(state, state.gateActive ? undefined : darkInstallInfo()));
     return;
   }
   res.json(scrubForNonLoopback(state));
@@ -118,7 +164,8 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
     // believe `gateActive` is true and render gate-only chrome, such as the
     // "your update window has ended" warning, on a build that gates nothing.
     // Same shaping as GET /api/license/status, so the two can't disagree.
-    res.json(toLicenseStatusWire(resolveLiveLicenseState()));
+    const live = resolveLiveLicenseState();
+    res.json(toLicenseStatusWire(live, live.gateActive ? undefined : darkInstallInfo()));
   } catch (err) {
     const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
     // A write failure is OUR fault, not the caller's — 500, not 400. The

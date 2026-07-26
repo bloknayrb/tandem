@@ -108,34 +108,54 @@ describe("normalizePastedLicense", () => {
     expect(normalizePastedLicense(`  \n${blob}\n  `)).toBe(blob);
   });
 
+  it("converges — one pass can CREATE a soft break out of non-matching neighbours", () => {
+    // `activateLicense` persists this output and its comment promises the bytes
+    // contain no soft break. A single left-to-right pass does not deliver that:
+    // the `=\r` and the `\n\n` here are not a match individually, but removing
+    // the inner `=\r\n` splices them into one.
+    expect("X=\r=\r\n\nY".replace(/=\r?\n/g, "")).toBe("X=\r\nY"); // still broken
+    expect(normalizePastedLicense("X=\r=\r\n\nY")).toBe("XY"); // converged
+    expect(normalizePastedLicense("X=\r=\r\n\nY")).not.toMatch(/=\r?\n/);
+  });
+
+  it("is idempotent, so a persisted blob is not re-repaired on every read", () => {
+    const once = normalizePastedLicense("A=\r=\r\n\n=\r\nB");
+    expect(normalizePastedLicense(once)).toBe(once);
+  });
+
   describe("regressions — inputs that already worked and must NOT be 'repaired'", () => {
     // Each of these was a candidate "hardening" that would have REJECTED blobs
     // which activate fine today. base64 is far more tolerant than it looks.
-    it("a real license blob can never contain `+` or `/` in the first place", () => {
-      // Worth pinning, because it retires a whole class of worry. A license
-      // blob is base64 of pure-ASCII JSON, and the sextets that encode `+`(62)
-      // and `/`(63) are unreachable from ASCII input except via bytes
-      // `>`/`?`/`~`/DEL in one specific position — none of which appear in our
-      // JSON. So base64url mangling cannot happen to a Tandem license at all.
-      //
-      // The previous version of this test substituted `+`/`/` in a fixture that
-      // contained neither, making it a no-op that asserted nothing.
-      for (let i = 0; i < 50; i++) {
+    it("a typical blob has no `+` or `/`, but a buyer's own name can produce one", () => {
+      // Careful here — an earlier version of this test asserted that a real
+      // blob can NEVER contain `+` or `/`, and that is false. The sextet
+      // arithmetic is right (they're only reachable from source bytes
+      // `>`/`?`/`~`/DEL at one position), but the premise that those bytes
+      // can't appear in the JSON is wrong: `cleanName` doesn't strip them and
+      // the email shape check permits them in the local part.
+      for (let i = 0; i < 20; i++) {
         expect(signBlob(tempKeyPair().privateKey, meta({ name: `Jane ${i}` }))).toMatch(
           /^[A-Za-z0-9=]+$/,
         );
       }
+      // ...but a perfectly ordinary name defeats that "never".
+      expect(signBlob(tempKeyPair().privateKey, meta({ name: "Who?" }))).toMatch(/[+/]/);
     });
 
-    it("base64 decoding treats the base64url alphabet as equivalent anyway", () => {
-      // Belt-and-braces on the decoder itself, on a synthetic string that
-      // genuinely contains `+` and `/` — so this assertion is not vacuous even
-      // though the case above shows real blobs never hit it.
-      const withSymbols = Buffer.from([0xfb, 0xff, 0xbf, 0x3e, 0x3f]).toString("base64");
+    it("base64url mangling is harmless — the decoder treats the alphabets as equal", () => {
+      // This is the assertion that actually matters, and it holds regardless of
+      // whether a given blob contains `+`/`/`. Exercised on a real signed blob
+      // whose name forces both characters to appear, so the substitution below
+      // is not a no-op.
+      const kp = tempKeyPair();
+      const withSymbols = signBlob(kp.privateKey, meta({ name: "Who? ~" }));
       expect(withSymbols).toMatch(/[+/]/);
+
       const urlSafe = withSymbols.replace(/\+/g, "-").replace(/\//g, "_");
       expect(urlSafe).not.toBe(withSymbols);
       expect(Buffer.from(urlSafe, "base64").equals(Buffer.from(withSymbols, "base64"))).toBe(true);
+      // And it still verifies end to end, which is the property buyers care about.
+      expect(verifierFor(kp.publicKey)(normalizePastedLicense(urlSafe))).toBeTruthy();
     });
 
     it("accepts a hard-wrapped blob (whitespace is ignored on decode)", () => {
@@ -201,7 +221,19 @@ describe("activateLicense error taxonomy", () => {
     } finally {
       spy.mockRestore();
     }
-    expect(activationErrorMessage("WRITE_FAILED")).toMatch(/valid, but Tandem couldn't save it/);
+    expect(activationErrorMessage("WRITE_FAILED")).toMatch(/valid, but Tandem couldn't save/);
+  });
+
+  it("TOO_LONG is rejected BEFORE the normalizer allocates", async () => {
+    // The route's Content-Length pre-check is sidesteppable with chunked
+    // transfer encoding, and the shared body parser admits 70 MB — so this
+    // bound, not that one, is what stops a paste from becoming memory pressure.
+    const dir = tmp();
+    await expect(activateLicense(dir, "x".repeat(20_001), verify)).rejects.toMatchObject({
+      code: "TOO_LONG",
+    });
+    // Nothing was written.
+    expect(fs.existsSync(licenseFilePath(dir))).toBe(false);
   });
 
   it("creates the app-data directory if it does not exist yet", async () => {

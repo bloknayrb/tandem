@@ -26,6 +26,32 @@
 /** `=` immediately before a line break — a quoted-printable soft break. */
 const QP_SOFT_BREAK = /=\r?\n/g;
 
+/**
+ * Longest input worth normalizing. Callers MUST bound before calling — this
+ * function allocates a copy per pass, so handing it an unbounded body turns a
+ * paste into transient memory pressure. Comfortably above the verifier's
+ * post-normalize 10k ceiling: soft breaks only ever ADD bytes, so anything that
+ * could legitimately normalize down to 10k starts well under this.
+ */
+export const MAX_NORMALIZE_INPUT = 20_000;
+
+/**
+ * Repair QP soft breaks and trim.
+ *
+ * Applied repeatedly to a fixed point, because a single left-to-right pass is
+ * NOT idempotent — it can create a soft break out of neighbours that didn't
+ * match: `"X=\r=\r\n\nY"` → `"X=\r\nY"`, which still contains one. Callers
+ * (notably `activateLicense`, which PERSISTS the result) are entitled to assume
+ * the output contains no soft break at all, so converge rather than pass once.
+ *
+ * Termination is guaranteed: each pass strictly shortens the string or changes
+ * nothing, and the loop stops on the first no-op.
+ */
 export function normalizePastedLicense(raw: string): string {
-  return raw.replace(QP_SOFT_BREAK, "").trim();
+  let out = raw;
+  for (;;) {
+    const next = out.replace(QP_SOFT_BREAK, "");
+    if (next === out) return out.trim();
+    out = next;
+  }
 }

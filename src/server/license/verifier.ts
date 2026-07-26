@@ -2,7 +2,7 @@
 import crypto from "crypto";
 import type { LicenseVerifyCode } from "../../shared/license-copy.js";
 import type { LicenseMetadata, SignatureVerified, SignedLicense } from "./license-types.js";
-import { normalizePastedLicense } from "./paste.js";
+import { MAX_NORMALIZE_INPUT, normalizePastedLicense } from "./paste.js";
 import { TANDEM_PUBLIC_KEY } from "./public-key.js";
 
 export type { LicenseVerifyCode };
@@ -67,7 +67,7 @@ export function verifyLicenseSignature(rawLicenseString: string): SignatureVerif
   // ceiling is deliberately looser than the post-normalize one: quoted-printable
   // soft breaks only ever ADD bytes, so anything that could legitimately
   // normalize down to <=10k starts well under 20k.
-  if (rawLicenseString.length > 20_000) {
+  if (rawLicenseString.length > MAX_NORMALIZE_INPUT) {
     throw new LicenseVerifyError(
       "TOO_LONG",
       "License verification failed: input exceeds maximum length",

@@ -213,11 +213,14 @@ export function registerApiRoutes(
   // License activate (#1116). Gated on origin allowlist + loopback inside the
   // handler — a license is a credential, installable only by a local caller.
   //
-  // `rejectOversizeLicenseBody` runs BEFORE the body parser: the shared
-  // `largeBody` parser admits 70 MB (it exists for document uploads), and the
-  // origin/loopback gates live inside the handler, so without this a caller
-  // that gets past `mw` could make us buffer 70 MB before anything checks who
-  // they are. A license blob is under 2 KB.
+  // `rejectOversizeLicenseBody` runs BEFORE the body parser, because the shared
+  // `largeBody` parser admits 70 MB (it exists for document uploads) and a
+  // license blob is under 2 KB.
+  //
+  // It is defense in depth ONLY: it reads the caller's own `Content-Length`, so
+  // omitting that header (or using chunked transfer encoding) skips it
+  // entirely. The bound that actually holds is inside `activateLicense`, which
+  // rejects over `MAX_NORMALIZE_INPUT` before allocating anything.
   app.options(API_LICENSE_ACTIVATE, mw);
   app.post(API_LICENSE_ACTIVATE, mw, rejectOversizeLicenseBody, largeBody, handleActivateLicense);
 

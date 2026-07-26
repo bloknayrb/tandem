@@ -728,25 +728,34 @@ export function licenseEmailText(name: string, blob: string, supportEmail?: stri
   return [
     `Hi ${name},`,
     "",
-    "Thank you for buying Tandem. Your license is attached as tandem.license, and",
-    "is also printed below.",
+    "Thank you for buying Tandem. Your license is attached as",
+    "tandem.license, and is also printed below.",
     "",
     "To activate, either:",
-    "  * open Tandem -> Settings -> License, and paste the key below; or",
-    "  * run `tandem activate ./tandem.license` from the command line, pointing at",
-    "    the attached file.",
+    "  * open Tandem -> Settings -> License and paste the key below; or",
+    "  * run `tandem activate ./tandem.license` from the command line,",
+    "    pointing at the attached file.",
     "",
     // Wrapped so an MTA doesn't re-encode the body as quoted-printable and
     // truncate the key. Base64 ignores the line breaks on paste.
     wrapBlob(blob),
     "",
-    "Keep this email - it's your proof of purchase and lets you re-activate on any",
-    "device you personally use. Your license runs the version you have forever;",
-    "your first year also includes new releases.",
+    "Keep this email - it's your proof of purchase, and it lets you",
+    "re-activate on any device you personally use. Your license runs the",
+    "version you have forever; your first year also includes new releases.",
     "",
-    "Please don't post the key publicly — it contains your name and email address.",
+    "Please don't post the key publicly - it contains your name and email",
+    "address.",
     ...(supportEmail
-      ? ["", `If activation gives you any trouble, just reply here or write to ${supportEmail}.`]
+      ? [
+          "",
+          "If activation gives you any trouble, just reply here, or write to:",
+          // Its own line: the address is operator-configured and interpolating
+          // it mid-sentence made this line's length unbounded (85 chars with a
+          // short address, and the whole point of the 72 ceiling is that no
+          // line invites an MTA to re-encode).
+          `  ${supportEmail}`,
+        ]
       : []),
     "",
     "-- The Tandem team",

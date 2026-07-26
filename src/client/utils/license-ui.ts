@@ -27,6 +27,15 @@ export interface LicenseStatusResponse {
    * ended, which for a beta tester is a trial they never had.
    */
   licenseUnverifiable?: LicenseUnverifiableCode;
+  /**
+   * Dark-build only: a license IS installed and would verify once the gate is
+   * on. `gateActive` stays false, so this must never drive gate-only chrome —
+   * it exists purely so an activation on a pre-v1.0 build is visibly confirmed
+   * rather than leaving the same "activate it now" hint on screen.
+   */
+  licenseInstalled?: boolean;
+  /** Dark-build only, loopback only. Display name from the installed license. */
+  licenseeName?: string;
 }
 
 export interface LicenseUi {

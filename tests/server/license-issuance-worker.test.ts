@@ -989,9 +989,17 @@ describe("default fetch wiring (env → deps)", () => {
       .join("");
     expect(inline).toBe(fileBytes);
     expect(blobVerifies(inline)).toBe(true);
+    // Pin BOTH properties the wrap depends on, because the previous version of
+    // this test asserted `<= 80` — which passes at 72, 76 and 80 alike, so it
+    // pinned nothing — and asserted nothing about ASCII, which is how an em
+    // dash shipped in a body whose own doc comment promised 7-bit purity.
     for (const line of (sent.text as string).split("\n")) {
-      expect(line.length).toBeLessThanOrEqual(80);
+      expect(line.length).toBeLessThanOrEqual(72);
     }
+    // A single 8-bit byte anywhere is enough to make an MTA re-encode the whole
+    // body as quoted-printable, whose soft break truncates the key.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching the 7-bit range is the point
+    expect(sent.text as string).toMatch(/^[\x00-\x7F]*$/);
   });
 
   it("alerts the operator when an event is dropped", async () => {

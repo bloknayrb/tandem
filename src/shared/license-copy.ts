@@ -73,9 +73,13 @@ export function activationErrorMessage(code: LicenseActivationCode | "UNKNOWN"):
     case "UNSUPPORTED_VERSION":
       return "This license needs a newer version of Tandem. Update Tandem and try again.";
     case "WRITE_FAILED":
+      // Deliberately names two causes. The writer has no rename retry, so a
+      // transient hold (an antivirus scanner, a sync client) surfaces here
+      // exactly like a permissions problem — and telling someone to go fix
+      // folder permissions when the real answer is "try again" wastes their time.
       return (
-        "Your license is valid, but Tandem couldn't save it — check that you have permission " +
-        "to write to Tandem's application data folder, then try again."
+        "Your license is valid, but Tandem couldn't save it. Try again — if it keeps " +
+        "failing, check that you have permission to write to Tandem's application data folder."
       );
     default:
       return `Activation failed unexpectedly. Email ${TANDEM_SUPPORT_EMAIL} and we'll sort it out.`;

@@ -18,8 +18,19 @@ const status = $derived(licenseStore.status);
 // required", which tells a beta tester holding a free license that it's
 // unnecessary — so they archive it, and then need it at the v1.0 flip. Say what
 // is actually true instead: enforcement is off in THIS version.
-const pillLabel = $derived(ui.statusLabel || "Not enforced in this version");
 const gateDark = $derived(status != null && !status.gateActive);
+// On a dark build the gate reports nothing, so `statusLabel` is "". Say whether
+// a license is actually installed — otherwise activating one changes nothing on
+// screen and the "activate it now" hint below keeps nagging someone who just did.
+const darkInstalled = $derived(gateDark && status?.licenseInstalled === true);
+const pillLabel = $derived(
+  ui.statusLabel ||
+    (darkInstalled
+      ? status?.licenseeName
+        ? `License installed for ${status.licenseeName} — takes effect at v1.0`
+        : "License installed — takes effect at v1.0"
+      : "Not enforced in this version"),
+);
 
 function onActivated(): void {
   ctx.notify("info", "License activated.");
@@ -30,10 +41,15 @@ function onActivated(): void {
   <div class="settings-section-label">License status</div>
   <div class="license-pill" data-testid="license-status-pill">{pillLabel}</div>
 
-  {#if gateDark}
+  {#if gateDark && !darkInstalled}
     <div class="settings-hint" data-testid="license-gate-dark-hint">
       Tandem doesn't require a license yet. If you've already been sent one, activate it now —
       it will be needed in a future version, and a key that's been archived is easy to lose.
+    </div>
+  {:else if darkInstalled}
+    <div class="settings-hint" data-testid="license-dark-installed-hint">
+      Your license is saved on this device. Licensing isn't enforced in this version, so nothing
+      changes yet — it will take effect automatically at v1.0. Nothing further to do.
     </div>
   {/if}
 

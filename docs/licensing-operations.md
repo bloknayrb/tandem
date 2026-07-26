@@ -264,10 +264,12 @@ Two paths write `KV[licenseId] = { updateWindowEnd, status, version }`:
 ## 3.5. The issuance endpoint (Cloudflare — owner-deployed)
 
 The **issuance Worker** (`infra/license-issuance-worker/`) is the public seam
-that turns a paid **Polar** checkout into a signed license. It supersedes the
-loopback-only server handler `src/server/license/webhook.ts` (which Polar can
-never reach). Like §3 it's owner-deployed; **you** own the Polar org, the
-Worker, its KV namespaces, and its secrets.
+that turns a paid **Polar** checkout into a signed license. It **replaced** the
+loopback-only server handler `src/server/license/webhook.ts`, which Polar could
+never reach and which is now deleted — issuance happens here and nowhere else,
+apart from the operator's own `scripts/sign-license.ts` (§1a/§2). Like §3 it's
+owner-deployed; **you** own the Polar org, the Worker, its KV namespaces, and
+its secrets.
 
 ### 3.5a. What it does
 
@@ -360,7 +362,7 @@ so this is unblocked before any LLC/payout setup.
   attacker) can both mint, or a refund's tombstone can be overwritten by a
   mint that lands just after its recheck. See the Worker's README "Known
   limitation" section. **After refunding a higher-value order**, spot-check
-  with `npx wrangler kv key get "order:live:<orderId>" --namespace-id
+  with `npx wrangler kv key get "order:live:<orderId>" --remote --namespace-id
   <LEDGER_KV id>` that `refunded: true` and that `LICENSE_KV` no longer has a
   live entry for that order's `licenseId`, until the tracked Durable-Object
   fix lands.
@@ -379,18 +381,23 @@ so this is unblocked before any LLC/payout setup.
 
 ### 5a. Run this for the first ~5 sales
 
-Four commands, end to end. Step 4 is the one that catches a license that will
-silently never update — the failure no other check sees.
+One dashboard check and three commands, end to end. Step 4 is the one that
+catches a license that will silently never update — the failure no other check
+sees.
+
+> **`--remote` is not optional.** Wrangler v4 flipped the default for `kv key`
+> commands to **local** storage. Without it these read an empty local store,
+> return "key not found", and send you off re-issuing a license that was fine.
 
 ```bash
 # 1. Polar dashboard: the order exists AND webhook delivery is 200.
 
 # 2. The ledger has a complete record.
-npx wrangler kv key get "order:live:<orderId>" --namespace-id <LEDGER_KV id>
+npx wrangler kv key get "order:live:<orderId>" --remote --namespace-id <LEDGER_KV id>
 #    expect: emailSent: true, refunded: false. Note the licenseId.
 
 # 3. The entitlement exists.
-npx wrangler kv key get "<licenseId>" --namespace-id <LICENSE_KV id>
+npx wrangler kv key get "<licenseId>" --remote --namespace-id <LICENSE_KV id>
 
 # 4. The updater is actually served a manifest.
 curl -H "X-Tandem-License-Id: <licenseId>" https://<your-update-endpoint>/latest.json -i
@@ -544,8 +551,8 @@ Then walk §5a steps 2–4 with that order number.
 | Check status (tester) | `tandem license` |
 | Deploy update Worker | `cd infra/license-update-worker && npx wrangler deploy` |
 | Deploy issuance Worker | `cd infra/license-issuance-worker && npx wrangler deploy` |
-| Read an order's ledger record | `npx wrangler kv key get "order:live:<orderId>" --namespace-id <LEDGER_KV>` |
-| Read an entitlement | `npx wrangler kv key get "<licenseId>" --namespace-id <LICENSE_KV>` |
+| Read an order's ledger record | `npx wrangler kv key get "order:live:<orderId>" --remote --namespace-id <LEDGER_KV>` |
+| Read an entitlement | `npx wrangler kv key get "<licenseId>" --remote --namespace-id <LICENSE_KV>` |
 | **Prove a license gets updates** | `curl -H "X-Tandem-License-Id: <licenseId>" https://<endpoint>/latest.json -i` (expect 200, not 204) |
-| Revoke updates | `npx wrangler kv key delete "<licenseId>" --namespace-id <LICENSE_KV>` |
+| Revoke updates | `npx wrangler kv key delete "<licenseId>" --remote --namespace-id <LICENSE_KV>` |
 | Stop the bleeding | Unpublish the Polar product |

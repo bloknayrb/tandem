@@ -29,11 +29,11 @@ it. For the first year you also get new versions as they're released.
 
 | | |
 |---|---|
-| **The version you have** | Yours forever. No subscription, no phone-home, no expiry. |
+| **The version you have** | Yours forever. No subscription, no expiry, and no licence check over the network. |
 | **New versions** | For one year from purchase. |
 | **After that year** | Tandem keeps running exactly as it is. You're just not offered new releases until you renew. |
 | **Devices** | Any computer you personally use. |
-| **Offline** | Activation works with the network unplugged. Nothing is checked against a server, ever. |
+| **Offline** | Activation and running work with the network unplugged — no server is ever asked whether your licence is valid. (Checking for *updates* does contact us, and sends an opaque id. See Part 2.) |
 
 ## Why the key is so long
 
@@ -225,9 +225,19 @@ encoder from reaching for QP, and the receiving end repairs soft breaks anyway.
 zero-width characters, non-breaking spaces, smart quotes, and the base64url
 alphabet all decode fine — verified, and pinned by tests. Two earlier rounds of
 this work proposed "hardening" against them that would have **rejected keys that
-activate correctly today**. A real license blob can't even contain `+` or `/`:
-base64 of pure-ASCII JSON can only emit those from bytes `>`/`?`/`~`/DEL in one
-sextet position, none of which appear in the JSON.
+activate correctly today**.
+
+> A cautionary note about that last one, because it's a good example of a
+> confident wrong answer. An earlier draft of this document asserted that a
+> licence blob can *never* contain `+` or `/`, reasoning that base64 emits them
+> only from the bytes `>`, `?`, `~` and DEL at one sextet position, and that
+> none of those appear in the JSON. The arithmetic is right; the premise isn't.
+> `cleanName` doesn't strip those characters and the email check permits them in
+> the local part — so a buyer called `Who?` produces a blob containing `/`. The
+> claim was false and the test that "proved" it only ever ran on names that
+> happened to avoid the issue. It doesn't matter in the end, because Node's
+> decoder treats the two alphabets as equivalent regardless — but the fix was to
+> assert *that*, not the unsupportable "never".
 
 ## Updates, and the endpoint that must not lie
 
@@ -325,9 +335,11 @@ Worth stating plainly, because they look like bugs:
 - **A resend-my-license endpoint.** Deferred past ~25 sales; manual re-signing
   is adequate and safer at that volume, and it doesn't help the case that
   actually prompts it (mail quarantine).
-- **A commercial SKU.** `isLedgerRecord` accepts only `personal` and
-  `grandfathered`, so organisational use is currently **unsellable** and
-  checkout copy must exclude it.
+- **A commercial SKU.** `issue()` hardcodes the type to `personal` (or
+  `grandfathered`), so a commercial purchase would be **silently issued a
+  personal licence** rather than rejected. Organisational use is therefore
+  unsellable today and checkout copy must exclude it explicitly, until an
+  SKU→type map exists.
 - **Atomicity on concurrent deliveries.** Workers KV has no compare-and-swap.
   `issue()` and `revoke()` each re-read immediately before their first commit,
   which narrows the race to one KV round trip but does not close it. Closing it

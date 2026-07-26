@@ -1,10 +1,15 @@
+import crypto from "crypto";
 import type { Request, Response } from "express";
-import { describe, expect, it } from "vitest";
+import fs from "fs";
+import { describe, expect, it, vi } from "vitest";
 import type { LicenseState } from "../../src/server/license/license-types.js";
+import * as verifier from "../../src/server/license/verifier.js";
+import { canonicalize } from "../../src/server/license/verifier.js";
 import {
   handleActivateLicense,
   handleGetLicenseStatus,
   scrubForNonLoopback,
+  toLicenseStatusWire,
 } from "../../src/server/mcp/routes/license.js";
 
 const FULL: LicenseState = {
@@ -116,5 +121,103 @@ describe("handleActivateLicense", () => {
     expect(res.statusCode).toBe(400);
     expect((res.body as { error: string }).error).toBe("INVALID_LICENSE");
     expect(JSON.stringify(res.body)).not.toContain(secret);
+  });
+
+  it("gives a 403 a buyer can act on, not internal integrations vocabulary", async () => {
+    // The gates are shared with the integrations module, whose default copy
+    // names "integration routes" and TANDEM_ALLOW_UNAUTHENTICATED_LAN. The
+    // client renders `json.message` verbatim in the activation form, so the
+    // override is the whole point — and asserting only on `error: FORBIDDEN`
+    // (as this suite used to) would stay green if it were dropped.
+    const res = fakeRes();
+    await handleActivateLicense(activateReq({ body: { license: "x" } }), res);
+    const message = (res.body as { message: string }).message;
+    expect(message).toMatch(/computer running Tandem/);
+    expect(message).not.toMatch(/integration routes/);
+    expect(message).not.toMatch(/TANDEM_ALLOW_UNAUTHENTICATED_LAN/);
+  });
+
+  it("reports a filesystem failure as 500 LICENSE_WRITE_FAILED, not a bad key", async () => {
+    // The distinction the taxonomy exists for: "your input is wrong" (400) vs
+    // "our disk is wrong" (500). Previously every cause collapsed into a 400
+    // telling the buyer to check their paste.
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519", {
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    });
+    const meta = {
+      id: crypto.randomUUID(),
+      name: "Jane Doe",
+      email: "jane@example.com",
+      type: "personal" as const,
+      createdAt: new Date().toISOString(),
+      expiresAt: null,
+      version: "1.0",
+    };
+    const sig = crypto.sign(null, Buffer.from(canonicalize(meta)), privateKey);
+    const blob = Buffer.from(
+      JSON.stringify({ metadata: meta, signature: sig.toString("hex") }),
+    ).toString("base64");
+
+    // Make the verifier accept it, and the write fail.
+    const verifySpy = vi
+      .spyOn(verifier, "verifyLicenseSignature")
+      .mockImplementation((s: string) => {
+        const d = JSON.parse(Buffer.from(s, "base64").toString("utf-8"));
+        if (
+          !crypto.verify(
+            null,
+            Buffer.from(canonicalize(d.metadata)),
+            publicKey,
+            Buffer.from(d.signature, "hex"),
+          )
+        ) {
+          throw new Error("bad");
+        }
+        return d.metadata;
+      });
+    const openSpy = vi
+      .spyOn(fs.promises, "open")
+      .mockRejectedValue(Object.assign(new Error("EROFS"), { code: "EROFS" }));
+    try {
+      const res = fakeRes();
+      await handleActivateLicense(
+        activateReq({ origin: "http://127.0.0.1:5173", body: { license: blob } }),
+        res,
+      );
+      expect(res.statusCode).toBe(500);
+      expect((res.body as { error: string }).error).toBe("LICENSE_WRITE_FAILED");
+      expect((res.body as { message: string }).message).toMatch(/valid, but Tandem couldn't save/);
+    } finally {
+      openSpy.mockRestore();
+      verifySpy.mockRestore();
+    }
+  });
+});
+
+describe("dark-build wire shape", () => {
+  // The gate ships dark, so this is the shape EVERY user gets today.
+  it("carries licenseInstalled so an activation is visibly confirmed", () => {
+    const dark: LicenseState = { gateActive: false };
+    const none = toLicenseStatusWire(dark, { installed: false });
+    expect(none).toMatchObject({ gateActive: false, licenseInstalled: false });
+    expect(none).not.toHaveProperty("licenseeName");
+
+    const installed = toLicenseStatusWire(dark, { installed: true, licenseeName: "Jane Doe" });
+    expect(installed).toMatchObject({ licenseInstalled: true, licenseeName: "Jane Doe" });
+  });
+
+  it("keeps the back-compat sentinel so the updater and client are unchanged", () => {
+    const wire = toLicenseStatusWire({ gateActive: false }, { installed: true });
+    // gateActive MUST stay false — it is what suppresses all gate-only chrome.
+    expect(wire.gateActive).toBe(false);
+    expect(wire.status).toBe("licensed");
+    expect(wire.updateWindowCurrent).toBe(true);
+  });
+
+  it("never puts the licensee name on the LAN-scrubbed path", () => {
+    const scrubbed = scrubForNonLoopback({ gateActive: false });
+    expect(scrubbed).not.toHaveProperty("licenseeName");
+    expect(typeof scrubbed.licenseInstalled).toBe("boolean");
   });
 });

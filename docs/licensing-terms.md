@@ -32,12 +32,23 @@ Stated as the code behaves, not as marketing:
 
 ## 2. Organisational use is currently unsellable — checkout copy must say so ⚖️
 
-The BUSL Additional Use Grant covers "Personal use and individual
-self-hosting". An organisation is outside that grant entirely, so it needs a
-commercial licence — and this pipeline **cannot mint one**:
-`isLedgerRecord` accepts only `personal | grandfathered`, so a `commercial`
-record would read back as `LedgerCorruptError` and produce a retryable 500
-forever.
+The BUSL Additional Use Grant covers personal use and individual self-hosting,
+and only "solely for evaluation purposes for up to 30 days" — continued or
+production use requires a paid licence. An organisation is outside that grant,
+so it needs a **commercial** licence, and this pipeline cannot issue one.
+
+The failure mode is worse than a loud error. `issue()` hardcodes
+`type = grandfathered ? "grandfathered" : "personal"` and `LedgerRecord["type"]`
+admits nothing else, so a commercial purchase would be **silently issued a
+`personal` licence** — the code says so itself: *"If a `commercial` SKU is ever
+sold through this same webhook it would be silently downgraded to `personal` —
+wire an SKU→type map at that milestone."* (`isLedgerRecord` also rejects
+`commercial`, but that guard is downstream and unreachable, since nothing can
+write such a record in the first place.)
+
+So the buyer would receive a licence whose own metadata contradicts what they
+paid for. Until an SKU→type map exists, checkout copy must **exclude
+organisational use explicitly**.
 
 Until a commercial SKU exists, checkout copy must **exclude organisational use
 explicitly**. Selling to a company something the software's own licence doesn't

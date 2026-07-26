@@ -5,7 +5,7 @@ import { resolveAppDataDir } from "../platform.js";
 import { LicenseActivationError } from "./activation.js";
 import { GATE_ENABLED } from "./gate-flag.js";
 import type { LicenseFile, LicenseState, SignatureVerified, TrialFile } from "./license-types.js";
-import { normalizePastedLicense } from "./paste.js";
+import { MAX_NORMALIZE_INPUT, normalizePastedLicense } from "./paste.js";
 import { licenseFilePath, TRIAL_MS, trialFilePath } from "./paths.js";
 import { LicenseVerifyError, verifyLicenseSignature } from "./verifier.js";
 
@@ -210,6 +210,15 @@ export async function activateLicense(
   // resolveLicenseState. Production uses the pinned-key signature verifier.
   verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
 ): Promise<LicenseState> {
+  // Bound BEFORE normalizing. `normalizePastedLicense` allocates a copy per
+  // pass, and the route's body parser admits up to 70 MB — its `Content-Length`
+  // pre-check can be sidestepped with chunked transfer encoding, so this is the
+  // guard that actually holds. Rejecting (rather than truncating) also gives the
+  // buyer the right message: they pasted the whole email.
+  if (rawBlob.length > MAX_NORMALIZE_INPUT) {
+    throw new LicenseActivationError("TOO_LONG", "License input exceeds maximum length");
+  }
+
   // Normalize before PERSISTING, not just before verifying. The production
   // verifier repairs transport damage itself, but what lands in `license.json`
   // must be clean bytes — otherwise every subsequent read re-repairs them, and

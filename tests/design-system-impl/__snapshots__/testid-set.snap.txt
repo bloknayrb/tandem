@@ -213,6 +213,7 @@ license-activate-error
 license-activate-input
 license-activate-submit
 license-buy-link
+license-dark-installed-hint
 license-gate-dark-hint
 license-settings-section
 license-status-pill
