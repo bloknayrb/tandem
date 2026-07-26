@@ -13,7 +13,11 @@ import os from "os";
 import path from "path";
 import { describe, expect, it, vi } from "vitest";
 import { LicenseActivationError } from "../../src/server/license/errors.js";
-import { activateLicense, resolveLicenseState } from "../../src/server/license/license-state.js";
+import {
+  _resetLicenseWarningsForTests,
+  activateLicense,
+  resolveLicenseState,
+} from "../../src/server/license/license-state.js";
 import type {
   LicenseMetadata,
   SignatureVerified,
@@ -281,6 +285,27 @@ describe("licensed-but-unverifiable state", () => {
       verify: verifierFor(publicKey),
     });
     expect(state.gateActive && state.status).toBe("licensed");
+  });
+
+  it("logs the condition ONCE, not on every dispatch", () => {
+    // `resolveLicenseState` runs per gated MCP call, per Hocuspocus
+    // authenticate, and per 60s client poll. An unthrottled warning here would
+    // emit continuously for as long as the bad file exists, burying the rest of
+    // the log a support request would ask for. The UI is what surfaces this to
+    // the user on every read; the log only needs to say it once.
+    _resetLicenseWarningsForTests();
+    const dir = tmp();
+    seedLicense(dir, signBlob(otherKey.privateKey, meta()));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const verify = verifierFor(tempKeyPair().publicKey);
+      for (let i = 0; i < 25; i++) {
+        resolveLicenseState({ appDataDir: dir, now: () => Date.now(), gateEnabled: true, verify });
+      }
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("stays inert when the gate is dark", () => {

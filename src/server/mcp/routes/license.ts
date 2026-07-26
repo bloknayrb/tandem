@@ -85,8 +85,16 @@ export function handleGetLicenseStatus(req: Request, res: Response): void {
  * message (no signature/parse detail reaches the wire).
  */
 export async function handleActivateLicense(req: Request, res: Response): Promise<void> {
-  if (assertOriginAllowlisted(req, res, API_LICENSE_ACTIVATE)) return;
-  if (assertLoopbackForMutation(req, res)) return;
+  // Same gates as before (origin allowlist THEN loopback), but with copy a
+  // buyer can act on. The default messages talk about "integration routes" and
+  // TANDEM_ALLOW_UNAUTHENTICATED_LAN — internal vocabulary that reaches the
+  // activation form verbatim, since the client passes `json.message` straight
+  // through.
+  const LOCAL_ONLY =
+    "A license can only be activated on the computer running Tandem. Open Tandem on that " +
+    "computer and paste the key there, or run `tandem activate` on it.";
+  if (assertOriginAllowlisted(req, res, API_LICENSE_ACTIVATE, LOCAL_ONLY)) return;
+  if (assertLoopbackForMutation(req, res, LOCAL_ONLY)) return;
 
   const { license: rawLicense } = (req.body ?? {}) as Record<string, unknown>;
   if (!rawLicense || typeof rawLicense !== "string") {

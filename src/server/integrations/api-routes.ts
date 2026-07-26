@@ -261,13 +261,22 @@ export function registerIntegrationsRoutes(
  * opt-in, on the basis that the user explicitly accepted exposing
  * Tandem's read surface to the network.
  */
-export function assertLoopbackForMutation(req: Request, res: Response): boolean {
+export function assertLoopbackForMutation(
+  req: Request,
+  res: Response,
+  // Optional user-facing override. The decision is unchanged — this only
+  // replaces the copy, so a route whose caller is a *person* (license
+  // activation) doesn't hand them a sentence about integration routes and an
+  // env var they've never heard of.
+  friendlyMessage?: string,
+): boolean {
   const allowUnauthLan = process.env[TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV] === "1";
   if (allowUnauthLan && !isLoopback(req.socket.remoteAddress)) {
     res.status(403).json({
       error: "FORBIDDEN",
       code: ERROR_CODE_BAD_ORIGIN,
       message:
+        friendlyMessage ??
         "Mutating integration routes are loopback-only; TANDEM_ALLOW_UNAUTHENTICATED_LAN does not relax this surface",
     });
     return true;
@@ -284,13 +293,19 @@ export function assertLoopbackForMutation(req: Request, res: Response): boolean 
  *
  * Returns true if the response was sent (caller should `return`).
  */
-export function assertOriginAllowlisted(req: Request, res: Response, routeLabel: string): boolean {
+export function assertOriginAllowlisted(
+  req: Request,
+  res: Response,
+  routeLabel: string,
+  /** Optional user-facing override; see `assertLoopbackForMutation`. */
+  friendlyMessage?: string,
+): boolean {
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   if (!isLocalhostOrigin(origin)) {
     res.status(403).json({
       error: "FORBIDDEN",
       code: ERROR_CODE_BAD_ORIGIN,
-      message: `Origin not allowlisted for ${routeLabel}`,
+      message: friendlyMessage ?? `Origin not allowlisted for ${routeLabel}`,
     });
     return true;
   }

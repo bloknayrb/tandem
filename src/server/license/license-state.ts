@@ -31,6 +31,29 @@ function knownVersion(v: string): boolean {
   return typeof v === "string" && KNOWN_VERSION_MAJORS.has(v.split(".")[0]);
 }
 
+/**
+ * One-shot log guard.
+ *
+ * `resolveLicenseState` is called PER DISPATCH — every gated MCP tool call,
+ * every Hocuspocus authenticate, and every 60-second client status poll. An
+ * unconditional log line on the unverifiable path would therefore emit
+ * continuously for as long as the bad file sits on disk, burying everything
+ * else in the log a support request would ask for. Log the condition once per
+ * process; the state itself (`licenseUnverifiable`) is what surfaces it to the
+ * user, on every read, in the UI.
+ */
+const loggedOnce = new Set<string>();
+function warnOnce(key: string, message: string): void {
+  if (loggedOnce.has(key)) return;
+  loggedOnce.add(key);
+  console.error(message);
+}
+
+/** Test-only: forget which warnings have been emitted. */
+export function _resetLicenseWarningsForTests(): void {
+  loggedOnce.clear();
+}
+
 function readJson<T>(filePath: string): T | null {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
@@ -96,7 +119,8 @@ export function resolveLicenseState(deps: {
         };
       }
       licenseUnverifiable = true;
-      console.error(
+      warnOnce(
+        `version:${meta.version}`,
         `[license] license.json holds an unsupported schema version (${meta.version}) — ` +
           "treating this device as unlicensed. A newer Tandem may be required.",
       );
@@ -104,7 +128,8 @@ export function resolveLicenseState(deps: {
       licenseUnverifiable = true;
       // Code only — never the message, which can embed blob bytes.
       const code = err instanceof LicenseVerifyError ? err.code : "UNKNOWN";
-      console.error(
+      warnOnce(
+        `verify:${code}`,
         `[license] license.json failed verification (${code}) — treating this device as ` +
           "unlicensed. If this license was issued before a signing-key rotation it must be reissued.",
       );
