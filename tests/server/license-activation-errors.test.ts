@@ -12,7 +12,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { describe, expect, it, vi } from "vitest";
-import { LicenseActivationError } from "../../src/server/license/errors.js";
+import { LicenseActivationError } from "../../src/server/license/activation.js";
 import {
   _resetLicenseWarningsForTests,
   activateLicense,
@@ -23,10 +23,14 @@ import type {
   SignatureVerified,
   SignedLicense,
 } from "../../src/server/license/license-types.js";
-import { activationErrorMessage } from "../../src/server/license/messages.js";
 import { normalizePastedLicense } from "../../src/server/license/paste.js";
 import { licenseFilePath } from "../../src/server/license/paths.js";
-import { canonicalize, verifyLicenseSignature } from "../../src/server/license/verifier.js";
+import {
+  canonicalize,
+  LicenseVerifyError,
+  verifyLicenseSignature,
+} from "../../src/server/license/verifier.js";
+import { activationErrorMessage } from "../../src/shared/license-copy.js";
 
 function tmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "lic-err-"));
@@ -58,17 +62,28 @@ function signBlob(privateKey: string, m: LicenseMetadata): string {
   return Buffer.from(JSON.stringify(signed)).toString("base64");
 }
 
-/** A verifier bound to a throwaway keypair, matching the production seam. */
+/**
+ * A verifier bound to a throwaway keypair, matching the production seam.
+ *
+ * Throws `LicenseVerifyError` with a real code, exactly as
+ * `verifyLicenseSignature` does — a plain `Error` here would make every injected
+ * failure classify as `UNKNOWN` and the code-carrying paths would go untested.
+ */
 function verifierFor(publicKey: string) {
   return (blob: string): SignatureVerified => {
-    const decoded = JSON.parse(Buffer.from(blob, "base64").toString("utf-8")) as SignedLicense;
+    let decoded: SignedLicense;
+    try {
+      decoded = JSON.parse(Buffer.from(blob, "base64").toString("utf-8")) as SignedLicense;
+    } catch (err) {
+      throw new LicenseVerifyError("MALFORMED", "test verifier: unparsable", { cause: err });
+    }
     const ok = crypto.verify(
       null,
       Buffer.from(canonicalize(decoded.metadata)),
       publicKey,
       Buffer.from(decoded.signature, "hex"),
     );
-    if (!ok) throw new Error("bad signature");
+    if (!ok) throw new LicenseVerifyError("BAD_SIGNATURE", "test verifier: bad signature");
     return decoded.metadata as SignatureVerified;
   };
 }
@@ -96,10 +111,31 @@ describe("normalizePastedLicense", () => {
   describe("regressions — inputs that already worked and must NOT be 'repaired'", () => {
     // Each of these was a candidate "hardening" that would have REJECTED blobs
     // which activate fine today. base64 is far more tolerant than it looks.
-    it("accepts the base64url alphabet as equivalent to +/", () => {
-      const urlSafe = blob.replace(/\+/g, "-").replace(/\//g, "_");
-      expect(Buffer.from(urlSafe, "base64").equals(Buffer.from(blob, "base64"))).toBe(true);
-      expect(verify(normalizePastedLicense(urlSafe))).toBeTruthy();
+    it("a real license blob can never contain `+` or `/` in the first place", () => {
+      // Worth pinning, because it retires a whole class of worry. A license
+      // blob is base64 of pure-ASCII JSON, and the sextets that encode `+`(62)
+      // and `/`(63) are unreachable from ASCII input except via bytes
+      // `>`/`?`/`~`/DEL in one specific position — none of which appear in our
+      // JSON. So base64url mangling cannot happen to a Tandem license at all.
+      //
+      // The previous version of this test substituted `+`/`/` in a fixture that
+      // contained neither, making it a no-op that asserted nothing.
+      for (let i = 0; i < 50; i++) {
+        expect(signBlob(tempKeyPair().privateKey, meta({ name: `Jane ${i}` }))).toMatch(
+          /^[A-Za-z0-9=]+$/,
+        );
+      }
+    });
+
+    it("base64 decoding treats the base64url alphabet as equivalent anyway", () => {
+      // Belt-and-braces on the decoder itself, on a synthetic string that
+      // genuinely contains `+` and `/` — so this assertion is not vacuous even
+      // though the case above shows real blobs never hit it.
+      const withSymbols = Buffer.from([0xfb, 0xff, 0xbf, 0x3e, 0x3f]).toString("base64");
+      expect(withSymbols).toMatch(/[+/]/);
+      const urlSafe = withSymbols.replace(/\+/g, "-").replace(/\//g, "_");
+      expect(urlSafe).not.toBe(withSymbols);
+      expect(Buffer.from(urlSafe, "base64").equals(Buffer.from(withSymbols, "base64"))).toBe(true);
     });
 
     it("accepts a hard-wrapped blob (whitespace is ignored on decode)", () => {
@@ -153,8 +189,10 @@ describe("activateLicense error taxonomy", () => {
     const blob = signBlob(privateKey, meta());
     // The blob is already proven good at the point the write happens, so this
     // must not surface as "check that you pasted the full license".
+    // `atomicWriteConfigFile` opens the temp file with `wx, 0o600` rather than
+    // calling `writeFile`, so the mock has to sit on `open`.
     const spy = vi
-      .spyOn(fs.promises, "writeFile")
+      .spyOn(fs.promises, "open")
       .mockRejectedValue(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
     try {
       await expect(activateLicense(dir, blob, verify)).rejects.toMatchObject({
@@ -221,7 +259,9 @@ describe("licensed-but-unverifiable state", () => {
     // Enforcement is deliberately UNCHANGED — an unverified license must not
     // unlock, so we still fall through to the trial clock.
     expect(state.gateActive && state.status).toBe("trial");
-    expect(state.gateActive && state.status !== "licensed" && state.licenseUnverifiable).toBe(true);
+    expect(state.gateActive && state.status !== "licensed" && state.licenseUnverifiable).toBe(
+      "BAD_SIGNATURE",
+    );
   });
 
   it("flags it on the restricted arm too (trial already expired)", () => {
@@ -241,7 +281,9 @@ describe("licensed-but-unverifiable state", () => {
       verify: verifierFor(tempKeyPair().publicKey),
     });
     expect(state.gateActive && state.status).toBe("restricted");
-    expect(state.gateActive && state.status !== "licensed" && state.licenseUnverifiable).toBe(true);
+    expect(state.gateActive && state.status !== "licensed" && state.licenseUnverifiable).toBe(
+      "BAD_SIGNATURE",
+    );
   });
 
   it("also flags an unknown schema version", () => {
@@ -254,7 +296,12 @@ describe("licensed-but-unverifiable state", () => {
       gateEnabled: true,
       verify: verifierFor(publicKey),
     });
-    expect(state.gateActive && state.status !== "licensed" && state.licenseUnverifiable).toBe(true);
+    // Distinct from BAD_SIGNATURE — the signature is fine, the schema isn't.
+    // That distinction is the whole reason the code is carried rather than a
+    // boolean: this user needs "update Tandem", not "have it reissued".
+    expect(state.gateActive && state.status !== "licensed" && state.licenseUnverifiable).toBe(
+      "UNSUPPORTED_VERSION",
+    );
   });
 
   it("is absent when there is no license file at all — an ordinary trial", () => {

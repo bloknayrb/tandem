@@ -1,15 +1,17 @@
 import type { Request, Response } from "express";
 import { API_LICENSE_ACTIVATE } from "../../../shared/api-paths.js";
+import {
+  activationErrorMessage,
+  type LicenseUnverifiableCode,
+} from "../../../shared/license-copy.js";
 import { isLoopback } from "../../auth/middleware.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
-import { LicenseActivationError } from "../../license/errors.js";
+import { LicenseActivationError } from "../../license/activation.js";
 import { activateLicense, resolveLiveLicenseState } from "../../license/license-state.js";
 import type { LicenseState, LicenseStatus } from "../../license/license-types.js";
-import { activationErrorMessage } from "../../license/messages.js";
-import { normalizePastedLicense } from "../../license/paste.js";
 import { resolveAppDataDir } from "../../platform.js";
 
 /**
@@ -37,7 +39,7 @@ export function scrubForNonLoopback(s: LicenseState): {
   status: LicenseStatus;
   daysRemaining: number | undefined;
   updateWindowCurrent: boolean;
-  licenseUnverifiable?: true;
+  licenseUnverifiable?: LicenseUnverifiableCode;
 } {
   if (!s.gateActive) {
     return {
@@ -52,8 +54,9 @@ export function scrubForNonLoopback(s: LicenseState): {
     status: s.status,
     daysRemaining: s.status === "trial" ? s.trial.daysRemaining : undefined,
     updateWindowCurrent: s.updateWindowCurrent,
-    // Not PII — a boolean about this device's own license file. The client needs
-    // it to avoid telling a license holder that their trial ended.
+    // Not PII — a closed enum describing this device's own license file, with no
+    // license content, name, id or email in it. The client needs it to avoid
+    // telling a license holder that their trial ended.
     licenseUnverifiable: s.status === "licensed" ? undefined : s.licenseUnverifiable,
   };
 }
@@ -103,8 +106,19 @@ export async function handleActivateLicense(req: Request, res: Response): Promis
   }
 
   try {
-    const state = await activateLicense(resolveAppDataDir(), normalizePastedLicense(rawLicense));
-    res.json(state);
+    // No normalization here — `activateLicense` does it, so the persisted bytes
+    // are clean and no caller can forget.
+    await activateLicense(resolveAppDataDir(), rawLicense);
+
+    // Re-resolve through the LIVE gate flag rather than returning
+    // `activateLicense`'s result directly. That function forces
+    // `gateEnabled: true` on purpose (so `tandem license` can confirm an
+    // installed license while enforcement still ships dark) — but handing that
+    // shape to the client poisons its store on a dark build: it would then
+    // believe `gateActive` is true and render gate-only chrome, such as the
+    // "your update window has ended" warning, on a build that gates nothing.
+    // Same shaping as GET /api/license/status, so the two can't disagree.
+    res.json(toLicenseStatusWire(resolveLiveLicenseState()));
   } catch (err) {
     const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
     // A write failure is OUR fault, not the caller's — 500, not 400. The

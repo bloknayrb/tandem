@@ -642,17 +642,26 @@ function grandfatherSetOf(raw: string): Set<string> {
  * Wrap the blob so no line exceeds `width` characters.
  *
  * This is delivery correctness, not cosmetics. A 484-character unbroken line is
- * exactly what makes a mail transfer agent switch the body to
- * quoted-printable — which inserts a soft line break (`=` at end of line) that
- * base64 reads as padding, silently TRUNCATING the key. Wrapping keeps the body
- * inside the limits that let it stay 7-bit/plain.
+ * what pushes a mail transfer agent to re-encode the body as quoted-printable,
+ * whose soft line break (`=` at end of line) base64 reads as padding — silently
+ * TRUNCATING the key.
  *
- * Base64 ignores whitespace on decode (`Buffer.from(s, "base64")` and the
- * browser both), so the wrapped copy pastes back exactly as issued. The cost is
- * that double-tap-to-select-line on mobile no longer grabs the whole key — which
- * is acceptable now that the `.license` attachment is the primary path.
+ * `width` is 72, deliberately **below** the quoted-printable line limit rather
+ * than at it. QP's 76 counts the trailing `=` itself, so wrapping at exactly 76
+ * still leaves lines an encoder wants to break. 72 is the long-standing safe
+ * mail width and leaves headroom.
+ *
+ * Wrapping alone is not sufficient — see `licenseEmailText`, which also keeps
+ * the body pure 7-bit ASCII so an encoder has no reason to reach for QP at all.
+ * And even that is belt-and-braces: the receiving end repairs soft breaks
+ * (`normalizePastedLicense`), and the `.license` attachment bypasses the body
+ * entirely. Three independent defenses, because the failure is silent.
+ *
+ * Base64 ignores whitespace on decode, so the wrapped copy pastes back exactly
+ * as issued. The cost is that double-tap-to-select-line on mobile no longer
+ * grabs the whole key — acceptable now that the attachment is the primary path.
  */
-export function wrapBlob(blob: string, width = 76): string {
+export function wrapBlob(blob: string, width = 72): string {
   const lines: string[] = [];
   for (let i = 0; i < blob.length; i += width) lines.push(blob.slice(i, i + width));
   return lines.join("\n");
@@ -705,6 +714,16 @@ async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: str
   }
 }
 
+/**
+ * The plain-text license email.
+ *
+ * Deliberately pure 7-bit ASCII — no em dashes, no smart quotes, no accented
+ * characters outside the buyer's own name. A single non-ASCII byte anywhere in
+ * the body is enough for a mail transfer agent to re-encode the whole thing as
+ * quoted-printable, and QP's soft line breaks are the one transformation that
+ * silently truncates a base64 license key. `name` is the unavoidable exception
+ * (it is the customer's actual name); everything we author is ASCII.
+ */
 export function licenseEmailText(name: string, blob: string, supportEmail?: string): string {
   return [
     `Hi ${name},`,
@@ -721,7 +740,7 @@ export function licenseEmailText(name: string, blob: string, supportEmail?: stri
     // truncate the key. Base64 ignores the line breaks on paste.
     wrapBlob(blob),
     "",
-    "Keep this email — it's your proof of purchase and lets you re-activate on any",
+    "Keep this email - it's your proof of purchase and lets you re-activate on any",
     "device you personally use. Your license runs the version you have forever;",
     "your first year also includes new releases.",
     "",
@@ -730,7 +749,7 @@ export function licenseEmailText(name: string, blob: string, supportEmail?: stri
       ? ["", `If activation gives you any trouble, just reply here or write to ${supportEmail}.`]
       : []),
     "",
-    "— The Tandem team",
+    "-- The Tandem team",
   ].join("\n");
 }
 
@@ -777,12 +796,12 @@ export function _resetAlertThrottleForTests(): void {
 /** Alert text. Carries the coarse result/stage ONLY — never an email, a license
  *  id, or payload bytes, so an alert channel is not a PII sink. */
 function alertBody(entry: LogEntry): string {
+  // Only reachable for the two `isAlertable` conditions, so these are the only
+  // two cases — a third "generic error" arm here would be dead code.
   const what =
     entry.stage === "email"
       ? "A license was minted but could NOT be emailed"
-      : entry.result === "dropped"
-        ? "A webhook event could not be fulfilled (a paid sale may be behind it)"
-        : "Issuance error";
+      : "A webhook event could not be fulfilled (a paid sale may be behind it)";
   return [
     `Tandem license issuance: ${what}.`,
     `result=${entry.result} stage=${entry.stage ?? "-"} status=${entry.status ?? "-"}`,
@@ -795,50 +814,58 @@ function alertBody(entry: LogEntry): string {
 
 async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void> {
   const body = alertBody(entry);
+  // Resend is the thing that just failed — do not report an email failure
+  // through it.
   const resendIsSuspect = entry.stage === "email";
 
   if (env.ALERT_WEBHOOK_URL) {
     try {
-      await fetch(env.ALERT_WEBHOOK_URL, {
+      const resp = await fetch(env.ALERT_WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: body }),
       });
-      return;
+      // A non-ok response counts as a failure, not a delivery. A retired Slack
+      // webhook 404s rather than throwing, and treating that as success loses
+      // the alert silently — in the one piece of code whose entire purpose is
+      // to not be missed.
+      if (resp.ok) return;
     } catch {
-      // fall through to email, unless email is the thing that's broken
+      // fall through
     }
   }
 
-  if (resendIsSuspect) {
-    console.log(
-      JSON.stringify({
-        result: "alert-undeliverable",
-        ts: Math.floor(Date.now() / 1000),
-        stage: "email",
-      }),
-    );
-    return;
+  if (!resendIsSuspect && env.ALERT_EMAIL && env.RESEND_API_KEY && env.RESEND_FROM) {
+    try {
+      const resp = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: env.RESEND_FROM,
+          to: env.ALERT_EMAIL,
+          subject: "[Tandem] license issuance needs attention",
+          text: body,
+        }),
+      });
+      if (resp.ok) return;
+    } catch {
+      // An alert that fails to send must never fail the webhook.
+    }
   }
 
-  if (!env.ALERT_EMAIL || !env.RESEND_API_KEY || !env.RESEND_FROM) return;
-  try {
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: env.RESEND_FROM,
-        to: env.ALERT_EMAIL,
-        subject: "[Tandem] license issuance needs attention",
-        text: body,
-      }),
-    });
-  } catch {
-    // An alert that fails to send must never fail the webhook.
-  }
+  // Both channels are exhausted (or the only viable one wasn't configured).
+  // Say so in the log — otherwise the throttle slot is consumed and nothing
+  // records that the alert never landed.
+  console.log(
+    JSON.stringify({
+      result: "alert-undeliverable",
+      ts: Math.floor(Date.now() / 1000),
+      ...(entry.stage ? { stage: entry.stage } : {}),
+    }),
+  );
 }
 
 /** Does this log entry warrant waking the operator? */

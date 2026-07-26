@@ -1,25 +1,13 @@
 import fs from "fs";
-import { atomicWrite } from "../file-io/index.js";
+import type { LicenseUnverifiableCode } from "../../shared/license-copy.js";
+import { atomicWriteConfigFile } from "../integrations/storage.js";
 import { resolveAppDataDir } from "../platform.js";
-import { LicenseActivationError } from "./errors.js";
+import { LicenseActivationError } from "./activation.js";
 import { GATE_ENABLED } from "./gate-flag.js";
 import type { LicenseFile, LicenseState, SignatureVerified, TrialFile } from "./license-types.js";
+import { normalizePastedLicense } from "./paste.js";
 import { licenseFilePath, TRIAL_MS, trialFilePath } from "./paths.js";
 import { LicenseVerifyError, verifyLicenseSignature } from "./verifier.js";
-
-/**
- * Ensure the app-data directory exists before writing into it.
- *
- * Every other app-data writer (auth/token-store, session/manager,
- * annotations/store, integrations/storage) does this; `license/` was the only
- * one that didn't. It matters because `tandem activate ./jane.license` — the
- * command the license email itself recommends — is frequently the FIRST thing a
- * buyer runs, before Tandem has ever launched and created the directory. The
- * resulting ENOENT surfaced as "your license could not be verified".
- */
-function ensureAppDataDir(appDataDir: string): void {
-  fs.mkdirSync(appDataDir, { recursive: true });
-}
 
 // Known license schema majors. The signed `version` field becomes load-bearing:
 // an unknown major is rejected rather than silently honored (review §12 L3).
@@ -95,11 +83,15 @@ export function resolveLicenseState(deps: {
   // not verify — a tester holding a pre-key-rotation license, a corrupted file,
   // or a license from a newer schema. Enforcement is unchanged (an unverified
   // license must never unlock, so we still fall through to the trial clock),
-  // but the state has to say so: without it, all three surfaces tell a person
-  // with a license sitting on disk that their *trial* ended — a trial they may
-  // never have had. It was previously swallowed by a bare `catch {}` with no
-  // log, no status and no UI.
-  let licenseUnverifiable: true | undefined;
+  // but the state has to say so: without it, every surface tells a person with a
+  // license sitting on disk that their *trial* ended — a trial they may never
+  // have had. It was previously swallowed by a bare `catch {}` with no log, no
+  // status and no UI.
+  //
+  // It carries the CODE, not a boolean. "Have it reissued", "the file is
+  // damaged" and "update Tandem" are three different user actions, and a
+  // boolean forced every surface to hedge across all three in one sentence.
+  let licenseUnverifiable: LicenseUnverifiableCode | undefined;
   const lf = readJson<LicenseFile>(licenseFilePath(appDataDir));
   if (lf?.blob) {
     try {
@@ -115,20 +107,19 @@ export function resolveLicenseState(deps: {
           updateWindowCurrent,
         };
       }
-      licenseUnverifiable = true;
+      licenseUnverifiable = "UNSUPPORTED_VERSION";
       warnOnce(
-        `version:${meta.version}`,
+        "version",
         `[license] license.json holds an unsupported schema version (${meta.version}) — ` +
           "treating this device as unlicensed. A newer Tandem may be required.",
       );
     } catch (err) {
-      licenseUnverifiable = true;
       // Code only — never the message, which can embed blob bytes.
-      const code = err instanceof LicenseVerifyError ? err.code : "UNKNOWN";
+      licenseUnverifiable = err instanceof LicenseVerifyError ? err.code : "UNKNOWN";
       warnOnce(
-        `verify:${code}`,
-        `[license] license.json failed verification (${code}) — treating this device as ` +
-          "unlicensed. If this license was issued before a signing-key rotation it must be reissued.",
+        `verify:${licenseUnverifiable}`,
+        `[license] license.json failed verification (${licenseUnverifiable}) — treating this ` +
+          "device as unlicensed. A license issued before a signing-key change must be reissued.",
       );
     }
   }
@@ -192,7 +183,11 @@ export async function ensureTrialStarted(
   if (fs.existsSync(filePath)) return;
   const body: TrialFile = { version: 1, firstRunAt: new Date(now()).toISOString() };
   try {
-    ensureAppDataDir(appDataDir);
+    // The directory may not exist yet — `tandem activate ./x.license`, which the
+    // license email recommends, is often the FIRST thing a buyer runs, before
+    // Tandem has ever launched. (The activate path gets its mkdir from
+    // `atomicWriteConfigFile`; this one writes directly for the `wx` semantics.)
+    fs.mkdirSync(appDataDir, { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify(body), { flag: "wx" });
   } catch {
     // Lost the race to a concurrently-starting process — its file stands.
@@ -210,11 +205,18 @@ export async function ensureTrialStarted(
  */
 export async function activateLicense(
   appDataDir: string,
-  blob: string,
+  rawBlob: string,
   // Injectable for tests (sign with a temp keypair) — mirrors the seam on
   // resolveLicenseState. Production uses the pinned-key signature verifier.
   verify: (blob: string) => SignatureVerified = verifyLicenseSignature,
 ): Promise<LicenseState> {
+  // Normalize before PERSISTING, not just before verifying. The production
+  // verifier repairs transport damage itself, but what lands in `license.json`
+  // must be clean bytes — otherwise every subsequent read re-repairs them, and
+  // an injected test verifier (which has no reason to normalize) would reject
+  // what activation just accepted.
+  const blob = normalizePastedLicense(rawBlob);
+
   let meta: SignatureVerified;
   try {
     meta = verify(blob);
@@ -235,8 +237,12 @@ export async function activateLicense(
   // as a bad license — the blob above is already proven good at this point.
   const body: LicenseFile = { version: 1, blob };
   try {
-    ensureAppDataDir(appDataDir);
-    await atomicWrite(licenseFilePath(appDataDir), JSON.stringify(body));
+    // `atomicWriteConfigFile` (not the generic `atomicWrite`) because it creates
+    // the file 0o600 and does its own recursive mkdir. `license.json` embeds the
+    // buyer's name and email inside the signed blob — the only identity PII
+    // Tandem writes to disk — so owner-only permissions are the right default,
+    // and it's the same helper the other app-data config stores already share.
+    await atomicWriteConfigFile(licenseFilePath(appDataDir), JSON.stringify(body));
   } catch (err) {
     throw new LicenseActivationError(
       "WRITE_FAILED",

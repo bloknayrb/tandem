@@ -8,6 +8,8 @@
  * this reads only fields present in BOTH shapes, plus the optional licensee name
  * (loopback only) used for the "Licensed to {name}" label.
  */
+import type { LicenseUnverifiableCode } from "../../shared/license-copy";
+
 export interface LicenseStatusResponse {
   gateActive: boolean;
   status: "trial" | "licensed" | "restricted";
@@ -18,13 +20,13 @@ export interface LicenseStatusResponse {
   updateWindowCurrent: boolean;
   license?: { name: string; type: string };
   /**
-   * A `license.json` exists on this device but did not verify (bad signature,
-   * unknown schema, damaged file). Present on the trial/restricted payloads
-   * only. Not PII — a boolean about this machine's own file — so it survives
-   * the LAN scrub. Without it every surface tells a license holder that their
-   * *trial* ended, which for a beta tester is a trial they never had.
+   * A `license.json` exists on this device but did not verify, and WHY. Present
+   * on the trial/restricted payloads only. Not PII — a closed enum about this
+   * machine's own file, carrying no license content — so it survives the LAN
+   * scrub. Without it every surface tells a license holder that their *trial*
+   * ended, which for a beta tester is a trial they never had.
    */
-  licenseUnverifiable?: boolean;
+  licenseUnverifiable?: LicenseUnverifiableCode;
 }
 
 export interface LicenseUi {

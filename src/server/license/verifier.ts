@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import crypto from "crypto";
+import type { LicenseVerifyCode } from "../../shared/license-copy.js";
 import type { LicenseMetadata, SignatureVerified, SignedLicense } from "./license-types.js";
+import { normalizePastedLicense } from "./paste.js";
 import { TANDEM_PUBLIC_KEY } from "./public-key.js";
+
+export type { LicenseVerifyCode };
 
 export function canonicalObject(obj: any): any {
   if (typeof obj !== "object" || obj === null) {
@@ -32,24 +36,10 @@ export function canonicalize(obj: any): string {
 }
 
 /**
- * Why a license failed to verify. The distinction is the whole point: a buyer
- * who pasted their entire confirmation email, one holding a license signed by a
- * retired key, and one on a Tandem too old to understand their license all get
- * "License could not be verified" today, and all three read it as "your key is
- * bad" and open a support ticket.
- *
- * These codes are the ONLY thing that crosses the boundary — never the input
- * bytes, never the underlying parse/crypto message (which can embed blob
- * content). `routes/license.ts` and `cli/license.ts` map them to copy.
+ * The code is the ONLY thing that crosses this boundary — never the input bytes,
+ * never the underlying parse/crypto message (which can embed blob content).
+ * The union and its copy live in `src/shared/license-copy.ts`.
  */
-export type LicenseVerifyCode =
-  /** Input longer than any real license — almost always a pasted email body. */
-  | "TOO_LONG"
-  /** Not base64, not JSON, or missing metadata/signature. */
-  | "MALFORMED"
-  /** Well-formed, but not signed by the key this build trusts. */
-  | "BAD_SIGNATURE";
-
 export class LicenseVerifyError extends Error {
   constructor(
     readonly code: LicenseVerifyCode,
@@ -71,8 +61,35 @@ export class LicenseVerifyError extends Error {
  * decision read `metadata.expiresAt` themselves (see `license-state.ts`).
  * Throws if the format is malformed or the signature is invalid.
  */
-export function verifyLicenseSignature(licenseString: string): SignatureVerified {
-  // Bound the input before any allocation — license blobs are small (<2KB).
+export function verifyLicenseSignature(rawLicenseString: string): SignatureVerified {
+  // Bound the RAW input first — the normalize below allocates a new string, and
+  // "bound before any allocation" is the whole point of this check. The raw
+  // ceiling is deliberately looser than the post-normalize one: quoted-printable
+  // soft breaks only ever ADD bytes, so anything that could legitimately
+  // normalize down to <=10k starts well under 20k.
+  if (rawLicenseString.length > 20_000) {
+    throw new LicenseVerifyError(
+      "TOO_LONG",
+      "License verification failed: input exceeds maximum length",
+    );
+  }
+
+  // Repair transport damage HERE, at the crypto boundary, rather than at each
+  // entry point. A quoted-printable soft break is mail-transport corruption, and
+  // this is the layer that should tolerate it before hashing — putting it at the
+  // call sites made it a contract every future caller has to remember, and one
+  // caller ALREADY forgot: `resolveLicenseState` reads `license.json` straight
+  // off disk and verifies it raw. A blob saved with a soft break still in it
+  // would then fail on every boot, forever, reported as "installed but could not
+  // be verified" with copy blaming a signing-key rotation.
+  //
+  // This cannot forge anything: whatever survives the transform must still carry
+  // a valid Ed25519 signature over its own canonicalized metadata.
+  const licenseString = normalizePastedLicense(rawLicenseString);
+
+  // Re-bound after normalizing — stripping an interior `=` can LENGTHEN the
+  // decode (Node treats `=` as terminating), so this check must run on exactly
+  // the string that gets decoded, not on the raw input.
   if (licenseString.length > 10_000) {
     throw new LicenseVerifyError(
       "TOO_LONG",

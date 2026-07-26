@@ -1,7 +1,9 @@
 import path from "path";
+import { TRIAL_DAYS } from "../../shared/constants.js";
 
-/** Trial length in days (ADR-040 §5: under the 30-day BUSL eval ceiling). */
-export const TRIAL_DAYS = 14;
+/** Trial length in days. Defined in `shared/constants.ts` so client-side copy
+ *  ("N of 14 days left") can't drift from the clock the server enforces. */
+export { TRIAL_DAYS };
 /** Trial length in milliseconds — epoch math only, never calendar arithmetic. */
 export const TRIAL_MS = TRIAL_DAYS * 86_400_000;
 

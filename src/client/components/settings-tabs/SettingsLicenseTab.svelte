@@ -1,12 +1,15 @@
 <script lang="ts">
 import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../../shared/constants";
+import { unverifiableLicenseMessage } from "../../../shared/license-copy";
 import { licenseStore } from "../../hooks/useLicense.svelte";
 import LicenseActivateForm from "../LicenseActivateForm.svelte";
 import type { SettingsTabContext } from "../SettingsModal.svelte";
 
 // Settings → License (#1116). Shows the current status and reuses the shared
-// activation form. Keep `$props()` as a single proxy and read via `ctx.foo`
-// (destructuring would freeze the getters at mount).
+// activation form. Keep `$props()` as a single proxy and read via `ctx.foo`.
+// (Destructuring `$props()` directly stays reactive — the compiler rewrites it
+// to getters. What breaks is capturing into a local FIRST and then
+// destructuring that: `let c = $props(); let { notify } = c` freezes at mount.)
 let ctx: SettingsTabContext = $props();
 
 const ui = $derived(licenseStore.ui);
@@ -47,9 +50,7 @@ function onActivated(): void {
 
   {#if status?.licenseUnverifiable}
     <div class="license-warning" data-testid="license-unverifiable-warning" role="alert">
-      A license is installed on this device but could not be verified. It may have been issued
-      before a signing-key change, or the file may be damaged. Paste it again below, or email
-      <a href="mailto:{TANDEM_SUPPORT_EMAIL}">{TANDEM_SUPPORT_EMAIL}</a> to have it reissued.
+      {unverifiableLicenseMessage(status.licenseUnverifiable)}
     </div>
   {/if}
 

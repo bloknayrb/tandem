@@ -25,6 +25,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { pathToFileURL } from "url";
 import { writeLicenseEntitlement } from "../src/server/license/kv-store.js";
 import type { LicenseMetadata, SignedLicense } from "../src/server/license/license-types.js";
 import { canonicalize } from "../src/server/license/verifier.js";
@@ -39,27 +40,39 @@ const USAGE =
   'Usage: npx tsx scripts/sign-license.ts --name "User Name" --email "user@example.com" ' +
   "[--type personal|commercial|grandfathered] [--expires days|never] [--skip-entitlement]";
 
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const options: Record<string, string> = {};
-
-  for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith("--")) {
-      const key = args[i].slice(2);
-      const val = args[i + 1];
-      if (val && !val.startsWith("--")) {
-        options[key] = val;
-        i++;
-      } else {
-        options[key] = "true";
-      }
+/**
+ * Parse `--flag value` pairs.
+ *
+ * A valueless flag maps to `true` (the boolean), NOT the string `"true"` — the
+ * previous version stored the string, which then had to be un-done at four
+ * separate call sites, and leaked the parser's encoding into
+ * `resolveExpiresAt`, an otherwise pure date function.
+ */
+export function parseArgs(argv: string[]): Record<string, string | true> {
+  const options: Record<string, string | true> = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (!argv[i].startsWith("--")) continue;
+    const key = argv[i].slice(2);
+    const val = argv[i + 1];
+    if (val && !val.startsWith("--")) {
+      options[key] = val;
+      i++;
+    } else {
+      options[key] = true;
     }
   }
   return options;
 }
 
-function fail(message: string): never {
+/** Read a flag that requires a value; a valueless flag reads as absent. */
+function str(options: Record<string, string | true>, key: string): string | undefined {
+  const v = options[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+function fail(message: string, showUsage = false): never {
   console.error(`Error: ${message}`);
+  if (showUsage) console.error(USAGE);
   process.exit(1);
 }
 
@@ -79,34 +92,38 @@ export function resolveExpiresAt(
   now: Date,
 ): string | null {
   if (rawExpires === "never") return null;
-  if (rawExpires === undefined || rawExpires === "true") {
+
+  let days: number;
+  if (rawExpires === undefined) {
     if (type === "grandfathered") return null;
-    const d = new Date(now);
-    d.setDate(d.getDate() + DEFAULT_EXPIRES_DAYS);
-    return d.toISOString();
+    days = DEFAULT_EXPIRES_DAYS;
+  } else {
+    // Strict, not `parseInt`: the prefix-lenient version silently read
+    // `--expires 30days` as 30 and `--expires 1e5` as 1.
+    if (!/^\d+$/.test(rawExpires)) {
+      throw new RangeError(
+        `--expires must be a whole number of days, or "never" (got "${rawExpires}")`,
+      );
+    }
+    days = Number(rawExpires);
+    if (days <= 0) {
+      throw new RangeError(`--expires must be greater than zero (got "${rawExpires}")`);
+    }
   }
-  const days = Number.parseInt(rawExpires, 10);
-  if (!Number.isFinite(days) || days <= 0) {
-    throw new RangeError(
-      `--expires must be a positive number of days, or "never" (got "${rawExpires}")`,
-    );
-  }
+
   const d = new Date(now);
   d.setDate(d.getDate() + days);
   return d.toISOString();
 }
 
 async function generateLicense(): Promise<void> {
-  const options = parseArgs();
-  const name = options.name === "true" ? "" : (options.name ?? "");
-  const email = options.email === "true" ? "" : (options.email ?? "");
-  const rawType = options.type === "true" ? undefined : options.type;
-  const type = (rawType ?? "personal") as LicenseMetadata["type"];
+  const options = parseArgs(process.argv.slice(2));
+  const name = str(options, "name");
+  const email = str(options, "email");
+  const type = (str(options, "type") ?? "personal") as LicenseMetadata["type"];
 
   if (!name || !email) {
-    console.error("Error: --name and --email are required.");
-    console.log(USAGE);
-    process.exit(1);
+    fail("--name and --email are required.", true);
   }
   if (!LICENSE_TYPES.includes(type as (typeof LICENSE_TYPES)[number])) {
     // A typo'd type would otherwise be SIGNED into the blob and rejected
@@ -126,7 +143,7 @@ async function generateLicense(): Promise<void> {
   const createdAt = new Date().toISOString();
   let expiresAt: string | null;
   try {
-    expiresAt = resolveExpiresAt(options.expires, type, new Date());
+    expiresAt = resolveExpiresAt(str(options, "expires"), type, new Date());
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }
@@ -161,7 +178,7 @@ async function generateLicense(): Promise<void> {
   // Record the update entitlement. Ordered AFTER printing so a KV failure never
   // costs the operator the blob they just minted — they can still deliver it and
   // repair the entitlement separately (see docs/licensing-operations.md).
-  if (options["skip-entitlement"] === "true") {
+  if (options["skip-entitlement"] === true) {
     console.error(
       "\n[license] --skip-entitlement: no LICENSE_KV entry written. This license will be " +
         'told "You\'re up to date" forever. Only correct for an offline test.',
@@ -190,7 +207,9 @@ async function generateLicense(): Promise<void> {
   console.log(`\n[license] Update entitlement written to Cloudflare KV for license ${id}.`);
 }
 
-// Guard so the exported helpers can be imported by tests without side effects.
-if (process.argv[1]?.includes("sign-license")) {
+// Run only when executed directly, so tests can import the exported helpers
+// without side effects. The canonical ESM check, not a substring match on the
+// path — `includes("sign-license")` also matched the test file's own name.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   void generateLicense();
 }

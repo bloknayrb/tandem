@@ -1,6 +1,9 @@
 <script lang="ts">
-import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL } from "../../shared/constants";
+import { untrack } from "svelte";
+import { TANDEM_PURCHASE_URL, TANDEM_SUPPORT_EMAIL, TRIAL_DAYS } from "../../shared/constants";
+import { unverifiableLicenseMessage } from "../../shared/license-copy";
 import { licenseStore } from "../hooks/useLicense.svelte";
+import { trapTab } from "../utils/focus-trap";
 import LicenseActivateForm from "./LicenseActivateForm.svelte";
 
 // Restricted-mode activation wall (#1116). Renders only when the trial has
@@ -15,56 +18,59 @@ import LicenseActivateForm from "./LicenseActivateForm.svelte";
 // was falsified by the thing saying it. Hence the dismiss below: it steps the
 // user into read-only mode rather than trapping them behind a promise the
 // overlay itself prevents them from acting on.
+//
+// Dismissing changes nothing about enforcement — that is entirely server-side
+// (Hocuspocus `onAuthenticate` clamps document rooms read-only; the MCP tools
+// and mutating `/api` routes are gated per dispatch). It hides an overlay.
 const ui = $derived(licenseStore.ui);
 const status = $derived(licenseStore.status);
 
 let dismissed = $state(false);
 let dialogEl = $state<HTMLElement | null>(null);
+let returnFocusEl: Element | null = null;
 
 const visible = $derived(ui.showWall && !dismissed);
 
 // Re-arm the wall if the user leaves restricted mode and comes back (e.g. a
 // license activated elsewhere later lapses). Without this, one dismissal would
-// suppress the wall for the rest of the session.
+// suppress the wall for the rest of the session. Reads `ui.showWall` but never
+// `dismissed`, so it cannot re-trigger itself.
 $effect(() => {
   if (!ui.showWall) dismissed = false;
 });
 
-// Focus the dialog when it appears so the trap below has an anchor and a
-// keyboard user isn't left with focus in the now-unreachable editor.
+// Move focus into the dialog on open, and PUT IT BACK on close. Without the
+// restore, dismissing (Escape or the button) unmounts the focused element and
+// the browser drops focus to <body> — leaving a keyboard user at the top of the
+// tab order with no focus ring, needing to Tab through the whole chrome to
+// reach the editor they were just returned to. Both sibling modals already do
+// this; the wall was the only one that didn't.
+//
+// `dialogEl` is read through `untrack` (the house pattern for a `bind:this`
+// ref) so a future state write in here can't turn this into a render loop.
 $effect(() => {
-  if (visible && dialogEl) dialogEl.focus();
+  if (!visible) return;
+  const el = untrack(() => dialogEl);
+  if (!el) return;
+  returnFocusEl = document.activeElement;
+  el.focus();
+  return () => {
+    if (returnFocusEl instanceof HTMLElement && document.contains(returnFocusEl)) {
+      returnFocusEl.focus();
+    }
+    returnFocusEl = null;
+  };
 });
-
-const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
-
-/** Tab focus trap — the dialog claims `aria-modal="true"`, so it owes one. */
-function trapTab(e: KeyboardEvent): void {
-  if (e.key !== "Tab" || !dialogEl) return;
-  const focusables = Array.from(dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-    (el) => el.offsetParent !== null,
-  );
-  if (focusables.length === 0) return;
-  const first = focusables[0];
-  const last = focusables[focusables.length - 1];
-  const active = document.activeElement;
-  if (e.shiftKey && (active === first || active === dialogEl)) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && active === last) {
-    e.preventDefault();
-    first.focus();
-  }
-}
 
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === "Escape") {
+    // `preventDefault` is load-bearing, not decorative: App.svelte's window
+    // keydown clears the active annotation and bails on `defaultPrevented`.
     e.preventDefault();
     dismissed = true;
     return;
   }
-  trapTab(e);
+  trapTab(e, dialogEl);
 }
 </script>
 
@@ -80,18 +86,17 @@ function onKeydown(e: KeyboardEvent): void {
     onkeydown={onKeydown}
   >
     <div class="license-wall-dialog">
-      <h2 class="license-wall-heading" id="license-wall-heading">Your trial has ended</h2>
+      <h2 class="license-wall-heading" id="license-wall-heading">
+        {status?.licenseUnverifiable ? "Your license needs attention" : "Your trial has ended"}
+      </h2>
       {#if status?.licenseUnverifiable}
         <p class="license-wall-body" data-testid="license-wall-unverifiable">
-          A license is installed on this device, but Tandem couldn't verify it — it may have
-          been issued before a signing-key change, or the file may be damaged. Paste it again
-          below, or email
-          <a href="mailto:{TANDEM_SUPPORT_EMAIL}">{TANDEM_SUPPORT_EMAIL}</a> to have it reissued.
+          {unverifiableLicenseMessage(status.licenseUnverifiable)}
         </p>
       {:else}
         <p class="license-wall-body">
-          Your 14-day trial is over. Activate a license to keep editing — or continue in
-          read-only mode, where your documents stay open for reading, exporting, and chatting
+          Your {TRIAL_DAYS}-day trial is over. Activate a license to keep editing — or continue
+          in read-only mode, where your documents stay open for reading, exporting, and chatting
           with Claude.
         </p>
       {/if}

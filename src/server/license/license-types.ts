@@ -1,3 +1,5 @@
+import type { LicenseUnverifiableCode } from "../../shared/license-copy.js";
+
 export interface LicenseMetadata {
   id: string; // Unique ID (e.g. UUID)
   name: string;
@@ -60,11 +62,16 @@ export interface LicenseFile {
  *    `updateWindowCurrent` governs ONLY the update window (run-forever otherwise).
  *
  * `licenseUnverifiable` marks the trial/restricted arms reached DESPITE a
- * `license.json` being present (bad signature, unknown schema, corrupt file).
- * It changes no enforcement — an unverified license must not unlock — but every
- * user-facing surface needs it, or someone holding a license is told their
- * trial ended. Only ever set on the non-licensed arms; the licensed arm is by
- * construction verified.
+ * `license.json` being present, and carries WHY (bad signature, unknown schema,
+ * corrupt file). It changes no enforcement — an unverified license must not
+ * unlock — but every user-facing surface needs it, or someone holding a license
+ * is told their trial ended. Only ever set on the non-licensed arms; the
+ * licensed arm is by construction verified.
+ *
+ * Deliberately NOT a fourth `status` value: `connection-gate.ts` and
+ * `license-gate.ts` both decide on `status === "restricted"`, so a new status
+ * would fail OPEN at both enforcement surfaces until every gate was updated.
+ * Diagnosis and entitlement are orthogonal axes.
  */
 export type LicenseState =
   | { gateActive: false }
@@ -73,13 +80,13 @@ export type LicenseState =
       status: "trial";
       trial: TrialInfo;
       updateWindowCurrent: false;
-      licenseUnverifiable?: true;
+      licenseUnverifiable?: LicenseUnverifiableCode;
     }
   | {
       gateActive: true;
       status: "restricted";
       updateWindowCurrent: false;
-      licenseUnverifiable?: true;
+      licenseUnverifiable?: LicenseUnverifiableCode;
     }
   | {
       gateActive: true;

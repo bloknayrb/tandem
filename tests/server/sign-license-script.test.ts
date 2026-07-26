@@ -12,7 +12,7 @@
  * Both halves are tested here: the expiry default, and the entitlement write.
  */
 import { describe, expect, it, vi } from "vitest";
-import { resolveExpiresAt } from "../../scripts/sign-license.js";
+import { parseArgs, resolveExpiresAt } from "../../scripts/sign-license.js";
 import { writeLicenseEntitlement } from "../../src/server/license/kv-store.js";
 
 const NOW = new Date("2026-01-01T00:00:00.000Z");
@@ -25,11 +25,19 @@ describe("resolveExpiresAt", () => {
     expect(got).toBe(new Date("2027-01-01T00:00:00.000Z").toISOString());
   });
 
-  it("treats a bare `--expires` flag (no value) as omitted", () => {
-    // The arg parser stores a valueless flag as the string "true".
-    expect(resolveExpiresAt("true", "personal", NOW)).toBe(
-      resolveExpiresAt(undefined, "personal", NOW),
-    );
+  it('rejects a literal "true" rather than silently treating it as omitted', () => {
+    // `parseArgs` used to store the STRING "true" for a valueless flag, which
+    // leaked the parser's encoding into this otherwise-pure date function. It
+    // now yields a boolean, and `str()` maps that to `undefined` — so anything
+    // reaching here as the string "true" is genuinely bad input.
+    expect(() => resolveExpiresAt("true", "personal", NOW)).toThrow(RangeError);
+  });
+
+  it("rejects prefix-numeric input instead of silently truncating it", () => {
+    // `parseInt` read "30days" as 30 and "1e5" as 1 — both silently wrong for a
+    // flag that decides how long a customer receives updates.
+    expect(() => resolveExpiresAt("30days", "personal", NOW)).toThrow(RangeError);
+    expect(() => resolveExpiresAt("1e5", "personal", NOW)).toThrow(RangeError);
   });
 
   it("gives a grandfathered license a null window — it never expires", () => {
@@ -52,6 +60,19 @@ describe("resolveExpiresAt", () => {
     expect(() => resolveExpiresAt("soon", "personal", NOW)).toThrow(RangeError);
     expect(() => resolveExpiresAt("0", "personal", NOW)).toThrow(RangeError);
     expect(() => resolveExpiresAt("-5", "personal", NOW)).toThrow(RangeError);
+  });
+});
+
+describe("parseArgs", () => {
+  it('yields a boolean for a valueless flag, not the string "true"', () => {
+    // The string form had to be un-done at four call sites and leaked into
+    // `resolveExpiresAt`. A boolean is unambiguous and `str()` filters it out.
+    expect(parseArgs(["--skip-entitlement"])).toEqual({ "skip-entitlement": true });
+    expect(parseArgs(["--name", "Jane"])).toEqual({ name: "Jane" });
+  });
+
+  it("treats a following flag as the end of the previous flag's value", () => {
+    expect(parseArgs(["--name", "--email", "j@x.co"])).toEqual({ name: true, email: "j@x.co" });
   });
 });
 
