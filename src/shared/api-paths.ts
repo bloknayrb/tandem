@@ -89,4 +89,7 @@ export const API_LAUNCHER_STATUS = "/api/launcher/status";
 export const API_LAUNCHER_NONCE = "/api/launcher/nonce";
 export const API_LAUNCHER_RELAUNCH = "/api/launcher/relaunch";
 export const API_LAUNCHER_START_FRESH = "/api/launcher/start-fresh";
+/** Promote a `deferred-autostart` launcher to a live supervisor (#1236).
+ * Distinct from `start-fresh`, which restarts an *existing* supervisor. */
+export const API_LAUNCHER_START = "/api/launcher/start";
 export const API_LAUNCHER_WORKING_DIRECTORY = "/api/launcher/working-directory";

@@ -64,11 +64,23 @@ These are what go stale if you delete Tandem without cleaning up:
   auto-discovers.
 - Windows only: `Tandem Cowork*` firewall rules and Cowork plugin
   registration entries.
+- The start-at-login registration, **if you turned that setting on**
+  (Settings → Network). It lives outside the app-data directory, so deleting
+  app data does not remove it, and an orphan makes your OS try to launch a
+  binary that isn't there on every login:
+
+  | OS | Location |
+  |---|---|
+  | Windows | `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, value `Tandem` (plus a matching `Explorer\StartupApproved\Run` value) |
+  | macOS | `~/Library/LaunchAgents/Tandem.plist` |
+  | Linux | `~/.config/autostart/Tandem.desktop` (always home-relative; `XDG_CONFIG_HOME` is not consulted) |
 
 ## Uninstalling cleanly
 
 **Windows desktop app**: the uninstaller runs the scrub automatically —
-nothing to do.
+nothing to do. It is skipped during an *upgrade* (the installer runs the old
+uninstaller to replace files, and wiping your configuration on every release
+would not be a favor), so your settings survive updates.
 
 **Everywhere else** (macOS/Linux desktop, npm install): run the scrub
 *before* removing the app, while the `tandem` binary still exists:
@@ -80,7 +92,8 @@ tandem --uninstall-scrub        # or: npx tandem-editor --uninstall-scrub
 Then delete the app / `npm uninstall -g tandem-editor`.
 
 The scrub removes the cross-program entries listed above (MCP config keys,
-the bundled skill, Cowork registration, firewall rules). It **deliberately
+the bundled skill, Cowork registration, firewall rules, and the start-at-login
+registration). It **deliberately
 leaves your data**: the app-data directory (your sessions, annotations, and
 document backups) and the keychain entries stay until you delete them
 yourself — uninstalling must never be the thing that destroys a backup you

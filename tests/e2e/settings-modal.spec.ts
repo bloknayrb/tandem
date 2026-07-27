@@ -313,6 +313,26 @@ test("PR6: Network Advanced disclosure resets across modal close/open", async ({
   await expect(page.locator("[data-testid='network-advanced']")).not.toHaveAttribute("open", /.*/);
 });
 
+test("#1236: the start-at-login toggle is absent in the browser build", async ({ page }) => {
+  // The only honest E2E assertion for autostart: it is a desktop-only control,
+  // and this suite runs in a browser. Negative, but it pins a real regression —
+  // an ungated toggle would call `invoke` and throw on click for every browser
+  // user. The positive path needs a real OS registration and a reboot, so it
+  // lives on the manual QA checklist (see ADR-046).
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+
+  await openSettingsModal(page);
+  await page.locator("[data-testid='settings-modal-tab-network']").click();
+
+  // The tab itself must have rendered — otherwise this would pass vacuously
+  // against a Network tab that failed to mount at all.
+  await expect(page.locator("[data-testid='network-advanced']")).toHaveCount(1);
+  await expect(page.locator("[data-testid='network-autostart-toggle']")).toHaveCount(0);
+  await expect(page.locator("[data-testid='network-autostart-error']")).toHaveCount(0);
+});
+
 test("#993: 'Use Warm when system is light' resolves system-light to warm, keeps dark", async ({
   page,
 }) => {

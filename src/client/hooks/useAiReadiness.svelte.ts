@@ -51,7 +51,7 @@
  */
 import { onDestroy } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
-import type { LauncherStatus } from "../../shared/launcher/contract.js";
+import { isTransientlyUnavailable, type LauncherStatus } from "../../shared/launcher/contract.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
 /** Loopback `/health` response. `hasSession` is omitted for non-loopback
@@ -235,7 +235,21 @@ export function createAiReadiness(deps: {
     // An active MCP session means an agent is connected and AI works, whether
     // or not the launcher spawned it. Promote to ready and skip the CTA.
     if (mcpSessionActive) return "ready";
-    if (status.available === false) return "unconfigured";
+    if (status.available === false) {
+      // Autostart deferral (#1236): the app was launched by the OS at login and
+      // deliberately held the Claude launcher back. Nothing is misconfigured —
+      // the Rust shell fires the deferred start the moment the window is shown,
+      // so this state resolves on its own within a poll or two. Rendering it as
+      // "unconfigured" would show a fully-configured user the setup-wizard
+      // "connect" CTA, which is worse than saying nothing. "booting" is exactly
+      // right: transient, chip suppressed.
+      //
+      // `reason` is loopback-only, so a LAN viewer sees bare
+      // `{ available: false }` and still lands on "unconfigured" — correct, since
+      // a LAN viewer cannot act on the deferral anyway.
+      if (isTransientlyUnavailable(status.reason)) return "booting";
+      return "unconfigured";
+    }
     return status.running === true ? "ready" : "stopped";
   });
 

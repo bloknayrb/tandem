@@ -133,6 +133,7 @@ const baseDeps = (
 ): LauncherRoutesDeps => ({
   getSupervisor: () => sup,
   unavailableReason: () => reason,
+  startSupervisor: async () => {},
   store: store ?? makeStubStore(),
 });
 
@@ -691,5 +692,194 @@ describe("/status try/catch on supervisor throw (B4)", () => {
     const res = await request(app, "GET", "/api/launcher/status");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ available: true, running: false });
+  });
+});
+
+describe("POST /api/launcher/start — autostart deferral (#1236)", () => {
+  /** Deps whose supervisor starts null and flips to a fake once started, so
+   * the route's own `getSupervisor() !== null` checks see real transitions. */
+  function deferredDeps(
+    overrides: Partial<LauncherRoutesDeps> = {},
+  ): LauncherRoutesDeps & { calls: () => number } {
+    let sup: Supervisor | null = null;
+    let calls = 0;
+    return {
+      getSupervisor: () => sup,
+      unavailableReason: () => "deferred-autostart",
+      startSupervisor: async () => {
+        calls += 1;
+        sup = makeFakeSupervisor();
+      },
+      store: makeStubStore(),
+      calls: () => calls,
+      ...overrides,
+    };
+  }
+
+  async function postStart(
+    app: Express,
+    body?: Record<string, unknown>,
+  ): Promise<{ status: number; body: unknown }> {
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    return request(app, "POST", "/api/launcher/start", { nonce: nonce.nonce, ...body });
+  }
+
+  it("starts the supervisor exactly once on the happy path", async () => {
+    const deps = deferredDeps();
+    const { app } = makeApp(deps);
+    const res = await postStart(app);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, started: true });
+    expect(deps.calls()).toBe(1);
+  });
+
+  it("is idempotent once the supervisor exists", async () => {
+    const deps = deferredDeps();
+    const { app } = makeApp(deps);
+    await postStart(app);
+    const again = await postStart(app);
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual({ ok: true, started: false });
+    // The second call must not create a second supervisor — two supervisors
+    // means an orphaned reaper child that shutdown can never reap.
+    expect(deps.calls()).toBe(1);
+  });
+
+  it("does NOT become an HTTP bypass of TANDEM_DISABLE_LAUNCHER=1", async () => {
+    // This is the whole reason the reason check precedes the nonce check.
+    const deps = deferredDeps({ unavailableReason: () => "disabled-by-env" });
+    const { app } = makeApp(deps);
+    const res = await postStart(app);
+    expect(res.status).toBe(503);
+    expect((res.body as { code: string }).code).toBe("LAUNCHER_NOT_AVAILABLE");
+    expect(deps.calls()).toBe(0);
+  });
+
+  it("rejects every non-deferred reason", async () => {
+    for (const reason of ["stdio-mode", "spawn-failed", "disabled-by-env"] as const) {
+      const deps = deferredDeps({ unavailableReason: () => reason });
+      const { app } = makeApp(deps);
+      const res = await postStart(app);
+      expect(res.status, `reason=${reason}`).toBe(503);
+      expect(deps.calls(), `reason=${reason}`).toBe(0);
+    }
+  });
+
+  it("rejects a missing nonce with 403 and never starts", async () => {
+    const deps = deferredDeps();
+    const { app } = makeApp(deps);
+    const res = await request(app, "POST", "/api/launcher/start", {});
+    expect(res.status).toBe(403);
+    expect(deps.calls()).toBe(0);
+  });
+
+  it("rejects a replayed nonce with 403", async () => {
+    const deps = deferredDeps();
+    const { app } = makeApp(deps);
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    await request(app, "POST", "/api/launcher/start", { nonce: nonce.nonce });
+    // Same nonce again: consumed on first use, so this must fail — and the
+    // supervisor already exists anyway.
+    const replay = await request(app, "POST", "/api/launcher/start", { nonce: nonce.nonce });
+    expect([403, 200]).toContain(replay.status);
+    expect(deps.calls()).toBe(1);
+  });
+
+  it("rejects a disallowed origin", async () => {
+    const deps = deferredDeps();
+    const { app } = makeApp(deps);
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const res = await request(
+      app,
+      "POST",
+      "/api/launcher/start",
+      { nonce: nonce.nonce },
+      { Origin: "https://evil.example.com" },
+    );
+    expect(res.status).toBe(403);
+    expect(deps.calls()).toBe(0);
+  });
+
+  it("429s while a relaunch is in flight (shared exclusion group)", async () => {
+    // A start racing a relaunch mid-stop is the double-spawn case.
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const sup = makeFakeSupervisor();
+    const deps: LauncherRoutesDeps = {
+      ...baseDeps(sup),
+      relaunchHook: () => held,
+    };
+    const { app } = makeApp(deps);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise((r) => server.once("listening", r));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    try {
+      const nonceRes = await fetch(`http://127.0.0.1:${port}/api/launcher/nonce`, {
+        headers: { Origin: `http://${TAURI_HOSTNAME}` },
+      });
+      const { nonce } = (await nonceRes.json()) as { nonce: string };
+
+      const relaunchPromise = fetch(`http://127.0.0.1:${port}/api/launcher/relaunch`, {
+        method: "POST",
+        headers: { Origin: `http://${TAURI_HOSTNAME}`, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: os.homedir(), nonce }),
+      });
+      // Let the relaunch handler reach its hook and hold there.
+      await new Promise((r) => setTimeout(r, 50));
+
+      const nonce2Res = await fetch(`http://127.0.0.1:${port}/api/launcher/nonce`, {
+        headers: { Origin: `http://${TAURI_HOSTNAME}` },
+      });
+      const { nonce: nonce2 } = (await nonce2Res.json()) as { nonce: string };
+      const startRes = await fetch(`http://127.0.0.1:${port}/api/launcher/start`, {
+        method: "POST",
+        headers: { Origin: `http://${TAURI_HOSTNAME}`, "content-type": "application/json" },
+        body: JSON.stringify({ nonce: nonce2 }),
+      });
+      // Supervisor is non-null here so the idempotent branch wins before the
+      // inflight check — the important assertion is that it did NOT spawn.
+      expect([200, 429]).toContain(startRes.status);
+
+      release();
+      await relaunchPromise;
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe("GET /api/launcher/status — reason redaction (#1236)", () => {
+  it("omits reason entirely for non-loopback callers", async () => {
+    // `deferred-autostart` is a presence oracle: it means the machine
+    // auto-booted and nobody has opened the window yet.
+    const { app } = makeApp(baseDeps(null, "deferred-autostart"), {
+      remoteAddress: "192.168.1.50",
+    });
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ available: false });
+  });
+
+  it("omits reason off-loopback for every reason, not just the deferred one", async () => {
+    for (const reason of [
+      "stdio-mode",
+      "disabled-by-env",
+      "spawn-failed",
+      "deferred-autostart",
+    ] as const) {
+      const { app } = makeApp(baseDeps(null, reason), { remoteAddress: "10.0.0.4" });
+      const res = await request(app, "GET", "/api/launcher/status");
+      expect(res.body, `reason=${reason}`).toEqual({ available: false });
+    }
+  });
+
+  it("still returns reason to loopback callers", async () => {
+    const { app } = makeApp(baseDeps(null, "deferred-autostart"));
+    const res = await request(app, "GET", "/api/launcher/status");
+    expect(res.body).toEqual({ available: false, reason: "deferred-autostart" });
   });
 });

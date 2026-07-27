@@ -1,6 +1,7 @@
 <script lang="ts">
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { createAppInfo } from "../hooks/useAppInfo.svelte.js";
+import { createAutostart } from "../hooks/useAutostart.svelte.js";
 import type { SidecarRetryStrategy } from "../hooks/useTandemSettings.svelte.js";
 import { disabledControlStyle } from "../utils/colors.js";
 import CollapsibleSection from "./CollapsibleSection.svelte";
@@ -12,6 +13,19 @@ const { open, settings, onUpdate, connected, reconnectAttempts, readOnly }: Prop
 
 const appInfo = createAppInfo(() => open);
 const isTauri = isTauriRuntime();
+
+// Start-at-login (#1236). Desktop-only: the npm CLI's `tandem start` is a
+// foreground process with no OS registration to manage.
+//
+// State lives in the OS, not `tandem:settings` — see `createAutostart`. That is
+// why nothing here touches `onUpdate` and why the schema version didn't move.
+// Also deliberately NOT gated on `readOnly`: that flag exists because
+// `onUpdate` no-ops against a forward-compat settings schema, which an OS login
+// item has nothing to do with.
+const autostart = createAutostart(() => open && isTauri);
+const autostartStatus = $derived(autostart.status);
+const autostartBlocked = $derived(autostartStatus !== null && !autostartStatus.trayAvailable);
+const autostartDisabled = $derived(autostartBlocked || autostart.loading);
 
 let restartError = $state<string | null>(null);
 let restarting = $state(false);
@@ -39,6 +53,11 @@ const labelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 const subtextStyle =
   "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);";
+const errorStyle =
+  "font-size: 10px; color: var(--tandem-error-fg); margin-top: var(--tandem-space-1);";
+/** The bordered-surface recipe every row in this tab repeats. */
+const rowCardStyle =
+  "padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface);";
 
 const transport = $derived(appInfo.info?.transport);
 const bindHost = $derived(appInfo.info?.bindHost);
@@ -82,7 +101,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
     {/if}
   </div>
   {#if restartError}
-    <div style="font-size: 10px; color: var(--tandem-error-fg); margin-top: var(--tandem-space-1);">
+    <div style={errorStyle}>
       {restartError}
     </div>
   {/if}
@@ -100,6 +119,48 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
     {/if}
   </div>
 </div>
+
+<!-- Start at login (#1236) — desktop only. Top-level rather than inside
+     Advanced: it changes what happens on every boot, which is not a
+     rarely-touched knob. -->
+{#if isTauri && autostartStatus !== null}
+  <div>
+    <div style={labelStyle}>Startup</div>
+    <label
+      style="display: flex; align-items: flex-start; gap: var(--tandem-space-2); {rowCardStyle} {disabledControlStyle(
+        autostartDisabled,
+      )}"
+    >
+      <input
+        type="checkbox"
+        data-testid="network-autostart-toggle"
+        checked={autostartStatus.enabled}
+        disabled={autostartDisabled}
+        onchange={(e) => void autostart.toggle(e.currentTarget.checked)}
+        style="accent-color: var(--tandem-accent); margin-top: 2px; flex-shrink: 0; {disabledControlStyle(
+          autostartDisabled,
+        )}"
+      />
+      <span style="flex: 1;">
+        <span style="font-size: 12px; color: var(--tandem-fg); display: block;">Start Tandem when my computer starts</span>
+        <span style="{subtextStyle} display: block;">
+          {#if autostartBlocked}
+            Unavailable — Tandem couldn't create a tray icon on this system, so a hidden
+            startup would leave no way to reach the app.
+          {:else}
+            Tandem starts minimized to the tray. Your AI assistant isn't launched until you
+            open the window. The document server runs whenever Tandem is running.
+          {/if}
+        </span>
+      </span>
+    </label>
+    {#if autostart.error}
+      <div data-testid="network-autostart-error" style={errorStyle}>
+        {autostart.error}
+      </div>
+    {/if}
+  </div>
+{/if}
 
 <!-- Advanced — collapsed by default. Holds the rarely-touched knobs: loopback
      port, banner delay, retry strategy, token rotation.

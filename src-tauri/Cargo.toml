@@ -58,6 +58,10 @@ tauri-plugin-devtools = { version = "2", optional = true }
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
+# Start-at-login (#1236). Wrapped in app-defined commands (src/autostart.rs)
+# rather than exposed via its JS API, so no `autostart:default` capability
+# grant and no @tauri-apps/plugin-autostart npm dependency are needed.
+tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-prevent-default = "5"
 tauri-plugin-decorum = "1"

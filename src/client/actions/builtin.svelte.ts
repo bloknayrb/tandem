@@ -19,7 +19,7 @@ import {
   API_SAVE,
   API_SCRATCHPAD,
 } from "../../shared/api-paths.js";
-import type { LauncherStatus } from "../../shared/launcher/contract.js";
+import { isTransientlyUnavailable, type LauncherStatus } from "../../shared/launcher/contract.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
@@ -537,6 +537,14 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
   }
   const status = result.value;
   if (!status.available) {
+    // #1236: "not active in this Tandem build" is a lie in the deferred case —
+    // the launcher is present and about to start, it just hasn't seen a human
+    // yet. Showing the window is what releases it, and the user is by
+    // definition looking at the window to have run this command.
+    if (isTransientlyUnavailable(status.reason)) {
+      d.notify("info", "Claude is starting up — try again in a moment.");
+      return false;
+    }
     d.notify("warning", "Claude launcher not active in this Tandem build.");
     return false;
   }
