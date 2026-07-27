@@ -3,7 +3,6 @@ import {
   autostartErrorMessage,
   autostartGetStatus,
   autostartSetEnabled,
-  type InvokeFn,
   loadInvoke,
 } from "../tauri/autostart-invoke.js";
 
@@ -37,23 +36,18 @@ export function createAutostart(getActive: () => boolean): AutostartState {
   let loading = $state(false);
   let error = $state<string | null>(null);
 
-  let invokeRef: InvokeFn | null = null;
-  let loadedOnce = false;
-
   function applyResult(next: AutostartStatus): void {
     status = next;
     error = next.error ? autostartErrorMessage(next.error) : null;
   }
 
-  async function getInvoke(): Promise<InvokeFn> {
-    invokeRef ??= await loadInvoke();
-    return invokeRef;
-  }
-
   async function load(): Promise<void> {
     loading = true;
     try {
-      applyResult(await autostartGetStatus(await getInvoke()));
+      // `loadInvoke` is a dynamic `import()`, so the ESM module cache already
+      // makes every call after the first a resolved-module lookup — memoizing
+      // it here would save nothing.
+      applyResult(await autostartGetStatus(await loadInvoke()));
     } catch {
       // A rejected invoke means the command isn't reachable (non-Tauri build,
       // or a shell that predates the command). Leave `status` null so the
@@ -65,11 +59,14 @@ export function createAutostart(getActive: () => boolean): AutostartState {
     }
   }
 
+  // No once-guard: `NetworkSettings` is mounted under `{#if open}` + `{#key
+  // activeTab.id}`, so this hook is constructed fresh per Settings open and
+  // `getActive()` stays true for the component's whole life — the body can only
+  // run once as written. A latch would be dead today AND would break the
+  // documented contract ("read the OS on every Settings open") if the modal ever
+  // became persistently mounted.
   $effect(() => {
-    if (!getActive()) return;
-    if (loadedOnce) return;
-    loadedOnce = true;
-    void load();
+    if (getActive()) void load();
   });
 
   const toggle = async (next: boolean): Promise<void> => {
@@ -79,7 +76,7 @@ export function createAutostart(getActive: () => boolean): AutostartState {
       // The result carries the OS's read-back value, not `next` — so a write
       // that was virtualized away or blocked leaves the toggle where it was
       // and reports `readback-mismatch` instead of lying.
-      applyResult(await autostartSetEnabled(await getInvoke(), next));
+      applyResult(await autostartSetEnabled(await loadInvoke(), next));
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {

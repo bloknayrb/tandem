@@ -60,6 +60,10 @@ const SHUTDOWN_URL: &str = "http://127.0.0.1:3479/api/shutdown";
 /// in src/shared/api-paths.ts.
 const LAUNCHER_NONCE_URL: &str = "http://127.0.0.1:3479/api/launcher/nonce";
 const LAUNCHER_START_URL: &str = "http://127.0.0.1:3479/api/launcher/start";
+/// How long a presence signal waits for the sidecar before giving up and
+/// re-arming the latch. Generous: the user has already shown up, so a slow boot
+/// should still get Claude launched rather than silently skipping it.
+const PRESENCE_HEALTH_DEADLINE: Duration = Duration::from_secs(90);
 /// License status endpoint (loopback). The updater reads `licenseId` +
 /// `updateWindowCurrent` to decide whether to route update checks through the
 /// license-gated Worker (#1116, ADR-040 §7). Keep in sync with
@@ -231,12 +235,19 @@ pub(crate) const AUTOSTART_FLAG: &str = "--tandem-autostart";
 /// other lifecycle behavior here has an env opt-out.
 const AUTOSTART_DISABLE_ENV: &str = "TANDEM_DISABLE_AUTOSTART";
 
-/// True when this process was started by the OS at login.
+/// Exact-match argv flag predicate, skipping `argv[0]`.
 ///
-/// `argv[0]` is skipped so an executable literally *named* `--tandem-autostart`
-/// cannot trip it — the same defensive skip `extract_file_arg` uses.
+/// The skip is a security invariant, not a nicety: an executable literally
+/// *named* `--tandem-autostart` (or `--uninstall-scrub`) must not be able to
+/// self-trigger the behavior by being renamed. One definition so a third flag
+/// can't copy the invariant a third time and get it subtly wrong.
+pub(crate) fn has_argv_flag(args: &[String], flag: &str) -> bool {
+    args.iter().skip(1).any(|a| a == flag)
+}
+
+/// True when this process was started by the OS at login.
 pub(crate) fn is_autostart_launch(args: &[String]) -> bool {
-    args.iter().skip(1).any(|a| a == AUTOSTART_FLAG)
+    has_argv_flag(args, AUTOSTART_FLAG)
 }
 
 /// Resolve the effective autostart state for this process: the flag, minus the
@@ -649,13 +660,7 @@ async fn post_drained_paths(
     if paths.is_empty() {
         return;
     }
-    let token = match token_store::get_or_create_token() {
-        Ok(t) => Some(t),
-        Err(e) => {
-            log::warn!("Token retrieval failed for drained-path POSTs: {e}");
-            None
-        }
-    };
+    let token = best_effort_token("drained-path POSTs");
     for path in paths {
         if let Err(e) = request_open_file(client, token.as_deref(), &path).await {
             log::warn!(
@@ -671,18 +676,12 @@ async fn post_drained_paths(
 /// queues when it is not.
 #[cfg(target_os = "macos")]
 fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
-    show_main_window(app);
+    show_main_window_for_user(app);
     // Hoist token retrieval out of the per-URL loop so a multi-file "Open
     // With" batch hits the keyring once, not N times. Mirrors
     // `post_drained_paths`. Falls back to anonymous on retrieval failure;
     // loopback bypasses Bearer enforcement so this is non-fatal.
-    let batch_token: Option<String> = match token_store::get_or_create_token() {
-        Ok(t) => Some(t),
-        Err(e) => {
-            log::warn!("Token retrieval failed for Opened-event batch: {e}");
-            None
-        }
-    };
+    let batch_token: Option<String> = best_effort_token("Opened-event batch");
     for url in urls {
         let path = match classify_opened_url(&url) {
             Ok(path) => path,
@@ -785,32 +784,81 @@ async fn request_launcher_start(
 /// not exist yet (see `buffer_startup_rejection`) — but a direct loopback POST
 /// has no such constraint.
 ///
-/// Known, accepted consequence: the tray's "Setup AI Assistant" item also shows
-/// the window, so it releases the launcher too. The supervisor's own gate (a
-/// `claude-code` integration with `apply !== "skip"`) is the backstop. See
+/// Known, accepted consequence: the tray's "Setup AI Assistant" item also
+/// signals presence, so it releases the launcher too. The supervisor's own gate
+/// (a `claude-code` integration with `apply !== "skip"`) is the backstop. See
 /// ADR-046.
 fn note_user_presence(app: &tauri::AppHandle) {
     if !LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel) {
         return;
     }
-    log::info!("Window shown after an autostart launch — releasing the Claude Code launcher");
+    log::info!("User presence detected after an autostart launch — releasing the Claude Code launcher");
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // The presence signal can beat the sidecar's HTTP server to the punch:
+        // `setup()` shows the window at boot on the trayless-Linux path, ~200
+        // lines before `start_sidecar`'s health poll returns. POSTing blind
+        // there hits a connection-refused, and since the latch was already
+        // consumed by the `swap` above, Claude would never launch for the rest
+        // of the session. Wait for the flag the spawn path sets instead.
+        if !await_sidecar_healthy(PRESENCE_HEALTH_DEADLINE).await {
+            log::warn!(
+                "Sidecar never became healthy — deferring the launcher release to the next presence signal"
+            );
+            LAUNCHER_DEFERRED.store(true, Ordering::Release);
+            return;
+        }
         let client = app.state::<reqwest::Client>().inner().clone();
-        let token = match token_store::get_or_create_token() {
-            Ok(t) => Some(t),
-            Err(e) => {
-                log::warn!("Token retrieval failed for deferred launcher start: {e}");
-                None
-            }
-        };
+        let token = best_effort_token("deferred launcher start");
         if let Err(e) = request_launcher_start(&client, token.as_deref()).await {
-            log::warn!("Deferred launcher start failed (Claude will not auto-launch): {e}");
+            // Restore the latch so a later presence signal retries. The `swap`
+            // above is a claim, not a commitment — without this a transient
+            // failure would permanently strand the launcher.
+            log::warn!("Deferred launcher start failed, will retry on the next presence signal: {e}");
+            LAUNCHER_DEFERRED.store(true, Ordering::Release);
         }
     });
 }
 
+/// Bounded wait for the sidecar's HTTP server to accept requests.
+///
+/// Polls the existing `SIDECAR_HEALTHY` flag rather than re-probing `/health` —
+/// the spawn path already flips it once `wait_for_health` succeeds and the
+/// pending-opens queue has drained, so this observes the same readiness the
+/// file-open path does instead of racing it with a second probe.
+async fn await_sidecar_healthy(deadline: Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < deadline {
+        if SIDECAR_HEALTHY.load(Ordering::Acquire) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    SIDECAR_HEALTHY.load(Ordering::Acquire)
+}
+
+/// Fetch the auth token for a loopback POST, falling back to anonymous.
+///
+/// Loopback callers are exempt from bearer enforcement (`createAuthMiddleware`),
+/// so a missing token is not fatal — but the header is still sent when
+/// available so the same call works if the server is ever bound non-loopback.
+/// One definition so the fallback posture can't drift between the four callers
+/// that need it.
+fn best_effort_token(context: &str) -> Option<String> {
+    match token_store::get_or_create_token() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            log::warn!("Token retrieval failed for {context}: {e}");
+            None
+        }
+    }
+}
+
 /// Show, unminimize, and focus the main window.
+///
+/// Mechanical only — this is also the startup path's show, so it must NOT imply
+/// a human is present. User-initiated entry points call
+/// `show_main_window_for_user` instead.
 fn show_main_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
         log::error!("Main window not found — check window label matches tauri.conf.json");
@@ -825,6 +873,18 @@ fn show_main_window(app: &tauri::AppHandle) {
     if let Err(e) = window.set_focus() {
         log::warn!("set_focus failed: {e}");
     }
+}
+
+/// Show the window *because a human asked for it*.
+///
+/// The split from `show_main_window` is load-bearing, not stylistic: `setup()`
+/// shows the window at boot on paths where nobody is necessarily watching (a
+/// trayless Linux autostart launch, and the Linux first-launch backstop).
+/// Treating "the window became visible" as "a human is here" would fire the
+/// launcher release at login — the exact scenario the deferral exists to
+/// prevent — and would do it before the sidecar is listening.
+fn show_main_window_for_user(app: &tauri::AppHandle) {
+    show_main_window(app);
     note_user_presence(app);
 }
 
@@ -879,7 +939,7 @@ pub fn run() {
             if suppress_show {
                 log::info!("Second instance is an autostart launch — not showing the window");
             } else {
-                show_main_window(app);
+                show_main_window_for_user(app);
             }
 
             match parsed {
@@ -887,13 +947,7 @@ pub fn run() {
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
                         let client = app_handle.state::<reqwest::Client>().inner().clone();
-                        let token = match token_store::get_or_create_token() {
-                            Ok(t) => Some(t),
-                            Err(e) => {
-                                log::warn!("Token retrieval failed for second-instance POST: {e}");
-                                None
-                            }
-                        };
+                        let token = best_effort_token("second-instance POST");
                         if let Err(e) =
                             request_open_file(&client, token.as_deref(), &path).await
                         {
@@ -1040,19 +1094,29 @@ pub fn run() {
             // plugin registers a few lines down, so `show_main_window`'s
             // warnings are lost on this path. Worth it — a lost warning beats a
             // window that never appears.
-            let autostart_launch = {
+            // Both facts are kept from ONE read of argv and the environment:
+            // the deferred log block below needs to distinguish "not an
+            // autostart launch" from "autostart launch, overridden", and
+            // re-deriving that would re-implement `resolve_autostart_launch`'s
+            // override rule inline — free to drift the moment the rule changes.
+            let (autostart_flag, autostart_launch) = {
                 let args: Vec<String> = std::env::args().collect();
                 let disable = std::env::var(AUTOSTART_DISABLE_ENV).ok();
-                resolve_autostart_launch(&args, disable.as_deref())
+                (
+                    is_autostart_launch(&args),
+                    resolve_autostart_launch(&args, disable.as_deref()),
+                )
             };
             // Arm the deferral BEFORE anything can show the window, so the
             // latch is never observed half-initialized. Set for every autostart
             // launch — not only the ones that stay hidden. If we end up showing
             // the window anyway (no tray, or the Linux first-launch exception),
-            // that show releases the latch immediately and the launcher starts
-            // as usual, which is the correct outcome by a shorter route.
+            // that path releases the latch explicitly; see the comment there.
             LAUNCHER_DEFERRED.store(autostart_launch, Ordering::Release);
 
+            // Mechanical show, not a presence signal: the latch is false on
+            // this path anyway, and routing it through the user-intent helper
+            // would blur the distinction the split exists to keep.
             if !autostart_launch {
                 show_main_window(app.handle());
             }
@@ -1093,9 +1157,7 @@ pub fn run() {
             // Deferred from the visibility block above — logging wasn't live yet.
             if autostart_launch {
                 log::info!("Autostart launch detected ({AUTOSTART_FLAG})");
-            } else if std::env::var(AUTOSTART_DISABLE_ENV).ok().as_deref() == Some("1")
-                && is_autostart_launch(&std::env::args().collect::<Vec<_>>())
-            {
+            } else if autostart_flag {
                 log::info!(
                     "{AUTOSTART_DISABLE_ENV}=1 — treating this autostart launch as a normal launch"
                 );
@@ -1223,13 +1285,13 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    MENU_OPEN => show_main_window(app),
+                    MENU_OPEN => show_main_window_for_user(app),
                     MENU_SETUP => {
                         // Auto-config was removed in #477 PR 3c-ii-c — setup is
                         // wizard-driven now. Focus the window and ask the client
                         // to open the integration wizard (App.svelte listens for
                         // "open-integration-wizard").
-                        show_main_window(app);
+                        show_main_window_for_user(app);
                         if let Err(e) = app.emit("open-integration-wizard", ()) {
                             log::warn!("Failed to emit open-integration-wizard: {e}");
                         }
@@ -1265,7 +1327,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        show_main_window(tray.app_handle());
+                        show_main_window_for_user(tray.app_handle());
                     }
                 })
                 .build(app);
@@ -1347,7 +1409,17 @@ pub fn run() {
                              (a hidden, trayless process would be unreachable)"
                         );
                     }
-                    show_main_window(app.handle());
+                    // Presence, deliberately, even though nobody has necessarily
+                    // arrived yet. Reaching here means we have abandoned the
+                    // hidden-tray model for this launch: there is no tray to
+                    // click and no Dock icon on Linux, so NO later signal can
+                    // ever release the latch and Claude would be stranded for
+                    // the whole session. Releasing at boot on an already-visible
+                    // window is the lesser evil, and it is confined to two
+                    // degraded Linux configurations we warn about. The release
+                    // is health-gated inside `note_user_presence`, so it lands
+                    // once the sidecar is actually listening. See ADR-046.
+                    show_main_window_for_user(app.handle());
                 }
             }
 
@@ -1466,7 +1538,7 @@ pub fn run() {
                     ..
                 } => {
                     if !has_visible_windows {
-                        show_main_window(_app);
+                        show_main_window_for_user(_app);
                     }
                 }
                 _ => {}
@@ -4640,6 +4712,27 @@ mod autostart_tests {
         LAUNCHER_DEFERRED.store(resolve_autostart_launch(&["tandem".into()], None), Ordering::Release);
         assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
         assert!(!LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
+    }
+
+    #[test]
+    fn a_failed_release_re_arms_the_latch_for_the_next_signal() {
+        let _guard = DEFERRAL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        LAUNCHER_DEFERRED.store(true, Ordering::Release);
+
+        // `note_user_presence` claims the latch with `swap` before it knows
+        // whether the POST will succeed. If the sidecar never came up, or the
+        // request failed, it must put the claim back — otherwise a transient
+        // failure permanently strands the launcher, which is exactly the bug
+        // the health-gating was added to prevent.
+        let claimed = LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel);
+        assert!(claimed, "the first signal claims the latch");
+        assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
+
+        // ...release fails...
+        LAUNCHER_DEFERRED.store(true, Ordering::Release);
+
+        // ...so a later presence signal can still claim it.
+        assert!(LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
     }
 
     #[test]

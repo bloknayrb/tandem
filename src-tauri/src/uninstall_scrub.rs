@@ -32,6 +32,14 @@
 //! Registration removal names the exact registry value / file path and deletes
 //! it — never enumerate-and-log, matching the token-safety invariant in
 //! `src/cli/uninstall-scrub.ts`.
+//!
+//! ## Why `eprintln!` and not `log::`
+//!
+//! `run()` dispatches here and `std::process::exit`s *before*
+//! `tauri::Builder::default()`, and `tauri-plugin-log` is only registered inside
+//! `setup()`. On this path no `log` implementation is ever installed, so every
+//! `log::warn!` would be silently discarded. stderr is the only channel that
+//! actually reaches a console uninstall.
 
 /// Exit code contract with the NSIS hook: 0 means "clean, or nothing was
 /// installed". The hook logs a non-zero code but never aborts the uninstall —
@@ -43,10 +51,8 @@ pub const SCRUB_OK: i32 = 0;
 pub const UNINSTALL_SCRUB_FLAG: &str = "--uninstall-scrub";
 
 /// True when this process was invoked purely to scrub.
-///
-/// `argv[0]` is skipped for the same reason `is_autostart_launch` skips it.
 pub fn is_uninstall_scrub(args: &[String]) -> bool {
-    args.iter().skip(1).any(|a| a == UNINSTALL_SCRUB_FLAG)
+    crate::has_argv_flag(args, UNINSTALL_SCRUB_FLAG)
 }
 
 /// Name the autostart registration is filed under.
@@ -86,10 +92,10 @@ fn remove_autostart_registration() {
             // firewall helper's stdout-matching idiom would log a spurious
             // warning on every clean uninstall.
             Ok(o) if o.status.success() => {
-                log::info!("[scrub] removed autostart registration from {key}");
+                eprintln!("[scrub] removed autostart registration from {key}");
             }
             Ok(_) => {}
-            Err(e) => log::warn!("[scrub] could not run reg delete for {key}: {e}"),
+            Err(e) => eprintln!("[scrub] could not run reg delete for {key}: {e}"),
         }
     }
 }
@@ -102,9 +108,9 @@ fn remove_autostart_registration() {
 fn remove_autostart_registration() {
     if let Some(path) = autostart_entry_path(dirs::home_dir()) {
         match std::fs::remove_file(&path) {
-            Ok(()) => log::info!("[scrub] removed autostart registration"),
+            Ok(()) => eprintln!("[scrub] removed autostart registration"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => log::warn!("[scrub] could not remove autostart registration: {e}"),
+            Err(e) => eprintln!("[scrub] could not remove autostart registration: {e}"),
         }
     }
 }
@@ -150,7 +156,7 @@ pub fn autostart_entry_path(home: Option<std::path::PathBuf>) -> Option<std::pat
 /// Run the scrub. Always returns `SCRUB_OK` — every step is independently
 /// best-effort, and a partial failure must not block uninstalling Tandem.
 pub fn run_uninstall_scrub() -> i32 {
-    log::info!("[scrub] starting uninstall scrub");
+    eprintln!("[scrub] starting uninstall scrub");
 
     remove_autostart_registration();
 
@@ -178,27 +184,27 @@ pub fn run_uninstall_scrub() -> i32 {
         for ws in &workspaces {
             match crate::cowork_installer::uninstall_tandem_plugin_from_workspace(ws) {
                 Ok(report) if fully_cleared(&report) => removed += 1,
-                Ok(report) => log::warn!(
+                Ok(report) => eprintln!(
                     "[scrub] workspace {} partially cleared: plugins={:?} marketplaces={:?} settings={:?}",
                     report.workspace_id,
                     report.installed_plugins,
                     report.known_marketplaces,
                     report.cowork_settings
                 ),
-                Err(e) => log::warn!("[scrub] workspace uninstall failed: {e}"),
+                Err(e) => eprintln!("[scrub] workspace uninstall failed: {e}"),
             }
         }
-        log::info!(
+        eprintln!(
             "[scrub] cleared Tandem plugin entries from {removed}/{} workspace(s)",
             workspaces.len()
         );
 
         if let Err(e) = crate::firewall::remove_cowork_rules() {
-            log::warn!("[scrub] firewall rule removal failed: {e}");
+            eprintln!("[scrub] firewall rule removal failed: {e}");
         }
     }
 
-    log::info!("[scrub] uninstall scrub complete");
+    eprintln!("[scrub] uninstall scrub complete");
     SCRUB_OK
 }
 

@@ -36,6 +36,7 @@ import {
 } from "../../shared/api-paths.js";
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
 import {
+  isTransientlyUnavailable,
   LAUNCHER_CWD_MAX_LENGTH,
   LAUNCHER_ERROR_IN_PROGRESS,
   LAUNCHER_ERROR_INVALID_BODY,
@@ -161,7 +162,6 @@ export interface LauncherRoutesDeps {
   relaunchHook?: () => Promise<void>;
   startFreshHook?: () => Promise<void>;
   workingDirHook?: () => Promise<void>;
-  startHook?: () => Promise<void>;
 }
 
 export function registerLauncherRoutes(app: Express, mw: Handler, deps: LauncherRoutesDeps): void {
@@ -278,6 +278,19 @@ function sendBadRequest(res: Response, code: string, message: string): void {
   res.status(400).json({ error: "BAD_REQUEST", code, message });
 }
 
+/** The `LAUNCHER_NOT_AVAILABLE` 503 shape, emitted from two places
+ * (`requireSupervisor` and the deferred-start route). One definition so the
+ * `reason` field's disclosure posture is decided once rather than drifting
+ * between them. */
+function sendNotAvailable(res: Response, reason: LauncherUnavailableReason, message: string): void {
+  res.status(503).json({
+    error: "SERVICE_UNAVAILABLE",
+    code: LAUNCHER_ERROR_NOT_AVAILABLE,
+    reason,
+    message,
+  });
+}
+
 function sendInProgress(res: Response, message: string): void {
   res.status(429).json({
     error: "TOO_MANY_REQUESTS",
@@ -333,12 +346,11 @@ function parseJsonObjectBody(req: Request, res: Response): Record<string, unknow
 function requireSupervisor(deps: LauncherRoutesDeps, res: Response): Supervisor | null {
   const sup = deps.getSupervisor();
   if (sup === null) {
-    res.status(503).json({
-      error: "SERVICE_UNAVAILABLE",
-      code: LAUNCHER_ERROR_NOT_AVAILABLE,
-      reason: deps.unavailableReason(),
-      message: "Auto-launcher is not available in this runtime",
-    });
+    sendNotAvailable(
+      res,
+      deps.unavailableReason(),
+      "Auto-launcher is not available in this runtime",
+    );
     return null;
   }
   return sup;
@@ -442,13 +454,8 @@ function makeStartHandler(deps: LauncherRoutesDeps): Handler {
     }
 
     const reason = deps.unavailableReason();
-    if (reason !== "deferred-autostart") {
-      res.status(503).json({
-        error: "SERVICE_UNAVAILABLE",
-        code: LAUNCHER_ERROR_NOT_AVAILABLE,
-        reason,
-        message: "Auto-launcher is not in a deferred state",
-      });
+    if (!isTransientlyUnavailable(reason)) {
+      sendNotAvailable(res, reason, "Auto-launcher is not in a deferred state");
       return;
     }
 
@@ -462,7 +469,6 @@ function makeStartHandler(deps: LauncherRoutesDeps): Handler {
     }
     inflight.start = true;
     try {
-      if (deps.startHook) await deps.startHook();
       await deps.startSupervisor();
       res.json({ ok: true, started: deps.getSupervisor() !== null });
     } catch (err) {

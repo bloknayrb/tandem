@@ -25,6 +25,7 @@ const isTauri = isTauriRuntime();
 const autostart = createAutostart(() => open && isTauri);
 const autostartStatus = $derived(autostart.status);
 const autostartBlocked = $derived(autostartStatus !== null && !autostartStatus.trayAvailable);
+const autostartDisabled = $derived(autostartBlocked || autostart.loading);
 
 let restartError = $state<string | null>(null);
 let restarting = $state(false);
@@ -52,6 +53,11 @@ const labelStyle =
   "font-size: 11px; font-weight: 600; color: var(--tandem-fg); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;";
 const subtextStyle =
   "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);";
+const errorStyle =
+  "font-size: 10px; color: var(--tandem-error-fg); margin-top: var(--tandem-space-1);";
+/** The bordered-surface recipe every row in this tab repeats. */
+const rowCardStyle =
+  "padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface);";
 
 const transport = $derived(appInfo.info?.transport);
 const bindHost = $derived(appInfo.info?.bindHost);
@@ -95,7 +101,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
     {/if}
   </div>
   {#if restartError}
-    <div style="font-size: 10px; color: var(--tandem-error-fg); margin-top: var(--tandem-space-1);">
+    <div style={errorStyle}>
       {restartError}
     </div>
   {/if}
@@ -121,18 +127,19 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
   <div>
     <div style={labelStyle}>Startup</div>
     <label
-      style="display: flex; align-items: flex-start; gap: var(--tandem-space-2); padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface); cursor: {autostartBlocked ||
-      autostart.loading
-        ? 'not-allowed'
-        : 'pointer'};"
+      style="display: flex; align-items: flex-start; gap: var(--tandem-space-2); {rowCardStyle} {disabledControlStyle(
+        autostartDisabled,
+      )}"
     >
       <input
         type="checkbox"
         data-testid="network-autostart-toggle"
         checked={autostartStatus.enabled}
-        disabled={autostartBlocked || autostart.loading}
+        disabled={autostartDisabled}
         onchange={(e) => void autostart.toggle(e.currentTarget.checked)}
-        style="margin-top: 2px; flex-shrink: 0;"
+        style="accent-color: var(--tandem-accent); margin-top: 2px; flex-shrink: 0; {disabledControlStyle(
+          autostartDisabled,
+        )}"
       />
       <span style="flex: 1;">
         <span style="font-size: 12px; color: var(--tandem-fg); display: block;">Start Tandem when my computer starts</span>
@@ -148,10 +155,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
       </span>
     </label>
     {#if autostart.error}
-      <div
-        data-testid="network-autostart-error"
-        style="font-size: 10px; color: var(--tandem-error-fg); margin-top: var(--tandem-space-1);"
-      >
+      <div data-testid="network-autostart-error" style={errorStyle}>
         {autostart.error}
       </div>
     {/if}

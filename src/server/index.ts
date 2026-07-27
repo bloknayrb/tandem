@@ -666,11 +666,16 @@ async function main() {
     // HTTP mode only. Gated by integrations.json having a claude-code entry
     // with apply !== "skip". Kill switch: TANDEM_DISABLE_LAUNCHER=1 for
     // debugging the server in isolation. PR #477 PR-4.
+    // Both branches read the RESOLVED reason, never `process.env` directly.
+    // `resolveInitialLauncherReason` is the single authority on this
+    // precedence and is the only thing the tests pin; re-testing the raw env
+    // var here would be a second source of truth that CI could not catch
+    // drifting from the first.
     if (launcherUnavailableReason === "deferred-autostart") {
       console.error(
         "[Tandem] Autostart launch — deferring the Claude Code launcher until the window is opened",
       );
-    } else if (process.env.TANDEM_DISABLE_LAUNCHER !== "1") {
+    } else if (launcherUnavailableReason !== "disabled-by-env") {
       await startLauncherSupervisor();
     }
   } else {

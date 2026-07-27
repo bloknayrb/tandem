@@ -51,7 +51,7 @@
  */
 import { onDestroy } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
-import type { LauncherStatus } from "../../shared/launcher/contract.js";
+import { isTransientlyUnavailable, type LauncherStatus } from "../../shared/launcher/contract.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
 /** Loopback `/health` response. `hasSession` is omitted for non-loopback
@@ -247,7 +247,7 @@ export function createAiReadiness(deps: {
       // `reason` is loopback-only, so a LAN viewer sees bare
       // `{ available: false }` and still lands on "unconfigured" — correct, since
       // a LAN viewer cannot act on the deferral anyway.
-      if (status.reason === "deferred-autostart") return "booting";
+      if (isTransientlyUnavailable(status.reason)) return "booting";
       return "unconfigured";
     }
     return status.running === true ? "ready" : "stopped";

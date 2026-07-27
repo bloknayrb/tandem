@@ -19,7 +19,7 @@ import {
   API_SAVE,
   API_SCRATCHPAD,
 } from "../../shared/api-paths.js";
-import type { LauncherStatus } from "../../shared/launcher/contract.js";
+import { isTransientlyUnavailable, type LauncherStatus } from "../../shared/launcher/contract.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
@@ -541,7 +541,7 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
     // the launcher is present and about to start, it just hasn't seen a human
     // yet. Showing the window is what releases it, and the user is by
     // definition looking at the window to have run this command.
-    if (status.reason === "deferred-autostart") {
+    if (isTransientlyUnavailable(status.reason)) {
       d.notify("info", "Claude is starting up — try again in a moment.");
       return false;
     }

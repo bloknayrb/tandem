@@ -41,8 +41,21 @@ pub const ERR_PLUGIN: &str = "plugin-error";
 pub struct AutostartStatus {
     pub enabled: bool,
     pub tray_available: bool,
-    /// `None` on success. One of the `ERR_*` codes otherwise.
-    pub error: Option<String>,
+    /// `None` on success. One of the `ERR_*` codes otherwise. `&'static str`
+    /// rather than `String` because every value is one of three consts — the
+    /// type makes it impossible to accidentally serialize a formatted error
+    /// message (and therefore a path) into this field.
+    pub error: Option<&'static str>,
+}
+
+impl AutostartStatus {
+    fn new(enabled: bool, tray_available: bool, error: Option<&'static str>) -> Self {
+        Self {
+            enabled,
+            tray_available,
+            error,
+        }
+    }
 }
 
 /// Map an opaque plugin error to a fixed, path-free code.
@@ -65,18 +78,10 @@ pub fn autostart_get_status(
 ) -> AutostartStatus {
     let tray = tray_available.get();
     match app.autolaunch().is_enabled() {
-        Ok(enabled) => AutostartStatus {
-            enabled,
-            tray_available: tray,
-            error: None,
-        },
+        Ok(enabled) => AutostartStatus::new(enabled, tray, None),
         Err(e) => {
             log::warn!("[autostart] is_enabled failed: {e}");
-            AutostartStatus {
-                enabled: false,
-                tray_available: tray,
-                error: Some(autostart_error_code(&e).to_string()),
-            }
+            AutostartStatus::new(false, tray, Some(autostart_error_code(&e)))
         }
     }
 }
@@ -105,34 +110,18 @@ pub fn autostart_set_enabled(
         // Still read back — the write may have partially applied, and the
         // toggle must reflect what the OS actually holds.
         let actual = manager.is_enabled().unwrap_or(false);
-        return AutostartStatus {
-            enabled: actual,
-            tray_available: tray,
-            error: Some(autostart_error_code(&e).to_string()),
-        };
+        return AutostartStatus::new(actual, tray, Some(autostart_error_code(&e)));
     }
 
     match manager.is_enabled() {
-        Ok(actual) if actual == enabled => AutostartStatus {
-            enabled: actual,
-            tray_available: tray,
-            error: None,
-        },
+        Ok(actual) if actual == enabled => AutostartStatus::new(actual, tray, None),
         Ok(actual) => {
             log::warn!("[autostart] readback mismatch: requested {enabled}, OS reports {actual}");
-            AutostartStatus {
-                enabled: actual,
-                tray_available: tray,
-                error: Some(ERR_READBACK.to_string()),
-            }
+            AutostartStatus::new(actual, tray, Some(ERR_READBACK))
         }
         Err(e) => {
             log::warn!("[autostart] readback failed after set_enabled({enabled}): {e}");
-            AutostartStatus {
-                enabled,
-                tray_available: tray,
-                error: Some(autostart_error_code(&e).to_string()),
-            }
+            AutostartStatus::new(enabled, tray, Some(autostart_error_code(&e)))
         }
     }
 }
@@ -197,12 +186,8 @@ mod tests {
 
     #[test]
     fn status_serializes_to_the_camel_case_client_contract() {
-        let json = serde_json::to_string(&AutostartStatus {
-            enabled: true,
-            tray_available: false,
-            error: Some(ERR_READBACK.to_string()),
-        })
-        .expect("serialize");
+        let json = serde_json::to_string(&AutostartStatus::new(true, false, Some(ERR_READBACK)))
+            .expect("serialize");
         assert_eq!(
             json,
             r#"{"enabled":true,"trayAvailable":false,"error":"readback-mismatch"}"#

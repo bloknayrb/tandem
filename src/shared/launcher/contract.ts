@@ -61,6 +61,26 @@ export type LauncherUnavailableReason =
   | "spawn-failed"
   | "deferred-autostart";
 
+/**
+ * True when `available: false` is a *transient phase* the launcher will leave on
+ * its own, rather than a terminal explanation.
+ *
+ * Every other reason means "this runtime will never have a launcher"; only
+ * `deferred-autostart` resolves without the user changing anything. The UI must
+ * not offer a fix-it CTA for a state that fixes itself — a fully-configured user
+ * who booted hidden would otherwise be told to re-run the integration wizard.
+ *
+ * A predicate rather than an inline comparison because two independent client
+ * surfaces need the same answer, and because it is the seam that makes the enum
+ * extensible: a second resumable reason updates one function, not N call sites.
+ *
+ * `undefined` (the off-loopback redacted shape) is deliberately NOT transient —
+ * a LAN viewer cannot act on the deferral, so treating it as terminal is right.
+ */
+export function isTransientlyUnavailable(reason: LauncherUnavailableReason | undefined): boolean {
+  return reason === "deferred-autostart";
+}
+
 /** Scrubbed `lastError` enum. Verbose error strings stay server-side. */
 export type LauncherErrorCode =
   | "spawn-failed"
