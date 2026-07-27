@@ -30,6 +30,7 @@ import {
 import { sweepDocBackups } from "./file-io/doc-backup.js";
 import { reapOrphanedTemps } from "./file-io/reaper.js";
 import { unwatchAll } from "./file-watcher.js";
+import { resolveInitialLauncherReason } from "./launcher/initial-reason.js";
 import {
   startLocalModelCollaborator,
   stopLocalModelCollaborator,
@@ -106,7 +107,54 @@ let httpServer: Server | null = null;
 let isShuttingDown = false;
 let launcherSupervisor: import("./launcher/supervisor.js").Supervisor | null = null;
 let launcherUnavailableReason: import("../shared/launcher/contract.js").LauncherUnavailableReason =
-  process.env.TANDEM_DISABLE_LAUNCHER === "1" ? "disabled-by-env" : "stdio-mode";
+  resolveInitialLauncherReason(process.env);
+
+/**
+ * Single-flight guard for `startLauncherSupervisor`. Set SYNCHRONOUSLY before
+ * the first `await` below — that ordering is the whole point. The body has two
+ * dynamic `import()`s plus `supervisor.start()`, so a flag set after any yield
+ * would let two concurrent callers each run `createSupervisor()`. The second
+ * assignment would orphan the first supervisor's reaper child, and shutdown
+ * (which stops only the current reference) could never reap it: a leaked Claude
+ * Code process surviving the server.
+ */
+let launcherStartInflight = false;
+
+/**
+ * Create and start the Claude Code supervisor. Idempotent and concurrency-safe.
+ *
+ * Extracted from `main()` so `POST /api/launcher/start` can promote a
+ * `deferred-autostart` launcher once a human opens the window (#1236) — the
+ * pre-existing routes all funnel through `requireSupervisor()`, which 503s in
+ * exactly that state.
+ */
+async function startLauncherSupervisor(): Promise<void> {
+  if (launcherStartInflight || launcherSupervisor !== null) return;
+  launcherStartInflight = true;
+  try {
+    const { createSupervisor } = await import("./launcher/supervisor.js");
+    const { resolveAppDataDir } = await import("./platform.js");
+    // Assigned before `start()` so a supervisor that spawned a reaper and then
+    // threw is still reachable by `shutdown()`. A non-null supervisor with a
+    // `spawn-failed` reason is the pre-existing shape here.
+    launcherSupervisor = createSupervisor({
+      integrationsBase: resolveAppDataDir(),
+    });
+    // Refresh the bundled skill on-disk if the version stamp moved
+    // forward — existing users pick up skill updates without re-running
+    // `tandem setup`. Best-effort, non-blocking.
+    const { refreshSkillIfStale } = await import("./integrations/apply.js");
+    void refreshSkillIfStale();
+    await launcherSupervisor.start();
+  } catch (err) {
+    launcherUnavailableReason = "spawn-failed";
+    console.error(
+      `[Tandem] Launcher supervisor failed to start (non-fatal): ${err instanceof Error ? err.message : err}`,
+    );
+  } finally {
+    launcherStartInflight = false;
+  }
+}
 
 // Swallow known Hocuspocus/ws protocol errors but crash on genuine bugs.
 // Async so we can ship the unknown error to Sentry (when crash reporting is
@@ -588,6 +636,7 @@ async function main() {
         {
           getSupervisor: () => launcherSupervisor,
           unavailableReason: () => launcherUnavailableReason,
+          startSupervisor: startLauncherSupervisor,
         },
         wsPort,
         {
@@ -617,25 +666,17 @@ async function main() {
     // HTTP mode only. Gated by integrations.json having a claude-code entry
     // with apply !== "skip". Kill switch: TANDEM_DISABLE_LAUNCHER=1 for
     // debugging the server in isolation. PR #477 PR-4.
-    if (process.env.TANDEM_DISABLE_LAUNCHER !== "1") {
-      try {
-        const { createSupervisor } = await import("./launcher/supervisor.js");
-        const { resolveAppDataDir } = await import("./platform.js");
-        launcherSupervisor = createSupervisor({
-          integrationsBase: resolveAppDataDir(),
-        });
-        // Refresh the bundled skill on-disk if the version stamp moved
-        // forward — existing users pick up skill updates without re-running
-        // `tandem setup`. Best-effort, non-blocking.
-        const { refreshSkillIfStale } = await import("./integrations/apply.js");
-        void refreshSkillIfStale();
-        await launcherSupervisor.start();
-      } catch (err) {
-        launcherUnavailableReason = "spawn-failed";
-        console.error(
-          `[Tandem] Launcher supervisor failed to start (non-fatal): ${err instanceof Error ? err.message : err}`,
-        );
-      }
+    // Both branches read the RESOLVED reason, never `process.env` directly.
+    // `resolveInitialLauncherReason` is the single authority on this
+    // precedence and is the only thing the tests pin; re-testing the raw env
+    // var here would be a second source of truth that CI could not catch
+    // drifting from the first.
+    if (launcherUnavailableReason === "deferred-autostart") {
+      console.error(
+        "[Tandem] Autostart launch — deferring the Claude Code launcher until the window is opened",
+      );
+    } else if (launcherUnavailableReason !== "disabled-by-env") {
+      await startLauncherSupervisor();
     }
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout

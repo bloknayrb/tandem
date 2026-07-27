@@ -437,6 +437,69 @@ async function deleteFirewallRule(name: string, logger: ScrubLogger): Promise<vo
  * never skips the rest (the firewall rules in particular must always be
  * attempted).
  */
+/**
+ * Name the start-at-login registration is filed under (#1236).
+ *
+ * `tauri-plugin-autostart` defaults its `app_name` to Tauri's `package_info().name`,
+ * which comes from `productName` in `src-tauri/tauri.conf.json`. Keep this in
+ * sync with `AUTOSTART_APP_NAME` in `src-tauri/src/uninstall_scrub.rs`.
+ */
+const AUTOSTART_APP_NAME = "Tandem";
+
+/**
+ * Remove the OS start-at-login registration, if the user ever enabled it.
+ *
+ * The Rust desktop scrub does this too, but macOS and Linux have no uninstaller
+ * to invoke it — those users are directed to `tandem --uninstall-scrub`, and
+ * `docs/data-locations.md` promises this step removes the entry. Without it the
+ * docs would be lying and the orphan would keep trying to launch a deleted
+ * binary at every login.
+ *
+ * Paths mirror `auto-launch` 0.5 exactly. Note Linux is **always**
+ * `~/.config/autostart` — that crate's `get_dir()` never consults
+ * `XDG_CONFIG_HOME`, so honoring it here would look where nothing was written.
+ *
+ * Windows is handled by the desktop uninstaller (both `Run` and
+ * `StartupApproved\\Run` values); a `reg delete` from the npm CLI would only
+ * duplicate it, and the npm distribution never writes a registration at all.
+ *
+ * `homeOverride` is for tests only.
+ */
+export async function removeAutostartEntry(
+  logger: ScrubLogger,
+  homeOverride?: string,
+): Promise<number> {
+  if (process.platform === "win32") {
+    logger.info("platform win32: start-at-login entry is removed by the desktop uninstaller");
+    return 0;
+  }
+  const home = homeOverride ?? homedir();
+  const entry =
+    process.platform === "darwin"
+      ? path.join(home, "Library", "LaunchAgents", `${AUTOSTART_APP_NAME}.plist`)
+      : path.join(home, ".config", "autostart", `${AUTOSTART_APP_NAME}.desktop`);
+
+  try {
+    assertPathSafe(entry, { allowedRoots: homeOverride ? [homeOverride] : undefined });
+  } catch (err) {
+    const reason = err instanceof PathRejectedError ? err.reason : (err as Error).message;
+    logger.warn(`leaving ${entry} — path rejected (${reason})`);
+    return 0;
+  }
+
+  try {
+    await fsPromises.rm(entry);
+    logger.info(`removed start-at-login entry ${entry}`);
+  } catch (err) {
+    // Never enabled is the overwhelmingly common case, not a failure.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      logger.error(`could not remove ${entry}: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+  return 0;
+}
+
 export async function runUninstallScrub(): Promise<number> {
   const logger = await openLogger();
 
@@ -477,6 +540,7 @@ export async function runUninstallScrub(): Promise<number> {
 
     failures += await scrubMcpConfigs(logger);
     failures += await removeSkillDir(logger);
+    failures += await removeAutostartEntry(logger);
 
     if (isWindows) {
       await deleteFirewallRule(FIREWALL_ALLOW_RULE, logger);

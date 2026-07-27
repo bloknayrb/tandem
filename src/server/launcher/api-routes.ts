@@ -29,12 +29,14 @@ import type { Express, Request, Response } from "express";
 import {
   API_LAUNCHER_NONCE,
   API_LAUNCHER_RELAUNCH,
+  API_LAUNCHER_START,
   API_LAUNCHER_START_FRESH,
   API_LAUNCHER_STATUS,
   API_LAUNCHER_WORKING_DIRECTORY,
 } from "../../shared/api-paths.js";
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
 import {
+  isTransientlyUnavailable,
   LAUNCHER_CWD_MAX_LENGTH,
   LAUNCHER_ERROR_IN_PROGRESS,
   LAUNCHER_ERROR_INVALID_BODY,
@@ -104,13 +106,23 @@ interface InflightState {
   relaunch: boolean;
   startFresh: boolean;
   workingDirectory: boolean;
+  /** #1236. Shares the relaunch/start-fresh exclusion group rather than
+   * standing alone: a `start` racing a `relaunch` mid-stop is the double-spawn
+   * case, and two supervisors means an orphaned reaper child. */
+  start: boolean;
 }
 
 const inflight: InflightState = {
   relaunch: false,
   startFresh: false,
   workingDirectory: false,
+  start: false,
 };
+
+/** True while any stop/spawn-shaped operation is running. */
+function spawnOpInFlight(): boolean {
+  return inflight.relaunch || inflight.startFresh || inflight.start;
+}
 
 export function _resetInflightForTests(): void {
   if (process.env.VITEST !== "true") {
@@ -119,6 +131,7 @@ export function _resetInflightForTests(): void {
   inflight.relaunch = false;
   inflight.startFresh = false;
   inflight.workingDirectory = false;
+  inflight.start = false;
 }
 
 export interface LauncherRoutesDeps {
@@ -134,6 +147,10 @@ export interface LauncherRoutesDeps {
   /** Reason the supervisor is unavailable (stdio mode, disabled, no integration).
    * Surfaced via GET /status. */
   unavailableReason: () => LauncherUnavailableReason;
+  /** Create + start the supervisor from null. Idempotent and single-flighted in
+   * `src/server/index.ts`. Only reachable via `POST /start` and only in the
+   * `deferred-autostart` state (#1236). */
+  startSupervisor: () => Promise<void>;
   /** Reads/writes the integrations file. Same store passed to integrations routes. */
   store: IntegrationsStore;
   /** Loopback-only side-channel for skill refresh failures. `null` when the
@@ -160,6 +177,9 @@ export function registerLauncherRoutes(app: Express, mw: Handler, deps: Launcher
   app.options(API_LAUNCHER_START_FRESH, mw);
   app.post(API_LAUNCHER_START_FRESH, mw, makeStartFreshHandler(deps));
 
+  app.options(API_LAUNCHER_START, mw);
+  app.post(API_LAUNCHER_START, mw, makeStartHandler(deps));
+
   app.options(API_LAUNCHER_WORKING_DIRECTORY, mw);
   app.post(API_LAUNCHER_WORKING_DIRECTORY, mw, makeWorkingDirHandler(deps));
 }
@@ -171,7 +191,14 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
     const sup = deps.getSupervisor();
     const loopback = isLoopback(req.socket.remoteAddress);
     if (sup === null) {
-      const body: LauncherStatus = { available: false, reason: deps.unavailableReason() };
+      // `reason` is loopback-only. `deferred-autostart` in particular is a live
+      // presence oracle — it says "this machine auto-booted at login and the
+      // human hasn't opened the window yet." Omitting the field entirely
+      // (rather than filtering that one value) also future-proofs the enum
+      // against the next reason that turns out to leak something.
+      const body: LauncherStatus = loopback
+        ? { available: false, reason: deps.unavailableReason() }
+        : { available: false };
       res.json(body);
       return;
     }
@@ -251,6 +278,19 @@ function sendBadRequest(res: Response, code: string, message: string): void {
   res.status(400).json({ error: "BAD_REQUEST", code, message });
 }
 
+/** The `LAUNCHER_NOT_AVAILABLE` 503 shape, emitted from two places
+ * (`requireSupervisor` and the deferred-start route). One definition so the
+ * `reason` field's disclosure posture is decided once rather than drifting
+ * between them. */
+function sendNotAvailable(res: Response, reason: LauncherUnavailableReason, message: string): void {
+  res.status(503).json({
+    error: "SERVICE_UNAVAILABLE",
+    code: LAUNCHER_ERROR_NOT_AVAILABLE,
+    reason,
+    message,
+  });
+}
+
 function sendInProgress(res: Response, message: string): void {
   res.status(429).json({
     error: "TOO_MANY_REQUESTS",
@@ -306,12 +346,11 @@ function parseJsonObjectBody(req: Request, res: Response): Record<string, unknow
 function requireSupervisor(deps: LauncherRoutesDeps, res: Response): Supervisor | null {
   const sup = deps.getSupervisor();
   if (sup === null) {
-    res.status(503).json({
-      error: "SERVICE_UNAVAILABLE",
-      code: LAUNCHER_ERROR_NOT_AVAILABLE,
-      reason: deps.unavailableReason(),
-      message: "Auto-launcher is not available in this runtime",
-    });
+    sendNotAvailable(
+      res,
+      deps.unavailableReason(),
+      "Auto-launcher is not available in this runtime",
+    );
     return null;
   }
   return sup;
@@ -332,8 +371,8 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     if (sup === null) return;
     // relaunch and startFresh are mutually exclusive — they're two flavors
     // of the same destructive stop+respawn operation.
-    if (inflight.relaunch || inflight.startFresh) {
-      sendInProgress(res, "another relaunch/start-fresh is in progress");
+    if (spawnOpInFlight()) {
+      sendInProgress(res, "another launcher start/relaunch is in progress");
       return;
     }
     inflight.relaunch = true;
@@ -364,8 +403,8 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
     }
     const sup = requireSupervisor(deps, res);
     if (sup === null) return;
-    if (inflight.relaunch || inflight.startFresh) {
-      sendInProgress(res, "another relaunch/start-fresh is in progress");
+    if (spawnOpInFlight()) {
+      sendInProgress(res, "another launcher start/relaunch is in progress");
       return;
     }
     inflight.startFresh = true;
@@ -377,6 +416,65 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
       sendUnexpected(res, err, "start-fresh failed");
     } finally {
       inflight.startFresh = false;
+    }
+  };
+}
+
+/**
+ * `POST /api/launcher/start` (#1236) — promote a deferred launcher to a live
+ * supervisor once a human opens the window.
+ *
+ * This is the only route that can create a supervisor from null; every other
+ * one funnels through `requireSupervisor()`, which 503s in exactly this state.
+ * That makes it a genuinely new capability, so the reason check comes FIRST:
+ *
+ * Ordering matters. If the nonce were checked first, a caller who can reach the
+ * API could burn nonces probing for the deferred state; more importantly, if
+ * the reason check were skipped or ordered after the supervisor call, this route
+ * would be an HTTP **bypass of `TANDEM_DISABLE_LAUNCHER=1`** — a kill switch
+ * that today cannot be defeated remotely at all.
+ *
+ * Guard posture is the same as `relaunch`, deliberately. Note that
+ * `assertLoopbackForMutation` only rejects when
+ * `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`; in the default configuration it is a
+ * no-op, and `assertOriginAllowlisted` reads a forgeable header. The real
+ * protection is the loopback bind plus Bearer auth for non-loopback callers.
+ */
+function makeStartHandler(deps: LauncherRoutesDeps): Handler {
+  return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_LAUNCHER_START)) return;
+    if (assertLoopbackForMutation(req, res)) return;
+
+    // Idempotent: an already-started launcher is a success, not an error. The
+    // client fires this on every visibility change, so a second call after the
+    // first one won must not surface as a failure toast.
+    if (deps.getSupervisor() !== null) {
+      res.json({ ok: true, started: false });
+      return;
+    }
+
+    const reason = deps.unavailableReason();
+    if (!isTransientlyUnavailable(reason)) {
+      sendNotAvailable(res, reason, "Auto-launcher is not in a deferred state");
+      return;
+    }
+
+    const body = parseJsonObjectBody(req, res);
+    if (body === null) return;
+    if (!consumeNonce(body.nonce, res)) return;
+
+    if (spawnOpInFlight()) {
+      sendInProgress(res, "another launcher start/relaunch is in progress");
+      return;
+    }
+    inflight.start = true;
+    try {
+      await deps.startSupervisor();
+      res.json({ ok: true, started: deps.getSupervisor() !== null });
+    } catch (err) {
+      sendUnexpected(res, err, "launcher start failed");
+    } finally {
+      inflight.start = false;
     }
   };
 }

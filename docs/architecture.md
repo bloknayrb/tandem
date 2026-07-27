@@ -286,6 +286,40 @@ File associations are declared in `src-tauri/tauri.conf.json#bundle.fileAssociat
 
 Known limitation: macOS cold-start may briefly show `welcome.md` before the requested file becomes active, because Apple Events arrive after `setup()` schedules the sidecar spawn. This window is typically 100–300 ms.
 
+### Start-at-login (#1236, ADR-046)
+
+Opt-in, off by default, desktop app only. When enabled, `tauri-plugin-autostart` writes an OS registration whose command line carries `--tandem-autostart`. That flag is the only thing distinguishing a login launch from a user-initiated one, and it changes two behaviors:
+
+```
+Login launch:
+  OS login  ──▶  Tandem --tandem-autostart
+                     ──▶  setup(): resolve_autostart_launch() = true
+                     ──▶  LAUNCHER_DEFERRED ← true      [before anything can show]
+                     ──▶  window stays hidden           [visible:false + no show call]
+                     ──▶  spawn sidecar with TANDEM_DEFER_LAUNCHER=1
+                     ──▶  Node: resolveInitialLauncherReason()
+                            = "deferred-autostart"  ──▶  supervisor NOT started
+                     ──▶  tray built; should_start_hidden(true, tray_available)
+                            decides the final visibility
+
+  user clicks tray  ──▶  show_main_window()
+                     ──▶  note_user_presence(): LAUNCHER_DEFERRED.swap(false)
+                     ──▶  GET /api/launcher/nonce  ──▶  POST /api/launcher/start
+                     ──▶  startLauncherSupervisor()  ──▶  Claude Code spawns
+
+Normal launch:
+  user opens app  ──▶  setup(): show_main_window() as the FIRST statement
+                     ──▶  LAUNCHER_DEFERRED stays false
+                     ──▶  sidecar spawns without TANDEM_DEFER_LAUNCHER
+                     ──▶  supervisor starts inline, as before
+```
+
+Three details are load-bearing:
+
+- **The normal-launch show is the first statement in `setup()`**, ahead of the log plugin, `build_http_client().expect(...)`, the sidecar spawn, and tray construction — so no fallible startup work can strand a user behind an invisible window. The autostart branch is the only one that waits, because it needs `tray_available`.
+- **`LAUNCHER_DEFERRED` is re-read on every sidecar spawn attempt**, unlike `TANDEM_OPEN_FILE` which is pinned to `attempt == 0`. `restart_sidecar` re-enters `start_sidecar` from scratch, so a value captured at boot would re-defer forever after any crash-restart.
+- **`StateFlags::VISIBLE` is masked out of `tauri-plugin-window-state`.** Its `restore_state` calls `show()` *and* `set_focus()` when the cached state says visible, which would override the hidden-boot decision and steal focus at login.
+
 ## Channel Push (Real-Time Events)
 
 The channel replaces polling for user actions. Instead of Claude calling `tandem_checkInbox` repeatedly, the channel shim pushes events to Claude Code as they happen.
