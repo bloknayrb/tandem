@@ -117,8 +117,15 @@ fn remove_autostart_registration() {
 ///
 /// macOS: `~/Library/LaunchAgents/{app_name}.plist` (the LaunchAgent variant —
 /// see the plugin registration in `lib.rs` for why that variant was chosen).
-/// Linux: `$XDG_CONFIG_HOME/autostart/{app_name}.desktop`, defaulting to
-/// `~/.config`.
+///
+/// Linux: `~/.config/autostart/{app_name}.desktop` — **always home-relative,
+/// deliberately ignoring `XDG_CONFIG_HOME`.** That is not XDG-correct, but it is
+/// what `auto-launch` 0.5 does: its `get_dir()` is literally
+/// `dirs::home_dir().unwrap().join(".config").join("autostart")`, with no env
+/// lookup anywhere. The scrub's job is to delete the file the plugin *wrote*, so
+/// honoring `XDG_CONFIG_HOME` here would send it looking somewhere the plugin
+/// never writes and leave the real orphan behind on exactly the machines where
+/// the variable is set. If upstream ever becomes XDG-aware, change both together.
 #[cfg(not(target_os = "windows"))]
 pub fn autostart_entry_path(home: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
     let home = home?;
@@ -132,12 +139,9 @@ pub fn autostart_entry_path(home: Option<std::path::PathBuf>) -> Option<std::pat
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| home.join(".config"));
         Some(
-            base.join("autostart")
+            home.join(".config")
+                .join("autostart")
                 .join(format!("{AUTOSTART_APP_NAME}.desktop")),
         )
     }
@@ -227,13 +231,44 @@ mod tests {
     fn autostart_entry_path_is_home_relative_and_named_for_the_app() {
         let home = std::path::PathBuf::from("/home/testuser");
         let path = autostart_entry_path(Some(home.clone())).expect("path");
-        assert!(path.starts_with(&home) || path.starts_with("/home/testuser"));
+        assert!(path.starts_with(&home), "got {}", path.display());
         assert!(
             path.to_string_lossy().contains(AUTOSTART_APP_NAME),
             "got {}",
             path.display()
         );
         assert_eq!(autostart_entry_path(None), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn autostart_entry_path_ignores_xdg_config_home() {
+        // Regression: an earlier version honored XDG_CONFIG_HOME, which broke on
+        // CI (GitHub runners set it) and — worse — would have been wrong in
+        // production. `auto-launch` 0.5's `get_dir()` is
+        // `dirs::home_dir().join(".config").join("autostart")` with no env
+        // lookup, so an XDG-aware scrub looks where the plugin never writes and
+        // leaves the real orphan behind.
+        let home = std::path::PathBuf::from("/home/testuser");
+        let expected = home
+            .join(".config")
+            .join("autostart")
+            .join("Tandem.desktop");
+
+        let before = autostart_entry_path(Some(home.clone())).expect("path");
+        assert_eq!(before, expected);
+
+        // Setting the variable must not move the answer. Safe to mutate here:
+        // the function no longer reads the environment, so no other test can
+        // observe this through it.
+        let prior = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/somewhere/else") };
+        let after = autostart_entry_path(Some(home)).expect("path");
+        match prior {
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        assert_eq!(after, expected);
     }
 
     #[cfg(target_os = "linux")]

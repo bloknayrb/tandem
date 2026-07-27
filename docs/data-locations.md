@@ -73,7 +73,7 @@ These are what go stale if you delete Tandem without cleaning up:
   |---|---|
   | Windows | `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, value `Tandem` (plus a matching `Explorer\StartupApproved\Run` value) |
   | macOS | `~/Library/LaunchAgents/Tandem.plist` |
-  | Linux | `$XDG_CONFIG_HOME/autostart/Tandem.desktop` (defaults to `~/.config/autostart/`) |
+  | Linux | `~/.config/autostart/Tandem.desktop` (always home-relative; `XDG_CONFIG_HOME` is not consulted) |
 
 ## Uninstalling cleanly
 

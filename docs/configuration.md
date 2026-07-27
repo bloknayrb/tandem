@@ -122,7 +122,7 @@ Where the registration lives:
 |---|---|
 | Windows | `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, value `Tandem` (plus a matching `Explorer\StartupApproved\Run` value) |
 | macOS | `~/Library/LaunchAgents/Tandem.plist` |
-| Linux | `$XDG_CONFIG_HOME/autostart/Tandem.desktop` (defaults to `~/.config/autostart/`) |
+| Linux | `~/.config/autostart/Tandem.desktop` (always home-relative; `XDG_CONFIG_HOME` is not consulted) |
 
 **These are outside the app-data root** — deleting `TANDEM_APP_DATA_DIR` does not remove them. Turn the setting off in Settings, or delete the entry above by hand. On Windows the uninstaller removes it (but deliberately not during an upgrade).
 
