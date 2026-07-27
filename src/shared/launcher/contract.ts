@@ -20,7 +20,9 @@
  * to surface it).
  */
 export type LauncherStatus =
-  | { available: false; reason: LauncherUnavailableReason }
+  /** `reason` is loopback-only — see the note on `LauncherUnavailableReason`.
+   * Non-loopback callers get the bare `{ available: false }`. */
+  | { available: false; reason?: LauncherUnavailableReason }
   | {
       available: true;
       running: false;
@@ -41,7 +43,23 @@ export type LauncherStatus =
       skillRefresh?: SkillRefreshError | null;
     };
 
-export type LauncherUnavailableReason = "stdio-mode" | "disabled-by-env" | "spawn-failed";
+/**
+ * `deferred-autostart` (#1236): the desktop app was launched by the OS at
+ * login, so the supervisor was deliberately NOT started — ADR-038 §2 grounds
+ * auto-launching Claude in "the user-invoked Tandem app spawning a child
+ * process", and a login launch breaks that premise. It is the one reason that
+ * is *recoverable at runtime*: `POST /api/launcher/start` promotes it to a
+ * live supervisor once a human shows up.
+ *
+ * Because it is recoverable it is also a presence oracle — it means "this
+ * machine auto-booted and nobody has opened the window yet" — so
+ * `GET /api/launcher/status` redacts the whole `reason` field off-loopback.
+ */
+export type LauncherUnavailableReason =
+  | "stdio-mode"
+  | "disabled-by-env"
+  | "spawn-failed"
+  | "deferred-autostart";
 
 /** Scrubbed `lastError` enum. Verbose error strings stay server-side. */
 export type LauncherErrorCode =

@@ -277,6 +277,9 @@ export interface LauncherWiring {
   getSupervisor: () => import("../launcher/supervisor.js").Supervisor | null;
   /** Why the supervisor is null. Surfaced in `GET /api/launcher/status`. */
   unavailableReason: () => import("../../shared/launcher/contract.js").LauncherUnavailableReason;
+  /** Create + start the supervisor from null. Only reachable via
+   * `POST /api/launcher/start` in the `deferred-autostart` state (#1236). */
+  startSupervisor: () => Promise<void>;
 }
 
 export async function startMcpServerHttp(
@@ -583,6 +586,7 @@ export async function startMcpServerHttp(
     registerLauncherRoutes(app, lanAwareApiMiddleware, {
       getSupervisor: launcher.getSupervisor,
       unavailableReason: launcher.unavailableReason,
+      startSupervisor: launcher.startSupervisor,
       store: createIntegrationsStore(resolveAppDataDir()),
       getSkillRefreshError,
     });

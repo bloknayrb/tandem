@@ -247,6 +247,8 @@ models-load-error
 models-loading
 models-reload-btn
 models-save-error
+network-autostart-error
+network-autostart-toggle
 network-degraded-delay-slider
 network-restart-sidecar
 network-retry-strategy

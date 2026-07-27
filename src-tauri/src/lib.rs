@@ -1,6 +1,8 @@
+mod autostart;
 pub mod keychain;
 mod sentry_reporting;
 mod token_store;
+mod uninstall_scrub;
 
 #[cfg(target_os = "windows")]
 mod cowork_atomic_json;
@@ -40,6 +42,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri_plugin_prevent_default::Flags;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_window_state::StateFlags;
 
 /// Keep in sync with DEFAULT_MCP_PORT in src/shared/constants.ts (port 3479).
 /// Must use 127.0.0.1, not `localhost` — `isHostAllowed` (api-routes.ts) narrowed
@@ -51,6 +54,12 @@ const OPEN_URL: &str = "http://127.0.0.1:3479/api/open";
 /// the Node shutdown sequence (dirty-doc flush + session save) before exit.
 /// Keep in sync with API_SHUTDOWN in src/shared/api-paths.ts.
 const SHUTDOWN_URL: &str = "http://127.0.0.1:3479/api/shutdown";
+/// Launcher nonce + deferred-start endpoints (#1236). A boot launch tells the
+/// sidecar to hold the Claude Code launcher; these promote it once a human
+/// actually shows up. Keep in sync with API_LAUNCHER_NONCE / API_LAUNCHER_START
+/// in src/shared/api-paths.ts.
+const LAUNCHER_NONCE_URL: &str = "http://127.0.0.1:3479/api/launcher/nonce";
+const LAUNCHER_START_URL: &str = "http://127.0.0.1:3479/api/launcher/start";
 /// License status endpoint (loopback). The updater reads `licenseId` +
 /// `updateWindowCurrent` to decide whether to route update checks through the
 /// license-gated Worker (#1116, ADR-040 §7). Keep in sync with
@@ -93,6 +102,19 @@ pub(crate) const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
 /// to decide between posting immediately vs queueing. Static (process-wide):
 /// there is exactly one sidecar per process.
 static SIDECAR_HEALTHY: AtomicBool = AtomicBool::new(false);
+
+/// One-shot latch: true from an autostart launch until the first human-presence
+/// signal, and read on EVERY sidecar spawn.
+///
+/// It has to be a latch rather than a value captured once at spawn time. The
+/// `.env(...)` chain lives inside `for attempt in 0..=MAX_RESTARTS`, and
+/// `restart_sidecar` re-enters `start_sidecar` from scratch — the existing code
+/// guards `TANDEM_OPEN_FILE` with `if attempt == 0` for exactly this reason. A
+/// statically captured flag would mean: boot hidden → user opens the window →
+/// launcher starts → sidecar crashes and restarts → the fresh sidecar defers
+/// again, no second presence signal ever fires, and Claude never comes back for
+/// the rest of the session.
+static LAUNCHER_DEFERRED: AtomicBool = AtomicBool::new(false);
 
 /// Buffered cold-start file-open rejection reason CODE (stable, path-free), for
 /// the WebView to surface as a toast once it has mounted. See issue #630.
@@ -191,6 +213,99 @@ const MENU_QUIT: &str = "quit";
 const MENU_UPDATE: &str = "update";
 
 const MAIN_WINDOW_LABEL: &str = "main";
+
+/// argv flag the OS autostart registration carries, so a login-triggered launch
+/// is distinguishable from a user-initiated one. An argv flag rather than an env
+/// var because the registration itself (Run value / plist / .desktop Exec line)
+/// is the only thing the OS lets us control, and it survives being inspected in
+/// Task Manager → Startup where an env var would be invisible.
+///
+/// `extract_file_arg` already skips `-`-prefixed args, so this can never be
+/// mistaken for a file-association path — `autostart_flag_is_not_a_file_arg`
+/// pins that.
+pub(crate) const AUTOSTART_FLAG: &str = "--tandem-autostart";
+
+/// Debug escape hatch: forces a launch to behave as a normal one (always show
+/// the window, never defer the Claude launcher) even when the OS passed
+/// `--tandem-autostart`. Mirrors `TANDEM_DISABLE_LAUNCHER` in spirit — every
+/// other lifecycle behavior here has an env opt-out.
+const AUTOSTART_DISABLE_ENV: &str = "TANDEM_DISABLE_AUTOSTART";
+
+/// True when this process was started by the OS at login.
+///
+/// `argv[0]` is skipped so an executable literally *named* `--tandem-autostart`
+/// cannot trip it — the same defensive skip `extract_file_arg` uses.
+pub(crate) fn is_autostart_launch(args: &[String]) -> bool {
+    args.iter().skip(1).any(|a| a == AUTOSTART_FLAG)
+}
+
+/// Resolve the effective autostart state for this process: the flag, minus the
+/// env kill switch. Deliberately does not log — it is called before the log
+/// plugin is registered (see the `setup()` ordering comment), so the one
+/// interesting case (the override actually firing) is logged at the call site
+/// once logging is live.
+fn resolve_autostart_launch(args: &[String], disable_env: Option<&str>) -> bool {
+    if disable_env == Some("1") {
+        return false;
+    }
+    is_autostart_launch(args)
+}
+
+/// Whether a boot launch should stay hidden in the tray.
+///
+/// The tray guard is load-bearing, not cosmetic: on Linux without
+/// libappindicator `TrayIconBuilder::build()` fails and `CloseRequested` exits
+/// the process instead of hiding. A hidden window with no tray icon would be an
+/// unreachable zombie still holding :3478/:3479 with no way to quit it short of
+/// a task manager.
+fn should_start_hidden(autostart: bool, tray_available: bool) -> bool {
+    autostart && tray_available
+}
+
+/// Marker recording that at least one autostart launch has already happened.
+/// Lives beside the session data in the app data dir.
+#[cfg(target_os = "linux")]
+const AUTOSTART_SEEN_MARKER: &str = "autostart-seen";
+
+/// Linux-only backstop for the residual hole in `should_start_hidden`.
+///
+/// `TrayIconBuilder::build()` *succeeding* does not prove the icon is visible —
+/// on GNOME without a status-icon extension it constructs fine and renders
+/// nothing, which is exactly the unreachable-process case the tray guard exists
+/// to prevent. So the first-ever autostart launch always shows the window,
+/// giving the user one guaranteed chance to see Tandem running and turn the
+/// setting off. Subsequent launches trust the tray.
+///
+/// Returns whether a prior autostart launch was recorded, and writes the marker
+/// as a side effect. Any I/O failure is reported as "not seen", which fails
+/// toward showing the window — always recoverable, unlike failing toward hidden.
+#[cfg(target_os = "linux")]
+fn autostart_seen_and_mark(dir: &std::path::Path) -> bool {
+    let marker = dir.join(AUTOSTART_SEEN_MARKER);
+    if marker.exists() {
+        return true;
+    }
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        log::warn!("Could not create app data dir for autostart marker: {e}");
+        return false;
+    }
+    if let Err(e) = std::fs::write(&marker, b"1") {
+        log::warn!("Could not write autostart marker: {e}");
+        return false;
+    }
+    false
+}
+
+/// Managed handle to the "tray icon was constructed" flag, so commands can read
+/// it. Autostart's Settings toggle needs it: with no tray, a hidden boot launch
+/// would be unreachable, so the control is disabled rather than lying.
+pub(crate) struct TrayAvailable(Arc<AtomicBool>);
+
+impl TrayAvailable {
+    pub(crate) fn get(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
 
 /// Tracks the sidecar child process so we can kill it on shutdown.
 struct SidecarState(Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
@@ -608,6 +723,93 @@ fn handle_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
     }
 }
 
+/// POST `/api/launcher/start` to promote a deferred Claude Code launcher.
+///
+/// Two hops because the route is nonce-gated like every other mutating launcher
+/// route: fetch a single-use nonce, then spend it. Best-effort — a failure means
+/// the user simply doesn't get Claude auto-launched this session, which is the
+/// same outcome as before this feature existed, so it logs and moves on.
+async fn request_launcher_start(
+    client: &reqwest::Client,
+    auth_token: Option<&str>,
+) -> Result<(), String> {
+    let with_auth = |req: reqwest::RequestBuilder| match auth_token {
+        Some(token) => req.header("Authorization", format!("Bearer {token}")),
+        None => req,
+    };
+
+    let nonce_resp = with_auth(client.get(LAUNCHER_NONCE_URL))
+        .send()
+        .await
+        .map_err(|e| format!("GET {LAUNCHER_NONCE_URL} failed: {e}"))?;
+    if !nonce_resp.status().is_success() {
+        return Err(format!(
+            "GET {LAUNCHER_NONCE_URL} returned {}",
+            nonce_resp.status()
+        ));
+    }
+    let nonce: serde_json::Value = nonce_resp
+        .json()
+        .await
+        .map_err(|e| format!("nonce body was not JSON: {e}"))?;
+    let nonce = nonce
+        .get("nonce")
+        .and_then(|n| n.as_str())
+        .ok_or_else(|| "nonce body missing `nonce`".to_string())?;
+
+    let body = serde_json::json!({ "nonce": nonce });
+    let resp = with_auth(client.post(LAUNCHER_START_URL).json(&body))
+        .send()
+        .await
+        .map_err(|e| format!("POST {LAUNCHER_START_URL} failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("POST {LAUNCHER_START_URL} returned {status}: {text}"));
+    }
+    Ok(())
+}
+
+/// Record that a human is present, and release the deferred Claude launcher.
+///
+/// Called from `show_main_window`, which is the single choke point for every
+/// path that surfaces the window: tray click, tray "Open Editor", the setup menu
+/// item, a second instance, and macOS Dock reopen. Cheap no-op after the first
+/// call — the latch is swapped atomically, so concurrent shows can't double-post.
+///
+/// The trigger lives in Rust rather than the WebView deliberately. The client
+/// alternative would key off `document.visibilityState`, whose behavior for a
+/// natively-hidden Tauri window is unverified, and it would silently do nothing
+/// if the WebView failed to mount. Rust knows exactly when the window is shown.
+/// A Tauri *event* would not work — events aren't buffered, and the listener may
+/// not exist yet (see `buffer_startup_rejection`) — but a direct loopback POST
+/// has no such constraint.
+///
+/// Known, accepted consequence: the tray's "Setup AI Assistant" item also shows
+/// the window, so it releases the launcher too. The supervisor's own gate (a
+/// `claude-code` integration with `apply !== "skip"`) is the backstop. See
+/// ADR-046.
+fn note_user_presence(app: &tauri::AppHandle) {
+    if !LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    log::info!("Window shown after an autostart launch — releasing the Claude Code launcher");
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let client = app.state::<reqwest::Client>().inner().clone();
+        let token = match token_store::get_or_create_token() {
+            Ok(t) => Some(t),
+            Err(e) => {
+                log::warn!("Token retrieval failed for deferred launcher start: {e}");
+                None
+            }
+        };
+        if let Err(e) = request_launcher_start(&client, token.as_deref()).await {
+            log::warn!("Deferred launcher start failed (Claude will not auto-launch): {e}");
+        }
+    });
+}
+
 /// Show, unminimize, and focus the main window.
 fn show_main_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
@@ -623,10 +825,24 @@ fn show_main_window(app: &tauri::AppHandle) {
     if let Err(e) = window.set_focus() {
         log::warn!("set_focus failed: {e}");
     }
+    note_user_presence(app);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Uninstall scrub (#1236) — handled BEFORE anything else: before Sentry
+    // init, before the Tauri builder, before any window, sidecar, or tray
+    // exists. The NSIS uninstaller runs this synchronously via `ExecWait` and
+    // waits for it, so booting the full app here would hang the uninstall on a
+    // visible editor window (which is what the previous, unhandled flag would
+    // have done had the binary name in the .nsi been correct).
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if uninstall_scrub::is_uninstall_scrub(&args) {
+            std::process::exit(uninstall_scrub::run_uninstall_scrub());
+        }
+    }
+
     // Crash reporting (#921) — OPT-IN, off by default. Returns `Some(guard)`
     // only when `TANDEM_SENTRY_DSN` is set; with no DSN this is `None`, so the
     // plugin is never registered below (no WebView IPC wiring, no minidump
@@ -645,13 +861,28 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             log::info!("Second instance detected — args: {args:?}, cwd: {cwd}");
-            show_main_window(app);
             let cwd_path = std::path::PathBuf::from(&cwd);
             // On macOS, "Open With" actions reactivate the existing app via
             // Apple Events (RunEvent::Opened) — args won't contain the file
             // path. This call is a no-op there, intentionally defensive for
             // shell-invoke edge cases.
-            match extract_file_arg(&args, &cwd_path) {
+            let parsed = extract_file_arg(&args, &cwd_path);
+
+            // A second instance carrying `--tandem-autostart` is the OS racing
+            // us at login (or a stale registration firing against an already-
+            // running Tandem) — that is not a human asking for the window, so
+            // don't pop it. But only suppress when nothing else was requested:
+            // `Tandem.exe --tandem-autostart doc.md` must still surface, or the
+            // document would open into an invisible editor with no feedback.
+            let suppress_show =
+                is_autostart_launch(&args) && !matches!(parsed, Ok(Some(_)));
+            if suppress_show {
+                log::info!("Second instance is an autostart launch — not showing the window");
+            } else {
+                show_main_window(app);
+            }
+
+            match parsed {
                 Ok(Some(path)) => {
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -740,17 +971,92 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::new().build())
+        // VISIBLE is masked out of the default `StateFlags::all()` so `setup()`
+        // is the sole authority on whether the window appears. The plugin's
+        // `restore_state` does `self.show()?.set_focus()?` when the flag is on
+        // and the cached state says visible — with `visible: false` in
+        // tauri.conf.json that would override `should_start_hidden` entirely
+        // AND steal focus during login, since the common case is a user who
+        // quit with the window open. Size/position/maximized restore are
+        // unaffected; `skip_initial_state` would have dropped those too.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .build(),
+        )
+        // Start-at-login (#1236). Default OFF — registering the plugin only
+        // makes the capability available; it never writes a registration on its
+        // own. The flag is what makes a login launch distinguishable from a
+        // user-initiated one downstream.
+        //
+        // macOS launcher variant — LaunchAgent, and the deciding factor is the
+        // READ path, not the write path.
+        //
+        // In `auto-launch` 0.5 (what the plugin pins), AppleScript mode's
+        // `is_enabled()` shells out to `osascript` ("get the name of every login
+        // item"), which needs Automation (TCC) approval. `autostart_get_status`
+        // runs on every Settings open, so choosing AppleScript would pop a
+        // scary "Tandem wants to control System Events" prompt at users who
+        // never asked for autostart at all. LaunchAgent's `is_enabled()` is a
+        // plain `plist.exists()` — free, silent, no permissions. Enabling costs
+        // two pop-ups under AppleScript versus none here.
+        //
+        // The known trade-off: a LaunchAgent plist points at the Mach-O inside
+        // the bundle and launches it outside LaunchServices, which may weaken
+        // the Apple Events (`RunEvent::Opened`) that file associations rely on.
+        // That risk is narrower than prompting every macOS user, it only
+        // affects login-launched instances, and `RunEvent::Reopen` plus
+        // single-instance still work. If real hardware shows Apple Events
+        // break (S4), this is a one-constant change. See ADR-046.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_FLAG]),
+        ))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState(Mutex::new(None)))
         .manage(PendingOpens(Mutex::new(Vec::new())))
+        .manage(TrayAvailable(tray_available.clone()))
         // App-level menu-event handler — registered exactly once here (NOT per
         // show_context_menu call, which would stack handlers). Forwards
         // `ctx:`-prefixed popup ids to the webview; the tray's own scoped
         // handler owns MENU_* ids. See forward_context_menu_event (#923).
         .on_menu_event(forward_context_menu_event)
         .setup(move |app| {
+            // --- Window visibility (#1236) ------------------------------------
+            //
+            // `tauri.conf.json` sets `visible: false`, so *something* in here
+            // must show the window or the app is unreachable. For a normal
+            // launch that show happens HERE — the very first statement, ahead of
+            // the log plugin (which can `?`-return), `build_http_client()
+            // .expect(...)` (which panics), sidecar spawn, and tray
+            // construction. None of that fallible work can strand a
+            // user-initiated launch behind an invisible window.
+            //
+            // An autostart launch defers the decision to after the tray build,
+            // where `tray_available` is known — see `should_start_hidden`.
+            //
+            // Cost of being first: `log::` macros are no-ops until the log
+            // plugin registers a few lines down, so `show_main_window`'s
+            // warnings are lost on this path. Worth it — a lost warning beats a
+            // window that never appears.
+            let autostart_launch = {
+                let args: Vec<String> = std::env::args().collect();
+                let disable = std::env::var(AUTOSTART_DISABLE_ENV).ok();
+                resolve_autostart_launch(&args, disable.as_deref())
+            };
+            // Arm the deferral BEFORE anything can show the window, so the
+            // latch is never observed half-initialized. Set for every autostart
+            // launch — not only the ones that stay hidden. If we end up showing
+            // the window anyway (no tray, or the Linux first-launch exception),
+            // that show releases the latch immediately and the launcher starts
+            // as usual, which is the correct outcome by a shorter route.
+            LAUNCHER_DEFERRED.store(autostart_launch, Ordering::Release);
+
+            if !autostart_launch {
+                show_main_window(app.handle());
+            }
+
             // tauri-plugin-log installs a global `tracing` subscriber. The
             // optional `devtools` feature installs its own, and two global
             // subscribers in one process panic — so the log plugin is gated off
@@ -782,6 +1088,17 @@ pub fn run() {
                         .rotation_strategy(RotationStrategy::KeepOne)
                         .build(),
                 )?;
+            }
+
+            // Deferred from the visibility block above — logging wasn't live yet.
+            if autostart_launch {
+                log::info!("Autostart launch detected ({AUTOSTART_FLAG})");
+            } else if std::env::var(AUTOSTART_DISABLE_ENV).ok().as_deref() == Some("1")
+                && is_autostart_launch(&std::env::args().collect::<Vec<_>>())
+            {
+                log::info!(
+                    "{AUTOSTART_DISABLE_ENV}=1 — treating this autostart launch as a normal launch"
+                );
             }
 
             let client = build_http_client(HTTP_CLIENT_TIMEOUT)
@@ -970,6 +1287,66 @@ pub fn run() {
                 }
             }
 
+            // --- Autostart visibility decision (#1236) ------------------------
+            //
+            // Deferred to here because it needs `tray_available`, which only
+            // exists after the build above. A normal launch already showed the
+            // window as setup()'s first statement and never reaches this.
+            if autostart_launch {
+                let tray_available = tray_flag_for_setup.load(Ordering::Acquire);
+                let mut hide = should_start_hidden(autostart_launch, tray_available);
+
+                // Linux backstop: a *constructed* tray icon is not a *visible*
+                // one (GNOME without a status-icon extension). Always show on
+                // the first autostart launch so the user gets one guaranteed
+                // chance to find the setting and turn it off.
+                #[cfg(target_os = "linux")]
+                if hide {
+                    match app.path().app_data_dir() {
+                        Ok(dir) => {
+                            if !autostart_seen_and_mark(&dir) {
+                                log::info!(
+                                    "First autostart launch on Linux — showing the window once \
+                                     so the tray icon can be verified"
+                                );
+                                hide = false;
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("app_data_dir unavailable for autostart marker: {e}");
+                            hide = false;
+                        }
+                    }
+                }
+
+                // Rewrite the registration so its baked exe path and args stay
+                // current. Spawned off the setup thread — on Windows this is a
+                // registry write and on Linux a file write, both fast, but
+                // neither belongs on the startup critical path. Only ever
+                // refreshes an *existing* registration; it can't turn autostart
+                // on. Scoped to autostart launches: a normal launch has no
+                // reason to touch it, and a user who moved the app will
+                // autostart at least once before the path matters.
+                {
+                    let refresh_handle = app.handle().clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        autostart::refresh_registration(&refresh_handle);
+                    });
+                }
+
+                if hide {
+                    log::info!("Autostart launch — staying hidden in the tray");
+                } else {
+                    if !tray_available {
+                        log::warn!(
+                            "Autostart launch with no tray icon — showing the window instead \
+                             (a hidden, trayless process would be unreachable)"
+                        );
+                    }
+                    show_main_window(app.handle());
+                }
+            }
+
             // Pre-seed the initial theme before Svelte mounts so the correct
             // app-mode preference (AppsUseLightTheme, not taskbar mode) is
             // available synchronously for the first paint. Value is always a
@@ -1060,6 +1437,8 @@ pub fn run() {
             keychain::keychain_get,
             keychain::keychain_set,
             keychain::keychain_delete,
+            autostart::autostart_get_status,
+            autostart::autostart_set_enabled,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| panic!("Failed to build Tauri application: {e}"))
@@ -1073,6 +1452,19 @@ pub fn run() {
                 // only; iOS is not a build target.
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Opened { urls } => handle_opened_urls(_app, urls),
+                // macOS: clicking the Dock icon fires applicationShouldHandleReopen.
+                // Without this, an autostart launch that started hidden leaves a
+                // Dock icon that does nothing when clicked — the window is real
+                // but hidden, so AppKit has nothing to un-minimize on its own.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    if !has_visible_windows {
+                        show_main_window(_app);
+                    }
+                }
                 _ => {}
             }
         });
@@ -1655,6 +2047,16 @@ async fn start_sidecar(
             if !dsn.trim().is_empty() {
                 cmd = cmd.env(sentry_reporting::SENTRY_DSN_ENV, dsn);
             }
+        }
+
+        // Autostart deferral (#1236). Read fresh on EVERY attempt — unlike
+        // TANDEM_OPEN_FILE below, this must NOT be pinned to `attempt == 0`.
+        // If the user has already opened the window, the latch is clear and a
+        // restarted sidecar starts the launcher normally; if they haven't, the
+        // restarted sidecar keeps holding it. Either way the restart inherits
+        // current reality rather than a snapshot from boot.
+        if LAUNCHER_DEFERRED.load(Ordering::Acquire) {
+            cmd = cmd.env("TANDEM_DEFER_LAUNCHER", "1");
         }
 
         // Cold-start file open from OS file association (Windows/Linux argv).
@@ -3386,7 +3788,12 @@ mod url_constants_tests {
     // "Server failed to start after 3 restart attempts".
     #[test]
     fn supervisor_urls_use_loopback_ip_not_localhost() {
-        for (name, url) in [("HEALTH_URL", HEALTH_URL), ("OPEN_URL", OPEN_URL)] {
+        for (name, url) in [
+            ("HEALTH_URL", HEALTH_URL),
+            ("OPEN_URL", OPEN_URL),
+            ("LAUNCHER_NONCE_URL", LAUNCHER_NONCE_URL),
+            ("LAUNCHER_START_URL", LAUNCHER_START_URL),
+        ] {
             assert!(
                 url.starts_with("http://127.0.0.1:"),
                 "{name} must use 127.0.0.1 (got {url}) — see #477 PR 2"
@@ -4102,5 +4509,164 @@ mod startup_rejection_tests {
             opened_url_reason_code(&OpenedUrlRejection::ConversionFailed),
             "not-a-file"
         );
+    }
+}
+
+#[cfg(test)]
+mod autostart_tests {
+    use super::*;
+
+    #[test]
+    fn detects_the_flag_anywhere_after_argv0() {
+        assert!(is_autostart_launch(&[
+            "tandem".into(),
+            AUTOSTART_FLAG.into()
+        ]));
+        assert!(is_autostart_launch(&[
+            "tandem".into(),
+            "--other".into(),
+            AUTOSTART_FLAG.into(),
+        ]));
+    }
+
+    #[test]
+    fn absent_flag_is_a_normal_launch() {
+        assert!(!is_autostart_launch(&["tandem".into()]));
+        assert!(!is_autostart_launch(&["tandem".into(), "doc.md".into()]));
+        // Prefix/suffix collisions must not match — exact comparison only.
+        assert!(!is_autostart_launch(&[
+            "tandem".into(),
+            "--tandem-autostart-please".into(),
+        ]));
+        assert!(!is_autostart_launch(&["tandem".into(), "-tandem-autostart".into()]));
+    }
+
+    #[test]
+    fn argv0_is_never_read_as_the_flag() {
+        // An executable renamed to the flag string must not self-trigger.
+        assert!(!is_autostart_launch(&[AUTOSTART_FLAG.into()]));
+    }
+
+    #[test]
+    fn env_kill_switch_downgrades_to_a_normal_launch() {
+        let args = vec!["tandem".to_string(), AUTOSTART_FLAG.to_string()];
+        assert!(resolve_autostart_launch(&args, None));
+        assert!(resolve_autostart_launch(&args, Some("0")));
+        assert!(resolve_autostart_launch(&args, Some("")));
+        assert!(!resolve_autostart_launch(&args, Some("1")));
+        // The kill switch can only ever downgrade — it never invents an
+        // autostart launch out of a normal one.
+        let plain = vec!["tandem".to_string()];
+        assert!(!resolve_autostart_launch(&plain, Some("1")));
+        assert!(!resolve_autostart_launch(&plain, None));
+    }
+
+    #[test]
+    fn hides_only_when_autostart_and_a_tray_exists() {
+        assert!(should_start_hidden(true, true));
+        // The trapdoor case: hiding here would leave an unreachable process
+        // holding :3478/:3479 with no tray icon and no window to close.
+        assert!(!should_start_hidden(true, false));
+        assert!(!should_start_hidden(false, true));
+        assert!(!should_start_hidden(false, false));
+    }
+
+    #[test]
+    fn autostart_flag_is_not_a_file_arg() {
+        // extract_file_arg skips `-`-prefixed args, so the flag can never be
+        // resolved as a path. Pin it rather than relying on it by accident.
+        let cwd = std::path::Path::new("/tmp");
+        let args = vec!["tandem".to_string(), AUTOSTART_FLAG.to_string()];
+        assert!(matches!(extract_file_arg(&args, cwd), Ok(None)));
+    }
+
+    #[test]
+    fn autostart_flag_does_not_shadow_a_real_file_arg() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("doc.md");
+        std::fs::write(&file, b"# hi").expect("write");
+
+        let args = vec![
+            "tandem".to_string(),
+            AUTOSTART_FLAG.to_string(),
+            file.to_string_lossy().to_string(),
+        ];
+        let resolved = extract_file_arg(&args, dir.path()).expect("should resolve");
+        assert_eq!(resolved.as_deref(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn autostart_flag_alongside_a_bad_extension_still_rejects() {
+        // The flag must not mask the existing rejection path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("payload.exe");
+        std::fs::write(&file, b"x").expect("write");
+
+        let args = vec![
+            "tandem".to_string(),
+            AUTOSTART_FLAG.to_string(),
+            file.to_string_lossy().to_string(),
+        ];
+        assert!(matches!(
+            extract_file_arg(&args, dir.path()),
+            Err(RejectionReason::UnsupportedExtension { .. })
+        ));
+    }
+
+    // Serialize the tests that mutate LAUNCHER_DEFERRED (a process-wide static).
+    static DEFERRAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn deferral_latch_releases_exactly_once() {
+        let _guard = DEFERRAL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        LAUNCHER_DEFERRED.store(true, Ordering::Release);
+
+        // `swap` is what makes concurrent shows safe: only the first caller
+        // sees `true`, so the start POST can never be issued twice.
+        assert!(LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
+        assert!(!LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
+        assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn deferral_latch_is_off_for_a_normal_launch() {
+        let _guard = DEFERRAL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // Mirrors setup(): the latch is stored from the resolved autostart
+        // state, so a normal launch never defers and never posts.
+        LAUNCHER_DEFERRED.store(resolve_autostart_launch(&["tandem".into()], None), Ordering::Release);
+        assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
+        assert!(!LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel));
+    }
+
+    #[test]
+    fn deferral_latch_survives_a_sidecar_restart_until_released() {
+        let _guard = DEFERRAL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        LAUNCHER_DEFERRED.store(true, Ordering::Release);
+
+        // start_sidecar re-reads the latch on every spawn attempt, so a crash
+        // loop before the user opens the window keeps deferring...
+        for _attempt in 0..3 {
+            assert!(LAUNCHER_DEFERRED.load(Ordering::Acquire));
+        }
+        // ...and once released, a later restart does NOT re-defer. This is the
+        // regression a statically captured env var would have shipped.
+        LAUNCHER_DEFERRED.swap(false, Ordering::AcqRel);
+        for _attempt in 0..3 {
+            assert!(!LAUNCHER_DEFERRED.load(Ordering::Acquire));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_marker_reports_unseen_once_then_seen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("nested/appdata");
+
+        // First autostart launch: no marker yet -> show the window once.
+        assert!(!autostart_seen_and_mark(&root));
+        assert!(root.join(AUTOSTART_SEEN_MARKER).exists());
+        // Every launch after that trusts the tray.
+        assert!(autostart_seen_and_mark(&root));
+        assert!(autostart_seen_and_mark(&root));
     }
 }

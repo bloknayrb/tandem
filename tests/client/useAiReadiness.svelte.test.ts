@@ -152,6 +152,34 @@ describe("createAiReadiness", () => {
     expect(h.get().chip).toBe("connect");
   });
 
+  it("suppresses the connect CTA while the launcher is deferred by autostart", async () => {
+    // #1236. A boot launch holds the Claude launcher until the window is
+    // shown. Falling through to "unconfigured" would tell a fully-configured
+    // user to run the integration wizard — worse than saying nothing.
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: false, reason: "deferred-autostart" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("booting");
+    expect(h.get().chip).toBeNull();
+  });
+
+  it("still shows the connect CTA to a LAN viewer, who sees no reason field", async () => {
+    // `reason` is loopback-only, so off-loopback the deferred state is
+    // indistinguishable from any other unavailable state — and a LAN viewer
+    // could not act on the deferral anyway.
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: false }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("unconfigured");
+    expect(h.get().chip).toBe("connect");
+  });
+
   it("a /health blip never demotes a connected agent (keeps prior hasSession)", async () => {
     // First poll: session active → hasSession cached true. Second poll's
     // /health throws → the prior (connected) value must survive.

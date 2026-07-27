@@ -537,6 +537,14 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
   }
   const status = result.value;
   if (!status.available) {
+    // #1236: "not active in this Tandem build" is a lie in the deferred case —
+    // the launcher is present and about to start, it just hasn't seen a human
+    // yet. Showing the window is what releases it, and the user is by
+    // definition looking at the window to have run this command.
+    if (status.reason === "deferred-autostart") {
+      d.notify("info", "Claude is starting up — try again in a moment.");
+      return false;
+    }
     d.notify("warning", "Claude launcher not active in this Tandem build.");
     return false;
   }

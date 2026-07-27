@@ -26,6 +26,8 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_DISABLE_FIRST_RUN_WIZARD` | unset | Set to `1` to suppress the integration setup wizard's first-run auto-open. Useful for scripted/CI setups where the wizard would otherwise appear on a fresh profile. |
 | `TANDEM_OPEN_FILE` | unset | Absolute path to a file the server should open on startup. Set by the Tauri runtime when Tandem is launched via an OS file association; not intended for manual use. |
 | `TANDEM_TAURI_SIDECAR` | unset | Set to `1` by the Tauri runtime when the server is running as a sidecar process. Suppresses noisy stderr logs in production builds. Not intended for manual use. |
+| `TANDEM_DEFER_LAUNCHER` | unset | Set to `1` by the Tauri runtime on a start-at-login launch, so the auto-launcher holds off until you open the window. **Not the same as `TANDEM_DISABLE_LAUNCHER`:** this one is temporary and self-releasing, and it is ignored unless `TANDEM_TAURI_SIDECAR=1` (otherwise an exported var would permanently disable the launcher on the npm install, which has no way to release it). `TANDEM_DISABLE_LAUNCHER=1` outranks it. Not intended for manual use. |
+| `TANDEM_DISABLE_AUTOSTART` | unset | Set to `1` to make a start-at-login launch behave like an ordinary one — the window shows and the AI launcher is not deferred. Debugging escape hatch; does not remove the OS registration (turn the setting off in Settings → Network for that). Desktop app only. |
 
 ### LAN exposure and authentication
 
@@ -95,6 +97,7 @@ The contents:
 | `tandem_auth_token` | Auto-generated auth token, mode `0o600`. |
 | `store.lock` | PID file for the annotation writer, used for cross-process safety. |
 | `last-seen-version` | Tracks the last Tandem version to launch — drives the CHANGELOG auto-open on upgrade. |
+| `autostart-seen` | Linux only, and only when start-at-login is on. Marks that at least one login launch has happened, so the first one always shows a window even if the tray icon turns out to be invisible. |
 
 To override the root entirely:
 
@@ -104,3 +107,25 @@ tandem
 ```
 
 To clear state, quit Tandem first, then delete the relevant subdirectory. See [troubleshooting.md](troubleshooting.md#reset-session-state) for the procedure.
+
+## Start at login (desktop app)
+
+Settings → Network → **Start Tandem when my computer starts**. Off by default; desktop app only. The npm CLI's `tandem start` is a foreground process with no OS registration to manage.
+
+A login launch starts **hidden in the tray** and does **not** launch your AI assistant. Claude Code is spawned the first time you open the window — [ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2 grounds auto-launch in the user invoking Tandem, and the OS starting it at login isn't that.
+
+**Autostart means the document server is always listening.** With it on, Tandem restores your open documents into memory at every login, serves them over Hocuspocus on `:3478`, and binds the MCP/API server on `:3479` — for as long as you're signed in, whether or not you have opened the window. Tandem trusts loopback callers: they are exempt from bearer auth, and `GET /api/document/raw` is loopback-only but unauthenticated. That trust now holds around the clock rather than only while you're at the machine. Nothing about the registration itself is privileged — `HKCU\...\Run`, `~/.config/autostart`, and `~/Library/LaunchAgents` are all user-writable.
+
+Where the registration lives:
+
+| OS | Location |
+|---|---|
+| Windows | `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, value `Tandem` (plus a matching `Explorer\StartupApproved\Run` value) |
+| macOS | `~/Library/LaunchAgents/Tandem.plist` |
+| Linux | `$XDG_CONFIG_HOME/autostart/Tandem.desktop` (defaults to `~/.config/autostart/`) |
+
+**These are outside the app-data root** — deleting `TANDEM_APP_DATA_DIR` does not remove them. Turn the setting off in Settings, or delete the entry above by hand. On Windows the uninstaller removes it (but deliberately not during an upgrade).
+
+The toggle reads the OS on every Settings open rather than caching a value, so changes you make in Task Manager → Startup, System Settings → Login Items, or `~/.config/autostart` show up correctly. If your system blocks the write, the toggle stays where it was and reports the failure instead of pretending it worked.
+
+**Developer note:** leave this off on a machine where you run Tandem from source. `freePort` *kills* whatever holds `:3478`/`:3479` on every HTTP boot, so `npm run test:e2e`, `tandem start`, and `npm run dev:server` will all terminate an autostarted sidecar mid-edit. Set `TANDEM_DISABLE_AUTOSTART=1` to neutralize a login launch without removing the registration.
