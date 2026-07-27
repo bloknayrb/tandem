@@ -40,8 +40,8 @@ export const TANDEM_PURCHASE_URL = TANDEM_SITE_URL;
  * (`infra/license-issuance-worker/src/worker.ts`) — they are the same promise
  * made in two places.
  *
- * PRE-LAUNCH: confirm this mailbox exists and is monitored. It is printed to
- * buyers at their most frustrated moment, and `docs/security.md` also routes
+ * The mailbox is live (confirmed 2026-07-27). Keep it that way: it is printed
+ * to buyers at their most frustrated moment, and `docs/security.md` also routes
  * *security reports* here — an address that bounces is worse than the GitHub
  * tracker it replaces.
  */
