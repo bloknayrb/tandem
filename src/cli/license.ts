@@ -6,10 +6,13 @@
  * here takes effect on the running server's next tool call / reconnect.
  */
 import fs from "fs";
+import { LicenseActivationError } from "../server/license/activation.js";
 import { GATE_ENABLED } from "../server/license/gate-flag.js";
 import { activateLicense, resolveLicenseState } from "../server/license/license-state.js";
 import type { LicenseState } from "../server/license/license-types.js";
 import { resolveAppDataDir } from "../server/platform.js";
+import { TANDEM_PURCHASE_URL, TRIAL_DAYS } from "../shared/constants.js";
+import { activationErrorMessage, unverifiableLicenseMessage } from "../shared/license-copy.js";
 
 /**
  * Resolve the activate argument to a license blob. If it names a readable file
@@ -23,8 +26,30 @@ export function resolveLicenseInput(
   fileExists: (p: string) => boolean,
   readFile: (p: string) => string,
 ): string {
+  // No normalization needed — `verifyLicenseSignature` repairs transport damage
+  // at the crypto boundary, and `activateLicense` normalizes before persisting.
   if (fileExists(arg)) return readFile(arg).trim();
   return arg.trim();
+}
+
+/**
+ * Greedy word-wrap for terminal output. The shared license copy is written as
+ * prose sentences (it also renders in the GUI, where the browser wraps it), so
+ * the CLI has to do its own wrapping rather than emitting one very long line.
+ */
+export function wrapForTerminal(text: string, width = 76): string[] {
+  const lines: string[] = [];
+  let current = "";
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (current && current.length + 1 + word.length > width) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = current ? `${current} ${word}` : word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
 }
 
 /**
@@ -35,9 +60,12 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
   const lines: string[] = ["", "Tandem license", ""];
   lines.push(`  Enforcement:   ${enforcementOn ? "on" : "off (activates at v1.0)"}`);
   if (state.gateActive && state.status === "trial") {
-    lines.push(`  Status:        trial (${state.trial.daysRemaining} days remaining)`);
+    lines.push(
+      `  Status:        trial (${state.trial.daysRemaining} of ${TRIAL_DAYS} days remaining)`,
+    );
   } else if (state.gateActive && state.status === "restricted") {
     lines.push("  Status:        restricted — trial ended; activate a license to keep editing");
+    lines.push(`  Buy a license: ${TANDEM_PURCHASE_URL}`);
   } else {
     // licensed (gate-active) — or the dark arm, which `tandem license` never
     // produces (it forces gateEnabled:true), but the union requires the branch.
@@ -49,6 +77,21 @@ export function formatLicenseStatus(state: LicenseState, enforcementOn: boolean)
         ? ` (through ${state.license.expiresAt.slice(0, 10)})`
         : "";
       lines.push(`  Update window: ${window}${through}`);
+      if (!state.updateWindowCurrent) {
+        // The single most confusing state in the whole system: the app keeps
+        // saying "You're up to date" because the update endpoint is returning
+        // no-update, not because there is nothing to install.
+        lines.push("                 (Tandem keeps running; new releases are no longer offered.)");
+      }
+    }
+  }
+  // A license file exists but doesn't verify. Without this, every surface tells
+  // the holder of a license that their *trial* ended. The message is chosen by
+  // the code, so it names the actual remedy rather than hedging across three.
+  if (state.gateActive && state.status !== "licensed" && state.licenseUnverifiable) {
+    lines.push("");
+    for (const line of wrapForTerminal(unverifiableLicenseMessage(state.licenseUnverifiable))) {
+      lines.push(`  ${line}`);
     }
   }
   lines.push("");
@@ -90,11 +133,10 @@ export async function runActivate(args: string[]): Promise<void> {
       console.log(`  Updates included through ${lic.expiresAt.slice(0, 10)}.`);
     }
     console.log("");
-  } catch {
-    console.error(
-      "\n[Tandem] License activation failed: the license could not be verified.\n" +
-        "Check that you pasted the full license string (or gave the correct file path).\n",
-    );
+  } catch (err) {
+    // Same per-cause copy the HTTP route uses — one taxonomy, two transports.
+    const code = err instanceof LicenseActivationError ? err.code : "UNKNOWN";
+    console.error(`\n[Tandem] License activation failed.\n${activationErrorMessage(code)}\n`);
     process.exit(1);
   }
 }

@@ -2,10 +2,11 @@
  * Tandem license ISSUANCE endpoint (Cloudflare Worker) — the public seam that
  * turns a paid Polar checkout into an Ed25519-signed license (#1116, ADR-040).
  *
- * This supersedes the loopback-only server handler
- * `src/server/license/webhook.ts` (which Polar can never reach, and whose
- * `verifyPolarSignature` invented a wrong `t=,v1=` scheme). Stripping that
- * server handler from the shipped bundle is a separate follow-up.
+ * This replaced the loopback-only server handler `src/server/license/webhook.ts`
+ * (which Polar could never reach, and whose `verifyPolarSignature` invented a
+ * wrong `t=,v1=` scheme). That handler is now deleted; issuance happens here and
+ * nowhere else. The one remaining out-of-band minting path is the operator's own
+ * `scripts/sign-license.ts`.
  *
  * Design mirrors the sibling `infra/license-update-worker/`: a pure
  * `handleIssuance(request, deps)` with ALL I/O injected, so the whole flow runs
@@ -73,6 +74,13 @@ const MAX_BODY_BYTES = 65_536;
  * here can fail on-device. We must never email a blob the buyer's own client
  * can't verify. */
 const MAX_BLOB_DECODED_BYTES = 4096;
+
+/** Minimal structural view of the Workers execution context. Declared locally
+ *  (same convention as `KvNamespace` below) so this file needs no ambient
+ *  Cloudflare types to typecheck alongside the rest of the repo. */
+export interface ExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
+}
 
 /** Minimal structural view of a Cloudflare KV namespace (read + write). */
 export interface KvNamespace {
@@ -596,10 +604,18 @@ interface WorkerEnv {
   TANDEM_PRIVATE_KEY: string; // PEM PKCS#8
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
+  /** Monitored inbox used as the license email's `reply_to` and named in its
+   *  body. Keep in sync with TANDEM_SUPPORT_EMAIL in src/shared/constants.ts. */
+  SUPPORT_EMAIL?: string;
   TANDEM_ISSUANCE_ENV?: string; // "sandbox" | "production" (default production)
   LICENSE_KV: KvNamespace; // SAME namespace the update Worker reads
   LEDGER_KV: KvNamespace; // issuance-owned; holds PII
   GRANDFATHER_EMAILS?: string; // comma/space-separated, optional
+  /** Incoming-webhook URL (Slack/Discord/ntfy) for operator alerts. Required to
+   *  be alerted about EMAIL failures — those can't go through Resend. */
+  ALERT_WEBHOOK_URL?: string;
+  /** Operator inbox for non-email-stage alerts, sent via Resend. */
+  ALERT_EMAIL?: string;
 }
 
 // Isolate-scope caches, keyed on the raw env value: Workers reuse module state
@@ -622,6 +638,48 @@ function grandfatherSetOf(raw: string): Set<string> {
   return grandfatherCache.set;
 }
 
+/**
+ * Wrap the blob so no line exceeds `width` characters.
+ *
+ * This is delivery correctness, not cosmetics. A 484-character unbroken line is
+ * what pushes a mail transfer agent to re-encode the body as quoted-printable,
+ * whose soft line break (`=` at end of line) base64 reads as padding — silently
+ * TRUNCATING the key.
+ *
+ * `width` is 72, deliberately **below** the quoted-printable line limit rather
+ * than at it. QP's 76 counts the trailing `=` itself, so wrapping at exactly 76
+ * still leaves lines an encoder wants to break. 72 is the long-standing safe
+ * mail width and leaves headroom.
+ *
+ * Wrapping alone is not sufficient — see `licenseEmailText`, which also keeps
+ * the body pure 7-bit ASCII so an encoder has no reason to reach for QP at all.
+ * And even that is belt-and-braces: the receiving end repairs soft breaks
+ * (`normalizePastedLicense`), and the `.license` attachment bypasses the body
+ * entirely. Three independent defenses, because the failure is silent.
+ *
+ * Base64 ignores whitespace on decode, so the wrapped copy pastes back exactly
+ * as issued. The cost is that double-tap-to-select-line on mobile no longer
+ * grabs the whole key — acceptable now that the attachment is the primary path.
+ */
+export function wrapBlob(blob: string, width = 72): string {
+  const lines: string[] = [];
+  for (let i = 0; i < blob.length; i += width) lines.push(blob.slice(i, i + width));
+  return lines.join("\n");
+}
+
+/**
+ * Build the Resend attachment for the license.
+ *
+ * `content` must be base64 of the FILE'S BYTES. The blob is already base64
+ * *text*, so it has to be base64-encoded a second time — passing the blob
+ * straight through produces a file containing raw `{"metadata":…}` JSON, which
+ * `activateLicense` rejects. `.license` is the extension the CLI and the runbook
+ * already use (`tandem activate ./jane.license`).
+ */
+export function licenseAttachment(blob: string): { content: string; filename: string } {
+  return { content: btoa(blob), filename: "tandem.license" };
+}
+
 async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: string) {
   // Not configured counts as a delivery failure so the event stays retryable
   // (the handler's 500 path logs it) rather than silently dropping a paid
@@ -637,8 +695,14 @@ async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: str
       body: JSON.stringify({
         from: env.RESEND_FROM,
         to,
+        // A buyer whose activation fails needs somewhere to write that isn't the
+        // public issue tracker — the natural instinct is to paste the key, and
+        // the key carries their own name and email. `RESEND_FROM` is a noreply
+        // address, so without this there is no inbound channel at all.
+        ...(env.SUPPORT_EMAIL ? { reply_to: env.SUPPORT_EMAIL } : {}),
         subject: "Your Tandem license",
-        text: licenseEmailText(name, blob),
+        text: licenseEmailText(name, blob, env.SUPPORT_EMAIL),
+        attachments: [licenseAttachment(blob)],
       }),
     });
     // Carry the upstream status into the error log (`stage: "email"`) — a 422
@@ -650,26 +714,189 @@ async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: str
   }
 }
 
-function licenseEmailText(name: string, blob: string): string {
+/**
+ * The plain-text license email.
+ *
+ * Deliberately pure 7-bit ASCII — no em dashes, no smart quotes, no accented
+ * characters outside the buyer's own name. A single non-ASCII byte anywhere in
+ * the body is enough for a mail transfer agent to re-encode the whole thing as
+ * quoted-printable, and QP's soft line breaks are the one transformation that
+ * silently truncates a base64 license key. `name` is the unavoidable exception
+ * (it is the customer's actual name); everything we author is ASCII.
+ */
+export function licenseEmailText(name: string, blob: string, supportEmail?: string): string {
   return [
     `Hi ${name},`,
     "",
-    "Thank you for buying Tandem. Your license key is below. To activate, open",
-    "Tandem -> Settings -> License -> Activate and paste it in (or run",
-    "`tandem activate <key>` from the CLI).",
+    "Thank you for buying Tandem. Your license is attached as",
+    "tandem.license, and is also printed below.",
     "",
-    blob,
+    "To activate, either:",
+    "  * open Tandem -> Settings -> License and paste the key below; or",
+    "  * run `tandem activate ./tandem.license` from the command line,",
+    "    pointing at the attached file.",
     "",
-    "Keep this email — it's your proof of purchase and lets you re-activate on",
-    "any device you personally use.",
+    // Wrapped so an MTA doesn't re-encode the body as quoted-printable and
+    // truncate the key. Base64 ignores the line breaks on paste.
+    wrapBlob(blob),
     "",
-    "— The Tandem team",
+    "Keep this email - it's your proof of purchase, and it lets you",
+    "re-activate on any device you personally use. Your license runs the",
+    "version you have forever; your first year also includes new releases.",
+    "",
+    "Please don't post the key publicly - it contains your name and email",
+    "address.",
+    ...(supportEmail
+      ? [
+          "",
+          "If activation gives you any trouble, just reply here, or write to:",
+          // Its own line: the address is operator-configured and interpolating
+          // it mid-sentence made this line's length unbounded (85 chars with a
+          // short address, and the whole point of the 72 ceiling is that no
+          // line invites an MTA to re-encode).
+          `  ${supportEmail}`,
+        ]
+      : []),
+    "",
+    "-- The Tandem team",
   ].join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Operator alerting.
+//
+// `wrangler tail` is a debugging tool, not an alert: no history, no thresholds,
+// no notification, and it dies with the terminal session. Cloudflare offers
+// nothing free that emails on a log condition. So the alert is raised in-band,
+// from the same log entry the handler already produces.
+//
+// Two results are worth waking someone for:
+//   - `dropped`  — a payload we couldn't fulfil. A paid sale may be behind it.
+//   - `stage:"email"` — the license was minted but not delivered.
+//
+// CRITICAL: the email-stage alert must NOT go through Resend, which is the thing
+// that just failed. It degrades to ALERT_WEBHOOK_URL (any incoming-webhook
+// endpoint — Slack, Discord, ntfy). If only one channel is configured, an
+// email-stage alert with no webhook is deliberately dropped rather than sent
+// through the broken path, and says so in the log.
+// ---------------------------------------------------------------------------
+
+/** Best-effort per-isolate throttle. Polar retries a failing delivery ~10 times;
+ *  without this a single misconfiguration emits an alert per retry per order.
+ *  Isolates are short-lived, so this narrows the storm rather than eliminating
+ *  it — which is the right trade for an alert you must not miss entirely. */
+const ALERT_THROTTLE_MS = 5 * 60 * 1000;
+const lastAlertAt = new Map<string, number>();
+
+function shouldAlert(key: string, nowMs: number): boolean {
+  const prev = lastAlertAt.get(key);
+  if (prev !== undefined && nowMs - prev < ALERT_THROTTLE_MS) return false;
+  lastAlertAt.set(key, nowMs);
+  return true;
+}
+
+/** Test-only: clear the throttle so each case starts from a clean isolate.
+ *  Without this the second test to provoke a given result is silently
+ *  suppressed, and any "does not alert" assertion passes vacuously. */
+export function _resetAlertThrottleForTests(): void {
+  lastAlertAt.clear();
+}
+
+/** Alert text. Carries the coarse result/stage ONLY — never an email, a license
+ *  id, or payload bytes, so an alert channel is not a PII sink. */
+function alertBody(entry: LogEntry): string {
+  // Only reachable for the two `isAlertable` conditions, so these are the only
+  // two cases — a third "generic error" arm here would be dead code.
+  const what =
+    entry.stage === "email"
+      ? "A license was minted but could NOT be emailed"
+      : "A webhook event could not be fulfilled (a paid sale may be behind it)";
+  return [
+    `Tandem license issuance: ${what}.`,
+    `result=${entry.result} stage=${entry.stage ?? "-"} status=${entry.status ?? "-"}`,
+    "",
+    "Polar disables a webhook endpoint after repeated failures, after which",
+    "sales stop arriving silently. Check Polar's delivery log, then reconcile:",
+    "docs/licensing-operations.md §5.",
+  ].join("\n");
+}
+
+async function sendOperatorAlert(env: WorkerEnv, entry: LogEntry): Promise<void> {
+  const body = alertBody(entry);
+  // Resend is the thing that just failed — do not report an email failure
+  // through it.
+  const resendIsSuspect = entry.stage === "email";
+
+  if (env.ALERT_WEBHOOK_URL) {
+    try {
+      const resp = await fetch(env.ALERT_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: body }),
+      });
+      // A non-ok response counts as a failure, not a delivery. A retired Slack
+      // webhook 404s rather than throwing, and treating that as success loses
+      // the alert silently — in the one piece of code whose entire purpose is
+      // to not be missed.
+      if (resp.ok) return;
+    } catch {
+      // fall through
+    }
+  }
+
+  if (!resendIsSuspect && env.ALERT_EMAIL && env.RESEND_API_KEY && env.RESEND_FROM) {
+    try {
+      const resp = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: env.RESEND_FROM,
+          to: env.ALERT_EMAIL,
+          subject: "[Tandem] license issuance needs attention",
+          text: body,
+        }),
+      });
+      if (resp.ok) return;
+    } catch {
+      // An alert that fails to send must never fail the webhook.
+    }
+  }
+
+  // Both channels are exhausted (or the only viable one wasn't configured).
+  // Say so in the log — otherwise the throttle slot is consumed and nothing
+  // records that the alert never landed.
+  console.log(
+    JSON.stringify({
+      result: "alert-undeliverable",
+      ts: Math.floor(Date.now() / 1000),
+      ...(entry.stage ? { stage: entry.stage } : {}),
+    }),
+  );
+}
+
+/** Does this log entry warrant waking the operator? */
+export function isAlertable(entry: LogEntry): boolean {
+  return entry.result === "dropped" || entry.stage === "email";
+}
+
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    const log = (entry: LogEntry) => console.log(JSON.stringify(entry));
+  async fetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
+    const log = (entry: LogEntry) => {
+      console.log(JSON.stringify(entry));
+      // Alert AFTER logging and outside the response path — `waitUntil` keeps
+      // the isolate alive for the send without delaying Polar's 200/500.
+      // `ctx` is always supplied by the real runtime; the optional guard keeps
+      // the handler callable from a two-arg test harness. Falling back to a
+      // floating promise (with its rejection swallowed) is right here: an alert
+      // must never be able to fail the webhook it is reporting on.
+      if (isAlertable(entry) && shouldAlert(`${entry.result}:${entry.stage ?? "-"}`, Date.now())) {
+        const pending = sendOperatorAlert(env, entry).catch(() => {});
+        if (ctx) ctx.waitUntil(pending);
+      }
+    };
 
     // Import the signing key up front — a bad/missing key fails closed (503)
     // before any webhook processing.

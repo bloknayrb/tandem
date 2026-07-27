@@ -11,13 +11,46 @@
  * Privacy invariants:
  *  - Unknown id AND expired window return a BYTE-IDENTICAL no-update response
  *    (HTTP 204, empty body) — no existence oracle.
- *  - Logs only `{ result, ts }` — never the license id (per-customer
- *    update-check logs would be telemetry).
+ *  - Logs only `{ result, reason, ts }` — never the license id (per-customer
+ *    update-check logs would be telemetry). The `reason` is a closed enum
+ *    describing OUR state, not the caller's identity.
  */
+
+/**
+ * Why a request was answered with no-update. All five reasons return identical
+ * bytes to the caller — this exists purely so the operator can tell them apart.
+ *
+ * It is the single detector for the worst failure mode in the licensing system:
+ * a license whose entitlement is missing is served 204, `tauri-plugin-updater`
+ * early-returns `Ok(None)`, and the desktop app tells the user **"You're up to
+ * date."** — permanently, while starved. That is indistinguishable from health
+ * at every layer above this line. A rising `unknown-id` count is the only
+ * evidence that licenses are being issued without entitlements (a broken
+ * issuance path, a KV namespace-id mismatch between the two wrangler.toml
+ * files, an eviction, or a refund).
+ */
+export type NoUpdateReason =
+  /** No `X-Tandem-License-Id` header — an unlicensed/public updater client. */
+  | "no-header"
+  /** Header present, but no KV entry. THE alert-worthy one. */
+  | "unknown-id"
+  /** KV entry present but not parsable JSON. */
+  | "unparseable"
+  /** Entitled, but past the update window. Expected and benign. */
+  | "expired"
+  /** Entitled and in-window, but the upstream manifest fetch failed. */
+  | "upstream";
 
 /** Minimal structural view of a Cloudflare KV namespace (read side). */
 export interface KvGetter {
   get(key: string): Promise<string | null>;
+}
+
+export interface LogEntry {
+  result: "served" | "no-update";
+  ts: number;
+  /** Present on `no-update` only. */
+  reason?: NoUpdateReason;
 }
 
 export interface UpdateDeps {
@@ -25,7 +58,7 @@ export interface UpdateDeps {
   latestJsonUrl: string;
   fetchFn: typeof fetch;
   now: () => number;
-  log?: (entry: { result: "served" | "no-update"; ts: number }) => void;
+  log?: (entry: LogEntry) => void;
 }
 
 export const LICENSE_HEADER = "X-Tandem-License-Id";
@@ -54,28 +87,30 @@ function noUpdate(): Response {
 export async function handleUpdateRequest(request: Request, deps: UpdateDeps): Promise<Response> {
   const { kv, latestJsonUrl, fetchFn, now, log } = deps;
   const ts = now();
-  const reject = (): Response => {
-    log?.({ result: "no-update", ts });
+  // The `reason` is logged, never returned — the response stays byte-identical
+  // across all five branches, so this cannot become an existence oracle.
+  const reject = (reason: NoUpdateReason): Response => {
+    log?.({ result: "no-update", ts, reason });
     return noUpdate();
   };
 
   const lid = request.headers.get(LICENSE_HEADER);
-  if (!lid) return reject();
+  if (!lid) return reject("no-header");
 
   const raw = await kv.get(lid);
-  if (!raw) return reject();
+  if (!raw) return reject("unknown-id");
 
   let entry: Entitlement;
   try {
     entry = JSON.parse(raw) as Entitlement;
   } catch {
-    return reject();
+    return reject("unparseable");
   }
 
   // null updateWindowEnd ⇒ never expires (grandfathered). Otherwise compare epochs.
   const expired =
     entry.updateWindowEnd != null && new Date(entry.updateWindowEnd).getTime() < ts;
-  if (expired) return reject();
+  if (expired) return reject("expired");
 
   // Entitled — proxy the signed public manifest. A failed upstream fetch
   // degrades to no-update (the user just isn't offered an update this round).
@@ -88,9 +123,9 @@ export async function handleUpdateRequest(request: Request, deps: UpdateDeps): P
   try {
     upstream = await fetchFn(latestJsonUrl, { headers: { Accept: "application/json" } });
   } catch {
-    return reject();
+    return reject("upstream");
   }
-  if (!upstream.ok) return reject();
+  if (!upstream.ok) return reject("upstream");
   const body = await upstream.text();
   log?.({ result: "served", ts });
   return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
@@ -108,7 +143,7 @@ export default {
       latestJsonUrl: env.PUBLIC_LATEST_JSON_URL,
       fetchFn: fetch,
       now: () => Date.now(),
-      // JSON line; deliberately carries no license id.
+      // JSON line; carries the coarse reason but deliberately no license id.
       log: (entry) => console.log(JSON.stringify(entry)),
     });
   },

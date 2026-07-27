@@ -8,6 +8,8 @@
  * this reads only fields present in BOTH shapes, plus the optional licensee name
  * (loopback only) used for the "Licensed to {name}" label.
  */
+import type { LicenseUnverifiableCode } from "../../shared/license-copy";
+
 export interface LicenseStatusResponse {
   gateActive: boolean;
   status: "trial" | "licensed" | "restricted";
@@ -17,6 +19,23 @@ export interface LicenseStatusResponse {
   trial?: { daysRemaining: number };
   updateWindowCurrent: boolean;
   license?: { name: string; type: string };
+  /**
+   * A `license.json` exists on this device but did not verify, and WHY. Present
+   * on the trial/restricted payloads only. Not PII — a closed enum about this
+   * machine's own file, carrying no license content — so it survives the LAN
+   * scrub. Without it every surface tells a license holder that their *trial*
+   * ended, which for a beta tester is a trial they never had.
+   */
+  licenseUnverifiable?: LicenseUnverifiableCode;
+  /**
+   * Dark-build only: a license IS installed and would verify once the gate is
+   * on. `gateActive` stays false, so this must never drive gate-only chrome —
+   * it exists purely so an activation on a pre-v1.0 build is visibly confirmed
+   * rather than leaving the same "activate it now" hint on screen.
+   */
+  licenseInstalled?: boolean;
+  /** Dark-build only, loopback only. Display name from the installed license. */
+  licenseeName?: string;
 }
 
 export interface LicenseUi {
@@ -55,7 +74,7 @@ export function deriveLicenseUi(state: LicenseStatusResponse | null): LicenseUi 
       showWall: true,
       showTrialBanner: false,
       trialDaysRemaining: null,
-      statusLabel: "Trial ended",
+      statusLabel: state.licenseUnverifiable ? "License not verified" : "Trial ended",
     };
   }
 

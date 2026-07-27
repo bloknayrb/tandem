@@ -6,6 +6,12 @@
     "type": "git",
     "url": "https://github.com/bloknayrb/tandem"
   },
+  "author": "bloknayrb",
+  "homepage": "https://github.com/bloknayrb/tandem#readme",
+  "bugs": {
+    "url": "https://github.com/bloknayrb/tandem/issues",
+    "email": "support@tandem.ink"
+  },
   "keywords": [
     "tandem",
     "mcp",

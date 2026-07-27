@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import crypto from "crypto";
+import type { LicenseVerifyCode } from "../../shared/license-copy.js";
 import type { LicenseMetadata, SignatureVerified, SignedLicense } from "./license-types.js";
+import { MAX_NORMALIZE_INPUT, normalizePastedLicense } from "./paste.js";
 import { TANDEM_PUBLIC_KEY } from "./public-key.js";
+
+export type { LicenseVerifyCode };
 
 export function canonicalObject(obj: any): any {
   if (typeof obj !== "object" || obj === null) {
@@ -32,6 +36,22 @@ export function canonicalize(obj: any): string {
 }
 
 /**
+ * The code is the ONLY thing that crosses this boundary — never the input bytes,
+ * never the underlying parse/crypto message (which can embed blob content).
+ * The union and its copy live in `src/shared/license-copy.ts`.
+ */
+export class LicenseVerifyError extends Error {
+  constructor(
+    readonly code: LicenseVerifyCode,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "LicenseVerifyError";
+  }
+}
+
+/**
  * Verifies the Ed25519 signature of a base64-encoded signed license against the
  * embedded public key — signature ONLY, no expiry check.
  *
@@ -41,10 +61,40 @@ export function canonicalize(obj: any): string {
  * decision read `metadata.expiresAt` themselves (see `license-state.ts`).
  * Throws if the format is malformed or the signature is invalid.
  */
-export function verifyLicenseSignature(licenseString: string): SignatureVerified {
-  // Bound the input before any allocation — license blobs are small (<2KB).
+export function verifyLicenseSignature(rawLicenseString: string): SignatureVerified {
+  // Bound the RAW input first — the normalize below allocates a new string, and
+  // "bound before any allocation" is the whole point of this check. The raw
+  // ceiling is deliberately looser than the post-normalize one: quoted-printable
+  // soft breaks only ever ADD bytes, so anything that could legitimately
+  // normalize down to <=10k starts well under 20k.
+  if (rawLicenseString.length > MAX_NORMALIZE_INPUT) {
+    throw new LicenseVerifyError(
+      "TOO_LONG",
+      "License verification failed: input exceeds maximum length",
+    );
+  }
+
+  // Repair transport damage HERE, at the crypto boundary, rather than at each
+  // entry point. A quoted-printable soft break is mail-transport corruption, and
+  // this is the layer that should tolerate it before hashing — putting it at the
+  // call sites made it a contract every future caller has to remember, and one
+  // caller ALREADY forgot: `resolveLicenseState` reads `license.json` straight
+  // off disk and verifies it raw. A blob saved with a soft break still in it
+  // would then fail on every boot, forever, reported as "installed but could not
+  // be verified" with copy blaming a signing-key rotation.
+  //
+  // This cannot forge anything: whatever survives the transform must still carry
+  // a valid Ed25519 signature over its own canonicalized metadata.
+  const licenseString = normalizePastedLicense(rawLicenseString);
+
+  // Re-bound after normalizing — stripping an interior `=` can LENGTHEN the
+  // decode (Node treats `=` as terminating), so this check must run on exactly
+  // the string that gets decoded, not on the raw input.
   if (licenseString.length > 10_000) {
-    throw new Error("License verification failed: input exceeds maximum length");
+    throw new LicenseVerifyError(
+      "TOO_LONG",
+      "License verification failed: input exceeds maximum length",
+    );
   }
   try {
     // 1. Decode base64
@@ -54,12 +104,18 @@ export function verifyLicenseSignature(licenseString: string): SignatureVerified
     // blobs are <2KB; 4KB is a generous ceiling that rejects the pathological
     // case before any parse/recurse.
     if (decoded.length > 4096) {
-      throw new Error("License verification failed: payload exceeds maximum length");
+      throw new LicenseVerifyError(
+        "TOO_LONG",
+        "License verification failed: payload exceeds maximum length",
+      );
     }
     const signedLicense = JSON.parse(decoded) as SignedLicense;
 
     if (!signedLicense.metadata || !signedLicense.signature) {
-      throw new Error("Invalid license format: missing metadata or signature");
+      throw new LicenseVerifyError(
+        "MALFORMED",
+        "License verification failed: missing metadata or signature",
+      );
     }
 
     // 2. Verify signature
@@ -69,17 +125,20 @@ export function verifyLicenseSignature(licenseString: string): SignatureVerified
     const verified = crypto.verify(null, data, TANDEM_PUBLIC_KEY, signature);
 
     if (!verified) {
-      throw new Error("Signature verification failed");
+      throw new LicenseVerifyError("BAD_SIGNATURE", "License verification failed: bad signature");
     }
 
     // Brand: this metadata is now signature-verified (run-gate may trust it).
     return signedLicense.metadata as SignatureVerified;
   } catch (error: any) {
-    // Preserve already-wrapped messages to avoid double-wrapping.
-    if (error instanceof Error && error.message.startsWith("License verification failed")) {
-      throw error;
-    }
-    throw new Error(`License verification failed: ${error.message}`, { cause: error });
+    // Preserve an already-classified error rather than re-wrapping it.
+    if (error instanceof LicenseVerifyError) throw error;
+    // Everything reaching here is a decode/parse failure (bad base64 → garbage
+    // UTF-8 → JSON.parse throws) or a malformed hex signature that made
+    // crypto.verify throw. Both mean "this isn't a license blob".
+    throw new LicenseVerifyError("MALFORMED", `License verification failed: ${error.message}`, {
+      cause: error,
+    });
   }
 }
 

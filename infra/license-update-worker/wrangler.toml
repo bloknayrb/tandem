@@ -6,12 +6,29 @@ name = "tandem-license-update"
 main = "src/worker.ts"
 compatibility_date = "2024-09-23"
 
+# REQUIRED before shipping a gate-on build: a custom domain (or route). The
+# endpoint URL is COMPILED INTO the desktop binary (LICENSE_UPDATE_ENDPOINT in
+# src-tauri/src/lib.rs), so a `*.workers.dev` host makes every shipped install
+# permanently dependent on one Cloudflare account name. If that host ever dies,
+# those installs silently report "You're up to date" forever and the only fix is
+# an update they can no longer be offered. Point a domain you own at this Worker
+# and use THAT in lib.rs.
+# [[routes]]
+# pattern = "updates.REPLACE_WITH_YOUR_DOMAIN"
+# custom_domain = true
+
 # KV namespace holding licenseId → { updateWindowEnd, status, version }, written
-# by the issuance webhook (src/server/license/kv-store.ts). Create it with
+# by the issuance Worker (infra/license-issuance-worker/) and, for out-of-band
+# licenses, by scripts/sign-license.ts. Create it with
 # `npx wrangler kv namespace create LICENSE_KV` and paste the id here.
+#
+# This id MUST match the LICENSE_KV id in
+# infra/license-issuance-worker/wrangler.toml — the placeholder name is the same
+# in both files on purpose. A mismatch is invisible: issuance succeeds, the buyer
+# gets a working license, and the updater silently reports "up to date" forever.
 [[kv_namespaces]]
 binding = "LICENSE_KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "REPLACE_WITH_LICENSE_KV_NAMESPACE_ID"
 
 [vars]
 # The public, signed release manifest the Worker proxies to entitled callers.

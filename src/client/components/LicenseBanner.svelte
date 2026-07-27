@@ -1,4 +1,5 @@
 <script lang="ts">
+import { TANDEM_PURCHASE_URL, TRIAL_DAYS } from "../../shared/constants";
 import { licenseStore } from "../hooks/useLicense.svelte";
 
 // Trial countdown banner (#1116). Only renders during an active trial; the
@@ -11,11 +12,20 @@ const ui = $derived(licenseStore.ui);
     <span class="license-trial-banner__text">
       {#if ui.trialDaysRemaining != null}
         <strong data-testid="license-trial-days">{ui.trialDaysRemaining}</strong>
-        {ui.trialDaysRemaining === 1 ? "day" : "days"} left in your Tandem trial.
+        of {TRIAL_DAYS} {ui.trialDaysRemaining === 1 ? "day" : "days"} left in your Tandem trial.
       {:else}
-        You're trying Tandem.
+        You're on a {TRIAL_DAYS}-day Tandem trial.
       {/if}
-      Activate a license in Settings → License to keep editing when it ends.
+      <!-- A purchase link, not just "activate a license": telling someone their
+           trial is ending without saying where to buy one is a dead end. -->
+      <a
+        class="license-trial-banner__buy"
+        data-testid="license-trial-buy"
+        href={TANDEM_PURCHASE_URL}
+        target="_blank"
+        rel="noopener noreferrer">Buy a license</a
+      >
+      to keep editing when it ends, or activate one in Settings → License.
     </span>
   </div>
 {/if}
@@ -33,5 +43,10 @@ const ui = $derived(licenseStore.ui);
 }
 .license-trial-banner__text strong {
   font-weight: 700;
+}
+.license-trial-banner__buy {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
 }
 </style>

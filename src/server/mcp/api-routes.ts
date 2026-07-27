@@ -153,6 +153,27 @@ export const apiMiddleware: Handler = createApiMiddleware();
  *   Provided by the entry point in HTTP mode; when omitted (tests), the route
  *   is not registered and callers get a 404.
  */
+/**
+ * Reject an implausibly large body on the license-activate route before the
+ * 70 MB shared parser buffers it. A signed license is ~650 bytes; 64 KB is a
+ * generous ceiling that still refuses anything that isn't a license.
+ *
+ * Checks the declared `Content-Length` only — the parser's own limit is the
+ * backstop for a missing/lying header. This is defense in depth, not the
+ * primary gate: the route is origin- and loopback-restricted inside the handler.
+ */
+export function rejectOversizeLicenseBody(req: Request, res: Response, next: NextFunction): void {
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > 64 * 1024) {
+    res.status(413).json({
+      error: "PAYLOAD_TOO_LARGE",
+      message: "That's far too long to be a license key.",
+    });
+    return;
+  }
+  next();
+}
+
 export function registerApiRoutes(
   app: Express,
   largeBody: Handler,
@@ -191,8 +212,17 @@ export function registerApiRoutes(
 
   // License activate (#1116). Gated on origin allowlist + loopback inside the
   // handler — a license is a credential, installable only by a local caller.
+  //
+  // `rejectOversizeLicenseBody` runs BEFORE the body parser, because the shared
+  // `largeBody` parser admits 70 MB (it exists for document uploads) and a
+  // license blob is under 2 KB.
+  //
+  // It is defense in depth ONLY: it reads the caller's own `Content-Length`, so
+  // omitting that header (or using chunked transfer encoding) skips it
+  // entirely. The bound that actually holds is inside `activateLicense`, which
+  // rejects over `MAX_NORMALIZE_INPUT` before allocating anything.
   app.options(API_LICENSE_ACTIVATE, mw);
-  app.post(API_LICENSE_ACTIVATE, mw, largeBody, handleActivateLicense);
+  app.post(API_LICENSE_ACTIVATE, mw, rejectOversizeLicenseBody, largeBody, handleActivateLicense);
 
   app.options(API_OPEN, mw);
   app.post(API_OPEN, mw, largeBody, handleOpen);

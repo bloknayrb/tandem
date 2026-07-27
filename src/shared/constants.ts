@@ -1,8 +1,51 @@
 export const DEFAULT_WS_PORT = 3478;
 export const DEFAULT_MCP_PORT = 3479;
 
+/**
+ * Trial length in days (ADR-040 §5: under the 30-day BUSL eval ceiling).
+ *
+ * Lives in `shared` so the *client* copy ("N of 14 days left") is generated from
+ * the same number the server clock uses, rather than hand-written in each
+ * surface — the trial length appears in banner, wall and CLI text, and a silent
+ * drift between the copy and the enforcement would be an accusation of bad
+ * faith, not a typo. `src/server/license/paths.ts` re-exports it.
+ */
+export const TRIAL_DAYS = 14;
+
 export const TANDEM_REPO_URL = "https://github.com/bloknayrb/tandem";
 export const TANDEM_ISSUES_NEW_URL = `${TANDEM_REPO_URL}/issues/new`;
+
+/** Tandem's website. The public face — distinct from the source repo. */
+export const TANDEM_SITE_URL = "https://tandem.ink";
+
+/**
+ * Where to buy a license. Referenced by every surface that can tell a user their
+ * trial has ended — the wall, the trial banner, the MCP `RESTRICTED_MESSAGE`,
+ * `tandem license`, and the HTTP 403 body. Telling someone to "activate a
+ * license" without saying where to get one is the most avoidable dead end in the
+ * whole flow.
+ *
+ * Points at the site root rather than a checkout path, because the path doesn't
+ * exist yet and a 404 at the moment of purchase is worse than one extra click.
+ * Repoint at the real Polar checkout URL at the v1.0 gate flip.
+ */
+export const TANDEM_PURCHASE_URL = TANDEM_SITE_URL;
+
+/**
+ * Where a buyer with a licensing problem should write. Deliberately NOT the
+ * public issue tracker: an activation failure funnels people toward pasting
+ * their license blob for help, and that blob carries their own name and email.
+ *
+ * Keep this in sync with the issuance Worker's `reply_to`
+ * (`infra/license-issuance-worker/src/worker.ts`) — they are the same promise
+ * made in two places.
+ *
+ * The mailbox is live (confirmed 2026-07-27). Keep it that way: it is printed
+ * to buyers at their most frustrated moment, and `docs/security.md` also routes
+ * *security reports* here — an address that bounces is worse than the GitHub
+ * tracker it replaces.
+ */
+export const TANDEM_SUPPORT_EMAIL = "support@tandem.ink";
 
 /**
  * Feature flag for the in-app "bring your own API key" Models registry UI

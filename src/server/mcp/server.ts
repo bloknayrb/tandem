@@ -19,7 +19,6 @@ import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
 import { readExistingTandemEntries } from "../integrations/existing-config.js";
 import { createKeychain, KEYCHAIN_SERVICE_MODELS } from "../integrations/keychain.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
-import { handleLicenseWebhook } from "../license/webhook.js";
 import { registerModelsRoutes } from "../models/api-routes.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
@@ -459,20 +458,14 @@ export async function startMcpServerHttp(
     if (entry && res.statusCode === 200) await registry.close(entry.sessionId);
   });
 
-  // Public webhook endpoint for Polar/Paddle license generation (auth-exempt).
-  // Intentionally placed before authMiddleware — this endpoint is called by external
-  // payment processors, not by local clients, so Bearer auth would block it.
-  // Security is provided by HMAC signature verification inside handleLicenseWebhook.
-  // The lanAwareApiMiddleware Host-header check is also intentionally omitted here:
-  // external webhook callers send their own Host headers, not localhost/tauri.localhost.
-  // express.raw() passes the raw Buffer as req.body, preserving the exact bytes that
-  // Polar/Paddle signed for HMAC verification. The handler parses JSON from the Buffer.
-
-  app.post(
-    "/webhooks/license",
-    (express as any).raw({ type: "application/json" }),
-    handleLicenseWebhook,
-  );
+  // NOTE: there is deliberately NO license-webhook route here. License issuance
+  // lives entirely in `infra/license-issuance-worker/` — a Cloudflare Worker that
+  // Polar can actually reach. The old `/webhooks/license` handler was mounted
+  // ahead of authMiddleware with no Host check (an unauthenticated,
+  // DNS-rebinding-reachable POST usable as a Tandem-presence oracle) and signed
+  // with an invented `t=,v1=` scheme Polar never sends. Removed in #1116
+  // follow-up; do not re-add a payment-processor endpoint to a server that binds
+  // to loopback.
 
   // Auth middleware for /mcp and /api/* — AFTER apiMiddleware (DNS-rebinding)
   // but BEFORE route handlers. Loopback is always exempt (Claude Code zero-config).

@@ -23,6 +23,8 @@ Inside it:
 | `annotations/` | The durable annotation store (one JSON per document hash) and its `store.lock` |
 | `doc-backups/` | Pre-overwrite snapshots of your documents — verbatim byte copies taken before Tandem's first write to a file each run, restorable with any file manager (see [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document)) |
 | `integrations.json` | Integration config; secrets are keychain references, not plaintext |
+| `license.json` | **Your activated license.** Contains the signed blob, which carries your name and email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
+| `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md)). |
 | `tandem_backups/` | Backups of `~/.claude.json` taken before Tandem rewrote a customized entry |
 | `.broken-backups/` | Quarantined copies of malformed config files (user-only permissions) |
 | `last-seen-version` | Drives the "what's new" changelog on upgrade |
@@ -102,6 +104,12 @@ need next week.
 ### Full manual cleanup
 
 If the binary is already gone, or you want zero traces:
+
+> **Before step 1: save your license.** The app-data directory contains
+> `license.json`. Deleting it destroys the activated copy of a license you paid
+> for. The signed key you were emailed is the real credential and can always be
+> re-activated — so keep that email (or copy `license.json` somewhere first) if
+> you intend to reinstall.
 
 1. Delete the app-data directory for your OS (table above).
 2. Delete the log directory (table above).
