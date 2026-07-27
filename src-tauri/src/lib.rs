@@ -1294,6 +1294,10 @@ pub fn run() {
             // window as setup()'s first statement and never reaches this.
             if autostart_launch {
                 let tray_available = tray_flag_for_setup.load(Ordering::Acquire);
+                // `mut` only on Linux — the backstop below is the sole writer,
+                // and it compiles out everywhere else (an unconditional `mut`
+                // warns on Windows/macOS).
+                #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
                 let mut hide = should_start_hidden(autostart_launch, tray_available);
 
                 // Linux backstop: a *constructed* tray icon is not a *visible*

@@ -156,11 +156,35 @@ pub fn run_uninstall_scrub() -> i32 {
 
     #[cfg(target_os = "windows")]
     {
+        use crate::cowork_installer::{WorkspaceWriteReport, WriteStatus};
+
+        /// A workspace counts as cleared only when all three registry files came
+        /// back clean. `uninstall_tandem_plugin_from_workspace` returns `Ok` even
+        /// when individual writes were `Locked` / `SchemaDrift` / `Failed` — the
+        /// per-file `WriteStatus` is where the truth lives, so treating the outer
+        /// `Ok` as success would overcount and print a reassuring lie.
+        fn fully_cleared(report: &WorkspaceWriteReport) -> bool {
+            [
+                &report.installed_plugins,
+                &report.known_marketplaces,
+                &report.cowork_settings,
+            ]
+            .iter()
+            .all(|s| matches!(s, WriteStatus::Ok | WriteStatus::AlreadyPresent))
+        }
+
         let workspaces = crate::cowork_workspace_scan::find_cowork_workspaces();
         let mut removed = 0usize;
         for ws in &workspaces {
             match crate::cowork_installer::uninstall_tandem_plugin_from_workspace(ws) {
-                Ok(()) => removed += 1,
+                Ok(report) if fully_cleared(&report) => removed += 1,
+                Ok(report) => log::warn!(
+                    "[scrub] workspace {} partially cleared: plugins={:?} marketplaces={:?} settings={:?}",
+                    report.workspace_id,
+                    report.installed_plugins,
+                    report.known_marketplaces,
+                    report.cowork_settings
+                ),
                 Err(e) => log::warn!("[scrub] workspace uninstall failed: {e}"),
             }
         }
