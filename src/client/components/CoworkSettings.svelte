@@ -1,6 +1,10 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
-import { COWORK_RESCAN_DEBOUNCE_MS, TANDEM_REPO_URL } from "../../shared/constants";
+import {
+  COWORK_RESCAN_DEBOUNCE_MS,
+  TANDEM_REPO_URL,
+  TANDEM_SUPPORT_EMAIL,
+} from "../../shared/constants";
 import {
   aggregateWorkspaceStatus,
   coworkReachability,
@@ -290,7 +294,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
                 <a
                   class="cs-report-link"
                   data-testid={`cowork-workspace-report-${ws.workspaceId}-${ws.vmId}`}
-                  href="mailto:maintainers@tandem.invalid?subject=Cowork%20schema%20drift"
+                  href={`mailto:${TANDEM_SUPPORT_EMAIL}?subject=Cowork%20schema%20drift`}
                 >
                   Report
                 </a>
