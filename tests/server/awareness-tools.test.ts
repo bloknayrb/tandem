@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { getAnnotationEditedChannelKey } from "../../src/server/events/queue.js";
+import {
+  attachObservers,
+  detachObservers,
+  getAnnotationEditedChannelKey,
+  resetForTesting as resetEventQueue,
+  wasEmittedViaChannel,
+} from "../../src/server/events/queue.js";
 import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
 import {
   collectInboxUserReplies,
@@ -42,6 +48,7 @@ function setupDoc(id: string, text: string) {
 
 beforeEach(() => {
   resetInbox();
+  resetEventQueue();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
 });
@@ -160,7 +167,13 @@ describe("processInboxAnnotations", () => {
     expect(second.userActions).toHaveLength(0);
   });
 
-  it("suppresses channel-delivered edits after the original comment was surfaced by polling", () => {
+  // Contract flipped deliberately: "pushed to the SSE fan-out" was never
+  // evidence of "delivered to a model". The server cannot observe what a host
+  // does with a notification, and `trackPayloadId` records the push even with
+  // zero subscribers — so suppressing on it silently dropped the comment in the
+  // default no-channel config. The item now surfaces with an `alreadyPushed`
+  // hint instead. See the zero-subscriber regression test below.
+  it("discloses rather than suppresses a channel-delivered edit", () => {
     const ydoc = setupDoc("inbox-edit-channel", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "before", {
@@ -188,8 +201,57 @@ describe("processInboxAnnotations", () => {
       (payloadId) => payloadId === getAnnotationEditedChannelKey(id, 2000),
     );
 
-    expect(second.userActions).toHaveLength(0);
+    expect(second.userActions).toHaveLength(1);
+    expect(second.userActions[0].alreadyPushed).toBe(true);
+    expect(second.userActions[0].edited).toBe(true);
     expect(surfaced.get(id)).toBe(2000);
+  });
+
+  // The regression this change exists for, driven through the REAL queue rather
+  // than a stubbed predicate — a stub would have kept passing throughout the bug.
+  // `trackPayloadId` runs unconditionally in `pushEvent`, so with ZERO
+  // subscribers (the default install: no channel shim, no monitor, nobody on
+  // /api/events) a browser-authored comment is still recorded as "emitted".
+  // checkInbox used to suppress on that and write the surfaced ledger, losing
+  // the comment for the rest of the server run.
+  it("surfaces a user comment pushed with zero subscribers (default no-channel config)", () => {
+    const docId = "inbox-no-subscribers";
+    const ydoc = setupDoc(docId, "Hello world");
+    attachObservers(docId, ydoc);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    // Browser-origin write — the only origin that generates a channel event.
+    map.set("ann_nosub", {
+      id: "ann_nosub",
+      type: "comment",
+      author: "user",
+      audience: "outbound",
+      content: "please look at this",
+      status: "pending",
+      textSnapshot: "Hello",
+      range: rangeOf(0, 5).range,
+      timestamp: 1000,
+      rev: 1,
+    });
+
+    // Nobody received it, yet the queue records it as emitted. This assertion
+    // is the bug's root: "emitted" has never meant "delivered".
+    expect(wasEmittedViaChannel("ann_nosub")).toBe(true);
+
+    const out = processInboxAnnotations(
+      collectAnnotations(map, DOC_HASH),
+      extractText(ydoc),
+      new Map<string, number>(),
+      (a) => a,
+      "tandem",
+      wasEmittedViaChannel,
+    );
+
+    expect(out.userActions).toHaveLength(1);
+    expect(out.userActions[0].id).toBe("ann_nosub");
+    expect(out.userActions[0].alreadyPushed).toBe(true);
+
+    detachObservers(docId);
   });
 
   it("marks polling-discovered edits when no channel event has delivered them", () => {
@@ -439,7 +501,11 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     ).toHaveLength(0);
   });
 
-  it("dedups a reply already delivered via the push channel", () => {
+  // Contract flipped deliberately — same reasoning as the annotation surfacer.
+  // This branch was the more dangerous of the two: `replySurfaced` is a plain
+  // Set with no edit dimension, so a poisoned entry had no `editedAt` escape
+  // hatch and the reply was unrecoverable for the whole server run.
+  it("discloses rather than suppresses a reply already pushed via the channel", () => {
     const replies = [reply({})];
     const ledger = new Set<string>();
     const out = collectInboxUserReplies(
@@ -450,8 +516,9 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       "tandem",
       (id) => id === "r1",
     );
-    expect(out).toHaveLength(0);
-    expect(ledger.has("r1")).toBe(true); // marked so it stays deduped
+    expect(out).toHaveLength(1);
+    expect(out[0].alreadyPushed).toBe(true);
+    expect(ledger.has("r1")).toBe(true); // still deduped against future polls
   });
 
   it("indeterminate mode holds only replies carrying the persisted marker", () => {

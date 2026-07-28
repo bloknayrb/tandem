@@ -872,7 +872,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
 - `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
-- **Channel-less clients degrade gracefully:** items already pushed in real time via the SSE channel shim are deduplicated out of this response; for a generic MCP client with no channel attached, nothing is ever deduplicated and every action surfaces here through polling.
+- **Channel push never suppresses an inbox item.** An item that was also emitted as a real-time event carries `alreadyPushed: true` and still appears here. The server can observe that it pushed an event to the SSE fan-out, but not that any model received it — a host may discard a notification, and events are pushed even when nothing is subscribed at all. Treat `alreadyPushed` as a hint that you may have already responded, not as proof of delivery. (This was previously a suppression, which silently dropped user comments and replies for any client without a working channel — the default configuration.)
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 

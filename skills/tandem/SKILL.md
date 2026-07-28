@@ -58,6 +58,8 @@ Choose the right type for each finding:
 
 **User comments.** When scanning `tandem_checkInbox` or `tandem_getAnnotations`, user-authored `type: "comment"` annotations are the ones you should respond to. Respond with `tandem_reply` for conversational answers, or a new `tandem_comment` on the same range for a textual annotation.
 
+**Before responding, check whether you already did.** Neither `tandem_reply` nor `tandem_comment` is idempotent — replying twice leaves two chat bubbles or two annotation cards on the same text, which the user sees. An inbox item flagged `alreadyPushed: true` was also delivered to you as a real-time event, so it's the most likely case where you've already answered. When that flag is set, or when the item looks familiar, read the annotation's existing replies via `tandem_getAnnotations` before writing a new one.
+
 ## Collaboration Mode
 
 Check `mode` from `tandem_status` or `tandem_checkInbox` and adapt:
@@ -73,7 +75,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area.
 - Use `tandem_status({ text: "..." })` to show what you're working on — the user sees it in the editor status bar.
-- **Call `tandem_checkInbox` every 2-3 tool calls**, not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and there is no signal that tells you it's off — so steady polling is the reliable path, always. It's cheap: if push *is* live, `tandem_checkInbox` de-duplicates items you've already seen, so frequent calls don't double-report or double-act (at worst a long-idle item re-surfaces once, harmlessly). When in doubt, poll.
+- **Call `tandem_checkInbox` every 2-3 tool calls**, not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and there is no signal that tells you it's off — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll.
 - Reply to chat messages with `tandem_reply`, not annotations.
 
 ## .docx Review Workflow
