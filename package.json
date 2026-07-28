@@ -95,7 +95,8 @@
     "tsup": {
       "esbuild": "^0.28.1"
     },
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "@hono/node-server": "^2.0.12"
   },
   "dependencies": {
     "@hocuspocus/provider": "3.4.4",
@@ -155,7 +156,7 @@
     "@types/node": "^25.5.0",
     "@types/update-notifier": "^6.0.8",
     "cross-env": "^10.1.0",
-    "eslint": "^10.8.0",
+    "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^5.2.0",
     "happy-dom": "^20.9.0",
     "husky": "^9.1.7",
