@@ -171,13 +171,13 @@ describe("processInboxAnnotations", () => {
     expect(second.userActions).toHaveLength(0);
   });
 
-  // Contract flipped deliberately: "pushed to the SSE fan-out" was never
-  // evidence of "delivered to a model". The server cannot observe what a host
-  // does with a notification, and `trackPayloadId` records the push even with
-  // zero subscribers — so suppressing on it silently dropped the comment in the
-  // default no-channel config. The item now surfaces with an `alreadyPushed`
-  // hint instead. See the zero-subscriber regression test below.
-  it("discloses rather than suppresses a channel-delivered edit", () => {
+  // Contract flipped deliberately: being handed to a consumer was never evidence
+  // that a model received it — an attached channel shim whose host never
+  // negotiated the channel accepts the frame and discards it, and the server
+  // cannot tell that apart from a live one. Suppressing on it dropped the
+  // comment for the whole server run. The item now surfaces with an advisory
+  // `alreadyPushed` hint instead. See the two queue-driven tests below.
+  it("discloses rather than suppresses a channel-pushed edit", () => {
     const ydoc = setupDoc("inbox-edit-channel", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "before", {

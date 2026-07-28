@@ -183,8 +183,9 @@ const MODE_RELEASE_WAKE_CONTENT =
  * inbox after a Solo→Tandem release. Modeled as `annotation:created` (a
  * VALID_EVENT_TYPES member so pinned monitors parse it) with a `wake_…`
  * annotationId in a DISJOINT namespace from real annotation ids — so
- * `trackPayloadId` records only the synthetic id and can't collide with / dedup
- * a real held item out of the checkInbox pull. The caller MUST have already set
+ * `trackPayloadId` records only the synthetic id and can't collide with a real
+ * held item (which would mis-stamp its `alreadyPushed` hint on the first
+ * post-release poll). The caller MUST have already set
  * mode to Tandem (the release route does this first); otherwise the pushEvent
  * Solo-hold would drop this `annotation:created`.
  */
