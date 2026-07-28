@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { z } from "zod";
 import {
   attachObservers,
   detachObservers,
@@ -24,10 +25,12 @@ import {
   removeDoc,
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
+import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
+  Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_CHAT,
@@ -55,6 +58,16 @@ beforeEach(() => {
   resetEventQueue();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
+  // Mode lives in CTRL_ROOM, is module-global, and survives every reset above.
+  // Tests further down this file write "solo" and "garbage-value" to it (see the
+  // `tandemMode via Y.Map` / `/api/mode` describes). Without this reset, a leak
+  // into the zero-subscriber regression test would make it pass VACUOUSLY rather
+  // than fail: `pushEvent` early-returns on the Solo privacy hold, so the event is
+  // never buffered and `wasEmittedViaChannel` is false for the wrong reason, while
+  // `processInboxAnnotations` is handed "tandem" explicitly so the length
+  // assertion still holds. Delete rather than set a default — present-vs-absent is
+  // what `readModeState` uses to discriminate "indeterminate".
+  getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE);
 });
 
 describe("safeSlice", () => {
@@ -293,6 +306,17 @@ describe("processInboxAnnotations", () => {
     expect(out.userActions).toHaveLength(1);
     expect(out.userActions[0].id).toBe("ann_inert");
     expect(out.userActions[0].alreadyPushed).toBe(true);
+
+    // Pin the flag against the DECLARED schema, not just the runtime shape.
+    // tests/server/mcp-output-schemas.test.ts cannot do this: it proves "no
+    // undeclared keys" by parsing in strip mode and deep-equalling, which only
+    // catches a key that is actually PRESENT — and that suite never attaches
+    // observers, so `wasEmittedViaChannel` is always false there and the field is
+    // never emitted. Without this, deleting `alreadyPushed` from userActionSchema
+    // leaves the whole suite green, and the `.describe()` on that field is the
+    // model-facing product of this change.
+    const parsedAction = z.object(checkInboxOutputShape).shape.userActions.parse(out.userActions);
+    expect(parsedAction[0].alreadyPushed).toBe(true);
 
     unsubscribe(inertConsumer);
     detachObservers(docId);
@@ -563,6 +587,55 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     expect(out).toHaveLength(1);
     expect(out[0].alreadyPushed).toBe(true);
     expect(ledger.has("r1")).toBe(true); // still deduped against future polls
+
+    // Pin the reply flag against the declared schema too — same gap as the
+    // annotation surfacer: the schema suite never emits this field.
+    const parsed = z.object(checkInboxOutputShape).shape.userReplies.parse(out);
+    expect(parsed[0].alreadyPushed).toBe(true);
+  });
+
+  // The test above passes a hand-written predicate, so `getTrackableId`'s
+  // `case "annotation:reply": return event.payload.replyId` is never exercised for
+  // tracking anywhere in the suite — the comment path got two queue-driven tests
+  // and this path got a stub. Drive the real queue so a regression in that case
+  // arm is visible here.
+  //
+  // Worth recording why this branch is structurally safer than the comment one:
+  // it is the arm the cross-document id collision CANNOT reach. User reply ids come
+  // from `generateReplyId()` (random), and imported Word reply ids carry
+  // `author: "import"`, which is filtered before it ever reaches the surfacer.
+  it("flags a reply that the real event queue tracked", () => {
+    const docId = "inbox-reply-queue";
+    const ydoc = setupDoc(docId, "Hello world");
+    attachObservers(docId, ydoc);
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const inertConsumer = () => {};
+    subscribe(inertConsumer);
+
+    // Parent must be a user comment: the replies observer drops note-threaded and
+    // non-comment parents before emitting.
+    withBrowser(ydoc, () => {
+      annMap.set(commentParent.id, { ...commentParent });
+      ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("r_queue", { ...reply({ id: "r_queue" }) });
+    });
+
+    expect(wasEmittedViaChannel("r_queue")).toBe(true);
+
+    const out = collectInboxUserReplies(
+      [commentParent],
+      extractText(ydoc),
+      () => [reply({ id: "r_queue" })],
+      new Set<string>(),
+      "tandem",
+      wasEmittedViaChannel,
+    );
+
+    expect(out).toHaveLength(1);
+    expect(out[0].alreadyPushed).toBe(true);
+
+    unsubscribe(inertConsumer);
+    detachObservers(docId);
   });
 
   it("indeterminate mode holds only replies carrying the persisted marker", () => {

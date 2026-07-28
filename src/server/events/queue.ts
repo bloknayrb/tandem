@@ -42,8 +42,34 @@ const docObservers = new Map<string, Array<() => void>>();
 /** Per-document selection buffer. Selections are stored here instead of being pushed as events. They get attached to the next chat:message for the same document. */
 const selectionBuffer = new Map<string, BufferedSelection>();
 
-/** O(1) dedup: ref-counted annotation/message IDs that have been pushed via channel. */
+/**
+ * O(1) dedup: ref-counted annotation/message IDs that have been pushed via channel.
+ *
+ * Invariant: `count(id) === |{e ∈ buffer : tracked(e) ∧ getTrackableId(e) === id}|`.
+ * `trackedEvents` is what makes that hold — tracking is conditional on having a
+ * subscriber, so eviction must be conditional on the same fact (see `pushEvent`).
+ *
+ * Ids are process-global and NOT document-scoped. That matters because imported
+ * Word annotation ids are deterministic across files: `importAnnotationId`
+ * (file-io/docx-comments.ts) hashes only commentId + range + body text, by design,
+ * so re-importing dedupes. The same Word comment living in two documents therefore
+ * yields the same id in both, and promoting it in each ("Send to Claude") emits two
+ * `annotation:created` events sharing that id. Consequence: `wasEmittedViaChannel`
+ * can be true in document A because of a push that happened in document B. That is
+ * within the advisory contract — the flag is a hint in both directions — but it is
+ * why the ref count must be kept honest rather than treated as a per-item truth.
+ */
 const emittedPayloadIds = new Map<string, number>();
+
+/**
+ * Which buffered events actually incremented `emittedPayloadIds`.
+ *
+ * A side-table marker, not a weak reference — `buffer` strongly holds every event
+ * until eviction, and eviction removes the entry explicitly. It lives here rather
+ * than as a field on `TandemEvent` because that type is the SSE wire shape; a
+ * bookkeeping boolean would serialize out to consumers.
+ */
+const trackedEvents = new WeakSet<TandemEvent>();
 
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
@@ -122,18 +148,28 @@ function pushEvent(event: TandemEvent): void {
   // consumer). What stays unknowable is whether an ATTACHED consumer's host did
   // anything with the notification — an inert channel shim accepts and discards.
   // So this narrows the lie, it does not eliminate it: `wasEmittedViaChannel` is
-  // "handed to >=1 consumer", never "a model saw it". Nothing may suppress on it.
-  if (subscribers.size > 0) trackPayloadId(event);
+  // "handed to >=1 subscribed consumer", never "a model saw it". Nothing may
+  // suppress on it.
+  //
+  // Record WHICH events were tracked. Eviction below must decrement only for those:
+  // the gate above makes tracking conditional, so an unconditional untrack lets an
+  // untracked event's eviction delete a tracked sibling's entry whenever the two
+  // share a trackable id (see the `emittedPayloadIds` docblock — reachable today
+  // via the same imported Word comment promoted in two documents).
+  if (subscribers.size > 0) {
+    trackPayloadId(event);
+    trackedEvents.add(event);
+  }
 
   while (buffer.length > CHANNEL_EVENT_BUFFER_SIZE) {
     const evicted = buffer.shift();
-    if (evicted) untrackPayloadId(evicted);
+    if (evicted && trackedEvents.delete(evicted)) untrackPayloadId(evicted);
   }
 
   const now = Date.now();
   while (buffer.length > 0 && now - buffer[0].timestamp > CHANNEL_EVENT_BUFFER_AGE_MS) {
     const evicted = buffer.shift();
-    if (evicted) untrackPayloadId(evicted);
+    if (evicted && trackedEvents.delete(evicted)) untrackPayloadId(evicted);
   }
 
   for (const cb of subscribers) {
@@ -163,12 +199,19 @@ export function replaySince(lastEventId: string): TandemEvent[] {
 }
 
 /**
- * O(1) check that an id was handed to at least one SSE consumer and is still in
- * the channel buffer. NOT a delivery signal and NOT a dedup gate: an attached
- * consumer may be inert (a channel shim whose host never negotiated the channel
- * accepts and discards), and the id is untracked on buffer eviction, so absence
- * is not evidence the item was never pushed. `checkInbox` uses it to stamp an
- * advisory `alreadyPushed` hint only — nothing may suppress on it.
+ * O(1) check that an id was handed to at least one subscribed consumer and is
+ * still in the channel buffer. NOT a delivery signal and NOT a dedup gate: an
+ * attached consumer may be inert (a channel shim whose host never negotiated the
+ * channel accepts and discards), and the id is untracked on buffer eviction, so
+ * absence is not evidence the item was never pushed. `checkInbox` uses it to stamp
+ * an advisory `alreadyPushed` hint only — nothing may suppress on it.
+ *
+ * "Subscribed consumer" is deliberately not "SSE consumer": `subscribe` is also
+ * how the in-process local-model collaborator attaches (local-model/collaborator.ts,
+ * dark behind BYO_MODELS_ENABLED). If that flag is ever flipped, an enabled
+ * collaborator holds a permanent subscription with no external consumer attached,
+ * and `pushEvent`'s gate above would stamp every comment — so the gate needs to
+ * count external subscribers only, not `subscribers.size`.
  */
 export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);

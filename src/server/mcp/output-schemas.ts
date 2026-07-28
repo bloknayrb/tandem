@@ -161,7 +161,7 @@ const alreadyPushedField = z
   .literal(true)
   .optional()
   .describe(
-    "This item was also emitted as a real-time channel event. A hint that you may have already responded — never proof. The server cannot confirm you received it, and the flag is dropped once the event ages out of the ~60s channel buffer, so its absence is not evidence the item wasn't pushed.",
+    "This item was also emitted as a real-time channel event. A hint that you may have already responded — never proof. The server cannot confirm you received it, and the flag is dropped when the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed.",
   );
 
 const userActionSchema = z.object({
