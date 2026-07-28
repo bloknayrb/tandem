@@ -109,15 +109,21 @@ function untrackPayloadId(event: TandemEvent): void {
 function pushEvent(event: TandemEvent): void {
   // WS-A2 privacy hold: in Solo, drop the user's own annotation/reply content
   // BEFORE buffering, tracking, or fan-out — it reaches neither the SSE forwarder
-  // nor the local-model collaborator, and (critically) `trackPayloadId` never
-  // runs for it. Skipping the track is the load-bearing half: a tracked-but-
-  // undelivered id would make `checkInbox`'s `wasEmittedViaChannel` wrongly
-  // suppress the item after release (silent loss). Release is pull-driven —
-  // `checkInbox` re-surfaces these once live mode reads tandem (see mode.ts).
+  // nor the local-model collaborator. Skipping the track also keeps the released
+  // item free of a stale `alreadyPushed` hint on the first post-release poll.
+  // Release is pull-driven — `checkInbox` re-surfaces these once live mode reads
+  // tandem (see mode.ts).
   if (isUserPrivacyHeld(event) && readModeState() === "solo") return;
 
   buffer.push(event);
-  trackPayloadId(event);
+  // Track only when the fan-out below is non-empty. "Pushed to nobody" is a fact
+  // the server CAN establish, and asserting otherwise made `alreadyPushed` false
+  // on every comment in the default install (no channel shim, no monitor, no SSE
+  // consumer). What stays unknowable is whether an ATTACHED consumer's host did
+  // anything with the notification — an inert channel shim accepts and discards.
+  // So this narrows the lie, it does not eliminate it: `wasEmittedViaChannel` is
+  // "handed to >=1 consumer", never "a model saw it". Nothing may suppress on it.
+  if (subscribers.size > 0) trackPayloadId(event);
 
   while (buffer.length > CHANNEL_EVENT_BUFFER_SIZE) {
     const evicted = buffer.shift();
@@ -156,7 +162,14 @@ export function replaySince(lastEventId: string): TandemEvent[] {
   return buffer.slice(idx + 1);
 }
 
-/** O(1) check if an annotation/message was already pushed via channel. Used for checkInbox dedup. */
+/**
+ * O(1) check that an id was handed to at least one SSE consumer and is still in
+ * the channel buffer. NOT a delivery signal and NOT a dedup gate: an attached
+ * consumer may be inert (a channel shim whose host never negotiated the channel
+ * accepts and discards), and the id is untracked on buffer eviction, so absence
+ * is not evidence the item was never pushed. `checkInbox` uses it to stamp an
+ * advisory `alreadyPushed` hint only — nothing may suppress on it.
+ */
 export function wasEmittedViaChannel(payloadId: string): boolean {
   return emittedPayloadIds.has(payloadId);
 }

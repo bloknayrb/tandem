@@ -448,25 +448,46 @@ describe("buffer eviction and replaySince", () => {
 
 // --- Ref-counted dedup ---
 
-describe("wasEmittedViaChannel (ref-counted dedup)", () => {
-  it("returns true after event with annotationId is pushed", () => {
+describe("wasEmittedViaChannel (ref-counted, subscriber-gated)", () => {
+  const ANN = {
+    id: "ann_dedup",
+    type: "comment",
+    author: "user",
+    content: "test",
+    status: "pending",
+    textSnapshot: "hello",
+    range: { from: 0, to: 5 },
+  };
+
+  it("returns true after an event is handed to a subscriber", () => {
     const doc = new Y.Doc();
     attachObservers("dedup-doc", doc);
-    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const consumer = () => {};
+    subscribe(consumer);
 
-    map.set("ann_dedup", {
-      id: "ann_dedup",
-      type: "comment",
-      author: "user",
-      content: "test",
-      status: "pending",
-      textSnapshot: "hello",
-      range: { from: 0, to: 5 },
-    });
+    doc.getMap(Y_MAP_ANNOTATIONS).set("ann_dedup", ANN);
 
     expect(wasEmittedViaChannel("ann_dedup")).toBe(true);
 
+    unsubscribe(consumer);
     detachObservers("dedup-doc");
+    doc.destroy();
+  });
+
+  // The gate that keeps `alreadyPushed` from lying. "Pushed to nobody" is a
+  // fact the server CAN establish, and tracking regardless of it made the hint
+  // false on every comment in the default install (no channel shim, no
+  // monitor). What stays unknowable is whether an ATTACHED consumer's host did
+  // anything with the frame — so this narrows the claim, it doesn't verify it.
+  it("returns false when the event was pushed with no subscribers attached", () => {
+    const doc = new Y.Doc();
+    attachObservers("dedup-nosub", doc);
+
+    doc.getMap(Y_MAP_ANNOTATIONS).set("ann_dedup", ANN);
+
+    expect(wasEmittedViaChannel("ann_dedup")).toBe(false);
+
+    detachObservers("dedup-nosub");
     doc.destroy();
   });
 

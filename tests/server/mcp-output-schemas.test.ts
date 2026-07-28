@@ -16,11 +16,14 @@
  * Also covers:
  *   - error envelopes from outputSchema'd tools are marked `isError: true`
  *     (the SDK requires structuredContent on non-error results),
- *   - channel-less degradation: this test environment has NO channel shim
- *     connected, so these tests double as proof that tandem_checkInbox /
- *     tandem_status return sensible results for generic MCP clients that
- *     never attach the SSE channel (`wasEmittedViaChannel` is always false →
- *     everything surfaces through polling).
+ *   - channel-less shape: `wasEmittedViaChannel` is always false here because
+ *     this environment never calls `attachObservers`, so no event is ever
+ *     pushed. That makes these tests a check on SHAPE only — they are NOT
+ *     proof that a generic MCP client with no channel attached sees its items.
+ *     Reading them that way is what let the inbox silently drop user comments
+ *     for a whole server run: in production the observers ARE attached, and
+ *     the ledger was written before the fan-out. The real coverage for that
+ *     lives in tests/server/awareness-tools.test.ts, which drives the queue.
  *   - ADR-027: notes never appear in structured payloads; the schemas don't
  *     even admit `type: "note"`.
  */

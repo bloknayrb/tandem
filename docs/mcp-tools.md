@@ -843,7 +843,7 @@ Check if the user is actively editing and where their cursor is.
 
 ### tandem_checkInbox
 
-Check for user actions you haven't seen yet -- new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Already-seen items are de-duplicated per poll (tracked independently of whether an SSE channel is attached), so frequent calls are cheap and never double-report. Low token cost.
+Check for user actions you haven't seen yet -- new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Items already returned by a previous poll are de-duplicated, so frequent calls are cheap. An item flagged `alreadyPushed` was also emitted as a real-time event -- if you recognize it and already responded, don't respond twice. Low token cost.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -872,7 +872,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
 - `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
-- **Channel push never suppresses an inbox item.** An item that was also emitted as a real-time event carries `alreadyPushed: true` and still appears here. The server can observe that it pushed an event to the SSE fan-out, but not that any model received it — a host may discard a notification, and events are pushed even when nothing is subscribed at all. Treat `alreadyPushed` as a hint that you may have already responded, not as proof of delivery. (This was previously a suppression, which silently dropped user comments and replies for any client without a working channel — the default configuration.)
+- **Channel push never suppresses an inbox item.** An item is always returned; when it was also handed to a real-time consumer it carries `alreadyPushed: true` (`userActions` and `userReplies` only -- `userResponses` never carries the flag). The server can observe that it pushed an event to a consumer, but not that any model received it: an attached channel shim whose host never negotiated the channel accepts the notification and discards it. The flag is advisory in **both** directions -- it can be set for an item no model saw, and it is dropped once the event ages out of the ~60s channel buffer, so its absence is not evidence the item wasn't pushed. Never skip an item on the strength of this flag. (This was previously a suppression, which silently dropped user comments and replies for any client without a working channel -- the default configuration.)
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 

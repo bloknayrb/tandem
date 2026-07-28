@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import * as Y from "yjs";
 import {
   attachObservers,
   detachObservers,
   getAnnotationEditedChannelKey,
   resetForTesting as resetEventQueue,
+  subscribe,
+  unsubscribe,
   wasEmittedViaChannel,
 } from "../../src/server/events/queue.js";
 import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
@@ -31,6 +34,7 @@ import {
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import { withBrowser } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply, ChatMessage } from "../../src/shared/types.js";
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
@@ -207,36 +211,40 @@ describe("processInboxAnnotations", () => {
     expect(surfaced.get(id)).toBe(2000);
   });
 
-  // The regression this change exists for, driven through the REAL queue rather
-  // than a stubbed predicate — a stub would have kept passing throughout the bug.
-  // `trackPayloadId` runs unconditionally in `pushEvent`, so with ZERO
-  // subscribers (the default install: no channel shim, no monitor, nobody on
-  // /api/events) a browser-authored comment is still recorded as "emitted".
-  // checkInbox used to suppress on that and write the surfaced ledger, losing
-  // the comment for the rest of the server run.
-  it("surfaces a user comment pushed with zero subscribers (default no-channel config)", () => {
+  // Both regressions below drive the REAL queue rather than a stubbed
+  // predicate. A stub would have kept passing throughout the original bug,
+  // which is precisely how it survived: the one test that claimed to cover
+  // "no channel attached" only ever exercised a detached-observer environment.
+  function writeUserComment(map: Y.Map<unknown>, ydoc: Y.Doc, id: string) {
+    withBrowser(ydoc, () =>
+      map.set(id, {
+        id,
+        type: "comment",
+        author: "user",
+        audience: "outbound",
+        content: "please look at this",
+        status: "pending",
+        textSnapshot: "Hello",
+        range: rangeOf(0, 5).range,
+        timestamp: 1000,
+        rev: 1,
+      }),
+    );
+  }
+
+  // The default install: no channel shim, no monitor, nothing on /api/events.
+  // Nothing was handed to anyone, so the hint must NOT claim otherwise — and
+  // the comment must reach the inbox. This is the configuration where the old
+  // suppression lost the comment for the rest of the server run.
+  it("surfaces a user comment unflagged when nothing is subscribed", () => {
     const docId = "inbox-no-subscribers";
     const ydoc = setupDoc(docId, "Hello world");
     attachObservers(docId, ydoc);
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
-    // Browser-origin write — the only origin that generates a channel event.
-    map.set("ann_nosub", {
-      id: "ann_nosub",
-      type: "comment",
-      author: "user",
-      audience: "outbound",
-      content: "please look at this",
-      status: "pending",
-      textSnapshot: "Hello",
-      range: rangeOf(0, 5).range,
-      timestamp: 1000,
-      rev: 1,
-    });
+    writeUserComment(map, ydoc, "ann_nosub");
 
-    // Nobody received it, yet the queue records it as emitted. This assertion
-    // is the bug's root: "emitted" has never meant "delivered".
-    expect(wasEmittedViaChannel("ann_nosub")).toBe(true);
+    expect(wasEmittedViaChannel("ann_nosub")).toBe(false);
 
     const out = processInboxAnnotations(
       collectAnnotations(map, DOC_HASH),
@@ -249,8 +257,44 @@ describe("processInboxAnnotations", () => {
 
     expect(out.userActions).toHaveLength(1);
     expect(out.userActions[0].id).toBe("ann_nosub");
+    expect(out.userActions[0].alreadyPushed).toBeUndefined();
+
+    detachObservers(docId);
+  });
+
+  // The residual unknowable case: a consumer IS attached but may be inert — a
+  // channel shim whose host never negotiated the channel accepts the frame and
+  // discards it, exactly like this no-op subscriber. The server cannot tell the
+  // difference, so the item is flagged AND still surfaced. The `toHaveLength(1)`
+  // is the load-bearing assertion: it is what stops the flag ever becoming a
+  // suppression again.
+  it("surfaces a user comment WITH the hint when an attached consumer may be inert", () => {
+    const docId = "inbox-inert-subscriber";
+    const ydoc = setupDoc(docId, "Hello world");
+    attachObservers(docId, ydoc);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const inertConsumer = () => {}; // accepts every event, delivers to nobody
+    subscribe(inertConsumer);
+
+    writeUserComment(map, ydoc, "ann_inert");
+
+    expect(wasEmittedViaChannel("ann_inert")).toBe(true);
+
+    const out = processInboxAnnotations(
+      collectAnnotations(map, DOC_HASH),
+      extractText(ydoc),
+      new Map<string, number>(),
+      (a) => a,
+      "tandem",
+      wasEmittedViaChannel,
+    );
+
+    expect(out.userActions).toHaveLength(1);
+    expect(out.userActions[0].id).toBe("ann_inert");
     expect(out.userActions[0].alreadyPushed).toBe(true);
 
+    unsubscribe(inertConsumer);
     detachObservers(docId);
   });
 

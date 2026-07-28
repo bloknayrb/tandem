@@ -153,15 +153,15 @@ export const getAnnotationsOutputShape = {
 // ---------------------------------------------------------------------------
 
 /**
- * Shared by the userActions and userReplies buckets. Set when the item was also
- * emitted as a channel event — which the server CAN observe, unlike delivery.
- * It is deliberately not a suppression: see `processUnsurfacedInboxAnnotations`.
+ * Shared by the userActions and userReplies buckets. Advisory in BOTH
+ * directions — see `wasEmittedViaChannel`. Deliberately not a suppression: see
+ * `processUnsurfacedInboxAnnotations`.
  */
 const alreadyPushedField = z
   .literal(true)
   .optional()
   .describe(
-    "This item was also emitted as a real-time channel event. The server cannot confirm you received it — treat as a hint that you may have already responded, not as proof.",
+    "This item was also emitted as a real-time channel event. A hint that you may have already responded — never proof. The server cannot confirm you received it, and the flag is dropped once the event ages out of the ~60s channel buffer, so its absence is not evidence the item wasn't pushed.",
   );
 
 const userActionSchema = z.object({

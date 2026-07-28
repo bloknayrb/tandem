@@ -423,14 +423,15 @@ function processUnsurfacedInboxAnnotations(
       const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
 
-      // Disclose, never suppress. `wasChannelEmitted` means "pushed to the SSE
-      // fan-out", NOT "delivered to a model" — the server cannot observe what a
-      // host did with a notification, and pushing happens even when nobody is
-      // subscribed at all (`trackPayloadId` in queue.ts runs unconditionally).
-      // Suppressing on it silently dropped the comment in the DEFAULT config
-      // (no channel shim, no monitor). So surface it and stamp the hint; the
-      // ledger below stays the sole dedup, exactly as the chat bucket already
-      // works. Cost: one duplicate per comment in channel-connected sessions.
+      // Disclose, never suppress. `wasChannelEmitted` means "handed to >=1 SSE
+      // consumer and still buffered", NOT "delivered to a model" — an attached
+      // consumer may be inert, and the server cannot observe what a host did
+      // with a notification. Suppressing on it silently dropped the comment for
+      // the whole server run; the ledger below stays the sole dedup, exactly as
+      // the chat bucket already works. The flag is advisory in BOTH directions:
+      // it can be true for an item no model saw, and absent for one that was
+      // pushed (ids are untracked on buffer eviction). Never gate on it.
+      // Cost: one duplicate per comment in channel-connected sessions.
       userActions.push({
         ...ann,
         textSnippet: snippet,

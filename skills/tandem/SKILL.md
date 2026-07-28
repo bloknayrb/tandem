@@ -58,7 +58,9 @@ Choose the right type for each finding:
 
 **User comments.** When scanning `tandem_checkInbox` or `tandem_getAnnotations`, user-authored `type: "comment"` annotations are the ones you should respond to. Respond with `tandem_reply` for conversational answers, or a new `tandem_comment` on the same range for a textual annotation.
 
-**Before responding, check whether you already did.** Neither `tandem_reply` nor `tandem_comment` is idempotent — replying twice leaves two chat bubbles or two annotation cards on the same text, which the user sees. An inbox item flagged `alreadyPushed: true` was also delivered to you as a real-time event, so it's the most likely case where you've already answered. When that flag is set, or when the item looks familiar, read the annotation's existing replies via `tandem_getAnnotations` before writing a new one.
+**Before responding, check whether you already did.** Neither `tandem_reply` nor `tandem_comment` is idempotent — replying twice leaves two chat bubbles or two annotation cards on the same text, which the user sees. Your own memory of the conversation is the primary check: if you recognize the comment's text, you have probably already answered it.
+
+`alreadyPushed: true` is a weak secondary hint, not a verdict. It means the server handed the item to a real-time consumer — not that the consumer's host showed it to you, and not that you saw it. It is also dropped once the event ages out of the ~60s channel buffer, so its absence proves nothing either. Never skip a comment on the strength of this flag alone. To check for a prior *annotation* reply, read the thread via `tandem_getAnnotations`; a prior `tandem_reply` is a chat message and won't appear there.
 
 ## Collaboration Mode
 
