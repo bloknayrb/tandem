@@ -1123,7 +1123,11 @@ Events are only emitted for editor-originated Y.Map changes (MCP-originated writ
 
 ### POST /api/channel-awareness
 
-Channel shim reports Claude's current processing status for the editor StatusBar.
+Push-consumer heartbeat: a channel shim or plugin monitor reports that it received an SSE event. Recorded server-side for diagnostics (`/health`'s loopback-only `push` field, and `tandem doctor`) and **never rendered as Claude's presence**.
+
+It used to write `ClaudeAwareness` into the document's awareness map, which drove the status pill. That was wrong: the caller posts on event *receipt*, not on Claude doing anything, so a channel shim whose host never negotiated the channel kept stamping `processing: …` and then `idle` for a process no model was attached to — the editor read "AI connected · idle" while nothing the user did reached Claude. Claude's real presence comes from `tandem_status` and the per-tool-call typing-presence marker, both written by Claude's own dispatches.
+
+The heartbeat proves the server→consumer leg works. It does **not** prove delivery to a model, and nothing may gate on it. `focusParagraph` / `focusOffset` are still accepted for wire compatibility with pinned shim versions but are ignored.
 
 **Request:**
 ```json

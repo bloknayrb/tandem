@@ -192,6 +192,19 @@ function pushEvent(event: TandemEvent): void {
 
 // --- Public API ---
 
+/**
+ * How many consumers are attached to the event fan-out. Diagnostics only.
+ *
+ * `0` is a sound negative — nothing is listening, so push cannot possibly be
+ * reaching a model. Any positive value is NOT the converse: an attached channel
+ * shim whose host never negotiated the channel accepts every event and discards
+ * it, and the server cannot tell that apart from a live one. Never gate
+ * behaviour or drive a "push is working" indicator on this.
+ */
+export function getSubscriberCount(): number {
+  return subscribers.size;
+}
+
 export function subscribe(cb: EventCallback): void {
   subscribers.add(cb);
 }

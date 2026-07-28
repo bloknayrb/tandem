@@ -80,10 +80,18 @@ function buildOptions(): EventConsumerOptions {
       // throw (rare) propagates out and the retry layer handles it.
       process.stdout.write(content + "\n");
     },
-    onExhaustion: () => {
+    onExhaustion: ({ everConnected }) => {
       // Visible-to-Claude-Code notification. stderr is invisible to the
-      // plugin host, so the user would otherwise see events just stop
-      // with no signal.
+      // plugin host, so a user whose stream really dropped would otherwise
+      // see events just stop with no signal.
+      //
+      // But ONLY when we actually had a stream. The plugin host spawns this
+      // monitor in every Claude Code session, and a desktop user runs Tandem
+      // occasionally while running `claude` constantly — so announcing "restart
+      // Tandem" on a never-connected run injects an unrelated instruction into
+      // the model's context in the common case. Silence is correct there:
+      // nothing was lost, because nothing was ever flowing.
+      if (!everConnected) return;
       process.stdout.write(
         "Tandem monitor disconnected — restart Tandem to restore real-time events\n",
       );

@@ -823,7 +823,10 @@ const doneHeaderState = $derived(
                 data-push-mode={wizard.channelRegistered ? "push" : "polling"}
               >
                 {#if wizard.channelRegistered}
-                  Real-time updates are configured — they start once you restart Claude.
+                  Real-time updates are set up for sessions Tandem starts for you. A session you
+                  start yourself needs the
+                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag —
+                  without it Claude only sees your comments and messages when it checks its inbox.
                 {:else}
                   Polling mode — Claude checks for your changes periodically rather than getting
                   them pushed in real time.

@@ -347,8 +347,8 @@ User accepts annotation in browser
     → SSE endpoint writes event frame to connected channel shim
     → Channel shim parses SSE, calls mcp.notification({ method: "notifications/claude/channel" })
     → Claude Code receives <channel source="tandem-channel" event_type="annotation_accepted">
-    → Shim posts awareness update to /api/channel-awareness
-    → Browser StatusBar shows "Claude -- processing: annotation:accepted"
+    → Shim posts a heartbeat to /api/channel-awareness (diagnostics only —
+      recorded for /health + `tandem doctor`, never shown as Claude's status)
 ```
 
 ### Origin Tagging (Echo Prevention)
@@ -429,7 +429,9 @@ On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
 
 ### Awareness Lifecycle
 
-Each incoming event schedules a debounced (500ms) POST to `/api/channel-awareness` (`active: true, status: "processing: <type>"`), followed by an auto-clear POST 3s later (`active: false, status: "idle"`). The browser's `StatusBar` component observes these changes and shows "Claude is active."
+Each incoming event schedules a debounced (500ms) POST to `/api/channel-awareness` (`active: true, status: "processing: <type>"`), followed by an auto-clear POST 3s later (`active: false, status: "idle"`).
+
+This is a **push-consumer heartbeat, not Claude's presence** — it fires on event receipt by the shim/monitor, which happens whether or not a model is attached. The server records it in `events/push-liveness.ts` for diagnostics (`/health`'s loopback-only `push` field, surfaced by `tandem doctor`) and does not write it to any document. It is the only positive evidence that the server→consumer leg of the push path works, and it is **not** evidence of delivery to a model: an inert channel shim receives every event and discards it. The `StatusBar` renders Claude's status from `ClaudeAwareness`, which only `tandem_status` and typing-presence write.
 
 On SIGINT/SIGTERM, `finalClearAwareness()` drains any in-flight awareness POSTs and then sends a final `active: false` clear for the last-known `documentId`. If no awareness was ever scheduled (no event carried a `documentId`), the shutdown POST is skipped — sending `{documentId: null}` is ambiguous and the server may reject it. `shutdownMonitor` exits 0 on a clean clear and 1 if the clear returned non-OK or threw. VITEST guards (`process.env.VITEST !== "true"`) prevent signal-listener accumulation across test files.
 

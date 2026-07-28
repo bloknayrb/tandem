@@ -879,7 +879,13 @@ async function checkOrphanedVite(
 
 interface HttpGetResult {
   status?: number;
-  data?: { version?: string; transport?: string; hasSession?: boolean } | null;
+  data?: {
+    version?: string;
+    transport?: string;
+    hasSession?: boolean;
+    /** Loopback-only. Diagnostics for the PUSH path — see `reportPushPath`. */
+    push?: { subscribers?: number; lastEventAt?: number | null; eventCount?: number };
+  } | null;
   error?: string;
 }
 
@@ -982,10 +988,60 @@ async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Pro
     if (!d.hasSession) {
       r.warn("No active MCP session — Claude Code hasn't connected yet");
     }
+    reportPushPath(r, d.push);
   } else {
     r.pass("Server responded on /health (could not parse body)");
   }
   return true;
+}
+
+/**
+ * Report the PUSH path separately from the pull path.
+ *
+ * `hasSession` above answers "can Claude call tools" — it says nothing about
+ * whether anything the user does reaches Claude, because those are two
+ * disjoint connections. Conflating them is exactly how a user ends up staring
+ * at "AI connected" while chat messages go nowhere.
+ *
+ * Deliberately never claims push IS working. `subscribers: 0` is a sound
+ * negative; a positive count includes a channel shim whose host never
+ * negotiated the channel, which receives every event and discards it. The
+ * server cannot tell those apart, so neither can this check.
+ */
+function reportPushPath(r: Recorder, push: unknown): void {
+  if (!push || typeof push !== "object") return;
+  const p = push as { subscribers?: number; lastEventAt?: number | null; eventCount?: number };
+  const subscribers = typeof p.subscribers === "number" ? p.subscribers : 0;
+  const eventCount = typeof p.eventCount === "number" ? p.eventCount : 0;
+  const fields = { subscribers, eventCount, lastEventAt: p.lastEventAt ?? null };
+
+  if (subscribers === 0) {
+    r.warn(
+      "No real-time push consumer attached — Claude is not notified when you comment " +
+        "or send a chat message, and only sees them when it polls its inbox",
+      "Start Claude Code with `--dangerously-load-development-channels server:tandem-channel`, " +
+        "or use the desktop app's Relaunch Claude button.",
+      fields,
+    );
+    return;
+  }
+
+  if (eventCount === 0) {
+    r.pass(
+      `${subscribers} push consumer(s) attached, none has received an event yet this run`,
+      undefined,
+      fields,
+    );
+    return;
+  }
+
+  const agoS = p.lastEventAt ? Math.round((Date.now() - p.lastEventAt) / 1000) : null;
+  r.pass(
+    `${subscribers} push consumer(s) attached, last received an event ${agoS === null ? "?" : `${agoS}s`} ago ` +
+      "(confirms events reach the consumer, NOT that Claude sees them)",
+    undefined,
+    fields,
+  );
 }
 
 // ── Check: SSE event stream ─────────────────────────────────────────

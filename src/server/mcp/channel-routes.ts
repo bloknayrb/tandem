@@ -9,9 +9,10 @@ import {
   API_EVENTS,
   API_LAUNCH_CLAUDE,
 } from "../../shared/api-paths.js";
-import { CTRL_ROOM, Y_MAP_AWARENESS, Y_MAP_CHAT, Y_MAP_CLAUDE } from "../../shared/constants.js";
+import { CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
 import { withMcp } from "../../shared/origins.js";
-import { ChannelErrorCodeSchema, type ClaudeAwareness } from "../../shared/types.js";
+import { ChannelErrorCodeSchema } from "../../shared/types.js";
+import { recordPushConsumerEvent } from "../events/push-liveness.js";
 import { sseHandler } from "../events/sse.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
@@ -34,40 +35,39 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
   // SSE event stream for channel shim
   app.get(API_EVENTS, apiMiddleware, sseHandler);
 
-  // Channel awareness: shim posts Claude's status for browser StatusBar
+  // Push-consumer heartbeat: a channel shim / plugin monitor reports that it
+  // received an SSE event. Recorded for diagnostics only — see the comment in
+  // the handler and `events/push-liveness.ts`. `focusParagraph`/`focusOffset`
+  // are still accepted on the wire (pinned shim versions send them) but are
+  // deliberately unread: they described Claude's cursor, and this caller has
+  // never had first-hand knowledge of that.
   app.options(API_CHANNEL_AWARENESS, apiMiddleware);
   app.post(API_CHANNEL_AWARENESS, apiMiddleware, (req: Request, res: Response) => {
-    const { documentId, status, active, focusParagraph, focusOffset } = (req.body ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const { documentId, status, active } = (req.body ?? {}) as Record<string, unknown>;
     if (typeof status !== "string") {
       res.status(400).json({ error: "BAD_REQUEST", message: "status is required" });
       return;
     }
-    // Write to the document's Y.Map('awareness') so the browser StatusBar updates
+    // This is a PUSH-CONSUMER heartbeat, not Claude's presence.
+    //
+    // It used to write `ClaudeAwareness` into the document's Y.Map('awareness'),
+    // which drives the status pill's `· {status}` suffix and the chat panel's
+    // thinking line. But the caller is the channel shim / plugin monitor, and
+    // `sse-consumer.ts` fires it on EVENT RECEIPT — not on Claude doing
+    // anything. A shim whose host never negotiated the channel still receives
+    // SSE, so it kept stamping `status: "processing: …"` and then the 3s
+    // auto-clear `status: "idle"` for a process no model was attached to. The
+    // pill read "AI connected · idle", refreshed on every document touch, with
+    // nothing on the other end. Claude's real presence comes from
+    // `tandem_status` (explicit) and typing-presence's `working` marker
+    // (per tool call); both are written by Claude's own dispatches.
+    //
+    // The signal is still worth keeping — it is the only positive evidence that
+    // the server→consumer leg of the push path works end to end — so it is
+    // recorded here for diagnostics (`/health`, `tandem doctor`) and never
+    // rendered as Claude's state. It does NOT prove delivery to a model.
     const docId = typeof documentId === "string" ? documentId : null;
-    if (docId) {
-      const doc = getOrCreateDocument(docId);
-      const awarenessMap = doc.getMap(Y_MAP_AWARENESS);
-      withMcp(doc, () => {
-        // #651/#823: preserve the in-flight `working` marker so this
-        // shim-driven status write (auto-fired on a debounce, and the 3s
-        // post-flush `clearAwareness()` idle write) doesn't wipe the typing
-        // indicator mid tool-call. Read prev INSIDE the transaction to avoid
-        // clobbering a concurrent awareness write. Mirrors document.ts:559.
-        const prev = awarenessMap.get(Y_MAP_CLAUDE) as ClaudeAwareness | undefined;
-        const state: ClaudeAwareness = {
-          status,
-          timestamp: Date.now(),
-          active: active === true,
-          focusParagraph: typeof focusParagraph === "number" ? focusParagraph : null,
-          focusOffset: typeof focusOffset === "number" ? focusOffset : null,
-          ...(prev?.working ? { working: prev.working } : {}),
-        };
-        awarenessMap.set(Y_MAP_CLAUDE, state);
-      });
-    }
+    recordPushConsumerEvent({ status, active: active === true, documentId: docId });
     res.json({ ok: true, written: !!docId });
   });
 

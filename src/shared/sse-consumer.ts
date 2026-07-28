@@ -86,8 +86,14 @@ export interface EventConsumerOptions {
    * Optional hook called after the retry-exhaustion error POST returns but
    * before `process.exit(1)`. The monitor uses it to write the visible
    * "disconnected" notice to stdout. Default is a noop.
+   *
+   * `everConnected` distinguishes "we had a stream and lost it" from "Tandem
+   * was never running". The monitor is spawned by the plugin host in EVERY
+   * Claude Code session, so without this a user who has the plugin installed
+   * pays a "restart Tandem" notice in unrelated work whenever Tandem simply
+   * isn't running — which is most of the time.
    */
-  onExhaustion?: () => void;
+  onExhaustion?: (info: { everConnected: boolean }) => void;
 }
 
 // --- Module-level state ---
@@ -115,6 +121,9 @@ let cachedMode: TandemMode = TANDEM_MODE_DEFAULT;
 let cachedModeAt = 0;
 let cachedModeFailedAt = 0;
 let _modeRefreshInFlight: Promise<void> | null = null;
+
+/** True once an SSE handshake has succeeded this run. See `onExhaustion`. */
+let everConnected = false;
 
 // --- Public entry point ---
 
@@ -173,7 +182,7 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
             describeFetchError(reportErr, API_CHANNEL_ERROR, CHANNEL_ERROR_REPORT_TIMEOUT_MS),
           );
         }
-        opts.onExhaustion?.();
+        opts.onExhaustion?.({ everConnected });
         process.exit(1);
       }
 
@@ -238,6 +247,11 @@ export async function connectAndStreamOnce(
   }
   if (!res.ok) throw new Error(`SSE endpoint returned ${res.status}`);
   if (!res.body) throw new Error("SSE endpoint returned no body");
+
+  // Latched at the first successful handshake — see `onExhaustion`. Set here,
+  // not on first event: a stream that connects and stays quiet IS connected,
+  // and losing it later is worth reporting.
+  everConnected = true;
 
   // Stable-uptime reset: if the connection stays healthy for
   // STABLE_CONNECTION_MS, signal the caller to reset its retry budget.
@@ -617,6 +631,7 @@ export function _resetSseConsumerStateForTests(): void {
   shutdownTimers.clearAwarenessTimer = null;
   shutdownTimers.lastDocumentId = null;
   outstandingAwareness.clear();
+  everConnected = false;
 }
 
 /** Testing-only — seeds the lastDocumentId that shutdown reads. */

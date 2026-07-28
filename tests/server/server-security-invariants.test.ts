@@ -5,16 +5,23 @@
  *              (never req.host), and advertise bearer_methods_supported: ["header"].
  * Invariant 7: /health omits `hasSession` for non-loopback requests; includes it
  *              for loopback.
+ * Invariant 8: /health's `push` diagnostics ride inside the SAME loopback gate
+ *              as `hasSession` — subscriber counts and consumer heartbeats are
+ *              session-presence signals of the same kind.
  *
  * These tests spin up a real `startMcpServerHttp` instance on an ephemeral port
  * so the Express routing and middleware are tested exactly as deployed.
  */
 
+import { readFile } from "node:fs/promises";
 import type { Server } from "node:http";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isLoopback } from "../../src/server/auth/middleware.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
+
+const SERVER_SRC_PATH = fileURLToPath(new URL("../../src/server/mcp/server.ts", import.meta.url));
 
 let httpServer: Server;
 let port: number;
@@ -105,6 +112,36 @@ describe("Invariant 7 — /health includes hasSession for loopback callers", () 
     const body = (await res.json()) as Record<string, unknown>;
     expect(typeof body.version).toBe("string");
     expect(body.transport).toBe("http");
+  });
+
+  // Invariant 8: `push` rides inside the SAME loopback branch as hasSession.
+  // Subscriber counts and consumer heartbeats are session-presence signals of
+  // the same kind, so a LAN caller must not learn whether anyone is attached.
+  // Same testing constraint as Invariant 7 — we assert the positive path plus
+  // the co-location, since the runner is always loopback.
+  it("/health exposes push diagnostics to loopback callers", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { Host: `127.0.0.1:${port}` },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect("push" in body).toBe(true);
+    const push = body.push as Record<string, unknown>;
+    expect(typeof push.subscribers).toBe("number");
+    expect(typeof push.eventCount).toBe("number");
+    expect("lastEventAt" in push).toBe(true);
+  });
+
+  // Pins the co-location so a future edit can't move `push` out of the gate
+  // while leaving `hasSession` inside it — they must appear and disappear
+  // together.
+  it("gates push and hasSession on the same condition", async () => {
+    const src = await readFile(SERVER_SRC_PATH, "utf8");
+    const loopbackBlock = src.slice(
+      src.indexOf("if (isLoopback(req.socket.remoteAddress))"),
+      src.indexOf("res.json(body);"),
+    );
+    expect(loopbackBlock).toContain("body.hasSession");
+    expect(loopbackBlock).toContain("body.push");
   });
 });
 

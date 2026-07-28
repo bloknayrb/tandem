@@ -15,6 +15,8 @@ import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runt
 import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
+import { getPushConsumerLiveness } from "../events/push-liveness.js";
+import { getSubscriberCount } from "../events/queue.js";
 import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
 import { readExistingTandemEntries } from "../integrations/existing-config.js";
 import { createKeychain, KEYCHAIN_SERVICE_MODELS } from "../integrations/keychain.js";
@@ -488,6 +490,20 @@ export async function startMcpServerHttp(
       };
       if (isLoopback(req.socket.remoteAddress)) {
         body.hasSession = getMcpSessionCount() > 0;
+        // Invariant 8: `push` is loopback-only too — subscriber counts and
+        // consumer heartbeats are session-presence signals of the same kind.
+        //
+        // DIAGNOSTICS ONLY. `hasSession` describes the PULL path (an MCP
+        // transport completed initialize); `push` describes the SSE fan-out.
+        // They are structurally disjoint, which is the whole reason a user can
+        // see "AI connected" while nothing they do reaches Claude. Neither
+        // field proves push is reaching a model: `subscribers: 0` is a sound
+        // negative, but any positive count includes the attached-but-inert
+        // channel shim. Do not build a "push is live" indicator on this.
+        body.push = {
+          subscribers: getSubscriberCount(),
+          ...getPushConsumerLiveness(),
+        };
       }
       res.json(body);
     },
