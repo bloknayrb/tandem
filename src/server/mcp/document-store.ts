@@ -173,12 +173,23 @@ export class YDocStore implements DocumentStore {
   readonly ydoc: Y.Doc;
   readonly filePath: string;
   readonly docHash: string;
+  /**
+   * The open document's stable id (the Hocuspocus room name).
+   *
+   * Distinct from `docHash`, which is derived from `filePath` and therefore
+   * CHANGES on rename and on scratchpad promotion — `renameDocument` deliberately
+   * keeps the docId and swaps the path so clients keep their Y.Doc and room. Any
+   * per-document server-side bookkeeping keyed across a document's lifetime must
+   * use this, not `docHash` and not `filePath`.
+   */
+  readonly documentId: string;
   /** Annotations Y.Map — kept private; the seam is the method surface. */
   private readonly map: Y.Map<unknown>;
 
-  constructor(ydoc: Y.Doc, filePath: string) {
+  constructor(ydoc: Y.Doc, filePath: string, documentId: string) {
     this.ydoc = ydoc;
     this.filePath = filePath;
+    this.documentId = documentId;
     this.docHash = docHash(filePath);
     this.map = ydoc.getMap(Y_MAP_ANNOTATIONS);
   }
@@ -300,5 +311,5 @@ export function getDocumentStore(documentId?: string): YDocStore | null {
   const doc = getCurrentDoc(documentId);
   if (!doc) return null;
   const ydoc = getOrCreateDocument(doc.docName);
-  return new YDocStore(ydoc, doc.filePath);
+  return new YDocStore(ydoc, doc.filePath, doc.id);
 }

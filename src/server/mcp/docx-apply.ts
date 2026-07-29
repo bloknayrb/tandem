@@ -91,7 +91,7 @@ export async function applyChangesCore(
   // `listAnnotations()` sanitizes legacy shapes through the same migration-log
   // relay (keyed on docHash(filePath)) the inline loop used, and skips
   // malformed rows that could never carry a valid suggestion range.
-  const store = new YDocStore(ydoc, filePath);
+  const store = new YDocStore(ydoc, filePath, docState.id);
   const suggestions: AcceptedSuggestion[] = [];
   let pendingCount = 0;
 
