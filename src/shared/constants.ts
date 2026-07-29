@@ -44,6 +44,12 @@ export const TANDEM_PURCHASE_URL = TANDEM_SITE_URL;
  * to buyers at their most frustrated moment, and `docs/security.md` also routes
  * *security reports* here — an address that bounces is worse than the GitHub
  * tracker it replaces.
+ *
+ * Three consumers now, not just licensing: the license surfaces, `docs/security.md`,
+ * and `CoworkSettings.svelte`'s schema-drift **Report** link. The name says
+ * SUPPORT, not LICENSING, and this is a general support address — but keep this
+ * list complete, because "who writes to this mailbox" is what decides whether it
+ * can ever be repointed at a licensing-only inbox.
  */
 export const TANDEM_SUPPORT_EMAIL = "support@tandem.ink";
 
