@@ -322,7 +322,9 @@ Three details are load-bearing:
 
 ## Channel Push (Real-Time Events)
 
-The channel replaces polling for user actions. Instead of Claude calling `tandem_checkInbox` repeatedly, the channel shim pushes events to Claude Code as they happen.
+The channel **supplements** polling for user actions: the shim pushes events to Claude Code as they happen, so Claude learns about a comment sooner than its next poll. It does not replace `tandem_checkInbox`, and nothing in the server treats a push as delivered.
+
+That distinction is load-bearing. The server can observe that it handed an event to a subscribed consumer; it cannot observe that any model received it — an attached channel shim whose host never negotiated the channel accepts the frame and discards it, indistinguishably from a live one. So `checkInbox` never suppresses an item on the strength of a push (it stamps an advisory `alreadyPushed` hint instead), and `skills/tandem/SKILL.md` instructs the model to poll at a steady cadence regardless of channel state. Treating push as authoritative is what silently dropped user comments for every install without a working channel — do not re-derive it.
 
 ### Activation
 
@@ -332,7 +334,7 @@ The channel shim is registered **by default** for the Claude Code target by ever
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-**Requirements:** Claude Code v2.1.80+, `claude.ai` login (not API key — channels require OAuth authentication). The `--dangerously-load-development-channels` flag both activates and loads the channel — no separate `--channels` flag is needed. This flag is required because `tandem-channel` is not yet on the official channel allowlist; it is safe to use with known, trusted channel servers like Tandem. Without it, Claude Code does not start the channel shim — Claude falls back to `tandem_checkInbox` polling.
+**Requirements:** Claude Code v2.1.80+, `claude.ai` login (not API key — channels require OAuth authentication). The `--dangerously-load-development-channels` flag both activates and loads the channel — no separate `--channels` flag is needed. This flag is required because `tandem-channel` is not yet on the official channel allowlist; it is safe to use with known, trusted channel servers like Tandem. Without it, Claude Code does not start the channel shim, and Claude learns about user actions only when it polls `tandem_checkInbox` — later, but never lost.
 
 ### Event Flow
 

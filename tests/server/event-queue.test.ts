@@ -448,25 +448,46 @@ describe("buffer eviction and replaySince", () => {
 
 // --- Ref-counted dedup ---
 
-describe("wasEmittedViaChannel (ref-counted dedup)", () => {
-  it("returns true after event with annotationId is pushed", () => {
+describe("wasEmittedViaChannel (ref-counted, subscriber-gated)", () => {
+  const ANN = {
+    id: "ann_dedup",
+    type: "comment",
+    author: "user",
+    content: "test",
+    status: "pending",
+    textSnapshot: "hello",
+    range: { from: 0, to: 5 },
+  };
+
+  it("returns true after an event is handed to a subscriber", () => {
     const doc = new Y.Doc();
     attachObservers("dedup-doc", doc);
-    const map = doc.getMap(Y_MAP_ANNOTATIONS);
+    const consumer = () => {};
+    subscribe(consumer);
 
-    map.set("ann_dedup", {
-      id: "ann_dedup",
-      type: "comment",
-      author: "user",
-      content: "test",
-      status: "pending",
-      textSnapshot: "hello",
-      range: { from: 0, to: 5 },
-    });
+    doc.getMap(Y_MAP_ANNOTATIONS).set("ann_dedup", ANN);
 
     expect(wasEmittedViaChannel("ann_dedup")).toBe(true);
 
+    unsubscribe(consumer);
     detachObservers("dedup-doc");
+    doc.destroy();
+  });
+
+  // The gate that keeps `alreadyPushed` from lying. "Pushed to nobody" is a
+  // fact the server CAN establish, and tracking regardless of it made the hint
+  // false on every comment in the default install (no channel shim, no
+  // monitor). What stays unknowable is whether an ATTACHED consumer's host did
+  // anything with the frame — so this narrows the claim, it doesn't verify it.
+  it("returns false when the event was pushed with no subscribers attached", () => {
+    const doc = new Y.Doc();
+    attachObservers("dedup-nosub", doc);
+
+    doc.getMap(Y_MAP_ANNOTATIONS).set("ann_dedup", ANN);
+
+    expect(wasEmittedViaChannel("ann_dedup")).toBe(false);
+
+    detachObservers("dedup-nosub");
     doc.destroy();
   });
 
@@ -516,7 +537,11 @@ describe("wasEmittedViaChannel (ref-counted dedup)", () => {
     expect(wasEmittedViaChannel("nonexistent")).toBe(false);
   });
 
-  it("ref-counting: same ID in two events survives eviction of the first", () => {
+  // NOTE: despite its historical name this test never created two events sharing
+  // an id — it seeds `ann_rc` once and fills with distinct ids, so it only ever
+  // exercised the count<=1 delete path. The genuine collision case is the test
+  // below it. Renamed to what it actually asserts.
+  it("an evicted event's id stops being tracked", () => {
     const { events, cleanup } = collectEvents();
     const doc = new Y.Doc();
     attachObservers("refcount-doc", doc);
@@ -557,6 +582,79 @@ describe("wasEmittedViaChannel (ref-counted dedup)", () => {
 
     detachObservers("refcount-doc");
     doc.destroy();
+    cleanup();
+  });
+
+  // The real ref-count collision, in the shape that is actually reachable.
+  //
+  // `importAnnotationId` (file-io/docx-comments.ts) hashes only commentId + range +
+  // body text — no path, no docId — so the SAME Word comment living in two files
+  // imports under one id in both. `emittedPayloadIds` is process-global. Promoting
+  // it in each document ("Send to Claude") therefore emits two `annotation:created`
+  // events sharing that id, both with author "user".
+  //
+  // Tracking is gated on having a subscriber; eviction must be gated on the same
+  // fact. Without that symmetry the untracked event's eviction decrements — and
+  // deletes — the tracked event's entry, silently clearing a hint that was earned.
+  it("an untracked event's eviction does not clear a tracked sibling sharing its id", () => {
+    const sharedId = "import-deadbeefcafe"; // same Word comment, two documents
+    const docA = new Y.Doc();
+    const docB = new Y.Doc();
+    attachObservers("import-doc-a", docA);
+    attachObservers("import-doc-b", docB);
+    const mapA = docA.getMap(Y_MAP_ANNOTATIONS);
+    const mapB = docB.getMap(Y_MAP_ANNOTATIONS);
+
+    const importedNote = {
+      id: sharedId,
+      type: "note",
+      author: "import",
+      content: "Word comment",
+      status: "pending",
+      textSnapshot: "hello",
+      range: { from: 0, to: 5 },
+    };
+    // Promotion preserves the id and flips author import->user, type note->comment
+    // (client/panels/annotation-actions.ts#promotedAnnotation spreads ...rest).
+    const promoted = { ...importedNote, type: "comment", author: "user" };
+
+    // Doc A: import (emits nothing — the add branch requires author "user"), then
+    // promote with NOBODY subscribed. Buffered, deliberately not tracked.
+    mapA.set(sharedId, importedNote);
+    mapA.set(sharedId, promoted);
+    expect(wasEmittedViaChannel(sharedId)).toBe(false);
+
+    // A consumer attaches.
+    const { cleanup } = collectEvents();
+
+    // Doc B: same comment, same id, promoted while subscribed. Genuinely handed
+    // to a consumer, so the hint is earned.
+    mapB.set(sharedId, importedNote);
+    mapB.set(sharedId, promoted);
+    expect(wasEmittedViaChannel(sharedId)).toBe(true);
+
+    // Evict exactly doc A's event: the buffer holds A's + B's, so one more than
+    // the cap minus those two pushes A's out and leaves B's in place.
+    for (let i = 0; i < CHANNEL_EVENT_BUFFER_SIZE - 1; i++) {
+      mapB.set(`ann_filler_${i}`, {
+        id: `ann_filler_${i}`,
+        type: "comment",
+        author: "user",
+        content: `filler ${i}`,
+        status: "pending",
+        textSnapshot: `filler text ${i}`,
+        range: { from: 0, to: 5 },
+      });
+    }
+
+    // Doc B's event is still buffered and was tracked, so the id must still read
+    // as pushed. Without the trackedEvents guard this is false.
+    expect(wasEmittedViaChannel(sharedId)).toBe(true);
+
+    detachObservers("import-doc-a");
+    detachObservers("import-doc-b");
+    docA.destroy();
+    docB.destroy();
     cleanup();
   });
 });

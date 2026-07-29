@@ -152,12 +152,25 @@ export const getAnnotationsOutputShape = {
 // tandem_checkInbox
 // ---------------------------------------------------------------------------
 
+/**
+ * Shared by the userActions and userReplies buckets. Advisory in BOTH
+ * directions — see `wasEmittedViaChannel`. Deliberately not a suppression: see
+ * `processUnsurfacedInboxAnnotations`.
+ */
+const alreadyPushedField = z
+  .literal(true)
+  .optional()
+  .describe(
+    "This item was also emitted as a real-time channel event. A hint that you may have already responded — never proof. The server cannot confirm you received it, and the flag is dropped when the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed.",
+  );
+
 const userActionSchema = z.object({
   ...annotationBaseShape,
   author: z.literal("user"),
   type: z.literal("comment"),
   textSnippet: z.string().describe("Current document text at the annotation range (≤100 chars)"),
   edited: z.literal(true).optional().describe("Set when re-surfaced after a user edit"),
+  alreadyPushed: alreadyPushedField,
 });
 
 const userResponseSchema = z.object({
@@ -189,6 +202,7 @@ const inboxUserReplySchema = z.object({
   text: z.string(),
   timestamp: z.number(),
   textSnippet: z.string().describe("Parent comment's anchored text (≤100 chars)"),
+  alreadyPushed: alreadyPushedField,
 });
 
 export const checkInboxOutputShape = {

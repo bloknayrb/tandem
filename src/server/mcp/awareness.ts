@@ -150,7 +150,7 @@ export function registerAwarenessTools(server: McpServer): void {
     "tandem_checkInbox",
     {
       description:
-        "Check for user actions you haven't seen yet — new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Already-seen items are de-duplicated, so frequent calls are cheap and never double-report. Low token cost — when in doubt, call it.",
+        "Check for user actions you haven't seen yet — new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Items already returned by a previous poll are de-duplicated, so frequent calls are cheap. An item flagged `alreadyPushed` was also emitted as a real-time event — if you recognize it and already responded, don't respond twice. Low token cost — when in doubt, call it.",
       inputSchema: {
         documentId: z
           .string()
@@ -371,7 +371,7 @@ export function processInboxAnnotations(
   modeState: ModeState = "indeterminate",
   wasChannelEmitted: (payloadId: string) => boolean = () => false,
 ): {
-  userActions: Array<Annotation & { textSnippet: string; edited?: boolean }>;
+  userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
 } {
   const unsurfaced: Annotation[] = [];
@@ -400,10 +400,10 @@ function processUnsurfacedInboxAnnotations(
   modeState: ModeState,
   wasChannelEmitted: (payloadId: string) => boolean,
 ): {
-  userActions: Array<Annotation & { textSnippet: string; edited?: boolean }>;
+  userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
 } {
-  const userActions: Array<Annotation & { textSnippet: string; edited?: boolean }> = [];
+  const userActions: Array<InboxUserAction> = [];
   const userResponses: Array<Annotation & { textSnippet: string }> = [];
 
   for (const ann of unsurfaced) {
@@ -421,12 +421,21 @@ function processUnsurfacedInboxAnnotations(
       const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
 
-      if (wasChannelEmitted(channelKey)) {
-        surfaced.set(ann.id, ann.editedAt ?? 0);
-        continue;
-      }
-
-      userActions.push({ ...ann, textSnippet: snippet, ...(edited ? { edited: true } : {}) });
+      // Disclose, never suppress. `wasChannelEmitted` means "handed to >=1 SSE
+      // consumer and still buffered", NOT "delivered to a model" — an attached
+      // consumer may be inert, and the server cannot observe what a host did
+      // with a notification. Suppressing on it silently dropped the comment for
+      // the whole server run; the ledger below stays the sole dedup, exactly as
+      // the chat bucket already works. The flag is advisory in BOTH directions:
+      // it can be true for an item no model saw, and absent for one that was
+      // pushed (ids are untracked on buffer eviction). Never gate on it.
+      // Cost: one duplicate per comment in channel-connected sessions.
+      userActions.push({
+        ...ann,
+        textSnippet: snippet,
+        ...(edited ? { edited: true } : {}),
+        ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
+      });
       surfaced.set(ann.id, ann.editedAt ?? 0);
     } else if (ann.author === "claude" && ann.status !== "pending") {
       userResponses.push({ ...ann, textSnippet: snippet });
@@ -437,6 +446,25 @@ function processUnsurfacedInboxAnnotations(
   return { userActions, userResponses };
 }
 
+/**
+ * A user comment in the checkInbox `userActions` bucket.
+ *
+ * Both optional flags are `true`-only, matching `z.literal(true).optional()` in
+ * `output-schemas.ts`. That is load-bearing, not cosmetic: the MCP SDK hard-
+ * validates structured output against the declared schema and throws
+ * `McpError(InvalidParams)` on a mismatch, which fails the WHOLE checkInbox
+ * response rather than dropping the field. Widening either to `boolean` would let
+ * `edited: false` typecheck and then blow up at runtime — and tests would not
+ * catch it, since tsconfig includes only `src/`.
+ */
+export type InboxUserAction = Annotation & {
+  textSnippet: string;
+  /** Set when re-surfaced after a user edit. Never `false` — omitted instead. */
+  edited?: true;
+  /** Also emitted as a channel event. A hint, not proof of delivery. */
+  alreadyPushed?: true;
+};
+
 export interface InboxUserReply {
   id: string;
   annotationId: string;
@@ -444,6 +472,8 @@ export interface InboxUserReply {
   text: string;
   timestamp: number;
   textSnippet: string;
+  /** Also emitted as a channel event. A hint, not proof of delivery. */
+  alreadyPushed?: true;
 }
 
 /**
@@ -455,7 +485,7 @@ export interface InboxUserReply {
  * is enforced exactly as the getAnnotations read and the SSE observer do — this
  * bucket can't drift from them. Mirrors the annotation surfacer's discipline:
  * `hideFromAI` holds in Solo BEFORE the ledger write (poison-free release), and
- * `wasChannelEmitted` dedups a reply already delivered in real time.
+ * `wasChannelEmitted` stamps `alreadyPushed` as a hint without ever suppressing.
  */
 export function collectInboxUserReplies(
   allAnnotations: Annotation[],
@@ -474,10 +504,11 @@ export function collectInboxUserReplies(
       if (reply.author !== "user") continue; // Claude's own replies aren't inbox items
       if (hideFromAI(reply, modeState)) continue; // Solo hold — no ledger write
       if (replySurfaced.has(reply.id)) continue; // already surfaced via this bucket
-      if (wasChannelEmitted(reply.id)) {
-        replySurfaced.add(reply.id); // delivered in real time — mark, don't re-surface
-        continue;
-      }
+      // Disclose, never suppress — see the annotation surfacer for the full
+      // rationale. This branch was strictly worse than the comment one:
+      // `replySurfaced` is a plain Set with no edit dimension, so a poisoned
+      // entry had no `editedAt` escape hatch and the reply was lost for the
+      // whole server run with certainty.
       out.push({
         id: reply.id,
         annotationId: ann.id,
@@ -485,6 +516,7 @@ export function collectInboxUserReplies(
         text: reply.text,
         timestamp: reply.timestamp,
         textSnippet: snippet,
+        ...(wasChannelEmitted(reply.id) ? { alreadyPushed: true } : {}),
       });
       replySurfaced.add(reply.id);
     }

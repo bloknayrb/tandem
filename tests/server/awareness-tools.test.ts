@@ -1,5 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { getAnnotationEditedChannelKey } from "../../src/server/events/queue.js";
+import * as Y from "yjs";
+import { z } from "zod";
+import {
+  attachObservers,
+  detachObservers,
+  getAnnotationEditedChannelKey,
+  resetForTesting as resetEventQueue,
+  subscribe,
+  unsubscribe,
+  wasEmittedViaChannel,
+} from "../../src/server/events/queue.js";
 import { collectAnnotations, createAnnotation } from "../../src/server/mcp/annotations.js";
 import {
   collectInboxUserReplies,
@@ -15,16 +25,19 @@ import {
   removeDoc,
   setActiveDocId,
 } from "../../src/server/mcp/document-service.js";
+import { checkInboxOutputShape } from "../../src/server/mcp/output-schemas.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
   TANDEM_MODE_DEFAULT,
+  Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_CHAT,
   Y_MAP_MODE,
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
+import { withBrowser } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply, ChatMessage } from "../../src/shared/types.js";
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
@@ -42,8 +55,19 @@ function setupDoc(id: string, text: string) {
 
 beforeEach(() => {
   resetInbox();
+  resetEventQueue();
   for (const id of [...getOpenDocs().keys()]) removeDoc(id);
   setActiveDocId(null);
+  // Mode lives in CTRL_ROOM, is module-global, and survives every reset above.
+  // Tests further down this file write "solo" and "garbage-value" to it (see the
+  // `tandemMode via Y.Map` / `/api/mode` describes). Without this reset, a leak
+  // into the zero-subscriber regression test would make it pass VACUOUSLY rather
+  // than fail: `pushEvent` early-returns on the Solo privacy hold, so the event is
+  // never buffered and `wasEmittedViaChannel` is false for the wrong reason, while
+  // `processInboxAnnotations` is handed "tandem" explicitly so the length
+  // assertion still holds. Delete rather than set a default — present-vs-absent is
+  // what `readModeState` uses to discriminate "indeterminate".
+  getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE);
 });
 
 describe("safeSlice", () => {
@@ -160,7 +184,13 @@ describe("processInboxAnnotations", () => {
     expect(second.userActions).toHaveLength(0);
   });
 
-  it("suppresses channel-delivered edits after the original comment was surfaced by polling", () => {
+  // Contract flipped deliberately: being handed to a consumer was never evidence
+  // that a model received it — an attached channel shim whose host never
+  // negotiated the channel accepts the frame and discards it, and the server
+  // cannot tell that apart from a live one. Suppressing on it dropped the
+  // comment for the whole server run. The item now surfaces with an advisory
+  // `alreadyPushed` hint instead. See the two queue-driven tests below.
+  it("discloses rather than suppresses a channel-pushed edit", () => {
     const ydoc = setupDoc("inbox-edit-channel", "Hello world");
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
     const id = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "before", {
@@ -188,8 +218,108 @@ describe("processInboxAnnotations", () => {
       (payloadId) => payloadId === getAnnotationEditedChannelKey(id, 2000),
     );
 
-    expect(second.userActions).toHaveLength(0);
+    expect(second.userActions).toHaveLength(1);
+    expect(second.userActions[0].alreadyPushed).toBe(true);
+    expect(second.userActions[0].edited).toBe(true);
     expect(surfaced.get(id)).toBe(2000);
+  });
+
+  // Both regressions below drive the REAL queue rather than a stubbed
+  // predicate. A stub would have kept passing throughout the original bug,
+  // which is precisely how it survived: the one test that claimed to cover
+  // "no channel attached" only ever exercised a detached-observer environment.
+  function writeUserComment(map: Y.Map<unknown>, ydoc: Y.Doc, id: string) {
+    withBrowser(ydoc, () =>
+      map.set(id, {
+        id,
+        type: "comment",
+        author: "user",
+        audience: "outbound",
+        content: "please look at this",
+        status: "pending",
+        textSnapshot: "Hello",
+        range: rangeOf(0, 5).range,
+        timestamp: 1000,
+        rev: 1,
+      }),
+    );
+  }
+
+  // The default install: no channel shim, no monitor, nothing on /api/events.
+  // Nothing was handed to anyone, so the hint must NOT claim otherwise — and
+  // the comment must reach the inbox. This is the configuration where the old
+  // suppression lost the comment for the rest of the server run.
+  it("surfaces a user comment unflagged when nothing is subscribed", () => {
+    const docId = "inbox-no-subscribers";
+    const ydoc = setupDoc(docId, "Hello world");
+    attachObservers(docId, ydoc);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    writeUserComment(map, ydoc, "ann_nosub");
+
+    expect(wasEmittedViaChannel("ann_nosub")).toBe(false);
+
+    const out = processInboxAnnotations(
+      collectAnnotations(map, DOC_HASH),
+      extractText(ydoc),
+      new Map<string, number>(),
+      (a) => a,
+      "tandem",
+      wasEmittedViaChannel,
+    );
+
+    expect(out.userActions).toHaveLength(1);
+    expect(out.userActions[0].id).toBe("ann_nosub");
+    expect(out.userActions[0].alreadyPushed).toBeUndefined();
+
+    detachObservers(docId);
+  });
+
+  // The residual unknowable case: a consumer IS attached but may be inert — a
+  // channel shim whose host never negotiated the channel accepts the frame and
+  // discards it, exactly like this no-op subscriber. The server cannot tell the
+  // difference, so the item is flagged AND still surfaced. The `toHaveLength(1)`
+  // is the load-bearing assertion: it is what stops the flag ever becoming a
+  // suppression again.
+  it("surfaces a user comment WITH the hint when an attached consumer may be inert", () => {
+    const docId = "inbox-inert-subscriber";
+    const ydoc = setupDoc(docId, "Hello world");
+    attachObservers(docId, ydoc);
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const inertConsumer = () => {}; // accepts every event, delivers to nobody
+    subscribe(inertConsumer);
+
+    writeUserComment(map, ydoc, "ann_inert");
+
+    expect(wasEmittedViaChannel("ann_inert")).toBe(true);
+
+    const out = processInboxAnnotations(
+      collectAnnotations(map, DOC_HASH),
+      extractText(ydoc),
+      new Map<string, number>(),
+      (a) => a,
+      "tandem",
+      wasEmittedViaChannel,
+    );
+
+    expect(out.userActions).toHaveLength(1);
+    expect(out.userActions[0].id).toBe("ann_inert");
+    expect(out.userActions[0].alreadyPushed).toBe(true);
+
+    // Pin the flag against the DECLARED schema, not just the runtime shape.
+    // tests/server/mcp-output-schemas.test.ts cannot do this: it proves "no
+    // undeclared keys" by parsing in strip mode and deep-equalling, which only
+    // catches a key that is actually PRESENT — and that suite never attaches
+    // observers, so `wasEmittedViaChannel` is always false there and the field is
+    // never emitted. Without this, deleting `alreadyPushed` from userActionSchema
+    // leaves the whole suite green, and the `.describe()` on that field is the
+    // model-facing product of this change.
+    const parsedAction = z.object(checkInboxOutputShape).shape.userActions.parse(out.userActions);
+    expect(parsedAction[0].alreadyPushed).toBe(true);
+
+    unsubscribe(inertConsumer);
+    detachObservers(docId);
   });
 
   it("marks polling-discovered edits when no channel event has delivered them", () => {
@@ -439,7 +569,11 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     ).toHaveLength(0);
   });
 
-  it("dedups a reply already delivered via the push channel", () => {
+  // Contract flipped deliberately — same reasoning as the annotation surfacer.
+  // This branch was the more dangerous of the two: `replySurfaced` is a plain
+  // Set with no edit dimension, so a poisoned entry had no `editedAt` escape
+  // hatch and the reply was unrecoverable for the whole server run.
+  it("discloses rather than suppresses a reply already pushed via the channel", () => {
     const replies = [reply({})];
     const ledger = new Set<string>();
     const out = collectInboxUserReplies(
@@ -450,8 +584,58 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       "tandem",
       (id) => id === "r1",
     );
-    expect(out).toHaveLength(0);
-    expect(ledger.has("r1")).toBe(true); // marked so it stays deduped
+    expect(out).toHaveLength(1);
+    expect(out[0].alreadyPushed).toBe(true);
+    expect(ledger.has("r1")).toBe(true); // still deduped against future polls
+
+    // Pin the reply flag against the declared schema too — same gap as the
+    // annotation surfacer: the schema suite never emits this field.
+    const parsed = z.object(checkInboxOutputShape).shape.userReplies.parse(out);
+    expect(parsed[0].alreadyPushed).toBe(true);
+  });
+
+  // The test above passes a hand-written predicate, so `getTrackableId`'s
+  // `case "annotation:reply": return event.payload.replyId` is never exercised for
+  // tracking anywhere in the suite — the comment path got two queue-driven tests
+  // and this path got a stub. Drive the real queue so a regression in that case
+  // arm is visible here.
+  //
+  // Worth recording why this branch is structurally safer than the comment one:
+  // it is the arm the cross-document id collision CANNOT reach. User reply ids come
+  // from `generateReplyId()` (random), and imported Word reply ids carry
+  // `author: "import"`, which is filtered before it ever reaches the surfacer.
+  it("flags a reply that the real event queue tracked", () => {
+    const docId = "inbox-reply-queue";
+    const ydoc = setupDoc(docId, "Hello world");
+    attachObservers(docId, ydoc);
+    const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
+
+    const inertConsumer = () => {};
+    subscribe(inertConsumer);
+
+    // Parent must be a user comment: the replies observer drops note-threaded and
+    // non-comment parents before emitting.
+    withBrowser(ydoc, () => {
+      annMap.set(commentParent.id, { ...commentParent });
+      ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).set("r_queue", { ...reply({ id: "r_queue" }) });
+    });
+
+    expect(wasEmittedViaChannel("r_queue")).toBe(true);
+
+    const out = collectInboxUserReplies(
+      [commentParent],
+      extractText(ydoc),
+      () => [reply({ id: "r_queue" })],
+      new Set<string>(),
+      "tandem",
+      wasEmittedViaChannel,
+    );
+
+    expect(out).toHaveLength(1);
+    expect(out[0].alreadyPushed).toBe(true);
+
+    unsubscribe(inertConsumer);
+    detachObservers(docId);
   });
 
   it("indeterminate mode holds only replies carrying the persisted marker", () => {

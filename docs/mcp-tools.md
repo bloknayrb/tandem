@@ -843,7 +843,7 @@ Check if the user is actively editing and where their cursor is.
 
 ### tandem_checkInbox
 
-Check for user actions you haven't seen yet -- new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Already-seen items are de-duplicated per poll (tracked independently of whether an SSE channel is attached), so frequent calls are cheap and never double-report. Low token cost.
+Check for user actions you haven't seen yet -- new comments, chat messages, and responses to your annotations. You cannot tell whether real-time push is reaching you, so poll at a steady cadence: every 2-3 tool calls, after completing any task, between steps, and whenever you pause. Items already returned by a previous poll are de-duplicated, so frequent calls are cheap. An item flagged `alreadyPushed` was also emitted as a real-time event -- if you recognize it and already responded, don't respond twice. Low token cost.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -856,7 +856,8 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
   "hasNew": true,
   "mode": "tandem",
   "storeReadOnly": false,
-  "userActions": [ { ...annotation, "textSnippet": "..." } ],
+  "userActions": [ { ...annotation, "textSnippet": "...", "edited": true, "alreadyPushed": true } ],
+  "userReplies": [ { "id": "r_...", "annotationId": "ann_...", "author": "user", "text": "...", "timestamp": 1710936000000, "textSnippet": "...", "alreadyPushed": true } ],
   "userResponses": [ { ...annotation, "textSnippet": "..." } ],
   "chatMessages": [ { "id": "msg_...", "text": "...", "timestamp": 1710936000000 } ],
   "activity": {
@@ -872,7 +873,7 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
 - Each annotation is surfaced only once -- subsequent calls return only new items (edited annotations re-surface with `edited: true`).
 - `userActions`: new or edited user comments. User notes and highlights never surface here (ADR-027).
 - `userResponses`: the user's accept/dismiss decisions on Claude's annotations.
-- **Channel-less clients degrade gracefully:** items already pushed in real time via the SSE channel shim are deduplicated out of this response; for a generic MCP client with no channel attached, nothing is ever deduplicated and every action surfaces here through polling.
+- **Channel push never suppresses an inbox item.** An item is always returned; when it was also handed to a real-time consumer it carries `alreadyPushed: true` (`userActions` and `userReplies` only -- `userResponses` never carries the flag). The server can observe that it pushed an event to a consumer, but not that any model received it: an attached channel shim whose host never negotiated the channel accepts the notification and discards it. The flag is advisory in **both** directions -- it can be set for an item no model saw, and it is dropped once the event leaves the channel buffer, so its absence is not evidence the item wasn't pushed. (Buffer eviction is size- and age-triggered but runs only when a *later* event is pushed -- there is no timer -- so on a quiet document the flag can outlive the nominal 60s age bound by an unbounded margin. Ids are also process-global rather than per-document; the same imported Word comment promoted in two files shares one id.) Never skip an item on the strength of this flag. (This was previously a suppression, which silently dropped user comments and replies for any client without a working channel -- the default configuration.)
 - `chatMessages`: new chat messages from the user via the ChatPanel sidebar. Each entry has `id`, `author`, `text`, `timestamp`, and optionally `documentId` (the document that was active when the message was sent).
 - `mode`: the user's current collaboration mode (`"tandem"` or `"solo"`). In `"solo"` mode, hold annotations and wait for the mode to switch to `"tandem"` before resuming.
 
