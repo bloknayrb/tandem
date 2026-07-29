@@ -140,6 +140,38 @@ function trackPayloadId(event: TandemEvent): boolean {
  * in-process collaborator (which uses `document:*` to abort in-flight runs) and
  * are suppressed from the external monitor at the SSE forwarder instead.
  */
+/**
+ * WS-A2 Phase 7: may this event go to an EXTERNAL consumer right now?
+ *
+ * `isUserPrivacyHeld` above drops the user's own annotation/reply CONTENT before
+ * it is ever buffered. This predicate covers what that one deliberately does not:
+ * accept/dismiss status flips, Claude-authored replies, and `document:*`
+ * lifecycle. Those carry no content the AI cannot already pull on demand (Solo
+ * does not gate document reads), but they carry TIMING — they tell an idle
+ * session "the user is doing things right now, go look", which is precisely what
+ * Solo promises not to do.
+ *
+ * Until now this was enforced only in the CONSUMER (`shared/sse-consumer.ts`),
+ * i.e. client-side, with a 2s stale mode cache that fails open on cold start —
+ * so any process that opens `/api/events` (a loopback `curl`, a third-party
+ * bridge, a version-pinned monitor) received the full stream in Solo. The server
+ * vouched for nothing.
+ *
+ * Deliberately NOT applied before `buffer.push`: keeping the buffer's contents
+ * unchanged means `replaySince`'s unknown-id fallback (which returns the ENTIRE
+ * buffer, on a client-controlled header) cannot hand out anything it could not
+ * hand out before. The gate is applied at the two delivery points instead.
+ *
+ * Read LIVE, per delivery — never stamped at push time. The Solo→Tandem release
+ * flips mode and then emits the wake, so a stamped value would swallow it.
+ */
+function shouldForwardExternally(event: TandemEvent): boolean {
+  // Chat is the always-delivered channel in both directions, and it is also the
+  // in-process collaborator's wake trigger. Never gate it.
+  if (event.type === "chat:message") return true;
+  return readModeState() !== "solo";
+}
+
 function isUserPrivacyHeld(event: TandemEvent): boolean {
   switch (event.type) {
     case "annotation:created":
@@ -203,13 +235,34 @@ function pushEvent(event: TandemEvent): void {
     if (evicted && trackedEvents.delete(evicted)) untrackPayloadId(evicted);
   }
 
+  // Bound ONCE and reused, rather than re-read per subscriber: `pushEvent` is
+  // synchronous so two reads cannot currently disagree, but binding it is the
+  // difference between correct and correct-by-accident.
+  const forwardExternally = shouldForwardExternally(event);
+
   for (const cb of subscribers) {
+    // In-process subscribers (the local-model collaborator) are NOT gated: they
+    // rely on `document:closed` / `document:switched` to abort in-flight runs,
+    // and they never leave this machine. Only external consumers are held.
+    if (!forwardExternally && externalSubscribers.has(cb)) continue;
     try {
       cb(event);
     } catch (err) {
       console.error("[EventQueue] Subscriber threw during event dispatch:", err);
     }
   }
+}
+
+/**
+ * Test-only seam onto `pushEvent`.
+ *
+ * Most queue tests drive real Y.Map observers, which is the right default. But
+ * `document:*` events are pushed directly by the document service rather than
+ * derived from an observer, so the Solo forwarder gate cannot be exercised for
+ * them any other way.
+ */
+export function _pushEventForTests(event: TandemEvent): void {
+  pushEvent(event);
 }
 
 // --- Public API ---
@@ -246,11 +299,22 @@ export function unsubscribe(cb: EventCallback): void {
   externalSubscribers.delete(cb);
 }
 
-/** Replay buffered events since a given event ID (for SSE reconnection). */
+/**
+ * Replay buffered events since a given event ID (for SSE reconnection).
+ *
+ * The Solo filter here is MANDATORY, not symmetry with the fan-out gate. This is
+ * the higher-risk branch: when `lastEventId` is not found the fallback returns
+ * the ENTIRE buffer, and `lastEventId` comes from a client-controlled
+ * `Last-Event-ID` header. Without the filter, any consumer reconnecting with a
+ * stale or fabricated id would receive the whole Solo span in one shot.
+ *
+ * Only `sse.ts` calls this, and it is the external delivery path, so filtering
+ * inside the function is complete.
+ */
 export function replaySince(lastEventId: string): TandemEvent[] {
   const idx = buffer.findIndex((e) => e.id === lastEventId);
-  if (idx === -1) return [...buffer]; // ID not found — replay everything
-  return buffer.slice(idx + 1);
+  const slice = idx === -1 ? [...buffer] : buffer.slice(idx + 1);
+  return slice.filter((e) => shouldForwardExternally(e));
 }
 
 /**

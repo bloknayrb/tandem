@@ -2,21 +2,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { AnnotationDocV1 } from "../../src/server/annotations/schema.js";
 import {
+  _pushEventForTests,
   attachCtrlObservers,
   attachObservers,
   detachObservers,
+  emitModeReleaseWake,
   getAnnotationEditedChannelKey,
   getBufferedSelection,
   reattachObservers,
   replaySince,
   resetForTesting,
+  type SubscriberKind,
   subscribe,
   unsubscribe,
   wasEmittedViaChannel,
 } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CHANNEL_EVENT_BUFFER_SIZE,
+  CTRL_ROOM,
   SELECTION_DWELL_DEFAULT_MS,
   Y_MAP_ANNOTATION_REPLIES,
   Y_MAP_ANNOTATIONS,
@@ -32,14 +37,19 @@ afterEach(() => {
 
 // --- Helper to collect events from the subscriber ---
 
-function collectEvents(): { events: TandemEvent[]; cleanup: () => void } {
+function collectEvents(kind: SubscriberKind = "external"): {
+  events: TandemEvent[];
+  cleanup: () => void;
+} {
   const events: TandemEvent[] = [];
   const cb = (event: TandemEvent) => {
     events.push(event);
   };
-  // "external" — these stand in for a channel shim / plugin monitor, which is
-  // what `wasEmittedViaChannel` and the doctor's push check are asking about.
-  subscribe(cb, "external");
+  // Default "external" — these stand in for a channel shim / plugin monitor,
+  // which is what `wasEmittedViaChannel` and the doctor's push check ask about.
+  // Pass "internal" to model the in-process collaborator, which the Solo
+  // forwarder gate deliberately does not hold.
+  subscribe(cb, kind);
   return { events, cleanup: () => unsubscribe(cb) };
 }
 
@@ -1475,6 +1485,12 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
     cleanup();
   });
 
+  // The server's PRE-BUFFER hold stays narrow: accept/dismiss is still buffered
+  // and still reaches in-process subscribers in Solo (the local-model
+  // collaborator needs it). What changed in Phase 7 is that EXTERNAL forwarding
+  // of it is now gated server-side rather than in the consumer — so this test
+  // subscribes as "internal" to assert the narrowness it was written for.
+  // External behaviour is covered in "Solo forwarder gate".
   it("does NOT hold accept/dismiss of a Claude annotation in Solo (narrow scope)", () => {
     setMode("solo");
     // Seed a Claude annotation via MCP (no event), then the user accepts it.
@@ -1492,16 +1508,126 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
       },
       MCP_ORIGIN,
     );
-    const { events, cleanup } = collectEvents();
+    const { events, cleanup } = collectEvents("internal");
 
-    // User accepts (browser-origin status flip) — must still fan out even in Solo,
-    // because accept/dismiss are suppressed from the external monitor downstream,
-    // not held here.
+    // User accepts (browser-origin status flip) — must still be buffered and
+    // delivered in-process even in Solo. It is withheld from EXTERNAL consumers
+    // by the forwarder gate, not dropped here.
     const ann = map.get("claude_ann") as Record<string, unknown>;
     map.set("claude_ann", { ...ann, status: "accepted" });
 
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe("annotation:accepted");
     cleanup();
+  });
+});
+
+// ── WS-A2 Phase 7: server-side Solo gate for EXTERNAL consumers ─────────────
+//
+// `isUserPrivacyHeld` drops the user's own annotation/reply content before it is
+// buffered. This gate covers what that deliberately does not — accept/dismiss,
+// Claude-authored replies, and document:* lifecycle. Those carry no content the
+// AI can't already pull (Solo doesn't gate document reads) but they carry
+// TIMING: they wake an idle session, which is exactly what Solo promises not to
+// do. Enforcement used to live only in the consumer, so any process that opened
+// /api/events got the full stream in Solo.
+describe("Solo forwarder gate (external consumers)", () => {
+  function setMode(mode: string | null) {
+    const map = getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_USER_AWARENESS);
+    if (mode === null) map.delete(Y_MAP_MODE);
+    else map.set(Y_MAP_MODE, mode);
+  }
+  afterEach(() => setMode(null));
+
+  function docEvent(id: string): TandemEvent {
+    return {
+      id,
+      type: "document:opened",
+      timestamp: Date.now(),
+      documentId: "d1",
+      payload: { fileName: "secret-plan.md", format: "md" },
+    } as TandemEvent;
+  }
+
+  it("withholds document lifecycle from an external consumer in Solo", () => {
+    setMode("solo");
+    const external: TandemEvent[] = [];
+    const cb = (e: TandemEvent) => external.push(e);
+    subscribe(cb, "external");
+    _pushEventForTests(docEvent("ev-ext-solo"));
+    unsubscribe(cb);
+
+    expect(external).toHaveLength(0);
+  });
+
+  // The in-process collaborator aborts in-flight runs on document:closed /
+  // switched. Gating it would silently strand those runs — so the gate is
+  // external-only, and this pins that.
+  it("still delivers to in-process subscribers in Solo", () => {
+    setMode("solo");
+    const internal: TandemEvent[] = [];
+    const cb = (e: TandemEvent) => internal.push(e);
+    subscribe(cb, "internal");
+    _pushEventForTests(docEvent("ev-int-solo"));
+    unsubscribe(cb);
+
+    expect(internal).toHaveLength(1);
+  });
+
+  it("delivers to external consumers again in Tandem", () => {
+    setMode("tandem");
+    const external: TandemEvent[] = [];
+    const cb = (e: TandemEvent) => external.push(e);
+    subscribe(cb, "external");
+    _pushEventForTests(docEvent("ev-ext-tandem"));
+    unsubscribe(cb);
+
+    expect(external).toHaveLength(1);
+  });
+
+  // The gate reads mode LIVE per delivery, never stamped at push time. The
+  // release route flips mode and THEN emits the wake in the same handler, so a
+  // stamped value would swallow the one event the release exists to deliver.
+  it("forwards the Solo→Tandem release wake to external consumers", () => {
+    setMode("tandem"); // the route has already flipped by the time the wake fires
+    const external: TandemEvent[] = [];
+    const cb = (e: TandemEvent) => external.push(e);
+    subscribe(cb, "external");
+    emitModeReleaseWake();
+    unsubscribe(cb);
+
+    expect(external).toHaveLength(1);
+    expect(external[0].type).toBe("annotation:created");
+  });
+
+  // replaySince is the HIGHER-risk branch: the unknown-id fallback returns the
+  // entire buffer, driven by a client-controlled Last-Event-ID header.
+  it("filters the replay path too, including the unknown-id fallback", () => {
+    setMode("tandem");
+    const cb = () => {};
+    subscribe(cb, "external");
+    _pushEventForTests(docEvent("ev-replay-1"));
+    unsubscribe(cb);
+
+    expect(replaySince("no-such-id").some((e) => e.id === "ev-replay-1")).toBe(true);
+
+    setMode("solo");
+    expect(replaySince("no-such-id").some((e) => e.id === "ev-replay-1")).toBe(false);
+  });
+
+  it("never gates chat, in either mode", () => {
+    setMode("solo");
+    const external: TandemEvent[] = [];
+    const cb = (e: TandemEvent) => external.push(e);
+    subscribe(cb, "external");
+    _pushEventForTests({
+      id: "ev-chat-solo",
+      type: "chat:message",
+      timestamp: Date.now(),
+      payload: { messageId: "m1", text: "hi", replyTo: null, anchor: null },
+    } as TandemEvent);
+    unsubscribe(cb);
+
+    expect(external).toHaveLength(1);
   });
 });
