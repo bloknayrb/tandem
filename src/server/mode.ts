@@ -63,7 +63,12 @@ export function readLiveMode(): "solo" | "tandem" {
 }
 
 /**
- * The single Solo-hold predicate, evaluated at all four delivery surfaces.
+ * The Solo-hold predicate for the PULL surfaces: `tandem_getAnnotations`,
+ * `tandem_checkInbox`, and `tandem_exportAnnotations` (annotations and replies
+ * each). Push does NOT use this — `events/queue.ts` holds with its own,
+ * deliberately narrower `isUserPrivacyHeld`. Enumerated rather than counted: an
+ * earlier version claimed "all four delivery surfaces", and that unearned
+ * completeness is what let the export bypass read as intentional for a release.
  * Carries ONLY the Solo-hold — ADR-027 note/reply privacy stays in the existing
  * per-surface type gates (comment-only at the push/checkInbox surfaces,
  * `channelVisibleReplies` for replies), which must not be folded in here.

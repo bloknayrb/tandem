@@ -137,7 +137,11 @@ export function exportAnnotations(doc: Y.Doc, annotations: Annotation[]): string
   // filters them out, but this function is privacy-safe on its own.
   const visible = annotations.filter((a) => a.type !== "note");
   if (visible.length === 0) {
-    return "# Document Review\n\nNo annotations found.";
+    // Deliberately NOT "No annotations found" — the caller may have filtered
+    // Solo-held items out of `annotations` before calling, and asserting that
+    // none EXIST would be a false statement rather than an incomplete one. The
+    // caller discloses the withheld count separately (`heldFromExport`).
+    return "# Document Review\n\nNo annotations available for export.";
   }
 
   const fragment = doc.getXmlFragment("default");

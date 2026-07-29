@@ -60,6 +60,81 @@ describe("solo-mode event filtering", () => {
     expect(stdoutSpy).not.toHaveBeenCalled();
   });
 
+  // The Solo->Tandem release wake. The release route flips mode server-side and
+  // fires this microseconds later in the SAME handler, but the consumer's gate
+  // reads `cachedMode` (fire-and-forget refresh + a 2s TTL early-return), so the
+  // cache still says "solo" and the wake — the one event WS-A2's release exists to
+  // deliver — was suppressed AND checkpointed past, so never replayed.
+  //
+  // Any Solo session that saw ANY non-chat event has a warm "solo" cache, and
+  // accept/dismiss and document:* still flow (the server hold is deliberately
+  // narrow), so this was the common case, not an edge.
+  it("delivers the Solo->Tandem release wake even with a stale solo cache", async () => {
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "solo" }), { status: 200 }));
+    const promise = connectAndStream(
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    // Warm the cache to "solo" — exactly the state the release lands in.
+    await getCachedMode();
+
+    stream.push(
+      sseFrame(
+        {
+          id: "w1",
+          type: "annotation:created",
+          timestamp: 1,
+          payload: {
+            annotationId: "wake_abc123",
+            annotationType: "comment",
+            content: "Solo mode ended. Call tandem_checkInbox…",
+            textSnippet: "",
+          },
+        },
+        "w1",
+      ),
+    );
+    stream.end();
+    await promise.catch(() => {});
+
+    expect(stdoutSpy).toHaveBeenCalled();
+  });
+
+  // The exemption must be exactly the disjoint `wake_` namespace and nothing
+  // wider — a real user comment in Solo must still be suppressed.
+  it("still suppresses a real annotation:created in solo", async () => {
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "solo" }), { status: 200 }));
+    const promise = connectAndStream(
+      undefined,
+      () => {},
+      () => {},
+    );
+    await getCachedMode();
+
+    stream.push(
+      sseFrame(
+        {
+          id: "a1",
+          type: "annotation:created",
+          timestamp: 1,
+          payload: {
+            annotationId: "ann_real",
+            annotationType: "comment",
+            content: "private thought",
+            textSnippet: "hello",
+          },
+        },
+        "a1",
+      ),
+    );
+    stream.end();
+    await promise.catch(() => {});
+
+    expect(stdoutSpy).not.toHaveBeenCalled();
+  });
+
   it("ALWAYS delivers chat:message events regardless of mode", async () => {
     stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "solo" }), { status: 200 }));
     const promise = connectAndStream(

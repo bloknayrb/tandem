@@ -359,7 +359,7 @@ describe("exportAnnotations", () => {
   it('returns "no annotations" for empty list', () => {
     doc = new Y.Doc();
     const result = exportAnnotations(doc, []);
-    expect(result).toContain("No annotations found");
+    expect(result).toContain("No annotations available for export");
   });
 
   it("excludes notes entirely (ADR-027 defense-in-depth)", () => {
@@ -379,7 +379,7 @@ describe("exportAnnotations", () => {
     const result = exportAnnotations(doc, annotations);
     expect(result).not.toContain("## Notes");
     expect(result).not.toContain("Personal reminder");
-    expect(result).toContain("No annotations found");
+    expect(result).toContain("No annotations available for export");
   });
 
   it("filters out notes even when mixed with visible annotations", () => {

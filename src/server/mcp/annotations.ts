@@ -714,7 +714,21 @@ export function registerAnnotationTools(server: McpServer): void {
 
         const annotations = store.listAnnotationsRefreshed();
         // Notes are user-private (ADR-027) — exclude from exports.
-        const exportable = annotations.filter((a) => a.type !== "note");
+        const notesFiltered = annotations.filter((a) => a.type !== "note");
+
+        // WS-A2: the Solo hold applies here too. This was previously exempt, on a
+        // documented rationale ("an export is an explicit give-Claude-everything
+        // action") that is false by construction: there is no user-invocable path
+        // to this tool — no route, no button, no palette entry, no CLI subcommand.
+        // It is registered only as an MCP tool, so the only actor who can perform
+        // that "explicit user action" is Claude, unilaterally, with no signal to
+        // the user. Meanwhile the editor was showing an amber Held pill asserting
+        // those very items were being withheld.
+        const modeState = readModeState();
+        const exportable = notesFiltered.filter((a) => !hideFromAI(a, modeState));
+        // Disclosed below. Filtering silently would trade a privacy bug for an
+        // honesty bug — see `heldFromExport` in the return payloads.
+        const heldFromExport = notesFiltered.length - exportable.length;
         const { ydoc, filePath } = store;
 
         // Build the enriched JSON list up-front. It is derived from the already
@@ -726,7 +740,15 @@ export function registerAnnotationTools(server: McpServer): void {
           ...ann,
           // ADR-027 + #1000: comment-only + `private`-stripped (see
           // tandem_getAnnotations / channelVisibleReplies).
-          replies: channelVisibleReplies(ann, (id) => store.listReplies(id)),
+          //
+          // The second filter is NOT redundant: `channelVisibleReplies` carries
+          // only the ADR-027 gates and has no Solo dimension, so a user reply on
+          // a CLAUDE-authored comment survives the annotation-level filter above
+          // (its parent isn't user-authored) and would leak. tandem_getAnnotations
+          // chains both for the same reason.
+          replies: channelVisibleReplies(ann, (id) => store.listReplies(id)).filter(
+            (r) => !hideFromAI(r, modeState),
+          ),
           textSnippet: fullText.slice(
             Math.max(0, ann.range.from),
             Math.min(fullText.length, ann.range.to),
@@ -798,16 +820,36 @@ export function registerAnnotationTools(server: McpServer): void {
             }
           }
           const contents = isJson
-            ? JSON.stringify({ annotations: enriched, count: enriched.length }, null, 2)
+            ? JSON.stringify(
+                {
+                  annotations: enriched,
+                  count: enriched.length,
+                  ...(heldFromExport > 0 ? { heldFromExport } : {}),
+                },
+                null,
+                2,
+              )
             : (markdown ?? "");
           await atomicWrite(sidecarPath, contents);
           writtenPath = sidecarPath;
         }
 
+        // Disclose what the Solo hold withheld. Without this the export ASSERTS a
+        // completeness it does not have — on a document whose annotations are all
+        // user comments, `exportable` is empty and the markdown arm returns
+        // "No annotations found", which is a false statement rather than a partial
+        // one. Mirrors the `notesExcluded` precedent on tandem_getAnnotations.
+        //
+        // The count is not itself a WS-A2 leak: checkInbox already reports
+        // `mode: "solo"`, so the existence of a hold is known. This adds
+        // cardinality, not content — and it is what makes the artifact honest.
+        const heldDisclosure = heldFromExport > 0 ? { heldFromExport } : {};
+
         if (isJson) {
           return mcpSuccess({
             annotations: enriched,
             count: enriched.length,
+            ...heldDisclosure,
             ...(writtenPath ? { writtenPath } : {}),
           });
         }
@@ -815,6 +857,7 @@ export function registerAnnotationTools(server: McpServer): void {
         return mcpSuccess({
           markdown,
           count: exportable.length,
+          ...heldDisclosure,
           ...(writtenPath ? { writtenPath } : {}),
         });
       },
