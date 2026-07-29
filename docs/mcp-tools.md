@@ -856,7 +856,8 @@ Check for user actions you haven't seen yet -- new comments, chat messages, and 
   "hasNew": true,
   "mode": "tandem",
   "storeReadOnly": false,
-  "userActions": [ { ...annotation, "textSnippet": "..." } ],
+  "userActions": [ { ...annotation, "textSnippet": "...", "edited": true, "alreadyPushed": true } ],
+  "userReplies": [ { "id": "r_...", "annotationId": "ann_...", "author": "user", "text": "...", "timestamp": 1710936000000, "textSnippet": "...", "alreadyPushed": true } ],
   "userResponses": [ { ...annotation, "textSnippet": "..." } ],
   "chatMessages": [ { "id": "msg_...", "text": "...", "timestamp": 1710936000000 } ],
   "activity": {

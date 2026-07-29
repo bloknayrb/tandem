@@ -2,7 +2,7 @@
  * Origin-tagged Y.Doc transaction wrappers (ADR-031).
  *
  * Every Y.Doc write — server-side or browser-side — MUST go through one of
- * the five helpers below. Direct `*.transact()` calls outside this file are
+ * the six helpers below. Direct `*.transact()` calls outside this file are
  * surfaced (warn-only) by the `.claude/hooks/check-raw-transact.sh` PostToolUse
  * hook and the `npm run audit:origins` static walk — there is no blocking
  * pre-commit hook or Biome rule. The wrapper

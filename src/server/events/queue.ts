@@ -68,8 +68,14 @@ const emittedPayloadIds = new Map<string, number>();
  * until eviction, and eviction removes the entry explicitly. It lives here rather
  * than as a field on `TandemEvent` because that type is the SSE wire shape; a
  * bookkeeping boolean would serialize out to consumers.
+ *
+ * `let`, not `const`: `resetForTesting` must be able to reassign it. Clearing
+ * `emittedPayloadIds` while this retained stale entries would reintroduce the very
+ * asymmetry the pair exists to prevent — a retained event re-pushed after a reset
+ * would take the delete branch on eviction with a count of zero and drop a
+ * legitimately tracked sibling's id. The two are one invariant; reset them together.
  */
-const trackedEvents = new WeakSet<TandemEvent>();
+let trackedEvents = new WeakSet<TandemEvent>();
 
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
@@ -95,9 +101,12 @@ function getTrackableId(event: TandemEvent): string | undefined {
   }
 }
 
-function trackPayloadId(event: TandemEvent): void {
+/** Returns whether this event actually carried a trackable id and was recorded. */
+function trackPayloadId(event: TandemEvent): boolean {
   const id = getTrackableId(event);
-  if (id) emittedPayloadIds.set(id, (emittedPayloadIds.get(id) ?? 0) + 1);
+  if (!id) return false;
+  emittedPayloadIds.set(id, (emittedPayloadIds.get(id) ?? 0) + 1);
+  return true;
 }
 
 /**
@@ -156,10 +165,10 @@ function pushEvent(event: TandemEvent): void {
   // untracked event's eviction delete a tracked sibling's entry whenever the two
   // share a trackable id (see the `emittedPayloadIds` docblock — reachable today
   // via the same imported Word comment promoted in two documents).
-  if (subscribers.size > 0) {
-    trackPayloadId(event);
-    trackedEvents.add(event);
-  }
+  // Only mark events that actually recorded an id — `document:*` and friends have
+  // no trackable id, so adding them would put entries in a set whose name promises
+  // otherwise and send every one of them through an untrack call that early-returns.
+  if (subscribers.size > 0 && trackPayloadId(event)) trackedEvents.add(event);
 
   while (buffer.length > CHANNEL_EVENT_BUFFER_SIZE) {
     const evicted = buffer.shift();
@@ -331,6 +340,8 @@ export function resetForTesting(): void {
   buffer.length = 0;
   subscribers.clear();
   emittedPayloadIds.clear();
+  // Reset as a pair with emittedPayloadIds — see the WeakSet's docblock.
+  trackedEvents = new WeakSet<TandemEvent>();
   selectionBuffer.clear();
 
   for (const cleanups of docObservers.values()) {

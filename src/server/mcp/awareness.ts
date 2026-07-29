@@ -371,7 +371,7 @@ export function processInboxAnnotations(
   modeState: ModeState = "indeterminate",
   wasChannelEmitted: (payloadId: string) => boolean = () => false,
 ): {
-  userActions: Array<Annotation & { textSnippet: string; edited?: boolean; alreadyPushed?: true }>;
+  userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
 } {
   const unsurfaced: Annotation[] = [];
@@ -400,12 +400,10 @@ function processUnsurfacedInboxAnnotations(
   modeState: ModeState,
   wasChannelEmitted: (payloadId: string) => boolean,
 ): {
-  userActions: Array<Annotation & { textSnippet: string; edited?: boolean; alreadyPushed?: true }>;
+  userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
 } {
-  const userActions: Array<
-    Annotation & { textSnippet: string; edited?: boolean; alreadyPushed?: true }
-  > = [];
+  const userActions: Array<InboxUserAction> = [];
   const userResponses: Array<Annotation & { textSnippet: string }> = [];
 
   for (const ann of unsurfaced) {
@@ -447,6 +445,25 @@ function processUnsurfacedInboxAnnotations(
 
   return { userActions, userResponses };
 }
+
+/**
+ * A user comment in the checkInbox `userActions` bucket.
+ *
+ * Both optional flags are `true`-only, matching `z.literal(true).optional()` in
+ * `output-schemas.ts`. That is load-bearing, not cosmetic: the MCP SDK hard-
+ * validates structured output against the declared schema and throws
+ * `McpError(InvalidParams)` on a mismatch, which fails the WHOLE checkInbox
+ * response rather than dropping the field. Widening either to `boolean` would let
+ * `edited: false` typecheck and then blow up at runtime — and tests would not
+ * catch it, since tsconfig includes only `src/`.
+ */
+export type InboxUserAction = Annotation & {
+  textSnippet: string;
+  /** Set when re-surfaced after a user edit. Never `false` — omitted instead. */
+  edited?: true;
+  /** Also emitted as a channel event. A hint, not proof of delivery. */
+  alreadyPushed?: true;
+};
 
 export interface InboxUserReply {
   id: string;

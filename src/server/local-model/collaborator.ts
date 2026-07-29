@@ -345,6 +345,13 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
       );
     }
     subscriberCb = onEvent;
+    // BEFORE FLIPPING BYO_MODELS_ENABLED: this subscription lands in the same
+    // fan-out Set that `pushEvent` reads to decide whether an event was "handed
+    // to a consumer" (events/queue.ts). Once this is live, `subscribers.size >= 1`
+    // permanently even with no external channel shim or monitor attached, so every
+    // user comment would be stamped `alreadyPushed: true` on the strength of an
+    // in-process subscriber — restoring the false signal #1242 removed. The gate
+    // there needs to count EXTERNAL subscribers only; give `subscribe` a kind.
     deps.subscribe(subscriberCb);
   }
 
