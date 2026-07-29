@@ -60,6 +60,7 @@ graph LR
         Notify["notifications.ts<br/>(ring buffer + SSE)"]
         FO["file-opener.ts<br/>(shared open logic)"]
         YDoc["Y.Doc per room<br/>(one per open document)"]
+        PushLiveness["push-liveness.ts<br/>(consumer heartbeat counters,<br/>diagnostics only)"]
         FileIO["File I/O<br/>markdown, txt, docx"]
     end
 
@@ -90,7 +91,8 @@ graph LR
     ChannelAPI -->|SSE stream| Bridge
     Bridge -->|notifications/claude/channel| Channel
     Reply -->|POST /api/channel-reply| ChannelAPI
-    ChannelAPI -->|awareness POST → Y.Doc| StatusBar
+    Bridge -.->|POST /api/channel-awareness| ChannelAPI
+    ChannelAPI -.->|record heartbeat, no Y.Doc write| PushLiveness
     Notify -->|SSE /api/notify-stream| Toasts
 ```
 
@@ -347,8 +349,8 @@ User accepts annotation in browser
     → SSE endpoint writes event frame to connected channel shim
     → Channel shim parses SSE, calls mcp.notification({ method: "notifications/claude/channel" })
     → Claude Code receives <channel source="tandem-channel" event_type="annotation_accepted">
-    → Shim posts awareness update to /api/channel-awareness
-    → Browser StatusBar shows "Claude -- processing: annotation:accepted"
+    → Shim posts a heartbeat to /api/channel-awareness (diagnostics only —
+      recorded for /health + `tandem doctor`, never shown as Claude's status)
 ```
 
 ### Origin Tagging (Echo Prevention)
@@ -429,7 +431,9 @@ On exhaustion (`CHANNEL_MAX_RETRIES`), the monitor:
 
 ### Awareness Lifecycle
 
-Each incoming event schedules a debounced (500ms) POST to `/api/channel-awareness` (`active: true, status: "processing: <type>"`), followed by an auto-clear POST 3s later (`active: false, status: "idle"`). The browser's `StatusBar` component observes these changes and shows "Claude is active."
+Each incoming event schedules a debounced (500ms) POST to `/api/channel-awareness` (`active: true, status: "processing: <type>"`), followed by an auto-clear POST 3s later (`active: false, status: "idle"`).
+
+This is a **push-consumer heartbeat, not Claude's presence** — it fires on event receipt by the shim/monitor, which happens whether or not a model is attached. The server records it in `events/push-liveness.ts` for diagnostics (`/health`'s loopback-only `push` field, surfaced by `tandem doctor`) and does not write it to any document. It is the only positive evidence that the server→consumer leg of the push path works, and it is **not** evidence of delivery to a model: an inert channel shim receives every event and discards it. The `StatusBar` renders Claude's status from `ClaudeAwareness`, which only `tandem_status` and typing-presence write.
 
 On SIGINT/SIGTERM, `finalClearAwareness()` drains any in-flight awareness POSTs and then sends a final `active: false` clear for the last-known `documentId`. If no awareness was ever scheduled (no event carried a `documentId`), the shutdown POST is skipped — sending `{documentId: null}` is ambiguous and the server may reject it. `shutdownMonitor` exits 0 on a clean clear and 1 if the clear returned non-OK or threw. VITEST guards (`process.env.VITEST !== "true"`) prevent signal-listener accumulation across test files.
 
@@ -777,7 +781,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `positions.ts` -- Unified position/coordinate module: `validateRange`, `anchoredRange`, `resolveToElement`, `refreshRange`, `flatOffsetToRelPos`/`relPosToFlatOffset`
 - `notifications.ts` -- Toast notification system: ring buffer of `NotificationPayload` objects, `pushNotification()` + `subscribe()`/`unsubscribe()` for SSE consumers
 - `mcp/` -- MCP tool definitions (document, annotations, navigation, awareness), `file-opener.ts` (shared file-open logic for MCP + HTTP API; `openScratchpad()` for ephemeral in-memory docs via `source:"upload"`), `document-service.ts` (shared document lifecycle helpers: `closeDocumentById`, `broadcastStoreReadOnly()`), `server.ts` (MCP transport + Express composition + static file serving from `dist/client/`, `snapshotToolCount()` for diagnostic tool census, `findRepoFile()` for locating bundled docs), `transport-registry.ts` (live MCP sessions keyed by `Mcp-Session-Id` — one `McpServer` per session, LRU cap + idle reaper; ADR-045), `../sessions/context.ts` (`AsyncLocalStorage` carrying the calling Claude session id into tool handlers), `api-routes.ts` (REST API: `GET /api/info`, `/api/open`, `/api/upload`, `/api/close`, `POST /api/scratchpad`, `GET /api/notify-stream`), `routes/info.ts` (`makeInfoHandler()` factory for `GET /api/info` — loopback-gated fields, token mtime, `changelogPath`, `workflowsPath`), `routes/diagnostics.ts` (`makeDiagnosticsHandler()` factory for `GET /api/diagnostics` — embedded `runDoctor()` report for the About tab's Copy Diagnostics button; loopback-only, dev-repo checks filtered, single-flight), `routes/scratchpad.ts` (handler for `POST /api/scratchpad`), `channel-routes.ts` (channel endpoints: `/api/channel-*`, `/api/events`, `/api/launch-claude`), `launcher.ts` (Claude Code spawner), `docx-apply.ts` (MCP tool definitions for `tandem_applyChanges` and `tandem_restoreBackup`)
-- `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer), `sse.ts` (SSE endpoint handler)
+- `events/` -- Channel event infrastructure: `types.ts` (TandemEvent definitions), `queue.ts` (Y.Map observers + circular buffer + subscriber-gated payload tracking), `sse.ts` (SSE endpoint handler), `push-liveness.ts` (consumer heartbeat counters — diagnostics only, never Claude's presence), `observers/` (per-map event derivation), `file-sync-registry.ts` (durable-annotation file-watcher binding)
 - `yjs/` -- Y.Doc management, the authoritative document state
 - `file-watcher.ts` -- File change detection: `fs.watch` wrapper with 500ms debounce, self-write suppression (`suppressNextChange`), per-path watcher lifecycle (`watchFile`/`unwatchFile`/`unwatchAll`)
 - `file-io/` -- FormatAdapter interface + registry (`getAdapter`), format converters (markdown, docx, docx-html, docx-comments), `atomicWrite` helper

@@ -61,6 +61,47 @@ All three need to match — `TANDEM_URL` is what the channel shim and MCP client
 
 If bind still fails after the timeout, the server logs `port {port} still not available after {timeoutMs}ms` and exits. Identify the holding process with `lsof -i :3479` (macOS/Linux) or `netstat -ano | findstr :3479` (Windows).
 
+## I sent a chat message (or left a comment) and nothing happened
+
+The status bar says **AI connected** and Claude never reacts. This is the most common new-user snag, and the status bar is genuinely not lying — it's answering a different question than the one you're asking.
+
+Tandem has **two independent connections** to Claude:
+
+| | What it is | What it does |
+|---|---|---|
+| **Pull** | The MCP server | Lets Claude read and edit your document when it decides to look |
+| **Push** | A real-time event stream | Tells Claude the moment you comment or send a message |
+
+"AI connected" reports the **pull** path only. Chat and comments need the **push** path, and the two can be in completely different states. A session with a working pull path and a dead push path looks perfectly healthy and does nothing when you type.
+
+**Diagnose it.** In the desktop app: **Settings → About → Copy Diagnostics** (the desktop app does not install the `tandem` command). From a terminal, if you installed via npm:
+
+```bash
+tandem doctor
+```
+
+Either way, look for the push line. `No real-time push consumer attached` means nothing is listening — that's the whole problem.
+
+**Fix it** — two ways, and you want exactly one of them.
+
+*Either* start Claude Code with the channel flag:
+
+```bash
+claude --dangerously-load-development-channels server:tandem-channel
+```
+
+In the desktop app, the **Relaunch Claude** button does this for you. Sessions Tandem starts always get the flag; sessions you start by typing `claude` do not.
+
+*Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it).
+
+**Do not enable both.** Each transport delivers independently, so a session running the plugin *and* the channel flag receives every event twice. Note that `No real-time push consumer attached` cannot tell you which one is missing — both attach to the same stream — so pick the one you meant to be using.
+
+**Meanwhile, nothing is lost.** Your message is saved and Claude sees it the next time it calls `tandem_checkInbox`. If Claude is mid-task, asking it to "check your inbox" surfaces everything immediately.
+
+**One caveat `tandem doctor` cannot resolve for you.** If a consumer *is* attached, that proves events reach the shim — not that Claude sees them. A session started without the flag still runs a channel shim that receives every event and discards it, because whether the channel is honored is decided inside Claude Code and never reported back. If push looks attached and Claude still isn't reacting, start the session with the flag explicitly rather than assuming the config alone is enough.
+
+Related: [Channel shim fails to start](#channel-shim-fails-to-start), [`claude plugin install` fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https), [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version).
+
 ## Channel shim fails to start
 
 The `tandem-channel` entry spawns a subprocess. Most failures fall into two buckets:

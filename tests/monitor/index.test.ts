@@ -361,7 +361,13 @@ describe("monitor: retry exhaustion -> MONITOR_CONNECT_FAILED + stdout notice", 
     exitSpy.mockRestore();
   });
 
-  it("reports MONITOR_CONNECT_FAILED + writes stdout notice + exits 1", async () => {
+  // Tandem was never running. The plugin host spawns the monitor in EVERY
+  // Claude Code session, so a "restart Tandem" line here would inject an
+  // unrelated instruction into the model's context during unrelated work —
+  // for a desktop user, most sessions. Nothing was lost, so say nothing.
+  // The error report and exit code are unchanged; only the stdout line is
+  // suppressed, because stdout is what the model reads.
+  it("reports MONITOR_CONNECT_FAILED and exits 1 but stays SILENT when it never connected", async () => {
     let attempts = 0;
     stub.on("/api/events", () => {
       attempts++;
@@ -378,6 +384,31 @@ describe("monitor: retry exhaustion -> MONITOR_CONNECT_FAILED + stdout notice", 
     expect(errorReports[0]!.error).toBe("MONITOR_CONNECT_FAILED");
     expect(exitSpy).toHaveBeenCalledWith(1);
 
+    const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(stdoutWrites).not.toMatch(/disconnected/i);
+  });
+
+  // The case the notice exists for, and the guard against "fixed" becoming
+  // "deleted": the stream WAS up and went away, so events really did stop
+  // arriving and the user needs to know.
+  it("writes the stdout notice when a live stream is lost", async () => {
+    const live = new ControllableStream();
+    let attempts = 0;
+    stub.on("/api/events", () => {
+      attempts++;
+      if (attempts === 1) return sseResponse(live); // first handshake succeeds
+      throw new Error("refused");
+    });
+
+    const { main } = await import("../../src/monitor/index.js");
+    const mainPromise = main().catch(() => {});
+    await vi.advanceTimersByTimeAsync(100);
+    live.error(new Error("connection reset"));
+    await vi.advanceTimersByTimeAsync(200_000);
+    await mainPromise;
+
+    expect(attempts).toBeGreaterThan(1);
+    expect(exitSpy).toHaveBeenCalledWith(1);
     const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(stdoutWrites).toMatch(/disconnected/i);
   });

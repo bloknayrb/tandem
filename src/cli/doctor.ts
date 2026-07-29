@@ -879,7 +879,13 @@ async function checkOrphanedVite(
 
 interface HttpGetResult {
   status?: number;
-  data?: { version?: string; transport?: string; hasSession?: boolean } | null;
+  data?: {
+    version?: string;
+    transport?: string;
+    hasSession?: boolean;
+    /** Loopback-only. Diagnostics for the PUSH path — see `evaluatePushPath`. */
+    push?: { subscribers?: number; lastEventAt?: number | null; eventCount?: number };
+  } | null;
   error?: string;
 }
 
@@ -982,10 +988,89 @@ async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Pro
     if (!d.hasSession) {
       r.warn("No active MCP session — Claude Code hasn't connected yet");
     }
+    recordEvaluation(r, evaluatePushPath(d.push));
   } else {
     r.pass("Server responded on /health (could not parse body)");
   }
   return true;
+}
+
+/**
+ * Pure decision step for the PUSH path.
+ *
+ * `hasSession` answers "can Claude call tools" — it says nothing about whether
+ * anything the user does reaches Claude, because those are two disjoint
+ * connections. Conflating them is exactly how a user ends up staring at
+ * "AI connected" while chat messages go nowhere.
+ *
+ * Deliberately never claims push IS working. `subscribers: 0` is a sound
+ * negative; a positive count includes a channel shim whose host never negotiated
+ * the channel, which receives every event and discards it. The server cannot tell
+ * those apart, so neither can this check.
+ *
+ * Split out from the recorder call (matching `evaluateNpmStaleness`,
+ * `evaluateClaudeCli`, `evaluateOrphanedVite`, `evaluateStaleGlobal`) so the
+ * branches are testable without standing up a server.
+ */
+export function evaluatePushPath(push: unknown): EvalOutcome | null {
+  // An older server has no `push` field. Say so rather than emitting nothing —
+  // the troubleshooting entry tells the reader to "look for the push line", and
+  // silence there reads as a passing check.
+  if (!push || typeof push !== "object") {
+    return {
+      status: "skip",
+      message:
+        "server did not report push-path status (running a build older than this CLI) — " +
+        "restart Tandem to get the newer server",
+      data: { reason: "no-push-field" },
+    };
+  }
+
+  const p = push as { subscribers?: number; lastEventAt?: number | null; eventCount?: number };
+  const subscribers = typeof p.subscribers === "number" ? p.subscribers : 0;
+  const eventCount = typeof p.eventCount === "number" ? p.eventCount : 0;
+  const data = { subscribers, eventCount, lastEventAt: p.lastEventAt ?? null };
+
+  if (subscribers === 0) {
+    return {
+      status: "warn",
+      message:
+        "No real-time push consumer attached — Claude is not notified when you comment " +
+        "or send a chat message, and only sees them when it polls its inbox",
+      fix:
+        "Either start Claude Code with `--dangerously-load-development-channels " +
+        "server:tandem-channel` (the desktop app's Relaunch Claude button does this), " +
+        "or install the Tandem plugin, which registers a monitor needing no flag " +
+        "(`claude plugin list` to check). Use one or the other, not both — each " +
+        "delivers independently, so running both means every event arrives twice.",
+      data,
+    };
+  }
+
+  // Counters are process-wide, not per consumer, so the wording below must not
+  // read as a claim about any individual one. A Solo-mode session also posts no
+  // heartbeat for annotation traffic — the Solo filter sits above the heartbeat
+  // in sse-consumer.ts — so "none received yet" is expected there until a chat
+  // message arrives.
+  if (eventCount === 0) {
+    return {
+      status: "pass",
+      message:
+        `${subscribers} push consumer(s) attached; no events delivered yet this run ` +
+        "(expected if you haven't edited, or if you're in Solo mode)",
+      data,
+    };
+  }
+
+  const agoS = p.lastEventAt ? Math.round((Date.now() - p.lastEventAt) / 1000) : null;
+  return {
+    status: "pass",
+    message:
+      `${subscribers} push consumer(s) attached; ${eventCount} event(s) delivered this run, ` +
+      `most recently ${agoS === null ? "?" : `${agoS}s`} ago ` +
+      "(confirms events reach a consumer, NOT that Claude sees them)",
+    data,
+  };
 }
 
 // ── Check: SSE event stream ─────────────────────────────────────────

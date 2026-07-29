@@ -58,6 +58,7 @@ import {
   listDocumentsOutputShape,
   statusOutputShape,
 } from "./output-schemas.js";
+import { noteClaudeActivity } from "./presence-expiry.js";
 import {
   getErrorMessage,
   mcpError,
@@ -808,6 +809,9 @@ export function registerDocumentTools(server: McpServer): void {
                 ...(prev?.working ? { working: prev.working } : {}),
               });
             });
+            // This write claims `active: true` and nothing here can ever clear it
+            // — arm the expiry sweep so the claim has a bounded lifetime.
+            noteClaudeActivity(current.docName);
             return mcpStructured({ status: text });
           }
 

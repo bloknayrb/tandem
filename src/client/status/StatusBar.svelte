@@ -343,11 +343,19 @@ function cycleWordMode() {
        state (replaces the old titlebar pill + the former "Assistant · idle"
        segment). Full opacity so it's glanceable; the dot pulses only when a
        live session is actively working (`aiAnimating`, latched to avoid strobe). -->
+  <!-- `role="img"` is required, not decoration: ARIA forbids an accessible name on
+       a role-less div (role=generic), so a conforming screen reader DROPS the
+       aria-label here and announces the visible text instead. Without the role,
+       editing that label changes nothing for the users it exists for. `role="img"`
+       makes the label authoritative without implying a live region — `role="status"`
+       would announce every status change AND the presence-expiry clear, which the
+       user did not cause. -->
   {#if aiView}
     <div
       data-testid="status-ai-indicator"
       data-ai-state={aiView.dataState}
       title={aiView.title}
+      role="img"
       aria-label={aiView.ariaLabel}
       style="display: flex; align-items: center; gap: var(--tandem-space-2);"
     >

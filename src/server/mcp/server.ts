@@ -13,8 +13,10 @@ import { createRequire } from "module";
 import { API_HEALTH } from "../../shared/api-paths.js";
 import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
 import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
-import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
+import { createAuthMiddleware } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
+import { getPushConsumerLiveness } from "../events/push-liveness.js";
+import { getSubscriberCount } from "../events/queue.js";
 import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
 import { readExistingTandemEntries } from "../integrations/existing-config.js";
 import { createKeychain, KEYCHAIN_SERVICE_MODELS } from "../integrations/keychain.js";
@@ -31,7 +33,9 @@ import { registerDocumentTools } from "./document.js";
 import { getGenerationId } from "./document-service.js";
 import { registerApplyTools } from "./docx-apply.js";
 import { registerNavigationTools } from "./navigation.js";
+import { clearAllClaudePresence } from "./presence-expiry.js";
 import type { DiagnosticsHandlerDeps } from "./routes/diagnostics.js";
+import { makeHealthHandler } from "./routes/health.js";
 import { createMcpSessionRegistry, type McpSessionRegistry } from "./transport-registry.js";
 
 // Injected by tsup at build time; absent in tsx dev and vitest, where createRequire
@@ -212,6 +216,10 @@ async function openSession(
     onsessionclosed: async (sessionId) => {
       await registry.close(sessionId);
       console.error(`[Tandem] MCP session closed: ${sessionId} — ${registry.size} live`);
+      // Last session gone ⇒ Claude is definitively absent. Clear its presence now
+      // rather than letting the TTL run out — session end is positive knowledge,
+      // and `tandem_status` writes `active: true` with no writer able to unset it.
+      if (registry.size === 0) clearAllClaudePresence();
     },
   });
 
@@ -480,17 +488,12 @@ export async function startMcpServerHttp(
   app.get(
     API_HEALTH,
     lanAwareApiMiddleware,
-    (req: import("express").Request, res: import("express").Response) => {
-      const body: Record<string, unknown> = {
-        status: "ok",
-        version: APP_VERSION,
-        transport: "http",
-      };
-      if (isLoopback(req.socket.remoteAddress)) {
-        body.hasSession = getMcpSessionCount() > 0;
-      }
-      res.json(body);
-    },
+    makeHealthHandler({
+      version: APP_VERSION,
+      hasSession: () => getMcpSessionCount() > 0,
+      getSubscriberCount,
+      getPushLiveness: getPushConsumerLiveness,
+    }),
   );
 
   // RFC 9728 Protected Resource Metadata — declares Bearer auth via header.

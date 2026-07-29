@@ -50,8 +50,14 @@ const CONNECTED: AiIndicatorView = {
   tone: "connected",
   dataState: "connected",
   canAnimate: true,
-  title: "Claude is connected — it can see your selections, comments, and edits",
-  ariaLabel: "Claude is connected and receiving your work",
+  // Scoped to what `liveIndicator` actually proves: an MCP session exists, so
+  // Claude can READ the document when it asks. Whether Claude is notified the
+  // moment you comment is the separate push path, which this indicator has no
+  // signal for — see docs/troubleshooting.md. The previous copy ("receiving your
+  // work" / "it can see your … comments") asserted exactly that missing half, and
+  // was false for the pull-only session this release exists to make legible.
+  title: "Claude is connected and can read your document",
+  ariaLabel: "Claude is connected and can read your document",
 };
 
 const SOLO_PAUSED: AiIndicatorView = {

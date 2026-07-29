@@ -107,6 +107,16 @@ You do not have to configure any of this by hand. Tandem opens a setup wizard th
 
 Prefer a different AI? Any MCP-capable client can connect to the same endpoint — see the [compatibility table](#the-mcp-integration-policy) for what is supported and what is untested, and [Cowork](#cowork) for connecting Claude Desktop on Windows.
 
+**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you — including the desktop app's **Relaunch Claude** button — get both. A session you start yourself by typing `claude` gets only the first, unless you start it like this:
+
+```bash
+claude --dangerously-load-development-channels server:tandem-channel
+```
+
+Installing the Tandem plugin is the other way to get it, and needs no flag — see [Channel push and real-time updates](#channel-push-and-real-time-updates) below. Use one or the other, not both: each delivers independently, so a session running both receives every event twice.
+
+Without the flag nothing breaks and nothing is lost: your messages and comments are saved, and Claude sees them the next time it checks its inbox. But it will not react on its own, which reads as Claude ignoring you. If that is what you are seeing, [this troubleshooting entry](docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) walks through it, and **Settings → About → Copy Diagnostics** (or `tandem doctor`, on npm installs) reports whether anything is listening. More detail in [Channel push and real-time updates](#channel-push-and-real-time-updates).
+
 ### What you get
 
 - Multiple documents open in tabs, with `.md`, `.txt`, `.html`, and `.docx` support (Word files are editable; the original is only written when you explicitly save).

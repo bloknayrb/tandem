@@ -5,6 +5,9 @@
  *              (never req.host), and advertise bearer_methods_supported: ["header"].
  * Invariant 7: /health omits `hasSession` for non-loopback requests; includes it
  *              for loopback.
+ * Invariant 8: /health's `push` diagnostics ride inside the SAME loopback gate
+ *              as `hasSession` — subscriber counts and consumer heartbeats are
+ *              session-presence signals of the same kind.
  *
  * These tests spin up a real `startMcpServerHttp` instance on an ephemeral port
  * so the Express routing and middleware are tested exactly as deployed.
@@ -106,6 +109,30 @@ describe("Invariant 7 — /health includes hasSession for loopback callers", () 
     expect(typeof body.version).toBe("string");
     expect(body.transport).toBe("http");
   });
+
+  // Invariant 8: `push` rides inside the SAME loopback branch as hasSession.
+  // Subscriber counts and consumer heartbeats are session-presence signals of
+  // the same kind, so a LAN caller must not learn whether anyone is attached.
+  // Same testing constraint as Invariant 7 — we assert the positive path plus
+  // the co-location, since the runner is always loopback.
+  it("/health exposes push diagnostics to loopback callers", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      headers: { Host: `127.0.0.1:${port}` },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    expect("push" in body).toBe(true);
+    const push = body.push as Record<string, unknown>;
+    expect(typeof push.subscribers).toBe("number");
+    expect(typeof push.eventCount).toBe("number");
+    expect("lastEventAt" in push).toBe(true);
+  });
+
+  // The negative half — "a LAN caller sees neither field" — is asserted in
+  // tests/server/health-route.test.ts, which drives `makeHealthHandler` with a
+  // real non-loopback `remoteAddress`. It used to be a source-text slice here,
+  // running from the `if (isLoopback(...))` line to `res.json(body)`; that window
+  // contains the block's own closing brace, so hoisting a field OUT of the gate
+  // still matched and the test could not fail on the regression it named.
 });
 
 // ── Fix 1 regression: /mcp DNS-rebinding protection with allowedHosts ────────

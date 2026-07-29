@@ -29,8 +29,20 @@ describe("aiIndicatorView", () => {
       dataState: "connected",
       canAnimate: true,
     });
-    expect(v?.title).toBeTruthy();
-    expect(v?.ariaLabel).toBeTruthy();
+    // Pinned, not just non-empty. `toBeTruthy()` meant this copy had never been
+    // specified by any test — which is how it kept claiming the push path.
+    //
+    // The indicator is driven by `liveIndicator`, i.e. "an MCP session exists".
+    // That proves Claude can READ the document; it proves nothing about whether
+    // Claude is NOTIFIED when the user comments, which travels a structurally
+    // separate connection the pill has no signal for. Copy here must not assert
+    // the second thing.
+    expect(v?.title).toBe("Claude is connected and can read your document");
+    expect(v?.ariaLabel).toBe("Claude is connected and can read your document");
+    for (const copy of [v?.title ?? "", v?.ariaLabel ?? ""]) {
+      expect(copy).not.toMatch(/receiving/i);
+      expect(copy).not.toMatch(/comments/i);
+    }
   });
 
   it("ready + solo-paused (Solo, session open) → Solo · edits held, animatable, has a11y copy", () => {

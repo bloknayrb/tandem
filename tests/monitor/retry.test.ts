@@ -71,7 +71,13 @@ describe("retry counter semantics", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it("writes a monitor:exit notification to stdout before process.exit(1)", async () => {
+  // Contract narrowed deliberately: the exit notice is now conditional on
+  // having connected at least once. Here the server was never reachable, so
+  // there is nothing to report — stdout is the model's context, and the plugin
+  // host runs this monitor in every Claude Code session whether or not Tandem
+  // is up. `tests/monitor/index.test.ts` covers the connected-then-dropped
+  // case, where the notice DOES fire.
+  it("stays silent on stdout when it never connected, and still exits 1", async () => {
     stub.on("/api/events", () => {
       throw new Error("refused");
     });
@@ -81,10 +87,12 @@ describe("retry counter semantics", () => {
     await mainPromise;
 
     const stdoutCalls = stdoutSpy.mock.calls.map((c) => String(c[0]));
-    const exitLine = stdoutCalls.find(
-      (s) => s.includes("monitor:exit") || s.includes("Tandem monitor disconnected"),
-    );
-    expect(exitLine).toBeDefined();
+    expect(
+      stdoutCalls.find(
+        (s) => s.includes("monitor:exit") || s.includes("Tandem monitor disconnected"),
+      ),
+    ).toBeUndefined();
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   it("retries on a 503 from /api/events (non-ok response, not a thrown error)", async () => {

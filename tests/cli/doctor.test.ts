@@ -8,6 +8,7 @@ import {
   evaluateClaudeCli,
   evaluateNpmStaleness,
   evaluateOrphanedVite,
+  evaluatePushPath,
   evaluateStaleGlobal,
   globalTandemEditorVersion,
   isTandemEditorRepo,
@@ -1211,5 +1212,62 @@ describe("orphaned-vite integration", () => {
     const freePort = await allocPort();
     const report = await runDoctor({ vitePort: freePort });
     expect(report.results.map((res) => res.check)).not.toContain("orphaned-vite");
+  });
+});
+
+// ── evaluatePushPath ────────────────────────────────────────────────────────
+//
+// The PUSH path is a different connection from the pull path `hasSession`
+// reports, and conflating them is how a user ends up staring at "AI connected"
+// while nothing they do reaches Claude. These branches are the user-facing
+// output of that distinction, and none of them were covered.
+
+describe("evaluatePushPath", () => {
+  it("skips with an explanation when the server reports no push field", () => {
+    // Silence would read as a passing check — the troubleshooting entry tells
+    // the reader to look for this line.
+    for (const absent of [undefined, null, "nope", 42]) {
+      const out = evaluatePushPath(absent);
+      expect(out?.status).toBe("skip");
+      expect(out?.message).toMatch(/older/i);
+    }
+  });
+
+  it("warns when nothing is attached, and names both remedies", () => {
+    const out = evaluatePushPath({ subscribers: 0, eventCount: 0, lastEventAt: null });
+    expect(out?.status).toBe("warn");
+    expect(out?.message).toMatch(/not notified/i);
+    // Both transports, because `subscribers: 0` cannot say which one is missing.
+    expect(out?.fix).toMatch(/dangerously-load-development-channels/);
+    expect(out?.fix).toMatch(/plugin/i);
+    expect(out?.fix).toMatch(/not both/i);
+    expect(out?.data).toMatchObject({ subscribers: 0, eventCount: 0 });
+  });
+
+  it("passes without alarm when attached but nothing delivered yet", () => {
+    const out = evaluatePushPath({ subscribers: 2, eventCount: 0, lastEventAt: null });
+    expect(out?.status).toBe("pass");
+    // Expected in Solo (the Solo filter sits above the heartbeat) and before any
+    // edit — must not read as a fault.
+    expect(out?.message).toMatch(/Solo/);
+    expect(out?.data).toMatchObject({ subscribers: 2, eventCount: 0 });
+  });
+
+  it("reports elapsed time without claiming Claude saw anything", () => {
+    const out = evaluatePushPath({
+      subscribers: 1,
+      eventCount: 7,
+      lastEventAt: Date.now() - 41_000,
+    });
+    expect(out?.status).toBe("pass");
+    expect(out?.message).toMatch(/4[01]s ago/);
+    // The load-bearing disclaimer: an attached consumer may be inert.
+    expect(out?.message).toMatch(/NOT that Claude sees them/);
+  });
+
+  it("tolerates a malformed push object rather than throwing", () => {
+    const out = evaluatePushPath({ subscribers: "three", eventCount: null });
+    expect(out?.status).toBe("warn"); // unparseable count falls back to 0 = nothing attached
+    expect(out?.data).toMatchObject({ subscribers: 0, eventCount: 0 });
   });
 });
