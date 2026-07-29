@@ -37,6 +37,9 @@ export { clearFileSyncContext, setFileSyncContext };
 
 type EventCallback = (event: TandemEvent) => void;
 
+/** Whether a subscriber represents a consumer outside this process. */
+export type SubscriberKind = "external" | "internal";
+
 const docObservers = new Map<string, Array<() => void>>();
 
 /** Per-document selection buffer. Selections are stored here instead of being pushed as events. They get attached to the next chat:message for the same document. */
@@ -79,6 +82,22 @@ let trackedEvents = new WeakSet<TandemEvent>();
 
 const buffer: TandemEvent[] = [];
 const subscribers = new Set<EventCallback>();
+
+/**
+ * Subscribers that represent something OUTSIDE this process — an SSE consumer
+ * (channel shim or plugin monitor). A subset of `subscribers`.
+ *
+ * The distinction is load-bearing, not bookkeeping. `src/server/local-model/
+ * collaborator.ts` subscribes to the same fan-out; it is dark behind
+ * `BYO_MODELS_ENABLED` today, but on that flip an enabled collaborator would hold
+ * a permanent subscription with no external consumer attached. Counting it would
+ * make `subscribers.size >= 1` always true, which (a) stamps every user comment
+ * `alreadyPushed` on the strength of an in-process listener and (b) makes
+ * `tandem doctor`'s "nothing is attached" branch unreachable — the exact false
+ * signal both were written to remove. Anything answering "is push reaching
+ * something outside this process?" must count THIS set.
+ */
+const externalSubscribers = new Set<EventCallback>();
 
 export function getAnnotationEditedChannelKey(annotationId: string, editedAt: number): string {
   return `edited:${annotationId}:${editedAt}`;
@@ -168,7 +187,10 @@ function pushEvent(event: TandemEvent): void {
   // Only mark events that actually recorded an id — `document:*` and friends have
   // no trackable id, so adding them would put entries in a set whose name promises
   // otherwise and send every one of them through an untrack call that early-returns.
-  if (subscribers.size > 0 && trackPayloadId(event)) trackedEvents.add(event);
+  // EXTERNAL subscribers only. An in-process listener receiving the event says
+  // nothing about whether it left this machine, and `alreadyPushed` exists to hint
+  // that a model may already have seen it.
+  if (externalSubscribers.size > 0 && trackPayloadId(event)) trackedEvents.add(event);
 
   while (buffer.length > CHANNEL_EVENT_BUFFER_SIZE) {
     const evicted = buffer.shift();
@@ -193,24 +215,35 @@ function pushEvent(event: TandemEvent): void {
 // --- Public API ---
 
 /**
- * How many consumers are attached to the event fan-out. Diagnostics only.
+ * How many EXTERNAL consumers are attached to the event fan-out. Diagnostics only.
  *
- * `0` is a sound negative — nothing is listening, so push cannot possibly be
- * reaching a model. Any positive value is NOT the converse: an attached channel
- * shim whose host never negotiated the channel accepts every event and discards
- * it, and the server cannot tell that apart from a live one. Never gate
- * behaviour or drive a "push is working" indicator on this.
+ * `0` is a sound negative — nothing outside this process is listening, so push
+ * cannot possibly be reaching a model. Any positive value is NOT the converse: an
+ * attached channel shim whose host never negotiated the channel accepts every
+ * event and discards it, and the server cannot tell that apart from a live one.
+ * Never drive a "push is working" indicator on this.
+ *
+ * In-process subscribers are deliberately excluded — see `externalSubscribers`.
  */
 export function getSubscriberCount(): number {
-  return subscribers.size;
+  return externalSubscribers.size;
 }
 
-export function subscribe(cb: EventCallback): void {
+/**
+ * @param kind `"external"` for a real consumer outside this process (SSE);
+ *   `"internal"` for an in-process listener that must not count as push reach.
+ *   Defaults to `"internal"` so a new caller that forgets is under-counted rather
+ *   than over-counted — the failure direction that produces a false negative in
+ *   diagnostics instead of a false claim of delivery.
+ */
+export function subscribe(cb: EventCallback, kind: SubscriberKind = "internal"): void {
   subscribers.add(cb);
+  if (kind === "external") externalSubscribers.add(cb);
 }
 
 export function unsubscribe(cb: EventCallback): void {
   subscribers.delete(cb);
+  externalSubscribers.delete(cb);
 }
 
 /** Replay buffered events since a given event ID (for SSE reconnection). */
@@ -352,6 +385,7 @@ export function reattachCtrlObservers(): void {
 export function resetForTesting(): void {
   buffer.length = 0;
   subscribers.clear();
+  externalSubscribers.clear();
   emittedPayloadIds.clear();
   // Reset as a pair with emittedPayloadIds — see the WeakSet's docblock.
   trackedEvents = new WeakSet<TandemEvent>();

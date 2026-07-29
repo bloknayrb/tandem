@@ -48,7 +48,9 @@ export function sseHandler(req: Request, res: Response): void {
       cleanup();
     }
   };
-  subscribe(onEvent);
+  // The SSE stream is the one true external consumer — a channel shim or plugin
+  // monitor on the other end. See `externalSubscribers` in queue.ts.
+  subscribe(onEvent, "external");
 
   // Keepalive to detect broken connections. The write MUST be guarded: on an
   // abruptly-closed socket (client SIGKILL / network drop, before req "close"

@@ -84,35 +84,72 @@ describe("channel/monitor heartbeat does not author Claude's presence", () => {
     const res = await postHeartbeat({ documentId: DOC_ID, active: true });
     expect(res.status).toBe(400);
   });
+
+  // The two cases above assert absence from an EMPTY baseline, which catches a
+  // straight re-add of the deleted code but not the thing the user actually
+  // reported: a stale value being displayed. That needs the key to hold a value.
+  // Seeded on its own document id, because DOC_ID is shared with the tests above
+  // and one of them opens by asserting the key is undefined.
+  it("does not overwrite or downgrade Claude's real presence", async () => {
+    const seededId = "push-liveness-seeded-doc";
+    const doc = getOrCreateDocument(seededId);
+    const awareness = doc.getMap(Y_MAP_AWARENESS);
+    const real = {
+      status: "reviewing the intro",
+      timestamp: Date.now(),
+      active: true,
+      focusParagraph: 3,
+      focusOffset: 42,
+    };
+    awareness.set(Y_MAP_CLAUDE, real);
+
+    // Both shapes the shim sends: the per-event stamp and the 3s auto-clear.
+    await postHeartbeat({
+      documentId: seededId,
+      status: "processing: annotation:created",
+      active: true,
+    });
+    await postHeartbeat({ documentId: seededId, status: "idle", active: false });
+
+    expect(awareness.get(Y_MAP_CLAUDE)).toEqual(real);
+  });
 });
 
 describe("push-consumer liveness recording", () => {
   it("starts empty so 'never attached' is distinguishable from 'quiet'", () => {
-    expect(getPushConsumerLiveness()).toEqual({
-      lastEventAt: null,
-      lastDocumentId: null,
-      eventCount: 0,
-    });
+    expect(getPushConsumerLiveness()).toEqual({ lastEventAt: null, eventCount: 0 });
   });
 
-  it("counts heartbeats and remembers the document", async () => {
+  it("counts heartbeats", async () => {
     await postHeartbeat({ documentId: DOC_ID, status: "processing: x", active: true });
     await postHeartbeat({ documentId: DOC_ID, status: "idle", active: false });
 
     const live = getPushConsumerLiveness();
     expect(live.eventCount).toBe(2);
-    expect(live.lastDocumentId).toBe(DOC_ID);
     expect(typeof live.lastEventAt).toBe("number");
   });
 
-  // A doc-less heartbeat (a chat event, or the shutdown clear) must still count
-  // as liveness without wiping the last-known document.
-  it("counts a doc-less heartbeat without clearing lastDocumentId", async () => {
+  // A document id is NOT opaque: `docIdFromPath` builds it as
+  // `<basename-slug>-<hash>`, so retaining one would put a filename into every
+  // /health response for the life of the process — sourced from an unvalidated
+  // body on a loopback-auth-exempt route, to answer a question the counters
+  // already answer. Nothing ever read it.
+  it("retains no document identifier", async () => {
     await postHeartbeat({ documentId: DOC_ID, status: "processing: x", active: true });
-    await postHeartbeat({ documentId: null, status: "idle", active: false });
+    expect(Object.keys(getPushConsumerLiveness()).sort()).toEqual(["eventCount", "lastEventAt"]);
+    expect(JSON.stringify(getPushConsumerLiveness())).not.toContain(DOC_ID);
+  });
 
-    const live = getPushConsumerLiveness();
-    expect(live.eventCount).toBe(2);
-    expect(live.lastDocumentId).toBe(DOC_ID);
+  it("counts a doc-less heartbeat", async () => {
+    await postHeartbeat({ documentId: null, status: "idle", active: false });
+    expect(getPushConsumerLiveness().eventCount).toBe(1);
+  });
+
+  it("answers { ok: true } with no `written` field", async () => {
+    // The handler writes nothing now, so `written` could only ever have meant
+    // "your body carried a string documentId". docs/mcp-tools.md always
+    // documented this response as `{ ok: true }`.
+    const res = await postHeartbeat({ documentId: DOC_ID, status: "idle", active: false });
+    expect(await res.json()).toEqual({ ok: true });
   });
 });

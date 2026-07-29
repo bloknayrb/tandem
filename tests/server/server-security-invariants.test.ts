@@ -13,15 +13,11 @@
  * so the Express routing and middleware are tested exactly as deployed.
  */
 
-import { readFile } from "node:fs/promises";
 import type { Server } from "node:http";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isLoopback } from "../../src/server/auth/middleware.js";
 import { startMcpServerHttp } from "../../src/server/mcp/server.js";
 import { allocPort } from "../helpers/alloc-port.js";
-
-const SERVER_SRC_PATH = fileURLToPath(new URL("../../src/server/mcp/server.ts", import.meta.url));
 
 let httpServer: Server;
 let port: number;
@@ -131,18 +127,12 @@ describe("Invariant 7 — /health includes hasSession for loopback callers", () 
     expect("lastEventAt" in push).toBe(true);
   });
 
-  // Pins the co-location so a future edit can't move `push` out of the gate
-  // while leaving `hasSession` inside it — they must appear and disappear
-  // together.
-  it("gates push and hasSession on the same condition", async () => {
-    const src = await readFile(SERVER_SRC_PATH, "utf8");
-    const loopbackBlock = src.slice(
-      src.indexOf("if (isLoopback(req.socket.remoteAddress))"),
-      src.indexOf("res.json(body);"),
-    );
-    expect(loopbackBlock).toContain("body.hasSession");
-    expect(loopbackBlock).toContain("body.push");
-  });
+  // The negative half — "a LAN caller sees neither field" — is asserted in
+  // tests/server/health-route.test.ts, which drives `makeHealthHandler` with a
+  // real non-loopback `remoteAddress`. It used to be a source-text slice here,
+  // running from the `if (isLoopback(...))` line to `res.json(body)`; that window
+  // contains the block's own closing brace, so hoisting a field OUT of the gate
+  // still matched and the test could not fail on the regression it named.
 });
 
 // ── Fix 1 regression: /mcp DNS-rebinding protection with allowedHosts ────────

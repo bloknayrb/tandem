@@ -33,6 +33,7 @@ import { withMcp } from "../../shared/origins.js";
 import type { Annotation, ClaudeAwareness } from "../../shared/types.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import { getCurrentDoc } from "./document.js";
+import { noteClaudeActivity } from "./presence-expiry.js";
 
 /** Maximum lifetime of a single presence entry before the sweep clears it. */
 export const TYPING_PRESENCE_TIMEOUT_MS = 30_000;
@@ -224,6 +225,11 @@ export async function withTypingPresence<T>(
   if (!docName) {
     return handler();
   }
+
+  // Refresh Claude's presence clock on ANY wrapped tool call, not just explicit
+  // `tandem_status` updates — a long run of edits between status calls is activity,
+  // and the expiry sweep must not read it as idle. See presence-expiry.ts.
+  noteClaudeActivity(docName);
 
   const handle = Symbol("typing-presence");
   const startedAt = Date.now();

@@ -37,7 +37,9 @@ function collectEvents(): { events: TandemEvent[]; cleanup: () => void } {
   const cb = (event: TandemEvent) => {
     events.push(event);
   };
-  subscribe(cb);
+  // "external" — these stand in for a channel shim / plugin monitor, which is
+  // what `wasEmittedViaChannel` and the doctor's push check are asking about.
+  subscribe(cb, "external");
   return { events, cleanup: () => unsubscribe(cb) };
 }
 
@@ -463,7 +465,7 @@ describe("wasEmittedViaChannel (ref-counted, subscriber-gated)", () => {
     const doc = new Y.Doc();
     attachObservers("dedup-doc", doc);
     const consumer = () => {};
-    subscribe(consumer);
+    subscribe(consumer, "external");
 
     doc.getMap(Y_MAP_ANNOTATIONS).set("ann_dedup", ANN);
 
@@ -672,8 +674,8 @@ describe("subscriber error isolation", () => {
       received.push(event);
     };
 
-    subscribe(badSub);
-    subscribe(goodSub);
+    subscribe(badSub, "external");
+    subscribe(goodSub, "external");
 
     const doc = new Y.Doc();
     attachObservers("error-doc", doc);

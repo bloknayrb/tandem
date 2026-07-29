@@ -113,7 +113,9 @@ Prefer a different AI? Any MCP-capable client can connect to the same endpoint �
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Without the flag nothing breaks and nothing is lost: your messages and comments are saved, and Claude sees them the next time it checks its inbox. But it will not react on its own, which reads as Claude ignoring you. If that is what you are seeing, [this troubleshooting entry](docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) walks through it, and `tandem doctor` reports whether anything is listening. More detail in [Channel push and real-time updates](#channel-push-and-real-time-updates).
+Installing the Tandem plugin is the other way to get it, and needs no flag — see [Channel push and real-time updates](#channel-push-and-real-time-updates) below. Use one or the other, not both: each delivers independently, so a session running both receives every event twice.
+
+Without the flag nothing breaks and nothing is lost: your messages and comments are saved, and Claude sees them the next time it checks its inbox. But it will not react on its own, which reads as Claude ignoring you. If that is what you are seeing, [this troubleshooting entry](docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) walks through it, and **Settings → About → Copy Diagnostics** (or `tandem doctor`, on npm installs) reports whether anything is listening. More detail in [Channel push and real-time updates](#channel-push-and-real-time-updates).
 
 ### What you get
 

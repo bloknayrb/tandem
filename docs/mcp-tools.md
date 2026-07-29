@@ -1125,9 +1125,13 @@ Events are only emitted for editor-originated Y.Map changes (MCP-originated writ
 
 Push-consumer heartbeat: a channel shim or plugin monitor reports that it received an SSE event. Recorded server-side for diagnostics (`/health`'s loopback-only `push` field, and `tandem doctor`) and **never rendered as Claude's presence**.
 
+Not literally one post per event: the consumer debounces (a burst collapses to one), and it is skipped entirely for annotation traffic that Solo mode suppresses, because that filter sits above the heartbeat. So a healthy attached consumer in Solo reports no events until a chat message arrives.
+
 It used to write `ClaudeAwareness` into the document's awareness map, which drove the status pill. That was wrong: the caller posts on event *receipt*, not on Claude doing anything, so a channel shim whose host never negotiated the channel kept stamping `processing: …` and then `idle` for a process no model was attached to — the editor read "AI connected · idle" while nothing the user did reached Claude. Claude's real presence comes from `tandem_status` and the per-tool-call typing-presence marker, both written by Claude's own dispatches.
 
-The heartbeat proves the server→consumer leg works. It does **not** prove delivery to a model, and nothing may gate on it. `focusParagraph` / `focusOffset` are still accepted for wire compatibility with pinned shim versions but are ignored.
+The heartbeat proves the server→consumer leg works. It does **not** prove delivery to a model, and nothing may gate on it.
+
+Unknown keys in the body are ignored. Worth stating because this line previously claimed `focusParagraph` / `focusOffset` were kept for compatibility with pinned shim versions — no shim has ever sent them (a full-history `git log --all -S` across `src/channel/`, `src/monitor/` and `sse-consumer.ts` returns nothing). They described Claude's cursor, which this caller has never had first-hand knowledge of. The server also retains no `documentId` from this route: a document id is a filename slug, not an opaque hash, and nothing read it.
 
 **Request:**
 ```json

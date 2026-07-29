@@ -1,8 +1,10 @@
 /**
  * Push-consumer liveness — diagnostics only.
  *
- * A channel shim or plugin monitor POSTs `/api/channel-awareness` on every SSE
- * event it receives (`sse-consumer.ts`). That tells us one thing, precisely:
+ * A channel shim or plugin monitor POSTs `/api/channel-awareness` as it receives
+ * SSE events (`sse-consumer.ts` — debounced, so a burst collapses to one post, and
+ * skipped entirely for annotation traffic that Solo mode suppresses, since that
+ * filter sits above the post). That tells us one thing, precisely:
  * the server→consumer leg of the push path is working. It is the only positive
  * evidence of that leg we have.
  *
@@ -21,35 +23,38 @@
 export interface PushConsumerLiveness {
   /** Epoch ms of the most recent consumer heartbeat, or null if none this run. */
   lastEventAt: number | null;
-  /** Document the last heartbeat referenced, when it carried one. */
-  lastDocumentId: string | null;
   /** Total heartbeats this run — distinguishes "never attached" from "quiet". */
   eventCount: number;
 }
 
 let lastEventAt: number | null = null;
-let lastDocumentId: string | null = null;
 let eventCount = 0;
 
-export function recordPushConsumerEvent(input: {
+/**
+ * The caller's `documentId` is deliberately NOT retained.
+ *
+ * A document id is not opaque — `docIdFromPath` builds it as
+ * `<basename-slug>-<hash>`, so `Q4-layoffs-plan.md` becomes `q4-layoffs-plan-1a2b3c`.
+ * Retaining it would put a filename in every `/health` response for the life of the
+ * process, sourced from an unvalidated request body on a loopback-auth-exempt route,
+ * to answer a question ("is anything attached, and is it receiving?") that the two
+ * counters below already answer. Nothing ever read it.
+ */
+export function recordPushConsumerEvent(_input: {
   status: string;
   active: boolean;
   documentId: string | null;
 }): void {
   lastEventAt = Date.now();
   eventCount += 1;
-  // Only advance on a real id — a doc-less heartbeat (e.g. a chat event, or the
-  // shutdown clear) must not wipe the last-known document.
-  if (input.documentId) lastDocumentId = input.documentId;
 }
 
 export function getPushConsumerLiveness(): PushConsumerLiveness {
-  return { lastEventAt, lastDocumentId, eventCount };
+  return { lastEventAt, eventCount };
 }
 
 /** Testing-only. */
 export function resetPushConsumerLivenessForTests(): void {
   lastEventAt = null;
-  lastDocumentId = null;
   eventCount = 0;
 }

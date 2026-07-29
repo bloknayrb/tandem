@@ -288,7 +288,7 @@ describe("processInboxAnnotations", () => {
     const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
     const inertConsumer = () => {}; // accepts every event, delivers to nobody
-    subscribe(inertConsumer);
+    subscribe(inertConsumer, "external");
 
     writeUserComment(map, ydoc, "ann_inert");
 
@@ -611,7 +611,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     const annMap = ydoc.getMap(Y_MAP_ANNOTATIONS);
 
     const inertConsumer = () => {};
-    subscribe(inertConsumer);
+    subscribe(inertConsumer, "external");
 
     // Parent must be a user comment: the replies observer drops note-threaded and
     // non-comment parents before emitting.

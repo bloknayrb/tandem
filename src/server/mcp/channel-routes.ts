@@ -37,10 +37,14 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
 
   // Push-consumer heartbeat: a channel shim / plugin monitor reports that it
   // received an SSE event. Recorded for diagnostics only — see the comment in
-  // the handler and `events/push-liveness.ts`. `focusParagraph`/`focusOffset`
-  // are still accepted on the wire (pinned shim versions send them) but are
-  // deliberately unread: they described Claude's cursor, and this caller has
-  // never had first-hand knowledge of that.
+  // the handler and `events/push-liveness.ts`.
+  //
+  // Unknown keys in the body are ignored. Worth stating because an earlier
+  // version of this comment claimed `focusParagraph`/`focusOffset` were kept for
+  // compatibility with pinned shim versions — no shim has ever sent them
+  // (`git log --all -S` across src/channel, src/monitor and sse-consumer.ts
+  // returns nothing). They described Claude's cursor, which this caller has
+  // never had first-hand knowledge of.
   app.options(API_CHANNEL_AWARENESS, apiMiddleware);
   app.post(API_CHANNEL_AWARENESS, apiMiddleware, (req: Request, res: Response) => {
     const { documentId, status, active } = (req.body ?? {}) as Record<string, unknown>;
@@ -68,7 +72,10 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     // rendered as Claude's state. It does NOT prove delivery to a model.
     const docId = typeof documentId === "string" ? documentId : null;
     recordPushConsumerEvent({ status, active: active === true, documentId: docId });
-    res.json({ ok: true, written: !!docId });
+    // `{ ok: true }` only. The handler writes nothing now, so the old `written`
+    // field meant no more than "your body carried a string documentId" — and
+    // docs/mcp-tools.md documented this response as `{ ok: true }` all along.
+    res.json({ ok: true });
   });
 
   // Channel error: shim reports errors for browser display
