@@ -44,6 +44,9 @@ import { generateMessageId } from "../../src/shared/utils.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
 const DOC_HASH = "sha256:awareness-tools";
+// Ledger keys are document-scoped (see `surfacedIds`); tests share one id
+// unless they are specifically exercising the cross-document collision.
+const DOC_KEY = "doc-awareness-tests";
 
 function setupDoc(id: string, text: string) {
   const ydoc = getOrCreateDocument(id);
@@ -128,7 +131,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (ann) => ann);
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (ann) => ann, DOC_KEY);
     // Only comments are surfaced; highlights and notes are excluded
     expect(result.userActions).toHaveLength(1);
     expect(result.userActions.find((a) => a.type === "comment")).toBeTruthy();
@@ -149,7 +152,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
     expect(result.userResponses).toHaveLength(1);
     expect(result.userResponses[0].status).toBe("accepted");
   });
@@ -163,7 +166,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
     expect(result.userActions).toHaveLength(0);
     expect(result.userResponses).toHaveLength(0);
   });
@@ -177,10 +180,10 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const first = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    const first = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
     expect(first.userActions).toHaveLength(1);
 
-    const second = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    const second = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
     expect(second.userActions).toHaveLength(0);
   });
 
@@ -203,6 +206,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (a) => a,
+      DOC_KEY,
     );
     expect(first.userActions).toHaveLength(1);
 
@@ -214,6 +218,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (a) => a,
+      DOC_KEY,
       "tandem",
       (payloadId) => payloadId === getAnnotationEditedChannelKey(id, 2000),
     );
@@ -221,7 +226,7 @@ describe("processInboxAnnotations", () => {
     expect(second.userActions).toHaveLength(1);
     expect(second.userActions[0].alreadyPushed).toBe(true);
     expect(second.userActions[0].edited).toBe(true);
-    expect(surfaced.get(id)).toBe(2000);
+    expect(surfaced.get(`${DOC_KEY}:${id}`)).toBe(2000);
   });
 
   // Both regressions below drive the REAL queue rather than a stubbed
@@ -264,6 +269,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       new Map<string, number>(),
       (a) => a,
+      DOC_KEY,
       "tandem",
       wasEmittedViaChannel,
     );
@@ -299,6 +305,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       new Map<string, number>(),
       (a) => a,
+      DOC_KEY,
       "tandem",
       wasEmittedViaChannel,
     );
@@ -335,6 +342,7 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (a) => a,
+      DOC_KEY,
     );
 
     const ann = map.get(id) as Annotation;
@@ -345,11 +353,12 @@ describe("processInboxAnnotations", () => {
       extractText(ydoc),
       surfaced,
       (a) => a,
+      DOC_KEY,
     );
 
     expect(second.userActions).toHaveLength(1);
     expect(second.userActions[0].edited).toBe(true);
-    expect(surfaced.get(id)).toBe(3000);
+    expect(surfaced.get(`${DOC_KEY}:${id}`)).toBe(3000);
   });
 
   it("calls refreshFn on each unsurfaced annotation", () => {
@@ -378,7 +387,7 @@ describe("processInboxAnnotations", () => {
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a);
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY);
     expect(result.userActions[0].textSnippet).toBe("quick");
   });
 });
@@ -400,10 +409,10 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "solo");
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY, "solo");
     expect(result.userActions).toHaveLength(0);
     // Ledger must be untouched — the item stays "unsurfaced" for release.
-    expect(surfaced.has(id)).toBe(false);
+    expect(surfaced.has(`${DOC_KEY}:${id}`)).toBe(false);
   });
 
   it("releases the held comment on the Solo→Tandem flip (surfaces on next poll)", () => {
@@ -418,17 +427,24 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const surfaced = new Map<string, number>();
 
     // Solo poll: held.
-    const solo = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "solo");
+    const solo = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY, "solo");
     expect(solo.userActions).toHaveLength(0);
 
     // Flip to Tandem: same annotation, same ledger — must now surface exactly once.
-    const released = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "tandem");
+    const released = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (a) => a,
+      DOC_KEY,
+      "tandem",
+    );
     expect(released.userActions).toHaveLength(1);
     expect(released.userActions[0].id).toBe(id);
-    expect(surfaced.get(id)).toBe(0);
+    expect(surfaced.get(`${DOC_KEY}:${id}`)).toBe(0);
 
     // A subsequent Tandem poll dedups normally (proves the release wrote the ledger).
-    const again = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "tandem");
+    const again = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY, "tandem");
     expect(again.userActions).toHaveLength(0);
   });
 
@@ -445,7 +461,7 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "solo");
+    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, DOC_KEY, "solo");
     expect(result.userResponses).toHaveLength(1);
   });
 
@@ -464,12 +480,19 @@ describe("processInboxAnnotations — WS-A2 Solo hold (kill-experiment A)", () =
     const fullText = extractText(ydoc);
     const surfaced = new Map<string, number>();
 
-    const result = processInboxAnnotations(allAnns, fullText, surfaced, (a) => a, "indeterminate");
+    const result = processInboxAnnotations(
+      allAnns,
+      fullText,
+      surfaced,
+      (a) => a,
+      DOC_KEY,
+      "indeterminate",
+    );
     // Marked-held stays held; the unmarked user comment surfaces normally.
     const surfacedIds = result.userActions.map((a) => a.id);
     expect(surfacedIds).toContain(freshId);
     expect(surfacedIds).not.toContain(heldId);
-    expect(surfaced.has(heldId)).toBe(false);
+    expect(surfaced.has(`${DOC_KEY}:${heldId}`)).toBe(false);
   });
 });
 
@@ -506,6 +529,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       () => replies,
       ledger,
       "tandem",
+      DOC_KEY,
     );
     expect(first).toHaveLength(1);
     expect(first[0].id).toBe("r1");
@@ -517,6 +541,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       () => replies,
       ledger,
       "tandem",
+      DOC_KEY,
     );
     expect(second).toHaveLength(0);
   });
@@ -524,9 +549,16 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
   it("holds a user reply in Solo (no surface, no ledger write) and releases on flip", () => {
     const replies = [reply({})];
     const ledger = new Set<string>();
-    const solo = collectInboxUserReplies([commentParent], fullText, () => replies, ledger, "solo");
+    const solo = collectInboxUserReplies(
+      [commentParent],
+      fullText,
+      () => replies,
+      ledger,
+      "solo",
+      DOC_KEY,
+    );
     expect(solo).toHaveLength(0);
-    expect(ledger.has("r1")).toBe(false);
+    expect(ledger.has(`${DOC_KEY}:r1`)).toBe(false);
 
     const released = collectInboxUserReplies(
       [commentParent],
@@ -534,6 +566,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       () => replies,
       ledger,
       "tandem",
+      DOC_KEY,
     );
     expect(released).toHaveLength(1);
   });
@@ -546,6 +579,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       () => replies,
       new Set(),
       "tandem",
+      DOC_KEY,
     );
     expect(out).toHaveLength(0);
   });
@@ -559,13 +593,21 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
         () => privateOnComment,
         new Set(),
         "tandem",
+        DOC_KEY,
       ),
     ).toHaveLength(0);
 
     // A reply on a note parent must never surface even without the private flag.
     const noteReply = [reply({ id: "rn", annotationId: "parent-note" })];
     expect(
-      collectInboxUserReplies([noteParent], fullText, () => noteReply, new Set(), "tandem"),
+      collectInboxUserReplies(
+        [noteParent],
+        fullText,
+        () => noteReply,
+        new Set(),
+        "tandem",
+        DOC_KEY,
+      ),
     ).toHaveLength(0);
   });
 
@@ -582,11 +624,12 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       () => replies,
       ledger,
       "tandem",
+      DOC_KEY,
       (id) => id === "r1",
     );
     expect(out).toHaveLength(1);
     expect(out[0].alreadyPushed).toBe(true);
-    expect(ledger.has("r1")).toBe(true); // still deduped against future polls
+    expect(ledger.has(`${DOC_KEY}:r1`)).toBe(true); // still deduped against future polls
 
     // Pin the reply flag against the declared schema too — same gap as the
     // annotation surfacer: the schema suite never emits this field.
@@ -628,6 +671,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       () => [reply({ id: "r_queue" })],
       new Set<string>(),
       "tandem",
+      DOC_KEY,
       wasEmittedViaChannel,
     );
 
@@ -646,6 +690,7 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
       () => replies,
       new Set(),
       "indeterminate",
+      DOC_KEY,
     );
     const ids = out.map((r) => r.id);
     expect(ids).toContain("fresh");
@@ -859,5 +904,88 @@ describe("/api/mode endpoint validation", () => {
     awareness.set(Y_MAP_MODE, "garbage-value");
     const mode = TandemModeSchema.catch(TANDEM_MODE_DEFAULT).parse(awareness.get(Y_MAP_MODE));
     expect(mode).toBe("tandem");
+  });
+});
+
+// ── Cross-document ledger collision (the reason keys are document-scoped) ────
+//
+// `importAnnotationId` hashes only commentId + range + body text — no path, by
+// design, so re-importing the same .docx dedupes instead of accumulating. The
+// consequence is that the SAME Word comment living in two files carries ONE id.
+// Under a bare-id ledger key, surfacing it from document A silently dropped it
+// from document B: one client, no restart, no multi-session involved. Promotion
+// bumps `rev`, not `editedAt`, so the re-surface hatch never fired either.
+describe("inbox ledgers are document-scoped", () => {
+  const SHARED_ID = "import-deadbeefcafe"; // same Word comment, two files
+
+  it("surfaces the same imported annotation id in BOTH documents", () => {
+    const docA = setupDoc("ledger-doc-a", "Hello world");
+    const docB = setupDoc("ledger-doc-b", "Hello world");
+    const surfaced = new Map<string, number>();
+
+    for (const [docKey, ydoc] of [
+      ["ledger-doc-a", docA],
+      ["ledger-doc-b", docB],
+    ] as const) {
+      const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+      map.set(SHARED_ID, {
+        id: SHARED_ID,
+        type: "comment",
+        author: "user",
+        content: "Word comment",
+        status: "pending",
+        textSnapshot: "Hello",
+        range: { from: 0, to: 5 },
+      });
+
+      const out = processInboxAnnotations(
+        collectAnnotations(map, DOC_HASH),
+        extractText(ydoc),
+        surfaced,
+        (a) => a,
+        docKey,
+        "tandem",
+      );
+      // Without document scoping the second document returns 0 here.
+      expect(out.userActions.map((a) => a.id)).toContain(SHARED_ID);
+    }
+
+    // One entry per document, not one shared entry.
+    expect(surfaced.has(`ledger-doc-a:${SHARED_ID}`)).toBe(true);
+    expect(surfaced.has(`ledger-doc-b:${SHARED_ID}`)).toBe(true);
+  });
+
+  // The reply ledger is a plain Set with NO edit dimension, so its collision has
+  // no escape hatch at all — strictly worse than the annotation one.
+  it("surfaces the same imported reply id in BOTH documents", () => {
+    const parent: Annotation = {
+      id: "parent-comment",
+      author: "user",
+      type: "comment",
+      range: { from: 0, to: 5 },
+      content: "parent",
+      status: "pending",
+      timestamp: 1000,
+    };
+    const sharedReply: AnnotationReply = {
+      id: "import-reply-cafe",
+      annotationId: "parent-comment",
+      author: "user",
+      text: "imported reply",
+      timestamp: 2000,
+    };
+    const ledger = new Set<string>();
+
+    for (const docKey of ["ledger-doc-a", "ledger-doc-b"]) {
+      const out = collectInboxUserReplies(
+        [parent],
+        "Hello world",
+        () => [sharedReply],
+        ledger,
+        "tandem",
+        docKey,
+      );
+      expect(out.map((r) => r.id)).toContain(sharedReply.id);
+    }
   });
 });

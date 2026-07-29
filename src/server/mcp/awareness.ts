@@ -33,15 +33,44 @@ import {
 } from "./response.js";
 import { withTypingPresence } from "./typing-presence.js";
 
-// Track which annotation IDs have been surfaced to Claude via checkInbox.
-// Value = lastSurfacedEditedAt (0 for unedited annotations).
-// Allows re-surfacing when an annotation has been edited since last surfaced.
+/**
+ * Which annotations have been surfaced to Claude via checkInbox.
+ * Value = lastSurfacedEditedAt (0 for unedited), so an edit re-surfaces.
+ *
+ * Keys are `${documentId}:${annotationId}` — DOCUMENT-SCOPED, and that is
+ * load-bearing rather than defensive. Imported Word annotation ids are
+ * deterministic across files by design: `importAnnotationId` hashes only
+ * commentId + range + body text, with no path, so re-importing the same file
+ * dedupes. The consequence is that the SAME Word comment living in two open
+ * `.docx` files carries ONE id. Under a bare-id key, promoting it in document A
+ * surfaced it and promoting it in document B was silently dropped — one client,
+ * no restart, no multi-session involved. Promotion bumps `rev`, not `editedAt`,
+ * so the re-surface hatch below never fired either.
+ *
+ * Scope on the document ID (the Hocuspocus room), never on `filePath` or
+ * `docHash`: rename keeps the id and swaps the path, so a path-derived key would
+ * strand the whole ledger and re-surface every annotation in the document.
+ */
 const surfacedIds = new Map<string, number>();
 
-// WS-A2: separate ledger for user replies surfaced via the checkInbox
-// userReplies bucket. Kept distinct from surfacedIds because reply IDs and
-// annotation IDs share no namespace guarantee and their surfacing rules differ.
+/**
+ * WS-A2: separate ledger for user replies surfaced via the userReplies bucket.
+ * Kept distinct from surfacedIds because reply IDs and annotation IDs share no
+ * namespace guarantee and their surfacing rules differ.
+ *
+ * Same `${documentId}:${replyId}` scoping, for the same reason and MORE
+ * urgently: `importReplyId` is deterministic across files exactly like
+ * `importAnnotationId`, and this ledger is a plain Set with no edit dimension —
+ * so a cross-document collision here has no escape hatch at all. The imported
+ * Word thread in two files loses its replies in the second one for the whole
+ * server run.
+ */
 const replySurfacedIds = new Set<string>();
+
+/** Ledger key. See `surfacedIds` for why the document scope is required. */
+function ledgerKey(documentId: string, itemId: string): string {
+  return `${documentId}:${itemId}`;
+}
 
 /** Reset surfaced IDs (exported for testing) */
 export function resetInbox(): void {
@@ -182,7 +211,7 @@ export function registerAwarenessTools(server: McpServer): void {
         const unsurfaced: Annotation[] = [];
         store.transactMcp(() => {
           for (const raw of allAnnotations) {
-            const lastSurfacedEditedAt = surfacedIds.get(raw.id);
+            const lastSurfacedEditedAt = surfacedIds.get(ledgerKey(store.documentId, raw.id));
             // Not yet surfaced
             if (lastSurfacedEditedAt === undefined) {
               unsurfaced.push(store.refreshAnnotation(raw));
@@ -201,6 +230,7 @@ export function registerAwarenessTools(server: McpServer): void {
           surfacedIds,
           modeState,
           wasEmittedViaChannel,
+          store.documentId,
         );
 
         // WS-A2 userReplies bucket — new user replies on comment threads, held in
@@ -212,6 +242,7 @@ export function registerAwarenessTools(server: McpServer): void {
           (id) => store.listReplies(id),
           replySurfacedIds,
           modeState,
+          store.documentId,
           wasEmittedViaChannel,
         );
 
@@ -365,6 +396,11 @@ export function processInboxAnnotations(
   fullText: string,
   surfaced: Map<string, number>,
   refreshFn: (ann: Annotation) => Annotation,
+  /**
+   * Scopes the ledger key. Required — a bare-id key silently drops the same
+   * imported Word comment in a second document. See `surfacedIds`.
+   */
+  documentId: string,
   // Privacy gate: default to the fail-CLOSED value, not "tandem". The real
   // caller always passes live mode; a caller that forgets should hold held
   // items, never surface them.
@@ -376,7 +412,7 @@ export function processInboxAnnotations(
 } {
   const unsurfaced: Annotation[] = [];
   for (const raw of allAnnotations) {
-    const lastSurfacedEditedAt = surfaced.get(raw.id);
+    const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, raw.id));
     if (lastSurfacedEditedAt === undefined) {
       unsurfaced.push(refreshFn(raw));
     } else if ((raw.editedAt ?? 0) > lastSurfacedEditedAt) {
@@ -390,6 +426,7 @@ export function processInboxAnnotations(
     surfaced,
     modeState,
     wasChannelEmitted,
+    documentId,
   );
 }
 
@@ -399,6 +436,8 @@ function processUnsurfacedInboxAnnotations(
   surfaced: Map<string, number>,
   modeState: ModeState,
   wasChannelEmitted: (payloadId: string) => boolean,
+  /** Scopes the ledger key — see `surfacedIds`. */
+  documentId: string,
 ): {
   userActions: Array<InboxUserAction>;
   userResponses: Array<Annotation & { textSnippet: string }>;
@@ -416,7 +455,7 @@ function processUnsurfacedInboxAnnotations(
 
     const snippet = safeSlice(fullText, ann.range.from, ann.range.to);
     if (ann.author === "user" && ann.type === "comment") {
-      const lastSurfacedEditedAt = surfaced.get(ann.id);
+      const lastSurfacedEditedAt = surfaced.get(ledgerKey(documentId, ann.id));
       const alreadySurfaced = lastSurfacedEditedAt !== undefined;
       const edited = alreadySurfaced && (ann.editedAt ?? 0) > lastSurfacedEditedAt;
       const channelKey = edited ? getAnnotationEditedChannelKey(ann.id, ann.editedAt ?? 0) : ann.id;
@@ -436,10 +475,10 @@ function processUnsurfacedInboxAnnotations(
         ...(edited ? { edited: true } : {}),
         ...(wasChannelEmitted(channelKey) ? { alreadyPushed: true } : {}),
       });
-      surfaced.set(ann.id, ann.editedAt ?? 0);
+      surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
     } else if (ann.author === "claude" && ann.status !== "pending") {
       userResponses.push({ ...ann, textSnippet: snippet });
-      surfaced.set(ann.id, ann.editedAt ?? 0);
+      surfaced.set(ledgerKey(documentId, ann.id), ann.editedAt ?? 0);
     }
   }
 
@@ -493,6 +532,8 @@ export function collectInboxUserReplies(
   loadReplies: (annotationId: string) => AnnotationReply[],
   replySurfaced: Set<string>,
   modeState: ModeState,
+  /** Scopes the ledger key — see `replySurfacedIds`. */
+  documentId: string,
   wasChannelEmitted: (payloadId: string) => boolean = () => false,
 ): InboxUserReply[] {
   const out: InboxUserReply[] = [];
@@ -503,7 +544,7 @@ export function collectInboxUserReplies(
     for (const reply of visible) {
       if (reply.author !== "user") continue; // Claude's own replies aren't inbox items
       if (hideFromAI(reply, modeState)) continue; // Solo hold — no ledger write
-      if (replySurfaced.has(reply.id)) continue; // already surfaced via this bucket
+      if (replySurfaced.has(ledgerKey(documentId, reply.id))) continue; // already surfaced
       // Disclose, never suppress — see the annotation surfacer for the full
       // rationale. This branch was strictly worse than the comment one:
       // `replySurfaced` is a plain Set with no edit dimension, so a poisoned
@@ -518,7 +559,7 @@ export function collectInboxUserReplies(
         textSnippet: snippet,
         ...(wasChannelEmitted(reply.id) ? { alreadyPushed: true } : {}),
       });
-      replySurfaced.add(reply.id);
+      replySurfaced.add(ledgerKey(documentId, reply.id));
     }
   }
   return out;

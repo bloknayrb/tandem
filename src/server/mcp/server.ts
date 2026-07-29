@@ -260,7 +260,7 @@ export async function startMcpServerStdio(): Promise<void> {
 /**
  * Snapshot the number of registered MCP tools from a server instance.
  *
- * Uses `_registeredTools`, a private field of McpServer (SDK 1.27.1, plain object keyed
+ * Uses `_registeredTools`, a private field of McpServer (SDK 1.30.0, plain object keyed
  * by tool name). Returns null if the field is absent or not a plain object — callers
  * should log and surface null rather than silently returning 0.
  *

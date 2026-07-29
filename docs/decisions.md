@@ -901,7 +901,7 @@ Both are silent from the user's perspective today; both end when the integration
 
 1. **Key live transports by the SDK's `Mcp-Session-Id`; never evict on `initialize`.** `src/server/mcp/transport-registry.ts` holds the map; `POST`/`GET`/`DELETE /mcp` look the session up by header and answer **404 `-32001` "Session not found"** when it is unknown. The old code answered 503 `-32000` "No active session" for a stale id, which reads as *the server is down* when the truth is *that session is gone, re-initialize*.
 
-2. **One `McpServer` instance per session ("Shape 2" of the spec), not a shared singleton.** This resolves the spec's probe **P2**: SDK 1.27.1's `shared/protocol.js` `connect()` throws `"Already connected to a transport"` when `this._transport` is set, so a single server provably cannot serve two live transports. Shape 1 is not available. Tool registration is pure and unconditional, so per-session servers are cheap.
+2. **One `McpServer` instance per session ("Shape 2" of the spec), not a shared singleton.** This resolves the spec's probe **P2**: SDK 1.30.0's `shared/protocol.js` `connect()` throws `"Already connected to a transport"` when `this._transport` is set, so a single server provably cannot serve two live transports. Shape 1 is not available. Tool registration is pure and unconditional, so per-session servers are cheap.
 
 3. **Register from `onsessioninitialized`, not after `connect()`.** `transport.sessionId` is minted while the transport *handles* the initialize request, so it is `undefined` immediately after construction — the callback is the only correct registration point. The `/mcp` route closes any session whose handshake finished without initializing, since the registry cannot reap an entry it never received.
 
