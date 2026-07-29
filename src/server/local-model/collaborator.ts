@@ -27,7 +27,7 @@ import type { ChatMessagePayload, TandemEvent } from "../../shared/events/types.
 import type { AgentIdentity } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { getActiveDocId, requireDocument } from "../documents/registry.js";
-import { subscribe, unsubscribe } from "../events/queue.js";
+import { type SubscriberKind, subscribe, unsubscribe } from "../events/queue.js";
 import { appendClaudeChatMessage, updateClaudeChatMessage } from "../mcp/awareness.js";
 import { extractText } from "../mcp/document.js";
 import { readLiveMode } from "../mode.js";
@@ -51,7 +51,7 @@ const SELECTION_TEXT_CAP = 500;
 export interface CollaboratorDeps {
   runTurn: (opts: RunTurnOpts) => Promise<LoopResult>;
   resolveConfig: () => LocalModelConfig | null;
-  subscribe: (cb: (e: TandemEvent) => void) => void;
+  subscribe: (cb: (e: TandemEvent) => void, kind?: SubscriberKind) => void;
   unsubscribe: (cb: (e: TandemEvent) => void) => void;
 }
 
@@ -345,14 +345,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
       );
     }
     subscriberCb = onEvent;
-    // BEFORE FLIPPING BYO_MODELS_ENABLED: this subscription lands in the same
-    // fan-out Set that `pushEvent` reads to decide whether an event was "handed
-    // to a consumer" (events/queue.ts). Once this is live, `subscribers.size >= 1`
-    // permanently even with no external channel shim or monitor attached, so every
-    // user comment would be stamped `alreadyPushed: true` on the strength of an
-    // in-process subscriber — restoring the false signal #1242 removed. The gate
-    // there needs to count EXTERNAL subscribers only; give `subscribe` a kind.
-    deps.subscribe(subscriberCb);
+    // "internal" is passed EXPLICITLY, not left to the default. Two correctness
+    // properties now hang on this subscriber not being external:
+    //   1. `alreadyPushed` — an in-process listener must not make the server
+    //      claim an event was handed to a consumer (#1242).
+    //   2. The WS-A2 Solo forwarder gate — external consumers are held in Solo,
+    //      but this loop needs `document:closed` / `document:switched` to abort
+    //      in-flight runs, so it must keep receiving them.
+    // Relying on a silent default is a poor place to hang a privacy gate.
+    deps.subscribe(subscriberCb, "internal");
   }
 
   function start(): void {
