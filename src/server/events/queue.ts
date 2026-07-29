@@ -12,6 +12,7 @@ import {
   CHANNEL_EVENT_BUFFER_AGE_MS,
   CHANNEL_EVENT_BUFFER_SIZE,
   CTRL_ROOM,
+  MODE_RELEASE_WAKE_ID_PREFIX,
 } from "../../shared/constants.js";
 import {
   resetForTesting as dirtyResetForTesting,
@@ -138,7 +139,11 @@ function trackPayloadId(event: TandemEvent): boolean {
  * Deliberately NARROW: accept/dismiss (status flips on Claude's OWN annotations)
  * and `document:*` lifecycle are NOT held here — they must still reach the
  * in-process collaborator (which uses `document:*` to abort in-flight runs) and
- * are suppressed from the external monitor at the SSE forwarder instead.
+ * are suppressed from the external monitor by the CONSUMER-side gate in
+ * `shared/sse-consumer.ts`. Note that is client-side enforcement: the server
+ * writes every event to any subscriber. Moving it to a server-side forwarder
+ * gate is WS-A2 Phase 7, still open — an earlier version of this comment said
+ * "at the SSE forwarder", describing that end state as if it had shipped.
  */
 function isUserPrivacyHeld(event: TandemEvent): boolean {
   switch (event.type) {
@@ -293,7 +298,7 @@ export function emitModeReleaseWake(): void {
     type: "annotation:created",
     timestamp: Date.now(),
     payload: {
-      annotationId: `wake_${generateEventId()}`,
+      annotationId: `${MODE_RELEASE_WAKE_ID_PREFIX}${generateEventId()}`,
       annotationType: "comment",
       content: MODE_RELEASE_WAKE_CONTENT,
       textSnippet: "",

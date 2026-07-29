@@ -185,14 +185,14 @@ The title bar includes a **Solo / Tandem** toggle (`Ctrl+Shift+M`). It holds wor
 
 Since v0.19.0 the server, not the client, enforces the other direction: while you are in Solo, the comments and replies **you** author are withheld from Claude. Each held item shows an amber **Held** pill, and the status bar shows a running count of what is being withheld. Switching back to Tandem releases the whole set at once — Claude picks them up on its next check, and a one-time nudge wakes a push-connected session to look.
 
-**Exactly what the Solo hold covers.** Held comments and replies are withheld from three surfaces:
+**Exactly what the Solo hold covers.** Held comments and replies are withheld from every surface that sends them to the AI:
 
 | Surface | Held in Solo? |
 |---|---|
 | `tandem_checkInbox` (what Claude is told) | Yes |
 | `tandem_getAnnotations` (Claude reading the annotation list) | Yes |
 | Real-time push (channel shim and plugin monitor) | Yes — annotation events only; chat messages always deliver |
-| `tandem_exportAnnotations` (generating a review report) | **No** — an export is an explicit "give Claude everything" action and includes held comments |
+| `tandem_exportAnnotations` (generating a review report) | Yes — the export reports how many items it withheld, so the report never reads as complete when it isn't. (This was previously exempt, on the reasoning that an export is an explicit "give everything" action. It isn't: only the AI can invoke this tool, so the "explicit action" was always the AI's, not yours.) |
 | `tandem_getTextContent`, `tandem_getContext`, `tandem_search` | Not applicable — these return document text only, never annotation records |
 
 Personal **notes** are private in both modes and are never surfaced to Claude through any tool ([ADR-027](decisions.md)).

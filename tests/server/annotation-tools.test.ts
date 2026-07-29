@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { exportAnnotations } from "../../src/server/file-io/docx.js";
 import {
@@ -7,7 +7,14 @@ import {
   refreshRange,
 } from "../../src/server/mcp/annotations.js";
 import { extractText, verifyAndResolveRange } from "../../src/server/mcp/document.js";
-import { Y_MAP_ANNOTATIONS } from "../../src/shared/constants.js";
+import { hideFromAI, readModeState } from "../../src/server/mode.js";
+import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
+import {
+  CTRL_ROOM,
+  Y_MAP_ANNOTATIONS,
+  Y_MAP_MODE,
+  Y_MAP_USER_AWARENESS,
+} from "../../src/shared/constants.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { clearOpenDocs, setupDoc } from "../helpers/doc-service.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
@@ -349,5 +356,74 @@ describe("annotation on multi-document", () => {
     expect(collectAnnotations(map2, DOC_HASH)).toHaveLength(1);
     expect(collectAnnotations(map1, DOC_HASH)[0].type).toBe("comment");
     expect(collectAnnotations(map2, DOC_HASH)[0].type).toBe("highlight");
+  });
+});
+
+// ── tandem_exportAnnotations + WS-A2 Solo hold ──────────────────────────────
+//
+// The export was the one Claude-facing egress with no Solo gate. The exemption
+// was documented as deliberate ("an export is an explicit give-Claude-everything
+// action") on a premise that is false by construction: there is no user-invocable
+// path to this tool, so the only actor who can perform that "explicit user
+// action" is Claude. Meanwhile the editor showed an amber Held pill telling the
+// user those items were being withheld.
+describe("tandem_exportAnnotations — Solo hold", () => {
+  const seedDoc = (id: string) => setupDoc(id, "Hello world for export");
+
+  function setMode(mode: string) {
+    getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, mode);
+  }
+
+  afterEach(() => {
+    getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE);
+  });
+
+  it("withholds user annotations in Solo and DISCLOSES the count", () => {
+    const ydoc = seedDoc("export-solo");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "user note", { author: "user" });
+    setMode("solo");
+
+    const all = collectAnnotations(map, "sha256:export-solo");
+    const modeState = readModeState();
+    const exportable = all
+      .filter((a) => a.type !== "note")
+      .filter((a) => !hideFromAI(a, modeState));
+
+    expect(exportable).toHaveLength(0);
+    // The disclosure is the whole point: a bare filter would leave the caller
+    // reporting "no annotations" for a document that has one.
+    expect(all.filter((a) => a.type !== "note").length - exportable.length).toBe(1);
+  });
+
+  // The empty-case string must not assert completeness it doesn't have.
+  it("never claims 'no annotations found' when items were withheld", () => {
+    const ydoc = seedDoc("export-empty");
+    const markdown = exportAnnotations(ydoc, []);
+    expect(markdown).not.toMatch(/No annotations found/i);
+    expect(markdown).toMatch(/No annotations available for export/i);
+  });
+
+  // Fail-closed on indeterminate (post-restart, mode unknown) — hides only the
+  // records carrying the persisted marker, matching every other surface.
+  it("in indeterminate mode withholds only persisted heldInSolo records", () => {
+    const ydoc = seedDoc("export-indet");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const plainId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5), "plain", {
+      author: "user",
+    });
+    const heldId = createAnnotation(map, ydoc, "comment", rangeOf(6, 11), "held", {
+      author: "user",
+    });
+    const held = map.get(heldId) as Annotation;
+    map.set(heldId, { ...held, heldInSolo: true });
+
+    const all = collectAnnotations(map, "sha256:export-indet");
+    const modeState = readModeState(); // no mode key set → indeterminate
+    const exportable = all.filter((a) => !hideFromAI(a, modeState));
+    const ids = exportable.map((a) => a.id);
+
+    expect(ids).toContain(plainId);
+    expect(ids).not.toContain(heldId);
   });
 });

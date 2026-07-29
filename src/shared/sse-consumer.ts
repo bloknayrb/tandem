@@ -55,6 +55,7 @@ import {
   CHANNEL_MODE_FETCH_TIMEOUT_MS,
   CHANNEL_RETRY_DELAY_MS,
   CHANNEL_SSE_INACTIVITY_TIMEOUT_MS,
+  MODE_RELEASE_WAKE_ID_PREFIX,
   TANDEM_MODE_DEFAULT,
 } from "./constants.js";
 import type { TandemEvent } from "./events/types.js";
@@ -65,6 +66,25 @@ import { type ChannelErrorCode, type TandemMode, TandemModeSchema } from "./type
 const AWARENESS_DEBOUNCE_MS = 500;
 const AWARENESS_CLEAR_MS = 3000;
 const MODE_CACHE_TTL_MS = 2000;
+
+/**
+ * Is this the synthetic Solo→Tandem release wake?
+ *
+ * The server mints it as an `annotation:created` carrying a `wake_`-prefixed
+ * annotationId in a namespace deliberately disjoint from real annotation ids
+ * (`events/queue.ts#emitModeReleaseWake`). Matching on that prefix is the only
+ * way a consumer can recognise it without a live mode read — which is the whole
+ * problem, since the consumer's mode cache is stale at exactly this moment.
+ */
+export function isModeReleaseWake(event: TandemEvent): boolean {
+  if (event.type !== "annotation:created") return false;
+  // Defensive read, not decoration: this runs on every inbound frame, and a
+  // payload missing `annotationId` must yield "not a wake" rather than throw.
+  // A throw here escapes into the stream loop and drops the event entirely —
+  // which is how a shutdown-path regression test caught this.
+  const id = (event.payload as { annotationId?: unknown } | undefined)?.annotationId;
+  return typeof id === "string" && id.startsWith(MODE_RELEASE_WAKE_ID_PREFIX);
+}
 const STABLE_CONNECTION_MS = 60_000; // Reset retries after this much continuous uptime
 const RETRY_MAX_DELAY_MS = 30_000; // Exponential backoff cap
 
@@ -410,7 +430,21 @@ export async function connectAndStreamOnce(
         }
 
         // Solo mode suppression: drop non-chat events when mode is "solo".
-        if (event.type !== "chat:message") {
+        //
+        // The Solo→Tandem RELEASE WAKE must be exempt, or this gate eats the one
+        // event WS-A2 exists to deliver. The release route flips mode server-side
+        // and fires the wake microseconds later in the same handler — but the
+        // check below reads `cachedMode`, and `refreshMode` is fire-and-forget
+        // AND early-returns inside its TTL. So the cache still says "solo" and
+        // the wake is dropped, with `onEventId` advancing past it so it is never
+        // replayed. Any Solo session that saw ANY non-chat event (accept/dismiss
+        // and `document:*` still flow — the server hold is deliberately narrow)
+        // has a warm "solo" cache and hits this.
+        //
+        // Exempting by id is safe because the namespace is disjoint by
+        // construction: `emitModeReleaseWake` mints `wake_…` precisely so it
+        // cannot collide with a real annotation id.
+        if (event.type !== "chat:message" && !isModeReleaseWake(event)) {
           refreshMode(opts.tandemUrl, opts.logPrefix); // fire-and-forget
           if (getModeSync() === "solo") {
             console.error(`${opts.logPrefix} Solo mode: suppressed ${event.type} event`);

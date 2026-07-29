@@ -280,6 +280,19 @@ export const COWORK_STATUS_POLL_MS = 30_000;
 export const COWORK_RESCAN_DEBOUNCE_MS = 2_000;
 
 // Channel / event queue
+/**
+ * Id prefix for the synthetic Solo→Tandem release wake (WS-A2).
+ *
+ * `emitModeReleaseWake` mints `annotationId: \`${MODE_RELEASE_WAKE_ID_PREFIX}…\``
+ * in a namespace disjoint from real annotation ids, so the wake can never
+ * mis-stamp a real held item's `alreadyPushed` hint. The SSE consumer ALSO
+ * matches on it, to exempt the wake from the Solo suppression gate — the gate
+ * reads a stale mode cache and would otherwise eat the one event the release
+ * exists to deliver. Shared here because a drifted literal silently re-breaks
+ * that release with no test failure on either side.
+ */
+export const MODE_RELEASE_WAKE_ID_PREFIX = "wake_";
+
 export const CHANNEL_EVENT_BUFFER_SIZE = 200;
 export const CHANNEL_EVENT_BUFFER_AGE_MS = 60_000; // 60 seconds
 export const CHANNEL_SSE_KEEPALIVE_MS = 15_000; // 15 seconds
