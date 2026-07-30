@@ -15,6 +15,12 @@ import {
 } from "./docx-comments.js";
 import { exportYDocToDocx } from "./docx-export.js";
 import { type DocxNotes, footnoteLossLines, parseDocxFootnotes } from "./docx-footnotes.js";
+import {
+  lostFeatureLossLines,
+  moveCount,
+  noLostFeatures,
+  scanDocxLostFeatures,
+} from "./docx-lost-features.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -67,11 +73,16 @@ const plaintextAdapter: FormatAdapter = {
  * that round-trip but stay Claude-invisible), per the gate in
  * `docx-comment-export.ts` — tracked changes stay deferred.
  *
- *   - `parse` runs `loadDocxWithWarnings` + `extractDocxComments` in parallel.
- *     mammoth import-fidelity warnings land as a `LoadIssue { kind: "other" }`
- *     so the UI can tell the user what formatting mammoth dropped (and thus
- *     what the round-trip cannot recover). Comment-extraction failures land as
- *     `LoadIssue { kind: "comments-failed" }` rather than being swallowed.
+ *   - `parse` runs four readers in parallel: `loadDocxWithWarnings`,
+ *     `extractDocxComments`, `parseDocxFootnotes`, and `scanDocxLostFeatures`.
+ *     The last two exist because mammoth is SILENT about its highest-stakes
+ *     losses — it emits zero warnings for footnotes, headers/footers or tracked
+ *     changes — so the only way to be honest about them is to read the package
+ *     directly. Their count-only lines join mammoth's own into a single
+ *     `LoadIssue { kind: "other" }` carrying `importLosses`, which drives both
+ *     the open-time toast and the persistent fidelity report. Comment-extraction
+ *     failures land as `LoadIssue { kind: "comments-failed" }` rather than being
+ *     swallowed.
  *   - `apply` runs `htmlToYDoc` then `injectCommentsAsAnnotations`
  *     synchronously inside the caller's transact. The snapshot/undo dance
  *     around inject lives here because Yjs doesn't roll back inner-transact
@@ -81,10 +92,10 @@ const plaintextAdapter: FormatAdapter = {
  *     (trust-boundary-gated). NOT wired into auto-save.
  */
 const docxAdapter: FormatAdapter = {
-  async parse(content): Promise<Prepared> {
+  async parse(content, options): Promise<Prepared> {
     const buffer = content as Buffer;
     const issues: LoadIssue[] = [];
-    const [loaded, comments, notes] = await Promise.all([
+    const [loaded, comments, notes, lost] = await Promise.all([
       loadDocxWithWarnings(buffer),
       extractDocxComments(buffer).catch((err) => {
         console.error(
@@ -103,28 +114,69 @@ const docxAdapter: FormatAdapter = {
         console.error("[docx-footnotes] parse failed unexpectedly:", err);
         return { footnotes: {}, endnotes: 0 } satisfies DocxNotes;
       }),
+      // Tracked changes + headers/footers (#1142 G3): mammoth emits ZERO
+      // warnings for either — measured, not assumed — so without this scan a
+      // reviewed document imports with every insertion silently accepted and
+      // every deletion silently discarded. Counts only; never reads w:author or
+      // header text. scanDocxLostFeatures never throws; this is last-resort.
+      options?.scanLostFeatures === false
+        ? noLostFeatures()
+        : scanDocxLostFeatures(buffer).catch((err) => {
+            console.error("[docx-lost-features] scan failed unexpectedly:", err);
+            return noLostFeatures();
+          }),
     ]);
-    // Note losses lead (the named, higher-impact loss). mammoth's per-occurrence
-    // warnings are already deduped + capped inside summarizeMammothMessages; the
-    // note lines are a bounded fixed set (≤3), so they ride on top of that cap
-    // without re-flooding — and crucially this guard fires when EITHER source is
-    // non-empty, because mammoth emits zero warnings for notes. The honesty line
-    // is driven off the RECONCILED partition (same inputs `htmlToYDoc` reconciles
-    // in `apply` → identical result), so a footnote that won't reconstruct (an
-    // orphaned definition, or a mammoth-format drift) is reported as a loss, not
-    // silently claimed "preserved".
+    // Ordered MOST-DESTRUCTIVE FIRST. Tracked changes lead: they are the only
+    // entry in the whole report where the text the user reads is not the text
+    // the author wrote (an insertion is silently accepted, a deletion silently
+    // discarded). Headers/footers next — total destruction of visible page
+    // furniture. Footnote lines follow (mostly reconstructed now, so only the
+    // degraded subset reports). mammoth's style-level long tail rides last,
+    // already deduped + capped inside summarizeMammothMessages.
+    //
+    // The fixed-set lines are bounded at 10 — up to 5 revision-family (the
+    // "couldn't check" line CAN coexist with counts, since the notes parts are
+    // still tallied after the main part fails), 2 header/footer, 3 note — and
+    // ride on TOP of mammoth's MAX_FIDELITY_WARNINGS cap, so 18 lines is the
+    // worst case for a pathological document. No re-flooding, no new cap needed. Note the counts INSIDE each
+    // line are unbounded, deliberately: "47 tracked deletions" is materially
+    // different from "3", and these lines never reach Claude (see the note in
+    // docx-lost-features.ts), so there is no oracle to bound.
+    // Crucially the guard below fires when ANY source is non-empty,
+    // because mammoth emits zero warnings for revisions, headers/footers OR
+    // notes. The footnote line is driven off the RECONCILED partition (same
+    // inputs `htmlToYDoc` reconciles in `apply` → identical result), so a
+    // footnote that won't reconstruct (an orphaned definition, or a
+    // mammoth-format drift) is reported as a loss, not silently claimed
+    // "preserved".
     const reconciliation = reconcileFootnoteIds(loaded.html, notes.footnotes);
-    const importLosses = [...footnoteLossLines(notes, reconciliation), ...loaded.warnings];
+    // mammoth is the ONE revision family it isn't silent about: it emits
+    // "unrecognised element was ignored: w:move…" for both halves of a move and
+    // their range markers. `loadDocxWithWarnings` keeps those OUT of the capped
+    // general set (see `partitionMammothMessages`) so they can't crowd out real
+    // style warnings; here we decide whether to surface them at all. Our own
+    // move line says strictly more, so it supersedes them — but ONLY when we
+    // actually emitted it, so a failed scan can never leave the move loss
+    // unreported by BOTH sources.
+    const mammothWarnings =
+      moveCount(lost.revisions) > 0
+        ? loaded.warnings
+        : [...loaded.warnings, ...(loaded.moveWarnings ?? [])];
+    const structural = [...lostFeatureLossLines(lost), ...footnoteLossLines(notes, reconciliation)];
+    const importLosses = [...structural, ...mammothWarnings];
     if (importLosses.length > 0) {
       issues.push({
         kind: "other",
         error: undefined,
         message:
-          "Some Word formatting couldn't be imported and won't be preserved on save: " +
+          // "features", not "formatting": a tracked change is neither formatting
+          // nor merely dropped — it was APPLIED, which the lines themselves say.
+          "Some Word features in this file weren't imported and won't be preserved on save: " +
           `${importLosses.join("; ")}.`,
         // Granular list for the persistent fidelity report (#1145); the joined
         // `message` above drives the transient open-time toast.
         importLosses,
+        structuralLosses: structural.length,
       });
     }
     return { format: "docx", html: loaded.html, comments, footnoteBodies: notes.footnotes, issues };

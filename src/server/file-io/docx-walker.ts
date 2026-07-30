@@ -31,6 +31,39 @@ export function getTextContent(node: ChildNode): string {
   return node.children.map(getTextContent).join("");
 }
 
+// Subtrees whose text mammoth does NOT surface. Kept adjacent to the walker
+// below, which skips the same two for the same reason — any reader that
+// extracts "the text a user would see" must agree with the importer or it
+// invents content that is not in the document.
+const INVISIBLE_TEXT_ELEMENTS = new Set([
+  "w:del", // deleted tracked-change text — already removed from the document
+  "w:delInstrText", // deleted field instruction
+  "w:instrText", // field instruction (e.g. ` HYPERLINK "https://…" `), not body text
+]);
+
+/**
+ * Like `getTextContent`, but skipping the subtrees mammoth drops.
+ *
+ * NOT a full model of what the import produces — `walkDocumentBody` additionally
+ * maps `SINGLE_CHAR_ELEMENTS` to one character and separates paragraphs with
+ * `\n`, neither of which this does. It is exactly `getTextContent` minus the
+ * invisible subtrees, which is what a body-capture caller needs.
+ *
+ * Use this — not `getTextContent` — whenever the result will be written back
+ * into a document. `getTextContent` recurses into `<w:del>` and `<w:instrText>`,
+ * so using it to capture body text RESURRECTS deleted text and splices raw
+ * field instructions in as literal prose. That is silent fabrication into a
+ * file the user shares, strictly worse than a silent loss: it can restore
+ * something an author deliberately removed, and it routes a `HYPERLINK` field's
+ * URL around the export trust boundary as plain text.
+ */
+export function getVisibleTextContent(node: ChildNode): string {
+  if (node.type === "text") return (node as { data: string }).data;
+  if (!isElement(node)) return "";
+  if (INVISIBLE_TEXT_ELEMENTS.has(node.name)) return "";
+  return node.children.map(getVisibleTextContent).join("");
+}
+
 /** Recursively find all elements with a given name. */
 export function findAllByName(name: string, nodes: ChildNode[]): Element[] {
   const results: Element[] = [];

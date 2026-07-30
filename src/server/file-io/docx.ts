@@ -33,7 +33,7 @@ export async function loadDocx(content: Buffer): Promise<string> {
  */
 export async function loadDocxWithWarnings(
   content: Buffer,
-): Promise<{ html: string; warnings: string[] }> {
+): Promise<{ html: string; warnings: string[]; moveWarnings: string[] }> {
   // styleMap is the SECOND arg of convertToHtml(input, options) — merging it into
   // the input object silently no-ops. mammoth IGNORES underline by default (its
   // docs: underline "can be easily confused with hyperlinks in HTML"), so without
@@ -50,7 +50,8 @@ export async function loadDocxWithWarnings(
     console.error(`[mammoth] ${msg.type}: ${msg.message}`);
   }
 
-  return { html: result.value, warnings: summarizeMammothMessages(result.messages) };
+  const { general, moves } = partitionMammothMessages(result.messages);
+  return { html: result.value, warnings: general, moveWarnings: moves };
 }
 
 /** Max distinct fidelity warnings surfaced to the user (avoid toast flooding). */
@@ -66,6 +67,28 @@ const MAX_FIDELITY_WARNINGS = 8;
 const MAX_WARNING_LINE_LENGTH = 120;
 
 /**
+ * mammoth's unrecognised-element messages for the two halves of a Word "move"
+ * revision (and their range markers). Partitioned out BEFORE the
+ * MAX_FIDELITY_WARNINGS cap, not filtered after it: a document with moved
+ * paragraphs produces up to six distinct normalized lines, which would eat six
+ * of the eight slots and permanently discard the real style warnings the cap is
+ * there to make room for. Filtering downstream cannot un-crowd a cap.
+ *
+ * mammoth's exact wording lives in this module, which owns every other regex
+ * against it (see the redaction slots below) — a mammoth upgrade should break
+ * one file, not a fidelity behaviour in the adapter.
+ */
+const MAMMOTH_MOVE_MESSAGE = /unrecognised element was ignored: \w*:?move/i;
+
+/** What `summarizeMammothMessages` produces: the capped general set, plus the
+ * move messages held apart so the caller can decide whether its own (more
+ * specific) move line supersedes them. */
+export interface MammothWarnings {
+  general: string[];
+  moves: string[];
+}
+
+/**
  * Collapse mammoth's per-occurrence messages into a small set of distinct,
  * user-readable phrases. mammoth emits one message PER dropped element (e.g. a
  * line per unrecognized style run), which would be unreadable surfaced raw.
@@ -73,7 +96,16 @@ const MAX_WARNING_LINE_LENGTH = 120;
 export function summarizeMammothMessages(
   messages: Array<{ type: string; message: string }>,
 ): string[] {
+  return partitionMammothMessages(messages).general;
+}
+
+/** As `summarizeMammothMessages`, but keeping the move messages separate so the
+ * cap applies only to the general set. */
+export function partitionMammothMessages(
+  messages: Array<{ type: string; message: string }>,
+): MammothWarnings {
   const seen = new Set<string>();
+  const moves = new Set<string>();
   for (const msg of messages) {
     // Only warnings/errors matter for fidelity — mammoth has no "info" today,
     // but guard defensively so a future info-level message isn't surfaced.
@@ -101,13 +133,14 @@ export function summarizeMammothMessages(
       .trim();
     // Clamp per-line (defense-in-depth, see MAX_WARNING_LINE_LENGTH). Dedup on
     // the clamped form so two messages differing only past the cap collapse.
-    seen.add(
+    const clamped =
       normalized.length > MAX_WARNING_LINE_LENGTH
         ? `${normalized.slice(0, MAX_WARNING_LINE_LENGTH - 1)}…`
-        : normalized,
-    );
+        : normalized;
+    if (MAMMOTH_MOVE_MESSAGE.test(clamped)) moves.add(clamped);
+    else seen.add(clamped);
   }
-  return [...seen].slice(0, MAX_FIDELITY_WARNINGS);
+  return { general: [...seen].slice(0, MAX_FIDELITY_WARNINGS), moves: [...moves] };
 }
 
 // -- Annotation export --

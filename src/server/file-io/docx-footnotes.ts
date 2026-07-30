@@ -16,7 +16,7 @@ import type { ChildNode, Element } from "domhandler";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import type { FootnoteBody } from "../../shared/types.js";
-import { findAllByName, getAttr, getTextContent, isElement } from "./docx-walker.js";
+import { findAllByName, getAttr, getVisibleTextContent, isElement } from "./docx-walker.js";
 
 /**
  * Footnote bodies (keyed by OOXML footnote id — the same id mammoth puts in its
@@ -119,7 +119,15 @@ export async function parseDocxFootnotes(buffer: Buffer): Promise<DocxNotes> {
   for (const note of footnoteEls) {
     const id = getAttr(note, "w:id");
     if (id === undefined) continue; // a real footnote always carries an id
-    footnotes[id] = { text: getTextContent(note), hadFormatting: noteHadFormatting(note) };
+    // getVisibleTextContent, NOT getTextContent: this body is written BACK into
+    // the user's file as a real <w:footnote> by the exporter. getTextContent
+    // recurses into <w:del> and <w:instrText>, so it would resurrect text the
+    // author deleted and splice raw field instructions (including a HYPERLINK
+    // field's URL) into the footnote as literal prose — silent fabrication into
+    // a shared file, invisible to the user and to Claude before it lands on
+    // disk, and undetectable by the 0e verifier (which compares footnote ids,
+    // not bodies).
+    footnotes[id] = { text: getVisibleTextContent(note), hadFormatting: noteHadFormatting(note) };
   }
   return { footnotes, endnotes: endnoteEls.length };
 }

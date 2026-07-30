@@ -9,7 +9,9 @@ vi.mock("../../src/server/file-io/docx.js", async (importOriginal) => {
   return {
     ...actual,
     loadDocx: vi.fn().mockResolvedValue("<p>Body</p>"),
-    loadDocxWithWarnings: vi.fn().mockResolvedValue({ html: "<p>Body</p>", warnings: [] }),
+    loadDocxWithWarnings: vi
+      .fn()
+      .mockResolvedValue({ html: "<p>Body</p>", warnings: [], moveWarnings: [] }),
     htmlToYDoc: vi.fn(),
   };
 });

@@ -265,8 +265,17 @@ export const buildEmbeddedImage = (): Promise<Buffer> =>
 
 const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
+/** A bare .docx-shaped zip carrying ONLY the named parts — no content-types, no
+ * rels. For readers that resolve parts by path and for the degenerate-package
+ * cases `rawDocx` can't express (a missing or unconventional main part). */
+export async function zipWith(files: Record<string, string>): Promise<Buffer> {
+  const zip = new JSZip();
+  for (const [p, c] of Object.entries(files)) zip.file(p, c);
+  return (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
+}
+
 /** Assemble a minimal .docx package from a document body + optional extra parts. */
-async function rawDocx(opts: {
+export async function rawDocx(opts: {
   body: string;
   /** Extra files keyed by zip path (e.g. "word/comments.xml"). */
   parts?: Record<string, string>;
@@ -392,4 +401,54 @@ export const buildTrackedChange = (): Promise<Buffer> =>
       `<w:del w:id="2" w:author="A" w:date="2020-01-01T00:00:00Z"><w:r><w:delText>removed</w:delText></w:r></w:del>` +
       `<w:r><w:t xml:space="preserve"> end.</w:t></w:r>` +
       `</w:p>`,
+  });
+
+/** A Word "move" revision: both halves, fixed dates. Distinct from an
+ * insert+delete pair because mammoth recognizes NEITHER element, so BOTH
+ * subtrees are discarded — the moved text is simply absent (measured). */
+export const buildMovedPassage = (): Promise<Buffer> =>
+  rawDocx({
+    body:
+      `<w:p>` +
+      `<w:r><w:t xml:space="preserve">Kept </w:t></w:r>` +
+      `<w:moveTo w:id="1" w:author="A" w:date="2020-01-01T00:00:00Z">` +
+      `<w:r><w:t>relocated</w:t></w:r></w:moveTo>` +
+      `<w:moveFrom w:id="2" w:author="A" w:date="2020-01-01T00:00:00Z">` +
+      `<w:r><w:delText>relocated</w:delText></w:r></w:moveFrom>` +
+      `<w:r><w:t xml:space="preserve"> end.</w:t></w:r>` +
+      `</w:p>`,
+  });
+
+/** A formatting-only revision (`w:rPrChange`) — no text delta at all. mammoth
+ * applies the new formatting and drops the record, so a text-based check sees
+ * a perfect round-trip while the revision history is gone. */
+export const buildFormatRevision = (): Promise<Buffer> =>
+  rawDocx({
+    body:
+      `<w:p><w:r><w:rPr><w:b/>` +
+      `<w:rPrChange w:id="7" w:author="A" w:date="2020-01-01T00:00:00Z"><w:rPr/></w:rPrChange>` +
+      `</w:rPr><w:t>Reformatted text.</w:t></w:r></w:p>`,
+  });
+
+/** A page footer whose ONLY content is a PAGE field — zero `<w:t>` anywhere.
+ * The case a text-based header/footer check cannot see, and the reason the
+ * content predicate keys on field markers. */
+export const buildPageNumberFooter = (): Promise<Buffer> =>
+  rawDocx({
+    body: `<w:p><w:r><w:t>Body above a page-number footer.</w:t></w:r></w:p>`,
+    parts: {
+      "word/footer1.xml":
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<w:ftr xmlns:w="${WML}"><w:p>` +
+        `<w:r><w:fldChar w:fldCharType="begin"/></w:r>` +
+        `<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>` +
+        `<w:r><w:fldChar w:fldCharType="end"/></w:r>` +
+        `</w:p></w:ftr>`,
+    },
+    overrides: [
+      `<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`,
+    ],
+    documentRels: [
+      `<Relationship Id="rIdFtr1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>`,
+    ],
   });

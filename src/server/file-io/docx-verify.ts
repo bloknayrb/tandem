@@ -28,7 +28,11 @@
 import * as Y from "yjs";
 import { withInternal } from "../../shared/origins.js";
 import { type Capture, captureModel, EMBED_PLACEHOLDER } from "./docx-capture.js";
-import { type ExportComment, prepareExportComments } from "./docx-comment-export.js";
+import {
+  BACKUP_RESTORE_TAIL,
+  type ExportComment,
+  prepareExportComments,
+} from "./docx-comment-export.js";
 import { getAdapter } from "./index.js";
 
 // --- Thresholds (pinned in docx-verify.test.ts with negative controls) --------
@@ -126,7 +130,12 @@ function containmentRatio(baseline: string, candidate: string): number {
 
 /** Normalized comment identity that survives the round-trip's author/type rewrite
  * (reimported comments all return as author:"import"/type:"note"): author display
- * name + normalized body text. Computed internally; never logged. */
+ * name + normalized body text. Computed internally; never logged.
+ *
+ * Deliberately narrow — do NOT widen this to a structural comparison of the
+ * whole `ExportComment`. `flattenedReplies` is export-side telemetry that is 0
+ * on every reimported comment by construction, so a deep-equal would report
+ * every threaded comment as lost. */
 function commentKey(c: ExportComment): string {
   const body = c.bodyParagraphs.join("\n").replace(/\s+/g, " ").trim().toLowerCase();
   return `${c.author.trim().toLowerCase()} ${body}`;
@@ -258,17 +267,23 @@ export async function verifyDocxRoundtrips(
   buffer: Buffer,
   liveDoc: Y.Doc,
   ctx: VerifyContext,
+  /**
+   * The export gate's output for `liveDoc`, when the caller already has it.
+   * PASSED rather than recomputed (#1142): the save path computes this set
+   * immediately before `saveBinary`, so handing it over both removes a full
+   * annotation walk per save and removes the need to argue that a third
+   * independent derivation is byte-identical to the one that was written.
+   * Omitted (tests, future callers) → recomputed here, read-only on `liveDoc`.
+   */
+  exportComments?: ExportComment[],
 ): Promise<VerifyVerdict> {
   const bufferBytes = buffer.length;
 
-  // Capture the live doc + the EXACT set the export gate emitted (recomputed on
-  // the unchanged liveDoc → byte-identical to what saveBinary wrote; avoids
-  // rippling the adapter signature). Read-only on liveDoc.
   let live: Capture;
   let expectedComments: ExportComment[];
   try {
     live = captureModel(liveDoc);
-    expectedComments = prepareExportComments(liveDoc);
+    expectedComments = exportComments ?? prepareExportComments(liveDoc);
   } catch (err) {
     console.error(
       "[docx-verify %s] live capture failed (allowing save):",
@@ -306,7 +321,10 @@ export async function verifyDocxRoundtrips(
       // populates Y_MAP_FOOTNOTE_BODIES + injects comments, else those checks are
       // vacuous). withInternal supplies the outer transaction htmlToYDoc needs.
       const adapter = getAdapter("docx");
-      const prepared = await adapter.parse(buffer);
+      // Skip the silent-loss scan: this buffer is OUR OWN export, which emits no
+      // revision marks and no header/footer parts, so the scan can only return
+      // zeros — and nothing here reads `prepared.issues` anyway.
+      const prepared = await adapter.parse(buffer, { scanLostFeatures: false });
       withInternal(reimportDoc, () =>
         adapter.apply(reimportDoc, prepared, { fileName: "verify-reimport.docx" }),
       );
@@ -378,27 +396,21 @@ export function integrityWarningLines(verdict: VerifyVerdict): string[] {
     const n = m.commentsExpected - m.commentsResolved;
     lines.push(
       `${n === 1 ? "1 comment" : `${n} comments`} may not have been preserved on this save — ` +
-        `the original version of this file is backed up and can be restored`,
+        BACKUP_RESTORE_TAIL,
     );
   }
   if (verdict.reasons.includes("footnote-loss")) {
     const n = m.footnoteIdsExpected - m.footnoteIdsResolved;
     lines.push(
       `${n === 1 ? "1 footnote" : `${n} footnotes`} may not have been preserved on this save — ` +
-        `the original version of this file is backed up and can be restored`,
+        BACKUP_RESTORE_TAIL,
     );
   }
   if (verdict.reasons.includes("soft-text-loss")) {
-    lines.push(
-      "This save may have changed more text than expected — " +
-        "the original version of this file is backed up and can be restored",
-    );
+    lines.push(`This save may have changed more text than expected — ${BACKUP_RESTORE_TAIL}`);
   }
   if (verdict.reasons.includes("verifier-error")) {
-    lines.push(
-      "Tandem couldn't fully verify this save — " +
-        "the original version of this file is backed up and can be restored",
-    );
+    lines.push(`Tandem couldn't fully verify this save — ${BACKUP_RESTORE_TAIL}`);
   }
   return lines;
 }
