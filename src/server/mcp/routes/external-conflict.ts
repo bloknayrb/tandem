@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 
-import { API_DOCX_CONFLICT_RESOLVE } from "../../../shared/api-paths.js";
+import { API_EXTERNAL_CONFLICT_RESOLVE } from "../../../shared/api-paths.js";
 import { getActiveDocId, hasDoc } from "../../documents/registry.js";
 import {
   assertLoopbackForMutation,
@@ -10,16 +10,17 @@ import { resolveExternalConflict } from "../file-opener.js";
 import { sendApiError } from "./_shared.js";
 
 /**
- * POST /api/docx-conflict/resolve — resolve a pending `.docx` external-conflict
- * prompt (#1069). Body: `{ documentId?, choice: "keep" | "reload" }`.
+ * POST /api/external-conflict/resolve — resolve a pending external-conflict
+ * prompt (#1069, widened to every format in #1238). Body:
+ * `{ documentId?, choice: "keep" | "reload" }`.
  *
  * - "keep": keep the in-memory unsaved edits and re-baseline so explicit save
  *   unblocks (the next save overwrites the on-disk version).
  * - "reload": discard the unsaved edits, reload from disk through the
  *   file-watcher reload lifecycle (annotations preserved + re-anchored).
  *
- * Gated on origin allowlist + loopback (#1121 F6): resolving a docx conflict
- * is a destructive state change and must not be reachable by authenticated LAN
+ * Gated on origin allowlist + loopback (#1121 F6): resolving a conflict is a
+ * destructive state change and must not be reachable by authenticated LAN
  * peers. Idempotent: resolving with no pending conflict is a no-op success
  * (double-click / stale-banner race).
  *
@@ -34,8 +35,8 @@ import { sendApiError } from "./_shared.js";
  * `resolveExternalConflict` already fails closed (throws NO_DOCUMENT) on an
  * unknown id.
  */
-export async function handleResolveDocxConflict(req: Request, res: Response): Promise<void> {
-  if (assertOriginAllowlisted(req, res, API_DOCX_CONFLICT_RESOLVE)) return;
+export async function handleResolveExternalConflict(req: Request, res: Response): Promise<void> {
+  if (assertOriginAllowlisted(req, res, API_EXTERNAL_CONFLICT_RESOLVE)) return;
   if (assertLoopbackForMutation(req, res)) return;
   const { documentId, choice } = (req.body ?? {}) as Record<string, unknown>;
   if (choice !== "keep" && choice !== "reload") {

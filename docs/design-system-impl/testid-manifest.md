@@ -145,6 +145,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `fidelity-report-banner`, `fidelity-report-details-toggle`,
   `fidelity-report-details`, `fidelity-report-import-losses`,
   `fidelity-report-export-downgrades` (#1145 — `.docx` honesty notice)
+- `external-conflict-banner`, `external-conflict-keep-btn`,
+  `external-conflict-reload-btn` (#1069 — keep-vs-reload after an external
+  write; every format since #1238)
 
 ### Modals & dialogs
 - `help-modal`, `help-modal-close`

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
+import type * as Y from "yjs";
 import {
+  AUTO_SAVE_FORMATS,
+  BINARY_SAVE_FORMATS,
   CTRL_ROOM,
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
   Y_MAP_ACTIVE_DOCUMENT_ID,
@@ -13,7 +16,7 @@ import {
   Y_MAP_STORE_READ_ONLY,
 } from "../../shared/constants.js";
 import { withFileSync, withInternal, withMcp } from "../../shared/origins.js";
-import type { FidelityReport } from "../../shared/types.js";
+import type { ExternalConflictState, FidelityReport } from "../../shared/types.js";
 import { generateNotificationId } from "../../shared/utils.js";
 import { docHash } from "../annotations/doc-hash.js";
 import { closeStore, createStore } from "../annotations/store.js";
@@ -113,21 +116,53 @@ const pathExists = (p: string): Promise<boolean> =>
 /** Per-document save lock to prevent concurrent auto-save + manual save races. */
 const savingDocs = new Set<string>();
 
-/** Formats eligible for disk auto-save (adapter.save defined && not binary). */
-const AUTO_SAVE_FORMATS = new Set(["md", "txt"]);
+/**
+ * True when the format has ANY path back to disk — auto-save or explicit.
+ *
+ * `.html` has neither (`saveDocumentToDisk` rejects it outright), which makes
+ * it the one format where "keep my edits" is not a promise the app can keep.
+ * Callers use this to avoid offering, or reporting, a save that cannot happen
+ * (#1238).
+ */
+export function canSaveToDisk(format: string): boolean {
+  return AUTO_SAVE_FORMATS.has(format) || BINARY_SAVE_FORMATS.has(format);
+}
 
 /**
- * Binary formats that write back via `adapter.saveBinary` + `atomicWriteBuffer`
- * (#576). EXPLICIT-SAVE-ONLY: deliberately disjoint from `AUTO_SAVE_FORMATS` so
- * the 60s auto-save timer never round-trips a lossy `.docx` import back to disk.
- * The protective layer for `.docx` is "never overwrite without an explicit
- * user save" (supersedes ADR-004's read-only default).
+ * `SaveResult.reason` for a save blocked by an unresolved external conflict
+ * (#1238). `errorCode` is only meaningful for `status: "error"`, so on the
+ * skipped path the reason string is the only handle callers have to tell this
+ * skip from the half-dozen others — a shared constant rather than a literal
+ * matched in two places.
  */
-const BINARY_SAVE_FORMATS = new Set(["docx"]);
+export const EXTERNAL_CONFLICT_SKIP_REASON = "External conflict pending";
+
+/**
+ * Read a document's pending external-conflict flag, if any (#1238).
+ *
+ * Deliberately a read at the *call site's* moment rather than something
+ * `saveSession` does for itself: on the success path `saveSession` runs before
+ * the flag is cleared, so a self-read there would persist a conflict the save
+ * just resolved and re-raise the banner on a clean, in-sync document.
+ */
+export function readPendingConflict(doc: Y.Doc): ExternalConflictState | undefined {
+  return doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT) as
+    | ExternalConflictState
+    | undefined;
+}
 
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
   reason?: string;
+  /**
+   * Machine-readable discriminator for a `skipped` result (#1238). `reason` is
+   * human-facing prose and must stay free to change, so a caller that needs to
+   * act on one particular skip — the browser's save action distinguishing "an
+   * external conflict is blocking this" from the routine skips it should stay
+   * quiet about — branches on this instead. Only set for skips a caller has a
+   * reason to handle; absent means "no special handling".
+   */
+  skipCode?: "EXTERNAL_CONFLICT";
   errorCode?: string;
   /**
    * Body-export fidelity warnings (#576, `.docx` only) — content the export
@@ -172,6 +207,7 @@ class SaveVerificationError extends Error {
  * - Binary formats (.docx) via `adapter.saveBinary` + `atomicWriteBuffer` —
  *   EXPLICIT save only (`source !== "auto-save"`); see `BINARY_SAVE_FORMATS`.
  * - Not upload://
+ * - An unresolved external conflict blocks the save outright (#1238)
  * - Checks source file mtime to skip if externally modified
  * - Per-document lock prevents concurrent writes
  */
@@ -225,6 +261,34 @@ export async function saveDocumentToDisk(
 
   savingDocs.add(docId);
   try {
+    // An unresolved external conflict blocks every writer whose disk copy has
+    // actually diverged, whatever the mtime heuristic below concludes (#1238).
+    // That heuristic compares against a Date.now() stamp with a 1-second
+    // tolerance, is re-baselined by rename, and — after a restart — is
+    // re-baselined by initSavedBaseline to the EXTERNAL write's own mtime, so
+    // it can silently pass while a keep-vs-reload banner is still up.
+    //
+    // `diskChanged` is the discriminator, not `source` alone: an
+    // "external-edit" conflict is always diskChanged, so this blocks Ctrl+S and
+    // tandem_save too. Neither is a resolution when the disk holds changes the
+    // user has not chosen to discard, and Claude has no surface that would even
+    // tell it a conflict is pending. An "unsaved-restore" over an UNCHANGED
+    // disk is the one case where an explicit save is unambiguous intent, and it
+    // stays permitted — which is exactly the pre-#1238 `.docx` behaviour.
+    //
+    // Skipping here also leaves `snapshotBeforeFirstWrite`'s once-per-run gate
+    // unconsumed, so when the user later picks "keep" and saves, the
+    // pre-overwrite snapshot captures the EXTERNAL version — the copy actually
+    // at risk.
+    const pendingConflict = readPendingConflict(getOrCreateDocument(docId));
+    if (pendingConflict && (source === "auto-save" || pendingConflict.diskChanged)) {
+      return {
+        status: "skipped",
+        reason: EXTERNAL_CONFLICT_SKIP_REASON,
+        skipCode: "EXTERNAL_CONFLICT",
+      };
+    }
+
     // Guard against overwriting external modifications.
     // Safe FS sink (CodeQL js/path-injection): `docState.filePath` is the
     // registry's server-managed path (only ever set by openFileByPath /
@@ -304,7 +368,12 @@ export async function saveDocumentToDisk(
     }
     // `dirty` records whether a body edit landed DURING the async write (the
     // saved bytes already match the session state otherwise) — consumed by the
-    // .docx restore-vs-reload prompt on reopen (#1069).
+    // restore-vs-reload prompt on reopen (#1069, every format since #1238).
+    //
+    // No `conflict`: this runs BEFORE the flag delete below, and the save just
+    // resolved whatever was pending. Reading it here would persist a conflict
+    // on a clean, in-sync document, so a crash in the window between the two
+    // would re-raise the banner with nothing left to decide.
     await saveSession(docState.filePath, docState.format, doc, {
       dirty: snapshotDirtyVersion(docId) !== dirtySnapshot,
     });
@@ -1091,7 +1160,14 @@ export async function renameDocument(docId: string, newName: string): Promise<Re
     // Move the session: write the new one BEFORE deleting the old so a crash
     // leaves the durable copy. saveSession stats newPath for its mtime baseline.
     try {
-      await saveSession(newPath, format, doc, { dirty: isDirty(docId) });
+      // Carry any pending conflict (#1238): rename re-baselines
+      // SAVED_AT_VERSION to the renamed file's mtime below, so without this a
+      // rename-then-restart would launder an unresolved conflict away and let
+      // the next autosave overwrite the external change.
+      await saveSession(newPath, format, doc, {
+        dirty: isDirty(docId),
+        conflict: readPendingConflict(doc),
+      });
       await deleteSession(oldPath);
     } catch (err) {
       console.error("[Rename] session move failed for %s:", docId, err);
@@ -1178,6 +1254,29 @@ export async function closeDocumentById(
 
   const closedPath = docState.filePath;
 
+  // An unresolved external conflict makes the session file load-bearing
+  // (#1238): every save path is blocked while one is pending, so the edits may
+  // never have reached disk, and the teardown below would otherwise delete the
+  // only copy of them. Write the session NOW — before `clearDirtyState` and
+  // `removeDoc` take away the state it needs — so the preserved file actually
+  // contains the edits rather than whatever the last periodic write held.
+  //
+  // Normally closing really does discard: a dirty .md/.txt autosaves within
+  // 60s, so the session is redundant and deleting it is what makes a closed tab
+  // stay closed. That path is unchanged.
+  const closingDoc = getOrCreateDocument(safeId);
+  const conflictAtClose = readPendingConflict(closingDoc);
+  if (conflictAtClose) {
+    try {
+      await saveSession(docState.filePath, docState.format, closingDoc, {
+        dirty: isDirty(safeId),
+        conflict: conflictAtClose,
+      });
+    } catch (err) {
+      console.error("[Tandem] closeDocumentById: conflict session write failed for %s:", id, err);
+    }
+  }
+
   // Stop watching for external changes before removing the document
   unwatchFile(docState.filePath);
 
@@ -1207,11 +1306,21 @@ export async function closeDocumentById(
 
   removeDoc(id);
 
-  // Delete the session file so this document doesn't reopen on restart
-  try {
-    await deleteSession(docState.filePath);
-  } catch (err) {
-    console.error("[Tandem] Failed to delete session for %s:", id, err);
+  // Delete the session file so this document doesn't reopen on restart —
+  // unless the block above just wrote it as the surviving copy of unpersisted
+  // edits. Keeping it means the document reopens still carrying its unanswered
+  // keep-vs-reload choice, which is the conservative outcome.
+  if (conflictAtClose) {
+    console.warn(
+      "[Tandem] Keeping the session for %s: closed with an unresolved external conflict, so the session holds the only copy of its unsaved edits.",
+      path.basename(closedPath),
+    );
+  } else {
+    try {
+      await deleteSession(docState.filePath);
+    } catch (err) {
+      console.error("[Tandem] Failed to delete session for %s:", id, err);
+    }
   }
 
   if (getActiveDocId() === id) {
@@ -1233,9 +1342,16 @@ export async function saveCurrentSession(): Promise<void> {
   for (const [id, state] of openDocs) {
     const doc = getOrCreateDocument(id);
     // `dirty` matters most here (#1069): shutdown's autoSaveAllToDisk flush
-    // skips binary formats, so a dirty .docx session at shutdown is the only
-    // copy of its unsaved edits — the flag drives the reopen prompt.
-    await saveSession(state.filePath, state.format, doc, { dirty: isDirty(id) });
+    // skips binary formats — and, since #1238, any format with a pending
+    // conflict — so a dirty session at shutdown can be the only copy of its
+    // unsaved edits. The flag drives the reopen prompt; `conflict` carries an
+    // unresolved keep-vs-reload choice across the restart, which cannot be
+    // re-derived on reopen (saveSession's mtime baseline already reflects the
+    // external write, so the file reads as unchanged).
+    await saveSession(state.filePath, state.format, doc, {
+      dirty: isDirty(id),
+      conflict: readPendingConflict(doc),
+    });
   }
   const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
   await saveCtrlSession(ctrlDoc);

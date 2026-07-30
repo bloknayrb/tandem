@@ -25,8 +25,8 @@ import { resolveActivityAction } from "./components/activityActions.js";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
-import DocxConflictBanner from "./components/DocxConflictBanner.svelte";
 import EmptyState from "./components/EmptyState.svelte";
+import ExternalConflictBanner from "./components/ExternalConflictBanner.svelte";
 import FidelityReportBanner from "./components/FidelityReportBanner.svelte";
 import FileOpenDialog from "./components/FileOpenDialog.svelte";
 import FirstRunModelPickerModal from "./components/FirstRunModelPickerModal.svelte";
@@ -2424,12 +2424,37 @@ const shouldShowModelPicker = $derived(
       visible={isReadOnly && activeTab?.format === "docx"}
       documentId={activeTab?.id}
     />
+    <!-- Every format, not just .docx (#1238): an external change while the
+         document holds unsaved edits raises the same keep-vs-reload choice
+         whatever the format, so this banner must be mountable for all of them.
+         It renders nothing unless the server has flagged a conflict.
+
+         `{#key activeTab.id}` for the same reason SourceView has one: this is a
+         SINGLE instance whose ydoc prop would otherwise swap on every tab
+         switch, and `resolve()` writes `error`/`pending` AFTER an await — so an
+         in-flight resolve for tab A would land its failure text on tab B's
+         banner and re-enable B's buttons mid-request. Remounting per tab makes
+         that structurally impossible. (`resolve()` also pins its own document,
+         so the component is correct standalone; this is the outer guard.)
+
+         NOT in source view: the raw-markdown textarea is served from a
+         `documentId`-keyed fetch that never re-runs when the server replaces
+         the Y.Doc, so "Reload from file" would appear to work and then be
+         silently undone by the next commit posting the stale draft. Leaving the
+         conflict unsurfaced there is not a dead end — exiting source view shows
+         the banner, and the source-view commit route refuses while a conflict
+         is pending, surfacing the reason inline. -->
+    {#if activeTab && !inSourceView}
+      {#key activeTab.id}
+        <ExternalConflictBanner
+          ydoc={activeTab.ydoc}
+          documentId={activeTab.id}
+          fileName={activeTab.fileName}
+          format={activeTab.format}
+        />
+      {/key}
+    {/if}
     {#if activeTab && activeTab.format === "docx"}
-      <DocxConflictBanner
-        ydoc={activeTab.ydoc}
-        documentId={activeTab.id}
-        fileName={activeTab.fileName}
-      />
       <FidelityReportBanner
         ydoc={activeTab.ydoc}
         documentId={activeTab.id}

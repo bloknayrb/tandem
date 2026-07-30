@@ -369,19 +369,30 @@ export interface SessionData {
   lastAccessed: number;
   /**
    * True when the Y.Doc held unsaved (not-written-to-disk) body edits at
-   * session-save time (#1069). Drives the `.docx` restore-vs-reload prompt:
-   * a dirty `.docx` session is the ONLY copy of those edits (binary formats
-   * never auto-save to disk), so restore keeps it even when the source file
-   * changed, and the user is prompted to keep or reload. Absent/false on
+   * session-save time (#1069). Drives the restore-vs-reload prompt: a dirty
+   * session is the ONLY copy of those edits, so restore keeps it even when the
+   * source file changed, and the user is prompted to keep or reload. Since
+   * #1238 this applies to every format, not just `.docx`. Absent/false on
    * sessions written before this field existed — treated as clean.
    */
   dirty?: boolean;
+  /**
+   * The external-conflict flag pending when the session was written (#1238),
+   * carried across the restart so the choice is not silently laundered away.
+   *
+   * This CANNOT be re-derived on reopen: `saveSession` stats the file at save
+   * time, so `sourceFileMtime` records the EXTERNAL write's mtime and
+   * `sourceFileChanged` reads false — the divergence becomes invisible exactly
+   * when it matters most. Absent on sessions written before this field existed,
+   * and on any session whose document had no pending conflict.
+   */
+  conflict?: ExternalConflictState;
 }
 
 /**
- * Per-document external-conflict state (#1069, `.docx` only). Stored in
- * Y_MAP_DOCUMENT_META under Y_MAP_EXTERNAL_CONFLICT while the document's
- * unsaved edits diverge from the on-disk source.
+ * Per-document external-conflict state (#1069; every format since #1238).
+ * Stored in Y_MAP_DOCUMENT_META under Y_MAP_EXTERNAL_CONFLICT while the
+ * document's unsaved edits diverge from the on-disk source.
  */
 export interface ExternalConflictState {
   /**

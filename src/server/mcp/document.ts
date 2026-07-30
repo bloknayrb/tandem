@@ -41,10 +41,12 @@ import {
   broadcastOpenDocs,
   closeDocumentById,
   docCount,
+  EXTERNAL_CONFLICT_SKIP_REASON,
   getActiveDocId,
   getCurrentDoc,
   getOpenDocs,
   hasDoc,
+  readPendingConflict,
   renameDocument,
   requireDocument,
   saveDocumentToDisk,
@@ -738,11 +740,32 @@ export function registerDocumentTools(server: McpServer): void {
       }
       if (result.status === "skipped") {
         // Fall back to session-only save for skipped formats. The disk save
-        // did NOT happen, so persist the dirty flag (#1069): without it a
-        // skipped save (e.g. "File modified externally" on a dirty .docx)
-        // would write a clean-looking session that a restart then discards —
-        // losing the only copy of the unsaved edits.
-        await saveSession(r.filePath, format, r.doc, { dirty: isDirty(r.docId) });
+        // did NOT happen, so persist the dirty flag (#1069) and any pending
+        // conflict (#1238): without them a skipped save would write a
+        // clean-looking session that a restart then discards — losing the only
+        // copy of the unsaved edits, or silently laundering away a conflict the
+        // user still has to decide.
+        await saveSession(r.filePath, format, r.doc, {
+          dirty: isDirty(r.docId),
+          conflict: readPendingConflict(r.doc),
+        });
+        // An external-conflict skip is not a save at any level Claude can act
+        // on, and `saved: true` would be a lie it has no way to check. Report
+        // it as an error instead — the resolution is a human keep-vs-reload
+        // choice in the editor, which no MCP tool exposes. Ordering matters:
+        // the session write above must happen first, or the carry is dead code.
+        if (result.reason === EXTERNAL_CONFLICT_SKIP_REASON) {
+          // Name the document — with several open, "a conflict" isn't
+          // actionable — and name BOTH exits. The banner is the normal one, but
+          // it needs a browser/desktop client; in stdio there is none, and
+          // pointing only at it would describe a remedy the caller cannot
+          // reach. tandem_open force:true works in either mode.
+          return mcpError(
+            "EXTERNAL_CONFLICT",
+            `${r.filePath} changed on disk while it had unsaved edits. The session was saved, but the disk save was blocked. The user resolves this with Keep or Reload in the editor's banner; if no editor is attached, tandem_open with force: true reloads from disk and discards the unsaved edits (and annotations).`,
+            { documentId: r.docId, filePath: r.filePath },
+          );
+        }
         return mcpSuccess({
           saved: true,
           sessionOnly: true,

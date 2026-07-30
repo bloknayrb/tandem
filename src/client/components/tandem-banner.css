@@ -63,8 +63,8 @@
   outline-color: var(--tandem-error-fg-strong);
 }
 
-/* Warning family — DocxConflictBanner (#1069). Same shape as error, swaps the
-   color tokens to the amber warning family. */
+/* Warning family — ExternalConflictBanner (#1069). Same shape as error, swaps
+   the color tokens to the amber warning family. */
 .tandem-banner--warning {
   background: var(--tandem-warning-bg);
   color: var(--tandem-warning-fg-strong);
