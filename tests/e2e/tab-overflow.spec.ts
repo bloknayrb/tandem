@@ -197,10 +197,7 @@ test("tabs compress to their floor before the strip scrolls, and nothing spills"
   const names = Array.from({ length: 12 }, (_, i) => `tandem-ink-email-runbook-${i + 1}.md`);
   for (const name of names) {
     const filePath = path.join(tmpDir, name);
-    fs.writeFileSync(filePath, `# ${name}
-
-Compression fixture.
-`);
+    fs.writeFileSync(filePath, `# ${name}\n\nCompression fixture.\n`);
     await mcp.callTool("tandem_open", { filePath });
   }
 
