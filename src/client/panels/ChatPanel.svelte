@@ -162,7 +162,11 @@ $effect(() => {
 $effect(() => {
   const el = internalInputEl;
   if (!el) return;
-  let lastWidth = el.clientWidth;
+  // -1 (not `el.clientWidth`) so the first callback always measures: clientWidth
+  // is a padding-box metric but `contentRect.width` below is content-box, so
+  // seeding from clientWidth made the first delivery a guaranteed false-positive
+  // "width changed" by exactly the horizontal padding.
+  let lastWidth = -1;
   // Construction is guarded the same way `scrollFade` guards its own observer.
   let ro: ResizeObserver | null = null;
   try {
