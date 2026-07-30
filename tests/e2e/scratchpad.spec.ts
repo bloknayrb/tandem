@@ -116,9 +116,13 @@ test("content typed into a scratchpad is recovered in the next one", async ({ pa
   // Close via MCP: detach() flushes the pending debounce → writes to localStorage.
   await mcp.callTool("tandem_close", { documentId: firstDocId });
 
+  // toBeAttached, not toBeVisible: the tab plays a 200ms collapse-out before it
+  // unmounts, and the collapsing pill reports a zero-size box well before the
+  // node is gone. Asserting on visibility lets the next scratchpad open while
+  // the old tab is still in the DOM, and the shared locator then matches two.
   await expect(
     page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
-  ).not.toBeVisible({ timeout: 5_000 });
+  ).not.toBeAttached({ timeout: 5_000 });
 
   // Open a new scratchpad — the hook should restore the saved content.
   await page.evaluate(
@@ -156,9 +160,13 @@ test("new scratchpad is empty when there is no recovery data", async ({ page }) 
   // Close via MCP — hook flushes content to localStorage.
   await mcp.callTool("tandem_close", { documentId: firstDocId });
 
+  // toBeAttached, not toBeVisible: the tab plays a 200ms collapse-out before it
+  // unmounts, and the collapsing pill reports a zero-size box well before the
+  // node is gone. Asserting on visibility lets the next scratchpad open while
+  // the old tab is still in the DOM, and the shared locator then matches two.
   await expect(
     page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
-  ).not.toBeVisible({ timeout: 5_000 });
+  ).not.toBeAttached({ timeout: 5_000 });
 
   // Discard the recovery data (simulates the user clearing it or a clean session).
   await page.evaluate(() => {
