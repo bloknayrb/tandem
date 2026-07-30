@@ -245,7 +245,7 @@ Playwright E2E tests cover the critical annotation lifecycle path. Infrastructur
 
 - **McpTestClient** (`tests/e2e/helpers.ts`): wraps MCP SDK's `Client` + `StreamableHTTPClientTransport` for tool calls from tests
 - **Fixture management**: `createFixtureDir()` copies sample files to a temp dir per test, `cleanupFixtureDir()` removes it
-- **Config**: `workers: 1` (server supports one MCP session), `webServer` starts `dev:standalone`, `reuseExistingServer` for local dev
+- **Config**: `workers: 1` (serial runs — the E2E server binds fixed ports :3478/:3479 and `freePort` kills whatever holds them, so parallel workers would fight over one server; the "one MCP session" rationale predates ADR-045, which made the server multi-session)
 - **CI**: Playwright Chromium install + E2E step after build, report artifact uploaded on failure
 - **13+ tests**: document load, annotation decoration, annotation card, accept, dismiss, replacement apply, tab switching, review mode keyboard, tab overflow, tab reorder, tab scroll
 

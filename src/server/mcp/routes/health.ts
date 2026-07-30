@@ -4,7 +4,14 @@ import type { Handler } from "./_shared.js";
 
 export interface HealthHandlerDeps {
   version: string;
-  /** True when at least one MCP transport has completed `initialize`. */
+  /**
+   * True when at least one MCP transport has completed `initialize`.
+   *
+   * Scoped to handshake-era clients by construction: MCP `2026-07-28` removed
+   * both the handshake and protocol-level sessions, so a client on that revision
+   * never increments this. Supplementing it without inverting its failure mode
+   * is #1249; see ADR-045's 2026-07-30 amendment.
+   */
   hasSession: () => boolean;
   /** Live count of event-queue subscribers (the SSE fan-out). */
   getSubscriberCount: () => number;

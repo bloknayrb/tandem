@@ -1,6 +1,16 @@
 /**
  * Registry of live MCP transport sessions, keyed by `Mcp-Session-Id`.
  *
+ * **Scope note (2026-07-30).** MCP `2026-07-28` removes protocol-level sessions
+ * and the `Mcp-Session-Id` header, so everything below describes what is now the
+ * *legacy* branch. It is not dead code on a deprecation clock: the revision lets
+ * a server serve both eras concurrently, and legacy clients have no fall-forward,
+ * so this branch has to keep working for as long as un-upgraded clients exist.
+ * What it is not is the destination design. See ADR-045's 2026-07-30 amendment —
+ * in particular, "one `McpServer`, no registry" is NOT the established stateless
+ * shape, because the `Protocol.connect()` constraint below is an SDK property
+ * that the spec change does not touch.
+ *
  * Replaces the single module-level `currentTransport` that made Tandem a
  * one-client server: every `initialize` used to tear down the previous
  * transport, so the second Claude Code session to start evicted the first
