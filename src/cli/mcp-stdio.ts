@@ -392,6 +392,9 @@ export async function runMcpStdio(): Promise<void> {
   // http.send, so buffered requests POST in parallel. Plugin hosts wait
   // for `initialize` to resolve before sending follow-ups per MCP spec, so
   // the buffer is usually ≤1 entry; we don't enforce serial ordering here.
+  // NOTE: that bound is a property of the handshake, which MCP `2026-07-28`
+  // removes — a client on that revision has no initialize to serialize behind,
+  // so the "usually ≤1" premise for leaving this unordered expires with it.
   const buffered = preReadyBuffer.splice(0);
   for (const msg of buffered) forwardToUpstream(msg);
 }

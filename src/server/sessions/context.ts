@@ -47,7 +47,14 @@ export interface McpRequestContext {
    * optional and degrade to session-agnostic behavior, never assume it.
    */
   claudeSessionId?: string;
-  /** The MCP transport session id (`Mcp-Session-Id`). Always present. */
+  /**
+   * The MCP transport session id (`Mcp-Session-Id`), on requests routed through
+   * a registered session. Absent on the `initialize` request itself (the id is
+   * minted while that request is handled, so the context is entered without it),
+   * and absent entirely for any client speaking MCP `2026-07-28` or later, which
+   * removed protocol-level sessions — see ADR-045's 2026-07-30 amendment. Treat
+   * as optional; it is not a stable identity.
+   */
   mcpSessionId?: string;
 }
 

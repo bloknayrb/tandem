@@ -161,7 +161,10 @@ describe("createMcpSessionRegistry", () => {
   });
 
   it("carries the Claude session id through to lookup", async () => {
-    // Phases 2-4 key event routing off this; it must survive add → get.
+    // The registry must carry `claudeSessionId` through add → get. (This was
+    // written as "Phases 2-4 key event routing off this"; that plan is on hold
+    // — MCP 2026-07-28 removed the session this is keyed by, so #438's routing
+    // work must not be built on it. See ADR-045's 2026-07-30 amendment.)
     const reg = createMcpSessionRegistry();
     await reg.add({
       sessionId: "s1",

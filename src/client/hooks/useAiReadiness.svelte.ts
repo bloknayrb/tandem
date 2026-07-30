@@ -13,7 +13,13 @@
  *   1. The launcher's `GET /api/launcher/status` — the supervised process.
  *   2. The server's `GET /health` `hasSession` field (loopback-only) — whether
  *      ANY MCP client transport is currently open, supervised or not. This is
- *      the authoritative "an agent is actually connected" signal.
+ *      the authoritative "an agent is actually connected" signal for clients
+ *      that perform an MCP `initialize` handshake. MCP `2026-07-28` removed
+ *      that handshake and protocol-level sessions, so the field goes silent
+ *      about clients on that revision — see #1249 before treating a `false`
+ *      here as "no agent". Note this hook is NOT promotion-only with respect
+ *      to it: `readHasSession` writes any non-null value, so a confident
+ *      `false` demotes both `state` and `liveIndicator`.
  *
  * An active MCP session means AI works regardless of launcher state, so it
  * promotes readiness to `ready` and suppresses both the restart CTA and the

@@ -8,6 +8,17 @@ that plan's Phase 0 probe description (see "Reconciling with the plan" below)
 **Related:** [per-client-identity-spec.md](per-client-identity-spec.md) §3.1,
 [ADR-045](../decisions.md#adr-045), [ADR-012](../decisions.md#adr-012)
 
+> **Amended 2026-07-30 — MCP revision `2026-07-28` invalidates this spike's measurement point and half its candidates.** [SEP-2567](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567) removes protocol-level sessions and the `Mcp-Session-Id` header; [SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575) removes the `initialize` handshake. Nothing is broken today — the newest published SDK (1.30.0, the version `package-lock.json` pins) still exports `LATEST_PROTOCOL_VERSION = '2025-11-25'` — but **this document is still marked "probe not yet run," so it is forward guidance, and parts of it are now wrong.** Read it with these corrections:
+>
+> - **"Measure at `initialize`, not at `tools/call`" inverts.** That instruction (and its claim to supersede the plan doc's Phase 0) rests on Tandem capturing `claudeSessionId` only during the handshake. On the modern branch there is no handshake, and identity metadata rides on *every* request. The plan doc's original "log the headers a live `tools/call` carries" is the measurement that survives. **Run both**: the initialize capture is what today's legacy branch uses, the per-request capture is what any future branch will.
+> - **P-A / P-B1 / P-B4 / P-C are not unrunnable, but their pass criteria change.** Each is phrased as "does the value reach `/mcp` at initialize." Re-phrase as "does it reach `/mcp`, and on which requests" — a header that appears only on later POSTs is *useless today and sufficient tomorrow*, which is a different verdict than this document records.
+> - **The framing that the stdio bridge is ruled out does not hold.** See consequence 3 of the amendment in [per-client-identity-spec.md](per-client-identity-spec.md): ADR-012 preserves stdio as a fallback and attributes issue #8 to Claude Code's pipe management, and the plugin manifest's stdio entry is how `X-Claude-Session-Id` reaches the server today. stdio identity is a 1:1 process pair — free, deterministic, and entirely unaffected by SEP-2567. It should be ranked as a live candidate, not a superseded one.
+> - **"No probe outcome threatens PR #1233 / ADR-045" still holds, for a better reason than stated.** ADR-045 survives as the *legacy branch* of a dual-era server rather than as a permanent design; see its amendment.
+> - **Do not add a candidate that keys on `Mcp-Session-Id`.** It exists only on the legacy branch.
+>
+> Cross-references: [ADR-045](../decisions.md#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id), [per-client-identity-spec.md](per-client-identity-spec.md), #1249 — all amended the same day.
+
+
 ## The problem this spike exists to answer
 
 Phase 1 (PR #1233, ADR-045) made the MCP server hold one `McpServer` per
