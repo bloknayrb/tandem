@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import {
   type CardModel,
@@ -208,6 +209,74 @@ describe("resolveCrowding — verdict from raw tops + model only", () => {
     const first = resolveCrowding(bubbles);
     const second = resolveCrowding(bubbles);
     expect([...first].sort()).toEqual([...second].sort());
+  });
+});
+
+describe("resolveCrowding — bestCandidate watermark scope", () => {
+  it("bestCandidate scanning from firstRelievable (not 0) still finds every relievable card", () => {
+    // `bestCandidate` scans `[firstRelievable, upto]`, not `[0, upto]` — it used
+    // to scan from 0, which re-pays a provably-null scan of everything below the
+    // watermark on every call (each index below `firstRelievable` is permanently
+    // either already-minimized or zero-gain, so it can never be the answer).
+    // That's real wasted work, not just a stylistic nit, but this repo's own
+    // shape (annotation counts in the dozens/low hundreds) doesn't make it
+    // reliably observable on a wall clock — a large, adversarial-shaped input
+    // built to maximize repeated `bestCandidate` calls against a frozen-low
+    // watermark still finished in low single-digit milliseconds even with the
+    // pre-fix 0-start scan, at n in the thousands. So this test asserts
+    // correctness (the watermark-scoped scan must still find every card that IS
+    // relievable — dropping indices below `firstRelievable` must never cause a
+    // false negative) plus a generous hang-detector, not a timing regression
+    // gate (see tests/server/annotations/perf.test.ts for the same philosophy).
+    const zeroGain = (id: string, top: number): PressureInput =>
+      at(id, top, {
+        contentLength: 5,
+        hasSnippet: false,
+        hasSuggestion: false,
+        replyCount: 0,
+        hasActions: false,
+      });
+    const tall = (id: string, top: number): PressureInput =>
+      at(id, top, {
+        contentLength: 2000,
+        hasSnippet: true,
+        hasSuggestion: true,
+        replyCount: 3,
+        hasActions: true,
+      });
+
+    const bubbles: PressureInput[] = [];
+    const RUNS = 20;
+    const ZERO_GAIN_PER_RUN = 15;
+    let top = 0;
+    for (let r = 0; r < RUNS; r++) {
+      for (let i = 0; i < ZERO_GAIN_PER_RUN; i++) {
+        bubbles.push(zeroGain(`z${r}_${i}`, top));
+        top += 8;
+      }
+      bubbles.push(tall(`tall${r}`, top));
+      top += 8;
+    }
+    expect(bubbles.length).toBe(RUNS * (ZERO_GAIN_PER_RUN + 1));
+
+    // Hang detector only — see the comment above for why this isn't a proof of
+    // the removed inefficiency.
+    const start = performance.now();
+    const out = resolveCrowding(bubbles);
+    const elapsedMs = performance.now() - start;
+    expect(elapsedMs).toBeLessThan(500);
+
+    // The actual property under test: every tall card should be minimized
+    // (each is a genuine violation contributor and relievable), and zero-gain
+    // cards — which cannot shrink at all — must never appear in the verdict.
+    // A watermark-scoped `bestCandidate` that incorrectly skipped a genuinely
+    // relievable card below `firstRelievable` would fail this.
+    for (let r = 0; r < RUNS; r++) {
+      expect(out.has(`tall${r}`)).toBe(true);
+    }
+    for (const id of out) {
+      expect(id.startsWith("tall")).toBe(true);
+    }
   });
 });
 

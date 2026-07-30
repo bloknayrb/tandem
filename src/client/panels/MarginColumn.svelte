@@ -145,7 +145,15 @@ const columnWidth = $derived(
 // from the grid track, which depends on stage width / reading measure / mode and
 // never on card heights (bubbles are absolutely positioned, so they cannot size
 // their own track). The forbidden input is a density-DEPENDENT measurement.
-// Falls back to the prop before the first measurement lands.
+// Falls back to the prop (the track's base/minimum width) before the first
+// measurement lands. On a viewport with genuine elastic surplus this makes the
+// pre-measurement estimate narrower than the eventual real width, so the very
+// first crowding verdict can over-minimize before snapping to the correct,
+// less-crowded verdict once `bind:clientWidth` reports in — a brief flash on
+// mount, not a steady-state bug. Deliberately not "fixed" by seeding from the
+// track's elastic maximum instead: that trades this flash for the reverse one
+// (rendering full-size, then visibly shrinking once measured), which is not
+// obviously the better direction and wasn't verified against a real browser.
 let measuredColumnWidth = $state(0);
 const estimateWidth = $derived(measuredColumnWidth > 0 ? measuredColumnWidth : width);
 

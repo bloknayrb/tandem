@@ -243,11 +243,20 @@ export function resolveCrowding(
    * actually shrink. Ties keep the HIGHEST such index — i.e. the one closest to
    * the violation — so relief stays local. Returns -1 when nothing above `upto`
    * can help. (Do not "simplify" `>=` to `>`: that inverts the locality.)
+   *
+   * Scans from `firstRelievable`, not 0: every index below the watermark is
+   * PERMANENTLY either already minimized or zero-gain (see the watermark
+   * comment below), so re-scanning it here can never change the result — it
+   * would just re-pay a provably-null scan on every call. This is load-bearing
+   * for the O(n²) bound, not a redundant optimization on top of it: without it,
+   * this O(n) scan can run up to n times per outer iteration (once per
+   * violation walked in the loop below) for up to n outer iterations, i.e. the
+   * O(n³) this module claims to have fixed.
    */
   const bestCandidate = (upto: number): number => {
     let best = -1;
     let bestGain = 0;
-    for (let i = 0; i <= upto; i++) {
+    for (let i = firstRelievable; i <= upto; i++) {
       if (minimized[i]) continue;
       const gain = fullH[i] - compactH[i];
       // Skip zero-gain cards: minimizing one is a visible density change that

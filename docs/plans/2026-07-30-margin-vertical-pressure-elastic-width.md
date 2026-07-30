@@ -84,7 +84,7 @@ Because the ceiling is *exactly* the surplus, the content track resolves to exac
 
 Live end-to-end measurement at 1600px with both rails collapsed and three seeded comments: `cols = 210px 0px 680px 420px 210px` — the right track grew 272→420 while the content track kept its full 680px measure. Cards rendered 388px wide (up from 240), the two crowded ones at 93px tall instead of 206, worst anchor drift 37px.
 
-**Still unverified: WebKitGTK (macOS/Linux) and WebView2 (Windows).** Tauri is the primary distribution. The engine-dependent risk is the *indefinite available width* case — during an ancestor's intrinsic-sizing pass, percentage track sizes become `auto`/zero and nested-in-`calc` behavior is inconsistent across engines. The degrade is benign (clamp's min wins → today's fixed track), but it should be measured. `.editor-column-wrap` is `flex: 1; min-width: 0`, so the definite path is the normal one.
+**Still unverified: WebKitGTK (macOS/Linux) and WebView2 (Windows).** Tauri is the primary distribution. The engine-dependent risk is the *indefinite available width* case — during an ancestor's intrinsic-sizing pass, the spec resolves a percentage-based track sizing function to `auto` (intrinsic/content-sized), not to the literal fixed base-px value — so "falls back to today's fixed track" overstates what should actually happen; the real fallback is closer to "sizes to content," and `nested-in-calc()` behavior is inconsistent across engines on top of that. Likely benign in practice (`.editor-column-wrap` is `flex: 1; min-width: 0`, so the definite path — where this doesn't apply — is the normal one), but it should be measured on real WebKitGTK/WebView2 rather than assumed.
 
 ### docx: no carve-out
 

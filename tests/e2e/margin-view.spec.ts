@@ -1412,6 +1412,37 @@ async function seedTwoDistantComments(): Promise<{ idTop: string; idBottom: stri
   return { idTop: a.data.annotationId, idBottom: b.data.annotationId };
 }
 
+/** Long enough to force several wrapped body lines at every C-1 column width. */
+const LONG_COMMENT_TEXT =
+  "This is a deliberately long annotation body written to force the card's " +
+  "content to wrap across several lines at any realistic margin column width, " +
+  "so the estimateHeightPx calibration guard exercises the body-wrap term " +
+  "(bodyLines * BODY_LINE_PX) instead of only ever seeing the single-line " +
+  "floor that every other fixture in this file happens to hit.";
+
+/**
+ * Same shape as `seedTwoDistantComments`, but the top comment's body is long
+ * enough to wrap multiple lines. Kept far from the bottom comment so neither
+ * crowds the other — density stays `full`, isolating the body-wrap term.
+ */
+async function seedLongAndDistantComment(): Promise<{ idTop: string; idBottom: string }> {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  const a = (await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_FROM + 4,
+    text: LONG_COMMENT_TEXT,
+    textSnapshot: TITLE_TEXT.slice(0, 4),
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  const b = (await mcp.callTool("tandem_comment", {
+    from: LAST_PARA_FROM,
+    to: LAST_PARA_TO,
+    text: "short bottom note",
+    textSnapshot: LAST_PARA_TEXT,
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  if (a.error !== false || b.error !== false) throw new Error("tandem_comment failed");
+  return { idTop: a.data.annotationId, idBottom: b.data.annotationId };
+}
+
 /** Open the doc at a wide viewport with margin view on and both rails closed. */
 async function openWideWithMargins(page: Page, width = 1600): Promise<void> {
   await page.setViewportSize({ width, height: 900 });
@@ -1595,6 +1626,88 @@ test("pressure: the height estimate tracks the real rendered card height", async
     error,
     `estimateHeightPx drifted from the real card: estimate ${estimate}px vs measured ${measured}px ` +
       `at column ${columnWidth}px. Card anatomy changed — retune the constants in marginPressure.ts.`,
+  ).toBeLessThan(0.35);
+});
+
+test("pressure: the height estimate tracks a wrapped multi-line body", async ({ page }) => {
+  // The existing calibration test above only ever exercises the single-line
+  // floor (`Math.max(1, ...)` in `estimateHeightPx`) because every other
+  // fixture's comment body is short enough to fit on one line at every C-1
+  // column width. `BODY_CHAR_PX` — the glyph-advance estimate that drives
+  // `bodyLines` — is the single most load-bearing/fragile constant in the
+  // module (it scales with content length, unlike the fixed per-row terms)
+  // and had zero calibration coverage. This seeds a body long enough to wrap
+  // several lines and checks the same relative-error band.
+  const { idTop } = await seedLongAndDistantComment();
+  await openWideWithMargins(page);
+
+  const bubble = page.locator(`[data-testid='margin-bubble-${idTop}']`);
+  await expect(bubble).toBeVisible({ timeout: 5_000 });
+  await expect(marginCard(page, idTop)).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+
+  const measured = await bubble.evaluate((el) => el.getBoundingClientRect().height);
+  const columnWidth = await page
+    .locator("[data-testid='margin-column-right']")
+    .evaluate((el) => el.clientWidth);
+
+  const estimate = estimateHeightPx(
+    {
+      contentLength: LONG_COMMENT_TEXT.length,
+      hasSnippet: true,
+      hasSuggestion: false,
+      replyCount: 0,
+      hasActions: true,
+    },
+    "full",
+    columnWidth,
+  );
+
+  const error = Math.abs(estimate - measured) / measured;
+  expect(
+    error,
+    `estimateHeightPx drifted from the real wrapped card: estimate ${estimate}px vs measured ` +
+      `${measured}px at column ${columnWidth}px. BODY_CHAR_PX or BODY_LINE_PX in marginPressure.ts ` +
+      "likely needs retuning.",
+  ).toBeLessThan(0.35);
+});
+
+test("pressure: the height estimate tracks a compact-density card", async ({ page }) => {
+  // The existing calibration coverage only ever measured `full` density —
+  // `compact`'s own estimate (one clamped body line + optional action row,
+  // a DIFFERENT code path than `full`'s wrap-based estimate) had zero
+  // calibration coverage. Reuses the crowded-pair fixture, whose inactive
+  // card (`cardB`) minimizes to `compact` once the active card is focused.
+  const { idB, cardA, cardB } = await crowdedPair(page);
+  await cardA.click();
+  await expect(cardB).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
+
+  const bubble = page.locator(`[data-testid='margin-bubble-${idB}']`);
+  const measured = await bubble.evaluate((el) => el.getBoundingClientRect().height);
+  const columnWidth = await page
+    .locator("[data-testid='margin-column-right']")
+    .evaluate((el) => el.clientWidth);
+
+  // Matches idB's model from `seedTwoComments`: snippet present, no
+  // suggestion, no replies, actions shown (pending comment) — content length
+  // is irrelevant to the compact estimate (clamped to one line regardless).
+  const estimate = estimateHeightPx(
+    {
+      contentLength: 0,
+      hasSnippet: true,
+      hasSuggestion: false,
+      replyCount: 0,
+      hasActions: true,
+    },
+    "compact",
+    columnWidth,
+  );
+
+  const error = Math.abs(estimate - measured) / measured;
+  expect(
+    error,
+    `estimateHeightPx drifted from the real compact card: estimate ${estimate}px vs measured ` +
+      `${measured}px at column ${columnWidth}px. The compact branch in marginPressure.ts likely ` +
+      "needs retuning.",
   ).toBeLessThan(0.35);
 });
 
