@@ -290,7 +290,8 @@ function handleReset() {
   data-testid="settings-modal-margin-view-hint"
   style="font-size: 10px; color: var(--tandem-fg-subtle);"
 >
-  Margin columns appear where rails are collapsed — open rails hide that side.
+  Cards sit beside the text they reference. They shrink when space is tight —
+  click one, or its chevron, to expand it.
 </div>
 
 {#if wdLoaded && !hasIntegration && lastLoadError}

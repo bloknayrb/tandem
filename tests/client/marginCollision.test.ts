@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { prunePlaceableHeights, resolveCollisions } from "../../src/client/panels/marginCollision";
+import {
+  DEFAULT_GAP,
+  pruneMissing,
+  resolveCollisions,
+} from "../../src/client/panels/marginCollision";
 
 describe("resolveCollisions", () => {
   it("returns an empty map for empty input", () => {
@@ -130,14 +134,14 @@ describe("resolveCollisions", () => {
   });
 });
 
-describe("prunePlaceableHeights", () => {
+describe("pruneMissing", () => {
   it("removes entries not in placeableIds", () => {
     const heights = new Map([
       ["a", 10],
       ["b", 20],
       ["c", 30],
     ]);
-    const removed = prunePlaceableHeights(heights, new Set(["a", "c"]));
+    const removed = pruneMissing(heights, new Set(["a", "c"]));
     expect(removed).toBe(1);
     expect(heights.has("b")).toBe(false);
     expect(heights.get("a")).toBe(10);
@@ -146,7 +150,7 @@ describe("prunePlaceableHeights", () => {
 
   it("returns 0 when nothing to prune", () => {
     const heights = new Map([["a", 10]]);
-    expect(prunePlaceableHeights(heights, new Set(["a", "b"]))).toBe(0);
+    expect(pruneMissing(heights, new Set(["a", "b"]))).toBe(0);
     expect(heights.size).toBe(1);
   });
 
@@ -164,9 +168,36 @@ describe("prunePlaceableHeights", () => {
       ids.push(id);
       heights.set(id, 42);
       const placeableIds = new Set(ids.slice(-STEADY_STATE));
-      prunePlaceableHeights(heights, placeableIds);
+      pruneMissing(heights, placeableIds);
       expect(heights.size).toBeLessThanOrEqual(STEADY_STATE);
     }
     expect(heights.size).toBe(STEADY_STATE);
+  });
+});
+
+describe("pruneMissing — shared by the heights Map and the pins Set", () => {
+  it("prunes a Set as well as a Map (one helper, two collection shapes)", () => {
+    // `MarginColumn` prunes measured heights (a Map) and pinned ids (a Set)
+    // through this one helper; both satisfy `{ keys(); delete() }`.
+    const pins = new Set(["a", "b", "c"]);
+    expect(pruneMissing(pins, new Set(["a", "c"]))).toBe(1);
+    expect([...pins].sort()).toEqual(["a", "c"]);
+  });
+
+  it("clears a Set entirely when nothing is known", () => {
+    const pins = new Set(["a", "b"]);
+    expect(pruneMissing(pins, new Set())).toBe(2);
+    expect(pins.size).toBe(0);
+  });
+
+  it("exports DEFAULT_GAP so the pressure sweep cannot drift from the real one", () => {
+    // A duplicated literal would let the simulated sweep in marginPressure and
+    // the real sweep here disagree about whether a stack fits.
+    expect(DEFAULT_GAP).toBeGreaterThan(0);
+    const twoTight = resolveCollisions([
+      { id: "a", top: 0, height: 10 },
+      { id: "b", top: 0, height: 10 },
+    ]);
+    expect(twoTight.get("b")).toBe(10 + DEFAULT_GAP);
   });
 });

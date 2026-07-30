@@ -40,9 +40,12 @@ interface Props {
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
   /**
-   * Margin-view density. `full` (default) reproduces today's card; `clamped`
-   * (narrow band) shows the header + a single-line body teaser; `stub` (stub
-   * band) collapses to a ~22px anchor pip. Resolved against `isEditing` below
+   * Margin-view density. `full` (default) reproduces today's card; `compact`
+   * (crowded anchors, full-width band) shows the header + a single-line body
+   * teaser + the action row; `clamped` (narrow band) is the same minus the
+   * action row; `stub` (stub band) collapses to a ~22px anchor pip.
+   * `compact` vs `clamped` is height-pressure vs width-pressure — see
+   * `cardDensity.ts`. Resolved against `isEditing` below
    * — editing always forces `full`. Only MarginColumn passes a non-default
    * value; the side panel leaves it `full`, so existing call sites are
    * unaffected.
@@ -203,6 +206,7 @@ function handleKeyDown(e: KeyboardEvent) {
 <div
   class="tandem-annotation-card"
   class:is-review-target={isReviewTarget}
+  class:is-density-compact={resolvedDensity === "compact"}
   class:is-density-clamped={resolvedDensity === "clamped"}
   class:is-density-stub={resolvedDensity === "stub"}
   in:cardEnter={{ enabled: lifecycleMotion, reduceMotion }}
@@ -433,12 +437,21 @@ function handleKeyDown(e: KeyboardEvent) {
      (AnnotationCardActions), `.art-root` (ReplyThread), and the header pieces
      `.ach-row`/`.ach-type`/`.ach-author`/`.ach-dot` (AnnotationCardHeader). */
 
-  /* Clamped (narrow band, inactive): keep the full header, hide the snippet,
-     show a single-line body teaser, drop actions + replies. The full
-     `-webkit-box` recipe is required — `-webkit-line-clamp` alone is a no-op —
-     and `overflow: clip` (not `hidden`) avoids creating a focus-autoscroll
-     scroll container (`feedback_overflow_hidden_vs_clip`). */
-  .is-density-clamped :global(.aca-body) {
+  /* Minimized cards — `clamped` (WIDTH pressure, narrow band) and `compact`
+     (HEIGHT pressure, crowded anchors at full width) share everything except the
+     action row. Both keep the full header, hide the snippet and replies, and show
+     a single-line body teaser.
+
+     The full `-webkit-box` recipe is required — `-webkit-line-clamp` alone is a
+     no-op — and it is hand-written deliberately: per the two-CSS-pipeline rule,
+     lightningcss will NOT add `-webkit-line-clamp` for you (unlike
+     `backdrop-filter`, where hand-writing the prefixed form collapses the
+     declaration to an inert `-webkit-` only). Keeping ONE copy of this recipe is
+     the point of sharing the selector list — a second copy is exactly the drift
+     that produced #1189. `overflow: clip` (not `hidden`) avoids creating a
+     focus-autoscroll scroll container (`feedback_overflow_hidden_vs_clip`). */
+  .is-density-clamped :global(.aca-body),
+  .is-density-compact :global(.aca-body) {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 1;
@@ -446,10 +459,19 @@ function handleKeyDown(e: KeyboardEvent) {
     overflow: clip;
   }
   .is-density-clamped :global([data-testid^="annotation-snippet-"]),
+  .is-density-clamped :global(.art-root),
+  .is-density-compact :global([data-testid^="annotation-snippet-"]),
+  .is-density-compact :global(.art-root) {
+    display: none;
+  }
+
+  /* The ONE difference: `clamped` also drops the action row, because a 160px
+     narrow column cannot fit accept/dismiss. A `compact` card is full-width and
+     has the room, so it keeps them — that is why the variant exists at all, and
+     it is what makes a crowd-minimized card actionable without expanding first. */
   .is-density-clamped :global(.aca-row),
   .is-density-clamped :global(.aca-undo-row),
-  .is-density-clamped :global(.aca-standalone),
-  .is-density-clamped :global(.art-root) {
+  .is-density-clamped :global(.aca-standalone) {
     display: none;
   }
 

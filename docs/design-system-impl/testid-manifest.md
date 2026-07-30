@@ -117,7 +117,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - Suggestion + import variants: `suggestion-diff-{*}`,
   `annotation-import-byline-{*}`, `annotation-select-checkbox-{*}`
 - Margin column: `margin-column-{*}`, `margin-bubble-{*}`,
-  `margin-leaders-{*}`
+  `margin-leaders-{*}`, `margin-pin-btn-{*}` (pin a crowd-minimized card open;
+  lives on the bubble wrapper, not in the card header, so it never appears in
+  the side rail)
 - Batch + bulk: `batch-promote-{bar,count,clear,confirm}`,
   `bulk-{confirm,cancel,accept,dismiss}-btn`
 - Sort: `annotation-sort-toggle` (position ↔ chronological, #1056)

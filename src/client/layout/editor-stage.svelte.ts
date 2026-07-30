@@ -40,8 +40,19 @@ import { EDITOR_MEASURE_CH, type EditorMeasure } from "../hooks/useTandemSetting
 export type MarginMode = "full" | "narrow" | "stub" | "off";
 
 export interface MarginTrackGeometry {
-  /** Bubble column width (px). */
+  /** Bubble column width (px) — the track's MINIMUM since the elastic step. */
   readonly column: number;
+  /**
+   * Widest the column may grow into surplus gutter space (px). Equal to
+   * `column` means "no elasticity" (`stub`, `off`).
+   *
+   * Elasticity exists because the stage grid's `1fr` gutters otherwise absorb
+   * every pixel reclaimed by collapsing or narrowing a rail — at a 1600px
+   * viewport with both rails collapsed and both margins `full` there is ~148px
+   * of dead gutter per side. Wider cards are also SHORTER cards, so this
+   * directly relieves the vertical crowding `marginPressure` handles.
+   */
+  readonly maxColumn: number;
   /** Edge inset between the column and the stage's outer edge (px). */
   readonly inset: number;
   /** Leader-line gap zone between the text edge and the column's near edge (px). */
@@ -58,15 +69,32 @@ export interface MarginTrackGeometry {
  * `narrow.column`; re-assert the band-gap test if these widths change.
  */
 export const MARGIN_TRACK_GEOMETRY: Record<MarginMode, MarginTrackGeometry> = {
-  full: { column: 240, inset: 8, gap: 24 },
-  narrow: { column: 160, inset: 8, gap: 24 },
-  stub: { column: 28, inset: 8, gap: 24 },
-  off: { column: 0, inset: 0, gap: 0 },
+  full: { column: 240, maxColumn: 400, inset: 8, gap: 24 },
+  narrow: { column: 160, maxColumn: 240, inset: 8, gap: 24 },
+  // A pip has nothing to gain from extra width.
+  stub: { column: 28, maxColumn: 28, inset: 8, gap: 24 },
+  // INVARIANT: `off` must stay all-zero INCLUDING `maxColumn`. A nonzero max
+  // would let a presence-collapsed side reserve phantom width again — exactly
+  // the defect the per-side reserve fixed. Pinned by a test.
+  off: { column: 0, maxColumn: 0, inset: 0, gap: 0 },
 };
 
-/** Total horizontal width a margin track reserves for a mode's geometry. */
+/**
+ * Total horizontal width a margin track reserves for a mode's geometry — the
+ * track's MINIMUM.
+ *
+ * The `calc()` geometry in `MarginColumn` depends on this being exactly
+ * `column + inset + gap` (it derives the leader inset as `100% - gap` and the
+ * column width as `100% - inset - gap`). A test pins the identity so a future
+ * geometry tweak cannot silently desync the CSS from this table.
+ */
 export function marginReservePx(geometry: MarginTrackGeometry): number {
   return geometry.column + geometry.inset + geometry.gap;
+}
+
+/** Total horizontal width a margin track may grow to, at full elasticity. */
+export function marginReserveMaxPx(geometry: MarginTrackGeometry): number {
+  return geometry.maxColumn + geometry.inset + geometry.gap;
 }
 
 // Full-mode layout constants, derived from `MARGIN_TRACK_GEOMETRY.full` so the
@@ -213,11 +241,16 @@ export interface StageLayerStyleInput {
   /** docx branch only: margins on (→ `position: relative`) vs off
    *  (→ `display: contents`). */
   effectivelyOn: boolean;
-  /** non-docx left grid-track width (px) = the left side's mode geometry total
-   *  (`marginReservePx`); 0 when that side is `off` (hidden or empty-collapsed). */
+  /** non-docx left grid-track MINIMUM width (px) = the left side's mode geometry
+   *  total (`marginReservePx`); 0 when that side is `off` (hidden or
+   *  empty-collapsed). */
   leftReservePx: number;
-  /** non-docx right grid-track width (px). See `leftReservePx`. */
+  /** non-docx right grid-track minimum width (px). See `leftReservePx`. */
   rightReservePx: number;
+  /** Left track's elastic ceiling (px) = `marginReserveMaxPx`. */
+  leftReserveMaxPx: number;
+  /** Right track's elastic ceiling (px). */
+  rightReserveMaxPx: number;
   /** Content reading measure as a CSS length: a ch width (`58ch`/`68ch`/`82ch`)
    *  or `"100%"` for the "full" preset, mapped via `EDITOR_MEASURE_CH`. */
   measure: string;
@@ -250,10 +283,47 @@ export function stageLayerStyle(input: StageLayerStyleInput): string {
     `--editor-measure: ${input.measure}; ` +
     `--margin-left-track: ${input.leftReservePx}px; ` +
     `--margin-right-track: ${input.rightReservePx}px; ` +
+    `--margin-left-track-max: ${input.leftReserveMaxPx}px; ` +
+    `--margin-right-track-max: ${input.rightReserveMaxPx}px; ` +
     "display: grid; align-items: stretch; " +
-    "grid-template-columns: minmax(0, 1fr) var(--margin-left-track) " +
-    "minmax(0, var(--editor-measure)) var(--margin-right-track) minmax(0, 1fr);"
+    "grid-template-columns: minmax(0, 1fr) " +
+    `${elasticTrack("left")} ` +
+    "minmax(0, var(--editor-measure)) " +
+    `${elasticTrack("right")} ` +
+    "minmax(0, 1fr);"
   );
+}
+
+/**
+ * Elastic margin track: grows from its base reserve toward its ceiling, but ONLY
+ * into surplus gutter space.
+ *
+ * **The `clamp()` is load-bearing — a plain `minmax(base, max)` is wrong.** CSS
+ * Grid's "Maximize Tracks" step distributes free space among non-flexible
+ * growable tracks (the `1fr` gutters are frozen at their base for that step), so
+ * an unguarded max lets the margin tracks grow at the CONTENT track's expense —
+ * its min is `0` by design so it can shrink. Measured in Chromium: naive
+ * `minmax` squeezes the content track from 556px to 236px at a 1100px stage, and
+ * 516→356 at 900px. With the `clamp()`, `(100% - measure) / 2` collapses onto the
+ * base wherever there is no genuine surplus, so the track is fixed at exactly
+ * today's value and behaviour is byte-identical; where there IS surplus the
+ * margin grows and the content track still resolves to exactly the measure.
+ *
+ * That content-width-neutrality is also what keeps this out of the reactive
+ * cycle: track width → content width → `coordsAtPos` → raw tops → crowding
+ * WOULD be a real cycle through raw positions (the "density → pressure → mode"
+ * idea rejected in `cleave-locks.md`). It is closed only because the elastic max
+ * is exactly the surplus, so the content track never moves. **Never express this
+ * ceiling as anything other than the surplus.**
+ *
+ * `--editor-measure` may be `100%` (the "full" reading-measure preset), which
+ * makes the surplus `0` and the track permanently fixed — that preset gets no
+ * elasticity by definition, since it leaves no gutter to claim.
+ */
+function elasticTrack(side: "left" | "right"): string {
+  const base = `var(--margin-${side}-track)`;
+  const max = `var(--margin-${side}-track-max)`;
+  return `minmax(${base}, clamp(${base}, (100% - var(--editor-measure)) / 2, ${max}))`;
 }
 
 export interface CreateEditorStageModelOpts {
@@ -369,6 +439,8 @@ export function createEditorStageModel(opts: CreateEditorStageModelOpts): Editor
       effectivelyOn,
       leftReservePx: marginReservePx(leftGeometry),
       rightReservePx: marginReservePx(rightGeometry),
+      leftReserveMaxPx: marginReserveMaxPx(leftGeometry),
+      rightReserveMaxPx: marginReserveMaxPx(rightGeometry),
       // Belt-and-suspenders fallback. The on-load + on-write validators in
       // useTandemSettings already coerce a bogus value to DEFAULTS, so this
       // `??` only triggers if a TS-violating cast slips one through. Without
