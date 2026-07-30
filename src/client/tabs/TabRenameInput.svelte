@@ -62,6 +62,9 @@ function onKeydown(e: KeyboardEvent) {
 }
 </script>
 
+<!-- The 80px min mirrors the filename allowance inside `.tab-flip`'s 142px
+     compression floor (see DocumentTabs) — a wider one would push a renaming
+     tab past the floor every other tab is held at. -->
 <input
   bind:value
   use:focusSelectStem

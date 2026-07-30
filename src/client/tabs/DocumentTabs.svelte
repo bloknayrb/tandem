@@ -650,12 +650,14 @@ $effect(() => {
        below would never appear. `min-width: 0` belongs here (unlike on the tabs):
        yielding and scrolling is exactly this element's job.
 
-       `data-tauri-drag-region="false"`: redundant for Tauri itself (a click on a
-       tab already blocks on the pill's role="tab"), but load-bearing for Tandem's
-       own `isInActiveDragRegion`, which is a naive `closest()` lookup that knows
-       nothing about Tauri's self-only or clickable-blocks rules. Without it, a
-       click on a tab resolves to TitleBar's `deep` region, reads as "on drag
-       surface", and stops dismissing an open new-tab menu. -->
+       `data-tauri-drag-region="false"` is load-bearing twice over. For Tauri: a
+       click that lands on a *pill* already blocks on its own role="tab", but one
+       that lands in the 6px gap between pills hits this container, which carries
+       no interactive role and would otherwise fall through to TitleBar's `deep`.
+       For Tandem's own `isInActiveDragRegion` — a naive `closest()` lookup that
+       knows nothing about Tauri's self-only or clickable-blocks rules — even a
+       click on a pill resolves to the `deep` region, reads as "on drag surface",
+       and stops dismissing an open new-tab menu. -->
   <div
     bind:this={scrollEl}
     data-testid="tab-scroll-container"
@@ -801,14 +803,18 @@ $effect(() => {
        - Put the floor on the pill instead and this wrapper shrinks straight
          past it, so the pill overflows its own wrapper and tabs overlap
          (measured: wrapper 129.5px around a 142px pill).
-     So: floor here, `min-width: 0` on the pill, and the pill flexes to whatever
-     width this box settles at. The value must stay a real number — it is also
-     what makes the scroller overflow, which is what keeps the mask fade and
-     horizontal scroll alive.
+     So: floor here, `min-width: 0` on the pill AND on its name span (the two
+     nodes that would otherwise contribute a content-based minimum), and the
+     pill flexes to whatever width this box settles at. The value must stay a
+     real number — it is also what makes the scroller overflow, which is what
+     keeps the mask fade and horizontal scroll alive.
 
-     142px = TabItem's 61px of chrome (indicator + gaps + close + padding +
-     borders) + ~80px of filename, which is the least that still reads as a
-     name. Keep it in sync with TabItem's pill if that chrome changes. */
+     142px is TabItem's chrome (indicator + gaps + close + padding + borders,
+     ~60px) plus ~80px of filename, the least that still reads as a name; the
+     total is the measured resting width, the split is approximate. Keep it in
+     sync with TabItem's pill if that chrome changes.
+     `tests/e2e/tab-overflow.spec.ts` pins the floor against the 259px
+     no-compression regression. */
   .tab-flip {
     display: flex;
     flex-shrink: 1;

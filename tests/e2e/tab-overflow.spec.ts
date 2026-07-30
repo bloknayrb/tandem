@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import fs from "fs";
 import path from "path";
 import {
   cleanupAllOpenDocuments,
@@ -169,4 +170,93 @@ test("open file button is always visible", async ({ page }) => {
 
   const openBtn = page.locator("[data-testid='open-file-btn']");
   await expect(openBtn).toBeVisible();
+});
+
+/**
+ * The tab strip's compression contract (#1250). Three review passes agreed on a
+ * mechanism that turned out to be wrong, and only measurement caught it — see
+ * lesson 85 in docs/lessons-learned.md — so the floor gets a real guard.
+ *
+ * `.tab-flip` and `.title-bar-actions` are matched by class, not testid: both
+ * are structural boxes owned by the components under test with no user-facing
+ * identity of their own, and a testid on either would exist solely for this
+ * assertion.
+ */
+test("tabs compress to their floor before the strip scrolls, and nothing spills", async ({
+  page,
+}) => {
+  // `tabEnter`/`tabExit` animate `width` and inject `min-width: 0`, so a pill
+  // measured mid-transition reports a collapsing box rather than its resting
+  // size. Zeroing both durations makes these measurements deterministic instead
+  // of merely slow. `motionOff()` reads this same media query.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+
+  // Names long enough that each would rest at the name span's 240px cap given
+  // room, and enough of them that the strip must overflow once every pill is
+  // down at its floor.
+  const names = Array.from({ length: 12 }, (_, i) => `tandem-ink-email-runbook-${i + 1}.md`);
+  for (const name of names) {
+    const filePath = path.join(tmpDir, name);
+    fs.writeFileSync(filePath, `# ${name}
+
+Compression fixture.
+`);
+    await mcp.callTool("tandem_open", { filePath });
+  }
+
+  await page.goto("http://127.0.0.1:5173");
+  await page.waitForSelector("[data-testid='tab-scroll-container']");
+  await expect
+    .poll(() => page.locator(".tab-flip").count(), { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(names.length);
+
+  const measured = await page.evaluate(() => {
+    const box = (el: Element) => {
+      const b = el.getBoundingClientRect();
+      return { left: b.left, right: b.right, width: b.width };
+    };
+    const scroller = document.querySelector("[data-testid='tab-scroll-container']") as HTMLElement;
+    const actions = document.querySelector(".title-bar-actions") as HTMLElement;
+    return {
+      overflowing: scroller.scrollWidth > scroller.clientWidth,
+      scrollerClass: scroller.className,
+      actions: box(actions),
+      viewportWidth: document.documentElement.clientWidth,
+      tabs: [...document.querySelectorAll<HTMLElement>(".tab-flip")].map((wrapper) => {
+        const pill = wrapper.firstElementChild as HTMLElement;
+        return {
+          wrapper: box(wrapper),
+          pill: box(pill),
+          name: box(pill.querySelector("[data-testid^='tab-name-']") as HTMLElement),
+          close: box(pill.querySelector("button[aria-label^='Close']") as HTMLElement),
+        };
+      }),
+    };
+  });
+
+  // The strip actually ran out of room — otherwise the floor below is vacuous.
+  expect(measured.overflowing).toBe(true);
+  expect(measured.scrollerClass).toMatch(/has-overflow|overflow-left|overflow-right/);
+
+  for (const tab of measured.tabs) {
+    // Upper bound is the regression detector: the shipped-then-reverted shape
+    // left a long name pinned at 259px and never compressed at all.
+    expect(tab.wrapper.width).toBeLessThan(200);
+    // Lower bound is the overlap detector: below the floor the pill's children
+    // stop fitting and neighbouring tabs run into each other.
+    expect(tab.wrapper.width).toBeGreaterThanOrEqual(141.5);
+    // A compressed tab must still read as a name, not an ellipsis.
+    expect(tab.name.width).toBeGreaterThan(40);
+    // Nothing escapes its pill (0.5px for subpixel flex rounding).
+    expect(tab.name.left).toBeGreaterThanOrEqual(tab.pill.left - 0.5);
+    expect(tab.name.right).toBeLessThanOrEqual(tab.pill.right + 0.5);
+    expect(tab.close.left).toBeGreaterThanOrEqual(tab.pill.left - 0.5);
+    expect(tab.close.right).toBeLessThanOrEqual(tab.pill.right + 0.5);
+  }
+
+  // The center cluster is the only shrinkable item in the title-bar row, so a
+  // crowded strip must never push the actions cluster off-screen.
+  expect(measured.actions.width).toBeGreaterThan(0);
+  expect(measured.actions.left).toBeGreaterThanOrEqual(-0.5);
+  expect(measured.actions.right).toBeLessThanOrEqual(measured.viewportWidth + 0.5);
 });

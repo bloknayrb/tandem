@@ -512,8 +512,8 @@ function chooseHelp() {
 
   /* Left-of-center spacer: a rigid gap so the tab strip left-justifies
      against the brand cluster. Overrides the base rule's flex shorthand; the
-     base rule's `min-width` still applies here but is non-binding (space-2 <
-     space-3 at every density). */
+     base rule's `min-width` still cascades in but can never bind, because
+     `flex-shrink: 0` stops this box shrinking below its basis at all. */
   .title-bar-spacer-fixed {
     flex: 0 0 var(--tandem-space-3);
   }
