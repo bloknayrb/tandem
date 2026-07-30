@@ -8,15 +8,25 @@
  * dispatcher and its five variants (plan C2 — NOT a flat `data-kind` bubble).
  *
  *   full    — today's card, every section visible.
+ *   compact — VERTICAL pressure (crowded anchors), any band with room: header +
+ *             a single-line body teaser + THE ACTION ROW; snippet and replies
+ *             hidden. Distinct from `clamped` on purpose: `clamped` is a WIDTH
+ *             concession (a 160px column cannot fit accept/dismiss), `compact`
+ *             is a HEIGHT concession at full width, where there IS room — so
+ *             minimizing never costs an extra click to reach Accept/Reject.
  *   clamped — narrow band, inactive: header + a single-line body teaser; the
  *             snippet, action row, replies, and expand button are hidden.
  *   stub    — stub band: a ~22px anchor pip (author dot only); the whole card
  *             body AND the header's text chrome collapse.
  *
- * One-way dependency: density reads ONLY (mode, isActive, isEditing) — NEVER
- * collision output (heights / adjustedPositions). The height → density → height
- * cycle is therefore structurally impossible (`feedback_svelte_effect_depth_guard`,
- * plan [MF-6]).
+ * One-way dependency: density reads ONLY (mode, isActive, isEditing, crowded,
+ * isPinned) — NEVER collision output (heights / adjustedPositions). `crowded`
+ * comes from `marginPressure.resolveCrowding`, which is itself derived from RAW
+ * anchor tops plus the annotation MODEL and never from a measured height, so the
+ * height → density → height cycle remains structurally impossible
+ * (`feedback_svelte_effect_depth_guard`, plan [MF-6]). Passing measured heights
+ * into the pressure pass is the regression that reopens it — see
+ * `marginPressure.ts`'s header.
  *
  * Stub geometry note (divergence from plan §5 "stub click → full in place" and
  * bundle `AnnotationBubble`): the C-1 stub track is ~28px wide (merged in PR
@@ -35,21 +45,37 @@
  */
 import type { MarginMode } from "../layout/editor-stage.svelte";
 
-export type Density = "full" | "clamped" | "stub";
+export type Density = "full" | "compact" | "clamped" | "stub";
 
 export function cardDensity(args: {
   mode: MarginMode;
   isActive: boolean;
   isEditing: boolean;
+  /**
+   * Vertical-pressure verdict from `resolveCrowding` — this card's neighbours
+   * would push it off its anchor if every card rendered full. Defaults false so
+   * every pre-existing call site is behaviourally identical.
+   */
+  crowded?: boolean;
+  /**
+   * User pinned this card open via the margin bubble's chevron. Overrides both
+   * `clamped` and `compact`, loses to `stub` (no room to expand a pip).
+   */
+  isPinned?: boolean;
 }): Density {
   // Stub track (~28px) fits only an anchor pip — for everyone, active or
   // editing. See the stub-geometry note above: there is no room to expand in
   // place, so stub wins over active/editing.
   if (args.mode === "stub") return "stub";
-  // Narrow/full bands have room: a focused or editing card expands to full
-  // (bundle: `-webkit-line-clamp:1` → `unset` on `.is-active`).
-  if (args.isEditing || args.isActive) return "full";
-  // Inactive narrow → a single-line teaser; `full` band keeps full density;
-  // `off` never reaches here (the column unmounts) but falls through safely.
-  return args.mode === "narrow" ? "clamped" : "full";
+  // Narrow/full bands have room: a focused, editing, or pinned card expands to
+  // full (bundle: `-webkit-line-clamp:1` → `unset` on `.is-active`).
+  if (args.isEditing || args.isActive || args.isPinned) return "full";
+  // Inactive narrow → a single-line teaser, action row dropped (the 160px
+  // column cannot fit it). Width beats height here: a narrow card is already
+  // minimal, so there is nothing for `crowded` to add.
+  if (args.mode === "narrow") return "clamped";
+  // `full` band (and `off`, which never reaches here — the column unmounts —
+  // but falls through safely): crowded anchors minimize vertically while
+  // keeping the action row.
+  return args.crowded ? "compact" : "full";
 }

@@ -1,5 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import path from "path";
+import { estimateHeightPx } from "../../src/client/panels/marginPressure";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import {
   cleanupAllOpenDocuments,
@@ -1344,25 +1345,418 @@ test("C-2: density sweep full→narrow→stub→full emits no console errors", a
 
   // Fix A active so B is deterministically inactive — B then steps through every
   // density as the viewport sweeps the bands (an active card would stay `full`
-  // in the narrow band and never exercise `clamped`). At this 1200 full band
-  // both cards are still `full`; B only diverges once we drop to narrow.
+  // in the narrow band and never exercise `clamped`).
   await cardA.click();
   await expect(cardA).toHaveClass(/is-review-target/, { timeout: 5_000 });
 
-  // full → narrow (clamped) → stub → back to full, with a frame settle between
-  // each so the density `$effect` (overlay-close guard) actually runs. A retry
-  // storm from a missing last-value guard would surface as console errors here.
-  await expect(cardB).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  // compact (full band, crowded) → clamped (narrow) → stub → back to compact,
+  // with a frame settle between each so the density `$effect` (overlay-close
+  // guard) actually runs. A retry storm from a missing last-value guard would
+  // surface as console errors here.
+  //
+  // B is `compact`, not `full`, at the 1200 full band: `seedTwoComments` anchors
+  // BOTH comments inside the title line (TITLE_FROM..+4 and TITLE_FROM+5..
+  // TITLE_TO), so they share a raw anchor top and the vertical-pressure pass
+  // minimizes the inactive one. That is the crowd-minimize feature working, not
+  // a regression — `seedTwoDistantComments` below covers the uncrowded
+  // "full band → full density" contract this line used to carry.
+  await expect(cardB).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
   await page.setViewportSize({ width: 950, height: 900 });
   await expect(cardB).toHaveAttribute("data-density", "clamped", { timeout: 5_000 });
   await page.setViewportSize({ width: 750, height: 900 });
   await expect(cardB).toHaveAttribute("data-density", "stub", { timeout: 5_000 });
   await page.setViewportSize({ width: 1200, height: 900 });
-  await expect(cardB).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(cardB).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
   await nextFrames(page);
 
   // Filter to app/effect errors — ignore benign Y.js "Invalid access" stderr
   // noise documented in CLAUDE.md (it can surface as a console error in dev).
   const appErrors = errors.filter((e) => !/Invalid access|favicon/i.test(e));
   expect(appErrors, `unexpected console errors: ${appErrors.join("\n")}`).toEqual([]);
+});
+
+/* ───────────── Vertical pressure + elastic width (#917) ─────────────
+ *
+ * Two independent density pressures now exist. WIDTH drives `MarginMode`
+ * (full/narrow/stub/off) and renders `clamped`; HEIGHT drives the crowding
+ * verdict and renders `compact` — a one-line teaser that KEEPS the action row,
+ * so a minimized card stays actionable. `seedTwoComments` above anchors both
+ * comments inside the title line, which makes it a crowded fixture by
+ * construction; `seedTwoDistantComments` is the uncrowded counterpart.
+ */
+
+// Offsets into the shared `sample.md` fixture (flat coordinates INCLUDE heading
+// prefixes — Critical Rule #4's coordinate system). "Another" opens the last
+// paragraph, ~10 rendered lines below the title, so two short cards anchored at
+// the title and here cannot collide.
+const LAST_PARA_FROM = 172;
+const LAST_PARA_TO = 179;
+const LAST_PARA_TEXT = "Another";
+
+/** Two comments far enough apart vertically that no card pushes the other. */
+async function seedTwoDistantComments(): Promise<{ idTop: string; idBottom: string }> {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  const a = (await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_FROM + 4,
+    text: "short top note",
+    textSnapshot: TITLE_TEXT.slice(0, 4),
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  const b = (await mcp.callTool("tandem_comment", {
+    from: LAST_PARA_FROM,
+    to: LAST_PARA_TO,
+    text: "short bottom note",
+    textSnapshot: LAST_PARA_TEXT,
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  if (a.error !== false || b.error !== false) throw new Error("tandem_comment failed");
+  return { idTop: a.data.annotationId, idBottom: b.data.annotationId };
+}
+
+/** Long enough to force several wrapped body lines at every C-1 column width. */
+const LONG_COMMENT_TEXT =
+  "This is a deliberately long annotation body written to force the card's " +
+  "content to wrap across several lines at any realistic margin column width, " +
+  "so the estimateHeightPx calibration guard exercises the body-wrap term " +
+  "(bodyLines * BODY_LINE_PX) instead of only ever seeing the single-line " +
+  "floor that every other fixture in this file happens to hit.";
+
+/**
+ * Same shape as `seedTwoDistantComments`, but the top comment's body is long
+ * enough to wrap multiple lines. Kept far from the bottom comment so neither
+ * crowds the other — density stays `full`, isolating the body-wrap term.
+ */
+async function seedLongAndDistantComment(): Promise<{ idTop: string; idBottom: string }> {
+  await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
+  const a = (await mcp.callTool("tandem_comment", {
+    from: TITLE_FROM,
+    to: TITLE_FROM + 4,
+    text: LONG_COMMENT_TEXT,
+    textSnapshot: TITLE_TEXT.slice(0, 4),
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  const b = (await mcp.callTool("tandem_comment", {
+    from: LAST_PARA_FROM,
+    to: LAST_PARA_TO,
+    text: "short bottom note",
+    textSnapshot: LAST_PARA_TEXT,
+  })) as { error: false; data: { annotationId: string } } | { error: true };
+  if (a.error !== false || b.error !== false) throw new Error("tandem_comment failed");
+  return { idTop: a.data.annotationId, idBottom: b.data.annotationId };
+}
+
+/** Open the doc at a wide viewport with margin view on and both rails closed. */
+async function openWideWithMargins(page: Page, width = 1600): Promise<void> {
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto("/");
+  await expect(page.locator(".tandem-editor")).toContainText(TITLE_TEXT, { timeout: 10_000 });
+  await expect(page.locator("[data-annotation-id]").first()).toBeVisible({ timeout: 15_000 });
+  await setMarginView(page, true);
+}
+
+const marginCard = (page: Page, id: string) =>
+  page.locator(`[data-testid='margin-bubble-${id}'] [data-testid='annotation-card-${id}']`);
+
+/**
+ * Seed the crowded fixture, open it wide with margins on, and return both cards.
+ * `seedTwoComments` anchors both comments inside the title line, so they share a
+ * raw anchor top — crowded by construction at every band.
+ */
+async function crowdedPair(page: Page): Promise<{
+  idA: string;
+  idB: string;
+  cardA: ReturnType<typeof marginCard>;
+  cardB: ReturnType<typeof marginCard>;
+}> {
+  const { idA, idB } = await seedTwoComments();
+  await openWideWithMargins(page);
+  const cardA = marginCard(page, idA);
+  const cardB = marginCard(page, idB);
+  await expect(cardA).toBeVisible({ timeout: 5_000 });
+  return { idA, idB, cardA, cardB };
+}
+
+test("pressure: uncrowded cards at the full band stay full (no false positives)", async ({
+  page,
+}) => {
+  const { idTop, idBottom } = await seedTwoDistantComments();
+  await openWideWithMargins(page);
+
+  const top = marginCard(page, idTop);
+  const bottom = marginCard(page, idBottom);
+  await expect(top).toBeVisible({ timeout: 5_000 });
+  await expect(bottom).toBeVisible({ timeout: 5_000 });
+
+  // Neither card pushes the other, so vertical pressure must not fire. This is
+  // the coverage the density-sweep test used to carry before its fixture became
+  // a crowded one.
+  await expect(top).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(bottom).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+});
+
+test("pressure: crowded cards minimize to compact and keep their action row", async ({ page }) => {
+  const { cardA, cardB } = await crowdedPair(page);
+
+  // Both comments share the title line, so the inactive one minimizes even at
+  // the widest band — width is not the constraint here, height is.
+  await cardA.click();
+  await expect(cardB).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
+
+  // The whole reason `compact` exists rather than reusing `clamped`: accept /
+  // dismiss stay reachable without first expanding the card.
+  await expect(cardB.locator("[data-testid^='accept-btn-']")).toBeVisible({ timeout: 5_000 });
+  await expect(cardB.locator("[data-testid^='dismiss-btn-']")).toBeVisible();
+  // ...while the space-consuming parts are gone.
+  await expect(cardB.locator("[data-testid^='annotation-snippet-']")).toBeHidden();
+});
+
+test("pressure: minimizing keeps each bubble near its anchor dot", async ({ page }) => {
+  await crowdedPair(page);
+
+  // The actual user-visible goal: a card and the text it annotates stay on
+  // screen together. Compare each bubble's top against its own anchor dot's cy,
+  // polling so the collision sweep and the density pass both settle first.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const bubbles = Array.from(
+            document.querySelectorAll<HTMLElement>("[data-testid^='margin-bubble-']"),
+          );
+          let worst = 0;
+          for (const b of bubbles) {
+            const id = b.getAttribute("data-testid")!.replace("margin-bubble-", "");
+            const dot = document.querySelector(
+              `circle[data-testid='margin-anchor-dot'][data-annotation-id='${id}']`,
+            );
+            if (!dot) continue;
+            const drift = Math.abs(b.getBoundingClientRect().top - dot.getBoundingClientRect().top);
+            worst = Math.max(worst, drift);
+          }
+          return Math.round(worst);
+        }),
+      {
+        timeout: 8_000,
+        message: "every margin bubble should sit close to its own anchor dot",
+      },
+    )
+    // Two cards on ONE line cannot both sit at zero drift — the lower one is at
+    // least a compact card's height away. This bound is what the feature buys:
+    // without minimizing, a full card pushes the second ~200px down.
+    .toBeLessThan(160);
+});
+
+test("pressure: clicking a minimized card expands it; the other re-minimizes", async ({ page }) => {
+  const { cardA, cardB } = await crowdedPair(page);
+
+  await cardA.click();
+  await expect(cardA).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(cardB).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
+
+  // Focus follows the click, so expansion moves with it — one card open at a
+  // time unless pinned (next test).
+  await cardB.click();
+  await expect(cardB).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(cardA).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
+});
+
+test("pressure: the chevron pins a card open across a focus change", async ({ page }) => {
+  const { idB, cardA, cardB } = await crowdedPair(page);
+
+  await cardA.click();
+  await expect(cardB).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
+
+  const pinB = page.locator(`[data-testid='margin-pin-btn-${idB}']`);
+  await expect(pinB).toHaveAttribute("aria-expanded", "false");
+  await pinB.click();
+  await expect(cardB).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(pinB).toHaveAttribute("aria-expanded", "true");
+
+  // The distinction from plain click-to-expand: focus moves away and B STAYS
+  // open. Also proves the pin's `stopPropagation` worked — had the click fallen
+  // through to the card root it would have focused B instead of leaving A active.
+  await cardA.click();
+  await expect(cardA).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+  await expect(cardB).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+
+  // Un-pinning returns it to the pressure verdict.
+  await pinB.click();
+  await expect(pinB).toHaveAttribute("aria-expanded", "false");
+  await expect(cardB).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
+});
+
+test("pressure: the height estimate tracks the real rendered card height", async ({ page }) => {
+  // `estimateHeightPx` mirrors card anatomy (padding, header, snippet, body line
+  // height, action row) in TS constants. That duplication across the JS/CSS
+  // boundary is deliberate — the estimate must not read measured heights, or the
+  // density→height→collision→density cycle reopens — but nothing else would
+  // DETECT it drifting. Retune a spacing token, add a header row, or change the
+  // body font and the only symptom is cards drifting off anchor: the exact bug
+  // this feature exists to fix, silently reappearing. This is the tripwire.
+  const { idTop } = await seedTwoDistantComments();
+  await openWideWithMargins(page);
+
+  const bubble = page.locator(`[data-testid='margin-bubble-${idTop}']`);
+  await expect(bubble).toBeVisible({ timeout: 5_000 });
+  await expect(marginCard(page, idTop)).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+
+  const measured = await bubble.evaluate((el) => el.getBoundingClientRect().height);
+  const columnWidth = await page
+    .locator("[data-testid='margin-column-right']")
+    .evaluate((el) => el.clientWidth);
+
+  // Same model the component builds for this annotation: "short bottom note" /
+  // "short top note" content, snippet present (textSnapshot was passed), no
+  // suggestion, no replies, actions shown (pending comment).
+  const estimate = estimateHeightPx(
+    {
+      contentLength: "short top note".length,
+      hasSnippet: true,
+      hasSuggestion: false,
+      replyCount: 0,
+      hasActions: true,
+    },
+    "full",
+    columnWidth,
+  );
+
+  // Bound the RELATIVE error rather than pinning a number: the estimate is a
+  // heuristic and font metrics vary by platform. A 35% band still catches a
+  // structural change — a whole extra or missing row is ~15-30% of a short card.
+  const error = Math.abs(estimate - measured) / measured;
+  expect(
+    error,
+    `estimateHeightPx drifted from the real card: estimate ${estimate}px vs measured ${measured}px ` +
+      `at column ${columnWidth}px. Card anatomy changed — retune the constants in marginPressure.ts.`,
+  ).toBeLessThan(0.35);
+});
+
+test("pressure: the height estimate tracks a wrapped multi-line body", async ({ page }) => {
+  // The existing calibration test above only ever exercises the single-line
+  // floor (`Math.max(1, ...)` in `estimateHeightPx`) because every other
+  // fixture's comment body is short enough to fit on one line at every C-1
+  // column width. `BODY_CHAR_PX` — the glyph-advance estimate that drives
+  // `bodyLines` — is the single most load-bearing/fragile constant in the
+  // module (it scales with content length, unlike the fixed per-row terms)
+  // and had zero calibration coverage. This seeds a body long enough to wrap
+  // several lines and checks the same relative-error band.
+  const { idTop } = await seedLongAndDistantComment();
+  await openWideWithMargins(page);
+
+  const bubble = page.locator(`[data-testid='margin-bubble-${idTop}']`);
+  await expect(bubble).toBeVisible({ timeout: 5_000 });
+  await expect(marginCard(page, idTop)).toHaveAttribute("data-density", "full", { timeout: 5_000 });
+
+  const measured = await bubble.evaluate((el) => el.getBoundingClientRect().height);
+  const columnWidth = await page
+    .locator("[data-testid='margin-column-right']")
+    .evaluate((el) => el.clientWidth);
+
+  const estimate = estimateHeightPx(
+    {
+      contentLength: LONG_COMMENT_TEXT.length,
+      hasSnippet: true,
+      hasSuggestion: false,
+      replyCount: 0,
+      hasActions: true,
+    },
+    "full",
+    columnWidth,
+  );
+
+  const error = Math.abs(estimate - measured) / measured;
+  expect(
+    error,
+    `estimateHeightPx drifted from the real wrapped card: estimate ${estimate}px vs measured ` +
+      `${measured}px at column ${columnWidth}px. BODY_CHAR_PX or BODY_LINE_PX in marginPressure.ts ` +
+      "likely needs retuning.",
+  ).toBeLessThan(0.35);
+});
+
+test("pressure: the height estimate tracks a compact-density card", async ({ page }) => {
+  // The existing calibration coverage only ever measured `full` density —
+  // `compact`'s own estimate (one clamped body line + optional action row,
+  // a DIFFERENT code path than `full`'s wrap-based estimate) had zero
+  // calibration coverage. Reuses the crowded-pair fixture, whose inactive
+  // card (`cardB`) minimizes to `compact` once the active card is focused.
+  const { idB, cardA, cardB } = await crowdedPair(page);
+  await cardA.click();
+  await expect(cardB).toHaveAttribute("data-density", "compact", { timeout: 5_000 });
+
+  const bubble = page.locator(`[data-testid='margin-bubble-${idB}']`);
+  const measured = await bubble.evaluate((el) => el.getBoundingClientRect().height);
+  const columnWidth = await page
+    .locator("[data-testid='margin-column-right']")
+    .evaluate((el) => el.clientWidth);
+
+  // Matches idB's model from `seedTwoComments`: snippet present, no
+  // suggestion, no replies, actions shown (pending comment) — content length
+  // is irrelevant to the compact estimate (clamped to one line regardless).
+  const estimate = estimateHeightPx(
+    {
+      contentLength: 0,
+      hasSnippet: true,
+      hasSuggestion: false,
+      replyCount: 0,
+      hasActions: true,
+    },
+    "compact",
+    columnWidth,
+  );
+
+  const error = Math.abs(estimate - measured) / measured;
+  expect(
+    error,
+    `estimateHeightPx drifted from the real compact card: estimate ${estimate}px vs measured ` +
+      `${measured}px at column ${columnWidth}px. The compact branch in marginPressure.ts likely ` +
+      "needs retuning.",
+  ).toBeLessThan(0.35);
+});
+
+test("elastic width: a wide viewport with rails closed grows the margin track past its base", async ({
+  page,
+}) => {
+  await seedTwoComments();
+  await openWideWithMargins(page, 1600);
+  await expect(page.locator("[data-testid='margin-column-right']")).toHaveCount(1);
+
+  /** Resolved grid track widths, in template order [gutter, L, content, R, gutter]. */
+  const tracks = async (): Promise<number[]> =>
+    page.evaluate(() => {
+      const stage = document.querySelector("[data-testid='editor-stage']") as HTMLElement;
+      return getComputedStyle(stage)
+        .gridTemplateColumns.split(/\s+/)
+        .map((v) => Number.parseFloat(v));
+    });
+
+  // The right side carries the comments, so its track is the elastic one. Base
+  // reserve is 272px (240 column + 8 inset + 24 gap); the ceiling is 432.
+  await expect
+    .poll(async () => (await tracks())[3], {
+      timeout: 8_000,
+      message: "right margin track should claim surplus gutter at a wide viewport",
+    })
+    .toBeGreaterThan(272);
+
+  const grown = await tracks();
+  expect(grown[3]).toBeLessThanOrEqual(432);
+  // Content must NOT have been squeezed to pay for it — that is the exact
+  // failure a plain `minmax(base, max)` produces (measured: 556px → 236px).
+  // With both rails closed at 1600px there is genuine surplus, so the content
+  // track keeps its full reading measure.
+  expect(grown[2]).toBeGreaterThan(400);
+
+  // The bubble inherits the elastic width via `calc(100% - inset - gap)`.
+  const bubbleWidth = await page
+    .locator("[data-testid^='margin-bubble-']")
+    .first()
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(bubbleWidth).toBeGreaterThan(240);
+
+  // Re-opening a rail takes the surplus back, so the track returns toward base.
+  await page.keyboard.press("Alt+Shift+ArrowRight");
+  await expect
+    .poll(async () => (await tracks())[3], {
+      timeout: 8_000,
+      message: "opening a rail should shrink the margin track back toward its base",
+    })
+    .toBeLessThan(grown[3]);
 });

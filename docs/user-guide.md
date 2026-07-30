@@ -170,7 +170,9 @@ Annotations can be reviewed without leaving the keyboard:
 | `Ctrl+Shift+Enter` | Dismiss the selected annotation (or the first pending one) |
 | `Escape` | Deselect the current annotation |
 
-You can also enable the **margin view** (decorations menu) to see annotation cards beside the text they reference instead of in the side panel list.
+You can also enable the **margin view** (Settings → Claude Code → "Margin annotation view") to see annotation cards beside the text they reference, in addition to the side panel list.
+
+In margin view, cards that would be pushed away from their anchor text by their neighbours automatically shrink to a one-line summary — the Accept/Reject buttons stay available, so a shrunken card is still actionable. Click a card to expand it while it's selected, or click its chevron to keep it expanded even after you select something else. Cards also widen to use empty margin space when you collapse or narrow a side rail.
 
 ### Bulk Actions
 

@@ -2467,11 +2467,20 @@ const shouldShowModelPicker = $derived(
            guards gate mounting), so `geom` is always the live widthMode track. -->
       {@const geom = side === "left" ? editorStage.leftGeometry : editorStage.rightGeometry}
       {@const mode = side === "left" ? editorStage.leftMode : editorStage.rightMode}
+      <!-- Which box the column's inline geometry measures against. Derived here
+           rather than passed per call site: there are four `{@render}` sites but
+           only ONE <MarginColumn>, so a per-site prop is impossible — and
+           deriving it from the same condition the branch below tests means it
+           cannot drift out of sync. docx renders the column as a direct child of
+           the stage (no `.margin-track` wrapper), so percentage geometry there
+           would resolve against the whole stage. -->
+      {@const sizing = activeTab?.format === "docx" ? "layer" : "track"}
       <MarginColumn
         {side}
         {annotations}
         positions={marginPositions.byId}
         width={geom.column}
+        {sizing}
         edgeInset={geom.inset}
         gap={geom.gap}
         {mode}

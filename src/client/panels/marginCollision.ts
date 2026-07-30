@@ -24,7 +24,12 @@ export interface CollisionOptions {
   gap?: number;
 }
 
-const DEFAULT_GAP = 6;
+/**
+ * Vertical pixels between two stacked bubbles. Exported so `marginPressure`'s
+ * simulated sweep uses the same spacing as the real one — a duplicated literal
+ * would let the two passes disagree about whether a stack fits.
+ */
+export const DEFAULT_GAP = 6;
 
 /**
  * Sort by raw `top` ascending, then walk and push each subsequent bubble down
@@ -71,23 +76,29 @@ export function resolveCollisions(
 }
 
 /**
- * Remove keys from a `heights` map that are no longer in the `placeable` set.
- * Pure helper extracted so the prune step is independently unit-testable
- * without dragging Svelte's scheduler into vitest.
+ * Remove entries whose id is no longer in `keep`. Pure helper extracted so the
+ * prune step is independently unit-testable without dragging Svelte's scheduler
+ * into vitest.
  *
- * Mutates `heights` in place and returns the number of keys removed so
- * callers / tests can assert behavior. Safe by construction: only deletes
- * keys that are NOT in `placeableIds`, so a concurrent `recordHeight` write
- * for an id still in `placeable` cannot be stranded.
+ * Structurally typed over `{ keys(); delete() }` so one implementation serves
+ * both `Map<string, number>` (measured heights) and `Set<string>` (pinned ids) —
+ * the collect-then-delete two-pass shape and the return-a-count-so-the-caller-
+ * can-guard contract are the parts worth having in exactly one place. Never
+ * delete during iteration.
+ *
+ * Deliberately does NOT know *which* id set to prune against: that choice
+ * differs per caller and is the interesting part, so it stays documented at the
+ * call site. See `MarginColumn.svelte` — heights prune against `placeable`,
+ * pins against `annotations`.
  */
-export function prunePlaceableHeights(
-  heights: Map<string, number>,
-  placeableIds: ReadonlySet<string>,
+export function pruneMissing(
+  collection: { keys(): Iterable<string>; delete(key: string): boolean },
+  keep: ReadonlySet<string>,
 ): number {
   const toDelete: string[] = [];
-  for (const key of heights.keys()) {
-    if (!placeableIds.has(key)) toDelete.push(key);
+  for (const key of collection.keys()) {
+    if (!keep.has(key)) toDelete.push(key);
   }
-  for (const key of toDelete) heights.delete(key);
+  for (const key of toDelete) collection.delete(key);
   return toDelete.length;
 }
