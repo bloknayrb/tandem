@@ -15,6 +15,15 @@ import { renderMarkdown } from "./chat-markdown";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
+/** Composer auto-grows with its content up to this many lines, then scrolls. */
+const COMPOSER_MAX_LINES = 8;
+/**
+ * Mirrors `--tandem-ui-leading` (index.html), which `.chat-textarea` sets as
+ * its line-height. Only read if that declaration ever disappears — see
+ * `resizeComposer()`.
+ */
+const COMPOSER_FALLBACK_LEADING = 1.4;
+
 const agentLabel = createAgentLabel();
 
 interface Props {
@@ -53,6 +62,7 @@ let inputText = $state("");
 
 let messagesEndEl: HTMLDivElement | undefined = $state();
 let internalInputEl: HTMLTextAreaElement | undefined = $state();
+let composerMultiline = $state(false);
 
 // Keep external binding in sync
 $effect(() => {
@@ -104,6 +114,74 @@ $effect(() => {
 });
 
 const unreadCount = $derived(messages.filter((m) => m.author === "claude" && !m.read).length);
+
+// Composer auto-grow: size the textarea to its content so a two-line draft
+// doesn't get a scrollbar inside a one-line pill. Past COMPOSER_MAX_LINES the
+// height is capped and the textarea starts scrolling — that's the only state
+// where a scrollbar is correct, because the alternative is unreachable text.
+function resizeComposer() {
+  const el = internalInputEl;
+  // A hidden panel (PanelSlot uses display:none) reports zero metrics; leave
+  // the height alone and recompute when `visible` flips back.
+  if (!el || el.clientWidth === 0) return;
+
+  const cs = getComputedStyle(el);
+  // `.chat-textarea` sets a unitless line-height so this resolves to px. The
+  // fallback keeps the cap finite if that declaration ever goes away — `normal`
+  // parses to NaN, and a NaN max lets the box grow without bound.
+  const lineHeight =
+    Number.parseFloat(cs.lineHeight) || Number.parseFloat(cs.fontSize) * COMPOSER_FALLBACK_LEADING;
+  const borders = Number.parseFloat(cs.borderTopWidth) + Number.parseFloat(cs.borderBottomWidth);
+  const padding = Number.parseFloat(cs.paddingTop) + Number.parseFloat(cs.paddingBottom);
+  // Ceil the text block: browsers round scrollHeight up to an integer, so a
+  // fractional cap (13px x 1.4 x 8 = 145.6) reads as overflowing at exactly
+  // COMPOSER_MAX_LINES and clips the last line by a pixel.
+  const maxHeight = Math.ceil(lineHeight * COMPOSER_MAX_LINES) + padding + borders;
+
+  // scrollHeight is content + padding (border-box excludes the border), so add
+  // the borders back before comparing against a border-box height.
+  el.style.height = "auto";
+  const needed = el.scrollHeight + borders;
+  el.style.height = `${Math.min(needed, maxHeight)}px`;
+  el.style.overflowY = needed > maxHeight ? "auto" : "hidden";
+  // A pill radius on a tall box renders as two half-circles; soften once the
+  // composer stops being a single line. Safe to write from here: the effect
+  // below never reads it, and a ResizeObserver callback is not a reaction.
+  composerMultiline = needed > lineHeight + padding + borders + 1;
+}
+
+$effect(() => {
+  void inputText; // typing, and the programmatic clear in sendMessage()
+  void visible; // remeasure after the panel comes back from display:none
+  resizeComposer();
+});
+
+// The right rail is user-resizable, so the wrap points — and therefore the
+// needed height — change without the text changing. Width-gated to keep our
+// own height writes from re-entering the observer.
+$effect(() => {
+  const el = internalInputEl;
+  if (!el) return;
+  // -1 (not `el.clientWidth`) so the first callback always measures: clientWidth
+  // is a padding-box metric but `contentRect.width` below is content-box, so
+  // seeding from clientWidth made the first delivery a guaranteed false-positive
+  // "width changed" by exactly the horizontal padding.
+  let lastWidth = -1;
+  // Construction is guarded the same way `scrollFade` guards its own observer.
+  let ro: ResizeObserver | null = null;
+  try {
+    ro = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      if (width === lastWidth) return;
+      lastWidth = width;
+      resizeComposer();
+    });
+    ro.observe(el);
+  } catch (err) {
+    console.warn("[ChatPanel] Composer ResizeObserver init failed", err);
+  }
+  return () => ro?.disconnect();
+});
 
 function sendMessage() {
   if (!ctrlYdoc || !inputText.trim()) return;
@@ -321,6 +399,7 @@ async function clearChat() {
       placeholder="Message your AI…"
       rows={1}
       class="chat-textarea"
+      data-multiline={composerMultiline}
       data-testid="chat-composer-input"
     ></textarea>
     <button
@@ -440,12 +519,22 @@ async function clearChat() {
     padding: 8px 14px;
     font-family: inherit;
     font-size: var(--tandem-text-base);
+    /* Load-bearing: resizeComposer() reads the computed line-height to derive
+       the COMPOSER_MAX_LINES cap, so this must stay an explicit ratio —
+       `normal` computes to the literal string, not a px value. */
+    line-height: var(--tandem-ui-leading);
     color: var(--tandem-fg);
     resize: none;
     outline: none;
     min-height: 36px;
+    /* Grown by resizeComposer(); `hidden` is the pre-JS default so a one-line
+       composer never flashes a scrollbar. */
+    overflow-y: hidden;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
     transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .chat-textarea[data-multiline="true"] {
+    border-radius: var(--tandem-r-5);
   }
   .chat-textarea:focus {
     border-color: var(--tandem-accent);
