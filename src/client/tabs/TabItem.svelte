@@ -1,6 +1,5 @@
 <script lang="ts">
 import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
-import { tabEnter, tabExit } from "../panels/cardMotion.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import TabRenameInput from "./TabRenameInput.svelte";
 
@@ -12,8 +11,6 @@ interface Props {
   onpointerdown: (e: PointerEvent, id: string) => void;
   dropIndicator: "left" | "right" | null;
   onkeydown: (e: KeyboardEvent, id: string) => void;
-  /** App reduce-motion setting; threaded from DocumentTabs (s3, #798). */
-  reduceMotion?: boolean;
   /** True when THIS tab is in inline-rename mode (#1017). Container-owned. */
   isRenaming?: boolean;
   /** Request to enter rename mode for this tab (double-click on the name). */
@@ -32,7 +29,6 @@ const {
   onpointerdown,
   dropIndicator,
   onkeydown,
-  reduceMotion = false,
   isRenaming = false,
   onstartrename,
   onrename,
@@ -145,7 +141,18 @@ const tabStyle = $derived(
     "touch-action: none",
     "white-space: nowrap",
     "transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s",
-    "flex-shrink: 0",
+    // Shrinkable so a crowded strip narrows its tabs before it starts scrolling.
+    // `min-width: 0` is required: left at `auto` this pill's minimum would be
+    // its own min-content — which includes the name span's full text width — and
+    // a long-named tab could never give a pixel back. The compression floor
+    // deliberately lives one level up on `.tab-flip` in DocumentTabs, because a
+    // floor here would be shrunk past by that wrapper and the pill would overflow
+    // it. See the `.tab-flip` comment for the full rule.
+    // `flex-grow: 1` fills the `.tab-flip` wrapper. It matters at the floor: a
+    // short name ("todo.md") is narrower than 142px, and without growing, the
+    // pill would sit inside its slot leaving a ragged gap before the next tab.
+    "flex: 1 1 auto",
+    "min-width: 0",
   ].join("; "),
 );
 
@@ -173,8 +180,6 @@ function handleMouseLeaveClose() {
   aria-selected={isActive}
   aria-label={tab.fileName}
   style={tabStyle}
-  in:tabEnter={{ reduceMotion }}
-  out:tabExit={{ reduceMotion }}
   onclick={() => onswitch(tab.id)}
   onpointerdown={(e) => onpointerdown(e, tab.id)}
   onkeydown={(e) => onkeydown(e, tab.id)}
@@ -204,11 +209,19 @@ function handleMouseLeaveClose() {
     <!-- Double-click the name to rename (file docs only). The wrapper is a
          presentational span; dblclick (not a focusable control) carries the
          affordance, mirroring the editor's double-click-to-select-word idiom. -->
+    <!-- `min-width: 0` is what lets a crowded strip compress: it drops this
+         span's min-content contribution to zero so `.tab-flip`'s explicit 142px
+         floor (not the filename) decides how small a tab can get, and the name
+         ellipsizes on the way down. That floor is also what preserves the ~80px
+         of readable filename this span's own `min-width` used to be credited
+         with — don't reintroduce one here, it would re-pin long tabs at their
+         full text width. `max-width` is the opposite end: the most filename a
+         tab shows when the strip has width to spare. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <span
       data-testid={`tab-name-${tab.id}`}
       title={canRename ? `${tab.filePath} — double-click or F2 to rename` : tab.filePath}
-      style={`font-weight: ${isActive ? 500 : 400}; min-width: 80px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`}
+      style={`font-weight: ${isActive ? 500 : 400}; min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`}
       ondblclick={(e) => {
         if (!canRename) return;
         e.stopPropagation();
