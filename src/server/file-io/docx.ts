@@ -92,6 +92,10 @@ export interface MammothWarnings {
  * Collapse mammoth's per-occurrence messages into a small set of distinct,
  * user-readable phrases. mammoth emits one message PER dropped element (e.g. a
  * line per unrecognized style run), which would be unreadable surfaced raw.
+ *
+ * NOTE: this returns the GENERAL bucket only — move-revision messages are
+ * partitioned out and are NOT in the result. If you want everything mammoth
+ * said, call `partitionMammothMessages` and read both fields.
  */
 export function summarizeMammothMessages(
   messages: Array<{ type: string; message: string }>,

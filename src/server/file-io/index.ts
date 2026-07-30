@@ -16,10 +16,11 @@ import {
 import { exportYDocToDocx } from "./docx-export.js";
 import { type DocxNotes, footnoteLossLines, parseDocxFootnotes } from "./docx-footnotes.js";
 import {
-  lostFeatureLossLines,
   moveCount,
   noLostFeatures,
   scanDocxLostFeatures,
+  scanFailureLines,
+  structuralLossLines,
 } from "./docx-lost-features.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
@@ -137,8 +138,10 @@ const docxAdapter: FormatAdapter = {
     // The fixed-set lines are bounded at 10 — up to 5 revision-family (the
     // "couldn't check" line CAN coexist with counts, since the notes parts are
     // still tallied after the main part fails), 2 header/footer, 3 note — and
-    // ride on TOP of mammoth's MAX_FIDELITY_WARNINGS cap, so 18 lines is the
-    // worst case for a pathological document. No re-flooding, no new cap needed. Note the counts INSIDE each
+    // ride on TOP of mammoth's MAX_FIDELITY_WARNINGS cap. mammoth's move bucket
+    // is partitioned out of that cap and is itself bounded at 6 distinct
+    // messages, so the true worst case is 10 + 8 + 6 = 24 lines for a
+    // pathological document. No re-flooding, no new cap needed. Note the counts INSIDE each
     // line are unbounded, deliberately: "47 tracked deletions" is materially
     // different from "3", and these lines never reach Claude (see the note in
     // docx-lost-features.ts), so there is no oracle to bound.
@@ -162,8 +165,12 @@ const docxAdapter: FormatAdapter = {
       moveCount(lost.revisions) > 0
         ? loaded.warnings
         : [...loaded.warnings, ...(loaded.moveWarnings ?? [])];
-    const structural = [...lostFeatureLossLines(lost), ...footnoteLossLines(notes, reconciliation)];
-    const importLosses = [...structural, ...mammothWarnings];
+    // `structural` = things that ARE gone, and only those: it drives the
+    // save-time overwrite warning, whose copy asserts the backed-up original has
+    // features this file doesn't. The scan-failure line rides in the banner but
+    // stays out of that count — "couldn't check" is not "is missing".
+    const structural = [...structuralLossLines(lost), ...footnoteLossLines(notes, reconciliation)];
+    const importLosses = [...scanFailureLines(lost), ...structural, ...mammothWarnings];
     if (importLosses.length > 0) {
       issues.push({
         kind: "other",

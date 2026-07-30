@@ -267,11 +267,13 @@ function toParagraphLines(text: string): string[] {
  * `onSkip` makes those drops COUNTABLE (#1142 G3) — they were previously only a
  * stderr line, and Phase 0e structurally cannot see them (see
  * `commentExportDowngrades`). It is optional, so the three pre-existing call
- * sites are untouched. Supplying it also SILENCES this call's stderr: a counting
- * caller runs in addition to the export and verify calls, which already log the
- * same drops, and tripling the log would degrade stderr as a diagnostic. The
- * reason is a closed enum carrying no annotation id and no offsets — it reaches
- * a Claude-visible surface, so it must not become a content oracle.
+ * sites are untouched. Supplying it also silences THIS MODULE'S stderr for the
+ * call: a counting caller runs in addition to the export and verify calls, which
+ * already log the same drops. (It does not silence everything — `refreshRange`
+ * emits its own partial/inverted-range warnings independently — so net volume is
+ * unchanged, not reduced.) The reason is a closed enum carrying no annotation id
+ * and no offsets: it reaches a Claude-visible surface, so it must never become a
+ * content oracle.
  */
 export function prepareExportComments(
   doc: Y.Doc,
@@ -314,8 +316,9 @@ export function prepareExportComments(
 
   // AFTER the gate, not before: `extractText` walks the whole document, and a
   // .docx carrying only highlights or private notes has nothing to export. This
-  // runs three times per save (export, verify, and the downgrade count), so a
-  // wasted walk here is a wasted walk three times over.
+  // function runs twice per save on the live doc (the downgrade count, then the
+  // export — the verifier is handed the first result rather than recomputing),
+  // so a wasted walk here is a wasted walk twice over.
   const docLength = extractText(doc).length;
 
   // Resolve each candidate's CURRENT range: relRange first, flat fallback
@@ -422,7 +425,7 @@ export function prepareExportComments(
  */
 export function commentExportDowngrades(
   comments: ExportComment[],
-  skipped: number,
+  skipped: { unresolved: number; malformed: number },
 ): { downgrades: string[]; integrity: string[] } {
   const downgrades: string[] = [];
   const integrity: string[] = [];
@@ -435,10 +438,26 @@ export function commentExportDowngrades(
             "(Word reply threads aren't supported)",
     );
   }
-  if (skipped > 0) {
+  // Reported apart, because they are different claims. A comment whose RANGE
+  // failed to resolve got past the ADR-027 gate — it was going to be written and
+  // wasn't. A MALFORMED record is rejected before that gate, so we cannot even
+  // tell whether it was a comment: it may well have been a highlight or a
+  // private note that would never have been exported. Folding the two would tell
+  // a user their comment vanished when nothing of the sort happened — on the one
+  // surface built to be trustworthy about loss.
+  if (skipped.unresolved > 0) {
+    const n = skipped.unresolved;
     integrity.push(
-      `${skipped === 1 ? "1 comment was" : `${skipped} comments were`} dropped because ` +
-        `${skipped === 1 ? "its" : "their"} location could no longer be found — ` +
+      `${n === 1 ? "1 comment was" : `${n} comments were`} dropped because ` +
+        `${n === 1 ? "its" : "their"} location could no longer be found — ` +
+        BACKUP_RESTORE_TAIL,
+    );
+  }
+  if (skipped.malformed > 0) {
+    const n = skipped.malformed;
+    integrity.push(
+      `${n === 1 ? "1 damaged annotation record" : `${n} damaged annotation records`} could ` +
+        `not be read, so anything ${n === 1 ? "it" : "they"} anchored was not written — ` +
         BACKUP_RESTORE_TAIL,
     );
   }

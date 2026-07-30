@@ -133,9 +133,16 @@ function containmentRatio(baseline: string, candidate: string): number {
  * name + normalized body text. Computed internally; never logged.
  *
  * Deliberately narrow — do NOT widen this to a structural comparison of the
- * whole `ExportComment`. `flattenedReplies` is export-side telemetry that is 0
- * on every reimported comment by construction, so a deep-equal would report
- * every threaded comment as lost. */
+ * whole `ExportComment`, and in particular do not add an offset-based
+ * anchor-drift check here. Two fields would lie:
+ *   - `flattenedReplies` is export-side telemetry that is 0 on every reimported
+ *     comment by construction, so a deep-equal reports every threaded comment
+ *     as lost; and
+ *   - `from`/`to` are flat offsets in DIFFERENT coordinate systems on the two
+ *     sides (live doc vs the throwaway reimport doc), and on the production path
+ *     the expected set is passed in from before the write, so they are not even
+ *     the same generation of the live doc. Comparing them would be a
+ *     cross-document offset comparison dressed up as a drift check. */
 function commentKey(c: ExportComment): string {
   const body = c.bodyParagraphs.join("\n").replace(/\s+/g, " ").trim().toLowerCase();
   return `${c.author.trim().toLowerCase()} ${body}`;

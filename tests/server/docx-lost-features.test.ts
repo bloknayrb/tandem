@@ -24,6 +24,7 @@ import {
   type DocxLostFeatures,
   lostFeatureLossLines,
   scanDocxLostFeatures,
+  structuralLossLines,
 } from "../../src/server/file-io/docx-lost-features.js";
 import {
   buildFormatRevision,
@@ -225,6 +226,51 @@ describe("scanDocxLostFeatures — revision marks", () => {
     );
     expect(out.revisions.insertions).toBe(0);
     expect(out.headers).toBe(1); // reported as a whole-part loss instead
+  });
+
+  it("finds note revisions when the main part is at the package ROOT", async () => {
+    // baseDir is "" here, so a naive `${baseDir}/footnotes.xml` builds
+    // "/footnotes.xml" — which JSZip never matches, silently losing the count.
+    const out = await scan(
+      await zipWith({
+        "_rels/.rels": rootRels("document.xml"),
+        "document.xml": documentXml("<w:p/>"),
+        "footnotes.xml":
+          `<?xml version="1.0"?><w:footnotes xmlns:w="${WML}"><w:footnote w:id="1"><w:p>` +
+          `<w:del ${REV}><w:r><w:delText>gone</w:delText></w:r></w:del></w:p></w:footnote></w:footnotes>`,
+      }),
+    );
+    expect(out.revisions.deletions).toBe(1);
+  });
+
+  it("falls back per-kind when a rels target doesn't name a real entry", async () => {
+    // An unresolvable target must not ALSO suppress the fallback that would
+    // have found the part sitting right there.
+    const out = await scan(
+      await pkg("<w:p/>", {
+        "word/_rels/document.xml.rels":
+          `<?xml version="1.0"?><Relationships xmlns="${REL_NS}">` +
+          `<Relationship Id="r1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="../word/footnotes.xml"/>` +
+          `</Relationships>`,
+        "word/footnotes.xml":
+          `<?xml version="1.0"?><w:footnotes xmlns:w="${WML}"><w:footnote w:id="1"><w:p>` +
+          `<w:del ${REV}><w:r><w:delText>gone</w:delText></w:r></w:del></w:p></w:footnote></w:footnotes>`,
+      }),
+    );
+    expect(out.revisions.deletions).toBe(1);
+  });
+
+  it("finds header/footer parts BESIDE the main part, not just under word/", async () => {
+    // The resolver follows the rels wherever the main part lives; assuming
+    // `word/` here would hand a `doc/`-laid-out package a false all-clear.
+    const out = await scan(
+      await zipWith({
+        "_rels/.rels": rootRels("doc/document.xml"),
+        "doc/document.xml": documentXml("<w:p/>"),
+        "doc/header1.xml": headerXml("<w:p><w:r><w:t>ACME letterhead</w:t></w:r></w:p>"),
+      }),
+    );
+    expect(out.headers).toBe(1);
   });
 
   it("reports 'couldn't check' rather than a silent zero when the main part is missing", async () => {
@@ -473,6 +519,22 @@ describe("lostFeatureLossLines — content contract", () => {
       expect(ALLOWED.some((re) => re.test(line))).toBe(true);
     }
     expect(one.every((l) => !/\d+ \w+s (was|wasn't)/.test(l))).toBe(true);
+  });
+
+  it("keeps 'couldn't check' OUT of the structural loss lines", async () => {
+    // structuralLossLines drives the save-time overwrite warning, whose copy
+    // asserts the backed-up original HAS features this file doesn't. A failed
+    // scan is not an existence claim.
+    const failed: DocxLostFeatures = {
+      revisions: { insertions: 0, deletions: 0, moveTo: 0, moveFrom: 0, formatting: 0 },
+      headers: 0,
+      footers: 0,
+      revisionScanFailed: true,
+    };
+    expect(structuralLossLines(failed)).toEqual([]);
+    // ...but the user is still told the check didn't run.
+    expect(lostFeatureLossLines(failed)).toHaveLength(1);
+    expect(lostFeatureLossLines(failed)[0]).toContain("couldn't check");
   });
 
   it("orders lines most-destructive first", async () => {

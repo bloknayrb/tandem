@@ -328,8 +328,13 @@ function relationshipTarget(
  */
 async function resolveRevisionParts(
   zip: JSZip,
-): Promise<{ main: string | undefined; notes: string[] }> {
+): Promise<{ main: string | undefined; baseDir: string; notes: string[] }> {
   let main: string | undefined;
+  // NB: `findAllByName` inside `relationshipTarget` matches the UNPREFIXED
+  // `Relationship`, which is how OPC rels parts are written in practice. A
+  // hypothetical `<r:Relationship>` part defeats resolution — but it degrades to
+  // the conventional fallback below or to an honest `revisionScanFailed`, never
+  // to a false all-clear, so it is not worth a second matcher.
   await withPart(zip, "_rels/.rels", (children) => {
     main = relationshipTarget(children, "", REL_NS_MAIN);
   });
@@ -337,25 +342,31 @@ async function resolveRevisionParts(
   // conventionally-named main part is still worth scanning.
   if (!main || !zip.file(main))
     main = zip.file("word/document.xml") ? "word/document.xml" : undefined;
-  if (!main) return { main: undefined, notes: [] };
+  if (!main) return { main: undefined, baseDir: "word", notes: [] };
 
   const slash = main.lastIndexOf("/");
   const baseDir = slash === -1 ? "" : main.slice(0, slash);
+  const dir = baseDir ? `${baseDir}/` : ""; // "" when the main part is at the root
   const base = main.slice(slash + 1);
-  const notes: string[] = [];
-  await withPart(zip, `${baseDir ? `${baseDir}/` : ""}_rels/${base}.rels`, (children) => {
-    for (const suffix of ["/relationships/footnotes", "/relationships/endnotes"]) {
-      const target = relationshipTarget(children, baseDir, suffix);
-      if (target) notes.push(target);
+
+  // Resolved PER KIND, not as one list. A target that doesn't name a real entry
+  // (a `..` segment, percent-encoding, a typo — `resolveTarget` normalizes none
+  // of those, and JSZip resolves none of them either) must fall back rather than
+  // both fail AND suppress the fallback; likewise a rels part that declares
+  // footnotes but not endnotes must not disable the endnotes fallback.
+  const resolved: Record<string, string | undefined> = {};
+  await withPart(zip, `${dir}_rels/${base}.rels`, (children) => {
+    for (const kind of ["footnotes", "endnotes"]) {
+      const target = relationshipTarget(children, baseDir, `/relationships/${kind}`);
+      if (target && zip.file(target)) resolved[kind] = target;
     }
   });
-  // Conventional fallback when the rels part is absent/unreadable.
-  if (notes.length === 0) {
-    for (const p of [`${baseDir}/footnotes.xml`, `${baseDir}/endnotes.xml`]) {
-      if (zip.file(p)) notes.push(p);
-    }
+  const notes: string[] = [];
+  for (const kind of ["footnotes", "endnotes"]) {
+    const target = resolved[kind] ?? `${dir}${kind}.xml`;
+    if (zip.file(target)) notes.push(target);
   }
-  return { main, notes };
+  return { main, baseDir, notes };
 }
 
 // ---------------------------------------------------------------------------
@@ -388,11 +399,25 @@ const MAX_HEADER_FOOTER_PARTS = 32;
  * about, so this is a cheap first line rather than a guarantee. */
 const MAX_HEADER_FOOTER_BYTES = 2 * 1024 * 1024;
 
-/** OPC part names compare case-insensitively, so match lowercased. `\d*` also
- * covers the no-digit `word/header.xml` form some producers emit. Anchored at
- * both ends, so nested or lookalike paths (`word/header1.xml/x`,
- * `word/media/header1.xml`) cannot match. */
-const HEADER_FOOTER_PART = /^word\/(header|footer)\d*\.xml$/;
+/**
+ * Header/footer parts, matched BESIDE the main document part rather than under a
+ * hardcoded `word/`. `resolveRevisionParts` goes to real lengths to follow the
+ * rels wherever the main part lives; assuming `word/` here would hand a package
+ * laid out under, say, `doc/` a confident "no headers lost" — the detector
+ * producing exactly the false all-clear this module exists to prevent. `word/`
+ * stays in the alternation so an UNREFERENCED conventional part still counts.
+ *
+ * OPC part names compare case-insensitively, so match lowercased. `\d*` also
+ * covers the no-digit `header.xml` form some producers emit. Anchored at both
+ * ends, so nested or lookalike paths (`word/header1.xml/x`,
+ * `word/media/header1.xml`) cannot match.
+ */
+function headerFooterKind(entryName: string, baseDir: string): "headers" | "footers" | undefined {
+  const dirs = new Set([baseDir.toLowerCase(), "word"].filter(Boolean));
+  const match = /^(.*)\/(header|footer)\d*\.xml$/.exec(entryName.toLowerCase());
+  if (!match || !dirs.has(match[1])) return undefined;
+  return match[2] === "header" ? "headers" : "footers";
+}
 
 /** Best-effort declared uncompressed size, or undefined when JSZip doesn't
  * expose it (never trusted for correctness — only to skip an obvious bomb). */
@@ -422,7 +447,7 @@ export async function scanDocxLostFeatures(buffer: Buffer): Promise<DocxLostFeat
   // that part — inventing a count we can't stand behind would be its own kind of
   // dishonesty. But failing to find the MAIN part at all is a different claim:
   // it means "couldn't check", and it gets its own line rather than a silent zero.
-  const { main, notes } = await resolveRevisionParts(zip);
+  const { main, baseDir, notes } = await resolveRevisionParts(zip);
   if (!main) {
     out.revisionScanFailed = true;
     console.error("[docx-lost-features] no main document part; cannot check for tracked changes");
@@ -446,10 +471,10 @@ export async function scanDocxLostFeatures(buffer: Buffer): Promise<DocxLostFeat
   // degrade-to-empty in docx-footnotes.ts, where the failure mode is symmetric.)
   const matches: Array<{ name: string; kind: "headers" | "footers" }> = [];
   for (const name of Object.keys(zip.files)) {
-    const group = HEADER_FOOTER_PART.exec(name.toLowerCase())?.[1];
-    // Classified ONCE, from the same match that admitted the part — a second
-    // independent `startsWith` would silently mis-bucket if the regex widened.
-    if (group) matches.push({ name, kind: group === "header" ? "headers" : "footers" });
+    // Classified ONCE, by the same predicate that admitted the part — a second
+    // independent `startsWith` would silently mis-bucket if the pattern widened.
+    const kind = headerFooterKind(name, baseDir);
+    if (kind) matches.push({ name, kind });
   }
   if (matches.length > MAX_HEADER_FOOTER_PARTS) {
     console.error(
@@ -507,15 +532,30 @@ const line = (n: number, one: string, many: string, tail: string): string =>
  * author wrote.
  */
 export function lostFeatureLossLines(scan: DocxLostFeatures): string[] {
+  return [...scanFailureLines(scan), ...structuralLossLines(scan)];
+}
+
+/**
+ * The "couldn't check" line, kept APART from the loss lines. It belongs in the
+ * banner — the user should know a check didn't run — but it must never feed the
+ * save-time structural count, because that count drives copy asserting the
+ * backed-up original HAS features this file doesn't. Deriving an existence claim
+ * from a "we couldn't look" signal is the failure this module exists to prevent.
+ */
+export function scanFailureLines(scan: DocxLostFeatures): string[] {
+  return scan.revisionScanFailed
+    ? [
+        "Tandem couldn't check this file for tracked changes — if it has any, they won't be " +
+          "preserved on save",
+      ]
+    : [];
+}
+
+/** Lines describing content or page furniture that is actually gone. */
+export function structuralLossLines(scan: DocxLostFeatures): string[] {
   const lines: string[] = [];
   const { insertions, deletions, formatting } = scan.revisions;
 
-  if (scan.revisionScanFailed) {
-    lines.push(
-      "Tandem couldn't check this file for tracked changes — if it has any, they won't be " +
-        "preserved on save",
-    );
-  }
   if (deletions > 0) {
     lines.push(
       line(

@@ -135,13 +135,15 @@ function fidelityReportOf(doc: Y.Doc): FidelityReport | undefined {
 }
 
 /**
- * How many STRUCTURAL import losses the persisted report carries (#1142 G3) —
- * content or page furniture that is gone, not mammoth's style-level tail. This
- * is what the save-time overwrite warning gates on; see the field's note in
- * `shared/types.ts` for why the broader count would make it ambient.
+ * How many STRUCTURAL import losses a report carries (#1142 G3) — content or
+ * page furniture that is gone, not mammoth's style-level tail. This is what the
+ * save-time overwrite warning gates on; see the field's note in
+ * `shared/types.ts` for why the broader count would make it ambient. Takes the
+ * report rather than the doc so a caller can read it ONCE and use the same
+ * snapshot for what it returns and what it persists.
  */
-function countStructuralLosses(doc: Y.Doc): number {
-  const value = fidelityReportOf(doc)?.structuralLosses;
+function structuralLossesOf(report: FidelityReport | undefined): number {
+  const value = report?.structuralLosses;
   return typeof value === "number" && value > 0 ? value : 0;
 }
 
@@ -167,15 +169,20 @@ export interface SaveResult {
   integrityWarnings?: string[];
   /**
    * How many KINDS of Word feature the import couldn't bring in (#1142 G3,
-   * `.docx` only) — i.e. the number of `FidelityReport.importLosses` lines, each
-   * of which already carries its own count. `undefined` when there are none.
+   * `.docx` only) — `FidelityReport.structuralLosses`, i.e. the count of report
+   * lines describing content or page furniture that is GONE. `undefined` when
+   * there are none.
    *
-   * A CATEGORY count, deliberately not a feature count, and the user-facing copy
-   * must not present it as one: `importLosses` is capped (≤9 fixed lines plus
-   * mammoth's own ≤8), so a document losing 40 tracked deletions and 12 styles
-   * still reports ~11. It exists to answer "is there anything to tell the user
-   * about at the moment of overwrite?", not "how much". The persistent notice
-   * carries the real numbers.
+   * Deliberately NOT `importLosses.length`: that includes mammoth's style-level
+   * tail, which nearly every real `.docx` trips, so gating on it would make the
+   * overwrite warning ambient. It also excludes the "couldn't check" line —
+   * that is not an existence claim.
+   *
+   * A CATEGORY count, and the user-facing copy must not present it as a feature
+   * count: each line carries its own number, so a document losing 40 tracked
+   * deletions and 3 headers reports 2, not 43. It answers "is there anything to
+   * tell the user at the moment of overwrite?", not "how much". The persistent
+   * notice carries the real numbers.
    */
   unpreservedImports?: number;
 }
@@ -293,6 +300,7 @@ export async function saveDocumentToDisk(
     let integrityWarnings: string[] | undefined;
     let exportDowngrades: string[] = [];
     let unpreservedImports: number | undefined;
+    let importSnapshot: FidelityReport | undefined;
     if (isBinary) {
       // Binary branch (#576, .docx). Capture fidelity warnings against the same
       // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
@@ -307,15 +315,22 @@ export async function saveDocumentToDisk(
       // an awaited call here: a Hocuspocus update landing in the gap would make
       // the report describe a document that was never saved. Pinned by a test
       // that compares the reported reply count against the produced buffer.
-      let unanchorableComments = 0;
-      const exportComments = prepareExportComments(doc, () => unanchorableComments++);
-      const commentFidelity = commentExportDowngrades(exportComments, unanchorableComments);
-      // Snapshot the import-loss count HERE, before the write. The `withMcp`
-      // block that persists the report runs after five awaits, and
-      // Y_MAP_FIDELITY_REPORT has a second writer (`writeImportLossReport`, on
-      // the force-reload and file-watcher-reload paths) — reading it down there
-      // could describe a DIFFERENT import than the bytes we are about to write.
-      unpreservedImports = countStructuralLosses(doc) || undefined;
+      const skipped = { unresolved: 0, malformed: 0 };
+      const exportComments = prepareExportComments(doc, (reason) => {
+        if (reason === "malformed") skipped.malformed++;
+        else skipped.unresolved++;
+      });
+      const commentFidelity = commentExportDowngrades(exportComments, skipped);
+      // Snapshot the WHOLE import half HERE, before the write, and use this one
+      // snapshot for both the returned count and the persisted report. The
+      // `withMcp` block runs after five awaits, and Y_MAP_FIDELITY_REPORT has a
+      // second writer (`writeImportLossReport`, on the force-reload and
+      // file-watcher-reload paths). Re-reading it down there could pair a NEWER
+      // import's loss list with this save's downgrades, and would let the
+      // persisted `structuralLosses` disagree with the count already delivered
+      // to the toast and to Claude.
+      importSnapshot = fidelityReportOf(doc);
+      unpreservedImports = structuralLossesOf(importSnapshot) || undefined;
       const buffer = await adapter.saveBinary!(doc);
       // Pre-overwrite snapshot of the on-disk original (first write per path per
       // run), mirroring the text branch below. .docx is the highest-stakes case:
@@ -383,10 +398,9 @@ export async function saveDocumentToDisk(
       // value is opaque (no field-level CRDT merge) and all writers are
       // server-side + serialized, so this read-modify-write can't interleave.
       if (isBinary) {
-        const prev = fidelityReportOf(doc);
         meta.set(Y_MAP_FIDELITY_REPORT, {
-          importLosses: prev?.importLosses ?? [],
-          structuralLosses: prev?.structuralLosses ?? 0,
+          importLosses: importSnapshot?.importLosses ?? [],
+          structuralLosses: structuralLossesOf(importSnapshot),
           exportDowngrades,
           // Post-write verify advisories (#1123 0e) — louder than downgrades;
           // `?? []` clears a prior save's advisory on a now-clean save.

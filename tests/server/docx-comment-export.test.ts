@@ -616,7 +616,10 @@ describe("commentExportDowngrades", () => {
     expect(comments).toHaveLength(1);
     expect(comments[0].flattenedReplies).toBe(2);
 
-    const { downgrades, integrity } = commentExportDowngrades(comments, 0);
+    const { downgrades, integrity } = commentExportDowngrades(comments, {
+      unresolved: 0,
+      malformed: 0,
+    });
     expect(downgrades).toEqual([
       "2 comment replies flattened into their parent comments (Word reply threads aren't supported)",
     ]);
@@ -632,7 +635,10 @@ describe("commentExportDowngrades", () => {
     addReply(d, { annotationId: id, text: "alpha-reply" });
     addReply(d, { annotationId: id, text: "beta-reply" });
 
-    const reported = commentExportDowngrades(prepareExportComments(d), 0);
+    const reported = commentExportDowngrades(prepareExportComments(d), {
+      unresolved: 0,
+      malformed: 0,
+    });
     const xml = (await readPart(await unzip(await exportYDocToDocx(d)), "word/comments.xml")) ?? "";
     const written = (xml.match(/Reply from /g) ?? []).length;
 
@@ -674,7 +680,7 @@ describe("commentExportDowngrades", () => {
     // Not an announced downgrade: the comment vanishes from the file, and
     // restore is the correct remedy — so it must not be folded into the calm
     // "N features simplified" count.
-    const { downgrades, integrity } = commentExportDowngrades([], 2);
+    const { downgrades, integrity } = commentExportDowngrades([], { unresolved: 2, malformed: 0 });
     expect(downgrades).toEqual([]);
     expect(integrity).toEqual([
       "2 comments were dropped because their location could no longer be found — " +
@@ -682,7 +688,25 @@ describe("commentExportDowngrades", () => {
     ]);
   });
 
-  it("counts a malformed record too — the fourth, previously silent drop", async () => {
+  it("reports a malformed record SEPARATELY, not as a location failure", async () => {
+    // The malformed check runs BEFORE the ADR-027 type gate, so it also catches
+    // records that could never have been exported (a corrupted highlight, say).
+    // Folding it into the "location could no longer be found" count would tell
+    // the user a comment vanished when nothing of the sort happened.
+    const { integrity } = commentExportDowngrades([], { unresolved: 0, malformed: 1 });
+    expect(integrity).toHaveLength(1);
+    expect(integrity[0]).toContain("1 damaged annotation record");
+    expect(integrity[0]).not.toContain("location could no longer be found");
+  });
+
+  it("keeps the two skip kinds on separate lines when both occur", async () => {
+    const { integrity } = commentExportDowngrades([], { unresolved: 2, malformed: 1 });
+    expect(integrity).toHaveLength(2);
+    expect(integrity[0]).toContain("2 comments were dropped");
+    expect(integrity[1]).toContain("1 damaged annotation record");
+  });
+
+  it("counts a malformed record at all — the fourth, previously silent drop", async () => {
     const d = docFromHtml("<p>Hello world text</p>");
     // A durable record that lost its range: rejected by isAnnotationShaped
     // before any of the three resolve-failure sites, with no log at all.
@@ -699,7 +723,10 @@ describe("commentExportDowngrades", () => {
     // drops must leave the notice empty, or the banner arms on every save.
     const d = docFromHtml("<p>Hello world text</p>");
     addAnnotation(d, 6, 11, { content: "Plain" });
-    const { downgrades, integrity } = commentExportDowngrades(prepareExportComments(d), 0);
+    const { downgrades, integrity } = commentExportDowngrades(prepareExportComments(d), {
+      unresolved: 0,
+      malformed: 0,
+    });
     expect(downgrades).toEqual([]);
     expect(integrity).toEqual([]);
   });
@@ -708,7 +735,10 @@ describe("commentExportDowngrades", () => {
     const d = docFromHtml("<p>Hello world text</p>");
     const id = addAnnotation(d, 6, 11, { content: "Parent" });
     addReply(d, { annotationId: id, text: "only" });
-    const { downgrades, integrity } = commentExportDowngrades(prepareExportComments(d), 1);
+    const { downgrades, integrity } = commentExportDowngrades(prepareExportComments(d), {
+      unresolved: 1,
+      malformed: 0,
+    });
     expect(downgrades[0]).toBe(
       "1 comment reply flattened into its parent comment (Word reply threads aren't supported)",
     );
@@ -719,7 +749,10 @@ describe("commentExportDowngrades", () => {
     const d = docFromHtml("<p>Hello world text</p>");
     const id = addAnnotation(d, 6, 11, { id: "ann-secret-id", content: "Parent" });
     addReply(d, { annotationId: id, author: "import", importAuthor: "Dana Q Counsel", text: "x" });
-    const { downgrades, integrity } = commentExportDowngrades(prepareExportComments(d), 3);
+    const { downgrades, integrity } = commentExportDowngrades(prepareExportComments(d), {
+      unresolved: 3,
+      malformed: 0,
+    });
     const blob = JSON.stringify([...downgrades, ...integrity]);
     expect(blob).not.toContain("Dana");
     expect(blob).not.toContain("Counsel");
