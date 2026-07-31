@@ -41,7 +41,6 @@ import {
   broadcastOpenDocs,
   closeDocumentById,
   docCount,
-  EXTERNAL_CONFLICT_SKIP_REASON,
   getActiveDocId,
   getCurrentDoc,
   getOpenDocs,
@@ -754,7 +753,13 @@ export function registerDocumentTools(server: McpServer): void {
         // it as an error instead — the resolution is a human keep-vs-reload
         // choice in the editor, which no MCP tool exposes. Ordering matters:
         // the session write above must happen first, or the carry is dead code.
-        if (result.reason === EXTERNAL_CONFLICT_SKIP_REASON) {
+        //
+        // Branches on `skipCode`, not `reason`: `reason` is free-form prose
+        // (SaveResult's own contract says as much) and `skipCode` is the
+        // machine-readable discriminator added specifically so callers don't
+        // depend on exact wording (review finding — this branch had drifted
+        // to the string it was meant to avoid).
+        if (result.skipCode === "EXTERNAL_CONFLICT") {
           // Name the document — with several open, "a conflict" isn't
           // actionable — and name BOTH exits. The banner is the normal one, but
           // it needs a browser/desktop client; in stdio there is none, and

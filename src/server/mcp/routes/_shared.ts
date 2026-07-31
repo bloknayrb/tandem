@@ -46,6 +46,7 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "ALREADY_EXISTS":
     case "RENAME_IN_PROGRESS":
     case "RELOAD_IN_PROGRESS":
+    case "EXTERNAL_CONFLICT":
       return 409;
     case "FILE_TOO_LARGE":
       return 413;
@@ -89,6 +90,8 @@ function errorCodeToLabel(code: string): string {
       return "READ_ONLY";
     case "RELOAD_IN_PROGRESS":
       return "RELOAD_IN_PROGRESS";
+    case "EXTERNAL_CONFLICT":
+      return "EXTERNAL_CONFLICT";
     case "FILE_TOO_LARGE":
       return "FILE_TOO_LARGE";
     case "EBUSY":

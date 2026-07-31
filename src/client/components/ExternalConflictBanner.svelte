@@ -20,6 +20,15 @@ import "./tandem-banner.css";
  * choice, reload, or explicit save). Non-blocking banner, not a modal — the
  * default (do nothing) keeps the unsaved in-memory edits, matching the
  * server's restore behavior.
+ *
+ * `tandem-banner--sticky` (review finding): this banner mounts inside
+ * `.editor-scroll`, a normal-flow position like the rest of the document body.
+ * Widened from `.docx`-only (#1069, rare external rewrites) to `.md`/`.txt`
+ * (#1238, routinely rewritten by git/tooling/other editors while open) with
+ * autosave now unconditionally blocked while a conflict is pending, a user
+ * scrolled into a long document would otherwise have no persistent signal that
+ * saving has silently stopped. Sticky-positions just this banner, not the
+ * shared `.tandem-banner--warning` family FidelityReportBanner also uses.
  */
 
 interface Props {
@@ -48,13 +57,31 @@ let error = $state<string | null>(null);
 $effect(() => {
   // Track the ydoc prop — re-observe when the active tab's doc changes.
   const meta = ydoc.getMap(Y_MAP_DOCUMENT_META);
+  // Plain closure variable, NOT $state: `read()` runs inside this $effect, so
+  // reading the `conflict` $state here (to detect an identity change) would
+  // make the effect read AND write the same state in one execution —
+  // `effect_update_depth_exceeded`. Tracking the last-seen id in an untracked
+  // local sidesteps that; `conflict` itself stays effect-write-only exactly
+  // like before this change.
+  let lastDetectedAt: number | undefined;
   const read = () => {
     const next = (meta.get(Y_MAP_EXTERNAL_CONFLICT) as ExternalConflictState | undefined) ?? null;
-    // Drop a stale failure when the conflict itself goes away, or a resolve
-    // that errored once would re-attach its message to the NEXT conflict on
-    // the same document (the banner unmounts and remounts, but `error` is
-    // component state and only the ydoc-swap cleanup clears it).
-    if (next === null) error = null;
+    // Reset on any identity change, not just the "conflict cleared" (→null)
+    // case (review finding): `{#key activeTab.id}` in App.svelte and the
+    // `forDoc` pin in resolve() only guard CROSS-document leakage. On the SAME
+    // document, a slow resolve() for conflict A can still be in flight when
+    // the server clears A and raises a fresh conflict B — without this, B's
+    // banner would inherit A's stale `pending`/`error` (wrongly-disabled
+    // buttons, or A's eventual failure text attached to B). `detectedAt` is a
+    // stable per-episode id (a carried flag is re-raised with its ORIGINAL
+    // detectedAt, but that path only fires for a document not currently open
+    // — see file-opener.ts's openFileByPath — so it can't collide with a live
+    // banner's in-flight request).
+    if (next?.detectedAt !== lastDetectedAt) {
+      error = null;
+      pending = null;
+    }
+    lastDetectedAt = next?.detectedAt;
     conflict = next;
   };
   read();
@@ -88,13 +115,18 @@ const message = $derived.by(() => {
 
 async function resolve(choice: "keep" | "reload") {
   if (pending) return;
-  // Pin the document this request belongs to. App.svelte remounts this
-  // component per tab, so today the prop can't change mid-flight — but the
+  // Pin the document AND the conflict episode this request belongs to. The
+  // document pin (`forDoc`) guards cross-document leakage — App.svelte remounts
+  // this component per tab, so today the prop can't change mid-flight, but the
   // component accepts a swappable `ydoc`/`documentId`, and every write below
-  // happens AFTER an await. Without the pin, a resolve for document A that
-  // settles after a switch would print A's failure inside B's banner and clear
-  // B's `pending`, re-enabling its buttons with B's own request still in flight.
+  // happens AFTER an await, so a resolve for document A that settles after a
+  // switch must not print A's failure inside B's banner. The conflict pin
+  // (`forConflict`) guards the narrower same-document case (review finding): A
+  // slow resolve for conflict A can still be in flight when the server clears
+  // A and raises a fresh conflict B on the SAME document — without this, B's
+  // banner would inherit A's stale `pending`/`error`.
   const forDoc = documentId;
+  const forConflict = conflict?.detectedAt;
   pending = choice;
   error = null;
   try {
@@ -103,22 +135,25 @@ async function resolve(choice: "keep" | "reload") {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ documentId: forDoc, choice }),
     });
-    if (!res.ok && forDoc === documentId) {
+    const stillCurrent = forDoc === documentId && forConflict === conflict?.detectedAt;
+    if (!res.ok && stillCurrent) {
       const body = await res.json().catch(() => null);
       error = body?.message ?? `Request failed (HTTP ${res.status}).`;
     }
     // On success the server clears the meta flag — the observer hides the banner.
   } catch {
-    if (forDoc === documentId) error = "Could not reach the server.";
+    if (forDoc === documentId && forConflict === conflict?.detectedAt) {
+      error = "Could not reach the server.";
+    }
   } finally {
-    if (forDoc === documentId) pending = null;
+    if (forDoc === documentId && forConflict === conflict?.detectedAt) pending = null;
   }
 }
 </script>
 
 {#if conflict}
   <div
-    class="tandem-banner tandem-banner--warning"
+    class="tandem-banner tandem-banner--warning tandem-banner--sticky"
     role="status"
     aria-live="polite"
     data-testid="external-conflict-banner"

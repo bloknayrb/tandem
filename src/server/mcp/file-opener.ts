@@ -1430,6 +1430,11 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     console.error("[FileWatcher] reloadFromDisk: reloading %s from %s", id, filePath);
 
     const doc = getOrCreateDocument(id);
+    // Captured RAW (not narrowed) before any async I/O, so the clear below can
+    // do an identity comparison against whatever's in the map at delete-time —
+    // see the comment there. Not `readPendingConflict()`: its narrowed return
+    // rebuilds a fresh object every call, which would defeat the comparison.
+    const rawConflictBeforeReload = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT);
 
     // 1. Read new content outside the transaction (async I/O). Pre-parse
     //    through the adapter so we use the same code path as opens
@@ -1472,9 +1477,18 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       // guard (stat.mtimeMs > lastSavedAt + 1000) doesn't permanently block
       // future saves against the pre-reload baseline, and clear any external-
       // conflict flag (#1069) — a completed reload IS the resolution.
+      //
+      // Guarded, not unconditional (review finding): steps 1's fs.stat/readFile
+      // were async, so the file watcher could have flagged a NEWER conflict
+      // while they were in flight. Deleting unconditionally would silently wipe
+      // that newer, real conflict for content this reload never saw. Only clear
+      // if the map's current raw value is still what was captured before the
+      // read started.
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       meta.set(Y_MAP_SAVED_AT_VERSION, diskStat?.mtimeMs ?? Date.now());
-      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeReload) {
+        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      }
       // Refresh the import-loss half of the fidelity report (#1145): this path
       // re-imports the doc but deliberately drops `reloadPrepared.issues` for
       // toast purposes (above), so without this the persistent banner would
@@ -1558,8 +1572,22 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
  * and the Y.Doc is the only copy of an unsaved edit whether that edit is bytes
  * in a ZIP or characters in Markdown. It gets an external-conflict flag the
  * client surfaces as a keep-vs-reload banner instead. Read-only docs are
- * excluded because they can never be saved (`saveDocumentToDisk` refuses every
- * source), so a keep-vs-reload prompt on one would be a dead end — they reload.
+ * excluded from the DIRTY check because they can never be saved
+ * (`saveDocumentToDisk` refuses every source), so a SYNTHESIZED keep-vs-reload
+ * prompt on one would be a dead end — a merely-dirty read-only doc reloads.
+ *
+ * That exclusion does NOT extend to an ALREADY-pending conflict (review
+ * finding): a document closed mid-conflict carries its `dirty` + `conflict`
+ * flags into its session (closeDocumentById), and a carried conflict is
+ * correctly re-raised even on a read-only reopen (maybeRestoreSession) — so a
+ * doc can be simultaneously read-only, dirty, AND conflict-pending. Gating
+ * only on `isDirty && !readOnly` would let a FURTHER external write on that
+ * doc fall into the reload branch and silently destroy the still-unresolved
+ * edits — exactly the class of bug #1238 exists to prevent. So the dispatch
+ * checks for a pending conflict FIRST, independent of readOnly: once flagged,
+ * a conflict only ever clears via an explicit keep/reload resolution, never by
+ * a readOnly reopen or a subsequent watcher tick.
+ *
  * Tandem's own saves are filtered
  * out before this callback by the file-watcher's two-layer self-write defense:
  * the arrival-time `suppressNextChange` counter swallows the rename events, and
@@ -1572,9 +1600,10 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
   try {
     watchFile(filePath, async () => {
       try {
-        if (isDirty(id) && !getOpenDocs().get(id)?.readOnly) {
-          const doc = getDocument(id);
-          if (!doc) return; // closed between arrival and delivery
+        const doc = getDocument(id);
+        if (!doc) return; // closed between arrival and delivery (or already evicted)
+        const alreadyConflicted = readPendingConflict(doc) !== undefined;
+        if (alreadyConflicted || (isDirty(id) && !getOpenDocs().get(id)?.readOnly)) {
           flagExternalConflict(id, doc, filePath, {
             kind: "external-edit",
             diskChanged: true,
@@ -1664,7 +1693,10 @@ export async function resolveExternalConflict(
   }
   const doc = getDocument(id) ?? getOrCreateDocument(id);
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === undefined) return;
+  // Captured RAW (not narrowed) for the "keep" branch's post-await identity
+  // check below — see the comment there.
+  const rawConflictBeforeResolve = meta.get(Y_MAP_EXTERNAL_CONFLICT);
+  if (rawConflictBeforeResolve === undefined) return;
 
   const resolvedFilePath = path.resolve(existing.filePath);
 
@@ -1679,28 +1711,40 @@ export async function resolveExternalConflict(
     const canSave = canSaveToDisk(existing.format);
     const stat = canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null;
     withInternal(doc, () => {
-      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
-      // Date.now() fallback when the file is transiently unreadable (e.g. a
-      // Word read-lock): clearing the flag without re-baselining would hide
-      // the banner while the external-modification guard kept blocking every
-      // subsequent save until the document was closed and reopened.
-      if (canSave) {
-        meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
+      // Guarded, not unconditional (review finding): the fs.stat above was
+      // async, so the file watcher could have flagged a NEWER conflict while
+      // it was in flight. "Keep" only means "keep the edits I saw when I
+      // clicked" — it must not also silently dismiss a conflict that arrived
+      // after the click.
+      if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeResolve) {
+        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+        // Date.now() fallback when the file is transiently unreadable (e.g. a
+        // Word read-lock): clearing the flag without re-baselining would hide
+        // the banner while the external-modification guard kept blocking every
+        // subsequent save until the document was closed and reopened.
+        if (canSave) {
+          meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
+        }
       }
     });
     return;
   }
 
-  await reloadFromDisk(id, resolvedFilePath, existing.format);
-  pushNotification({
-    id: generateNotificationId(),
-    type: "file-reloaded",
-    severity: "info",
-    message: `Reloaded from disk: ${path.basename(existing.filePath)}`,
-    documentId: id,
-    dedupKey: `reload:${id}`,
-    timestamp: Date.now(),
-  });
+  // reloadFromDisk returns false (and leaves the flag untouched) when a
+  // concurrent reload already holds `reloadInProgress` — in that case this
+  // click didn't perform a reload, so don't claim it did.
+  const reloaded = await reloadFromDisk(id, resolvedFilePath, existing.format);
+  if (reloaded) {
+    pushNotification({
+      id: generateNotificationId(),
+      type: "file-reloaded",
+      severity: "info",
+      message: `Reloaded from disk: ${path.basename(existing.filePath)}`,
+      documentId: id,
+      dedupKey: `reload:${id}`,
+      timestamp: Date.now(),
+    });
+  }
 }
 
 function ensureAutoSave(): void {

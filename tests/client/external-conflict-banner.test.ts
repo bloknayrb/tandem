@@ -151,4 +151,70 @@ describe("ExternalConflictBanner", () => {
       "Could not reach the server",
     );
   });
+
+  it("does not inherit stale pending/error state when a NEW conflict replaces the old one directly (no null in between)", async () => {
+    // Regression for a same-document race the `forDoc`/`{#key}` guards don't
+    // cover: a slow resolve() for conflict A is still in flight when the
+    // server clears A and raises conflict B WITHOUT an intermediate `delete`
+    // (e.g. two Y.Map writes coalesced into one observer callback). Before the
+    // fix, `read()` only reset `error` on the null transition and never reset
+    // `pending` at all, so B's banner would render with A's leftover
+    // "Keeping…"/disabled buttons, and A's eventual failure could attach to B.
+    const ydoc = new Y.Doc();
+    setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 1 });
+    const { container } = render(ExternalConflictBanner, baseProps(ydoc));
+    await tick();
+
+    let releaseFetch: (() => void) | undefined;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() =>
+      new Promise((_resolve, reject) => {
+        releaseFetch = () => reject(new Error("offline"));
+      })) as typeof fetch;
+
+    try {
+      (
+        container.querySelector("[data-testid='external-conflict-keep-btn']") as HTMLButtonElement
+      ).click();
+      await tick();
+      // A's resolve is in flight: buttons disabled, "Keeping…" showing.
+      expect(
+        (container.querySelector("[data-testid='external-conflict-keep-btn']") as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+      expect(container.querySelector(BANNER)?.textContent).toContain("Keeping…");
+
+      // Server replaces A with a fresh conflict B on the SAME document, in one
+      // write — no delete, no null transition.
+      setConflict(ydoc, { kind: "external-edit", diskChanged: true, detectedAt: 2 });
+      await tick();
+
+      // B's banner must NOT inherit A's stale pending state.
+      expect(
+        (container.querySelector("[data-testid='external-conflict-keep-btn']") as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+      expect(container.querySelector(BANNER)?.textContent).not.toContain("Keeping…");
+      expect(container.querySelector(BANNER)?.textContent).not.toContain(
+        "Could not reach the server",
+      );
+
+      // A's stale request now settles (fails). It must not retroactively
+      // disable B's buttons or attach its error to B's banner.
+      releaseFetch?.();
+      await tick();
+      await Promise.resolve();
+      await tick();
+
+      expect(container.querySelector(BANNER)?.textContent).not.toContain(
+        "Could not reach the server",
+      );
+      expect(
+        (container.querySelector("[data-testid='external-conflict-keep-btn']") as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

@@ -960,6 +960,130 @@ describe("session restore across a restart (#1238)", () => {
     expect(await fs.readFile(filePath, "utf-8")).toBe("# External rewrite");
   });
 
+  it("does not silently reload a READ-ONLY document that already has a pending conflict", async () => {
+    // Composition bug (review finding): the previous test shows a carried
+    // conflict IS correctly re-raised on a read-only reopen, which means a doc
+    // can be simultaneously read-only, dirty, AND conflict-pending. The
+    // ORIGINAL watcher gate (`isDirty && !readOnly`) evaluates `true && false`
+    // there and falls into the reload branch on any FURTHER external write —
+    // silently destroying the still-unresolved edits. This is exactly the
+    // class of bug #1238 exists to prevent, reintroduced by composing two
+    // individually-correct changes.
+    const filePath = path.join(tmpDir, "readonly-composition.md");
+    await fs.writeFile(filePath, "# Disk body");
+
+    const first = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(first.documentId);
+    makeDirty(doc);
+    await fs.writeFile(filePath, "# External rewrite");
+    await capturedWatcherCallback(filePath)(filePath);
+    await saveCurrentSession();
+    removeDoc(first.documentId);
+    setActiveDocId(null);
+
+    // Reopen read-only: carries the conflict (per the previous test).
+    const ro = await openFileByPath(filePath, { readOnly: true });
+    const roDoc = getOrCreateDocument(ro.documentId);
+    expect(conflictOf(roDoc)).toMatchObject({ kind: "external-edit" });
+    const contentBeforeThirdWrite = extractText(roDoc);
+
+    // A THIRD write lands on disk while the read-only tab is still open.
+    await fs.writeFile(filePath, "# Yet another external rewrite");
+    await capturedWatcherCallback(filePath)(filePath);
+
+    // The still-unresolved edits must survive — no silent reload — and the
+    // conflict must still be flagged (not clobbered by a no-op reload branch).
+    expect(extractText(roDoc)).toBe(contentBeforeThirdWrite);
+    expect(conflictOf(roDoc)).toMatchObject({ kind: "external-edit" });
+  });
+
+  it("preserves a NEWER conflict flagged while a 'reload' resolve is still in flight", async () => {
+    // Race regression (review finding): reloadFromDisk's fs.stat/fs.readFile
+    // are async, so a DISTINCT external write can get flagged by the watcher
+    // while a "Reload from file" click is still in progress. The completing
+    // reload used to unconditionally delete Y_MAP_EXTERNAL_CONFLICT afterward,
+    // silently wiping a newer, real conflict for content the reload never saw.
+    const filePath = path.join(tmpDir, "race.md");
+    await fs.writeFile(filePath, "# Disk body v1");
+
+    const opened = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    makeDirty(doc);
+    await fs.writeFile(filePath, "# Disk body v2 (external edit A)");
+    await capturedWatcherCallback(filePath)(filePath);
+    expect(conflictOf(doc)).toMatchObject({ kind: "external-edit" });
+
+    const originalReadFile = fs.readFile;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementationOnce(async (...args: Parameters<typeof fs.readFile>) => {
+        // Simulate a SECOND, later external write racing in while THIS
+        // reload's read is in flight — exactly what the file watcher would do
+        // on its own if it fired here.
+        await fs.writeFile(filePath, "# Disk body v3 (external edit B, races the reload)");
+        doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, {
+          kind: "external-edit",
+          diskChanged: true,
+          detectedAt: 999,
+        } satisfies ExternalConflictState);
+        return (
+          originalReadFile as (
+            ...a: Parameters<typeof fs.readFile>
+          ) => ReturnType<typeof fs.readFile>
+        )(...args);
+      });
+    try {
+      await resolveExternalConflict(opened.documentId, "reload");
+    } finally {
+      readFileSpy.mockRestore();
+    }
+
+    // The newer conflict (B) must survive the reload that raced against it —
+    // NOT be silently cleared as if the reload had resolved it.
+    expect(conflictOf(doc)).toMatchObject({ kind: "external-edit", detectedAt: 999 });
+  });
+
+  it("preserves a NEWER conflict flagged while an autosave's write is still in flight", async () => {
+    // Same race, at the OTHER call site (review finding covered both):
+    // saveDocumentToDisk's atomicWrite is async, so a distinct external write
+    // can get flagged while a save is in flight. The save's completion used to
+    // unconditionally clear the flag.
+    const filePath = path.join(tmpDir, "race-save.md");
+    await fs.writeFile(filePath, "# Disk body v1");
+
+    const opened = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    // No conflict pending yet — saveDocumentToDisk's own gate only blocks when
+    // one IS pending; this exercises the race for a save that starts clean.
+    makeDirty(doc);
+
+    const originalStat = fs.stat;
+    const statSpy = vi
+      .spyOn(fs, "stat")
+      .mockImplementationOnce(async (...args: Parameters<typeof fs.stat>) => {
+        // A NEW external write lands and gets flagged while this save's
+        // pre-write mtime check is in flight.
+        doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, {
+          kind: "external-edit",
+          diskChanged: true,
+          detectedAt: 888,
+        } satisfies ExternalConflictState);
+        return (originalStat as (...a: Parameters<typeof fs.stat>) => ReturnType<typeof fs.stat>)(
+          ...args,
+        );
+      });
+    try {
+      const result = await saveDocumentToDisk(opened.documentId, "manual");
+      expect(result.status).toBe("saved");
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    // The conflict flagged mid-write must survive the save that raced against
+    // it — the save resolved a divergence it never saw, not this one.
+    expect(conflictOf(doc)).toMatchObject({ kind: "external-edit", detectedAt: 888 });
+  });
+
   it("prompts for a dirty .html session even over an UNCHANGED file", async () => {
     // .html is in neither AUTO_SAVE_FORMATS nor BINARY_SAVE_FORMATS, so
     // saveDocumentToDisk refuses it outright — nothing will ever persist these

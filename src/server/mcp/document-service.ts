@@ -53,6 +53,7 @@ import {
   deleteSession,
   listSessionFilePaths,
   loadCtrlSession,
+  narrowConflict,
   restoreCtrlDoc,
   saveCtrlSession,
   saveSession,
@@ -144,11 +145,15 @@ export const EXTERNAL_CONFLICT_SKIP_REASON = "External conflict pending";
  * `saveSession` does for itself: on the success path `saveSession` runs before
  * the flag is cleared, so a self-read there would persist a conflict the save
  * just resolved and re-raise the banner on a clean, in-sync document.
+ *
+ * Routed through `narrowConflict` (review finding): the raw Y.Map value is as
+ * untrusted as a restored session's JSON — any WS peer with room access can
+ * set `Y_MAP_EXTERNAL_CONFLICT` via Hocuspocus, and this return value feeds
+ * save-blocking decisions and round-trips into the on-disk session file
+ * verbatim. A bare cast would take a forged/malformed value on trust.
  */
 export function readPendingConflict(doc: Y.Doc): ExternalConflictState | undefined {
-  return doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT) as
-    | ExternalConflictState
-    | undefined;
+  return narrowConflict(doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT));
 }
 
 export interface SaveResult {
@@ -280,7 +285,15 @@ export async function saveDocumentToDisk(
     // unconsumed, so when the user later picks "keep" and saves, the
     // pre-overwrite snapshot captures the EXTERNAL version — the copy actually
     // at risk.
-    const pendingConflict = readPendingConflict(getOrCreateDocument(docId));
+    // Captured RAW (not narrowed) so the post-write clear below can do an
+    // identity comparison — see the comment at the delete site. Deliberately
+    // NOT `readPendingConflict()`'s narrowed return: `narrowConflict` builds a
+    // fresh object on every call (even for an unchanged raw value, via its
+    // Date.now() fallback for a malformed `detectedAt`), so comparing two
+    // narrowed reads would spuriously look like a change on every call.
+    const conflictMetaBeforeSave = getOrCreateDocument(docId).getMap(Y_MAP_DOCUMENT_META);
+    const rawConflictBeforeSave = conflictMetaBeforeSave.get(Y_MAP_EXTERNAL_CONFLICT);
+    const pendingConflict = narrowConflict(rawConflictBeforeSave);
     if (pendingConflict && (source === "auto-save" || pendingConflict.diskChanged)) {
       return {
         status: "skipped",
@@ -384,7 +397,16 @@ export async function saveDocumentToDisk(
       meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
       // A successful save wrote the in-memory edits to disk — any pending
       // external-conflict flag (#1069) is resolved. No-op when absent.
-      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      //
+      // Guarded, not unconditional (review finding): the write above was async
+      // (fs.stat + atomicWrite), so a NEW external edit could have been flagged
+      // by the file watcher while it was in flight. Deleting unconditionally
+      // would silently wipe that newer, real conflict. Reference-compare the
+      // CURRENT raw map value against what was captured before the write
+      // started; only clear if nothing wrote a different value in between.
+      if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeSave) {
+        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      }
       // Refresh the export-downgrade half of the fidelity report (#1145, 0c),
       // preserving the import-loss half set at open. docx-only — only the
       // binary branch computes fidelityWarnings; `?? []` clears a prior save's
@@ -1273,7 +1295,11 @@ export async function closeDocumentById(
         conflict: conflictAtClose,
       });
     } catch (err) {
-      console.error("[Tandem] closeDocumentById: conflict session write failed for %s:", id, err);
+      console.error(
+        "[Tandem] closeDocumentById: conflict session write failed for %s:",
+        safeId,
+        err,
+      );
     }
   }
 
@@ -1294,7 +1320,7 @@ export async function closeDocumentById(
   try {
     await closeStore(docHash(docState.filePath));
   } catch (err) {
-    console.error("[Tandem] closeDocumentById: closeStore failed for %s:", id, err);
+    console.error("[Tandem] closeDocumentById: closeStore failed for %s:", safeId, err);
   }
   clearFileSyncContext(id);
 
@@ -1319,7 +1345,7 @@ export async function closeDocumentById(
     try {
       await deleteSession(docState.filePath);
     } catch (err) {
-      console.error("[Tandem] Failed to delete session for %s:", id, err);
+      console.error("[Tandem] Failed to delete session for %s:", safeId, err);
     }
   }
 
