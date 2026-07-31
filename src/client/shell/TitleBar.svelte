@@ -315,7 +315,17 @@ function chooseHelp() {
   <div class="title-bar-spacer title-bar-spacer-fixed" data-tauri-drag-region></div>
 
   {#if center}
-    <div class="title-bar-center" data-tauri-drag-region="false">
+    <!-- `deep` (not bare, not "false"): the tab strip now spans most of the
+         titlebar, so the empty area right of the last tab has to stay window-drag
+         surface or dragging the app by its titlebar mostly stops working. A bare
+         attribute only fires when the element IS the event target, which wouldn't
+         cover DocumentTabs' inner boxes; `deep` covers every descendant, and
+         Tauri's walk short-circuits on interactive elements (tags, roles in
+         {button, link, menuitem, tab, …}, `tabindex != -1`) — so tab pills
+         (role="tab" + tabindex=0), the "+" button and the rename input all block
+         it before it reaches here. The two non-interactive containers that would
+         otherwise become drag handles opt out explicitly inside DocumentTabs. -->
+    <div class="title-bar-center" data-tauri-drag-region="deep">
       {@render center()}
     </div>
   {/if}
@@ -486,20 +496,24 @@ function chooseHelp() {
     flex-shrink: 0;
   }
 
+  /* Right-of-center gutter. `flex-grow: 0` — the slack belongs to the tab
+     strip, not to this spacer (see `.title-bar-center`). The basis is a
+     visual gap, but `flex-shrink: 1` + the smaller `min-width` lets it
+     collapse under pressure so a narrow window spends its last pixels on
+     tabs rather than on empty space. */
   .title-bar-spacer {
-    flex: 1 1 0;
+    flex: 0 1 var(--tandem-space-5);
     min-width: var(--tandem-space-2);
     /* Stretch to the title-bar's full content height so the drag region
        actually has a hit area; an empty div under flex `align-items: center`
-       collapses to 0px tall otherwise. Explicit `align-self: stretch` —
-       relying on the inherited `align-items` value breaks `flex-grow` in
-       some browsers, so the keyword is set rather than omitted. */
+       collapses to 0px tall otherwise. */
     align-self: stretch;
   }
 
-  /* Left-of-center spacer: fixed gap (not flex-grow) so the tab strip
-     left-justifies against the brand cluster. The right spacer keeps
-     `flex: 1 1 0` and absorbs all slack. */
+  /* Left-of-center spacer: a rigid gap so the tab strip left-justifies
+     against the brand cluster. Overrides the base rule's flex shorthand; the
+     base rule's `min-width` still cascades in but can never bind, because
+     `flex-shrink: 0` stops this box shrinking below its basis at all. */
   .title-bar-spacer-fixed {
     flex: 0 0 var(--tandem-space-3);
   }
@@ -509,16 +523,21 @@ function chooseHelp() {
   }
 
 
-  /* Cap at 60% so brand + actions stay readable when the center fills with
-     many tabs; DocumentTabs handles its own horizontal scroll past the cap.
+  /* The tab strip owns every pixel between the brand and actions clusters.
+     This is the row's only `flex-grow: 1` item, so it takes all positive
+     free space. It is also the only item that can keep shrinking indefinitely
+     (`.title-bar-left` / `.title-bar-actions` are `flex-shrink: 0`, and the
+     right spacer floors at its own `min-width`), so `min-width: 0` is what
+     lets it absorb the remaining negative free space — which is why the
+     actions cluster can never be pushed off-screen. DocumentTabs still handles
+     its own horizontal scroll once the tabs outgrow whatever width lands here.
      `z-index` lifts the tab strip above tauri-plugin-decorum's overlay
      drag-region so clicks on tab pills aren't intercepted. */
   .title-bar-center {
     display: flex;
     align-items: center;
-    flex: 0 1 auto;
+    flex: 1 1 auto;
     min-width: 0;
-    max-width: 60%;
     position: relative;
     z-index: var(--tandem-z-titlebar);
   }
