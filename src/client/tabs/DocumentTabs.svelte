@@ -332,11 +332,22 @@ function beginDragMotion() {
   //    problem isn't actually resolved on the next line. cancel() is synchronous.
   const wrappers = el ? liveWrappers(tabWrappers(el)) : [];
   for (const w of wrappers) {
+    let anims: Animation[] = [];
     try {
-      for (const anim of w.getAnimations()) anim.cancel();
+      anims = w.getAnimations();
     } catch {
-      // cancel() can throw InvalidStateError, and getAnimations() also returns
-      // CSS transitions — including this module's own revert.
+      // getAnimations() is absent in happy-dom and can throw on a detached node.
+    }
+    // Per-animation, not around the loop: one InvalidStateError must not skip
+    // the rest of this wrapper's animations, or a re-grab mid-settle would find
+    // a surviving Web Animation still outranking the inline transform.
+    for (const anim of anims) {
+      try {
+        anim.cancel();
+      } catch {
+        // cancel() can throw InvalidStateError, and getAnimations() also returns
+        // CSS transitions — including this module's own revert.
+      }
     }
   }
 
@@ -439,6 +450,12 @@ function endRevert() {
  */
 function invalidateDragGeometry() {
   if (!dragSnapshot) return;
+  // Same reason `buildDecorations()` warns on a CRDT fallback: the feature
+  // degrades to a visibly poorer mode with no other signal, and "the tabs
+  // stopped animating mid-drag" is otherwise unreproducible from a bug report.
+  // Only this path warns — a strip that never had geometry is zero-width, i.e.
+  // not on screen, so nobody is dragging it and there is nothing to report.
+  console.warn("[tandem] tab strip geometry changed mid-drag; falling back to hit-testing");
   // The one $effect-driven write into the transform layer, and the inversion is
   // the point: measure() runs with the transforms still on, this clears them
   // inside the same flush, apply() then reads an untransformed `to` — so the
@@ -787,6 +804,16 @@ function handleTabPointerDown(e: PointerEvent, id: string) {
   if (renamingTabId === id) return;
   // A cancelled drag's glide is still stripping itself; a new grab supersedes it.
   endRevert();
+  // So does a gesture that never ended. A second finger on another tab, or a
+  // pointerup swallowed by the OS, would otherwise leave the previous gesture's
+  // lift and parting on the strip while this one overwrites the latch that was
+  // the only handle on them. Tear it down rather than refusing to start: a
+  // guard on `pointerId !== null` would make one lost release kill dragging for
+  // the rest of the session.
+  if (pointerId !== null) {
+    clearDragMotion(dragWrappers);
+    clearDragState();
+  }
   pointerId = e.pointerId;
   pointerStartX = e.clientX;
   pointerStartY = e.clientY;
@@ -877,8 +904,17 @@ function handlePointerUp(e: PointerEvent) {
     // against reordering onto an id no longer in `tabs`.
     tabs.some((t) => t.id === target.id)
   ) {
-    reorder(from, target.id, target.side);
-    invoked = true;
+    try {
+      reorder(from, target.id, target.side);
+      invoked = true;
+    } catch (err) {
+      // `reorder` is a host prop — this component can't know what it does. A
+      // throw here used to skip everything below it, stranding the transform
+      // layer, the pointer latch and the window listeners for the rest of the
+      // session. Treat it as not-invoked: no reorder means no reconcile, so the
+      // revert path is the correct one, and the gesture still tears down.
+      console.warn("[tandem] tab reorder threw; reverting the drag", err);
+    }
   }
   if (wasDragging) {
     // The discriminator is "was `reorder` INVOKED", not "did the order change".

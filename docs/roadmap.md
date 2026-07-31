@@ -223,7 +223,7 @@ Remaining:
 - ~~Accept All / Dismiss All buttons~~ — implemented in SidePanel
 - ~~Review Mode toggle~~ — implemented (Ctrl+Shift+R)
 - ~~"+" File Open button~~ — implemented in DocumentTabs (opens FileOpenDialog)
-- ~~Tab overflow + reorder~~ — implemented: horizontal scroll with arrow buttons, HTML5 drag-and-drop reorder, Alt+Left/Right keyboard reorder, filename ellipsis with tooltip (Issue #99)
+- ~~Tab overflow + reorder~~ — implemented: horizontal scroll with arrow buttons, pointer-based drag reorder, Alt+Left/Right keyboard reorder, filename ellipsis with tooltip (Issue #99)
 - ~~Tab cycling~~ — implemented: Ctrl+Tab / Ctrl+Shift+Tab to cycle through tabs (Issue #266)
 - ~~Version indicator in the UI (#435)~~ — **SHIPPED** (PR #460, 2026-04-28). About footer in Settings popover showing version + MCP SDK version via `useAppInfo` hook fetching `/api/info`.
 - ~~"View Changelog" button in Settings panel (#437)~~ — **SHIPPED** (PR #463, 2026-04-28). Opens bundled `CHANGELOG.md` as a read-only document tab via `POST /api/open` with `readOnly: true`.

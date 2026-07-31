@@ -609,6 +609,247 @@ describe("DocumentTabs A30 drag motion", () => {
       expect(w.style.zIndex).toBe("");
     }
   });
+
+  it("Escape suppresses the trailing click, so the cancelled tab does not switch", async () => {
+    // Escape used to null `pointerId`, which made the real pointerup early-return
+    // before the suppressor was installed — so the trailing synthetic click
+    // reached `onswitch` and the tab activated anyway. Harmless when nothing
+    // moved; under A30 it reads as "I cancelled, it flew back, and it switched".
+    const reorder = vi.fn();
+    const props = baseProps([makeTab("a"), makeTab("b")], reorder);
+    const { container } = render(DocumentTabs, { props });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 200, clientY: 0 }));
+    await tick();
+
+    tabA.click();
+    await tick();
+
+    expect(reorder).not.toHaveBeenCalled();
+    expect(props.onTabSwitch).not.toHaveBeenCalled();
+  });
+
+  it("releasing inside its own slot reverts instead of settling, and commits nothing", async () => {
+    // The modal state of the gesture: picked up, jiggled, put back. The slot
+    // never changes, so there is no target, `reorder` is never invoked, no
+    // reconcile happens — and therefore no flip to settle the tab home. This is
+    // exactly the path the CSS revert exists for; an unconditional clear here
+    // would snap the pill back from mid-air instead of gliding.
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    overElement(null);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    // 100 is past the 5px threshold but short of b's midpoint (156), so "a"
+    // stays in slot 0 and nothing parts.
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 100, clientY: 0 }));
+    await tick();
+
+    const [wrapA, wrapB] = wrappersIn(container);
+    expect(wrapA.style.transform).toBe("translateX(100px)");
+    expect(wrapB.style.transform).toBe("");
+
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 100, clientY: 0 }));
+    await tick();
+
+    expect(reorder).not.toHaveBeenCalled();
+    expect(wrapA.style.transform).toBe("");
+    expect(wrapA.style.transition).toContain("--a30-settle");
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(wrapA.style.transition).toBe("");
+    expect(wrapA.style.zIndex).toBe("");
+  });
+
+  it("a width-only change mid-drag invalidates the snapshot too", async () => {
+    // The id-set detector is blind to this: same ids, same order, but the
+    // adaptive-floor effect rewrites every wrapper's min-width when the active
+    // tab changes (the active name renders at font-weight 500, measurably wider
+    // than the 400 it was measured at), and with flex-shrink:1 that moves every
+    // left and width. Midpoints and parting magnitudes would then describe a
+    // strip that no longer exists.
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container, rerender } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    overElement(null);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+    expect(wrappersIn(container)[1].style.transform).toBe("translateX(-106px)");
+
+    // Same ids, same order — only the active tab moves.
+    await rerender({ ...baseProps(tabs, reorder), activeTabId: "b" });
+    await tick();
+
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+    expect(styleOf(tabA)).toContain("transform: none");
+
+    // Degraded from here, asserted through BEHAVIOUR rather than the wedge:
+    // further movement must not re-part anything off the dead snapshot. The
+    // wedge itself is covered by the id-change test above — here "b" is now the
+    // active tab, and happy-dom mis-expands the active branch's
+    // `border: 1px solid var(--tandem-border)` shorthand (a `var()` inside a
+    // shorthand lands in all three longhands), swallowing the `border-left`
+    // override that follows it. Real browsers cascade that correctly; it is a
+    // limitation of the test DOM, not of the indicator.
+    overElement(tabB);
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 210, clientY: 0 }));
+    await tick();
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+
+    // The gesture is still alive and still commits, off the live hit-test.
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 210, clientY: 0 }));
+    await tick();
+    expect(reorder).toHaveBeenCalledTimes(1);
+  });
+
+  it("parts every sibling it passes, not just the first", async () => {
+    // Two tabs can't tell "shift the crossed neighbour" from "shift everything
+    // between here and there" — with three, dragging "a" to the end has to move
+    // BOTH "b" and "c" back by the same width+gap.
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b"), makeTab("c")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container); // lefts 0/106/212, midpoints 50/156/262
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    overElement(null);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 300, clientY: 0 }));
+    await tick();
+
+    const [wrapA, wrapB, wrapC] = wrappersIn(container);
+    expect(wrapA.style.transform).toBe("translateX(300px)");
+    expect(wrapB.style.transform).toBe("translateX(-106px)");
+    expect(wrapC.style.transform).toBe("translateX(-106px)");
+
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 300, clientY: 0 }));
+    await tick();
+    expect(reorder).toHaveBeenCalledWith("a", "c", "right");
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+  });
+
+  it("pointercancel takes the revert path, not the settle", async () => {
+    // Escape and pointercancel are separate handlers reaching the same no-call
+    // release. Both must revert: nothing was committed, so no reconcile happens
+    // and there is no flip to settle the pill home from mid-air.
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+    expect(wrappersIn(container)[0].style.transform).toBe("translateX(200px)");
+
+    window.dispatchEvent(makePointerEvent("pointercancel", { clientX: 200, clientY: 0 }));
+    await tick();
+
+    expect(reorder).not.toHaveBeenCalled();
+    const [wrapA] = wrappersIn(container);
+    expect(wrapA.style.transform).toBe("");
+    expect(wrapA.style.transition).toContain("--a30-settle");
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(wrapA.style.transition).toBe("");
+    expect(wrapA.style.zIndex).toBe("");
+  });
+
+  it("a tab being renamed cannot be grabbed", async () => {
+    // Dragging from the pill's padding pulls focus off the rename input, whose
+    // blur commits `finish(false)` — so the rename would be silently discarded
+    // by the act of picking the tab up.
+    const reorder = vi.fn();
+    // `isRenamable` gates on `source === "file"`, which makeTab leaves unset —
+    // without it the double-click below is a no-op and the test passes for the
+    // wrong reason.
+    const tabs = [{ ...makeTab("a"), source: "file" as const }, makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    // `renamingTabId` is DocumentTabs' own state, not a prop — double-click on
+    // the name span is the real entry point, so drive it the way a user would.
+    const nameA = container.querySelector('[data-testid="tab-name-a"]') as HTMLElement;
+    nameA.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await tick();
+    expect(container.querySelector('[data-testid="tab-rename-input-a"]')).toBeTruthy();
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 200, clientY: 0 }));
+    await tick();
+    expect(reorder).not.toHaveBeenCalled();
+  });
+
+  it("Alt+Arrow is inert while a pointer drag is in flight", async () => {
+    // Both reorder paths stay reachable at once (pointerdown focuses the tab and
+    // the window keydown handler only intercepts Escape). A keyboard reorder
+    // landing mid-gesture would commit against the pointer gesture's snapshot,
+    // leave the parted siblings gliding toward a drop that no longer happens,
+    // and then layer a second reorder on release.
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+
+    // Still a press, not a drag — the gate is `dragging`, not the pointer latch,
+    // so keyboard reorder must still work here.
+    tabA.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true }),
+    );
+    await tick();
+    expect(reorder).toHaveBeenCalledTimes(1);
+    reorder.mockClear();
+
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+    tabA.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true }),
+    );
+    await tick();
+    expect(reorder).not.toHaveBeenCalled();
+  });
 });
 
 describe("uniform tab width", () => {
