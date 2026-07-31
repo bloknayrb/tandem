@@ -2254,6 +2254,7 @@ const shouldShowModelPicker = $derived(
     <ActivityTray
       items={notifications.activity}
       open={activityOpen}
+      reduceMotion={settingsState.settings.reduceMotion}
       onToggle={() => (activityOpen = !activityOpen)}
       onDismiss={notifications.dismissActivity}
       onClear={notifications.clearActivity}

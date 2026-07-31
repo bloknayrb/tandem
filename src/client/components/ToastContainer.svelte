@@ -122,6 +122,20 @@ let { toasts, onDismiss }: Props = $props();
     animation: tandem-toast-slide-in 0.2s ease-out;
   }
 
+  /* Reduced motion — this surface had NO guard at all (OS pref or in-app), unlike
+     every other animated surface in the app. Dual mechanism, matching the
+     ActivityTray/editor.css pattern. No `!important` needed here: `.toast-card` is
+     a single-class selector, so the media query wins on order and the :global body
+     selector wins on specificity. */
+  @media (prefers-reduced-motion: reduce) {
+    .toast-card {
+      animation: none;
+    }
+  }
+  :global(body.tandem-reduce-motion) .toast-card {
+    animation: none;
+  }
+
   .toast-card .glyph {
     flex: 0 0 auto;
     width: 22px;

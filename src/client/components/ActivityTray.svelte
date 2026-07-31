@@ -1,6 +1,7 @@
 <script lang="ts">
-import { onDestroy } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import type { ActivityItem } from "../hooks/useNotifications.svelte";
+import { emptyUnfold, rowEnter, rowOut } from "../panels/cardMotion.js";
 import "../panels/morphTiming.css";
 import { resolveActivityAction } from "./activityActions.js";
 import { relativeTime, SEVERITY_GLYPHS } from "./activityCenter.js";
@@ -15,11 +16,19 @@ interface Props {
   // resolveActivityAction(item) is non-null, so an optional/forgotten handler
   // would render a silently-dead button.
   onAction: (item: ActivityItem) => void;
+  // JS transitions escape BOTH the CSS `@media (prefers-reduced-motion)` query and
+  // the `body.tandem-reduce-motion` class, so the setting has to be threaded in and
+  // handed to `motionOff()` — the same contract every other cardMotion consumer uses.
+  reduceMotion: boolean;
 }
 
-let { items, open, onToggle, onDismiss, onClear, onAction }: Props = $props();
+let { items, open, onToggle, onDismiss, onClear, onAction, reduceMotion }: Props = $props();
 
 const total = $derived(items.length);
+// Newest-first (A14): the store APPENDS (`[...activity, item]`), so reverse at the
+// render boundary. Reversing in the store instead would invert cap eviction
+// (`next.shift()` drops the oldest) and `loadActivity`'s `.slice(-CAP)`.
+const rows = $derived([...items].reverse());
 // Highest-severity-wins: error outranks warning outranks info, else idle.
 // Drives the shell tint + LED state (was `pillClass` pre-A23 single-shell morph).
 // MUST stay `$derived.by` — a plain const would freeze at mount and the LED
@@ -37,24 +46,46 @@ const clock = setInterval(() => {
   now = Date.now();
 }, 30_000);
 
-// Cascade-on-open window (A23). `.tray-inner` is conditionally rendered, so the
-// rows mount fresh on every open and the rowSlideUp @keyframes fire on mount —
-// no listEl bind / reflow trick needed (that's why this is ONE effect, not the
-// bundle's two). We just flag `.tray-list.cascade` for ~1800ms so the staggered
-// reveal runs exactly once per open. A notification arriving after the window
-// simply appears (the bundle's per-row `.entering` solo-arrival path is deferred).
-let cascading = $state(false);
+// Cascade-on-open (A23). `.tray-inner` is conditionally rendered, so the rows mount
+// fresh on every open and the rowSlideUp @keyframes fire on mount.
+//
+// The cascade is anchored to a SNAPSHOT of the ids present at the moment `open`
+// flips, not to `:nth-child` as it was before A14. Two reasons, both of which the
+// old selector got wrong the instant rows could arrive or leave mid-window:
+//   1. A row mounting during the window inherited a delay of up to 1090ms measured
+//      from ITS OWN mount, so it sat at opacity:0 (`both` fill) for over a second.
+//   2. Newest-first insertion puts a new row at index 0 and shifts every sibling's
+//      :nth-child — and outroing rows are still counted by those selectors.
+// A row absent from the snapshot gets no `.cascade-row`, so it takes `in:rowEnter`
+// instead. That separation also keeps the CSS animation and Svelte's WAAPI
+// transition off the same element: both drive opacity/transform, the script-side
+// one wins while it runs, and its `animation.cancel()` at the end would hand the
+// element back to a still-delayed rowSlideUp holding opacity:0 — fade in, blink
+// out, slide in again.
+const CASCADE_SLIDE_Y = [240, 160, 84, 16, 8, 6];
+// The 540ms lead is `--morph-p1` (340) + `--morph-cascade` (200): rows start once the
+// shell has finished widening and the body has revealed. It stays a literal because
+// morphTiming.css:47-50 keeps those tokens literal for getComputedStyle consumers, so
+// a calc() here could not read back either. Retune P1 and this desyncs silently.
+const CASCADE_DELAY_MS = [540, 650, 760, 870, 980, 1090];
+const cascadeStep = (i: number) => Math.min(i, CASCADE_SLIDE_Y.length - 1);
+
+let cascadeOrder = $state<string[]>([]);
 let prevOpen = false; // plain latch — NOT $state (read+write in the effect would self-trigger)
 let cascadeTimer: ReturnType<typeof setTimeout> | undefined;
-$effect(() => {
+// `$effect.pre`, not `$effect`: a post-render effect would land after the rows have
+// already painted, so the inline --slide-y / animation-delay would be missing on
+// frame 1 and the cascade would start a frame late.
+$effect.pre(() => {
   if (open && !prevOpen) {
-    cascading = true; // written, never read here → creates no dependency, no loop
+    // untrack: the snapshot must not re-run when items change, only on the open edge.
+    cascadeOrder = untrack(() => rows.map((r) => r.id));
     if (cascadeTimer) clearTimeout(cascadeTimer);
     cascadeTimer = setTimeout(() => {
-      cascading = false;
+      cascadeOrder = [];
     }, 1800); // last row lands ~1510ms; window covers it
   } else if (!open && prevOpen) {
-    cascading = false;
+    cascadeOrder = [];
     if (cascadeTimer) {
       clearTimeout(cascadeTimer);
       cascadeTimer = undefined;
@@ -82,90 +113,117 @@ onDestroy(() => {
               <button type="button" data-testid="activity-clear-all" onclick={onClear}>Clear all</button>
             {/if}
           </div>
+          <!--
+            `.tray-list` is UNCONDITIONAL, and the empty state is a sibling rather
+            than its `{:else}`. That is what makes the row lifecycle work at all: a
+            branch swap tears down the `{#each}` block, and a local `out:` is not
+            collected when an ANCESTOR block is destroyed — so with an `{:else}`,
+            clear-all and dismissing the last row snapped instead of animating.
+            Symmetrically, a local `in:` is skipped while its block is initializing,
+            so re-creating the each block on 0→1 items ate the first arrival's
+            entrance. Keeping the block alive fixes all three at once.
+          -->
+          <div class="tray-list">
+            {#each rows as item (item.id)}
+              {@const action = resolveActivityAction(item)}
+              {@const ci = cascadeOrder.indexOf(item.id)}
+              <div
+                class="toast-row {item.severity}"
+                class:cascade-row={ci >= 0}
+                style:--slide-y={ci >= 0 ? `${CASCADE_SLIDE_Y[cascadeStep(ci)]}px` : null}
+                style:animation-delay={ci >= 0 ? `${CASCADE_DELAY_MS[cascadeStep(ci)]}ms` : null}
+                data-testid={`activity-row-${item.id}`}
+                in:rowEnter={{ reduceMotion }}
+                out:rowOut={{ reduceMotion }}
+              >
+                <span class="glyph">
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    {#each SEVERITY_GLYPHS[item.severity] as d (d)}
+                      <path {d} />
+                    {/each}
+                  </svg>
+                </span>
+                <div class="body">
+                  <div class="msg-row">
+                    <span class="msg">{item.message}</span>
+                    {#if item.count > 1}
+                      <!--
+                        `{#key}` so the badge REMOUNTS on each increment. Coalescing
+                        keeps the row's id and slot, so the keyed each preserves node
+                        identity and nothing else about a repeat event moves — without
+                        a remount the pop keyframe could only ever play once (on the
+                        1→2 mount) and every later increment would be a silent text swap.
+                      -->
+                      {#key item.count}
+                        <span class="badge">×{item.count}</span>
+                      {/key}
+                    {/if}
+                    <span class="ts">{relativeTime(item.timestamp, now)}</span>
+                  </div>
+                  {#if action}
+                    <button
+                      type="button"
+                      class="action"
+                      data-testid={`activity-action-${item.id}`}
+                      onclick={() => onAction(item)}
+                    >
+                      <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M21 12a9 9 0 1 1-3-7" />
+                        <path d="M21 4v5h-5" />
+                      </svg>
+                      {action.label}
+                    </button>
+                  {/if}
+                </div>
+                <button
+                  type="button"
+                  class="dismiss"
+                  data-testid={`activity-dismiss-${item.id}`}
+                  onclick={() => onDismiss(item.id)}
+                  aria-label="Dismiss activity item"
+                >
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M6 6l12 12" />
+                    <path d="M6 18L18 6" />
+                  </svg>
+                </button>
+              </div>
+            {/each}
+          </div>
           {#if total === 0}
-            <div class="tray-empty" data-testid="activity-empty">
+            <div class="tray-empty" data-testid="activity-empty" in:emptyUnfold={{ reduceMotion }}>
               Nothing to report.
               <div class="sub">Saves, errors, and integration events appear here.</div>
-            </div>
-          {:else}
-            <div class="tray-list" class:cascade={cascading}>
-              {#each items as item (item.id)}
-                {@const action = resolveActivityAction(item)}
-                <div class="toast-row {item.severity}" data-testid={`activity-row-${item.id}`}>
-                  <span class="glyph">
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="1.7"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      aria-hidden="true"
-                    >
-                      {#each SEVERITY_GLYPHS[item.severity] as d (d)}
-                        <path {d} />
-                      {/each}
-                    </svg>
-                  </span>
-                  <div class="body">
-                    <div class="msg-row">
-                      <span class="msg">{item.message}</span>
-                      {#if item.count > 1}
-                        <span class="badge">×{item.count}</span>
-                      {/if}
-                      <span class="ts">{relativeTime(item.timestamp, now)}</span>
-                    </div>
-                    {#if action}
-                      <button
-                        type="button"
-                        class="action"
-                        data-testid={`activity-action-${item.id}`}
-                        onclick={() => onAction(item)}
-                      >
-                        <svg
-                          width="11"
-                          height="11"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          aria-hidden="true"
-                        >
-                          <path d="M21 12a9 9 0 1 1-3-7" />
-                          <path d="M21 4v5h-5" />
-                        </svg>
-                        {action.label}
-                      </button>
-                    {/if}
-                  </div>
-                  <button
-                    type="button"
-                    class="dismiss"
-                    data-testid={`activity-dismiss-${item.id}`}
-                    onclick={() => onDismiss(item.id)}
-                    aria-label="Dismiss activity item"
-                  >
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      aria-hidden="true"
-                    >
-                      <path d="M6 6l12 12" />
-                      <path d="M6 18L18 6" />
-                    </svg>
-                  </button>
-                </div>
-              {/each}
             </div>
           {/if}
         </div>
@@ -426,6 +484,11 @@ onDestroy(() => {
   .tray-list {
     max-height: 288px;
     overflow-y: auto;
+    /* `overflow-y: auto` alone leaves overflow-x computing to `auto`, and rowOut's
+       8px rightward swipe exceeds the 6px right padding below — which would make
+       the list horizontally scrollable. The scrollbar is display:none'd, so the
+       symptom would be silent scroll drift rather than a visible bar. */
+    overflow-x: clip;
     -webkit-mask-image: linear-gradient(
       to bottom,
       transparent 0,
@@ -445,37 +508,24 @@ onDestroy(() => {
   .tray-list::-webkit-scrollbar {
     display: none;
   }
+  /* The list is always rendered now (see the markup comment), so collapse its
+     padding when it holds nothing — otherwise 12px of dead space sits above the
+     empty state. `:empty` stops matching while rows are outroing, which is what
+     we want: the padding holds until they are actually gone. */
+  .tray-list:empty {
+    padding: 0;
+  }
 
-  /* Cascade-on-open: rows rise from the bottom into their stacked positions.
-     Topmost (newest) lands first, each next ~110ms later. `--slide-y` is read
-     inside the @keyframes (we animate `transform`, not the property itself), so
-     no @property registration is needed. */
-  .tray-list.cascade .toast-row {
+  /* Cascade-on-open: rows rise from the pill into their stacked positions. The top
+     row (farthest from the bottom-anchored pill, and after A14 the NEWEST) travels
+     furthest and lands first, each next ~110ms later. `--slide-y` and the delay are
+     written inline from a snapshot index taken when the tray opens — NOT from
+     :nth-child, which mis-assigned both as soon as rows could arrive or leave
+     mid-window (see the script). `--slide-y` is read inside the @keyframes (we
+     animate `transform`, not the property itself), so no @property registration
+     is needed. */
+  .toast-row.cascade-row {
     animation: rowSlideUp 420ms var(--tandem-ease-out) both;
-  }
-  .tray-list.cascade .toast-row:nth-child(1) {
-    --slide-y: 240px;
-    animation-delay: 540ms;
-  }
-  .tray-list.cascade .toast-row:nth-child(2) {
-    --slide-y: 160px;
-    animation-delay: 650ms;
-  }
-  .tray-list.cascade .toast-row:nth-child(3) {
-    --slide-y: 84px;
-    animation-delay: 760ms;
-  }
-  .tray-list.cascade .toast-row:nth-child(4) {
-    --slide-y: 16px;
-    animation-delay: 870ms;
-  }
-  .tray-list.cascade .toast-row:nth-child(5) {
-    --slide-y: 8px;
-    animation-delay: 980ms;
-  }
-  .tray-list.cascade .toast-row:nth-child(n + 6) {
-    --slide-y: 6px;
-    animation-delay: 1090ms;
   }
   @keyframes rowSlideUp {
     from {
@@ -513,8 +563,16 @@ onDestroy(() => {
   .toast-row:hover {
     background: var(--tandem-surface-sunk);
   }
-  .toast-row + .toast-row {
-    margin-top: 2px;
+  /* Gap on the row ITSELF, not `.toast-row + .toast-row { margin-top }`. An
+     adjacent-sibling rule puts a leaving row's gap on the row that FOLLOWS it — a
+     node the exit transition cannot style — so the 2px snapped back at splice time,
+     and under newest-first every arrival (always a top insert) hit that case. Owning
+     its own bottom margin means the gap collapses with the row, and no sibling's
+     margin ever changes. `geometry()` already measures marginBottom, so `rowEnter`/
+     `rowOut` animate it for free. The trailing 2px on the last row is absorbed by
+     `.tray-list`'s 8px bottom padding. */
+  .toast-row {
+    margin-bottom: 2px;
   }
   .toast-row .glyph {
     flex: 0 0 auto;
@@ -583,6 +641,9 @@ onDestroy(() => {
     padding-top: 1px;
     align-self: flex-start;
   }
+  /* Coalescing keeps the row's id and slot, so a repeat event moves nothing — the
+     ×N badge is the only place it can register. Remounted per increment via
+     `{#key item.count}` so this replays instead of firing once on the 1→2 mount. */
   .toast-row .badge {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
@@ -590,6 +651,18 @@ onDestroy(() => {
     padding: 1px 6px;
     border-radius: var(--tandem-r-pill);
     border: 1px solid transparent;
+    animation: badgePop 240ms var(--tandem-ease-out);
+  }
+  @keyframes badgePop {
+    0% {
+      transform: scale(1);
+    }
+    40% {
+      transform: scale(1.18);
+    }
+    100% {
+      transform: scale(1);
+    }
   }
   .toast-row.info .badge {
     background: var(--tandem-info-bg);
@@ -639,12 +712,14 @@ onDestroy(() => {
      reduced-motion (WCAG 2.2.2). */
   @media (prefers-reduced-motion: reduce) {
     .pill-row .led,
-    .tray-list.cascade .toast-row {
+    .toast-row.cascade-row,
+    .toast-row .badge {
       animation: none !important;
     }
   }
   :global(body.tandem-reduce-motion) .pill-row .led,
-  :global(body.tandem-reduce-motion) .tray-list.cascade .toast-row {
+  :global(body.tandem-reduce-motion) .toast-row.cascade-row,
+  :global(body.tandem-reduce-motion) .toast-row .badge {
     animation: none !important;
   }
 </style>
