@@ -31,6 +31,7 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { MCP_ORIGIN } from "../../src/shared/origins.js";
+import { setCtrlMode } from "../helpers/ctrl-mode.js";
 
 // ---------------------------------------------------------------------------
 // Module-level vi.mock — must be declared at file scope (hoisted by Vitest).
@@ -64,7 +65,7 @@ vi.mock("../../src/server/positions.js", () => ({
 function collectEvents(): { events: TandemEvent[]; cleanup: () => void } {
   const events: TandemEvent[] = [];
   const cb = (event: TandemEvent) => events.push(event);
-  subscribe(cb);
+  subscribe(cb, "external");
   return { events, cleanup: () => unsubscribe(cb) };
 }
 
@@ -81,6 +82,11 @@ describe("ctrl-meta observer — document lifecycle events", () => {
   beforeEach(() => {
     _ctrlTestDoc = new Y.Doc();
     attachCtrlObservers();
+    // `document:*` is withheld from EXTERNAL consumers unless mode reads
+    // "tandem" — an absent key is "indeterminate", which fails closed. Set it
+    // AFTER the ctrl doc is replaced, and stand in for the connected client that
+    // broadcasts mode on connect: these tests are about the observer split.
+    setCtrlMode("tandem");
   });
 
   afterEach(() => {
@@ -160,6 +166,10 @@ describe("ctrl-meta observer — MCP_ORIGIN filter", () => {
   beforeEach(() => {
     _ctrlTestDoc = new Y.Doc();
     attachCtrlObservers();
+    // Tandem so the "no events" assertions below fail for the RIGHT reason: with
+    // the mode key absent the Solo gate would withhold `document:*` anyway and
+    // the origin filter could rot undetected.
+    setCtrlMode("tandem");
   });
 
   afterEach(() => {

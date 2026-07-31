@@ -41,6 +41,7 @@ import { withBrowser } from "../../src/shared/origins.js";
 import type { Annotation, AnnotationReply, ChatMessage } from "../../src/shared/types.js";
 import { TandemModeSchema } from "../../src/shared/types.js";
 import { generateMessageId } from "../../src/shared/utils.js";
+import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { rangeOf } from "../helpers/ydoc-factory.js";
 
 const DOC_HASH = "sha256:awareness-tools";
@@ -69,7 +70,9 @@ beforeEach(() => {
   // never buffered and `wasEmittedViaChannel` is false for the wrong reason, while
   // `processInboxAnnotations` is handed "tandem" explicitly so the length
   // assertion still holds. Delete rather than set a default — present-vs-absent is
-  // what `readModeState` uses to discriminate "indeterminate".
+  // what `readModeState` uses to discriminate "indeterminate", and indeterminate
+  // now fails CLOSED on the push path too, so a test that needs the queue to
+  // actually emit must set "tandem" for itself (two below do).
   getOrCreateDocument(CTRL_ROOM).getMap(Y_MAP_USER_AWARENESS).delete(Y_MAP_MODE);
 });
 
@@ -296,6 +299,10 @@ describe("processInboxAnnotations", () => {
     const inertConsumer = () => {}; // accepts every event, delivers to nobody
     subscribe(inertConsumer, "external");
 
+    // Explicit Tandem: the beforeEach clears the mode key, and the push hold
+    // fails closed on that ("indeterminate"), which would make the tracking
+    // assertion below fail for a reason this test isn't about.
+    setCtrlMode("tandem");
     writeUserComment(map, ydoc, "ann_inert");
 
     expect(wasEmittedViaChannel("ann_inert")).toBe(true);
@@ -656,6 +663,9 @@ describe("collectInboxUserReplies — WS-A2 reply bucket + Solo hold", () => {
     const inertConsumer = () => {};
     subscribe(inertConsumer, "external");
 
+    // Explicit Tandem — see the sibling test above: the cleared mode key is
+    // "indeterminate", which the push hold fails closed on.
+    setCtrlMode("tandem");
     // Parent must be a user comment: the replies observer drops note-threaded and
     // non-comment parents before emitting.
     withBrowser(ydoc, () => {

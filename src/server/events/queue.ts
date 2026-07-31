@@ -130,6 +130,56 @@ function trackPayloadId(event: TandemEvent): boolean {
 }
 
 /**
+ * WS-A2 Phase 7: may this event go to an EXTERNAL consumer right now?
+ *
+ * `isUserPrivacyHeld` below drops the user's own annotation/reply CONTENT before
+ * it is ever buffered. This predicate covers what that one deliberately does not:
+ * accept/dismiss status flips, Claude-authored replies, and `document:*`
+ * lifecycle. Those carry no content the AI cannot already pull on demand (Solo
+ * does not gate document reads), but they carry TIMING — they tell an idle
+ * session "the user is doing things right now, go look", which is precisely what
+ * Solo promises not to do.
+ *
+ * Before this gate, suppression lived only in the CONSUMER
+ * (`shared/sse-consumer.ts`), i.e. client-side, with a 2s stale mode cache that
+ * fails open on cold start — so any process that opened `/api/events` (a loopback
+ * `curl`, a third-party bridge, a version-pinned monitor) received the full
+ * stream in Solo. The server vouched for nothing; now it does.
+ *
+ * The consumer gate is deliberately KEPT alongside this one, and is not
+ * redundant: consumers are version-pinned separately from the server (see that
+ * gate's comment), so a new monitor can run against an older server that lacks
+ * this function entirely. Against a current server it catches nothing extra —
+ * but it is not inert, because its mode cache is stale-preserving and keeps
+ * dropping after a Solo→Tandem release until a successful refresh lands.
+ *
+ * Deliberately NOT applied before `buffer.push`: keeping the buffer's contents
+ * unchanged means `replaySince`'s unknown-id fallback (which returns the ENTIRE
+ * buffer, on a client-controlled header) cannot hand out anything it could not
+ * hand out before. The gate is applied at the two delivery points instead.
+ *
+ * Tests for `=== "tandem"`, NOT `!== "solo"`: `readModeState()` is three-valued
+ * and "indeterminate" (the CTRL_ROOM mode key absent — session lost or corrupt
+ * on restart, or simply before the client's first ctrl broadcast lands) must
+ * fail CLOSED, exactly as the pull surfaces do in `mode.ts#hideFromAI`. The
+ * whole point of the indeterminate state is "we may have been in Solo and no
+ * longer know", so the deliver-everything branch is the one branch it must
+ * never take.
+ *
+ * Read LIVE, per delivery — never stamped at push time. The Solo→Tandem release
+ * flips mode and then emits the wake, so a stamped value would swallow it. That
+ * ordering is also why fail-closed is safe here: the release route writes
+ * "tandem" into CTRL_ROOM before it calls `emitModeReleaseWake`, so mode reads
+ * `"tandem"` — not indeterminate — at the moment the wake is delivered.
+ */
+function shouldForwardExternally(event: TandemEvent): boolean {
+  // Chat is the always-delivered channel in both directions, and it is also the
+  // in-process collaborator's wake trigger. Never gate it.
+  if (event.type === "chat:message") return true;
+  return readModeState() === "tandem";
+}
+
+/**
  * WS-A2: is this event the user's own annotation/reply CONTENT — the thing the
  * AI must not see in Solo? The three event types below are, by their observers'
  * own guards, only ever emitted for `author:"user"` (annotations.ts gates
@@ -138,45 +188,13 @@ function trackPayloadId(event: TandemEvent): boolean {
  *
  * Deliberately NARROW: accept/dismiss (status flips on Claude's OWN annotations)
  * and `document:*` lifecycle are NOT held here — they must still reach the
- * in-process collaborator (which uses `document:*` to abort in-flight runs) and
- * are suppressed from the external monitor by the CONSUMER-side gate in
- * `shared/sse-consumer.ts`. Note that is client-side enforcement: the server
- * writes every event to any subscriber. Moving it to a server-side forwarder
- * gate is WS-A2 Phase 7, still open — an earlier version of this comment said
- * "at the SSE forwarder", describing that end state as if it had shipped.
+ * in-process collaborator, which consumes `document:*` to abort in-flight runs.
+ * External consumers do not receive them in Solo either, but that is enforced
+ * one layer out by `shouldForwardExternally` above. The two are different holds,
+ * not redundant ones: held HERE means never buffered at all; held THERE means
+ * buffered but not forwarded off this machine. Keeping this one narrow is what
+ * lets the collaborator keep working while the external stream stays quiet.
  */
-/**
- * WS-A2 Phase 7: may this event go to an EXTERNAL consumer right now?
- *
- * `isUserPrivacyHeld` above drops the user's own annotation/reply CONTENT before
- * it is ever buffered. This predicate covers what that one deliberately does not:
- * accept/dismiss status flips, Claude-authored replies, and `document:*`
- * lifecycle. Those carry no content the AI cannot already pull on demand (Solo
- * does not gate document reads), but they carry TIMING — they tell an idle
- * session "the user is doing things right now, go look", which is precisely what
- * Solo promises not to do.
- *
- * Until now this was enforced only in the CONSUMER (`shared/sse-consumer.ts`),
- * i.e. client-side, with a 2s stale mode cache that fails open on cold start —
- * so any process that opens `/api/events` (a loopback `curl`, a third-party
- * bridge, a version-pinned monitor) received the full stream in Solo. The server
- * vouched for nothing.
- *
- * Deliberately NOT applied before `buffer.push`: keeping the buffer's contents
- * unchanged means `replaySince`'s unknown-id fallback (which returns the ENTIRE
- * buffer, on a client-controlled header) cannot hand out anything it could not
- * hand out before. The gate is applied at the two delivery points instead.
- *
- * Read LIVE, per delivery — never stamped at push time. The Solo→Tandem release
- * flips mode and then emits the wake, so a stamped value would swallow it.
- */
-function shouldForwardExternally(event: TandemEvent): boolean {
-  // Chat is the always-delivered channel in both directions, and it is also the
-  // in-process collaborator's wake trigger. Never gate it.
-  if (event.type === "chat:message") return true;
-  return readModeState() !== "solo";
-}
-
 function isUserPrivacyHeld(event: TandemEvent): boolean {
   switch (event.type) {
     case "annotation:created":
@@ -198,13 +216,26 @@ function untrackPayloadId(event: TandemEvent): void {
 }
 
 function pushEvent(event: TandemEvent): void {
-  // WS-A2 privacy hold: in Solo, drop the user's own annotation/reply content
-  // BEFORE buffering, tracking, or fan-out — it reaches neither the SSE forwarder
-  // nor the local-model collaborator. Skipping the track also keeps the released
-  // item free of a stale `alreadyPushed` hint on the first post-release poll.
-  // Release is pull-driven — `checkInbox` re-surfaces these once live mode reads
-  // tandem (see mode.ts).
-  if (isUserPrivacyHeld(event) && readModeState() === "solo") return;
+  // WS-A2 privacy hold: unless mode reads Tandem, drop the user's own
+  // annotation/reply content BEFORE buffering, tracking, or fan-out — it reaches
+  // neither the SSE forwarder nor the local-model collaborator. Skipping the
+  // track also keeps the released item free of a stale `alreadyPushed` hint on
+  // the first post-release poll.
+  //
+  // `!== "tandem"`, not `=== "solo"`: "indeterminate" (mode key absent — session
+  // lost/corrupt on restart, or before the client's first ctrl broadcast) fails
+  // CLOSED here. That is strictly STRICTER than `mode.ts#hideFromAI`, which in
+  // indeterminate withholds only records carrying the persisted `heldInSolo`
+  // marker — so an unmarked comment authored during indeterminate is still
+  // surfaced on pull while this gate withholds its push. Over-withholding costs
+  // nothing here because only the NOTIFICATION is forgone (see below), whereas
+  // over-delivering would push content the pull path is busy withholding.
+  // Restarting mid-Solo is precisely the state this hold exists for.
+  //
+  // Dropping rather than deferring is safe because release is pull-driven —
+  // `checkInbox` re-surfaces these records once live mode reads Tandem (see
+  // mode.ts); only the push NOTIFICATION is forgone.
+  if (isUserPrivacyHeld(event) && readModeState() !== "tandem") return;
 
   buffer.push(event);
   // Track only when the fan-out below is non-empty. "Pushed to nobody" is a fact
@@ -288,13 +319,25 @@ export function getSubscriberCount(): number {
 }
 
 /**
+ * `kind` is REQUIRED — deliberately not defaulted. It now decides two different
+ * things that want OPPOSITE defaults:
+ *
+ *  1. Diagnostics (`getSubscriberCount`, `alreadyPushed`): a forgotten flag is
+ *     safest as `"internal"` — under-counting produces a false negative rather
+ *     than a false claim of delivery.
+ *  2. Privacy (WS-A2 Phase 7): the Solo fan-out gate skips a callback only via
+ *     `externalSubscribers.has(cb)`, so a forgotten flag is safest as
+ *     `"external"` — an SSE-shaped consumer silently classified in-process would
+ *     receive the full Solo stream.
+ *
+ * There is no default that is right for both, so there is no default. Callers
+ * state which they are.
+ *
  * @param kind `"external"` for a real consumer outside this process (SSE);
- *   `"internal"` for an in-process listener that must not count as push reach.
- *   Defaults to `"internal"` so a new caller that forgets is under-counted rather
- *   than over-counted — the failure direction that produces a false negative in
- *   diagnostics instead of a false claim of delivery.
+ *   `"internal"` for an in-process listener that must not count as push reach
+ *   and must keep receiving `document:*` in Solo (the local-model collaborator).
  */
-export function subscribe(cb: EventCallback, kind: SubscriberKind = "internal"): void {
+export function subscribe(cb: EventCallback, kind: SubscriberKind): void {
   subscribers.add(cb);
   if (kind === "external") externalSubscribers.add(cb);
 }

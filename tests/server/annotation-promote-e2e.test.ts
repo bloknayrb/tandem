@@ -37,6 +37,7 @@ import { htmlToYDoc } from "../../src/server/file-io/docx-html.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
 import { relPosToFlatOffset } from "../../src/server/positions.js";
 import type { Annotation } from "../../src/shared/types.js";
+import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { collectEvents } from "../helpers/event-collector.js";
 import { getAnnotationsMap } from "../helpers/ydoc-factory.js";
 
@@ -77,6 +78,10 @@ describe("AR5 import → promote → Claude-visible (integration)", () => {
     doc = new Y.Doc();
     htmlToYDoc(doc, HTML);
     attachObservers("e2e-doc", doc);
+    // The WS-A2 push hold fails CLOSED on an absent mode key ("indeterminate"),
+    // so the promotion would emit nothing. Stand in for the connected client
+    // that broadcasts Tandem.
+    setCtrlMode("tandem");
   });
 
   afterEach(() => {
