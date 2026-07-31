@@ -302,15 +302,32 @@ function handleMouseLeaveClose() {
      tab, and cancelling the drag with Escape flips :focus-visible on, so the
      ring lands on the tab you just watched fly home.
 
-     Matches the `+` pill in the same strip (DocumentTabs `.tab-add-pill`),
-     which already tunes the house `outline: 2px solid var(--tandem-accent)`
-     down to a 1px offset for these vertical constraints — 3px total reach
-     against the scroller's 6px padding, so it clears the pill without meeting
-     the `overflow-y: hidden` edge that clips the drag lift's shadow. Not
-     `outline: none`: the ring appears precisely because the user reached for
-     the keyboard, and that is the moment it has to be there. */
+     Deliberately QUIETER than the house ring, and quieter than the `+` pill
+     beside it (DocumentTabs `.tab-add-pill`, which uses the full
+     `--tandem-accent`): a tab is chrome you look past, not a control you aim
+     at, and the ring's most common trigger is cancelling a drag — a moment
+     where a loud outline reads as an error report on an action that succeeded.
+     `--tandem-accent-border` is the palette's own accent-family border token,
+     so this stays a tokenized decision rather than a one-off tint.
+
+     Two things it must NOT become. Not `--tandem-border`: that is the active
+     tab's own border colour, so a focused inactive tab would be hard to tell
+     from the active one. Not `outline: none`, and not a blur() on the Escape
+     path — both were tried; blurring leaves activeElement on BODY (measured),
+     stripping the indicator at the exact moment the user reached for the
+     keyboard and taking Alt+Arrow reorder with it.
+
+     KNOWN TRADE, made deliberately (Bryan, 2026-07-31): at ~1.4:1 against the
+     strip this sits under the 3:1 WCAG 1.4.11 asks of a focus indicator.
+     `--tandem-accent` (~4:1) is the conformant value if that is ever revisited;
+     the E2E below pins whichever token is chosen, so swapping is a one-line
+     change in two places.
+
+     The 1px offset is a constraint, not taste: 3px total reach against the
+     scroller's 6px padding clears the pill without meeting the
+     `overflow-y: hidden` edge that clips the drag lift's shadow. */
   [role="tab"]:focus-visible {
-    outline: 2px solid var(--tandem-accent);
+    outline: 2px solid var(--tandem-accent-border);
     outline-offset: 1px;
   }
 

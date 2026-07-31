@@ -297,9 +297,10 @@ test("cancelling with Escape keeps focus on the tab, under the accent ring", asy
   // tab. Escape is a keyboard interaction, so blurring here would strip the
   // focus indicator at the exact moment the user reached for the keyboard, and
   // drop Alt+Arrow reorder along with it — measured: activeElement became BODY.
-  // (2) The ring must be the app's accent, not Chromium's default. The pill
-  // carried no focus style at all until this change, so the UA fallback painted
-  // a heavy black outline that read as an error state.
+  // (2) The ring must be the app's own quiet accent-border token, not
+  // Chromium's default. The pill carried no focus style at all until this
+  // change, so the UA fallback painted a heavy black outline that read as an
+  // error state on a cancel that had in fact worked.
   const before = await openTwoTabs(page, "no-preference");
   await dragFirstPastSecond(page, before);
   await page.keyboard.press("Escape");
@@ -308,20 +309,28 @@ test("cancelling with Escape keeps focus on the tab, under the accent ring", asy
   const ring = await page.evaluate(() => {
     const el = document.activeElement as HTMLElement | null;
     const cs = el ? getComputedStyle(el) : null;
+    // Resolve the token through the SAME computed-style path as outlineColor
+    // rather than reading its declaration text. The raw token says `0.10` where
+    // the computed value serializes `0.1`, so comparing the strings directly
+    // fails on a difference that isn't a colour difference.
+    const probe = document.createElement("span");
+    probe.style.color = "var(--tandem-accent-border)";
+    document.body.appendChild(probe);
+    const expected = getComputedStyle(probe).color;
+    probe.remove();
     return {
       testid: el?.getAttribute("data-testid") ?? null,
       color: cs?.outlineColor ?? null,
       width: cs?.outlineWidth ?? null,
-      accent: getComputedStyle(document.documentElement).getPropertyValue("--tandem-accent").trim(),
+      expected,
     };
   });
 
   expect(ring.testid).toBe(before[0].testid);
   expect(ring.width).toBe("2px");
-  // Compare against the live token rather than a literal, so a palette change
-  // moves the expectation with it. `deg` is how the computed value serializes
-  // the hue channel; the token text omits it.
-  expect(ring.color?.replace("deg", "")).toBe(ring.accent.replace("deg", ""));
+  // Against the live token, not a literal, so a palette change carries the
+  // expectation with it.
+  expect(ring.color).toBe(ring.expected);
 
   // And the cancel still committed nothing.
   await expect
