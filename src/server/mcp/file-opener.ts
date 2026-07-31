@@ -1717,6 +1717,11 @@ export async function resolveExternalConflict(
     // flashing a check on a document whose edits still exist only in memory
     // (#1238).
     const canSave = canSaveToDisk(existing.format);
+    // resolvedFilePath is derived from existing.filePath, the OpenDoc registry's
+    // server-managed path (only ever set by openFileByPath / resolveAndValidatePath
+    // / a validated rename or save-as) — never raw request input. Same established
+    // false-positive class as document-service.ts's FS sinks; see issue #1042.
+    // codeql[js/path-injection]
     const stat = canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null;
     withInternal(doc, () => {
       // Guarded, not unconditional (review finding): the fs.stat above was
