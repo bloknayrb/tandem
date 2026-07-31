@@ -492,3 +492,116 @@ test("a coalesced row remounts its count badge so the pop can replay", async ({ 
   await expect(badge).toHaveText("×3");
   await expect(badge).not.toHaveAttribute("data-probe", "gen2");
 });
+
+test("rows render newest-first", async ({ page }) => {
+  await openEditor(page);
+
+  // The store APPENDS; `rows` reverses at the render boundary. Nothing else in
+  // this suite asserts relative order, so dropping the `.reverse()` — or
+  // double-reversing it — would otherwise ship silently. The cascade's
+  // `--slide-y` indexing reads the same `rows`, so this also guards the cascade
+  // running upside-down.
+  await pushNotification(page, {
+    id: "o1",
+    type: "general-error",
+    severity: "error",
+    message: "Oldest.",
+  });
+  await pushNotification(page, {
+    id: "o2",
+    type: "general-error",
+    severity: "error",
+    message: "Newest.",
+  });
+
+  await page.locator("[data-testid='activity-pill']").click();
+  await expect(page.locator(".toast-row .msg")).toHaveText(["Newest.", "Oldest."]);
+});
+
+test("an arriving row actually animates in, and does not under reduced motion", async ({
+  page,
+}) => {
+  // `toBeVisible()` cannot tell an instant mount from an animated one — Playwright
+  // treats opacity:0 as visible — so without this, deleting `in:rowEnter` (or
+  // misspelling the `reduceMotion` prop) would not fail a single test. Sample the
+  // computed opacity across the first frames and keep the minimum.
+  const minOpacityOnArrival = async () =>
+    page.evaluate(async () => {
+      const w = window as unknown as {
+        __tandemTest?: { pushNotification: (x: unknown) => void };
+      };
+      w.__tandemTest?.pushNotification({
+        id: "a1",
+        type: "general-error",
+        severity: "error",
+        message: "Arriving.",
+        timestamp: Date.now(),
+      });
+      let min = 1;
+      const deadline = performance.now() + 150;
+      while (performance.now() < deadline) {
+        const el = document.querySelector<HTMLElement>("[data-testid='activity-row-a1']");
+        if (el) min = Math.min(min, Number(getComputedStyle(el).opacity));
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+      }
+      return min;
+    });
+
+  await setReduceMotion(page, false);
+  await openEditor(page);
+  await page.locator("[data-testid='activity-pill']").click();
+  await expect(page.locator("[data-testid='activity-empty']")).toBeVisible();
+  // rowEnter ramps opacity 0→1 over 240ms, so an early frame must catch it partway.
+  expect(await minOpacityOnArrival()).toBeLessThan(0.9);
+
+  // Same push under reduced motion: motionOff() short-circuits to {duration: 0},
+  // so the row is fully opaque from its first frame. This is the control that
+  // makes the assertion above mean "the transition ran" rather than "opacity
+  // happened to be low".
+  const reduced = await page.context().newPage();
+  await setReduceMotion(reduced, true);
+  await reduced.goto("/");
+  await expect(reduced.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  await reduced.locator("[data-testid='activity-pill']").click();
+  const reducedMin = await reduced.evaluate(async () => {
+    const w = window as unknown as {
+      __tandemTest?: { pushNotification: (x: unknown) => void };
+    };
+    w.__tandemTest?.pushNotification({
+      id: "a1",
+      type: "general-error",
+      severity: "error",
+      message: "Arriving.",
+      timestamp: Date.now(),
+    });
+    let min = 1;
+    const deadline = performance.now() + 150;
+    while (performance.now() < deadline) {
+      const el = document.querySelector<HTMLElement>("[data-testid='activity-row-a1']");
+      if (el) min = Math.min(min, Number(getComputedStyle(el).opacity));
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    }
+    return min;
+  });
+  expect(reducedMin).toBe(1);
+  await reduced.close();
+});
+
+test("the transient toast honours reduced motion", async ({ page }) => {
+  // ToastContainer had NO reduced-motion guard of any kind before this change —
+  // its only @media was `forced-colors`. A fix with no regression test is exactly
+  // what the rest of this suite is careful about.
+  await setReduceMotion(page, true);
+  await openEditor(page);
+
+  await pushNotification(page, {
+    id: "t1",
+    type: "general-error",
+    severity: "error",
+    message: "Toast under reduced motion.",
+  });
+
+  const card = page.locator("[data-testid='toast-t1']");
+  await expect(card).toBeVisible({ timeout: 5_000 });
+  expect(await card.evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
+});

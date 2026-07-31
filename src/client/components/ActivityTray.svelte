@@ -63,10 +63,11 @@ const clock = setInterval(() => {
 // element back to a still-delayed rowSlideUp holding opacity:0 — fade in, blink
 // out, slide in again.
 const CASCADE_SLIDE_Y = [240, 160, 84, 16, 8, 6];
-// The 540ms lead is `--morph-p1` (340) + `--morph-cascade` (200): rows start once the
-// shell has finished widening and the body has revealed. It stays a literal because
-// morphTiming.css:47-50 keeps those tokens literal for getComputedStyle consumers, so
-// a calc() here could not read back either. Retune P1 and this desyncs silently.
+// The 540ms lead is `--morph-p1` (340) + `--morph-cascade` (200), declared at
+// morphTiming.css:32-34: rows start once the shell has finished widening and the body
+// has revealed. This array hardcodes that sum rather than reading the tokens back —
+// nothing here calls getComputedStyle, unlike DocumentTabs' morphCollapseMs(). So
+// retuning P1 desyncs this silently; the two have to be changed together.
 const CASCADE_DELAY_MS = [540, 650, 760, 870, 980, 1090];
 const cascadeStep = (i: number) => Math.min(i, CASCADE_SLIDE_Y.length - 1);
 

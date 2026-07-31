@@ -256,9 +256,10 @@ describe("rowEnter / rowOut", () => {
       expect(mid).toContain("margin-bottom:");
       expect(mid).toContain("overflow:clip");
       expect(mid).toContain("box-sizing:border-box");
-      // padding is NOT animated: it rides inside the border-box height, and
-      // animating both would make the content box quadratic in t and re-wrap
-      // the message mid-flight.
+      // padding is NOT animated: `.toast-row`'s padding is horizontal as well as
+      // vertical, so scaling it would shrink the row's inline width mid-flight and
+      // re-wrap the message (text wrapping is a step function of width). The
+      // vertical part is already covered by animating the border-box height.
       expect(mid).not.toContain("padding");
     }
   });

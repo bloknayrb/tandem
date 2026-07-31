@@ -402,8 +402,10 @@ const ROW_EXIT_MS = 200;
  *
  * Height is measured, not a magic `max-height` — a `save-error` row carries a
  * Retry button plus a wrapping message and has no fixed height. Padding is NOT
- * animated: it rides inside the border-box height, and animating both would make
- * the content box quadratic in `t`, re-wrapping the message mid-flight.
+ * animated: `.toast-row`'s padding is horizontal as well as vertical, so scaling
+ * it would shrink the row's available inline width mid-flight, and text-wrapping
+ * is a step function of width — the message would re-wrap partway through. The
+ * vertical component is already accounted for by animating the border-box height.
  */
 export function rowEnter(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
   if (motionOff(reduceMotion)) return { duration: 0 };
