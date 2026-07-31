@@ -291,3 +291,40 @@ test("the reorder moves the existing element rather than remounting it", async (
     1,
   );
 });
+
+test("cancelling with Escape keeps focus on the tab, under the accent ring", async ({ page }) => {
+  // Two things this pins, both learned the hard way. (1) Focus must STAY on the
+  // tab. Escape is a keyboard interaction, so blurring here would strip the
+  // focus indicator at the exact moment the user reached for the keyboard, and
+  // drop Alt+Arrow reorder along with it — measured: activeElement became BODY.
+  // (2) The ring must be the app's accent, not Chromium's default. The pill
+  // carried no focus style at all until this change, so the UA fallback painted
+  // a heavy black outline that read as an error state.
+  const before = await openTwoTabs(page, "no-preference");
+  await dragFirstPastSecond(page, before);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+
+  const ring = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    const cs = el ? getComputedStyle(el) : null;
+    return {
+      testid: el?.getAttribute("data-testid") ?? null,
+      color: cs?.outlineColor ?? null,
+      width: cs?.outlineWidth ?? null,
+      accent: getComputedStyle(document.documentElement).getPropertyValue("--tandem-accent").trim(),
+    };
+  });
+
+  expect(ring.testid).toBe(before[0].testid);
+  expect(ring.width).toBe("2px");
+  // Compare against the live token rather than a literal, so a palette change
+  // moves the expectation with it. `deg` is how the computed value serializes
+  // the hue channel; the token text omits it.
+  expect(ring.color?.replace("deg", "")).toBe(ring.accent.replace("deg", ""));
+
+  // And the cancel still committed nothing.
+  await expect
+    .poll(async () => (await readStrip(page)).map((t) => t.name))
+    .toEqual(before.map((t) => t.name));
+});

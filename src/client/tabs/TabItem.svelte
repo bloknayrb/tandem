@@ -296,6 +296,24 @@ function handleMouseLeaveClose() {
 </div>
 
 <style>
+  /* The pill had no app-level focus style, so a keyboard interaction fell
+     through to Chromium's default ring — a heavy black outline that reads as an
+     error state on this surface. A30 made that visible: pointerdown focuses the
+     tab, and cancelling the drag with Escape flips :focus-visible on, so the
+     ring lands on the tab you just watched fly home.
+
+     Matches the `+` pill in the same strip (DocumentTabs `.tab-add-pill`),
+     which already tunes the house `outline: 2px solid var(--tandem-accent)`
+     down to a 1px offset for these vertical constraints — 3px total reach
+     against the scroller's 6px padding, so it clears the pill without meeting
+     the `overflow-y: hidden` edge that clips the drag lift's shadow. Not
+     `outline: none`: the ring appears precisely because the user reached for
+     the keyboard, and that is the moment it has to be there. */
+  [role="tab"]:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
+  }
+
   /* A2 (#798): fixed-width slot keeps the tab from shifting as the indicator
      swaps between the unsaved dot, the save-confirm check, and empty. */
   .save-indicator {
