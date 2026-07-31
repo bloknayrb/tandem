@@ -16,7 +16,7 @@ import type { ChildNode, Element } from "domhandler";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
 import type { FootnoteBody } from "../../shared/types.js";
-import { findAllByName, getAttr, getTextContent, isElement } from "./docx-walker.js";
+import { findAllByName, getAttr, getVisibleTextContent, isElement } from "./docx-walker.js";
 
 /**
  * Footnote bodies (keyed by OOXML footnote id — the same id mammoth puts in its
@@ -119,7 +119,15 @@ export async function parseDocxFootnotes(buffer: Buffer): Promise<DocxNotes> {
   for (const note of footnoteEls) {
     const id = getAttr(note, "w:id");
     if (id === undefined) continue; // a real footnote always carries an id
-    footnotes[id] = { text: getTextContent(note), hadFormatting: noteHadFormatting(note) };
+    // getVisibleTextContent, NOT getTextContent: this body is written BACK into
+    // the user's file as a real <w:footnote> by the exporter. getTextContent
+    // recurses into <w:del> and <w:instrText>, so it would resurrect text the
+    // author deleted and splice raw field instructions (including a HYPERLINK
+    // field's URL) into the footnote as literal prose — silent fabrication into
+    // a shared file, invisible to the user and to Claude before it lands on
+    // disk, and undetectable by the 0e verifier (which compares footnote ids,
+    // not bodies).
+    footnotes[id] = { text: getVisibleTextContent(note), hadFormatting: noteHadFormatting(note) };
   }
   return { footnotes, endnotes: endnoteEls.length };
 }
@@ -156,8 +164,25 @@ export function footnoteLossLines(
   notes: DocxNotes,
   reconciliation: FootnoteReconciliation,
 ): string[] {
+  return [
+    ...footnoteDowngradeLines(notes, reconciliation),
+    ...footnoteStructuralLines(notes, reconciliation),
+  ];
+}
+
+/**
+ * Footnotes that ARE preserved but lost body formatting. Kept apart from the
+ * structural lines because the save-time overwrite warning gates on those, and
+ * this line says the footnote round-trips — counting it would fire "the
+ * backed-up original has Word features this file doesn't" for a footnote the
+ * exporter re-emits as a real `<w:footnote>`. Formatted footnotes are near
+ * universal in reviewed Word files, so that would be an ambient warning.
+ */
+export function footnoteDowngradeLines(
+  notes: DocxNotes,
+  reconciliation: FootnoteReconciliation,
+): string[] {
   const lines: string[] = [];
-  // Reconstructed footnotes whose body carried formatting we flattened.
   const formattingFlattened = reconciliation.reconstructed.filter(
     (id) => notes.footnotes[id]?.hadFormatting,
   ).length;
@@ -168,6 +193,15 @@ export function footnoteLossLines(
         `(bold/italic/links or multiple paragraphs) was simplified to plain text`,
     );
   }
+  return lines;
+}
+
+/** Notes that genuinely won't survive: unreconstructable footnotes and endnotes. */
+export function footnoteStructuralLines(
+  notes: DocxNotes,
+  reconciliation: FootnoteReconciliation,
+): string[] {
+  const lines: string[] = [];
   // Captured footnotes that won't reconstruct — degraded, NOT preserved.
   if (reconciliation.dropped.length > 0) {
     const n = reconciliation.dropped.length;

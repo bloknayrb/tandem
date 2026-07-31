@@ -149,6 +149,44 @@ describe("verifyDocxRoundtrips", () => {
     live.destroy();
   });
 
+  it("accepts a PRE-COMPUTED expected-comment set — the production path (#1142)", async () => {
+    // `saveDocumentToDisk` computes this set immediately before `saveBinary` and
+    // hands it over, so expected and buffer come from the same generation. Every
+    // other test here exercises only the recompute fallback, which is NOT what
+    // ships.
+    const live = await importToDoc(await buildComment());
+    const expected = prepareExportComments(live);
+    expect(expected.length).toBeGreaterThan(0);
+    const verdict = await verifyDocxRoundtrips(
+      await exportBuffer(live),
+      live,
+      { docId: "passed-in" },
+      expected,
+    );
+    expect(verdict.kind).toBe("ok");
+    expect(verdict.metrics.commentsExpected).toBe(expected.length);
+    expect(verdict.metrics.commentsResolved).toBe(expected.length);
+    live.destroy();
+  });
+
+  it("uses the PASSED set, not a re-derived one, to decide comment loss", async () => {
+    // Proves the parameter is actually load-bearing: hand it a comment the doc
+    // does not contain, and the verifier must report it unresolved rather than
+    // quietly recomputing an empty expectation and passing.
+    const live = await importToDoc(await buildComment());
+    const real = prepareExportComments(live);
+    const phantom = [{ ...real[0], bodyParagraphs: ["a comment that was never exported"] }];
+    const verdict = await verifyDocxRoundtrips(
+      await exportBuffer(live),
+      live,
+      { docId: "phantom" },
+      phantom,
+    );
+    expect(verdict.metrics.commentsExpected).toBe(1);
+    expect(verdict.metrics.commentsResolved).toBe(0);
+    live.destroy();
+  });
+
   it("advises when an exported comment doesn't survive (comment-loss, gate-keyed)", async () => {
     const live = await importToDoc(await buildComment());
     // Same visible text, no comment → high text retention, but the gate's

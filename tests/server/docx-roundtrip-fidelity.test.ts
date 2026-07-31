@@ -53,6 +53,13 @@ const CORPUS: Fixture[] = [
     check(rt) {
       expectStable(rt);
       expect(nodesOfType(rt.gen1, "heading").map((h) => h.attrs.level)).toEqual([1, 2, 3]);
+      // FALSE-POSITIVE GUARD for the #1142 detectors: a clean document must not
+      // acquire a tracked-change or header/footer line. Targeted rather than
+      // `toEqual([])` so an unrelated future mammoth warning fails its own test,
+      // not this one.
+      expect(
+        rt.importWarnings.some((w) => /tracked|moved passage|page (header|footer)/i.test(w)),
+      ).toBe(false);
     },
   },
   {
@@ -225,13 +232,18 @@ const CORPUS: Fixture[] = [
     build: corpus.buildHeaderFooter,
     status: "breaks",
     reason:
-      "mammoth does not extract headers/footers — recoverable only via preserve-the-package (Tier-B)",
+      "mammoth does not extract headers/footers — recoverable only via preserve-the-package " +
+      "(Tier-B), but the loss is now reported honestly on import (#1142)",
     check(rt) {
       expectStable(rt);
       // CURRENT LOSS — header/footer text never reaches the model. When Tier-B
       // recovers them, this flips → promote.
       expect(rt.gen1.flatText).not.toContain("Running header text");
       expect(rt.gen1.flatText).not.toContain("Running footer text");
+      // ...and the user is TOLD. mammoth emits zero warnings here (measured),
+      // so without the docx-lost-features scan this loss is entirely silent.
+      expect(rt.importWarnings.some((w) => /page header/i.test(w))).toBe(true);
+      expect(rt.importWarnings.some((w) => /page footer/i.test(w))).toBe(true);
     },
   },
   {
@@ -301,11 +313,60 @@ const CORPUS: Fixture[] = [
     name: "tracked changes",
     build: corpus.buildTrackedChange,
     status: "breaks",
-    reason: "mammoth accepts <w:ins> as body text and drops <w:del> + all revision metadata",
+    reason:
+      "mammoth accepts <w:ins> as body text and drops <w:del> + all revision metadata — " +
+      "silently, until #1142 reported it",
     check(rt) {
       expectStable(rt);
       expect(rt.gen1.flatText).toContain("added"); // insertion accepted as plain text
       expect(rt.gen1.flatText).not.toContain("removed"); // deletion gone
+      // The document's MEANING changed on import. Both halves must be named:
+      // the deletion (text already missing) and the insertion (now permanent).
+      expect(rt.importWarnings.some((w) => /tracked deletion/i.test(w))).toBe(true);
+      expect(rt.importWarnings.some((w) => /tracked insertion/i.test(w))).toBe(true);
+    },
+  },
+  {
+    name: "moved passage",
+    build: corpus.buildMovedPassage,
+    status: "breaks",
+    reason:
+      "mammoth recognizes NEITHER <w:moveTo> nor <w:moveFrom>, so both subtrees are discarded — " +
+      "a move is content loss, not an insertion",
+    check(rt) {
+      expectStable(rt);
+      // The moved text is simply absent — this is why a move must never be
+      // reported as an "insertion accepted" (that would claim it is present).
+      expect(rt.gen1.flatText).not.toContain("relocated");
+      expect(rt.importWarnings.some((w) => /moved passage/i.test(w))).toBe(true);
+      expect(rt.importWarnings.some((w) => /tracked insertion/i.test(w))).toBe(false);
+    },
+  },
+  {
+    name: "formatting-only revision",
+    build: corpus.buildFormatRevision,
+    status: "breaks",
+    reason:
+      "a <w:rPrChange> has no text delta — the text round-trips perfectly while the revision " +
+      "record is silently gone",
+    check(rt) {
+      expectStable(rt);
+      expect(rt.gen1.flatText).toContain("Reformatted text.");
+      expect(rt.importWarnings.some((w) => /tracked formatting change/i.test(w))).toBe(true);
+      // Pins the grouping: a formatting revision is not an insertion/deletion.
+      expect(rt.importWarnings.some((w) => /tracked (insertion|deletion)/i.test(w))).toBe(false);
+    },
+  },
+  {
+    name: "page-number-only footer",
+    build: corpus.buildPageNumberFooter,
+    status: "breaks",
+    reason:
+      "a footer whose only content is a PAGE field carries no literal text — invisible to any " +
+      "text-based check, and the reason the content predicate keys on field markers",
+    check(rt) {
+      expectStable(rt);
+      expect(rt.importWarnings.some((w) => /page footer/i.test(w))).toBe(true);
     },
   },
 ];

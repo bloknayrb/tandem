@@ -95,7 +95,10 @@ describe("docx adapter — saveBinary capability (#576)", () => {
     const prepared = await adapter.parse(await buildSimpleDocx());
     const other = prepared.issues.find((i) => i.kind === "other");
     if (other && other.kind === "other") {
-      expect(other.message).toMatch(/formatting/i);
+      // "features", not "formatting" (#1142): the same message now also carries
+      // tracked-change and header/footer losses, which are neither formatting
+      // nor merely dropped.
+      expect(other.message).toMatch(/weren't imported/i);
     }
     // Not asserting presence unconditionally — mammoth's warning set is version-
     // dependent. The shape (other → message) is what matters when present.

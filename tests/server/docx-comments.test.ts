@@ -286,18 +286,31 @@ describe("extractDocxComments", () => {
     expect(result).toEqual([]);
   });
 
-  it("returns empty array for buffer without document.xml", async () => {
+  it("THROWS for a package with comments but no word/document.xml (#1142)", async () => {
     const JSZip = (await import("jszip")).default;
     const zip = new JSZip();
     zip.file(
       "word/comments.xml",
       `<?xml version="1.0"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="1" w:author="A"><w:p><w:r><w:t>Hi</w:t></w:r></w:p></w:comment></w:comments>`,
     );
-    // No word/document.xml
+    // No word/document.xml — but `word/document.xml` is a CONVENTION, not a
+    // rule: OPC names the main part in _rels/.rels, and mammoth resolves it that
+    // way, so such a package imports its text perfectly. Returning [] here (the
+    // old behaviour) silently dropped every Word comment in it. The adapter
+    // turns this throw into a visible `comments-failed` issue instead.
     const buffer = await zip.generateAsync({ type: "nodebuffer" });
 
-    const result = await extractDocxComments(buffer);
-    expect(result).toEqual([]);
+    await expect(extractDocxComments(buffer)).rejects.toThrow(/Missing word\/document\.xml/);
+  });
+
+  it("still returns empty for a package with NO comments at all", async () => {
+    // The genuinely-clean case must stay silent — only a package that HAS
+    // comments we cannot anchor is worth failing loudly for.
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    zip.file("word/styles.xml", "<x/>");
+    const buffer = (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
+    await expect(extractDocxComments(buffer)).resolves.toEqual([]);
   });
 
   it("extracts comments with ranges from a synthetic docx zip", async () => {

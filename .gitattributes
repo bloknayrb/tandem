@@ -17,6 +17,15 @@
 *.svg   text eol=lf
 LICENSE text eol=lf
 
+# Sources containing literal NUL bytes. `text=auto` above marks them binary on
+# content sniffing, so `git diff` shows only "Bin N -> M bytes" and the file is
+# INVISIBLE in every pull request. `docx-comments.ts` uses \0 as the field
+# separator in the importAnnotationId hash (changing that separator would
+# rewrite every imported-comment id and break the #1150 drift dedup), so force a
+# textual diff instead. It is also the file that owns Word-comment anchor math —
+# the one place a one-character error shifts every imported comment.
+src/server/file-io/docx-comments.ts diff
+
 # Binary assets -- never touch
 *.png   binary
 *.jpg   binary

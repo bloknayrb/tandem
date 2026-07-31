@@ -11,8 +11,20 @@
 //   and (B) imports — Word comments that CAME FROM the source .docx, stored as
 //   private notes (Claude-invisible) but written back to the same file on save.
 //   Writing an import back to its own file is content preservation, NOT Claude
-//   exposure — the Claude-facing surfaces (`tandem_getAnnotations`,
+//   exposure — the annotation-reading surfaces (`tandem_getAnnotations`,
 //   `tandem_exportAnnotations`, channel) are untouched by this module.
+//
+//   ONE Claude-visible datum does originate here (#1142 G3):
+//   `commentExportDowngrades`' integrity line carries a COUNT of comments whose
+//   location could not be found. That count is drawn from the candidate set
+//   above, which by design includes imported private notes — so it discloses
+//   "some comment was dropped" without disclosing which, who, or what. This is
+//   the same channel, same derivation and same wording as the shipped
+//   `integrityWarningLines` comment-loss advisory (docx-verify.ts), which is
+//   already computed from this module's output; it is consistent with the
+//   existing boundary rather than a new crossing. The flattened-reply count is
+//   deliberately NOT returned in `SaveResult` at all — it would count private
+//   imported replies, and it is a formatting downgrade, not a loss.
 //
 //   - An ANNOTATION is exported when EITHER:
 //       (A) `type === "comment"` AND `audience !== "private"` AND
@@ -56,6 +68,20 @@ import { extractText } from "../mcp/document-model.js";
 import { refreshRange } from "../positions.js";
 import { isCanonicalWordId } from "./docx-comment-id.js";
 
+/**
+ * The restore promise every integrity advisory ends with. ONE definition,
+ * because the verifier's advisories and this module's land adjacent in a single
+ * `integrityWarnings` list — two phrasings of the same promise in one list reads
+ * as two different guarantees. Honest about WHAT is recoverable: the snapshot is
+ * the file as first opened this session (0a), not the immediately-prior save.
+ *
+ * It lives here rather than in docx-verify.ts, its more natural home, only for
+ * dependency direction: verify already imports this module, so defining it there
+ * would close a cycle.
+ */
+export const BACKUP_RESTORE_TAIL =
+  "the original version of this file is backed up and can be restored";
+
 /** A privacy-gated, range-resolved comment ready for OOXML emission. */
 export interface ExportComment {
   /** Numeric Word `w:id`. Unique within one export. */
@@ -78,7 +104,33 @@ export interface ExportComment {
    * append AFTER the content.
    */
   bodyParagraphs: string[];
+  /**
+   * How many replies were flattened into `bodyParagraphs` for this comment
+   * (#1142 G3). Set at the flattening site itself so the reported count can
+   * never drift from what is actually written — deriving it by re-running the
+   * privacy gate, or by counting `"Reply from "` prefixes in the body, would
+   * both be wrong (the second false-positives on user text). Count only: it
+   * feeds a count-only export-downgrade line and never names a replier.
+   *
+   * EXPORT-SIDE TELEMETRY ONLY — deliberately NOT part of round-trip identity.
+   * A live comment carries `flattenedReplies: 2` while its reimported twin
+   * carries 0 (the flattened text comes back as body paragraphs, not replies),
+   * so a structural deep-equal between the two generations would false-fire as
+   * comment loss. `commentKey` (docx-verify.ts) reads only `author` +
+   * `bodyParagraphs` — keep it that way.
+   */
+  flattenedReplies: number;
 }
+
+/**
+ * Why `prepareExportComments` dropped a comment. A CLOSED enum on purpose: the
+ * three resolve-failure sites log `ann.id` and the raw `[from, to]` offsets to
+ * stderr, and typing this as `string` would invite a caller to forward one of
+ * those messages into a report line — flat offsets are positional metadata about
+ * document content. The reasons are aggregated into a single undifferentiated
+ * total by `commentExportDowngrades`; no reason is ever surfaced on its own.
+ */
+export type ExportSkipReason = "malformed" | "range-failed" | "invalid-range" | "out-of-bounds";
 
 /**
  * Import round-trip predicate: an annotation that ORIGINATED from the source
@@ -211,18 +263,41 @@ function toParagraphLines(text: string): string[] {
  * Annotations whose ranges no longer resolve (CRDT anchors dead AND flat
  * offsets out of bounds/inverted) are skipped with a stderr warning — a save
  * must never fail because one annotation went stale.
+ *
+ * `onSkip` makes those drops COUNTABLE (#1142 G3) — they were previously only a
+ * stderr line, and Phase 0e structurally cannot see them (see
+ * `commentExportDowngrades`). It is optional, so the three pre-existing call
+ * sites are untouched. Supplying it also silences THIS MODULE'S stderr for the
+ * call: a counting caller runs in addition to the export and verify calls, which
+ * already log the same drops. (It does not silence everything — `refreshRange`
+ * emits its own partial/inverted-range warnings independently — so net volume is
+ * unchanged, not reduced.) The reason is a closed enum carrying no annotation id
+ * and no offsets: it reaches a Claude-visible surface, so it must never become a
+ * content oracle.
  */
-export function prepareExportComments(doc: Y.Doc): ExportComment[] {
+export function prepareExportComments(
+  doc: Y.Doc,
+  onSkip?: (reason: ExportSkipReason) => void,
+): ExportComment[] {
+  // Counting call → stay quiet; the export + verify calls own the logging.
+  const warn = onSkip ? () => {} : (msg: string): void => console.error(msg);
   const map = doc.getMap(Y_MAP_ANNOTATIONS);
   if (map.size === 0) return [];
   const repliesMap = doc.getMap(Y_MAP_ANNOTATION_REPLIES);
-  const docLength = extractText(doc).length;
 
   const candidates: Annotation[] = [];
   map.forEach((value) => {
-    if (!isAnnotationShaped(value)) return;
+    if (!isAnnotationShaped(value)) {
+      // A FOURTH drop, earlier and previously entirely silent (no log, no
+      // counter): a durable record that lost or corrupted its id/content/range
+      // is a real Word comment that will not be written. Counting it matters —
+      // omitting it would under-report on the surface built to stop
+      // under-reporting.
+      onSkip?.("malformed");
+      return;
+    }
     const ann = sanitizeAnnotation(value, (event) => {
-      console.error(`[docx-comment-export] sanitize rewrote ${event.id}: ${event.kind}`);
+      warn(`[docx-comment-export] sanitize rewrote ${event.id}: ${event.kind}`);
     });
     // ADR-027 gate — see module header. Import round-trips (author:"import" +
     // importSource) bypass the type/audience/status gates: they are file content
@@ -239,29 +314,35 @@ export function prepareExportComments(doc: Y.Doc): ExportComment[] {
   });
   if (candidates.length === 0) return [];
 
+  // AFTER the gate, not before: `extractText` walks the whole document, and a
+  // .docx carrying only highlights or private notes has nothing to export. This
+  // function runs twice per save on the live doc (the downgrade count, then the
+  // export — the verifier is handed the first result rather than recomputing),
+  // so a wasted walk here is a wasted walk twice over.
+  const docLength = extractText(doc).length;
+
   // Resolve each candidate's CURRENT range: relRange first, flat fallback
   // (refreshRange does both, read-only without a map argument).
   const resolved: Array<{ ann: Annotation; from: number; to: number }> = [];
   for (const ann of candidates) {
     const refreshed = refreshRange(ann, doc);
     if (refreshed.kind === "failed") {
-      console.error(
-        `[docx-comment-export] Skipping comment ${ann.id}: CRDT range resolution failed`,
-      );
+      warn(`[docx-comment-export] Skipping comment ${ann.id}: CRDT range resolution failed`);
+      onSkip?.("range-failed");
       continue;
     }
     const { from, to } = refreshed.annotation.range;
     if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from > to) {
-      console.error(
-        `[docx-comment-export] Skipping comment ${ann.id}: invalid range [${from}, ${to}]`,
-      );
+      warn(`[docx-comment-export] Skipping comment ${ann.id}: invalid range [${from}, ${to}]`);
+      onSkip?.("invalid-range");
       continue;
     }
     if (to > docLength) {
-      console.error(
+      warn(
         `[docx-comment-export] Skipping comment ${ann.id}: range [${from}, ${to}] ` +
           `exceeds document length ${docLength}`,
       );
+      onSkip?.("out-of-bounds");
       continue;
     }
     resolved.push({ ann: refreshed.annotation, from, to });
@@ -296,7 +377,8 @@ export function prepareExportComments(doc: Y.Doc): ExportComment[] {
     if (ann.type === "comment" && ann.suggestedText) {
       bodyParagraphs.push("", `Suggested replacement: ${ann.suggestedText}`);
     }
-    for (const reply of exportableReplies(repliesMap, ann.id)) {
+    const replies = exportableReplies(repliesMap, ann.id);
+    for (const reply of replies) {
       const replyLines = toParagraphLines(reply.text);
       bodyParagraphs.push("", `Reply from ${replyAuthorLabel(reply)}: ${replyLines[0]}`);
       bodyParagraphs.push(...replyLines.slice(1));
@@ -309,7 +391,75 @@ export function prepareExportComments(doc: Y.Doc): ExportComment[] {
       from,
       to,
       bodyParagraphs,
+      flattenedReplies: replies.length,
     });
   }
   return out;
+}
+
+/**
+ * The comment half of a `.docx` save's fidelity reporting (#1142 G3). Two
+ * previously-unreported outcomes, routed to DIFFERENT channels because they
+ * mean different things to the user — `FidelityReport`'s channel contract
+ * (shared/types.ts) splits on user meaning, not on provenance:
+ *
+ *   - `downgrades` — replies are FLATTENED into the parent comment body because
+ *     docx@9.6 can't emit `commentsExtended.xml` (module header). ANNOUNCED and
+ *     expected: the reply TEXT is still written, only the thread structure is
+ *     lost. Persisted to the calm `exportDowngrades` notice and deliberately
+ *     NOT returned in `SaveResult` — imported Word reply threads round-trip by
+ *     design (#1000), so nearly every colleague-reviewed `.docx` has them, and
+ *     a per-save toast for a non-loss would be pure fatigue.
+ *   - `integrity` — a comment whose range no longer resolves is dropped from
+ *     the file entirely, with only a stderr line. UNEXPECTED loss, and restore
+ *     is the correct remedy, so it belongs in the louder channel that carries
+ *     the restore on-ramp. Phase 0e cannot catch it: `verifyDocxRoundtrips`
+ *     builds its `expectedComments` from this same already-reduced output, so
+ *     the dropped comment is absent from BOTH sides of the comparison and the
+ *     verify passes clean. Its wording matches `integrityWarningLines`' existing
+ *     comment-loss advisory, which is derived from the same candidate set.
+ *
+ * Counts and fixed strings only — no replier names, no annotation ids, no skip
+ * reasons. Both channels reach the persistent report, and `integrity` also
+ * reaches Claude via `tandem_save`.
+ */
+export function commentExportDowngrades(
+  comments: ExportComment[],
+  skipped: { unresolved: number; malformed: number },
+): { downgrades: string[]; integrity: string[] } {
+  const downgrades: string[] = [];
+  const integrity: string[] = [];
+  const replies = comments.reduce((sum, c) => sum + c.flattenedReplies, 0);
+  if (replies > 0) {
+    downgrades.push(
+      replies === 1
+        ? "1 comment reply flattened into its parent comment (Word reply threads aren't supported)"
+        : `${replies} comment replies flattened into their parent comments ` +
+            "(Word reply threads aren't supported)",
+    );
+  }
+  // Reported apart, because they are different claims. A comment whose RANGE
+  // failed to resolve got past the ADR-027 gate — it was going to be written and
+  // wasn't. A MALFORMED record is rejected before that gate, so we cannot even
+  // tell whether it was a comment: it may well have been a highlight or a
+  // private note that would never have been exported. Folding the two would tell
+  // a user their comment vanished when nothing of the sort happened — on the one
+  // surface built to be trustworthy about loss.
+  if (skipped.unresolved > 0) {
+    const n = skipped.unresolved;
+    integrity.push(
+      `${n === 1 ? "1 comment was" : `${n} comments were`} dropped because ` +
+        `${n === 1 ? "its" : "their"} location could no longer be found — ` +
+        BACKUP_RESTORE_TAIL,
+    );
+  }
+  if (skipped.malformed > 0) {
+    const n = skipped.malformed;
+    integrity.push(
+      `${n === 1 ? "1 damaged annotation record" : `${n} damaged annotation records`} could ` +
+        `not be read, so anything ${n === 1 ? "it" : "they"} anchored was not written — ` +
+        BACKUP_RESTORE_TAIL,
+    );
+  }
+  return { downgrades, integrity };
 }

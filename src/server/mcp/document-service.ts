@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
+import type * as Y from "yjs";
 import {
   CTRL_ROOM,
   Y_MAP_ACTIVE_DOCUMENT_EPOCH,
@@ -32,6 +33,7 @@ import {
 import { notifyDocumentPromoted } from "../events/observers/ctrl-meta.js";
 import { attachObservers, clearFileSyncContext } from "../events/queue.js";
 import { snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
+import { commentExportDowngrades, prepareExportComments } from "../file-io/docx-comment-export.js";
 import { detectExportFidelityIssues } from "../file-io/docx-export.js";
 import {
   type BlockReason,
@@ -125,6 +127,26 @@ const AUTO_SAVE_FORMATS = new Set(["md", "txt"]);
  */
 const BINARY_SAVE_FORMATS = new Set(["docx"]);
 
+/** The persisted fidelity report, defensively typed: it is server-written but
+ * survives session restore un-revalidated, so every read tolerates a legacy or
+ * malformed value rather than throwing inside a save. */
+function fidelityReportOf(doc: Y.Doc): FidelityReport | undefined {
+  return doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_FIDELITY_REPORT) as FidelityReport | undefined;
+}
+
+/**
+ * How many STRUCTURAL import losses a report carries (#1142 G3) — content or
+ * page furniture that is gone, not mammoth's style-level tail. This is what the
+ * save-time overwrite warning gates on; see the field's note in
+ * `shared/types.ts` for why the broader count would make it ambient. Takes the
+ * report rather than the doc so a caller can read it ONCE and use the same
+ * snapshot for what it returns and what it persists.
+ */
+function structuralLossesOf(report: FidelityReport | undefined): number {
+  const value = report?.structuralLosses;
+  return typeof value === "number" && value > 0 ? value : 0;
+}
+
 export interface SaveResult {
   status: "saved" | "skipped" | "error";
   reason?: string;
@@ -145,6 +167,24 @@ export interface SaveResult {
    * A `blocked` verdict instead aborts the save (status:"error").
    */
   integrityWarnings?: string[];
+  /**
+   * How many KINDS of Word feature the import couldn't bring in (#1142 G3,
+   * `.docx` only) — `FidelityReport.structuralLosses`, i.e. the count of report
+   * lines describing content or page furniture that is GONE. `undefined` when
+   * there are none.
+   *
+   * Deliberately NOT `importLosses.length`: that includes mammoth's style-level
+   * tail, which nearly every real `.docx` trips, so gating on it would make the
+   * overwrite warning ambient. It also excludes the "couldn't check" line —
+   * that is not an existence claim.
+   *
+   * A CATEGORY count, and the user-facing copy must not present it as a feature
+   * count: each line carries its own number, so a document losing 40 tracked
+   * deletions and 3 headers reports 2, not 43. It answers "is there anything to
+   * tell the user at the moment of overwrite?", not "how much". The persistent
+   * notice carries the real numbers.
+   */
+  unpreservedImports?: number;
 }
 
 /**
@@ -258,11 +298,39 @@ export async function saveDocumentToDisk(
 
     let fidelityWarnings: string[] | undefined;
     let integrityWarnings: string[] | undefined;
+    let exportDowngrades: string[] = [];
+    let unpreservedImports: number | undefined;
+    let importSnapshot: FidelityReport | undefined;
     if (isBinary) {
       // Binary branch (#576, .docx). Capture fidelity warnings against the same
       // Y.Doc snapshot we serialize, then write the ZIP via atomicWriteBuffer
       // (atomicWrite's UTF-8 encoding would corrupt the binary).
       const warnings = detectExportFidelityIssues(doc);
+      // Comment-side fidelity (#1142 G3): flattened reply threads and comments
+      // whose ranges no longer resolve. Computed from ONE `prepareExportComments`
+      // pass, and this pass must stay immediately adjacent to the `saveBinary`
+      // below — `exportYDocToDocx` re-derives the identical set from the same
+      // unmutated doc as its first statement, so with no `await` between these
+      // two lines the counts describe exactly the bytes written. DO NOT insert
+      // an awaited call here: a Hocuspocus update landing in the gap would make
+      // the report describe a document that was never saved. Pinned by a test
+      // that compares the reported reply count against the produced buffer.
+      const skipped = { unresolved: 0, malformed: 0 };
+      const exportComments = prepareExportComments(doc, (reason) => {
+        if (reason === "malformed") skipped.malformed++;
+        else skipped.unresolved++;
+      });
+      const commentFidelity = commentExportDowngrades(exportComments, skipped);
+      // Snapshot the WHOLE import half HERE, before the write, and use this one
+      // snapshot for both the returned count and the persisted report. The
+      // `withMcp` block runs after five awaits, and Y_MAP_FIDELITY_REPORT has a
+      // second writer (`writeImportLossReport`, on the force-reload and
+      // file-watcher-reload paths). Re-reading it down there could pair a NEWER
+      // import's loss list with this save's downgrades, and would let the
+      // persisted `structuralLosses` disagree with the count already delivered
+      // to the toast and to Claude.
+      importSnapshot = fidelityReportOf(doc);
+      unpreservedImports = structuralLossesOf(importSnapshot) || undefined;
       const buffer = await adapter.saveBinary!(doc);
       // Pre-overwrite snapshot of the on-disk original (first write per path per
       // run), mirroring the text branch below. .docx is the highest-stakes case:
@@ -280,15 +348,22 @@ export async function saveDocumentToDisk(
       // write/suppressor (so a blocking verdict aborts with the file untouched
       // and the watcher suppressor un-armed). Never throws — a `blocked` verdict
       // is a returned value we escalate to a save-error here.
-      const verdict = await verifyDocxRoundtrips(buffer, doc, { docId: safeDocId });
+      const verdict = await verifyDocxRoundtrips(buffer, doc, { docId: safeDocId }, exportComments);
       if (verdict.kind === "blocked") {
         throw new SaveVerificationError(blockReasonMessage(verdict.reason), verdict.reason);
       }
       suppressNextChange(docState.filePath);
       await atomicWriteBuffer(docState.filePath, buffer);
       recordSelfWrite(docState.filePath, buffer);
+      // `fidelityWarnings` drives the save toast; `exportDowngrades` is the
+      // persistent notice. They differ by exactly the flattened-reply line,
+      // which is deliberately persistent-only: imported Word reply threads
+      // round-trip by design (#1000), so nearly every reviewed .docx has them,
+      // and the reply TEXT is still written — a per-save toast for a non-loss
+      // would be the same fatigue we refuse to add a third toast for.
       fidelityWarnings = warnings.length > 0 ? warnings : undefined;
-      const advisories = integrityWarningLines(verdict);
+      exportDowngrades = [...warnings, ...commentFidelity.downgrades];
+      const advisories = [...integrityWarningLines(verdict), ...commentFidelity.integrity];
       integrityWarnings = advisories.length > 0 ? advisories : undefined;
     } else {
       const output = adapter.save!(doc);
@@ -323,10 +398,10 @@ export async function saveDocumentToDisk(
       // value is opaque (no field-level CRDT merge) and all writers are
       // server-side + serialized, so this read-modify-write can't interleave.
       if (isBinary) {
-        const prev = meta.get(Y_MAP_FIDELITY_REPORT) as FidelityReport | undefined;
         meta.set(Y_MAP_FIDELITY_REPORT, {
-          importLosses: prev?.importLosses ?? [],
-          exportDowngrades: fidelityWarnings ?? [],
+          importLosses: importSnapshot?.importLosses ?? [],
+          structuralLosses: structuralLossesOf(importSnapshot),
+          exportDowngrades,
           // Post-write verify advisories (#1123 0e) — louder than downgrades;
           // `?? []` clears a prior save's advisory on a now-clean save.
           integrityWarnings: integrityWarnings ?? [],
@@ -336,7 +411,7 @@ export async function saveDocumentToDisk(
     });
     markCleanIfUnchanged(docId, dirtySnapshot);
 
-    return { status: "saved", fidelityWarnings, integrityWarnings };
+    return { status: "saved", fidelityWarnings, integrityWarnings, unpreservedImports };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const errCode = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
