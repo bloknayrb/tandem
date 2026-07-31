@@ -404,6 +404,7 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
           skipCode?: string;
           fidelityWarnings?: string[];
           integrityWarnings?: string[];
+          unpreservedImports?: number;
         };
       } | null;
       // A skipped save is HTTP 200, so `resp.ok` alone would fire StatusBar's
@@ -437,11 +438,36 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
           'Saved, but some content may not have been preserved — your original is backed up. See the document notice, or run "Restore a backup of this document…" from the command palette.',
         );
       }
+      // Two distinct facts, ONE toast (#1142 G3). A third toast would fire on
+      // almost every .docx save — nearly any real Word file has an unrecognized
+      // style — and a three-toast stack trains people to dismiss it unread,
+      // destroying the signal G3 exists to send.
+      //
+      // Deliberately NO number on the unpreserved-imports half: it counts
+      // fidelity-report LINES (feature categories), and that list is capped, so
+      // "N Word features" would be a falsifiable claim on the one surface built
+      // for honesty. The persistent notice carries the real counts.
+      //
+      // It repeats on every save, and the reason is NOT "the loss is re-incurred"
+      // — after the first save the file on disk already lacks those features.
+      // It repeats because the comparison is against the BACKED-UP ORIGINAL,
+      // which is still the thing the user can get back.
       const downgraded = json?.data?.fidelityWarnings?.length ?? 0;
-      if (downgraded > 0) {
+      const unpreserved = json?.data?.unpreservedImports ?? 0;
+      if (downgraded > 0 && unpreserved > 0) {
         deps?.notify(
           "warning",
-          `Saved — ${downgraded} Word feature${downgraded === 1 ? "" : "s"} were simplified on export; see the document notice for details.`,
+          `Saved — ${downgraded} Word feature${downgraded === 1 ? " was" : "s were"} simplified on export, and the backed-up original has features this file doesn't. See the document notice for details.`,
+        );
+      } else if (downgraded > 0) {
+        deps?.notify(
+          "warning",
+          `Saved — ${downgraded} Word feature${downgraded === 1 ? " was" : "s were"} simplified on export; see the document notice for details.`,
+        );
+      } else if (unpreserved > 0) {
+        deps?.notify(
+          "warning",
+          "Saved — the backed-up original has Word features this file doesn't. Your original can still be restored; see the document notice for details.",
         );
       }
     }

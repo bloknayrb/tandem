@@ -31,10 +31,22 @@ export type LoadIssue =
       message?: string;
       /**
        * Granular per-loss strings (the un-joined `message`), used to populate
-       * the persistent docx fidelity report (#1145). The docx adapter sets this
-       * from `summarizeMammothMessages`; the joined `message` drives the toast.
+       * the persistent docx fidelity report (#1145). The docx adapter builds
+       * this from three producers; the joined `message` drives the toast.
        */
       importLosses?: string[];
+      /**
+       * How many of `importLosses` describe STRUCTURAL loss — content or page
+       * furniture that is gone (tracked changes, moves, headers/footers,
+       * footnotes) — as opposed to mammoth's style-level long tail (#1142 G3).
+       *
+       * The distinction exists because the save-time overwrite warning gates on
+       * it. Nearly every real-world `.docx` trips at least one unrecognized
+       * style, so gating on `importLosses.length` would make that warning
+       * ambient on every save — the precise fatigue that trains people to
+       * dismiss the warnings that matter.
+       */
+      structuralLosses?: number;
     };
 
 /**
@@ -102,9 +114,21 @@ export interface ApplyContext {
   fileName?: string;
 }
 
+/** Per-call knobs for `parse`. */
+export interface ParseOptions {
+  /**
+   * Run the silent-loss scan (#1142). Default true. The 0e verifier passes
+   * `false` when re-importing a buffer TANDEM just produced: `exportYDocToDocx`
+   * emits no revision marks and no header/footer parts, so the scan is
+   * structurally guaranteed to find nothing there — and the verifier discards
+   * `prepared.issues` anyway. Measured at ~5–7% of every `.docx` save.
+   */
+  scanLostFeatures?: boolean;
+}
+
 export interface FormatAdapter {
   /** Async pre-parse — no doc dependency. */
-  parse(content: string | Buffer): Promise<Prepared>;
+  parse(content: string | Buffer, options?: ParseOptions): Promise<Prepared>;
 
   /**
    * Sync apply — must be called inside the caller's origin-tagged transact.

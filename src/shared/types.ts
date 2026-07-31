@@ -416,15 +416,45 @@ export interface ExternalConflictState {
  */
 export interface FidelityReport {
   /**
-   * Word features mammoth dropped on import (footnotes, headers/footers,
-   * tracked changes, custom styles — the round-trip ceiling). Set at open and
-   * re-set on every re-import (force-reload, file-watcher reload).
+   * Word features the import couldn't bring in — the round-trip ceiling. Set at
+   * open and re-set on every re-import (force-reload, file-watcher reload).
+   *
+   * Three sources, because mammoth only warns about one of them: its own
+   * messages (custom styles etc., deduped + redacted by
+   * `summarizeMammothMessages`), `footnoteLossLines` (footnotes/endnotes), and
+   * `lostFeatureLossLines` (tracked changes, moves, headers/footers). The latter
+   * two read the `.docx` package directly because mammoth is SILENT about those
+   * families — see lesson 85.
+   *
+   * USER-FACING ONLY, deliberately: no MCP tool returns these lines. They are
+   * finer-grained than anything else the user surfaces carry (a tracked-deletion
+   * count describes text that is not in the Y.Doc at all), so routing them into
+   * a tool result would make them a content oracle. `tandem_save` carries only
+   * the capped category COUNT (`unpreservedImports`).
    */
   importLosses: string[];
   /**
+   * How many of `importLosses` describe STRUCTURAL loss — content or page
+   * furniture that is gone (tracked changes, moves, headers/footers, footnotes)
+   * — rather than mammoth's style-level long tail (#1142 G3). Optional for
+   * forward-compat: pre-#1142 reports lack it, so every reader uses `?? 0`.
+   *
+   * Drives the save-time overwrite warning. Gating that on `importLosses.length`
+   * would make it ambient — nearly every real `.docx` trips one unrecognized
+   * style — which is exactly the fatigue that trains users to dismiss warnings.
+   */
+  structuralLosses?: number;
+  /**
    * Content the export downgraded on the most recent save (unsupported blocks,
-   * non-`data:` images). Refreshed each binary save; reset by a re-import.
-   * These are ANNOUNCED, expected downgrades — rendered as a calm/info notice.
+   * non-`data:` images, flattened comment reply threads). Refreshed each binary
+   * save; reset by a re-import. These are ANNOUNCED, expected downgrades —
+   * rendered as a calm/info notice.
+   *
+   * A SUPERSET of `SaveResult.fidelityWarnings`, which drives the save toast:
+   * the flattened-reply line is persistent-only. Imported Word reply threads
+   * round-trip by design (#1000), so nearly every reviewed `.docx` has them, and
+   * the reply TEXT is still written — toasting a non-loss on every save would
+   * be the fatigue that makes the toasts that DO matter get dismissed unread.
    */
   exportDowngrades: string[];
   /**

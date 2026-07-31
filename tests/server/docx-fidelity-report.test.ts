@@ -91,6 +91,31 @@ async function buildDocxWithUnknownStyle(text: string, styleId: string): Promise
   return (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
 }
 
+/**
+ * A .docx carrying a tracked insertion + deletion and a letterhead header —
+ * the two families mammoth reports NOTHING about (#1142). Author name and
+ * header text double as probes for the redaction test.
+ */
+async function buildDocxWithSilentLosses(author: string, headerText: string): Promise<Buffer> {
+  const JSZip = (await import("jszip")).default;
+  const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const rev = `w:id="1" w:author="${author}" w:date="2020-01-01T00:00:00Z"`;
+  const zip = new JSZip();
+  zip.file(
+    "word/document.xml",
+    `<?xml version="1.0"?><w:document xmlns:w="${WML}"><w:body><w:p>` +
+      `<w:r><w:t xml:space="preserve">Kept </w:t></w:r>` +
+      `<w:ins ${rev}><w:r><w:t>added</w:t></w:r></w:ins>` +
+      `<w:del ${rev}><w:r><w:delText>removed</w:delText></w:r></w:del>` +
+      `</w:p></w:body></w:document>`,
+  );
+  zip.file(
+    "word/header1.xml",
+    `<?xml version="1.0"?><w:hdr xmlns:w="${WML}"><w:p><w:r><w:t>${headerText}</w:t></w:r></w:p></w:hdr>`,
+  );
+  return (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
+}
+
 function capturedWatcherCallback(filePath: string): (p: string) => Promise<void> {
   const calls = vi.mocked(watchFile).mock.calls.filter(([p]) => p === filePath);
   expect(calls.length, `watchFile was not called for ${filePath}`).toBeGreaterThan(0);
@@ -260,6 +285,142 @@ describe("fidelity report wiring", () => {
     expect(after.importLosses).toEqual(before.importLosses);
     expect(after.exportDowngrades).toEqual([]);
     expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
+  });
+
+  it("surfaces tracked changes and headers — the losses mammoth is silent about", async () => {
+    const filePath = path.join(tmpDir, "reviewed.docx");
+    await fs.writeFile(filePath, await buildDocxWithSilentLosses("Alice Q Reviewer", "ACME LTD"));
+
+    const opened = await openFileByPath(filePath);
+    const report = reportOf(getOrCreateDocument(opened.documentId))!;
+
+    expect(report.importLosses.some((l) => /tracked deletion/i.test(l))).toBe(true);
+    expect(report.importLosses.some((l) => /tracked insertion/i.test(l))).toBe(true);
+    expect(report.importLosses.some((l) => /page header/i.test(l))).toBe(true);
+    // The persistent surface must carry neither the reviewer's name nor the
+    // header text — these lines bypass summarizeMammothMessages' redaction, so
+    // the guarantee is that nothing variable is ever interpolated.
+    const blob = JSON.stringify(report.importLosses);
+    expect(blob).not.toContain("Alice");
+    expect(blob).not.toContain("Reviewer");
+    expect(blob).not.toContain("ACME");
+  });
+
+  it("orders the tracked-change line ahead of mammoth's style warnings", async () => {
+    const filePath = path.join(tmpDir, "both.docx");
+    const JSZip = (await import("jszip")).default;
+    const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const zip = new JSZip();
+    zip.file(
+      "word/document.xml",
+      `<?xml version="1.0"?><w:document xmlns:w="${WML}"><w:body>` +
+        `<w:p><w:pPr><w:pStyle w:val="CorpStyle"/></w:pPr>` +
+        `<w:del w:id="1" w:author="A" w:date="2020-01-01T00:00:00Z">` +
+        `<w:r><w:delText>gone</w:delText></w:r></w:del></w:p>` +
+        `</w:body></w:document>`,
+    );
+    await fs.writeFile(filePath, (await zip.generateAsync({ type: "nodebuffer" })) as Buffer);
+
+    const opened = await openFileByPath(filePath);
+    const losses = reportOf(getOrCreateDocument(opened.documentId))!.importLosses;
+    const revision = losses.findIndex((l) => /tracked deletion/i.test(l));
+    const style = losses.findIndex((l) => /style/i.test(l));
+    expect(revision).toBeGreaterThanOrEqual(0);
+    expect(style).toBeGreaterThan(revision); // most-destructive first
+  });
+
+  it("refreshes the silent-loss lines on a file-watcher reload", async () => {
+    const filePath = path.join(tmpDir, "reload-losses.docx");
+    await fs.writeFile(filePath, await buildDocxWithSilentLosses("A", "Letterhead"));
+
+    const opened = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
+    expect(reportOf(doc)!.importLosses.some((l) => /tracked/i.test(l))).toBe(true);
+
+    // An external tool accepts the revisions and drops the header. The banner
+    // must clear, not keep showing a loss the file no longer has.
+    await fs.writeFile(filePath, await buildSimpleDocx("Now clean"));
+    await capturedWatcherCallback(watcherPath)(watcherPath);
+
+    expect(reportOf(doc)!.importLosses).toEqual([]);
+  });
+
+  it("reports the unpreserved-import COUNT on save, and omits it when clean", async () => {
+    const lossy = path.join(tmpDir, "lossy-save.docx");
+    await fs.writeFile(lossy, await buildDocxWithSilentLosses("A", "Letterhead"));
+    const openedLossy = await openFileByPath(lossy);
+    const before = reportOf(getOrCreateDocument(openedLossy.documentId))!;
+    const lossyResult = await saveDocumentToDisk(openedLossy.documentId, "manual");
+    expect(lossyResult.status).toBe("saved");
+    // A CATEGORY count — the number of STRUCTURAL report lines, each carrying
+    // its own count.
+    expect(lossyResult.unpreservedImports).toBe(before.structuralLosses);
+
+    const clean = path.join(tmpDir, "clean-save.docx");
+    await fs.writeFile(clean, await buildSimpleDocx("All supported"));
+    const openedClean = await openFileByPath(clean);
+    const cleanResult = await saveDocumentToDisk(openedClean.documentId, "manual");
+    expect(cleanResult.status).toBe("saved");
+    expect(cleanResult.unpreservedImports).toBeUndefined();
+  });
+
+  it("does NOT warn at save when the only loss is a style — the ambient-toast guard", async () => {
+    // Nearly every real .docx trips an unrecognized style. Gating the overwrite
+    // warning on importLosses.length would fire it on almost every save, which
+    // is the exact fatigue that trains users to dismiss the warnings that count.
+    const filePath = path.join(tmpDir, "style-only.docx");
+    await fs.writeFile(filePath, await buildDocxWithUnknownStyle("Body", "CorpStyle"));
+
+    const opened = await openFileByPath(filePath);
+    const report = reportOf(getOrCreateDocument(opened.documentId))!;
+    expect(report.importLosses.length).toBeGreaterThan(0); // the banner still tells them
+    expect(report.structuralLosses).toBe(0);
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result.status).toBe("saved");
+    expect(result.unpreservedImports).toBeUndefined(); // ...but the toast stays quiet
+  });
+
+  it("counts ONLY structural losses when a document has both kinds", async () => {
+    const filePath = path.join(tmpDir, "mixed.docx");
+    const JSZip = (await import("jszip")).default;
+    const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const zip = new JSZip();
+    zip.file(
+      "word/document.xml",
+      `<?xml version="1.0"?><w:document xmlns:w="${WML}"><w:body>` +
+        `<w:p><w:pPr><w:pStyle w:val="CorpStyle"/></w:pPr>` +
+        `<w:del w:id="1" w:author="A" w:date="2020-01-01T00:00:00Z">` +
+        `<w:r><w:delText>gone</w:delText></w:r></w:del></w:p>` +
+        `</w:body></w:document>`,
+    );
+    await fs.writeFile(filePath, (await zip.generateAsync({ type: "nodebuffer" })) as Buffer);
+
+    const opened = await openFileByPath(filePath);
+    const report = reportOf(getOrCreateDocument(opened.documentId))!;
+    expect(report.importLosses.length).toBeGreaterThan(1); // deletion + style
+    expect(report.structuralLosses).toBe(1); // ...only the deletion is structural
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result.unpreservedImports).toBe(1);
+  });
+
+  it("does NOT warn at save for a footnote that is PRESERVED but reformatted", async () => {
+    // The line says "preserved". Counting it as structural would fire the
+    // overwrite warning for a footnote the exporter re-emits intact — and
+    // formatted footnotes are near-universal in reviewed Word files.
+    const filePath = path.join(tmpDir, "fmt-footnote.docx");
+    const { buildFootnoteWithFormatting } = await import("../helpers/docx-corpus.js");
+    await fs.writeFile(filePath, await buildFootnoteWithFormatting());
+
+    const opened = await openFileByPath(filePath);
+    const report = reportOf(getOrCreateDocument(opened.documentId))!;
+    expect(report.importLosses.some((l) => /preserved, but body formatting/.test(l))).toBe(true);
+    expect(report.structuralLosses).toBe(0);
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result.unpreservedImports).toBeUndefined();
   });
 
   it("writes NO report for a non-docx (.md) document", async () => {

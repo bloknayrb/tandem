@@ -12,23 +12,13 @@
  * bug reading footnotes.xml for the endnote count can't pass silently.
  */
 
-import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { footnoteLossLines, parseDocxFootnotes } from "../../src/server/file-io/docx-footnotes.js";
 import { reconcileFootnoteIds } from "../../src/server/file-io/docx-html.js";
 import type { FootnoteBody } from "../../src/shared/types.js";
-import { buildEndnote, buildFootnote, buildHeadings } from "../helpers/docx-corpus.js";
+import { buildEndnote, buildFootnote, buildHeadings, zipWith } from "../helpers/docx-corpus.js";
 
 const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-
-/** Minimal .docx-shaped zip carrying only the named parts. parseDocxFootnotes
- * reads word/footnotes.xml / word/endnotes.xml directly (no rels/content-types
- * traversal), so a bare zip with just those parts exercises the real path. */
-async function zipWith(files: Record<string, string>): Promise<Buffer> {
-  const zip = new JSZip();
-  for (const [p, c] of Object.entries(files)) zip.file(p, c);
-  return (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
-}
 
 /** word/footnotes.xml with the two structural separators Word always emits, plus
  * whatever `realNotes` markup is appended. */
@@ -119,6 +109,47 @@ describe("parseDocxFootnotes", () => {
 
 /** A reconciliation partition (from `reconcileFootnoteIds`). */
 const recon = (reconstructed: string[], dropped: string[] = []) => ({ reconstructed, dropped });
+
+describe("parseDocxFootnotes — body capture must not FABRICATE", () => {
+  // The footnote body is written BACK into the user's file as a real
+  // <w:footnote> by the exporter, so anything captured here lands on disk.
+  // `getTextContent` recurses into every text node; using it meant a footnote
+  // containing a tracked deletion resurrected that text, and a footnote
+  // containing a field spliced the raw instruction in as prose. Invisible to
+  // the user AND to Claude before the write, and undetectable by the 0e
+  // verifier (which compares footnote ids, not bodies).
+  it("does not resurrect text the author deleted", async () => {
+    const buffer = await zipWith({
+      "word/footnotes.xml": footnotesXml(
+        `<w:footnote w:id="1"><w:p>` +
+          `<w:r><w:t xml:space="preserve">Kept </w:t></w:r>` +
+          `<w:del w:id="9" w:author="A" w:date="2020-01-01T00:00:00Z">` +
+          `<w:r><w:delText>REDACTED-BY-AUTHOR</w:delText></w:r></w:del>` +
+          `<w:r><w:t>tail.</w:t></w:r></w:p></w:footnote>`,
+      ),
+    });
+    const notes = await parseDocxFootnotes(buffer);
+    expect(notes.footnotes["1"].text).toBe("Kept tail.");
+    expect(notes.footnotes["1"].text).not.toContain("REDACTED-BY-AUTHOR");
+  });
+
+  it("does not splice a field instruction in as literal prose", async () => {
+    // A HYPERLINK field's URL would otherwise reach the exported document as
+    // text, routing around the export trust boundary's link scrubbing.
+    const buffer = await zipWith({
+      "word/footnotes.xml": footnotesXml(
+        `<w:footnote w:id="1"><w:p>` +
+          `<w:r><w:t xml:space="preserve">See </w:t></w:r>` +
+          `<w:r><w:instrText xml:space="preserve"> HYPERLINK "file://evil/share" </w:instrText></w:r>` +
+          `<w:r><w:t>the note.</w:t></w:r></w:p></w:footnote>`,
+      ),
+    });
+    const notes = await parseDocxFootnotes(buffer);
+    expect(notes.footnotes["1"].text).toBe("See the note.");
+    expect(notes.footnotes["1"].text).not.toContain("HYPERLINK");
+    expect(notes.footnotes["1"].text).not.toContain("file://");
+  });
+});
 
 describe("footnoteLossLines", () => {
   it("returns no lines when there are no notes", () => {

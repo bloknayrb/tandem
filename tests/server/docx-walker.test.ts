@@ -4,6 +4,7 @@ import {
   type CommentStartHit,
   detectHeadingLevel,
   findAllByName,
+  getVisibleTextContent,
   type TextHit,
   walkDocumentBody,
 } from "../../src/server/file-io/docx-walker.js";
@@ -446,5 +447,75 @@ describe("detectHeadingLevel", () => {
       "w:p",
     );
     expect(detectHeadingLevel(el)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tracked MOVES (#1142) — mammoth recognizes neither half, so both are skipped
+// ---------------------------------------------------------------------------
+
+describe("walkDocumentBody — move revisions", () => {
+  const REV = 'w:id="1" w:author="A" w:date="2020-01-01T00:00:00Z"';
+
+  it("skips BOTH move halves, so flat offsets match the import", () => {
+    // MEASURED against the real mammoth import: a document with a 15-character
+    // <w:moveTo> imported as "Before  After" while this walker produced
+    // "Before MOVED-HERE-TEXT After" — 15 characters of drift, which shifts
+    // every comment anchor after the move onto unrelated text. The invariant at
+    // the top of docx-walker.ts is not optional.
+    const result = walkDocumentBody(
+      wrapBody(
+        `<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r>` +
+          `<w:moveFrom ${REV}><w:r><w:delText>MOVED-AWAY-TEXT</w:delText></w:r></w:moveFrom>` +
+          `<w:moveTo ${REV}><w:r><w:t>MOVED-HERE-TEXT</w:t></w:r></w:moveTo>` +
+          `<w:r><w:t xml:space="preserve"> After</w:t></w:r></w:p>`,
+      ),
+    );
+    expect(result.flatText).toBe("Before  After");
+  });
+
+  it("keeps comment anchors correct across a move", () => {
+    // The consequence the skip exists to prevent: an anchor AFTER a move.
+    const starts: CommentStartHit[] = [];
+    const result = walkDocumentBody(
+      wrapBody(
+        `<w:p><w:moveTo ${REV}><w:r><w:t>0123456789</w:t></w:r></w:moveTo>` +
+          `<w:commentRangeStart w:id="7"/><w:r><w:t>anchored</w:t></w:r>` +
+          `<w:commentRangeEnd w:id="7"/></w:p>`,
+      ),
+      { onCommentStart: (hit) => starts.push(hit) },
+    );
+    expect(result.flatText).toBe("anchored");
+    expect(starts[0].offset).toBe(0); // not 10
+  });
+});
+
+describe("getVisibleTextContent", () => {
+  const REV = 'w:id="1" w:author="A" w:date="2020-01-01T00:00:00Z"';
+  const parse = (xml: string) => parseDocument(xml, { xmlMode: true }).children[0];
+
+  it("skips deleted text, field instructions, and both move halves", () => {
+    const node = parse(
+      `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+        `<w:r><w:t xml:space="preserve">Kept </w:t></w:r>` +
+        `<w:del ${REV}><w:r><w:delText>DELETED</w:delText></w:r></w:del>` +
+        `<w:r><w:instrText> HYPERLINK "file://evil" </w:instrText></w:r>` +
+        `<w:moveFrom ${REV}><w:r><w:delText>MOVED-AWAY</w:delText></w:r></w:moveFrom>` +
+        `<w:moveTo ${REV}><w:r><w:t>MOVED-HERE</w:t></w:r></w:moveTo>` +
+        `<w:r><w:t>tail.</w:t></w:r></w:p>`,
+    );
+    expect(getVisibleTextContent(node)).toBe("Kept tail.");
+  });
+
+  it("matches LOCAL names, so a non-`w` prefix can't smuggle deleted text back", () => {
+    // This text is written back into the user's file as a real <w:footnote>.
+    // Prefix-matching here means fabrication, not merely a missed count.
+    const node = parse(
+      `<x:p xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+        `<x:r><x:t xml:space="preserve">Kept </x:t></x:r>` +
+        `<x:del x:id="1"><x:r><x:delText>REDACTED</x:delText></x:r></x:del>` +
+        `<x:r><x:t>tail.</x:t></x:r></x:p>`,
+    );
+    expect(getVisibleTextContent(node)).toBe("Kept tail.");
   });
 });

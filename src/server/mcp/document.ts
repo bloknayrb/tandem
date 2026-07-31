@@ -735,6 +735,12 @@ export function registerDocumentTools(server: McpServer): void {
           ...(result.integrityWarnings && result.integrityWarnings.length > 0
             ? { integrityWarnings: result.integrityWarnings }
             : {}),
+          // How many KINDS of Word feature the import couldn't bring in (#1142
+          // G3) — so the agent knows this save overwrote an original that had
+          // things the model never held. A capped category count, NOT a feature
+          // count, and the lines themselves stay user-only (see the note in
+          // docx-lost-features.ts on why import losses don't cross to Claude).
+          ...(result.unpreservedImports ? { unpreservedImports: result.unpreservedImports } : {}),
         });
       }
       if (result.status === "skipped") {

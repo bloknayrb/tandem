@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import { exportAnnotations, htmlToYDoc, loadDocx } from "../../src/server/file-io/docx.js";
+import {
+  exportAnnotations,
+  htmlToYDoc,
+  loadDocx,
+  partitionMammothMessages,
+} from "../../src/server/file-io/docx.js";
 import { getElementText } from "../../src/server/mcp/document.js";
 import type { Annotation } from "../../src/shared/types.js";
 import { buildMarks } from "../helpers/docx-corpus.js";
@@ -460,5 +465,45 @@ describe("read-only guard", () => {
     // back on explicit save. CHANGELOG.md is a representative read-only doc.
     const docState = { filePath: "CHANGELOG.md", format: "md", readOnly: true };
     expect(docState.readOnly).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Move-revision partition (#1142) — the cap must not be eaten by move noise
+// ---------------------------------------------------------------------------
+
+describe("partitionMammothMessages", () => {
+  const warn = (message: string) => ({ type: "warning", message });
+
+  it("keeps move messages OUT of the capped general set", () => {
+    // mammoth emits an unrecognised-element message for both halves of a move
+    // and all four range markers — six distinct lines. Filtering them
+    // downstream cannot un-crowd a cap that already ran, so they are
+    // partitioned before the slice.
+    const { general, moves } = partitionMammothMessages([
+      ...["w:moveTo", "w:moveFrom", "w:moveToRangeStart", "w:moveToRangeEnd"].map((n) =>
+        warn(`An unrecognised element was ignored: ${n}`),
+      ),
+      // Distinct, non-redactable messages: quoted style names all collapse to
+      // one line under the redaction, which would hide the crowding this pins.
+      ...["w:tblPrEx", "w:proofErr", "w:bookmarkStart", "w:sdt", "w:smartTag", "w:ruby"].map((n) =>
+        warn(`An unrecognised element was ignored: ${n}`),
+      ),
+    ]);
+    expect(moves).toHaveLength(4);
+    // All six real warnings survive. Before the partition the four move lines
+    // occupied four of the eight cap slots, so a document with more than four
+    // other warnings lost them permanently — and filtering downstream, after
+    // the cap had already run, could not bring them back.
+    expect(general).toHaveLength(6);
+    expect(general.every((g) => !/move/i.test(g))).toBe(true);
+  });
+
+  it("leaves a document with no moves unchanged", () => {
+    const { general, moves } = partitionMammothMessages([
+      warn("Unrecognised paragraph style: 'Corp' (Style ID: C1)"),
+    ]);
+    expect(moves).toEqual([]);
+    expect(general).toHaveLength(1);
   });
 });

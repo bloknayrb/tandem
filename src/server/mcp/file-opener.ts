@@ -892,12 +892,17 @@ function applyPreparedContent(doc: Y.Doc, prepared: Prepared, ctx: PopulateConte
 function writeImportLossReport(doc: Y.Doc, prepared: Prepared): void {
   if (prepared.format !== "docx") return;
   let importLosses: string[] = [];
+  let structuralLosses = 0;
   for (const issue of prepared.issues) {
-    if (issue.kind === "other" && issue.importLosses) importLosses = issue.importLosses;
+    if (issue.kind === "other" && issue.importLosses) {
+      importLosses = issue.importLosses;
+      structuralLosses = issue.structuralLosses ?? 0;
+    }
   }
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   meta.set(Y_MAP_FIDELITY_REPORT, {
     importLosses,
+    structuralLosses,
     exportDowngrades: [],
     updatedAt: Date.now(),
   } satisfies FidelityReport);
