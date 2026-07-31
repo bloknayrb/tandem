@@ -49,6 +49,11 @@ interface Props {
   /** Reactive head of the closed-tab stack — drives "Reopen last closed". */
   closedTabTop?: ClosedTabRecord | null;
   onReopenClosed?: () => void;
+  /** `tandem:settings.uniformTabWidth`. True clamps every tab to TAB_FLOOR_PX
+   * via `.tab-flip.uniform` (CSS only); false runs the measured per-tab floor
+   * below. Defaults false so `svelte-harness/registry.ts`, which mounts this
+   * component with no props, keeps its adaptive-by-default smoke render. */
+  uniformTabWidth?: boolean;
 }
 
 const {
@@ -66,6 +71,7 @@ const {
   renameTrigger = 0,
   closedTabTop = null,
   onReopenClosed,
+  uniformTabWidth = false,
 }: Props = $props();
 
 // Inline rename (#1017). DocumentTabs is the single source of truth for which
@@ -257,6 +263,11 @@ $effect(() => {
   if (dropTarget && !ids.has(dropTarget.id)) dropTarget = null;
 });
 
+// The tab strip's width floor, mirrored by `.tab-flip`'s `min-width` below.
+// Uniform mode pins every tab here; adaptive mode clamps each measured per-tab
+// floor to it, so no tab is ever wider than this on a crowded strip.
+const TAB_FLOOR_PX = 142;
+
 function updateScrollState() {
   const el = scrollEl;
   if (!el) return;
@@ -310,6 +321,102 @@ $effect(() => {
 $effect(() => {
   // Track tabs.length
   void tabs.length;
+  updateScrollState();
+});
+
+// Webfonts are `font-display: swap` (index.html) and session restore opens tabs
+// before the real faces land, so every filename's advance width changes shortly
+// after first paint. Without re-measuring on that event the adaptive floors
+// below would freeze at fallback-font widths for the whole session — the
+// default startup path, not an edge case.
+let fontsSettled = $state(false);
+$effect(() => {
+  let cancelled = false;
+  document.fonts?.ready.then(() => {
+    if (!cancelled) fontsSettled = true;
+  });
+  return () => {
+    cancelled = true;
+  };
+});
+
+// Adaptive tab widths (`uniformTabWidth: false`). CSS cannot express
+// "floor at min(my own natural width, TAB_FLOOR_PX)" — the name span's
+// `min-width: 0` + `overflow: hidden` give it an automatic minimum of zero, so
+// the filename never reaches the wrapper's min-content. Hence a measured floor.
+// Uniform mode needs none of this: `.tab-flip.uniform` pins the wrapper in CSS.
+$effect(() => {
+  const el = scrollEl;
+  if (!el) return;
+  // Tracked deps. `activeTabId` is load-bearing: the active tab's name renders
+  // at font-weight 500 and is measurably wider than the 400 it was measured at.
+  void uniformTabWidth;
+  // .map alone registers the dep on every fileName; nothing consumes the result.
+  void tabs.map((t) => t.fileName);
+  void activeTabId;
+  void renamingTabId;
+  void fontsSettled;
+
+  // Walk live children rather than querying by tab id: a closing tab lingers
+  // ~200ms with its testid intact, so a close-then-reopen of the same document
+  // would otherwise resolve to the dying node and leave the live tab unfloored.
+  const wrappers = Array.from(el.children).filter(
+    (c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains("tab-flip"),
+  );
+
+  if (uniformTabWidth) {
+    for (const w of wrappers) w.style.removeProperty("min-width");
+    updateScrollState();
+    return;
+  }
+
+  // Pass 1 — measure only. Writing inside this loop would dirty layout and
+  // force a fresh reflow for every subsequent tab (O(n) synchronous layouts).
+  const floors = wrappers.map((w) => {
+    const pill = w.querySelector<HTMLElement>('[role="tab"]');
+    const name = w.querySelector<HTMLElement>('[data-testid^="tab-name-"]');
+    // Renaming swaps the name span for an input whose own 80px minimum needs
+    // the full floor; bail to it rather than measuring a node that isn't there.
+    if (!pill || !name) return TAB_FLOOR_PX;
+
+    // Chrome is NOT a constant and must not be derived as `pill − name`: a
+    // floored tab carries slack that flex-start parks after the last child,
+    // which that subtraction would count as chrome. Sum the real boxes — this
+    // also self-corrects for the read-only badge (~29px, `flex-shrink: 0`) and
+    // for the 2px border delta between an active and an inactive pill.
+    const cs = getComputedStyle(pill);
+    const kids = Array.from(pill.children).filter(
+      (k): k is HTMLElement => k instanceof HTMLElement,
+    );
+    let chrome =
+      parseFloat(cs.paddingLeft) +
+      parseFloat(cs.paddingRight) +
+      parseFloat(cs.borderLeftWidth) +
+      parseFloat(cs.borderRightWidth) +
+      Math.max(0, kids.length - 1) * (parseFloat(cs.columnGap) || 0);
+    for (const k of kids) {
+      if (k !== name) chrome += k.getBoundingClientRect().width;
+    }
+
+    // `scrollWidth` is integer-rounded, so a name that exactly fits can still
+    // pick up an ellipsis; +1 buys that back. Read the cap off the span itself
+    // rather than restating TabItem's 240px literal here.
+    const cap = parseFloat(getComputedStyle(name).maxWidth) || Number.POSITIVE_INFINITY;
+    const nameNatural = Math.min(name.scrollWidth + 1, cap);
+    return Math.min(chrome + nameNatural, TAB_FLOOR_PX);
+  });
+
+  // Pass 2 — write. Deliberately NOT `!important`: cardMotion's exit keyframes
+  // carry `min-width: 0`, and the animation origin outranks an inline value
+  // only while that value is not important. Marking these would freeze the
+  // close/open collapse at the floor — rev 1's bug by another route.
+  wrappers.forEach((w, i) => {
+    w.style.minWidth = `${floors[i]}px`;
+  });
+
+  // The ResizeObserver above watches the scroller, not its children, and the
+  // scroller's own box doesn't move when child widths do — so without this the
+  // mask-fade classes go stale after a rename, a font swap, or a mode toggle.
   updateScrollState();
 });
 
@@ -695,6 +802,7 @@ $effect(() => {
            instead of gliding (measured). -->
       <div
         class="tab-flip"
+        class:uniform={uniformTabWidth}
         role="presentation"
         animate:flip={{ duration: motionOff(reduceMotion) ? 0 : 200 }}
         in:tabEnter={{ reduceMotion }}
@@ -791,11 +899,17 @@ $effect(() => {
 
      `flex-shrink: 1` so compression reaches the pill: with room to spare tabs
      sit at their natural width, and when the strip fills they narrow together
-     before it falls back to scrolling.
+     before it falls back to scrolling. In adaptive mode a short-named tab's
+     measured floor EQUALS its natural width, so a strip of short names cannot
+     compress at all — it goes straight to scrolling. That is intended
+     (a tab is never wider than its own filename needs).
 
-     The explicit `min-width` is the tab strip's ONLY compression floor, and it
-     has to live here — on the outermost shrinking box — rather than on the pill
-     inside. Two rules make that non-obvious:
+     The explicit `min-width` is the tab strip's compression floor in uniform
+     mode, and the CEILING the adaptive floor is clamped to in the other (see
+     the measured per-tab pass in the script — it writes a smaller inline
+     `min-width` on tabs whose own filename doesn't need this much). Either way
+     it has to live here — on the outermost shrinking box — rather than on the
+     pill inside. Two rules make that non-obvious:
        - Left at `auto`, this wrapper's minimum is the pill's min-content
          *contribution*, which a `min-width` can only raise, never lower. So the
          floor would track the filename and a long-named tab could never give a
@@ -819,6 +933,29 @@ $effect(() => {
     display: flex;
     flex-shrink: 1;
     min-width: 142px;
+  }
+
+  /* Uniform mode (`uniformTabWidth: true`, the default): pin the WRAPPER to a
+     single width. Matching min and max is what makes it uniform — the floor
+     alone only rescues tabs that are too narrow, and nothing capped the ones
+     that are too wide.
+
+     The pin deliberately clamps this box rather than sizing the name span,
+     because two pill layouts put width outside that span: a read-only tab adds
+     an RO badge plus a gap (~29px) beside it, and an inline rename replaces the
+     span entirely with an input carrying its own 80px minimum. Measured sparse,
+     sizing the span gave 246.3 / 287.7 / 221.4 for plain / read-only /
+     renaming; clamping here gives 142 / 142 / 142. Clamping the wrapper is
+     indifferent to all of it, since the pill and its name span already carry
+     `min-width: 0` and simply ellipsize.
+
+     Safe against the open/close motion: cardMotion animates `width` down to 0
+     and a max-width never blocks shrinking. Do NOT convert this to a flex-basis
+     (`flex: 1 1 0`) — a non-auto basis overrides the inline `width` those
+     transitions animate and the collapse goes inert. */
+  .tab-flip.uniform {
+    min-width: 142px;
+    max-width: 142px;
   }
 
   :global(.tab-scroll-hide) {

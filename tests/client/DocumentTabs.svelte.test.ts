@@ -390,3 +390,38 @@ describe("DocumentTabs new-tab menu (openMenuTrigger)", () => {
     expect(document.querySelector(menuSelector)).toBeNull();
   });
 });
+
+describe("uniform tab width", () => {
+  // The geometry itself needs a real layout engine and lives in
+  // tests/e2e/tab-overflow.spec.ts. What's checked here is only the wiring the
+  // E2E can't distinguish from a CSS regression: that the prop actually reaches
+  // the wrapper. A dropped or misspelled prop silently leaves every tab in
+  // adaptive mode while the setting reads as on.
+  it("applies .uniform to each tab wrapper only when uniformTabWidth is set", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    // Scope to this render's container: earlier tests in this file leave their
+    // trees mounted, so a document-wide query picks up their wrappers too.
+    const { rerender, container } = render(DocumentTabs, {
+      props: { ...baseProps(tabs, reorder), uniformTabWidth: true },
+    });
+    await tick();
+
+    const wrappers = () => Array.from(container.querySelectorAll(".tab-flip"));
+    expect(wrappers()).toHaveLength(2);
+    expect(wrappers().every((w) => w.classList.contains("uniform"))).toBe(true);
+
+    await rerender({ ...baseProps(tabs, reorder), uniformTabWidth: false });
+    await tick();
+    expect(wrappers().some((w) => w.classList.contains("uniform"))).toBe(false);
+  });
+
+  it("defaults to adaptive when the prop is omitted (svelte-harness mounts it bare)", async () => {
+    const reorder = vi.fn();
+    const { container } = render(DocumentTabs, { props: baseProps([makeTab("a")], reorder) });
+    await tick();
+    const wrapper = container.querySelector(".tab-flip");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.classList.contains("uniform")).toBe(false);
+  });
+});

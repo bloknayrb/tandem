@@ -2320,6 +2320,7 @@ const shouldShowModelPicker = $derived(
     onCloseToRight={closeTabsToRight}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
+    uniformTabWidth={settingsState.settings.uniformTabWidth}
     onRequestOpenDialog={() => void requestOpenFile()}
     openMenuTrigger={newTabMenuTrigger}
     onTabRename={(tabId, newName) =>

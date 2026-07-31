@@ -269,10 +269,13 @@ const TAB_EXIT_MS = 200;
  * s3 — a closing tab collapses on the INLINE axis (width w→0) + fades, so the
  * adjacent tabs glide left to fill (`out:` directive on the `.tab-flip` wrapper
  * in DocumentTabs — NOT the TabItem pill inside it). The `min-width:0` is what
- * makes the collapse reach zero: `.tab-flip` carries the tab strip's 142px
- * compression floor, and a transition can only style its own node, so hosting
- * this on the pill would leave the wrapper pinned at 142px and the neighbours
- * would jump. `overflow:clip` clips the name without becoming a focus-stealing
+ * makes the collapse reach zero: `.tab-flip` carries the tab strip's width
+ * floor (142px under `uniformTabWidth`, a smaller measured per-tab value
+ * otherwise), and a transition can only style its own node, so hosting this on
+ * the pill would leave the wrapper pinned at its floor and the neighbours would
+ * jump. Svelte emits these as keyframes, which outrank the inline `min-width`
+ * the adaptive pass writes — but only while that inline value is not
+ * `!important`, which is why it never is. `overflow:clip` clips the name without becoming a focus-stealing
  * scroll box.
  * `pointer-events:none` makes the leaving node inert for its ~200ms in the DOM:
  * the id is already gone from `tabsState` (that removal is what fired this outro),
@@ -301,7 +304,7 @@ const TAB_ENTER_MS = 220;
  * instead of snapping (`in:` directive on the `.tab-flip` wrapper, for the
  * reason spelled out in `tabExit`). A touch longer than the 200ms exit (220ms)
  * so the unroll reads as settling in rather than snapping shut. `min-width:0`
- * clears that wrapper's 142px floor so the unroll starts from 0. Svelte skips intros on the
+ * clears that wrapper's width floor so the unroll starts from 0. Svelte skips intros on the
  * initial render, so existing tabs don't all animate on app load — only a tab
  * opened after mount unrolls. Reduced motion → instant.
  */

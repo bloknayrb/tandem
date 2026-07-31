@@ -473,3 +473,24 @@ for (const row of FONT_FORMAT_ROWS) {
     resizing it; click its edge to pin it open. When off, rails reveal only on click.
   </div>
 </div>
+
+<!-- Uniform tab width -->
+<div>
+  <label
+    data-testid="appearance-uniform-tab-width"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+  >
+    <input
+      type="checkbox"
+      checked={settings.uniformTabWidth}
+      disabled={readOnly}
+      onchange={(e) => onUpdate({ uniformTabWidth: (e.target as HTMLInputElement).checked })}
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
+    />
+    <span>Uniform tab width</span>
+  </label>
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+    Give every document tab the same width. When off, each tab sizes to its own
+    filename — short names take less room, long ones grow until they hit a cap.
+  </div>
+</div>

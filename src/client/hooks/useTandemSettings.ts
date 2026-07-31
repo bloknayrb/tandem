@@ -213,6 +213,15 @@ export interface TandemSettings {
    */
   spellcheck: boolean;
   /**
+   * Tab-strip sizing. `true` (default) clamps every tab to one width via
+   * `.tab-flip.uniform`'s matched `min-width`/`max-width` — a CSS-only pin on
+   * the wrapper, deliberately not on the name span, since the span is absent
+   * during inline rename and a read-only tab's badge sits outside it. `false`
+   * sizes each tab to its own filename via a measured per-tab floor in
+   * `DocumentTabs`, growing to the name span's 240px cap. Display-only.
+   */
+  uniformTabWidth: boolean;
+  /**
    * **DO NOT** set this from product code. Internal marker stamped by
    * `loadSettings` when the on-disk `schemaVersion` is newer than this
    * client knows how to migrate. `createTandemSettings` short-circuits
@@ -238,7 +247,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 17,
+  schemaVersion: 18,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -273,6 +282,7 @@ const DEFAULTS: TandemSettings = {
   customShortcuts: {},
   smartTypography: false,
   spellcheck: true,
+  uniformTabWidth: true,
 };
 
 /** Max length of an opaque keychain ref (matches server-side `REF_MAX_LENGTH`). */
@@ -473,8 +483,13 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   `normalizeKnownFields` defaults a missing `smartTypography` to `false`
  *   and a missing `spellcheck` to `true`, and preserves any explicit value
  *   already present on the blob.
+ * v17→v18: introduce `uniformTabWidth: true` (settings-driven tab-strip
+ *   sizing). Pure version bump — do NOT set the field here (that would clobber
+ *   an explicit override); `normalizeKnownFields` defaults a missing field to
+ *   `true`, preserving the uniform strip existing users already see when the
+ *   strip is crowded, and preserves an explicit `false`.
  */
-export const CURRENT_SCHEMA_VERSION = 17;
+export const CURRENT_SCHEMA_VERSION = 18;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -589,6 +604,9 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     customShortcuts: parseCustomShortcuts(parsed.customShortcuts),
     smartTypography: parsed.smartTypography === true,
     spellcheck: parsed.spellcheck === false ? false : DEFAULTS.spellcheck,
+    // Default-TRUE idiom (like `spellcheck` above, unlike `smartTypography`):
+    // an absent key must load as `true`, or the shipped default never applies.
+    uniformTabWidth: parsed.uniformTabWidth === false ? false : DEFAULTS.uniformTabWidth,
   };
 }
 
@@ -793,6 +811,12 @@ export function loadSettings(): TandemSettings {
         // a missing `smartTypography` to false and a missing `spellcheck` to
         // true, and preserves explicit values already on the blob.
         parsed = { ...parsed, schemaVersion: 17 };
+      }
+      if (parsed.schemaVersion === 17) {
+        // v17→v18: introduce `uniformTabWidth`. Pure version bump — do NOT set
+        // the field here (that would clobber an explicit override).
+        // normalizeKnownFields defaults a missing value to true.
+        parsed = { ...parsed, schemaVersion: 18 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`

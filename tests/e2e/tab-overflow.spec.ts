@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import {
@@ -173,42 +173,67 @@ test("open file button is always visible", async ({ page }) => {
 });
 
 /**
- * The tab strip's compression contract (#1250). Three review passes agreed on a
- * mechanism that turned out to be wrong, and only measurement caught it — see
- * lesson 85 in docs/lessons-learned.md — so the floor gets a real guard.
+ * The tab strip's sizing contract (#1250, then the `uniformTabWidth` setting).
+ * Three review passes agreed on a mechanism that turned out to be wrong, and
+ * only measurement caught it — see lesson 85 in docs/lessons-learned.md — so
+ * both modes get a real guard.
+ *
+ * The fixture deliberately MIXES name lengths. An earlier version opened twelve
+ * near-identical names, which cannot express width dispersion: a uniformity
+ * check passes trivially in both modes, so the assertion that actually
+ * distinguishes them was unavailable.
  *
  * `.tab-flip` and `.title-bar-actions` are matched by class, not testid: both
  * are structural boxes owned by the components under test with no user-facing
  * identity of their own, and a testid on either would exist solely for this
  * assertion.
  */
-test("tabs compress to their floor before the strip scrolls, and nothing spills", async ({
-  page,
-}) => {
+const FLOOR_PX = 142;
+
+/** Long names rest at the 240px name cap; the two short ones are the dispersion probe. */
+const FIXTURE_NAMES = [
+  ...Array.from({ length: 10 }, (_, i) => `tandem-ink-email-runbook-${i + 1}.md`),
+  "ab.md",
+  "notes.md",
+];
+
+async function openFixtureTabs(page: Page, uniform: boolean) {
   // `tabEnter`/`tabExit` animate `width` and inject `min-width: 0`, so a pill
   // measured mid-transition reports a collapsing box rather than its resting
   // size. Zeroing both durations makes these measurements deterministic instead
   // of merely slow. `motionOff()` reads this same media query.
   await page.emulateMedia({ reducedMotion: "reduce" });
 
-  // Names long enough that each would rest at the name span's 240px cap given
-  // room, and enough of them that the strip must overflow once every pill is
-  // down at its floor.
-  const names = Array.from({ length: 12 }, (_, i) => `tandem-ink-email-runbook-${i + 1}.md`);
-  for (const name of names) {
+  for (const name of FIXTURE_NAMES) {
     const filePath = path.join(tmpDir, name);
-    fs.writeFileSync(filePath, `# ${name}\n\nCompression fixture.\n`);
+    fs.writeFileSync(filePath, `# ${name}\n\nSizing fixture.\n`);
     await mcp.callTool("tandem_open", { filePath });
   }
+
+  // Seed the setting before first paint. `schemaVersion` must be the CURRENT
+  // one: seed it lower and loadSettings migrates (fine), but seed it higher and
+  // the whole run silently goes `_readOnly`.
+  await page.addInitScript(
+    ([key, value]) => {
+      window.localStorage.setItem(
+        key as string,
+        JSON.stringify({ schemaVersion: 18, uniformTabWidth: value }),
+      );
+    },
+    ["tandem:settings", uniform],
+  );
 
   await page.goto("http://127.0.0.1:5173");
   await page.waitForSelector("[data-testid='tab-scroll-container']");
   await expect
     .poll(() => page.locator(".tab-flip").count(), { timeout: 10_000 })
-    .toBeGreaterThanOrEqual(names.length);
+    .toBeGreaterThanOrEqual(FIXTURE_NAMES.length);
+}
 
-  const measured = await page.evaluate(() => {
-    const box = (el: Element) => {
+async function measureTabStrip(page: Page) {
+  return page.evaluate(() => {
+    const box = (el: Element | null) => {
+      if (!el) return null;
       const b = el.getBoundingClientRect();
       return { left: b.left, right: b.right, width: b.width };
     };
@@ -217,43 +242,97 @@ test("tabs compress to their floor before the strip scrolls, and nothing spills"
     return {
       overflowing: scroller.scrollWidth > scroller.clientWidth,
       scrollerClass: scroller.className,
-      actions: box(actions),
+      actions: box(actions)!,
       viewportWidth: document.documentElement.clientWidth,
       tabs: [...document.querySelectorAll<HTMLElement>(".tab-flip")].map((wrapper) => {
         const pill = wrapper.firstElementChild as HTMLElement;
+        // Null while a tab is renaming — the span is swapped for an input.
+        const name = pill.querySelector("[data-testid^='tab-name-']");
         return {
-          wrapper: box(wrapper),
-          pill: box(pill),
-          name: box(pill.querySelector("[data-testid^='tab-name-']") as HTMLElement),
-          close: box(pill.querySelector("button[aria-label^='Close']") as HTMLElement),
+          uniform: wrapper.classList.contains("uniform"),
+          wrapper: box(wrapper)!,
+          pill: box(pill)!,
+          name: box(name),
+          close: box(pill.querySelector("button[aria-label^='Close']"))!,
         };
       }),
     };
   });
+}
 
-  // The strip actually ran out of room — otherwise the floor below is vacuous.
-  expect(measured.overflowing).toBe(true);
-  expect(measured.scrollerClass).toMatch(/has-overflow|overflow-left|overflow-right/);
-
+/** Shared by both modes: nothing escapes its pill, and the actions cluster survives. */
+function assertNothingSpills(measured: Awaited<ReturnType<typeof measureTabStrip>>) {
   for (const tab of measured.tabs) {
-    // Upper bound is the regression detector: the shipped-then-reverted shape
-    // left a long name pinned at 259px and never compressed at all.
-    expect(tab.wrapper.width).toBeLessThan(200);
-    // Lower bound is the overlap detector: below the floor the pill's children
-    // stop fitting and neighbouring tabs run into each other.
-    expect(tab.wrapper.width).toBeGreaterThanOrEqual(141.5);
-    // A compressed tab must still read as a name, not an ellipsis.
-    expect(tab.name.width).toBeGreaterThan(40);
-    // Nothing escapes its pill (0.5px for subpixel flex rounding).
-    expect(tab.name.left).toBeGreaterThanOrEqual(tab.pill.left - 0.5);
-    expect(tab.name.right).toBeLessThanOrEqual(tab.pill.right + 0.5);
+    // 0.5px for subpixel flex rounding.
+    if (tab.name) {
+      expect(tab.name.left).toBeGreaterThanOrEqual(tab.pill.left - 0.5);
+      expect(tab.name.right).toBeLessThanOrEqual(tab.pill.right + 0.5);
+    }
     expect(tab.close.left).toBeGreaterThanOrEqual(tab.pill.left - 0.5);
     expect(tab.close.right).toBeLessThanOrEqual(tab.pill.right + 0.5);
   }
-
   // The center cluster is the only shrinkable item in the title-bar row, so a
   // crowded strip must never push the actions cluster off-screen.
   expect(measured.actions.width).toBeGreaterThan(0);
   expect(measured.actions.left).toBeGreaterThanOrEqual(-0.5);
   expect(measured.actions.right).toBeLessThanOrEqual(measured.viewportWidth + 0.5);
+}
+
+test("uniform mode: every tab is the same width, and the strip still scrolls", async ({ page }) => {
+  await openFixtureTabs(page, true);
+  const measured = await measureTabStrip(page);
+
+  expect(measured.tabs.every((t) => t.uniform)).toBe(true);
+
+  // Guard against `flex-grow` filling the scroller exactly: if it ever does,
+  // scrollWidth === clientWidth, updateScrollState never fires, and the mask
+  // fade plus horizontal scroll disappear permanently (lesson 85).
+  expect(measured.overflowing).toBe(true);
+  expect(measured.scrollerClass).toMatch(/has-overflow|overflow-left|overflow-right/);
+
+  const widths = measured.tabs.map((t) => t.wrapper.width);
+  // The whole point of the mode: a 2-character name and a 28-character name
+  // occupy identical space. Also the regression detector for a name-span-based
+  // pin, which left read-only and renaming tabs 80-145px wider than the rest.
+  expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+  expect(Math.max(...widths)).toBeCloseTo(FLOOR_PX, 0);
+
+  assertNothingSpills(measured);
+});
+
+test("adaptive mode: tabs size to their own name, and long ones still compress", async ({
+  page,
+}) => {
+  await openFixtureTabs(page, false);
+  const measured = await measureTabStrip(page);
+
+  expect(measured.tabs.some((t) => t.uniform)).toBe(false);
+
+  // Still overflows — otherwise the floor assertions below are vacuous.
+  expect(measured.overflowing).toBe(true);
+  expect(measured.scrollerClass).toMatch(/has-overflow|overflow-left|overflow-right/);
+
+  const widths = measured.tabs.map((t) => t.wrapper.width);
+  // THE assertion for this mode. The bug being fixed was every tab landing on
+  // the floor regardless of its name, which reads as "all tabs are identical".
+  expect(Math.max(...widths) - Math.min(...widths)).toBeGreaterThan(15);
+
+  for (const tab of measured.tabs) {
+    // Upper bound is the no-compression regression detector: the
+    // shipped-then-reverted shape left a long name pinned at 259px. It is also
+    // the adaptive ceiling — a tab is never wider than the uniform width once
+    // the strip is crowded.
+    expect(tab.wrapper.width).toBeLessThanOrEqual(FLOOR_PX + 0.5);
+    // Lower bound: a tab may be narrower than the floor ONLY because its own
+    // name needs less. It may never be narrower than its own chrome, which is
+    // what would make the close button collide with the name.
+    expect(tab.wrapper.width).toBeGreaterThan(60);
+  }
+
+  // A short name must not be truncated — that is what distinguishes this mode
+  // from a uniformly-floored strip, where `ab.md` is padded out to 142px.
+  const shortest = measured.tabs.reduce((a, b) => (a.wrapper.width <= b.wrapper.width ? a : b));
+  expect(shortest.wrapper.width).toBeLessThan(FLOOR_PX - 5);
+
+  assertNothingSpills(measured);
 });
