@@ -302,32 +302,44 @@ function handleMouseLeaveClose() {
      tab, and cancelling the drag with Escape flips :focus-visible on, so the
      ring lands on the tab you just watched fly home.
 
-     Deliberately QUIETER than the house ring, and quieter than the `+` pill
+     Deliberately far quieter than the house ring, and quieter than the `+` pill
      beside it (DocumentTabs `.tab-add-pill`, which uses the full
      `--tandem-accent`): a tab is chrome you look past, not a control you aim
      at, and the ring's most common trigger is cancelling a drag — a moment
      where a loud outline reads as an error report on an action that succeeded.
-     `--tandem-accent-border` is the palette's own accent-family border token,
-     so this stays a tokenized decision rather than a one-off tint.
+     Picked from four rendered candidates (accent / accent-border / border /
+     1px accent-border) rather than chosen on paper.
 
-     Two things it must NOT become. Not `--tandem-border`: that is the active
-     tab's own border colour, so a focused inactive tab would be hard to tell
-     from the active one. Not `outline: none`, and not a blur() on the Escape
-     path — both were tried; blurring leaves activeElement on BODY (measured),
-     stripping the indicator at the exact moment the user reached for the
-     keyboard and taking Alt+Arrow reorder with it.
+     TWO KNOWN TRADES, both made deliberately with the alternatives on screen
+     (Bryan, 2026-07-31) — do not "fix" either without asking:
 
-     KNOWN TRADE, made deliberately (Bryan, 2026-07-31): at ~1.4:1 against the
-     strip this sits under the 3:1 WCAG 1.4.11 asks of a focus indicator.
-     `--tandem-accent` (~4:1) is the conformant value if that is ever revisited;
-     the E2E below pins whichever token is chosen, so swapping is a one-line
-     change in two places.
+     1. CONTRAST. `--tandem-border` is the *quietest* of the four and sits well
+        under the 3:1 WCAG 1.4.11 asks of a focus indicator. `--tandem-accent`
+        (~4:1) is the conformant value; `--tandem-accent-border` (~1.4:1) is the
+        middle option. The E2E below pins whichever token is in force, so moving
+        between them is one line here and one there.
+        Narrower than it looks, though: `index.html`'s `forced-colors: active`
+        block remaps `--tandem-border` to `CanvasText`, so under Windows High
+        Contrast this ring is the maximum-contrast foreground automatically. The
+        quiet version reaches only users who have NOT asked the OS for high
+        contrast — which is why the token indirection matters here and a
+        hardcoded colour would have been the wrong shape even at the same hue.
+     2. SHARED COLOUR WITH THE ACTIVE TAB. This is the same token the active
+        pill uses for its own border (see `tabStyle` above), so a focused
+        inactive tab and the active tab are close in colour. They stay
+        separable by geometry rather than hue: this is 2px at a 1px OFFSET
+        (outside the pill), the active border is 1px ON it.
+
+     What it must NOT become: `outline: none`, or a blur() on the Escape path.
+     Both were tried — blurring leaves activeElement on BODY (measured, not
+     assumed), stripping the indicator at the exact moment the user reached for
+     the keyboard and taking Alt+Arrow reorder with it.
 
      The 1px offset is a constraint, not taste: 3px total reach against the
      scroller's 6px padding clears the pill without meeting the
      `overflow-y: hidden` edge that clips the drag lift's shadow. */
   [role="tab"]:focus-visible {
-    outline: 2px solid var(--tandem-accent-border);
+    outline: 2px solid var(--tandem-border);
     outline-offset: 1px;
   }
 

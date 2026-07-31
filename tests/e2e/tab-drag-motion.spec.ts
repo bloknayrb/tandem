@@ -297,10 +297,10 @@ test("cancelling with Escape keeps focus on the tab, under the accent ring", asy
   // tab. Escape is a keyboard interaction, so blurring here would strip the
   // focus indicator at the exact moment the user reached for the keyboard, and
   // drop Alt+Arrow reorder along with it — measured: activeElement became BODY.
-  // (2) The ring must be the app's own quiet accent-border token, not
-  // Chromium's default. The pill carried no focus style at all until this
-  // change, so the UA fallback painted a heavy black outline that read as an
-  // error state on a cancel that had in fact worked.
+  // (2) The ring must be the app's own quiet border token, not Chromium's
+  // default. The pill carried no focus style at all until this change, so the
+  // UA fallback painted a heavy black outline that read as an error state on a
+  // cancel that had in fact worked.
   const before = await openTwoTabs(page, "no-preference");
   await dragFirstPastSecond(page, before);
   await page.keyboard.press("Escape");
@@ -314,7 +314,7 @@ test("cancelling with Escape keeps focus on the tab, under the accent ring", asy
     // the computed value serializes `0.1`, so comparing the strings directly
     // fails on a difference that isn't a colour difference.
     const probe = document.createElement("span");
-    probe.style.color = "var(--tandem-accent-border)";
+    probe.style.color = "var(--tandem-border)";
     document.body.appendChild(probe);
     const expected = getComputedStyle(probe).color;
     probe.remove();
