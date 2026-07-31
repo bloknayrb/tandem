@@ -403,6 +403,31 @@ export const buildTrackedChange = (): Promise<Buffer> =>
       `</w:p>`,
   });
 
+/** A footnote whose body carries bold — it RECONSTRUCTS on export (so it is not
+ * a structural loss) but the bold is flattened to plain text. */
+export const buildFootnoteWithFormatting = (): Promise<Buffer> =>
+  rawDocx({
+    body:
+      `<w:p><w:r><w:t xml:space="preserve">A claim</w:t></w:r>` +
+      `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr>` +
+      `<w:footnoteReference w:id="1"/></w:r></w:p>`,
+    parts: {
+      "word/footnotes.xml":
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<w:footnotes xmlns:w="${WML}">` +
+        `<w:footnote w:type="separator" w:id="-1"><w:p/></w:footnote>` +
+        `<w:footnote w:id="1"><w:p><w:r><w:rPr><w:b/></w:rPr>` +
+        `<w:t>A bold footnote body.</w:t></w:r></w:p></w:footnote>` +
+        `</w:footnotes>`,
+    },
+    overrides: [
+      `<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>`,
+    ],
+    documentRels: [
+      `<Relationship Id="rIdFn" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>`,
+    ],
+  });
+
 /** A Word "move" revision: both halves, fixed dates. Distinct from an
  * insert+delete pair because mammoth recognizes NEITHER element, so BOTH
  * subtrees are discarded — the moved text is simply absent (measured). */

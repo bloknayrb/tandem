@@ -383,6 +383,20 @@ describe("scanDocxLostFeatures — headers / footers", () => {
     expect(out.headers).toBe(3);
   });
 
+  it("finds header/footer parts at the package ROOT", async () => {
+    // baseDir is "" here — a REAL directory, and one resolveRevisionParts
+    // explicitly supports for the main part. Treating it as absent makes a
+    // root-level header unmatchable and hands that layout a false all-clear.
+    const out = await scan(
+      await zipWith({
+        "_rels/.rels": rootRels("document.xml"),
+        "document.xml": documentXml("<w:p/>"),
+        "header1.xml": headerXml("<w:p><w:r><w:t>ACME letterhead</w:t></w:r></w:p>"),
+      }),
+    );
+    expect(out.headers).toBe(1);
+  });
+
   it("does not match nested or lookalike paths", async () => {
     const out = await scan(
       await pkg("<w:p/>", {
@@ -394,9 +408,15 @@ describe("scanDocxLostFeatures — headers / footers", () => {
     expect(out.headers).toBe(0);
   });
 
+  // The control bytes are BUILT, never written literally: a literal NUL in a
+  // source file makes git classify it as binary, and the whole test file then
+  // shows as "Bin N -> M bytes" in every pull request (the hazard .gitattributes
+  // works around for docx-comments.ts). Not having the byte at all is better.
   it("counts an unreadable part as content-bearing (never conflates can't-read with empty)", async () => {
     silenceErrors();
-    const out = await scan(await pkg("<w:p/>", { "word/header1.xml": "  not xml" }));
+    const out = await scan(
+      await pkg("<w:p/>", { "word/header1.xml": `${String.fromCharCode(0, 1)} not xml` }),
+    );
     expect(out.headers).toBe(1);
   });
 
@@ -416,6 +436,24 @@ describe("scanDocxLostFeatures — headers / footers", () => {
 });
 
 describe("scanDocxLostFeatures — robustness", () => {
+  it("is not confused by element names that collide with Object.prototype", async () => {
+    // The bucket key comes from attacker-controlled XML. A plain object literal
+    // would resolve `toString`/`constructor`/`__proto__` to truthy "buckets".
+    const out = await scan(
+      await pkg(
+        `<w:p><w:toString/><w:constructor/><w:hasOwnProperty/>` +
+          `<w:del ${REV}><w:r><w:delText>gone</w:delText></w:r></w:del></w:p>`,
+      ),
+    );
+    expect(out.revisions).toEqual({
+      insertions: 0,
+      deletions: 1,
+      moveTo: 0,
+      moveFrom: 0,
+      formatting: 0,
+    });
+  });
+
   it("degrades to all-zeros on a non-ZIP buffer and never throws", async () => {
     silenceErrors();
     const out = await scan(Buffer.from("this is not a zip archive"));

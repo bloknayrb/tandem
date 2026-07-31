@@ -49,7 +49,7 @@
 import type { ChildNode } from "domhandler";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
-import { findAllByName, getAttr, getTextContent, isElement } from "./docx-walker.js";
+import { findAllByName, getAttr, getTextContent, isElement, localName } from "./docx-walker.js";
 
 /**
  * Revision-mark tallies, split three ways rather than collapsed into one
@@ -103,31 +103,16 @@ export const noLostFeatures = (): DocxLostFeatures => ({
 // Element matching
 // ---------------------------------------------------------------------------
 
-/**
- * Match on the LOCAL name, not the prefixed one.
- *
- * `w:` is a convention, not a guarantee: OOXML binds the WordprocessingML
- * namespace by URI, so a producer may legitimately declare
- * `xmlns:x="…/wordprocessingml/2006/main"` and emit `<x:ins>`. Measured: mammoth
- * imports such a package identically (its office-xml reader maps URIs to
- * canonical prefixes), silently applying every revision — so prefix-matching
- * here would return a confident all-clear on a document that IS losing content.
- * On an honesty surface a false all-clear is the worst possible failure.
- *
- * Matching bare local names is the over-warn direction this module commits to:
- * there is no `ins`/`del`/`moveTo`/`*Change` element in another OOXML namespace
- * that would false-positive, and an extra line costs nothing next to a missed
- * loss. (Tandem's other OOXML readers do assume `w:`; there the consequence is a
- * missing comment, not a false assurance.)
- */
-const localName = (name: string): string => name.slice(name.lastIndexOf(":") + 1);
+// Element matching is by LOCAL name — see `localName` in docx-walker.ts for the
+// measurement that makes prefix-matching unsafe here: a package binding WML to a
+// non-`w` prefix imports identically under mammoth, so prefix-matching would
+// return a confident all-clear on a document that IS losing content.
 
-/**
- * Local element name → tally. One table rather than a set-per-bucket plus a
- * branch chain: adding an element name is a single edit, and a reader sees at a
- * glance that there are four buckets, not five sets.
- */
-const REVISION_BUCKET: Record<string, keyof RevisionCounts> = {
+// `Object.create(null)`-backed: the key comes from an attacker-controlled XML
+// element name, and a plain object literal would resolve inherited members
+// (`toString`, `constructor`, `__proto__`) to truthy "buckets" and write garbage
+// keys into the counts object.
+const REVISION_BUCKET: Record<string, keyof RevisionCounts> = Object.assign(Object.create(null), {
   ins: "insertions",
   del: "deletions",
   moveTo: "moveTo",
@@ -136,7 +121,7 @@ const REVISION_BUCKET: Record<string, keyof RevisionCounts> = {
   cellIns: "formatting",
   cellDel: "formatting",
   cellMerge: "formatting",
-};
+});
 
 /**
  * Formatting revisions are ALSO matched by FAMILY (`…Change`) rather than by an
@@ -264,6 +249,15 @@ const REL_NS_MAIN = "/relationships/officeDocument";
  * resolves no DOCTYPE or external entities, so there is no XXE surface (same
  * parser and same posture as docx-walker / docx-footnotes / docx-apply).
  */
+/** Zip entry names are attacker-controlled and these reach the rotated log file
+ * that Copy Diagnostics ships to support. Strip control characters (a newline
+ * would let a crafted archive forge log lines) and bound the length. */
+function safeEntryLabel(name: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
+  const cleaned = name.replace(/[\u0000-\u001f\u007f]/g, "?");
+  return cleaned.length > 120 ? `${cleaned.slice(0, 119)}…` : cleaned;
+}
+
 async function withPart(
   zip: JSZip,
   partPath: string,
@@ -276,7 +270,7 @@ async function withPart(
     use(doc.children);
     return true;
   } catch (err) {
-    console.error(`[docx-lost-features] failed to analyze ${partPath}:`, err);
+    console.error(`[docx-lost-features] failed to analyze ${safeEntryLabel(partPath)}:`, err);
     return false;
   }
 }
@@ -413,17 +407,34 @@ const MAX_HEADER_FOOTER_BYTES = 2 * 1024 * 1024;
  * `word/media/header1.xml`) cannot match.
  */
 function headerFooterKind(entryName: string, baseDir: string): "headers" | "footers" | undefined {
-  const dirs = new Set([baseDir.toLowerCase(), "word"].filter(Boolean));
-  const match = /^(.*)\/(header|footer)\d*\.xml$/.exec(entryName.toLowerCase());
-  if (!match || !dirs.has(match[1])) return undefined;
+  // `""` is a REAL directory here — the package root, which `resolveRevisionParts`
+  // explicitly supports for the main part. Filtering it out (as `.filter(Boolean)`
+  // would) makes a root-level `header1.xml` unmatchable and hands that layout a
+  // confident "no headers lost".
+  const dirs = new Set([baseDir.toLowerCase(), "word"]);
+  const match = /^(?:(.*)\/)?(header|footer)\d*\.xml$/.exec(entryName.toLowerCase());
+  if (!match || !dirs.has(match[1] ?? "")) return undefined;
   return match[2] === "header" ? "headers" : "footers";
 }
 
 /** Best-effort declared uncompressed size, or undefined when JSZip doesn't
  * expose it (never trusted for correctness — only to skip an obvious bomb). */
+let warnedMissingSizeField = false;
 function declaredSize(file: unknown): number | undefined {
   const size = (file as { _data?: { uncompressedSize?: unknown } })?._data?.uncompressedSize;
-  return typeof size === "number" ? size : undefined;
+  if (typeof size === "number") return size;
+  // `_data` is a JSZip internal with no compatibility guarantee. If it ever
+  // moves, every part looks small and the size ceiling silently stops existing —
+  // a working guard and a dead guard are indistinguishable on benign input. Say
+  // so once rather than failing open in silence.
+  if (file && !warnedMissingSizeField) {
+    warnedMissingSizeField = true;
+    console.error(
+      "[docx-lost-features] JSZip no longer exposes _data.uncompressedSize; " +
+        "the per-part size ceiling is inactive",
+    );
+  }
+  return undefined;
 }
 
 /**
@@ -458,7 +469,9 @@ export async function scanDocxLostFeatures(buffer: Buffer): Promise<DocxLostFeat
       // notes part just means no note revisions were counted.
       if (!read && part === main) {
         out.revisionScanFailed = true;
-        console.error(`[docx-lost-features] ${part} unreadable; cannot check for tracked changes`);
+        console.error(
+          `[docx-lost-features] ${safeEntryLabel(part)} unreadable; cannot check for tracked changes`,
+        );
       }
     }
   }
@@ -499,7 +512,9 @@ export async function scanDocxLostFeatures(buffer: Buffer): Promise<DocxLostFeat
         if (children.some(isElement)) counts = hasVisibleContent(children);
       });
       if (counts === undefined) {
-        console.error(`[docx-lost-features] ${name} unreadable; counting it as content-bearing`);
+        console.error(
+          `[docx-lost-features] ${safeEntryLabel(name)} unreadable; counting it as content-bearing`,
+        );
       }
     }
     if (counts ?? true) out[kind]++;
@@ -530,6 +545,12 @@ const line = (n: number, one: string, many: string, tail: string): string =>
  * Ordered most-destructive first: a tracked deletion is the only entry in the
  * whole fidelity report where the text the user is reading is not the text the
  * author wrote.
+ */
+/**
+ * Both halves, in report order. The ADAPTER interleaves these with the footnote
+ * and mammoth lines, so this is not the production composition — it exists so
+ * callers that want "everything this module would say" (and the content-contract
+ * tests) have one entry point rather than re-deriving the order.
  */
 export function lostFeatureLossLines(scan: DocxLostFeatures): string[] {
   return [...scanFailureLines(scan), ...structuralLossLines(scan)];

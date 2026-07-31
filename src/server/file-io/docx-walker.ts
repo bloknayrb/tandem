@@ -4,8 +4,8 @@
 // application (docx-apply.ts). The walker's flat-text output must match
 // `extractText(htmlToYDoc(mammoth(docx)))` for any document.
 //
-// Key invariant: <w:del> subtrees are skipped (mammoth excludes deleted
-// tracked-change text), while <w:ins> subtrees are traversed normally
+// Key invariant: <w:del> and both <w:moveFrom>/<w:moveTo> subtrees are skipped
+// (mammoth excludes all three), while <w:ins> subtrees are traversed normally
 // (mammoth includes inserted text).
 
 import type { ChildNode, Element } from "domhandler";
@@ -24,6 +24,19 @@ export function getAttr(el: Element, name: string): string | undefined {
   return el.attribs?.[name];
 }
 
+/**
+ * The local part of a possibly-prefixed OOXML name (`w:del` → `del`).
+ *
+ * `w:` is a convention, not a guarantee: OOXML binds WordprocessingML by URI, so
+ * a producer may declare `xmlns:x="…/wordprocessingml/2006/main"` and emit
+ * `<x:del>`. Measured (see `docx-lost-features.ts`): mammoth canonicalizes by
+ * URI and imports such a package identically. Any reader whose WRONG answer is
+ * fabrication or an offset shift must therefore match local names.
+ */
+export function localName(name: string): string {
+  return name.slice(name.lastIndexOf(":") + 1);
+}
+
 /** Recursively collect text content from a DOM node. */
 export function getTextContent(node: ChildNode): string {
   if (node.type === "text") return (node as { data: string }).data;
@@ -36,9 +49,13 @@ export function getTextContent(node: ChildNode): string {
 // extracts "the text a user would see" must agree with the importer or it
 // invents content that is not in the document.
 const INVISIBLE_TEXT_ELEMENTS = new Set([
-  "w:del", // deleted tracked-change text — already removed from the document
-  "w:delInstrText", // deleted field instruction
-  "w:instrText", // field instruction (e.g. ` HYPERLINK "https://…" `), not body text
+  "del", // deleted tracked-change text — already removed from the document
+  "delInstrText", // deleted field instruction
+  "instrText", // field instruction (e.g. ` HYPERLINK "https://…" `), not body text
+  // Both halves of a Word "move". Measured: mammoth recognizes neither, so it
+  // drops both subtrees — the moved text is simply absent from the import.
+  "moveFrom",
+  "moveTo",
 ]);
 
 /**
@@ -60,7 +77,7 @@ const INVISIBLE_TEXT_ELEMENTS = new Set([
 export function getVisibleTextContent(node: ChildNode): string {
   if (node.type === "text") return (node as { data: string }).data;
   if (!isElement(node)) return "";
-  if (INVISIBLE_TEXT_ELEMENTS.has(node.name)) return "";
+  if (INVISIBLE_TEXT_ELEMENTS.has(localName(node.name))) return "";
   return node.children.map(getVisibleTextContent).join("");
 }
 
@@ -158,7 +175,7 @@ const SINGLE_CHAR_ELEMENTS = new Set(["w:tab", "w:br", "w:noBreakHyphen", "w:sof
  * Walk `<w:body>` children in document.xml, counting flat-text offsets and
  * firing callbacks for text nodes and comment range markers.
  *
- * Skips `<w:del>` subtrees (mammoth excludes deleted tracked-change text).
+ * Skips `<w:del>` and both move halves (mammoth excludes all three).
  * Traverses `<w:ins>` subtrees normally (mammoth includes inserted text).
  * Skips `<w:instrText>` (field instruction text).
  */
@@ -209,6 +226,13 @@ export function walkDocumentBody(xml: string, callbacks: WalkerCallbacks = {}): 
         currentParagraphId = prevParagraphId;
       } else if (node.name === "w:del") {
         // Skip deleted tracked-change text — mammoth excludes it
+      } else if (node.name === "w:moveFrom" || node.name === "w:moveTo") {
+        // Skip BOTH halves of a Word "move" — mammoth recognizes neither
+        // element (they are in neither its reader map nor its ignore list), so
+        // it discards both subtrees. Measured: a document whose moveTo carries
+        // 15 characters made this walker's flat text 15 chars longer than the
+        // import, shifting every comment anchor after the move onto unrelated
+        // text. The invariant at the top of this file is not optional.
       } else if (node.name === "w:commentRangeStart") {
         const id = getAttr(node, "w:id");
         if (id) {

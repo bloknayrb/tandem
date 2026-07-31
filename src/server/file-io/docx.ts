@@ -57,6 +57,11 @@ export async function loadDocxWithWarnings(
 /** Max distinct fidelity warnings surfaced to the user (avoid toast flooding). */
 const MAX_FIDELITY_WARNINGS = 8;
 
+/** Well-formed Word emits at most 6 distinct move-element messages (both halves
+ * plus their four range markers). A hostile package can emit thousands, so this
+ * is a cap, not a description. */
+const MAX_MOVE_WARNINGS = 6;
+
 /**
  * Max characters per emitted warning line. The quote-stripping below redacts
  * the variable payload mammoth quotes (style names), but the report these feed
@@ -144,7 +149,14 @@ export function partitionMammothMessages(
     if (MAMMOTH_MOVE_MESSAGE.test(clamped)) moves.add(clamped);
     else seen.add(clamped);
   }
-  return { general: [...seen].slice(0, MAX_FIDELITY_WARNINGS), moves: [...moves] };
+  // BOTH buckets are capped. Partitioning moves out of the general cap was to
+  // stop them crowding out style warnings — not to exempt them: `element.name`
+  // is attacker-controlled, so a package naming 5000 distinct `move*` elements
+  // would otherwise put 5000 lines into a persisted report and one joined toast.
+  return {
+    general: [...seen].slice(0, MAX_FIDELITY_WARNINGS),
+    moves: [...moves].slice(0, MAX_MOVE_WARNINGS),
+  };
 }
 
 // -- Annotation export --

@@ -14,7 +14,12 @@ import {
   injectCommentsAsAnnotations,
 } from "./docx-comments.js";
 import { exportYDocToDocx } from "./docx-export.js";
-import { type DocxNotes, footnoteLossLines, parseDocxFootnotes } from "./docx-footnotes.js";
+import {
+  type DocxNotes,
+  footnoteDowngradeLines,
+  footnoteStructuralLines,
+  parseDocxFootnotes,
+} from "./docx-footnotes.js";
 import {
   moveCount,
   noLostFeatures,
@@ -96,6 +101,7 @@ const docxAdapter: FormatAdapter = {
   async parse(content, options): Promise<Prepared> {
     const buffer = content as Buffer;
     const issues: LoadIssue[] = [];
+    let commentsFailed = false;
     const [loaded, comments, notes, lost] = await Promise.all([
       loadDocxWithWarnings(buffer),
       extractDocxComments(buffer).catch((err) => {
@@ -104,6 +110,7 @@ const docxAdapter: FormatAdapter = {
           err,
         );
         issues.push({ kind: "comments-failed", error: err });
+        commentsFailed = true;
         return [] as DocxComment[];
       }),
       // Footnote/endnote capture (#1123 Tier-A #3): mammoth flattens these to a
@@ -169,8 +176,28 @@ const docxAdapter: FormatAdapter = {
     // save-time overwrite warning, whose copy asserts the backed-up original has
     // features this file doesn't. The scan-failure line rides in the banner but
     // stays out of that count — "couldn't check" is not "is missing".
-    const structural = [...structuralLossLines(lost), ...footnoteLossLines(notes, reconciliation)];
-    const importLosses = [...scanFailureLines(lost), ...structural, ...mammothWarnings];
+    const structural = [
+      ...structuralLossLines(lost),
+      ...footnoteStructuralLines(notes, reconciliation),
+      // A comment-extraction failure is a STRUCTURAL loss like any other: the
+      // file's Word comments are not in the model and the save writes a .docx
+      // without them. It previously produced only an open-time toast via the
+      // `comments-failed` issue, so it was silent at the moment of overwrite —
+      // the half of G3 that matters most. Count-only, like every other line.
+      ...(commentsFailed
+        ? ["this file's Word comments couldn't be read and won't be in the saved file"]
+        : []),
+    ];
+    // A footnote that reconstructs but lost its bold is NOT structural loss —
+    // the line literally says "preserved". Counting it would fire the overwrite
+    // warning for a footnote the exporter re-emits intact, and formatted
+    // footnotes are near-universal in reviewed Word files.
+    const importLosses = [
+      ...scanFailureLines(lost),
+      ...structural,
+      ...footnoteDowngradeLines(notes, reconciliation),
+      ...mammothWarnings,
+    ];
     if (importLosses.length > 0) {
       issues.push({
         kind: "other",

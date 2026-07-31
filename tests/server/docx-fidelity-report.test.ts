@@ -406,6 +406,23 @@ describe("fidelity report wiring", () => {
     expect(result.unpreservedImports).toBe(1);
   });
 
+  it("does NOT warn at save for a footnote that is PRESERVED but reformatted", async () => {
+    // The line says "preserved". Counting it as structural would fire the
+    // overwrite warning for a footnote the exporter re-emits intact — and
+    // formatted footnotes are near-universal in reviewed Word files.
+    const filePath = path.join(tmpDir, "fmt-footnote.docx");
+    const { buildFootnoteWithFormatting } = await import("../helpers/docx-corpus.js");
+    await fs.writeFile(filePath, await buildFootnoteWithFormatting());
+
+    const opened = await openFileByPath(filePath);
+    const report = reportOf(getOrCreateDocument(opened.documentId))!;
+    expect(report.importLosses.some((l) => /preserved, but body formatting/.test(l))).toBe(true);
+    expect(report.structuralLosses).toBe(0);
+
+    const result = await saveDocumentToDisk(opened.documentId, "manual");
+    expect(result.unpreservedImports).toBeUndefined();
+  });
+
   it("writes NO report for a non-docx (.md) document", async () => {
     const filePath = path.join(tmpDir, "note.md");
     await fs.writeFile(filePath, "# Heading\n\nPlain markdown.\n", "utf-8");
