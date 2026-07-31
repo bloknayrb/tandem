@@ -5,7 +5,7 @@ import { createScratchpad } from "../actions/builtin.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { loadInvoke } from "../cowork/cowork-invoke.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
-import { motionOff } from "../panels/cardMotion.js";
+import { motionOff, tabEnter, tabExit } from "../panels/cardMotion.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import {
@@ -629,7 +629,9 @@ $effect(() => {
 </script>
 
 <!-- Transparent container so pill TabItems read as standalone chips against
-     the canvas behind TitleBar's center cluster (the only host).
+     the canvas behind TitleBar's center cluster (its only production host —
+     `svelte-harness/registry.ts` also mounts it standalone for visual smoke
+     tests, so don't assume TitleBar's context is always present).
 
      Mask-fade overflow: when the scroller has hidden content on either side
      we apply `.has-overflow` (both sides) or `.overflow-left` / `.overflow-right`
@@ -640,9 +642,26 @@ $effect(() => {
 <div
   style="position: relative; display: flex; align-items: center; background: transparent; min-height: 32px; z-index: var(--tandem-z-base); width: 100%; min-width: 0;"
 >
+  <!-- `flex: 0 1 auto` (content-sized, shrinkable) — NOT `flex: 1`. The center
+       cluster now stretches nearly to the actions cluster, so a growing scroller
+       would push `.nt-wrap` to the far right, detaching "+" from the last tab and
+       flipping `shouldOpenRight()`; it would also make `clientWidth` permanently
+       >= `scrollWidth`, so overflow would never be detected and the mask fade
+       below would never appear. `min-width: 0` belongs here (unlike on the tabs):
+       yielding and scrolling is exactly this element's job.
+
+       `data-tauri-drag-region="false"` is load-bearing twice over. For Tauri: a
+       click that lands on a *pill* already blocks on its own role="tab", but one
+       that lands in the 6px gap between pills hits this container, which carries
+       no interactive role and would otherwise fall through to TitleBar's `deep`.
+       For Tandem's own `isInActiveDragRegion` — a naive `closest()` lookup that
+       knows nothing about Tauri's self-only or clickable-blocks rules — even a
+       click on a pill resolves to the `deep` region, reads as "on drag surface",
+       and stops dismissing an open new-tab menu. -->
   <div
     bind:this={scrollEl}
     data-testid="tab-scroll-container"
+    data-tauri-drag-region="false"
     class={[
       "tab-scroll-hide",
       "tab-scroll-mask",
@@ -652,7 +671,7 @@ $effect(() => {
     ]}
     role="tablist"
     aria-label="Open documents"
-    style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 6px 8px;"
+    style="display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 6px 8px;"
   >
     {#each tabs as tab (tab.id)}
       <!-- s3 reorder (#798): a `role="presentation"` flex wrapper carries
@@ -664,8 +683,23 @@ $effect(() => {
            hit-testing (closest on the tab-prefixed testid + role=tab) and
            scroll-into-view (querySelector on the active tab testid) both
            resolve to the TabItem root inside — the wrapper carries no testid
-           and role="presentation", so it's invisible to them. -->
-      <div class="tab-flip" role="presentation" animate:flip={{ duration: motionOff(reduceMotion) ? 0 : 200 }}>
+           and role="presentation", so it's invisible to them.
+
+           The s3 open/close transitions live here too, NOT on the TabItem root,
+           and that placement is load-bearing: they animate `width` to 0 and
+           inject `min-width: 0` to clear the compression floor on the way down,
+           and that floor is on THIS element (see `.tab-flip` below). Left on the
+           pill inside, the transition released a floor that wasn't there while
+           this wrapper stayed pinned at 142px — so a closing tab's footprint
+           collapsed 257→142 and then snapped to 0, and its neighbours jumped
+           instead of gliding (measured). -->
+      <div
+        class="tab-flip"
+        role="presentation"
+        animate:flip={{ duration: motionOff(reduceMotion) ? 0 : 200 }}
+        in:tabEnter={{ reduceMotion }}
+        out:tabExit={{ reduceMotion }}
+      >
         <TabItem
           {tab}
           isActive={tab.id === activeTabId}
@@ -674,7 +708,6 @@ $effect(() => {
           onpointerdown={handleTabPointerDown}
           dropIndicator={dropTarget?.id === tab.id ? dropTarget.side : null}
           onkeydown={handleKeyDown}
-          {reduceMotion}
           isRenaming={renamingTabId === tab.id}
           onstartrename={startRename}
           onrename={commitRename}
@@ -691,7 +724,12 @@ $effect(() => {
        so its growth is never clipped by the horizontal tab overflow. The 28×28 .nt-wrap
        placeholder holds the in-flow slot stable while the absolute .nt-morph grows
        down-and-left from the + slot. -->
-  <div class="nt-wrap">
+  <!-- `data-tauri-drag-region="false"` is load-bearing for Tauri here (unlike on
+       the scroller): the expanded menu's root is role="dialog" tabindex="-1" and
+       its chrome is plain divs, none of which Tauri counts as interactive — so
+       under TitleBar's `deep` region every one of them would become a window-drag
+       handle and swallow mousedown inside an open menu. -->
+  <div class="nt-wrap" data-tauri-drag-region="false">
     <div class="nt-morph" class:open={showRecent} class:filled={showRecent || bodyMounted} class:grow-right={openRight} bind:this={morphEl}>
       <button
         bind:this={openBtnEl}
@@ -749,10 +787,38 @@ $effect(() => {
   /* s3 reorder (#798): transparent flex wrapper that carries `animate:flip`.
      It must not introduce box geometry of its own — `display: contents` would
      drop it from the flex layout (and break the FLIP measurement), so it's a
-     zero-padding flex item that shrinks to the TabItem pill. */
+     zero-padding flex item that wraps the TabItem pill.
+
+     `flex-shrink: 1` so compression reaches the pill: with room to spare tabs
+     sit at their natural width, and when the strip fills they narrow together
+     before it falls back to scrolling.
+
+     The explicit `min-width` is the tab strip's ONLY compression floor, and it
+     has to live here — on the outermost shrinking box — rather than on the pill
+     inside. Two rules make that non-obvious:
+       - Left at `auto`, this wrapper's minimum is the pill's min-content
+         *contribution*, which a `min-width` can only raise, never lower. So the
+         floor would track the filename and a long-named tab could never give a
+         pixel back (measured: pinned at 259px).
+       - Put the floor on the pill instead and this wrapper shrinks straight
+         past it, so the pill overflows its own wrapper and tabs overlap
+         (measured: wrapper 129.5px around a 142px pill).
+     So: floor here, `min-width: 0` on the pill AND on its name span (the two
+     nodes that would otherwise contribute a content-based minimum), and the
+     pill flexes to whatever width this box settles at. The value must stay a
+     real number — it is also what makes the scroller overflow, which is what
+     keeps the mask fade and horizontal scroll alive.
+
+     142px is TabItem's chrome (indicator + gaps + close + padding + borders,
+     ~60px) plus ~80px of filename, the least that still reads as a name; the
+     total is the measured resting width, the split is approximate. Keep it in
+     sync with TabItem's pill if that chrome changes.
+     `tests/e2e/tab-overflow.spec.ts` pins the floor against the 259px
+     no-compression regression. */
   .tab-flip {
     display: flex;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 142px;
   }
 
   :global(.tab-scroll-hide) {
