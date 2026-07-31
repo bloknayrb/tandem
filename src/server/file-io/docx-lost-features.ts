@@ -30,8 +30,10 @@
 //
 // Where these lines actually go: `FidelityReport.importLosses` is PERSISTENT and
 // USER-visible (the open-time toast + the fidelity banner). It is deliberately
-// NOT returned by any MCP tool — `tandem_save` surfaces only `exportDowngrades`
-// and `integrityWarnings`. Keep it that way: the counts here are finer-grained
+// NOT returned by any MCP tool — `tandem_save` surfaces only `fidelityWarnings`,
+// `integrityWarnings`, and `unpreservedImports` (a count, not this array).
+// `exportDowngrades` is client-only too (Y_MAP_FIDELITY_REPORT), never crosses
+// the MCP boundary either. Keep it that way: the counts here are finer-grained
 // than anything else the user-visible surfaces carry (a tracked-deletion count
 // describes text that is NOT in the Y.Doc and so is otherwise unknowable), and
 // routing them into a tool result would turn them into a content oracle.
