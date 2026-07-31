@@ -2,6 +2,12 @@
 import { Y_MAP_DOCUMENT_META, Y_MAP_SAVED_AT_VERSION } from "../../shared/constants.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import TabRenameInput from "./TabRenameInput.svelte";
+// A30 (tab reorder drag): --a30-lift / --a30-shadow / --a30-lift-shadow, plus
+// the reduced-motion token-zeroing. Imported here as well as in DocumentTabs
+// because an undefined custom property inside the `transition` shorthand below
+// invalidates the WHOLE declaration — the pill's background/color/border
+// transitions would go with it.
+import "./tabDragMotion.css";
 
 interface Props {
   tab: OpenTab;
@@ -10,6 +16,13 @@ interface Props {
   onclose: (id: string) => void;
   onpointerdown: (e: PointerEvent, id: string) => void;
   dropIndicator: "left" | "right" | null;
+  /**
+   * A30: this tab is the one being dragged and the transform layer is live.
+   * Mutually exclusive with `dropIndicator` by construction — DocumentTabs
+   * renders the indicator only in degraded mode, where nothing lifts and
+   * nothing parts, so the two feedback languages never overlap.
+   */
+  lifted?: boolean;
   onkeydown: (e: KeyboardEvent, id: string) => void;
   /** True when THIS tab is in inline-rename mode (#1017). Container-owned. */
   isRenaming?: boolean;
@@ -28,6 +41,7 @@ const {
   onclose,
   onpointerdown,
   dropIndicator,
+  lifted = false,
   onkeydown,
   isRenaming = false,
   onstartrename,
@@ -136,11 +150,29 @@ const tabStyle = $derived(
     `border-left: ${dropIndicator === "left" ? "2px solid var(--tandem-accent)" : isActive ? "1px solid var(--tandem-border)" : "2px solid transparent"}`,
     `border-right: ${dropIndicator === "right" ? "2px solid var(--tandem-accent)" : isActive ? "1px solid var(--tandem-border)" : "2px solid transparent"}`,
     "border-radius: var(--tandem-r-pill)",
-    `box-shadow: ${isActive ? "var(--tandem-shadow-1)" : "0 1px 3px rgba(0, 0, 0, 0.08)"}`,
+    // A30 lift. The pill carries the lift; the `.tab-flip` wrapper outside it
+    // carries the translateX that tracks the pointer. Two elements, two
+    // transforms — the wrapper's has to stay on the FLIP host (that is what
+    // makes `animate:flip` measure the tab mid-air and settle it for free), and
+    // multiplying the lift into it would make the tab grow as it travelled.
+    `transform: ${lifted ? "translateY(-5px) scale(1.04)" : "none"}`,
+    `box-shadow: ${
+      lifted
+        ? "var(--a30-lift-shadow)"
+        : isActive
+          ? "var(--tandem-shadow-1)"
+          : "0 1px 3px rgba(0, 0, 0, 0.08)"
+    }`,
     "user-select: none",
     "touch-action: none",
     "white-space: nowrap",
-    "transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s",
+    // The target state owns the transition (the A29 convention): picking up
+    // runs at --a30-lift, putting down at --a30-settle. Reduced motion zeroes
+    // both tokens but NOT --a30-shadow, so the tab still arrives instantly
+    // while the shadow keeps its crossfade.
+    `transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow var(--a30-shadow) var(--tandem-ease-out), transform ${
+      lifted ? "var(--a30-lift)" : "var(--a30-settle)"
+    } var(--tandem-ease-out)`,
     // Shrinkable so a crowded strip narrows its tabs before it starts scrolling.
     // `min-width: 0` is required: left at `auto` this pill's minimum would be
     // its own min-content — which includes the name span's full text width — and

@@ -607,19 +607,27 @@ This is intentionally separate from `GET /api/events` (channel push) which deliv
 
 ## Tab Overflow and Reorder
 
-When many documents are open, the tab bar overflows horizontally. Arrow buttons appear at the edges to scroll through tabs. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder.
+When many documents are open, the tab bar overflows horizontally. Arrow buttons appear at the edges to scroll through tabs. Tabs support **pointer-event** drag reorder and Alt+Left/Right keyboard reorder.
+
+Reorder is deliberately **not** HTML5 drag-and-drop: the Tauri WebView runs with `dragDropEnabled: true` and swallows `dragstart`/`dragover`/`drop` before they reach the page, so the desktop app — the primary distribution — could never see them. `pointerdown` / `pointermove` / `pointerup` with `setPointerCapture` is the only mechanism available to both distributions. (See lessons-learned #46: a Playwright `dragTo()` spec written against the old HTML5 handlers passed on a branch where reorder was broken, because Chromium's `dragTo()` synthesizes mouse events, not drag events.)
 
 ```
-User drags tab to new position
-    → HTML5 DragEvent fires on DocumentTabs
-    → useTabOrder hook recomputes tab order array
-    → Tab bar re-renders with new order
+User presses on a tab and moves past a 5px threshold
+    → the pressed tab lifts and tracks the pointer (A30 drag motion)
+    → geometry snapshot taken once at threshold-crossing:
+      per-tab lefts, widths, and the inter-tab gap
+    → pointer x is compared against the snapshot's STATIC midpoints
+      to pick a destination slot; siblings translate to open that slot
+    → on release, useTabOrder recomputes the order array, and
+      `animate:flip` settles the lifted tab into the gap
     → Order persists for the session (not saved to disk)
 
 User presses Alt+Right on active tab
     → useTabOrder hook swaps tab with its right neighbor
     → Tab bar re-renders
 ```
+
+The midpoints are read from the drag-start snapshot rather than from live hit-testing, because parting a sibling opens a void directly under the pointer: `document.elementFromPoint` would return the scroller, the drop target would evaluate to null, and the siblings would shimmy in and out on every pixel — with the drop itself doing nothing if the pointer came to rest inside the gap. Live hit-testing survives only as a fallback for a single "no usable geometry" flag, which also re-shows the edge wedge as the drop signal. Geometry helpers live in `src/client/tabs/tabDragMotion.ts` (pure, no DOM); duration tokens in `src/client/tabs/tabDragMotion.css`.
 
 The `useTabOrder` hook manages the tab ordering state. Tab overflow scroll uses `scrollIntoView` to keep the active tab visible when switching.
 
@@ -816,7 +824,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `App.svelte` -- Layout + UI state only; `useYjsSync` hook (`src/client/hooks/`) manages `OpenTab` objects (one per open document), each with its own Y.Doc + provider
 - `panel-layout.ts` -- Panel width constants (`PANEL_DEFAULT_WIDTH`, `PANEL_MIN_WIDTH`, `PANEL_MAX_WIDTH`) and `loadPanelWidth()`. `PanelLayout` type and `getRightWidth` were removed with the layout-mode refactor
 - `DocListEntry`, `OpenTab`, and `AppInfoData` types live in `src/client/types.ts`
-- `DocumentTabs` -- Tab bar + "+" button (opens `NewTabMenu` with recent files, New Scratchpad, and Browse). In the desktop app, "Browse files…" (and the Ctrl+O `open-file` shortcut / palette command) opens the native OS file picker directly via `browseNativeFile` (`src/client/utils/browse-file.ts`); the `FileOpenDialog` modal only appears in the browser distribution, which has no native picker. Tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support HTML5 drag-and-drop reorder and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
+- `DocumentTabs` -- Tab bar + "+" button (opens `NewTabMenu` with recent files, New Scratchpad, and Browse). In the desktop app, "Browse files…" (and the Ctrl+O `open-file` shortcut / palette command) opens the native OS file picker directly via `browseNativeFile` (`src/client/utils/browse-file.ts`); the `FileOpenDialog` modal only appears in the browser distribution, which has no native picker. Tab switching passes different ydoc/provider to Editor (key-based remount). Overflow tabs scroll horizontally with arrow buttons. Tabs support pointer-event drag reorder (lift-and-part motion, see [Tab Overflow and Reorder](#tab-overflow-and-reorder)) and Alt+Left/Right keyboard reorder. Long filenames are ellipsized with a tooltip showing the full name. `useTabOrder` hook manages persistent tab ordering.
 - `hooks/useAppInfo.svelte.ts` -- Fetches `/api/info` with module-level cache, timeout, and AbortController cleanup. Used by the Settings modal's ABOUT footer and View Changelog button
 - `hooks/useModels.svelte.ts` -- Server-authoritative Models registry store (#1123 M2): module-level `$state` singleton loaded from `GET /api/models` (`loadFromServer`, `BYO_MODELS_ENABLED`-gated), optimistic-then-reconcile write-through (`createModels()` facade + mutators, keychain deletes gated on the `WriteOutcome`), sync snapshot (`getModelsSnapshot`), and `agentLabelSource()` — localStorage while dark / store when lit (the label dark-invariant: an empty store must not blank a v0.13.x cohort's configured-model byline). `initializeStore()` owns boot: reconcile → settle CRUD gate → load. Replaces the settings-backed `createModels`; the agent-label consumers + ProseMirror `annotation.ts` source labels from here.
 - `actions/reconcile-models-registry.ts` -- One-shot localStorage→server reconcile (#1123 M2, replaces the M1a seeder). GETs the ETag, POSTs the projected registry as `{file, ifMatch}`, returns a `ReconcileOutcome` that `initializeStore` maps to the CRUD gate (settle on success/skip, stay closed on failure).

@@ -391,6 +391,226 @@ describe("DocumentTabs new-tab menu (openMenuTrigger)", () => {
   });
 });
 
+// A30 tab-reorder drag motion. NO geometry assertions beyond the arithmetic the
+// component feeds to tabDragMotion.ts — happy-dom has no layout engine, so the
+// rects below are stubs and the questions that need a real one (does the pill
+// track the pointer, does the parted gap survive the drop) live in
+// tests/e2e/tab-drag-motion.spec.ts. What is worth pinning here is the WIRING:
+// which mode the component picks, and what it writes to the DOM in each.
+describe("DocumentTabs A30 drag motion", () => {
+  const styleOf = (el: Element | null) => el?.getAttribute("style") ?? "";
+  // The drop indicator is a 2px accent wedge on one edge, written as a
+  // `border-left`/`border-right` shorthand that happy-dom expands into
+  // longhands — so match the token, not the shorthand text, and let it stand
+  // for either side. An inactive non-target pill carries no accent at all.
+  const hasWedge = (el: Element | null) => styleOf(el).includes("--tandem-accent");
+  const wrappersIn = (container: Element) =>
+    Array.from(container.querySelectorAll<HTMLElement>(".tab-flip"));
+
+  /**
+   * Shadow happy-dom's always-0 `clientWidth` and hand the strip a real layout,
+   * so the healthy (snapshot) path can be exercised at all. Two 100px tabs with
+   * a 6px gap: lefts 0 and 106, so b's midpoint is 156.
+   */
+  function forceLayout(container: Element) {
+    const scroller = container.querySelector('[data-testid="tab-scroll-container"]');
+    Object.defineProperty(scroller, "clientWidth", { value: 400, configurable: true });
+    wrappersIn(container).forEach((w, i) => {
+      vi.spyOn(w, "getBoundingClientRect").mockReturnValue({
+        left: i * 106,
+        right: i * 106 + 100,
+        width: 100,
+        top: 0,
+        bottom: 26,
+        height: 26,
+        x: i * 106,
+        y: 0,
+        toJSON() {},
+      } as DOMRect);
+    });
+  }
+
+  it("falls back to the live hit-test when there is no usable geometry", async () => {
+    // This is why the nine coordinate-blind `elementFromPoint` stubs above still
+    // work: happy-dom's clientWidth getter returns a field initialised to 0 and
+    // never updated, so the environment probe holds unconditionally. If this
+    // ever flips, the rest of this file starts testing a path the product
+    // doesn't take — so pin the mode, not just the outcome.
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    overElement(tabB);
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 80, clientY: 0 }));
+    await tick();
+
+    // Degraded: the accent wedge is the drop signal, nothing lifts, and the
+    // transform layer is never touched.
+    expect(hasWedge(tabB)).toBe(true);
+    expect(styleOf(tabA)).toContain("transform: none");
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 80, clientY: 0 }));
+    await tick();
+    expect(reorder).toHaveBeenCalledWith("a", "b", expect.stringMatching(/^(left|right)$/));
+  });
+
+  it("lifts the pill and parts the sibling once the strip has geometry", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+    overElement(null); // healthy mode must never consult the hit-test
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    // Past b's midpoint (156), so the slot flips and b backs up by its own
+    // width + the gap. The drag offset is the raw pointer travel.
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+
+    const [wrapA, wrapB] = wrappersIn(container);
+    expect(wrapA.style.transform).toBe("translateX(200px)");
+    expect(wrapB.style.transform).toBe("translateX(-106px)");
+    expect(styleOf(tabA)).toContain("transform: translateY(-5px) scale(1.04)");
+    // The parted gap replaces the wedge — never both.
+    expect(hasWedge(tabB)).toBe(false);
+
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 200, clientY: 0 }));
+    await tick();
+
+    expect(reorder).toHaveBeenCalledWith("a", "b", "right");
+    // Cleared in the microtask between flip's measure() and apply().
+    expect(wrapA.style.transform).toBe("");
+    expect(wrapB.style.transform).toBe("");
+    expect(wrapA.style.zIndex).toBe("");
+    expect(styleOf(tabA)).toContain("transform: none");
+  });
+
+  it("a mid-drag tabs change drops to the wedge and strands no transform", async () => {
+    const reorder = vi.fn();
+    const tabsInit = [makeTab("a"), makeTab("b")];
+    const { container, rerender } = render(DocumentTabs, {
+      props: baseProps(tabsInit, reorder),
+    });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    const tabB = container.querySelector('[data-testid="tab-b"]') as HTMLElement;
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+    expect(wrappersIn(container)[1].style.transform).toBe("translateX(-106px)");
+
+    // A third tab arrives (Claude calling tandem_open). The snapshot's midpoints
+    // and parting magnitudes now describe a strip that no longer exists.
+    await rerender(baseProps([tabsInit[0], tabsInit[1], makeTab("c")], reorder));
+    await tick();
+
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+    expect(styleOf(tabA)).toContain("transform: none");
+
+    // The gesture stays alive and still commits — case B's contract — but from
+    // here on the wedge is the signal, so the hit-test has to be back in play.
+    overElement(tabB);
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 210, clientY: 0 }));
+    await tick();
+    expect(hasWedge(tabB)).toBe(true);
+
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 210, clientY: 0 }));
+    await tick();
+    expect(reorder).toHaveBeenCalledTimes(1);
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+  });
+
+  it("Escape reverts the transform layer and strands nothing", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+    expect(wrappersIn(container)[0].style.transform).toBe("translateX(200px)");
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await tick();
+    // The transform goes immediately (the CSS transition carries the glide);
+    // the transition declaration is stripped when the glide ends.
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+    expect(wrappersIn(container)[0].style.transition).toContain("--a30-settle");
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    for (const w of wrappersIn(container)) {
+      expect(w.style.transition).toBe("");
+      expect(w.style.zIndex).toBe("");
+    }
+    expect(reorder).not.toHaveBeenCalled();
+  });
+
+  it("unmounting mid-drag tears the gesture down without throwing", async () => {
+    // @testing-library/svelte's auto-cleanup never registers here (its index.js
+    // gates on a global afterEach and vitest.config.ts sets no `globals`), so
+    // nothing is ever unmounted for us — an implicit version of this would test
+    // nothing at all.
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    const { container, unmount } = render(DocumentTabs, { props: baseProps(tabs, reorder) });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+
+    // Hold the wrapper references across the unmount. `container` is emptied,
+    // so querying after the fact would find nothing and every style assertion
+    // below would pass vacuously — which is the whole failure mode being pinned.
+    const wrappers = wrappersIn(container);
+    expect(wrappers[0].style.transform).toBe("translateX(200px)");
+
+    unmount();
+    await tick();
+
+    // The window listeners went with it, so nothing is left to fire a reorder.
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 260, clientY: 0 }));
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 260, clientY: 0 }));
+    await tick();
+    expect(reorder).not.toHaveBeenCalled();
+
+    // Teardown must strip the transform layer, not just drop the listeners. A
+    // real unmount takes the nodes with it so nobody would see the residue —
+    // but svelte-hmr can keep these elements alive across a component swap, and
+    // a leftover inline `transition` keeps `getAnimations()` non-empty, which
+    // makes `fix()` early-return and the next tab close jump instead of
+    // collapsing. Detached-but-styled is exactly the state to forbid.
+    for (const w of wrappers) {
+      expect(w.style.transform).toBe("");
+      expect(w.style.transition).toBe("");
+      expect(w.style.zIndex).toBe("");
+    }
+  });
+});
+
 describe("uniform tab width", () => {
   // The geometry itself needs a real layout engine and lives in
   // tests/e2e/tab-overflow.spec.ts. What's checked here is only the wiring the
