@@ -342,8 +342,10 @@ $effect(() => {
 
 // Adaptive tab widths (`uniformTabWidth: false`). CSS cannot express
 // "floor at min(my own natural width, TAB_FLOOR_PX)" — the name span's
-// `min-width: 0` + `overflow: hidden` give it an automatic minimum of zero, so
-// the filename never reaches the wrapper's min-content. Hence a measured floor.
+// explicit `min-width: 0` zeroes its min-content contribution outright (this
+// is the override, not the `min-width: auto` + `overflow: hidden` automatic-
+// minimum rule, which would reach the same zero by a different route), so the
+// filename never reaches the wrapper's min-content. Hence a measured floor.
 // Uniform mode needs none of this: `.tab-flip.uniform` pins the wrapper in CSS.
 $effect(() => {
   const el = scrollEl;
@@ -403,7 +405,13 @@ $effect(() => {
     // rather than restating TabItem's 240px literal here.
     const cap = parseFloat(getComputedStyle(name).maxWidth) || Number.POSITIVE_INFINITY;
     const nameNatural = Math.min(name.scrollWidth + 1, cap);
-    return Math.min(chrome + nameNatural, TAB_FLOOR_PX);
+    const floor = Math.min(chrome + nameNatural, TAB_FLOOR_PX);
+    // A layout-less DOM (happy-dom, which the unit tests run under) returns ""
+    // from getComputedStyle for every length, so `chrome` is NaN and the write
+    // below would emit "NaNpx" — an invalid declaration the browser drops on
+    // the floor, leaving the tab silently unfloored. Fall back to the full
+    // floor: uniform-when-unmeasurable beats silently-inert.
+    return Number.isFinite(floor) ? floor : TAB_FLOOR_PX;
   });
 
   // Pass 2 — write. Deliberately NOT `!important`: cardMotion's exit keyframes
@@ -935,8 +943,11 @@ $effect(() => {
     min-width: 142px;
   }
 
-  /* Uniform mode (`uniformTabWidth: true`, the default): pin the WRAPPER to a
-     single width. Matching min and max is what makes it uniform — the floor
+  /* Uniform mode: pin the WRAPPER to a single width. (`true` is the SETTINGS
+     default, in `useTandemSettings`'s DEFAULTS — this component's own prop
+     defaults to `false` so the props-less harness mount stays adaptive. See
+     the `uniformTabWidth` Props JSDoc.) Matching min and max is what makes it
+     uniform — the floor
      alone only rescues tabs that are too narrow, and nothing capped the ones
      that are too wide.
 

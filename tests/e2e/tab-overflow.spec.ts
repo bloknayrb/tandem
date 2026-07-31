@@ -6,6 +6,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openSettingsViaBrandMenu,
 } from "./helpers";
 
 let mcp: McpTestClient;
@@ -335,4 +336,44 @@ test("adaptive mode: tabs size to their own name, and long ones still compress",
   expect(shortest.wrapper.width).toBeLessThan(FLOOR_PX - 5);
 
   assertNothingSpills(measured);
+});
+
+test("toggling the setting live re-sizes the strip, stranding no per-tab floor", async ({
+  page,
+}) => {
+  // The two tests above each seed the setting before first paint, so neither
+  // exercises the transition. That leaves the one path where the CSS clamp is
+  // not self-sufficient: adaptive mode writes an INLINE `min-width` per tab,
+  // and inline beats `.tab-flip.uniform`'s class-selector `min-width`. If the
+  // effect ever stopped clearing those on the way into uniform mode, the CSS
+  // would look correct, every unit test would pass, and the strip would simply
+  // stay ragged.
+  await openFixtureTabs(page, false);
+  const before = await measureTabStrip(page);
+  const beforeWidths = before.tabs.map((t) => t.wrapper.width);
+  expect(Math.max(...beforeWidths) - Math.min(...beforeWidths)).toBeGreaterThan(15);
+
+  await openSettingsViaBrandMenu(page);
+  await page.locator("[data-testid='appearance-uniform-tab-width'] input").check();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-testid='settings-modal']")).toHaveCount(0, { timeout: 2_000 });
+
+  // Poll: the class flip and the effect that clears the inline floors land in
+  // separate flushes, so a single measurement can catch the strip mid-way.
+  await expect
+    .poll(
+      async () => {
+        const w = (await measureTabStrip(page)).tabs.map((t) => t.wrapper.width);
+        return Math.max(...w) - Math.min(...w);
+      },
+      { timeout: 5_000 },
+    )
+    .toBeLessThanOrEqual(1);
+
+  const after = await measureTabStrip(page);
+  expect(after.tabs.every((t) => t.uniform)).toBe(true);
+  // Not just equal to each other — equal at the FLOOR. A stranded 102px inline
+  // min-width would still let the tabs agree with one another at the wrong size.
+  expect(Math.max(...after.tabs.map((t) => t.wrapper.width))).toBeCloseTo(FLOOR_PX, 0);
+  assertNothingSpills(after);
 });
