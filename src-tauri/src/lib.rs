@@ -2929,8 +2929,10 @@ fn cowork_rescan() -> Result<String, String> {
 /// Guards:
 /// - No-op unless `cowork_meta.enabled` (never arms anything by itself; no
 ///   firewall work, no UAC, ever).
-/// - Read-only precheck first — zero writes when every workspace already has
-///   its entry (the steady state).
+/// - Read-only precheck first — zero writes and zero keychain access when every
+///   workspace already has its entry (the steady state). The credential fetch is
+///   forced lazily, from inside the injected installer, so a pass with nothing
+///   to install stays side-effect-free and infallible.
 /// - Attempt set keyed on *terminal* outcomes only: a workspace is recorded
 ///   (and not retried this run) once its install succeeds OR fails terminally
 ///   (`InsecureAcl` — a redirected/synced path that will never become safe).
@@ -2940,14 +2942,18 @@ fn cowork_rescan() -> Result<String, String> {
 ///   deliberately bypasses this guard (it force-reinstalls everything).
 ///
 /// Returns the number of workspaces successfully installed this pass.
+///
+/// The loop itself lives in `heal_pass_inner` — this is the shell that loads
+/// meta, scans, delegates (handing the loop a closure that lazily resolves the
+/// credential and writes), and persists meta. Everything below the shell's disk
+/// and keychain dependencies is unit-tested there (#1112).
 #[cfg(target_os = "windows")]
 fn cowork_heal_pass() -> Result<usize, String> {
+    use std::cell::OnceCell;
     use std::collections::BTreeSet;
+    use std::path::Path;
 
-    use cowork_installer::{
-        heal_outcome_is_terminal, install_tandem_plugin_into_workspace, resolve_tandem_url,
-        workspace_has_tandem_entry, WriteStatus,
-    };
+    use cowork_installer::{install_tandem_plugin_into_workspace, resolve_tandem_url, WriteStatus};
     use cowork_workspace_scan::find_cowork_workspaces;
 
     static HEAL_ATTEMPTED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
@@ -2957,54 +2963,54 @@ fn cowork_heal_pass() -> Result<usize, String> {
         return Ok(0);
     }
 
-    // Read-only precheck: which workspaces lack a tandem entry?
-    let missing: Vec<PathBuf> = find_cowork_workspaces()
-        .into_iter()
-        .filter(|ws| !workspace_has_tandem_entry(ws))
-        .collect();
-    if missing.is_empty() {
-        return Ok(0);
-    }
-
-    // Skip workspaces already terminally attempted this run (read-only snapshot;
-    // the heal pass is a single serialized interval task, so no concurrent pass
-    // races this — and manual rescan never touches HEAL_ATTEMPTED).
-    let to_attempt: Vec<PathBuf> = {
-        let attempted = HEAL_ATTEMPTED.lock().unwrap_or_else(|p| p.into_inner());
-        missing
-            .into_iter()
-            .filter(|ws| !attempted.contains(ws))
-            .collect()
+    // Read-only snapshot of the attempt set; the heal pass is a single serialized
+    // interval task, so no concurrent pass races this — and manual rescan never
+    // touches HEAL_ATTEMPTED.
+    let attempted: BTreeSet<PathBuf> = {
+        let guard = HEAL_ATTEMPTED.lock().unwrap_or_else(|p| p.into_inner());
+        guard.clone()
     };
-    if to_attempt.is_empty() {
-        return Ok(0);
-    }
 
-    let token = token_store::get_or_create_token()?;
-    let tandem_url = resolve_tandem_url(&meta);
+    // Credentials are resolved LAZILY, inside the installer closure, and only
+    // once per pass. This PRESERVES a property the pre-refactor shell already
+    // had for free — there, the token fetch sat physically below both early
+    // returns, so an enabled-but-idle tick never reached it. Moving the
+    // precheck into `heal_pass_inner` removes that positional guarantee, and
+    // the `OnceCell` is what puts it back; this is not repairing a live bug.
+    //
+    // It matters because `get_or_create_token` is NOT a pure keychain read:
+    // with no token stored it mints one and persists it (keyring
+    // `set_password`, or the env-paths file), and it can fail outright on a
+    // broken keyring. Forcing it up here would make the idle steady state both
+    // a potential write and a fallible operation, turning a silent `Ok(0)`
+    // into a "[cowork] heal pass failed" log on every 5-minute tick.
+    // A failure is therefore scoped to the workspace that needed it, as a
+    // transient `Failed` (left out of the attempt set, retried next tick).
+    let credentials: OnceCell<Result<(String, String), String>> = OnceCell::new();
 
-    let mut installed = 0usize;
-    let mut terminal: Vec<PathBuf> = Vec::new();
-    for ws in &to_attempt {
-        let status = match install_tandem_plugin_into_workspace(ws, &token, &tandem_url) {
-            Ok(report) => report.installed_plugins,
-            Err(e) => {
-                log::warn!("[cowork] heal: install into {} errored: {e}", ws.display());
-                // Treat an error as a transient Failed so it retries next tick.
-                WriteStatus::Failed(e.to_string())
+    let (installed, terminal) =
+        heal_pass_inner(find_cowork_workspaces(), &attempted, |ws: &Path| {
+            let creds = match credentials.get_or_init(|| {
+                token_store::get_or_create_token().map(|t| (t, resolve_tandem_url(&meta)))
+            }) {
+                Ok(creds) => creds,
+                Err(e) => {
+                    log::warn!(
+                        "[cowork] heal: no token available, skipping {}: {e}",
+                        ws.display()
+                    );
+                    return WriteStatus::Failed(e.clone());
+                }
+            };
+            match install_tandem_plugin_into_workspace(ws, &creds.0, &creds.1) {
+                Ok(report) => report.installed_plugins,
+                Err(e) => {
+                    log::warn!("[cowork] heal: install into {} errored: {e}", ws.display());
+                    // Treat an error as a transient Failed so it retries next tick.
+                    WriteStatus::Failed(e.to_string())
+                }
             }
-        };
-        match &status {
-            WriteStatus::Ok | WriteStatus::AlreadyPresent => installed += 1,
-            other => log::warn!(
-                "[cowork] heal: install into {} not successful: {other:?}",
-                ws.display()
-            ),
-        }
-        if heal_outcome_is_terminal(&status) {
-            terminal.push(ws.clone());
-        }
-    }
+        });
 
     // Record only terminal outcomes — transient failures stay retryable.
     if !terminal.is_empty() {
@@ -3021,6 +3027,264 @@ fn cowork_heal_pass() -> Result<usize, String> {
     }
 
     Ok(installed)
+}
+
+/// The heal pass's find -> filter -> classify -> terminal-mark loop, with the
+/// keychain and the registry write injected as `install`.
+///
+/// Split out of `cowork_heal_pass` so the orchestration is unit-testable (#1112):
+/// the shell's `cowork_meta::load()` reads env-paths disk and its `install`
+/// closure resolves `token_store::get_or_create_token()` against the OS keychain,
+/// neither of which is overridable. Because the credential lives behind `install`
+/// (lazily, via a `OnceCell` the shell only forces from inside it), a pass that
+/// installs nothing never reaches the keychain: the two early returns below are
+/// what keep the steady state a pure read. `attempted` is taken as a borrowed set
+/// rather than read from the caller's process-wide static, so tests need no
+/// ordering lock.
+///
+/// Returns `(installed_count, newly_terminal_workspaces)`. The caller — and only
+/// the caller — folds the returned paths into its attempt set: marking inside
+/// the loop is what poisoned transient failures in #1110 (see lessons-learned
+/// lesson 81), so a `Locked` / `SchemaDrift` / `Failed` workspace must come back
+/// out of here unmarked and be retried on the next tick.
+#[cfg(target_os = "windows")]
+fn heal_pass_inner(
+    workspaces: Vec<PathBuf>,
+    attempted: &std::collections::BTreeSet<PathBuf>,
+    install: impl Fn(&std::path::Path) -> cowork_installer::WriteStatus,
+) -> (usize, Vec<PathBuf>) {
+    use cowork_installer::{heal_outcome_is_terminal, workspace_has_tandem_entry, WriteStatus};
+
+    // Read-only precheck: which workspaces lack a tandem entry?
+    let missing: Vec<PathBuf> = workspaces
+        .into_iter()
+        .filter(|ws| !workspace_has_tandem_entry(ws))
+        .collect();
+    if missing.is_empty() {
+        return (0, Vec::new());
+    }
+
+    // Skip workspaces already terminally attempted this run.
+    let to_attempt: Vec<PathBuf> = missing
+        .into_iter()
+        .filter(|ws| !attempted.contains(ws))
+        .collect();
+    if to_attempt.is_empty() {
+        return (0, Vec::new());
+    }
+
+    let mut installed = 0usize;
+    let mut terminal: Vec<PathBuf> = Vec::new();
+    for ws in &to_attempt {
+        let status = install(ws.as_path());
+        match &status {
+            WriteStatus::Ok | WriteStatus::AlreadyPresent => installed += 1,
+            other => log::warn!(
+                "[cowork] heal: install into {} not successful: {other:?}",
+                ws.display()
+            ),
+        }
+        if heal_outcome_is_terminal(&status) {
+            terminal.push(ws.clone());
+        }
+    }
+
+    (installed, terminal)
+}
+
+/// Tests for the Cowork heal-pass loop orchestration (#1112): no-op when there
+/// is nothing to scan, no-op when every workspace is already configured (or was
+/// already attempted), install-on-missing, and terminal-only attempt marking.
+///
+/// Windows-gated, like everything they exercise (`cowork_installer` is
+/// `#![cfg(target_os = "windows")]`), so they compile — and run — only on the
+/// windows-latest leg of ci.yml's `rust-test` matrix. A green `cargo test` on
+/// Linux does not mean these ran; it means they did not exist.
+///
+/// No env lock is needed: `heal_pass_inner` reads only the paths it is handed
+/// and the borrowed attempt set, never `HEAL_ATTEMPTED` or the scan roots.
+#[cfg(all(test, target_os = "windows"))]
+mod cowork_heal_pass_tests {
+    use super::*;
+    use crate::cowork_installer::WriteStatus;
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
+
+    /// Create a workspace dir under `root`; when `configured`, give it the
+    /// `installed_plugins.json` entry `workspace_has_tandem_entry` looks for.
+    fn make_ws(root: &Path, name: &str, configured: bool) -> PathBuf {
+        let ws = root.join(name);
+        let plugins = ws.join("cowork_plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        if configured {
+            fs::write(
+                plugins.join("installed_plugins.json"),
+                r#"{"mcpServers":{"tandem":{"type":"stdio"}}}"#,
+            )
+            .unwrap();
+        }
+        ws
+    }
+
+    #[test]
+    fn inner_no_ops_when_there_is_nothing_to_scan() {
+        // The `!meta.enabled` guard itself lives in the shell (it needs
+        // `cowork_meta::load`), and a disabled pass never reaches a scan — so the
+        // delegated shape is an empty workspace list. Nothing installed, nothing
+        // marked, and the injected install is never called: no keychain, no writes.
+        let calls = RefCell::new(Vec::new());
+        let attempted = BTreeSet::new();
+        let (installed, terminal) = heal_pass_inner(Vec::new(), &attempted, |ws: &Path| {
+            calls.borrow_mut().push(ws.to_path_buf());
+            WriteStatus::Ok
+        });
+
+        assert_eq!(installed, 0);
+        assert!(terminal.is_empty());
+        assert!(
+            calls.borrow().is_empty(),
+            "install must not run with no workspaces"
+        );
+    }
+
+    #[test]
+    fn inner_no_ops_when_every_workspace_is_already_configured() {
+        // The steady state: the read-only precheck finds nothing missing, so the
+        // pass stays a pure read. `install` never being called is the whole
+        // invariant — the shell resolves the token lazily from inside it, so an
+        // uncalled `install` means no keychain access and no token minted either.
+        let dir = TempDir::new().unwrap();
+        let a = make_ws(dir.path(), "a", true);
+        let b = make_ws(dir.path(), "b", true);
+
+        let calls = RefCell::new(Vec::new());
+        let attempted = BTreeSet::new();
+        let (installed, terminal) = heal_pass_inner(vec![a, b], &attempted, |ws: &Path| {
+            calls.borrow_mut().push(ws.to_path_buf());
+            WriteStatus::Ok
+        });
+
+        assert_eq!(installed, 0);
+        assert!(terminal.is_empty());
+        assert!(
+            calls.borrow().is_empty(),
+            "steady state must not write anything"
+        );
+    }
+
+    #[test]
+    fn inner_no_ops_when_every_missing_workspace_was_already_attempted() {
+        // Second early return: the workspace lacks its entry but was terminally
+        // attempted this run, so it is not retried.
+        let dir = TempDir::new().unwrap();
+        let missing = make_ws(dir.path(), "attempted", false);
+
+        let mut attempted = BTreeSet::new();
+        attempted.insert(missing.clone());
+
+        let calls = RefCell::new(Vec::new());
+        let (installed, terminal) = heal_pass_inner(vec![missing], &attempted, |ws: &Path| {
+            calls.borrow_mut().push(ws.to_path_buf());
+            WriteStatus::Ok
+        });
+
+        assert_eq!(installed, 0);
+        assert!(terminal.is_empty());
+        assert!(
+            calls.borrow().is_empty(),
+            "a terminally attempted workspace must not be reinstalled"
+        );
+    }
+
+    #[test]
+    fn inner_installs_only_into_unconfigured_unattempted_workspaces() {
+        let dir = TempDir::new().unwrap();
+        let configured = make_ws(dir.path(), "configured", true);
+        let already_tried = make_ws(dir.path(), "already-tried", false);
+        let fresh = make_ws(dir.path(), "fresh", false);
+
+        let mut attempted = BTreeSet::new();
+        attempted.insert(already_tried.clone());
+
+        let calls = RefCell::new(Vec::new());
+        let (installed, terminal) = heal_pass_inner(
+            vec![configured, already_tried, fresh.clone()],
+            &attempted,
+            |ws: &Path| {
+                calls.borrow_mut().push(ws.to_path_buf());
+                WriteStatus::Ok
+            },
+        );
+
+        assert_eq!(installed, 1);
+        assert_eq!(terminal, vec![fresh.clone()]);
+        assert_eq!(*calls.borrow(), vec![fresh]);
+    }
+
+    #[test]
+    fn inner_marks_only_terminal_outcomes_so_transient_failures_retry() {
+        // The #1110 regression (lessons-learned lesson 81): marking every touched
+        // workspace instead of gating on `heal_outcome_is_terminal` poisons a
+        // momentary Locked/SchemaDrift/Failed, so the next tick never retries it.
+        // Terminal = Ok | AlreadyPresent | InsecureAcl, and nothing else.
+        fn outcome(ws: &Path) -> WriteStatus {
+            match ws.file_name().unwrap().to_str().unwrap() {
+                "ok" => WriteStatus::Ok,
+                "present" => WriteStatus::AlreadyPresent,
+                "acl" => WriteStatus::InsecureAcl,
+                "locked" => WriteStatus::Locked,
+                "drift" => WriteStatus::SchemaDrift,
+                _ => WriteStatus::Failed("io".into()),
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let ok = make_ws(dir.path(), "ok", false);
+        let present = make_ws(dir.path(), "present", false);
+        let acl = make_ws(dir.path(), "acl", false);
+        let locked = make_ws(dir.path(), "locked", false);
+        let drift = make_ws(dir.path(), "drift", false);
+        let failed = make_ws(dir.path(), "failed", false);
+        let all = vec![
+            ok.clone(),
+            present.clone(),
+            acl.clone(),
+            locked.clone(),
+            drift.clone(),
+            failed.clone(),
+        ];
+
+        let attempted = BTreeSet::new();
+        let (installed, terminal) = heal_pass_inner(all.clone(), &attempted, outcome);
+
+        // Only the two successes count as installed — InsecureAcl is terminal but
+        // is not an install.
+        assert_eq!(installed, 2);
+        assert_eq!(terminal, vec![ok, present, acl]);
+        for retryable in [&locked, &drift, &failed] {
+            assert!(
+                !terminal.contains(retryable),
+                "{} is a transient failure and must stay retryable",
+                retryable.display()
+            );
+        }
+
+        // Next tick: fold the returned terminal set in (what the shell does) and
+        // re-run. Exactly the three transient workspaces are attempted again.
+        let attempted: BTreeSet<PathBuf> = terminal.into_iter().collect();
+        let calls = RefCell::new(Vec::new());
+        let (installed, terminal) = heal_pass_inner(all, &attempted, |ws: &Path| {
+            calls.borrow_mut().push(ws.to_path_buf());
+            outcome(ws)
+        });
+
+        assert_eq!(installed, 0);
+        assert!(terminal.is_empty());
+        assert_eq!(*calls.borrow(), vec![locked, drift, failed]);
+    }
 }
 
 /// Get the current Cowork integration status.
