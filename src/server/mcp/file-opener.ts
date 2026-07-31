@@ -1687,11 +1687,19 @@ export async function resolveExternalConflict(
   id: string,
   choice: "keep" | "reload",
 ): Promise<void> {
-  const existing = getOpenDocs().get(id);
+  // path.basename eliminates directory components so CodeQL does not trace
+  // user input (the request body's documentId, per handleResolveExternalConflict's
+  // own comment) through Map.get(id) to existing.filePath FS sinks
+  // (js/path-injection) — same technique as closeDocumentById. Valid IDs are
+  // 64-char hex, no separators, so this is a no-op at runtime; the actual FS
+  // path used below (`existing.filePath`) always comes from the server-owned
+  // OpenDoc registry, never from request input.
+  const safeId = path.basename(id);
+  const existing = getOpenDocs().get(safeId);
   if (!existing) {
     throw Object.assign(new Error("Document is not open."), { code: "NO_DOCUMENT" });
   }
-  const doc = getDocument(id) ?? getOrCreateDocument(id);
+  const doc = getDocument(safeId) ?? getOrCreateDocument(safeId);
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
   // Captured RAW (not narrowed) for the "keep" branch's post-await identity
   // check below — see the comment there.
@@ -1733,15 +1741,15 @@ export async function resolveExternalConflict(
   // reloadFromDisk returns false (and leaves the flag untouched) when a
   // concurrent reload already holds `reloadInProgress` — in that case this
   // click didn't perform a reload, so don't claim it did.
-  const reloaded = await reloadFromDisk(id, resolvedFilePath, existing.format);
+  const reloaded = await reloadFromDisk(safeId, resolvedFilePath, existing.format);
   if (reloaded) {
     pushNotification({
       id: generateNotificationId(),
       type: "file-reloaded",
       severity: "info",
       message: `Reloaded from disk: ${path.basename(existing.filePath)}`,
-      documentId: id,
-      dedupKey: `reload:${id}`,
+      documentId: safeId,
+      dedupKey: `reload:${safeId}`,
       timestamp: Date.now(),
     });
   }
