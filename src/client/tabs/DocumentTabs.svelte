@@ -465,6 +465,12 @@ function invalidateDragGeometry() {
   dragWrappers = [];
   dragIdSeed = null; // fire once per gesture
   dragSlot = null;
+  // Also drop the resolved target: it was computed against the snapshot this
+  // function just discarded, and handlePointerUp reads it unconditionally. An
+  // immediate pointerup with no intervening pointermove to re-resolve a fresh
+  // target must fall through to the "no valid drop target" revert path below,
+  // not commit a reorder against geometry that no longer exists.
+  dropTarget = null;
   liftedId = null;
   dragDegraded = true;
 }
@@ -590,7 +596,10 @@ $effect(() => {
 // `tabs` is deliberately NOT among them — `orderedTabs` is a `$derived.by`
 // returning a fresh array on every evaluation, so tracking it here would fire on
 // every Yjs awareness ping and degrade every drag. A local rename is covered by
-// `renamingTabId`; a remote one isn't, and is left to misplace the gap.
+// `renamingTabId`; a remote one isn't. That's not just a cosmetic gap: `dropTarget`
+// is resolved against the same stale snapshot, so a remote rename mid-drag can
+// misplace the COMMITTED reorder, not only the animation. Accepted, deferred gap
+// (see PR's "Deferred, flagged back to design" table) — do not fix here.
 $effect(() => {
   void activeTabId;
   void renamingTabId;

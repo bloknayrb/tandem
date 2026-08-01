@@ -536,6 +536,47 @@ describe("DocumentTabs A30 drag motion", () => {
     for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
   });
 
+  it("an immediate pointerup right after invalidation commits no reorder", async () => {
+    // Mirrors the "mid-drag tabs change" case above, but skips the intervening
+    // pointermove that re-resolves a fresh dropTarget through the degraded
+    // hit-test. Before the fix, invalidateDragGeometry() cleared the snapshot
+    // and visually reverted the transform layer but left `dropTarget` pointing
+    // at the pre-invalidation target — and handlePointerUp read it
+    // unconditionally, committing a reorder against geometry that had already
+    // been discarded. A release landing in that exact gap (no re-resolve in
+    // between) must fall through to the "no valid drop target" revert path.
+    const reorder = vi.fn();
+    const tabsInit = [makeTab("a"), makeTab("b")];
+    const { container, rerender } = render(DocumentTabs, {
+      props: baseProps(tabsInit, reorder),
+    });
+    await tick();
+    forceLayout(container);
+
+    const tabA = container.querySelector('[data-testid="tab-a"]') as HTMLElement;
+
+    tabA.dispatchEvent(makePointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    await tick();
+    window.dispatchEvent(makePointerEvent("pointermove", { clientX: 200, clientY: 0 }));
+    await tick();
+    expect(wrappersIn(container)[1].style.transform).toBe("translateX(-106px)");
+
+    // A third tab arrives mid-drag (Claude calling tandem_open), invalidating
+    // the snapshot — and, with the fix, the resolved dropTarget too.
+    await rerender(baseProps([tabsInit[0], tabsInit[1], makeTab("c")], reorder));
+    await tick();
+
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+
+    // No pointermove here — the release lands in the exact gap the bug report
+    // describes: geometry just invalidated, no re-resolved target yet.
+    window.dispatchEvent(makePointerEvent("pointerup", { clientX: 200, clientY: 0 }));
+    await tick();
+
+    expect(reorder).not.toHaveBeenCalled();
+    for (const w of wrappersIn(container)) expect(w.style.transform).toBe("");
+  });
+
   it("Escape reverts the transform layer and strands nothing", async () => {
     const reorder = vi.fn();
     const tabs = [makeTab("a"), makeTab("b")];
