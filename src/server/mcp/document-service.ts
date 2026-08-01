@@ -522,6 +522,30 @@ export async function saveDocumentToDisk(
   }
 }
 
+/**
+ * Persist the dirty/conflict session carry after a `saveDocumentToDisk` call
+ * returns `status: "skipped"` (#1238). The disk save did NOT happen, so
+ * without this a skipped save would write (or leave) a clean-looking session
+ * that a restart then discards — losing the only copy of unsaved edits, or
+ * silently laundering away a pending keep-vs-reload conflict the user still
+ * has to decide. Shared by `tandem_save` (document.ts) and `POST /api/save`
+ * (routes/save.ts) so both skip paths carry the same state; previously only
+ * the MCP tool did this, leaving the browser save route's skip path unguarded.
+ *
+ * A no-op if `docId` isn't open — callers that already validated the doc
+ * exists (both current call sites do) never hit that branch, but a stale ID
+ * slipping through must not throw.
+ */
+export async function persistSkippedSaveSession(docId: string): Promise<void> {
+  const docState = openDocs.get(docId);
+  if (!docState) return;
+  const doc = getOrCreateDocument(docId);
+  await saveSession(docState.filePath, docState.format, doc, {
+    dirty: isDirty(docId),
+    conflict: readPendingConflict(doc),
+  });
+}
+
 /** Allowed formats for save-as. Mirrors AUTO_SAVE_FORMATS. */
 const SAVE_AS_FORMATS = new Set(["md", "txt"]);
 
@@ -1350,6 +1374,19 @@ export async function closeDocumentById(
 
   const closedPath = docState.filePath;
 
+  // Stop watching for external changes BEFORE reading the pending-conflict
+  // flag below (review finding). A file-watcher debounce timer can still be
+  // mid-flight at close time; if `readPendingConflict` ran first and the
+  // debounce delivered a NEW conflict in the gap before `unwatchFile`, that
+  // flag would be written to the just-evicted Y.Doc and immediately orphaned
+  // — `removeDoc` drops the doc from the registry right after, so nothing
+  // would ever read or carry it into the session. Unwatching first closes
+  // that window: any debounce callback still in flight finds `getDocument(id)`
+  // returns the doc (harmless — `readPendingConflict` below already captured
+  // the pre-close state), and no NEW watcher callback can fire after this
+  // point.
+  unwatchFile(docState.filePath);
+
   // An unresolved external conflict makes the session file load-bearing
   // (#1238): every save path is blocked while one is pending, so the edits may
   // never have reached disk, and the teardown below would otherwise delete the
@@ -1376,9 +1413,6 @@ export async function closeDocumentById(
       );
     }
   }
-
-  // Stop watching for external changes before removing the document
-  unwatchFile(docState.filePath);
 
   // Flush the durable annotation store FIRST (while the in-memory tombstone
   // ledger is still intact), THEN drop the per-doc file-sync observer.

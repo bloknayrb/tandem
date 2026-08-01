@@ -133,7 +133,11 @@ async function resolve(choice: "keep" | "reload") {
     const res = await fetch(`${API_BASE}${API_EXTERNAL_CONFLICT_RESOLVE}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId: forDoc, choice }),
+      // detectedAt pins the request to the conflict episode the user actually
+      // saw and clicked on — the server no-ops instead of resolving a
+      // different episode that may have replaced it before this request lands
+      // (#1238 review finding).
+      body: JSON.stringify({ documentId: forDoc, choice, detectedAt: forConflict }),
     });
     const stillCurrent = forDoc === documentId && forConflict === conflict?.detectedAt;
     if (!res.ok && stillCurrent) {

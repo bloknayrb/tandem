@@ -421,6 +421,18 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
       { code: "EXTERNAL_CONFLICT" },
     );
   }
+  // Captured RAW (not narrowed), immediately after the check above with no
+  // await between — so this is the map's exact value at the moment we
+  // confirmed no conflict was pending (undefined, given the throw above).
+  // Passed through to clearAndReload as a guard (#1238 review finding):
+  // `prepareContent` inside clearAndReload does real async work (markdown
+  // parse), and a genuine external write can land during that gap and flag a
+  // NEW conflict via the file watcher. clearAndReload's delete of
+  // Y_MAP_EXTERNAL_CONFLICT must only fire if the map still holds this exact
+  // value by the time the transact runs — otherwise it would silently wipe a
+  // conflict this reload never saw. Same identity-comparison pattern as
+  // reloadFromDisk's rawConflictBeforeReload guard.
+  const rawConflictBeforeCommit = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT);
 
   // Serialize against the file-watcher reload path (which guards on the same
   // Set) so two clear+repopulate transactions never interleave on one Y.Doc.
@@ -437,6 +449,7 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
     // clean against stale content (#851 mechanism).
     await clearAndReload(id, doc, existing.filePath, "md", existing, markdown, {
       markCleanAfter: false,
+      conflictGuard: { raw: rawConflictBeforeCommit },
     });
     // File-source docs re-wire the durable annotation store (clearAndReload
     // wiped it) and persist the new markdown to disk immediately. Scratchpads
@@ -1248,6 +1261,18 @@ export async function wireAnnotationStore(
  * `opts.readOnly` (default false): the authoritative readOnly for the rewritten
  * metadata. Previously hardcoded `isDocx` — a #576 leftover from when .docx
  * opened read-only; .docx is writable now, so the caller's value is the truth.
+ *
+ * `opts.conflictGuard` (default undefined — unconditional delete, #1238 review
+ * finding): when provided, the `Y_MAP_EXTERNAL_CONFLICT` delete below only
+ * fires if the map's CURRENT raw value still equals `conflictGuard.raw` — the
+ * value the caller captured before its own async gap. Without a guard, this
+ * function's unconditional delete is correct for its other caller (force-open
+ * via `tandem_open force:true`, which is explicitly "discard everything,
+ * including any conflict"). `reloadDocumentFromMarkdown` passes a guard
+ * because a real external write can land during ITS pre-call gap and flag a
+ * genuinely new conflict that this unrelated repopulation must not silently
+ * wipe. The wrapper object (rather than a bare `unknown`) distinguishes "no
+ * guard requested" from "guard requested, captured value was undefined".
  */
 async function clearAndReload(
   id: string,
@@ -1256,7 +1281,11 @@ async function clearAndReload(
   format: string,
   existing: OpenDoc,
   source: string | Buffer,
-  opts?: { markCleanAfter?: boolean; readOnly?: boolean },
+  opts?: {
+    markCleanAfter?: boolean;
+    readOnly?: boolean;
+    conflictGuard?: { raw: unknown };
+  },
 ): Promise<void> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
@@ -1303,7 +1332,20 @@ async function clearAndReload(
       meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
       // Content was rebuilt from the caller's source — any pending external-
       // conflict flag (#1069) is moot. Y.Map.delete on a missing key is a no-op.
-      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      //
+      // Guarded when the caller opted in (#1238 review finding): a real
+      // external write can land during this function's own async gap
+      // (`prepareContent` above) and flag a NEW conflict via the file watcher.
+      // Deleting unconditionally would silently wipe that newer, real
+      // conflict for content this reload never saw. Only delete if the map's
+      // current raw value still matches what the caller captured before the
+      // gap opened.
+      if (
+        opts?.conflictGuard === undefined ||
+        meta.get(Y_MAP_EXTERNAL_CONFLICT) === opts.conflictGuard.raw
+      ) {
+        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      }
     });
 
     // 3. Reattach event queue observers (idempotent — detaches existing first)
@@ -1686,19 +1728,34 @@ function flagExternalConflict(
  *   re-anchored; reloadFromDisk clears the flag and refreshes the baseline).
  *
  * No-op success when no conflict is pending (double-click / stale banner race).
+ *
+ * `expectedDetectedAt` (optional, #1238 review finding — episode-identity
+ * race): the `detectedAt` of the conflict episode the CLIENT saw when the
+ * user clicked. Between the click and this call landing, a second external
+ * write can have replaced the pending conflict with a DIFFERENT episode (a
+ * new `detectedAt`) — the user saw conflict A, clicked "Keep"; before the
+ * request lands, a write for conflict B arrives and replaces the flag.
+ * Resolving whatever is CURRENTLY pending under A's semantics would silently
+ * accept B's disk state as the new baseline, with the user never having seen
+ * a banner for B. When supplied and it does not match the currently-pending
+ * conflict, this is a no-op — same as the "no conflict pending" case above —
+ * rather than resolving the wrong episode. Only checked when the caller
+ * supplies it; omitting it (older/internal callers) keeps resolving whatever
+ * is pending, same as before this check existed.
+ *
  * Throws coded errors the route maps to HTTP status (NO_DOCUMENT).
  */
 export async function resolveExternalConflict(
   id: string,
   choice: "keep" | "reload",
+  expectedDetectedAt?: number,
 ): Promise<void> {
   // path.basename eliminates directory components so CodeQL does not trace
   // user input (the request body's documentId, per handleResolveExternalConflict's
   // own comment) through Map.get(id) to existing.filePath FS sinks
-  // (js/path-injection) — same technique as closeDocumentById. Valid IDs are
-  // 64-char hex, no separators, so this is a no-op at runtime; the actual FS
+  // (js/path-injection) — same technique as closeDocumentById. The actual FS
   // path used below (`existing.filePath`) always comes from the server-owned
-  // OpenDoc registry, never from request input.
+  // OpenDoc registry, never from request input, regardless of `id`'s shape.
   const safeId = path.basename(id);
   const existing = getOpenDocs().get(safeId);
   if (!existing) {
@@ -1711,6 +1768,14 @@ export async function resolveExternalConflict(
   const rawConflictBeforeResolve = meta.get(Y_MAP_EXTERNAL_CONFLICT);
   if (rawConflictBeforeResolve === undefined) return;
 
+  // Episode-identity check — see the doc comment above. `readPendingConflict`
+  // is a second, synchronous read of the same map (no await between here and
+  // the raw read above), so it observes the identical value.
+  if (expectedDetectedAt !== undefined) {
+    const pending = readPendingConflict(doc);
+    if (pending?.detectedAt !== expectedDetectedAt) return;
+  }
+
   const resolvedFilePath = path.resolve(existing.filePath);
 
   if (choice === "keep") {
@@ -1722,11 +1787,12 @@ export async function resolveExternalConflict(
     // flashing a check on a document whose edits still exist only in memory
     // (#1238).
     const canSave = canSaveToDisk(existing.format);
-    // resolvedFilePath is derived from existing.filePath, the OpenDoc registry's
-    // server-managed path (only ever set by openFileByPath / resolveAndValidatePath
-    // / a validated rename or save-as) — never raw request input. Same established
-    // false-positive class as document-service.ts's FS sinks; see issue #1042.
-    // codeql[js/path-injection]
+    // Safe FS sink (CodeQL js/path-injection): `resolvedFilePath` is derived
+    // from `existing.filePath`, the OpenDoc registry's server-managed path
+    // (only ever set by openFileByPath / resolveAndValidatePath / a validated
+    // rename or save-as) — never raw request input. Same established
+    // false-positive class as document-service.ts's FS sinks; dismiss per
+    // issue #1042.
     const stat = canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null;
     withInternal(doc, () => {
       // Guarded, not unconditional (review finding): the fs.stat above was

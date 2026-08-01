@@ -34,17 +34,30 @@ import { sendApiError } from "./_shared.js";
  * taint path. `hasDoc` is a fail-loud UX guard, not the security boundary:
  * `resolveExternalConflict` already fails closed (throws NO_DOCUMENT) on an
  * unknown id.
+ *
+ * `detectedAt` is accepted from the body (optional, #1238 review finding):
+ * the conflict episode's identity, as the client last observed it. Without
+ * it, a race is reachable — the user sees conflict A, clicks "Keep"; a second
+ * external write replaces the pending conflict with a different episode B
+ * before this request lands; resolving whatever is CURRENTLY pending under
+ * A's semantics would silently accept B's disk state with no banner ever
+ * shown for B. `resolveExternalConflict` no-ops instead of resolving the
+ * wrong episode when this doesn't match what's actually pending.
  */
 export async function handleResolveExternalConflict(req: Request, res: Response): Promise<void> {
   if (assertOriginAllowlisted(req, res, API_EXTERNAL_CONFLICT_RESOLVE)) return;
   if (assertLoopbackForMutation(req, res)) return;
-  const { documentId, choice } = (req.body ?? {}) as Record<string, unknown>;
+  const { documentId, choice, detectedAt } = (req.body ?? {}) as Record<string, unknown>;
   if (choice !== "keep" && choice !== "reload") {
     res.status(400).json({ error: "BAD_REQUEST", message: 'choice must be "keep" or "reload".' });
     return;
   }
   if (documentId !== undefined && typeof documentId !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "documentId must be a string" });
+    return;
+  }
+  if (detectedAt !== undefined && typeof detectedAt !== "number") {
+    res.status(400).json({ error: "BAD_REQUEST", message: "detectedAt must be a number" });
     return;
   }
   if (typeof documentId === "string" && documentId.length > 0 && !hasDoc(documentId)) {
@@ -57,7 +70,7 @@ export async function handleResolveExternalConflict(req: Request, res: Response)
     return;
   }
   try {
-    await resolveExternalConflict(docId, choice);
+    await resolveExternalConflict(docId, choice, detectedAt);
     res.json({ success: true });
   } catch (err: unknown) {
     sendApiError(res, err);

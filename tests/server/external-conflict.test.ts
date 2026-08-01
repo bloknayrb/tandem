@@ -57,6 +57,7 @@ vi.mock("../../src/server/file-watcher", async (importOriginal) => ({
 
 import type { Request, Response } from "express";
 import { resetForTesting as resetDirtyState } from "../../src/server/documents/dirty.js";
+import { getAdapter } from "../../src/server/file-io/index.js";
 import { suppressNextChange, watchFile } from "../../src/server/file-watcher.js";
 import { registerDocumentTools } from "../../src/server/mcp/document.js";
 import { extractText } from "../../src/server/mcp/document-model.js";
@@ -77,6 +78,7 @@ import {
   resolveExternalConflict,
 } from "../../src/server/mcp/file-opener.js";
 import { handleResolveExternalConflict } from "../../src/server/mcp/routes/external-conflict.js";
+import { handleSave } from "../../src/server/mcp/routes/save.js";
 import {
   getBuffer,
   resetForTesting as resetNotifications,
@@ -335,6 +337,53 @@ describe("resolveExternalConflict", () => {
       code: "NO_DOCUMENT",
     });
   });
+
+  it('"keep" resolves normally when the passed detectedAt matches the pending conflict', async () => {
+    const { filePath, id, doc } = await flaggedSetup();
+    const matchingDetectedAt = conflictOf(doc)!.detectedAt;
+
+    await resolveExternalConflict(id, "keep", matchingDetectedAt);
+
+    expect(conflictOf(doc)).toBeUndefined();
+    const stat = await fs.stat(filePath);
+    const savedAt = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION) as number;
+    expect(savedAt).toBe(stat.mtimeMs);
+  });
+
+  it('"keep" no-ops when the passed detectedAt does not match the currently-pending conflict (episode race, #1238)', async () => {
+    // Race regression (review finding): the user saw conflict A (the client
+    // has A.detectedAt in hand), clicked "Keep"; before the request lands, a
+    // second external write replaces the pending conflict with a DIFFERENT
+    // episode B. Resolving whatever is CURRENTLY pending under A's semantics
+    // would silently accept B's disk state as the new baseline — the user
+    // never saw a banner for B. Simulated with a direct map write (not a
+    // second watcher trigger) so the two episodes have deterministic, distinct
+    // `detectedAt` values regardless of test-run timing.
+    const { id, doc } = await flaggedSetup();
+    const staleDetectedAt = conflictOf(doc)!.detectedAt;
+    const textAtStaleClick = extractText(doc);
+    const baselineBeforeStaleClick = doc
+      .getMap(Y_MAP_DOCUMENT_META)
+      .get(Y_MAP_SAVED_AT_VERSION) as number;
+
+    const newerConflict: ExternalConflictState = {
+      kind: "external-edit",
+      diskChanged: true,
+      detectedAt: staleDetectedAt + 1000,
+    };
+    doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, newerConflict);
+
+    await resolveExternalConflict(id, "keep", staleDetectedAt);
+
+    // No-op: the newer conflict (B) survives untouched, content is unaffected,
+    // and the savedAt baseline is NOT re-stamped (a stale "keep" must not
+    // unblock a save the user hasn't actually accepted for episode B).
+    expect(conflictOf(doc)).toEqual(newerConflict);
+    expect(extractText(doc)).toBe(textAtStaleClick);
+    expect(doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_SAVED_AT_VERSION)).toBe(
+      baselineBeforeStaleClick,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -500,6 +549,62 @@ describe("handleResolveExternalConflict — route doc selection", () => {
 
     expect(res._status).toBe(400);
     expect(res._body).toMatchObject({ error: "BAD_REQUEST" });
+  });
+
+  it("rejects a non-number detectedAt with 400", async () => {
+    const res = makeRes();
+    await handleResolveExternalConflict(
+      makeReq({ choice: "keep", detectedAt: "not-a-number" }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(400);
+    expect(res._body).toMatchObject({ error: "BAD_REQUEST" });
+  });
+
+  it("forwards a matching detectedAt through to resolveExternalConflict (resolves normally)", async () => {
+    const { id, doc } = await flaggedDocx("detected-at-match.docx", "Matching disk body");
+    const matchingDetectedAt = conflictOf(doc)!.detectedAt;
+
+    const res = makeRes();
+    await handleResolveExternalConflict(
+      makeReq({ documentId: id, choice: "reload", detectedAt: matchingDetectedAt }),
+      res as unknown as Response,
+    );
+
+    expect(res._status).toBe(0);
+    expect(res._body).toMatchObject({ success: true });
+    expect(conflictOf(doc)).toBeUndefined();
+    expect(extractText(doc)).toContain("Matching disk body");
+  });
+
+  it("no-ops via a stale detectedAt (episode race, #1238) instead of resolving the wrong conflict", async () => {
+    const { id, doc } = await flaggedDocx("detected-at-stale.docx", "First disk body");
+    const staleDetectedAt = conflictOf(doc)!.detectedAt;
+
+    // A second external write replaces the pending conflict with a newer
+    // episode before the (stale) request is handled.
+    const newerConflict: ExternalConflictState = {
+      kind: "external-edit",
+      diskChanged: true,
+      detectedAt: staleDetectedAt + 1000,
+    };
+    doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, newerConflict);
+    const textBeforeStaleRequest = extractText(doc);
+
+    const res = makeRes();
+    await handleResolveExternalConflict(
+      makeReq({ documentId: id, choice: "reload", detectedAt: staleDetectedAt }),
+      res as unknown as Response,
+    );
+
+    // The route still reports success (a no-op is a valid outcome, same as
+    // the "no conflict pending" case), but the newer conflict and content
+    // must survive untouched — "reload" for the stale episode never fired.
+    expect(res._status).toBe(0);
+    expect(res._body).toMatchObject({ success: true });
+    expect(conflictOf(doc)).toEqual(newerConflict);
+    expect(extractText(doc)).toBe(textBeforeStaleRequest);
   });
 });
 
@@ -1144,6 +1249,65 @@ describe("conflict-adjacent surfaces", () => {
     await expect(reloadDocumentFromMarkdown(id, "# Deliberate draft")).resolves.toBeUndefined();
   });
 
+  it("preserves a NEW conflict flagged during the async prepareContent gap (source-view commit race, #1238)", async () => {
+    // Race regression (review finding): reloadDocumentFromMarkdown's entry
+    // guard only rejects a conflict pending AT THE TIME OF THE CHECK.
+    // clearAndReload then does real async work (`prepareContent`, the
+    // markdown parse) before its transact deletes Y_MAP_EXTERNAL_CONFLICT — a
+    // genuine external write can land and get flagged by the file watcher
+    // during that gap. The unconditional delete used to silently wipe that
+    // newer, real conflict for content this commit never saw.
+    const filePath = path.join(tmpDir, "sourceview-race.md");
+    await fs.writeFile(filePath, "# Disk body");
+    const opened = await openFileByPath(filePath);
+    const id = opened.documentId;
+    const doc = getOrCreateDocument(id);
+    expect(conflictOf(doc)).toBeUndefined();
+
+    const adapter = getAdapter("md");
+    const originalParse = adapter.parse;
+    const parseSpy = vi
+      .spyOn(adapter, "parse")
+      .mockImplementationOnce(async (...args: Parameters<typeof adapter.parse>) => {
+        // Simulate the file watcher flagging a genuinely new conflict WHILE
+        // this reload's own pre-parse is in flight.
+        doc.getMap(Y_MAP_DOCUMENT_META).set(Y_MAP_EXTERNAL_CONFLICT, {
+          kind: "external-edit",
+          diskChanged: true,
+          detectedAt: 777,
+        } satisfies ExternalConflictState);
+        return originalParse.apply(adapter, args);
+      });
+
+    try {
+      await reloadDocumentFromMarkdown(id, "# Edited via source view");
+    } finally {
+      parseSpy.mockRestore();
+    }
+
+    // The commit itself succeeded (content replaced)...
+    expect(extractText(doc)).toContain("Edited via source view");
+    // ...but the conflict flagged mid-reload must survive, not be silently
+    // cleared as if this reload had resolved it.
+    expect(conflictOf(doc)).toMatchObject({ kind: "external-edit", detectedAt: 777 });
+  });
+
+  it("clears the flag normally when NO race occurs during a source-view commit", async () => {
+    // Companion to the race test above: the guard must not become an
+    // unconditional refusal-to-clear. With no conflict flagged during the
+    // async gap, the commit still resolves cleanly (baseline behavior).
+    const filePath = path.join(tmpDir, "sourceview-no-race.md");
+    await fs.writeFile(filePath, "# Disk body");
+    const opened = await openFileByPath(filePath);
+    const id = opened.documentId;
+    const doc = getOrCreateDocument(id);
+
+    await reloadDocumentFromMarkdown(id, "# Edited via source view, no race");
+
+    expect(extractText(doc)).toContain("Edited via source view, no race");
+    expect(conflictOf(doc)).toBeUndefined();
+  });
+
   it("keeps the session when a conflicted tab is closed (it is the only copy)", async () => {
     const { filePath, id } = await flagged("close-conflicted.md");
 
@@ -1267,5 +1431,80 @@ describe("tandem_save on a conflicted document (#1238)", () => {
     const session = await loadSession(filePath);
     expect(session?.dirty).toBe(true);
     expect(session?.conflict).toMatchObject({ kind: "external-edit" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/save on a conflicted document (#1238 review finding)
+//
+// tandem_save (document.ts) already persisted the dirty/conflict session
+// carry on a skipped save; the browser's POST /api/save route did not — an
+// asymmetry between the two save entry points into the same
+// `saveDocumentToDisk`. Mirrors the tandem_save test above via the shared
+// `persistSkippedSaveSession` helper both routes now call.
+// ---------------------------------------------------------------------------
+describe("POST /api/save on a conflicted document (#1238)", () => {
+  function makeRes() {
+    const res = {
+      _status: 0,
+      _body: null as unknown,
+      status(code: number) {
+        this._status = code;
+        return this;
+      },
+      json(body: unknown) {
+        this._body = body;
+        return this;
+      },
+    };
+    return res;
+  }
+
+  function makeReq(body: unknown): Request {
+    return { body } as unknown as Request;
+  }
+
+  it("leaves the session carrying dirty + conflict after a skipped save", async () => {
+    const filePath = path.join(tmpDir, "api-save.md");
+    await fs.writeFile(filePath, "# Disk body");
+
+    const opened = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    const watcherPath = vi.mocked(watchFile).mock.calls[0][0];
+    makeDirty(doc);
+    await fs.writeFile(filePath, "# External rewrite");
+    await capturedWatcherCallback(watcherPath)(watcherPath);
+
+    const res = makeRes();
+    await handleSave(makeReq({ documentId: opened.documentId }), res as unknown as Response);
+
+    // The route still reports the underlying skip result as data (unlike the
+    // MCP tool, which turns it into an error) — this test is about the
+    // session carry, not the HTTP response shape.
+    expect(res._status).toBe(0);
+    expect((res._body as { data?: { status?: string } })?.data?.status).toBe("skipped");
+    expect(await fs.readFile(filePath, "utf-8")).toBe("# External rewrite");
+
+    // Without the fix, this session would NOT carry dirty/conflict — a
+    // restart would discard the only copy of the unsaved edits or silently
+    // launder away the pending keep-vs-reload choice.
+    const session = await loadSession(filePath);
+    expect(session?.dirty).toBe(true);
+    expect(session?.conflict).toMatchObject({ kind: "external-edit" });
+  });
+
+  it("does not write a stray session carry on an ordinary successful save", async () => {
+    const filePath = path.join(tmpDir, "api-save-ok.md");
+    await fs.writeFile(filePath, "# Disk body");
+    const opened = await openFileByPath(filePath);
+    const doc = getOrCreateDocument(opened.documentId);
+    makeDirty(doc);
+
+    const res = makeRes();
+    await handleSave(makeReq({ documentId: opened.documentId }), res as unknown as Response);
+
+    expect(res._status).toBe(0);
+    expect((res._body as { data?: { status?: string } })?.data?.status).toBe("saved");
+    expect(conflictOf(doc)).toBeUndefined();
   });
 });

@@ -18,7 +18,6 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import { isDirty } from "../documents/dirty.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
 // Position system
@@ -45,7 +44,7 @@ import {
   getCurrentDoc,
   getOpenDocs,
   hasDoc,
-  readPendingConflict,
+  persistSkippedSaveSession,
   renameDocument,
   requireDocument,
   saveDocumentToDisk,
@@ -750,10 +749,7 @@ export function registerDocumentTools(server: McpServer): void {
         // clean-looking session that a restart then discards — losing the only
         // copy of the unsaved edits, or silently laundering away a conflict the
         // user still has to decide.
-        await saveSession(r.filePath, format, r.doc, {
-          dirty: isDirty(r.docId),
-          conflict: readPendingConflict(r.doc),
-        });
+        await persistSkippedSaveSession(r.docId);
         // An external-conflict skip is not a save at any level Claude can act
         // on, and `saved: true` would be a lie it has no way to check. Report
         // it as an error instead — the resolution is a human keep-vs-reload
