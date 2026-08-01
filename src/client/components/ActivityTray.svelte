@@ -74,6 +74,35 @@ const cascadeStep = (i: number) => Math.min(i, CASCADE_SLIDE_Y.length - 1);
 let cascadeOrder = $state<string[]>([]);
 let prevOpen = false; // plain latch — NOT $state (read+write in the effect would self-trigger)
 let cascadeTimer: ReturnType<typeof setTimeout> | undefined;
+
+// Badge-pop gating. `.tray-inner` (and everything below it, including the
+// `{#each}`) is destroyed and recreated every time the tray closes/reopens —
+// that structure is load-bearing for the row-level `in:`/`out:` transitions
+// (see the `.tray-list` comment below) and is NOT something this fix touches.
+// But it means the badge span for an already-coalesced row (count > 1) gets a
+// fresh DOM node on every reopen too, and a CSS animation that's unconditional
+// on mount would replay every time — a false "this just happened" signal for a
+// row that hasn't changed since the user last looked.
+//
+// This Map is declared at component-instance scope, NOT inside the `{#each}`,
+// so it survives the tray-body remount: App.svelte mounts `<ActivityTray>`
+// unconditionally (only `open` toggles which markup renders inside it), so
+// this same Map instance lives across every close/reopen. Keyed by item id,
+// which `coalesceActivity` (useNotifications.svelte.ts) keeps stable across a
+// row's whole coalesced life, not just across mounts.
+const lastPoppedCount = new Map<string, number>();
+
+// True only the FIRST time this (id, count) pair is observed — i.e. a genuine
+// coalesce bump. Re-renders/remounts with an unchanged count (tray reopen,
+// unrelated state churn) return false. Called from a `{@const}` inside the
+// per-row `{#key item.count}` block, so it runs once per block instantiation;
+// idempotent for a stable pair, so re-evaluating it is harmless.
+function shouldPopBadge(id: string, count: number): boolean {
+  if (lastPoppedCount.get(id) === count) return false;
+  lastPoppedCount.set(id, count);
+  return true;
+}
+
 // `$effect.pre`, not `$effect`: a post-render effect would land after the rows have
 // already painted, so the inline --slide-y / animation-delay would be missing on
 // frame 1 and the cascade would start a frame late.
@@ -93,6 +122,17 @@ $effect.pre(() => {
     }
   }
   prevOpen = open;
+});
+
+// Prune popped-count bookkeeping for ids no longer in the activity list
+// (dismissed row / clear-all) so `lastPoppedCount` doesn't grow across a
+// session's full coalesce history. Runs regardless of `open` — `items` is
+// live at component-instance scope.
+$effect(() => {
+  const liveIds = new Set(items.map((i) => i.id));
+  for (const id of lastPoppedCount.keys()) {
+    if (!liveIds.has(id)) lastPoppedCount.delete(id);
+  }
 });
 
 onDestroy(() => {
@@ -164,9 +204,18 @@ onDestroy(() => {
                         identity and nothing else about a repeat event moves — without
                         a remount the pop keyframe could only ever play once (on the
                         1→2 mount) and every later increment would be a silent text swap.
+
+                        The remount alone is not sufficient to gate the pop, though:
+                        `.tray-inner` (and this whole `{#each}`) also remounts on every
+                        tray close/reopen, with `item.count` unchanged. The `.pop` class
+                        is the actual trigger — `shouldPopBadge` (component-scoped, so it
+                        survives that remount) only returns true the first time THIS
+                        (id, count) pair is seen, so a reopen with no new coalesce mounts
+                        a fresh node without `.pop` and plays no animation.
                       -->
                       {#key item.count}
-                        <span class="badge">×{item.count}</span>
+                        {@const pop = shouldPopBadge(item.id, item.count)}
+                        <span class="badge" class:pop>×{item.count}</span>
                       {/key}
                     {/if}
                     <span class="ts">{relativeTime(item.timestamp, now)}</span>
@@ -644,7 +693,12 @@ onDestroy(() => {
   }
   /* Coalescing keeps the row's id and slot, so a repeat event moves nothing — the
      ×N badge is the only place it can register. Remounted per increment via
-     `{#key item.count}` so this replays instead of firing once on the 1→2 mount. */
+     `{#key item.count}` so this replays instead of firing once on the 1→2 mount.
+     The animation itself lives on the `.pop` modifier, NOT the base class: the
+     badge span also remounts on every tray close/reopen (ancestor teardown, see
+     the markup comment), and `.pop` is only applied by the script when
+     `shouldPopBadge` confirms this is a genuinely new count — a reopen with no
+     new coalesce mounts a plain `.badge` with no animation. */
   .toast-row .badge {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
@@ -652,6 +706,8 @@ onDestroy(() => {
     padding: 1px 6px;
     border-radius: var(--tandem-r-pill);
     border: 1px solid transparent;
+  }
+  .toast-row .badge.pop {
     animation: badgePop 240ms var(--tandem-ease-out);
   }
   @keyframes badgePop {

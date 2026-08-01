@@ -493,6 +493,49 @@ test("a coalesced row remounts its count badge so the pop can replay", async ({ 
   await expect(badge).not.toHaveAttribute("data-probe", "gen2");
 });
 
+test("closing and reopening the tray does NOT replay the badge pop without a new coalesce", async ({
+  page,
+}) => {
+  await openEditor(page);
+
+  const repeat = (n: number) =>
+    pushNotification(page, {
+      id: `p${n}`,
+      type: "general-error",
+      severity: "error",
+      message: "Same thing again.",
+      dedupKey: "pop-gate-thing",
+    });
+
+  const pill = page.locator("[data-testid='activity-pill']");
+  const badge = page.locator("[data-testid='activity-row-p1'] .badge");
+  const animationName = () => badge.evaluate((el) => getComputedStyle(el).animationName);
+
+  await repeat(1);
+  await repeat(2);
+  await pill.click();
+
+  // Genuine first sighting of count 2: the badge pops.
+  await expect(badge).toHaveText("×2");
+  await expect.poll(animationName).toBe("badgePop");
+
+  // Close the tray (`.tray-inner` unmounts) and reopen it with nothing new
+  // having happened. The badge remounts (fresh DOM node — same mechanism the
+  // prior test pins), but must NOT replay the pop: it's not a genuine
+  // increment, just the user looking again.
+  await pill.click();
+  await expect(page.locator("[data-testid='activity-tray']")).toHaveCount(0);
+  await pill.click();
+
+  await expect(badge).toHaveText("×2");
+  await expect.poll(animationName).toBe("none");
+
+  // A genuine new coalesce while the tray stays open still pops normally.
+  await repeat(3);
+  await expect(badge).toHaveText("×3");
+  await expect.poll(animationName).toBe("badgePop");
+});
+
 test("rows render newest-first", async ({ page }) => {
   await openEditor(page);
 

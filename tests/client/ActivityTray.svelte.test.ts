@@ -220,3 +220,55 @@ describe("ActivityTray cascade snapshot", () => {
     expect(patched).toEqual([]);
   });
 });
+
+describe("badge pop gating (should-fix: no replay on a bare tray reopen)", () => {
+  it("applies .pop the first time a row's count rises above 1", async () => {
+    const item = makeItem("a", { count: 1 });
+    const { container, rerender } = render(ActivityTray, { props: baseProps([item], true) });
+
+    // count 1 renders no badge at all.
+    expect(container.querySelector(".badge")).toBeNull();
+
+    await rerender(baseProps([{ ...item, count: 2 }], true));
+
+    const badge = container.querySelector(".badge");
+    expect(badge?.textContent).toContain("2");
+    expect(badge?.classList.contains("pop")).toBe(true);
+  });
+
+  it("does not replay .pop when the tray closes and reopens with no new coalesce", async () => {
+    const bumped = makeItem("a", { count: 2 });
+    const { container, rerender } = render(ActivityTray, { props: baseProps([bumped], true) });
+
+    // First sight of count 2 pops.
+    expect(container.querySelector(".badge")?.classList.contains("pop")).toBe(true);
+
+    // Tray closes: `.tray-inner` (and the badge span inside it) unmounts entirely.
+    await rerender(baseProps([bumped], false));
+    expect(container.querySelector(".badge")).toBeNull();
+
+    // Tray reopens with the SAME count. The badge remounts (fresh DOM node,
+    // per the `{#key item.count}` / ancestor-teardown comment) but must NOT
+    // replay the pop, since nothing changed while it was closed.
+    await rerender(baseProps([bumped], true));
+    const badge = container.querySelector(".badge");
+    expect(badge).not.toBeNull();
+    expect(badge?.classList.contains("pop")).toBe(false);
+  });
+
+  it("still pops on reopen when a genuine coalesce happened while the tray was closed", async () => {
+    const item = makeItem("a", { count: 2 });
+    const { container, rerender } = render(ActivityTray, { props: baseProps([item], true) });
+    expect(container.querySelector(".badge")?.classList.contains("pop")).toBe(true);
+
+    await rerender(baseProps([item], false));
+
+    // A real coalesce bump lands while the tray is closed; reopening should
+    // show the user the pop they haven't seen yet.
+    await rerender(baseProps([{ ...item, count: 3 }], true));
+
+    const badge = container.querySelector(".badge");
+    expect(badge?.textContent).toContain("3");
+    expect(badge?.classList.contains("pop")).toBe(true);
+  });
+});
