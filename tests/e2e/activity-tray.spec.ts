@@ -509,7 +509,11 @@ test("closing and reopening the tray does NOT replay the badge pop without a new
 
   const pill = page.locator("[data-testid='activity-pill']");
   const badge = page.locator("[data-testid='activity-row-p1'] .badge");
+  // Svelte scopes `@keyframes` referenced from a component `<style>` block with a
+  // per-component hash prefix (e.g. `svelte-bf7dij-badgePop`), so the computed
+  // `animationName` is never the bare keyframe name — match the suffix instead.
   const animationName = () => badge.evaluate((el) => getComputedStyle(el).animationName);
+  const isPopping = async () => /(^|-)badgePop$/.test(await animationName());
 
   await repeat(1);
   await repeat(2);
@@ -517,7 +521,7 @@ test("closing and reopening the tray does NOT replay the badge pop without a new
 
   // Genuine first sighting of count 2: the badge pops.
   await expect(badge).toHaveText("×2");
-  await expect.poll(animationName).toBe("badgePop");
+  await expect.poll(isPopping).toBe(true);
 
   // Close the tray (`.tray-inner` unmounts) and reopen it with nothing new
   // having happened. The badge remounts (fresh DOM node — same mechanism the
@@ -533,7 +537,7 @@ test("closing and reopening the tray does NOT replay the badge pop without a new
   // A genuine new coalesce while the tray stays open still pops normally.
   await repeat(3);
   await expect(badge).toHaveText("×3");
-  await expect.poll(animationName).toBe("badgePop");
+  await expect.poll(isPopping).toBe(true);
 });
 
 test("rows render newest-first", async ({ page }) => {
