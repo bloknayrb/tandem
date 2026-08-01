@@ -203,15 +203,22 @@ export function addReplyToAnnotation(
     // user-private forever (even if the note is later promoted to a comment);
     // comment replies omit the flag and surface to Claude normally (#1000).
     ...(ann.type === "comment" ? {} : { private: true }),
-    // WS-A2: server-stamp the Solo-hold marker on a user reply created in Solo.
-    // Replies are created server-side (this function is the sole write path), so
-    // unlike browser annotation writes the stamp lives here. Live hiding is still
-    // mode-based (Phase 2 pushEvent + the checkInbox/getAnnotations reply gates);
-    // this persisted marker drives the held-badge and the fail-closed-restart
-    // hold (indeterminate mode). Gated on `ann.type === "comment"` to match the
-    // comment-only annotation path (heldInSoloOnCreate): a private note-reply is
-    // never sent to Claude, so it is not "held from the AI" and carries no marker.
-    ...(author === "user" && ann.type === "comment" && readModeState() === "solo"
+    // WS-A2: server-stamp the Solo-hold marker on a user reply created while not
+    // in Tandem. Replies are created server-side (this function is the sole
+    // write path), so unlike browser annotation writes the stamp lives here.
+    // Live hiding is still mode-based (Phase 2 pushEvent + the
+    // checkInbox/getAnnotations reply gates); this persisted marker drives the
+    // held-badge AND the fail-closed-restart hold that `mode.ts#hideFromAI`
+    // applies in "indeterminate" mode (record.heldInSolo === true). Tested
+    // against `!== "tandem"`, not `=== "solo"` — completing the #1213
+    // fail-closed invariant: a reply created mid-restart, while the CTRL_ROOM
+    // mode key is absent (indeterminate), must still be stamped, or
+    // `hideFromAI` has nothing to withhold on the next pull even though the
+    // server has no idea whether the user was actually in Solo. Gated on
+    // `ann.type === "comment"` to match the comment-only annotation path
+    // (heldInSoloOnCreate): a private note-reply is never sent to Claude, so it
+    // is not "held from the AI" and carries no marker.
+    ...(author === "user" && ann.type === "comment" && readModeState() !== "tandem"
       ? { heldInSolo: true }
       : {}),
     // #1123 M3: agent byline (local-model collaborator only). Absent ⇒ omitted.

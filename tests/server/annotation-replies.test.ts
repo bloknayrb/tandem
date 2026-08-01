@@ -4,6 +4,7 @@ import {
   collectRepliesForAnnotation,
   createAnnotation,
 } from "../../src/server/mcp/annotations.js";
+import { hideFromAI } from "../../src/server/mode.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CTRL_ROOM,
@@ -185,6 +186,31 @@ describe("WS-A2 Solo-hold marker on replies (AM-F1)", () => {
       heldInSolo?: boolean;
     };
     expect(stored.heldInSolo).toBeUndefined();
+  });
+
+  // Completes the #1213 fail-closed invariant on the STAMPING side: a server
+  // restart can drop the CTRL_ROOM mode key BEFORE the reconnecting client
+  // rebroadcasts real mode state, so a reply created in that exact window reads
+  // `readModeState() === "indeterminate"`, not `"solo"`. The stamp must still
+  // fire — mode.ts#hideFromAI only withholds an indeterminate-mode record when
+  // it carries `heldInSolo === true`, so a reply created here without the
+  // marker would surface on the very next pull despite the server having no
+  // idea whether the user was actually in Solo at the time.
+  it("stamps heldInSolo on a user reply to a COMMENT while mode is indeterminate (restart), and hideFromAI withholds it", () => {
+    const ydoc = setupDoc("held-reply-4", "Hello world");
+    const map = ydoc.getMap(Y_MAP_ANNOTATIONS);
+    const annId = createAnnotation(map, ydoc, "comment", rangeOf(0, 5, ydoc), "parent comment");
+    setMode(undefined); // absent CTRL_ROOM mode key === indeterminate
+
+    const result = addReplyToAnnotation(ydoc, map, annId, "mid-restart reply", "user");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+
+    const stored = ydoc.getMap(Y_MAP_ANNOTATION_REPLIES).get(result.replyId) as AnnotationReply & {
+      heldInSolo?: boolean;
+    };
+    expect(stored.heldInSolo).toBe(true);
+    expect(hideFromAI(stored, "indeterminate")).toBe(true);
   });
 });
 
