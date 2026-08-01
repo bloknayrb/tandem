@@ -23,6 +23,7 @@ import {
   isTabContextMenuActionId,
   type TabContextMenuActionId,
 } from "./tab-context-menu.js";
+import { measureTabFloor } from "./tab-floor.js";
 // A29 morph (#798): shared timing tokens + reduced-motion token-zeroing.
 import "../panels/morphTiming.css";
 
@@ -266,7 +267,10 @@ $effect(() => {
 // The tab strip's width floor, mirrored by `.tab-flip`'s `min-width` below.
 // Uniform mode pins every tab here; adaptive mode clamps each measured per-tab
 // floor to it, so no tab is ever wider than this on a crowded strip.
-const TAB_FLOOR_PX = 142;
+// Owned by `./tab-floor.js` — imported above — since `tabEnter` (cardMotion.ts)
+// needs the exact same value and measurement logic synchronously at transition
+// setup, before this component's own $effect below has run. Keep the numeric
+// rationale (chrome + filename) there, not here.
 
 function updateScrollState() {
   const el = scrollEl;
@@ -353,15 +357,33 @@ $effect(() => {
   // Tracked deps. `activeTabId` is load-bearing: the active tab's name renders
   // at font-weight 500 and is measurably wider than the 400 it was measured at.
   void uniformTabWidth;
-  // .map alone registers the dep on every fileName; nothing consumes the result.
-  void tabs.map((t) => t.fileName);
+  // .map alone registers the dep on every fileName AND every readOnly (the RO
+  // badge is folded into the chrome measurement below) — nothing consumes the
+  // mapped result itself. A single `.map` (not two) keeps both deps tied to
+  // one array walk. Every writer of `tab.readOnly` reassigns the whole
+  // `tabsState` array today, so `fileName` alone would still invalidate this
+  // effect correctly — but that's an implicit convention elsewhere, not a
+  // guarantee this effect should lean on; tracking `readOnly` explicitly here
+  // removes the footgun regardless of how tabsState gets mutated in the future.
+  void tabs.map((t) => [t.fileName, t.readOnly]);
   void activeTabId;
   void renamingTabId;
   void fontsSettled;
 
-  // Walk live children rather than querying by tab id: a closing tab lingers
-  // ~200ms with its testid intact, so a close-then-reopen of the same document
-  // would otherwise resolve to the dying node and leave the live tab unfloored.
+  // Walk live children rather than querying by tab id. Originally justified
+  // here as: "a closing tab lingers ~200ms with its testid intact, so a
+  // close-then-reopen of the same document would otherwise resolve to the
+  // dying node" — that premise doesn't hold. Tab ids are stable per file path,
+  // so a close-then-reopen of the same file reuses the same `{#each (tab.id)}`
+  // key, and Svelte 5's keyed-each reconcile RESURRECTS the still-outroing
+  // effect for a reappearing key rather than mounting a second one (see
+  // `reconcile()` in svelte/src/internal/client/dom/blocks/each.js, and the
+  // pinned regression test in tests/client/DocumentTabs.svelte.test.ts,
+  // "same-key close-then-reopen"). There is only ever one DOM node per id, so
+  // an id-based query would resolve to the same live node this walk does.
+  // Kept anyway because it's the more direct way to get "every tab-flip
+  // wrapper currently in the DOM, in visual order" without cross-referencing
+  // the `tabs` prop per id — not because of the dying-node hazard above.
   const wrappers = Array.from(el.children).filter(
     (c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains("tab-flip"),
   );
@@ -372,47 +394,11 @@ $effect(() => {
     return;
   }
 
-  // Pass 1 — measure only. Writing inside this loop would dirty layout and
-  // force a fresh reflow for every subsequent tab (O(n) synchronous layouts).
-  const floors = wrappers.map((w) => {
-    const pill = w.querySelector<HTMLElement>('[role="tab"]');
-    const name = w.querySelector<HTMLElement>('[data-testid^="tab-name-"]');
-    // Renaming swaps the name span for an input whose own 80px minimum needs
-    // the full floor; bail to it rather than measuring a node that isn't there.
-    if (!pill || !name) return TAB_FLOOR_PX;
-
-    // Chrome is NOT a constant and must not be derived as `pill − name`: a
-    // floored tab carries slack that flex-start parks after the last child,
-    // which that subtraction would count as chrome. Sum the real boxes — this
-    // also self-corrects for the read-only badge (~29px, `flex-shrink: 0`) and
-    // for the 2px border delta between an active and an inactive pill.
-    const cs = getComputedStyle(pill);
-    const kids = Array.from(pill.children).filter(
-      (k): k is HTMLElement => k instanceof HTMLElement,
-    );
-    let chrome =
-      parseFloat(cs.paddingLeft) +
-      parseFloat(cs.paddingRight) +
-      parseFloat(cs.borderLeftWidth) +
-      parseFloat(cs.borderRightWidth) +
-      Math.max(0, kids.length - 1) * (parseFloat(cs.columnGap) || 0);
-    for (const k of kids) {
-      if (k !== name) chrome += k.getBoundingClientRect().width;
-    }
-
-    // `scrollWidth` is integer-rounded, so a name that exactly fits can still
-    // pick up an ellipsis; +1 buys that back. Read the cap off the span itself
-    // rather than restating TabItem's 240px literal here.
-    const cap = parseFloat(getComputedStyle(name).maxWidth) || Number.POSITIVE_INFINITY;
-    const nameNatural = Math.min(name.scrollWidth + 1, cap);
-    const floor = Math.min(chrome + nameNatural, TAB_FLOOR_PX);
-    // A layout-less DOM (happy-dom, which the unit tests run under) returns ""
-    // from getComputedStyle for every length, so `chrome` is NaN and the write
-    // below would emit "NaNpx" — an invalid declaration the browser drops on
-    // the floor, leaving the tab silently unfloored. Fall back to the full
-    // floor: uniform-when-unmeasurable beats silently-inert.
-    return Number.isFinite(floor) ? floor : TAB_FLOOR_PX;
-  });
+  // Pass 1 — measure only (via the SAME helper `tabEnter` calls synchronously
+  // for a just-opened tab — see cardMotion.ts). Writing inside this loop would
+  // dirty layout and force a fresh reflow for every subsequent tab (O(n)
+  // synchronous layouts).
+  const floors = wrappers.map(measureTabFloor);
 
   // Pass 2 — write. Deliberately NOT `!important`: cardMotion's exit keyframes
   // carry `min-width: 0`, and the animation origin outranks an inline value
@@ -813,7 +799,7 @@ $effect(() => {
         class:uniform={uniformTabWidth}
         role="presentation"
         animate:flip={{ duration: motionOff(reduceMotion) ? 0 : 200 }}
-        in:tabEnter={{ reduceMotion }}
+        in:tabEnter={{ reduceMotion, uniformTabWidth }}
         out:tabExit={{ reduceMotion }}
       >
         <TabItem

@@ -213,6 +213,38 @@ describe("tabEnter", () => {
     expect(easing!(1)).toBe(1);
     expect(easing!(0.5)).toBeGreaterThan(0.5); // front-loaded
   });
+
+  // #1257 Fix 1: the enter transition's target width must come from the SAME
+  // measurement DocumentTabs' post-render adaptive-floor $effect uses
+  // (`measureTabFloor`), computed synchronously here — not a naive
+  // `node.offsetWidth` read, which at transition-setup time (BEFORE that
+  // effect has run) would only see the un-floored base CSS. happy-dom has no
+  // real layout engine, so this can't pin an exact adaptive pixel value (that
+  // needs `tests/e2e/tab-overflow.spec.ts`); it pins which CODE PATH runs, via
+  // each branch's distinct fallback: `measureTabFloor` falls back to
+  // `TAB_FLOOR_PX` (142) when it can't find the expected pill/name structure,
+  // while a bare `offsetWidth` read on a detached node is 0 in happy-dom.
+  describe("target-width branch (#1257 Fix 1)", () => {
+    it("adaptive mode (uniformTabWidth: false) measures via measureTabFloor, not offsetWidth", () => {
+      const cfg = tabEnter(el(), { reduceMotion: false, uniformTabWidth: false });
+      const present = cfg.css!(1, 0);
+      // A structure-less node has no pill/name for measureTabFloor to find, so
+      // it falls back to TAB_FLOOR_PX (142) — NOT offsetWidth's 0, which is
+      // what the naive-offsetWidth regression would have produced instead.
+      expect(present).toContain("width:142px");
+    });
+
+    it("uniform mode (uniformTabWidth: true) still reads offsetWidth directly", () => {
+      const cfg = tabEnter(el(), { reduceMotion: false, uniformTabWidth: true });
+      const present = cfg.css!(1, 0);
+      // offsetWidth on a detached/layout-less node is 0 — pins that the
+      // uniform branch takes the offsetWidth path, unaffected by the
+      // adaptive-floor fix (uniform mode was never buggy: `.tab-flip.uniform`
+      // pins min-width AND max-width in CSS, so offsetWidth is already correct
+      // regardless of effect timing).
+      expect(present).toContain("width:0px");
+    });
+  });
 });
 
 // A27 fly-to-margin. The Map-presence gate is the load-bearing guarantee that
