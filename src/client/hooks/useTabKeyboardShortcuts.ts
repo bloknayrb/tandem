@@ -13,3 +13,19 @@ export function shouldIgnoreShortcut(e: Pick<KeyboardEvent, "target" | "isCompos
   if (!el) return false;
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA";
 }
+
+/**
+ * Save As is intentionally available from ProseMirror and Source View, but it
+ * must not hijack editing/selecting inside ordinary form controls elsewhere
+ * (chat, annotations, settings, dialogs). Keep this policy centralized so the
+ * default chord and user-remapped chord take the same path.
+ */
+export function shouldIgnoreSaveAsShortcut(
+  e: Pick<KeyboardEvent, "target" | "isComposing">,
+): boolean {
+  if (e.isComposing) return true;
+  const el = e.target as HTMLElement | null;
+  if (!el) return false;
+  if (el.closest?.(".ProseMirror, [data-testid='source-view-container']")) return false;
+  return !!el.closest?.("input, textarea, select, [contenteditable='true']");
+}

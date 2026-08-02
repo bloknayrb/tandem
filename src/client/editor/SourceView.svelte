@@ -22,16 +22,17 @@ interface Props {
    * a reactive `$effect` reading this prop, which would re-fire on every parent
    * re-render and loop.
    */
-  onDraftChange: (text: string, dirty: boolean) => void;
+  onDraftChange: (documentId: string, text: string, dirty: boolean) => void;
   /** Save the committed Y.Doc using the active target's persistence policy. */
-  onSave: (intent: "save" | "save-as") => Promise<void>;
+  onSave: (documentId: string, intent: "save" | "save-as") => Promise<void>;
   /** Publish commit-aware commands to the App-level shortcut dispatcher. */
-  onCommandsChange: (commands: SourceViewCommands | null) => void;
+  onCommandsChange: (documentId: string, commands: SourceViewCommands | null) => void;
   /** Return to the WYSIWYG editor. */
-  onExit: () => void;
+  onExit: (documentId: string) => void;
 }
 
 interface SourceViewCommands {
+  documentId: string;
   save(intent: "save" | "save-as"): Promise<void>;
   exit(): Promise<void>;
 }
@@ -45,6 +46,7 @@ const { documentId, ydoc, initialDraft, onDraftChange, onSave, onCommandsChange,
 // effect from re-running on every keystroke — App updates `sourceDrafts` on
 // input, which would otherwise change the `initialDraft` prop and retrigger a
 // fetch that clobbers the live text.
+const sourceDocumentId = untrack(() => documentId);
 const draftAtMount = untrack(() => initialDraft);
 
 let originalMarkdown = $state("");
@@ -72,7 +74,7 @@ $effect(() => {
 
 // Fetch the literal markdown source on mount / when the target doc changes.
 $effect(() => {
-  const id = documentId;
+  const id = sourceDocumentId;
   let cancelled = false;
   loading = true;
   errorMessage = null;
@@ -110,21 +112,23 @@ $effect(() => {
  * and keeps the user in source view with their edits intact.
  */
 async function commit(): Promise<boolean> {
+  const targetDocumentId = sourceDocumentId;
+  const submittedMarkdown = currentMarkdown;
   saving = true;
   errorMessage = null;
   try {
     const res = await fetch(`${API_BASE}${API_DOCUMENT_RELOAD}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId, markdown: currentMarkdown }),
+      body: JSON.stringify({ documentId: targetDocumentId, markdown: submittedMarkdown }),
     });
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { message?: string };
       throw new Error(body.message ?? res.statusText);
     }
-    originalMarkdown = currentMarkdown;
-    // Committed content now matches disk — clear the draft/dirty flag in App.
-    onDraftChange(currentMarkdown, false);
+    originalMarkdown = submittedMarkdown;
+    // Preserve any keystroke that landed while the request was in flight.
+    onDraftChange(targetDocumentId, currentMarkdown, currentMarkdown !== submittedMarkdown);
     return true;
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : "Failed to apply markdown changes.";
@@ -137,7 +141,7 @@ async function commit(): Promise<boolean> {
 /** Report a textarea edit up to App for cross-switch preservation + close/quit warning. */
 function handleInput(e: Event): void {
   const value = (e.target as HTMLTextAreaElement).value;
-  onDraftChange(value, value !== originalMarkdown);
+  onDraftChange(sourceDocumentId, value, value !== originalMarkdown);
 }
 
 async function handleExit(): Promise<void> {
@@ -145,39 +149,23 @@ async function handleExit(): Promise<void> {
     const ok = await commit();
     if (!ok) return; // stay in source view so edits aren't lost
   }
-  onExit();
+  onExit(sourceDocumentId);
 }
 
 async function saveWithIntent(intent: "save" | "save-as"): Promise<void> {
   if (loading || saving) return;
   if (dirty && !(await commit())) return;
-  await onSave(intent);
+  await onSave(sourceDocumentId, intent);
 }
 
 $effect(() => {
-  onCommandsChange({ save: saveWithIntent, exit: handleExit });
-  return () => onCommandsChange(null);
+  onCommandsChange(sourceDocumentId, {
+    documentId: sourceDocumentId,
+    save: saveWithIntent,
+    exit: handleExit,
+  });
+  return () => onCommandsChange(sourceDocumentId, null);
 });
-
-async function handleKeydown(e: KeyboardEvent): Promise<void> {
-  // Ctrl/Cmd+S commits the source edit instead of saving stale Y.Doc content.
-  // stopPropagation is load-bearing: without it the event bubbles to App's
-  // window-level keydown listener, whose `save` branch has no form-field guard
-  // and would `triggerSave()` the STALE Y.Doc to disk, racing this commit
-  // (#1021 review must-fix). This handler runs first (bubble phase, target),
-  // so stopping propagation here keeps the global save from ever firing.
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === "KeyS") {
-    e.preventDefault();
-    e.stopPropagation();
-    await saveWithIntent(e.shiftKey ? "save-as" : "save");
-    return;
-  }
-  if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === "KeyE") {
-    e.preventDefault();
-    e.stopPropagation();
-    await handleExit();
-  }
-}
 
 async function copyToClipboard(): Promise<void> {
   try {
@@ -188,7 +176,11 @@ async function copyToClipboard(): Promise<void> {
 }
 </script>
 
-<div class="source-view" data-testid="source-view-container">
+<div
+  class="source-view"
+  data-testid="source-view-container"
+  data-document-id={sourceDocumentId}
+>
   <div class="source-view-toolbar">
     <button
       type="button"
@@ -234,7 +226,7 @@ async function copyToClipboard(): Promise<void> {
       data-testid="source-view-textarea"
       bind:value={currentMarkdown}
       oninput={handleInput}
-      onkeydown={handleKeydown}
+      disabled={saving}
       spellcheck="false"
       autocomplete="off"
       autocapitalize="off"

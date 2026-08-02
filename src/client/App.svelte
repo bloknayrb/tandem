@@ -73,7 +73,11 @@ import { createModels } from "./hooks/useModels.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
-import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
+import {
+  pickTabByDigit,
+  shouldIgnoreSaveAsShortcut,
+  shouldIgnoreShortcut,
+} from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
 import { createTandemSettings, resolveFont, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
@@ -822,7 +826,7 @@ wireActionDeps({
     settingsState.updateSettings({
       formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
-  toggleSourceView: () => toggleSourceView(),
+  toggleSourceView: () => void requestToggleSourceView(),
   focusChat,
   save: async () => saveDocumentTarget(yjsSync.activeTabId, "save"),
   saveAs: async () => {
@@ -956,10 +960,26 @@ let sourceViewTabs = $state(new Set<string>());
 // (#1021 review SHOULD-FIX).
 let sourceDrafts = $state(new Map<string, string>());
 let sourceDirtyTabs = $state(new Set<string>());
-let sourceViewCommands = $state<{
+type SourceViewCommands = {
+  documentId: string;
   save(intent: "save" | "save-as"): Promise<void>;
   exit(): Promise<void>;
-} | null>(null);
+};
+let sourceViewCommands = $state(new Map<string, SourceViewCommands>());
+
+function updateSourceViewCommands(documentId: string, commands: SourceViewCommands | null): void {
+  const next = new Map(sourceViewCommands);
+  if (commands) next.set(documentId, commands);
+  else next.delete(documentId);
+  sourceViewCommands = next;
+}
+
+function sourceCommandsForEvent(e: KeyboardEvent): SourceViewCommands | null {
+  const el = e.target as HTMLElement | null;
+  const container = el?.closest?.<HTMLElement>('[data-testid="source-view-container"]');
+  const documentId = container?.dataset.documentId;
+  return documentId ? (sourceViewCommands.get(documentId) ?? null) : null;
+}
 
 function updateSourceDraft(tabId: string, text: string, dirty: boolean): void {
   const drafts = new Map(sourceDrafts);
@@ -1318,31 +1338,25 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // stopPropagations — this is belt-and-suspenders against that invariant
     // being broken later: the global save must never write the stale Y.Doc to
     // disk underneath an open source edit (#1021 review must-fix).
+    const sourceCommands = sourceCommandsForEvent(e);
+    if (sourceCommands) {
+      void sourceCommands.save("save");
+      return;
+    }
     if (inSourceView) {
-      const el = e.target as HTMLElement | null;
-      if (el?.closest?.('[data-testid="source-view-container"]')) {
-        void sourceViewCommands?.save("save");
-      }
       return;
     }
     void saveDocumentTarget(yjsSync.activeTabId, "save");
   },
   "save-as": (e) => {
     // Don't hijack Ctrl+Shift+S while typing in a chat / annotation input.
-    const el = e.target as HTMLElement | null;
-    if (inSourceView && el?.closest?.('[data-testid="source-view-container"]')) {
+    const sourceCommands = sourceCommandsForEvent(e);
+    if (sourceCommands) {
       e.preventDefault();
-      void sourceViewCommands?.save("save-as");
+      void sourceCommands.save("save-as");
       return;
     }
-    const inEditor = !!el?.closest?.(".ProseMirror");
-    if (
-      el &&
-      !inEditor &&
-      (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)
-    ) {
-      return;
-    }
+    if (shouldIgnoreSaveAsShortcut(e)) return;
     e.preventDefault();
     void saveDocumentTarget(yjsSync.activeTabId, "save-as");
   },
@@ -1352,15 +1366,15 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     focusChat();
   },
   "toggle-source-view": (e) => {
-    const el = e.target as HTMLElement | null;
-    if (inSourceView && el?.closest?.('[data-testid="source-view-container"]')) {
+    const sourceCommands = sourceCommandsForEvent(e);
+    if (sourceCommands) {
       e.preventDefault();
-      void sourceViewCommands?.exit();
+      void sourceCommands.exit();
       return;
     }
     if (shouldIgnoreShortcut(e)) return;
     e.preventDefault();
-    toggleSourceView();
+    void requestToggleSourceView();
   },
   settings: (e) => {
     e.preventDefault();
@@ -1698,22 +1712,29 @@ const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
 
-function toggleSourceView(): void {
+function enterSourceView(): void {
   if (!activeTab) return;
   const id = activeTab.id;
+  if (sourceViewTabs.has(id)) return;
   const next = new Set(sourceViewTabs);
-  if (next.has(id)) {
-    next.delete(id);
-  } else {
-    if (!canSourceView) return;
-    next.add(id);
-    // Source view replaces the Tiptap editor; close editor-bound overlays so
-    // they don't linger non-functional over the textarea.
-    findBarOpen = false;
-    slashCommandMenuOpen = false;
-    paletteOpen = false;
-  }
+  if (!canSourceView) return;
+  next.add(id);
+  // Source view replaces the Tiptap editor; close editor-bound overlays so
+  // they don't linger non-functional over the textarea.
+  findBarOpen = false;
+  slashCommandMenuOpen = false;
+  paletteOpen = false;
   sourceViewTabs = next;
+}
+
+async function requestToggleSourceView(): Promise<void> {
+  const documentId = yjsSync.activeTabId;
+  if (!documentId) return;
+  if (sourceViewTabs.has(documentId)) {
+    await sourceViewCommands.get(documentId)?.exit();
+    return;
+  }
+  enterSourceView();
 }
 
 function exitSourceView(id: string): void {
@@ -1947,7 +1968,7 @@ const shouldShowModelPicker = $derived(
     onConnectAi={connectAi}
     onRestartClaude={restartClaude}
     sourceViewActive={inSourceView}
-    onToggleSourceView={canSourceView || inSourceView ? toggleSourceView : null}
+    onToggleSourceView={canSourceView || inSourceView ? () => void requestToggleSourceView() : null}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -2582,10 +2603,10 @@ const shouldShowModelPicker = $derived(
           documentId={activeTab.id}
           ydoc={activeTab.ydoc}
           initialDraft={sourceDrafts.get(activeTab.id)}
-          onDraftChange={(text, dirty) => updateSourceDraft(activeTab!.id, text, dirty)}
-          onSave={(intent) => saveDocumentTarget(activeTab!.id, intent)}
-          onCommandsChange={(commands) => (sourceViewCommands = commands)}
-          onExit={() => exitSourceView(activeTab!.id)}
+          onDraftChange={(documentId, text, dirty) => updateSourceDraft(documentId, text, dirty)}
+          onSave={(documentId, intent) => saveDocumentTarget(documentId, intent)}
+          onCommandsChange={updateSourceViewCommands}
+          onExit={exitSourceView}
         />
       {/key}
     {:else}

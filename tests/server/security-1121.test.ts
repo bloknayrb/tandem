@@ -226,6 +226,51 @@ describe("POST /api/document/reload — origin gate (#1121 F6)", () => {
     expect(res._status).toBe(403);
     expect(reloadDocumentFromMarkdown).not.toHaveBeenCalled();
   });
+
+  it("routes to the exact validated document instead of the process-global active document", async () => {
+    getActiveDocId.mockReturnValue("other-window-active-doc");
+    hasDoc.mockImplementation((id: string) => id === "source-doc");
+    const res = mockRes();
+
+    await handleReloadFromMarkdown(
+      loopbackReq({ body: { documentId: "source-doc", markdown: "# exact target" } }),
+      res,
+    );
+
+    expect(res._status).toBe(200);
+    expect(reloadDocumentFromMarkdown).toHaveBeenCalledWith("source-doc", "# exact target");
+    expect(reloadDocumentFromMarkdown).not.toHaveBeenCalledWith(
+      "other-window-active-doc",
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    undefined,
+    "",
+    "../other-doc",
+    "bad/doc",
+    "x".repeat(257),
+  ])("rejects invalid documentId %s", async (documentId) => {
+    const res = mockRes();
+    await handleReloadFromMarkdown(
+      loopbackReq({ body: { documentId, markdown: "# unchanged" } }),
+      res,
+    );
+    expect(res._status).toBe(400);
+    expect(reloadDocumentFromMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale document ID that is no longer open", async () => {
+    hasDoc.mockReturnValue(false);
+    const res = mockRes();
+    await handleReloadFromMarkdown(
+      loopbackReq({ body: { documentId: "closed-doc", markdown: "# stale" } }),
+      res,
+    );
+    expect(res._status).toBe(404);
+    expect(reloadDocumentFromMarkdown).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

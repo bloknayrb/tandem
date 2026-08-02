@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   pickTabByDigit,
+  shouldIgnoreSaveAsShortcut,
   shouldIgnoreShortcut,
 } from "../../src/client/hooks/useTabKeyboardShortcuts.js";
 
@@ -30,6 +31,38 @@ describe("pickTabByDigit", () => {
     expect(pickTabByDigit(tabs, 0)).toBeNull();
     expect(pickTabByDigit(tabs, 10)).toBeNull();
     expect(pickTabByDigit(tabs, -1)).toBeNull();
+  });
+});
+
+describe("shouldIgnoreSaveAsShortcut", () => {
+  const evt = (target: EventTarget | null, isComposing = false) =>
+    ({ target, isComposing }) as Pick<KeyboardEvent, "target" | "isComposing">;
+
+  it.each(["input", "textarea", "select"])("suppresses Save As in %s controls", (tag) => {
+    expect(shouldIgnoreSaveAsShortcut(evt(document.createElement(tag)))).toBe(true);
+  });
+
+  it("suppresses nested content inside an editable form surface", () => {
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    const child = document.createElement("span");
+    editable.appendChild(child);
+    expect(shouldIgnoreSaveAsShortcut(evt(child))).toBe(true);
+  });
+
+  it("allows ProseMirror and Source View editing surfaces", () => {
+    const proseMirror = document.createElement("div");
+    proseMirror.className = "ProseMirror";
+    const sourceView = document.createElement("div");
+    sourceView.dataset.testid = "source-view-container";
+    const textarea = document.createElement("textarea");
+    sourceView.appendChild(textarea);
+    expect(shouldIgnoreSaveAsShortcut(evt(proseMirror))).toBe(false);
+    expect(shouldIgnoreSaveAsShortcut(evt(textarea))).toBe(false);
+  });
+
+  it("suppresses while composing", () => {
+    expect(shouldIgnoreSaveAsShortcut(evt(document.createElement("div"), true))).toBe(true);
   });
 });
 

@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 
 import { API_DOCUMENT_RELOAD } from "../../../shared/api-paths.js";
-import { getActiveDocId } from "../../documents/registry.js";
+import { hasDoc } from "../../documents/registry.js";
 import {
   assertLoopbackForMutation,
   assertOriginAllowlisted,
@@ -15,6 +15,8 @@ import { sendApiError } from "./_shared.js";
  * for an inline reload argument — this mirrors `tandem_appendContent`'s cap.
  */
 const MAX_RELOAD_MARKDOWN_BYTES = 1_000_000;
+const MAX_DOCUMENT_ID_LENGTH = 256;
+const DOCUMENT_ID_RE = /^[A-Za-z0-9._-]+$/;
 
 /**
  * POST /api/document/reload — replace a document's content from a user-supplied
@@ -23,15 +25,25 @@ const MAX_RELOAD_MARKDOWN_BYTES = 1_000_000;
  * Gated on origin allowlist + loopback (#1121 F6): replacing document content
  * is destructive and must not be reachable by authenticated LAN peers.
  *
- * documentId is intentionally not accepted from the request body: the source
- * view is always rendered for the active document, so accepting a
- * user-supplied ID would introduce an unnecessary taint path from request
- * input to FS operations with no functional benefit.
+ * The client must send the source view's exact document ID. Active-document
+ * state is process-global and can change in another window while a source
+ * commit is in flight, so it is never used as a fallback here. The ID is
+ * bounded, restricted to room-name characters, and re-resolved against the
+ * live registry before the server-managed file path can be reached.
  */
 export async function handleReloadFromMarkdown(req: Request, res: Response): Promise<void> {
   if (assertOriginAllowlisted(req, res, API_DOCUMENT_RELOAD)) return;
   if (assertLoopbackForMutation(req, res)) return;
-  const { markdown } = (req.body ?? {}) as Record<string, unknown>;
+  const { documentId, markdown } = (req.body ?? {}) as Record<string, unknown>;
+  if (
+    typeof documentId !== "string" ||
+    documentId.length === 0 ||
+    documentId.length > MAX_DOCUMENT_ID_LENGTH ||
+    !DOCUMENT_ID_RE.test(documentId)
+  ) {
+    res.status(400).json({ error: "BAD_REQUEST", message: "documentId is invalid." });
+    return;
+  }
   if (typeof markdown !== "string") {
     res.status(400).json({ error: "BAD_REQUEST", message: "markdown (string) is required." });
     return;
@@ -42,13 +54,12 @@ export async function handleReloadFromMarkdown(req: Request, res: Response): Pro
       .json({ error: "PAYLOAD_TOO_LARGE", message: "Markdown exceeds the 1MB reload limit." });
     return;
   }
-  const docId = getActiveDocId();
-  if (!docId) {
-    res.status(400).json({ error: "BAD_REQUEST", message: "No active document." });
+  if (!hasDoc(documentId)) {
+    res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
     return;
   }
   try {
-    await reloadDocumentFromMarkdown(docId, markdown);
+    await reloadDocumentFromMarkdown(documentId, markdown);
     res.json({ success: true });
   } catch (err: unknown) {
     sendApiError(res, err);
