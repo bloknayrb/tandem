@@ -66,7 +66,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
 
   it("sets lastSaveOk=true after a successful save", async () => {
     vi.stubGlobal("fetch", vi.fn(fetchWith({ status: "saved" })));
-    await triggerSave("doc-1");
+    await expect(triggerSave("doc-1")).resolves.toBe(true);
     expect(saveStore.lastSaveOk).toBe(true);
     expect(saveStore.saving).toBe(false);
     expect(notify).not.toHaveBeenCalledWith("error", expect.anything());
@@ -75,7 +75,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
 
   it("sets lastSaveOk=false and notifies on a failed (non-ok) response", async () => {
     vi.stubGlobal("fetch", vi.fn(fetchFail));
-    await triggerSave("doc-1");
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
     expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("disk full"));
@@ -87,7 +87,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
       "fetch",
       vi.fn(() => Promise.reject(new Error("network down"))),
     );
-    await triggerSave("doc-1");
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
     expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("try again"));
@@ -118,7 +118,7 @@ describe("saveSkippedMessage", () => {
       "fetch",
       vi.fn(fetchWith({ status: "skipped", skipCode: "READ_ONLY", reason: "Read-only" })),
     );
-    await triggerSave("doc-1");
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(notify).toHaveBeenCalledWith("warning", expect.stringContaining("read-only"));
     vi.unstubAllGlobals();

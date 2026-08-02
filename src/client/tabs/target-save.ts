@@ -1,5 +1,5 @@
 export interface TargetSaveCommands {
-  save(intent: "save" | "save-as"): Promise<void>;
+  save(intent: "save" | "save-as"): Promise<boolean>;
 }
 
 export interface TargetSaveDeps<T> {
@@ -11,7 +11,7 @@ export interface TargetSaveDeps<T> {
   activateTarget: (tabId: string) => void;
   afterActivate: () => Promise<void>;
   getSourceCommands: (tabId: string) => TargetSaveCommands | null;
-  saveCommitted: (target: T, intent: "save" | "save-as") => Promise<void>;
+  saveCommitted: (target: T, intent: "save" | "save-as") => Promise<boolean>;
 }
 
 /**
@@ -31,12 +31,10 @@ export async function saveExactTarget<T>(deps: TargetSaveDeps<T>): Promise<boole
     if (!after || !deps.isSameTarget(before, after)) return false;
     const commands = deps.getSourceCommands(deps.tabId);
     if (!commands) return false;
-    await commands.save(deps.intent);
-    return true;
+    return commands.save(deps.intent);
   }
 
   const current = deps.resolveTarget(deps.tabId);
   if (!current || !deps.isSameTarget(before, current)) return false;
-  await deps.saveCommitted(current, deps.intent);
-  return true;
+  return deps.saveCommitted(current, deps.intent);
 }

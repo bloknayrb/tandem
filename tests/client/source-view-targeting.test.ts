@@ -2,10 +2,11 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import SourceView from "../../src/client/editor/SourceView.svelte";
+import { saveExactTarget } from "../../src/client/tabs/target-save";
 
 interface SourceCommands {
   documentId: string;
-  save(intent: "save" | "save-as"): Promise<void>;
+  save(intent: "save" | "save-as"): Promise<boolean>;
   exit(): Promise<void>;
 }
 
@@ -21,10 +22,100 @@ afterEach(() => {
 });
 
 describe("SourceView exact-document commands", () => {
+  it("waits for a delayed inactive-tab source load before committing its carried draft", async () => {
+    let commands: SourceCommands | null = null;
+    let resolveRaw!: (response: Response) => void;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveRaw = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const target = { id: "inactive-source", generation: {} };
+    const onSave = vi.fn(async () => true);
+    const activateTarget = vi.fn();
+    let settled = false;
+    const savePromise = saveExactTarget({
+      tabId: target.id,
+      intent: "save" as const,
+      resolveTarget: () => target,
+      isSameTarget: (before, after) => before.generation === after.generation,
+      isSourceView: () => true,
+      activateTarget,
+      afterActivate: async () => {
+        render(SourceView, {
+          props: {
+            documentId: target.id,
+            ydoc: new Y.Doc(),
+            initialDraft: "# Inactive dirty draft\n",
+            onDraftChange: vi.fn(),
+            onSave,
+            onCommandsChange: (_documentId: string, next: SourceCommands | null) => {
+              commands = next;
+            },
+            onExit: vi.fn(),
+          },
+        });
+        await waitFor(() => expect(commands).not.toBeNull());
+      },
+      getSourceCommands: () => commands,
+      saveCommitted: vi.fn(async () => true),
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(activateTarget).toHaveBeenCalledWith(target.id);
+    expect(settled).toBe(false);
+    expect(onSave).not.toHaveBeenCalled();
+
+    resolveRaw(jsonResponse({ markdown: "# Original\n" }));
+    await expect(savePromise).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const commitRequest = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(JSON.parse(String(commitRequest.body))).toEqual({
+      documentId: target.id,
+      markdown: "# Inactive dirty draft\n",
+    });
+    expect(onSave).toHaveBeenCalledWith(target.id, "save", expect.any(Y.Doc));
+  });
+
+  it("reports failure instead of saving when source initialization fails", async () => {
+    let commands: SourceCommands | null = null;
+    const onSave = vi.fn(async () => true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("unavailable", { status: 503 })),
+    );
+
+    render(SourceView, {
+      props: {
+        documentId: "failed-source",
+        ydoc: new Y.Doc(),
+        onDraftChange: vi.fn(),
+        onSave,
+        onCommandsChange: (_documentId: string, next: SourceCommands | null) => {
+          commands = next;
+        },
+        onExit: vi.fn(),
+      },
+    });
+
+    await waitFor(() => expect(commands).not.toBeNull());
+    await expect(commands!.save("save")).resolves.toBe(false);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("keeps the mounted document ID through an async commit and save", async () => {
     let commands: SourceCommands | null = null;
     const onDraftChange = vi.fn();
-    const onSave = vi.fn(async () => {});
+    const onSave = vi.fn(async () => true);
     const onExit = vi.fn();
     let resolveCommit!: (response: Response) => void;
     const fetchMock = vi
@@ -79,7 +170,7 @@ describe("SourceView exact-document commands", () => {
     });
 
     resolveCommit(jsonResponse({ success: true }));
-    await savePromise;
+    await expect(savePromise).resolves.toBe(true);
     expect(textarea.readOnly).toBe(false);
     expect(document.activeElement).toBe(textarea);
     expect(onSave).toHaveBeenCalledWith("doc-a", "save", expect.any(Y.Doc));
@@ -100,7 +191,7 @@ describe("SourceView exact-document commands", () => {
         documentId: "palette-doc",
         ydoc: new Y.Doc(),
         onDraftChange: vi.fn(),
-        onSave: vi.fn(async () => {}),
+        onSave: vi.fn(async () => true),
         onCommandsChange: (_documentId: string, next: SourceCommands | null) => {
           commands = next;
         },

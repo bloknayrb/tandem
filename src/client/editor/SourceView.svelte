@@ -24,7 +24,7 @@ interface Props {
    */
   onDraftChange: (documentId: string, text: string, dirty: boolean) => void;
   /** Save the committed Y.Doc using the active target's persistence policy. */
-  onSave: (documentId: string, intent: "save" | "save-as", ydoc: Y.Doc) => Promise<void>;
+  onSave: (documentId: string, intent: "save" | "save-as", ydoc: Y.Doc) => Promise<boolean>;
   /** Publish commit-aware commands to the App-level shortcut dispatcher. */
   onCommandsChange: (documentId: string, commands: SourceViewCommands | null) => void;
   /** Return to the WYSIWYG editor. */
@@ -33,7 +33,7 @@ interface Props {
 
 interface SourceViewCommands {
   documentId: string;
-  save(intent: "save" | "save-as"): Promise<void>;
+  save(intent: "save" | "save-as"): Promise<boolean>;
   exit(): Promise<void>;
 }
 
@@ -56,6 +56,20 @@ let saving = $state(false);
 let lockedMarkdown: string | null = null;
 let errorMessage = $state<string | null>(null);
 
+// Commands are published as soon as the component mounts, while the raw source
+// request may still be in flight. Saving awaits this single-settlement boundary
+// so an inactive source tab cannot turn an early native-menu action into a no-op.
+let settleInitialization!: (ready: boolean) => void;
+let initializationSettled = false;
+const initialization = new Promise<boolean>((resolve) => {
+  settleInitialization = (ready) => {
+    if (initializationSettled) return;
+    initializationSettled = true;
+    resolve(ready);
+  };
+});
+let saveCommandInFlight = false;
+
 const dirty = $derived(!loading && currentMarkdown !== originalMarkdown);
 
 // Mirror the annotation-map size into reactive $state via a Y.Map observer.
@@ -77,6 +91,7 @@ $effect(() => {
 $effect(() => {
   const id = sourceDocumentId;
   let cancelled = false;
+  let loaded = false;
   loading = true;
   errorMessage = null;
   (async () => {
@@ -95,15 +110,18 @@ $effect(() => {
       // content; otherwise start from disk. Uses the mount-captured value so
       // this effect never re-runs when App rewrites the live draft.
       currentMarkdown = draftAtMount ?? originalMarkdown;
+      loaded = true;
     } catch (err) {
       if (cancelled) return;
       errorMessage = err instanceof Error ? err.message : "Failed to load markdown source.";
     } finally {
       if (!cancelled) loading = false;
+      settleInitialization(!cancelled && loaded);
     }
   })();
   return () => {
     cancelled = true;
+    settleInitialization(false);
   };
 });
 
@@ -165,10 +183,21 @@ async function handleExit(): Promise<void> {
   onExit(sourceDocumentId);
 }
 
-async function saveWithIntent(intent: "save" | "save-as"): Promise<void> {
-  if (loading || saving) return;
-  if (dirty && !(await commit())) return;
-  await onSave(sourceDocumentId, intent, ydoc);
+async function saveWithIntent(intent: "save" | "save-as"): Promise<boolean> {
+  if (saveCommandInFlight || saving) return false;
+  saveCommandInFlight = true;
+  try {
+    if (!(await initialization) || saving) return false;
+    if (dirty && !(await commit())) return false;
+    try {
+      return await onSave(sourceDocumentId, intent, ydoc);
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : "Failed to save markdown source.";
+      return false;
+    }
+  } finally {
+    saveCommandInFlight = false;
+  }
 }
 
 $effect(() => {

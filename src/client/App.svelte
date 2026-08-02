@@ -712,24 +712,23 @@ async function saveDocumentTargetAfterSourceCommit(
   tabId: string,
   intent: "save" | "save-as",
   expectedYdoc?: OpenTab["ydoc"],
-): Promise<void> {
+): Promise<boolean> {
   const tab = yjsSync.tabs.find((candidate) => candidate.id === tabId);
-  if (!tab || (expectedYdoc && tab.ydoc !== expectedYdoc)) return;
+  if (!tab || (expectedYdoc && tab.ydoc !== expectedYdoc)) return false;
 
   const needsPromotion = tab.source === "upload" || isUploadPath(tab.filePath);
   if (needsPromotion) {
     if (tab.readOnly) {
       pushSaveNotification("warning", "Not saved — this document is read-only.");
-      return;
+      return false;
     }
     const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
-    await triggerSaveAs({
+    return triggerSaveAs({
       activeDocId: tab.id,
       defaultName: tab.filePath.slice(lastSlash + 1),
       sourceFormat: tab.format,
       notify: pushSaveNotification,
     });
-    return;
   }
 
   if (intent === "save-as") {
@@ -737,9 +736,9 @@ async function saveDocumentTargetAfterSourceCommit(
       "info",
       "Save As is for uploads and scratchpads; this document already saves to its file.",
     );
-    return;
+    return false;
   }
-  await triggerSave(tab.id);
+  return triggerSave(tab.id);
 }
 
 /**
@@ -753,7 +752,7 @@ async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-a
     return;
   }
 
-  const handled = await saveExactTarget<OpenTab>({
+  await saveExactTarget<OpenTab>({
     tabId,
     intent,
     resolveTarget: (id) => yjsSync.tabs.find((candidate) => candidate.id === id) ?? null,
@@ -765,10 +764,6 @@ async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-a
     saveCommitted: (target, nextIntent) =>
       saveDocumentTargetAfterSourceCommit(target.id, nextIntent, target.ydoc),
   });
-
-  if (!handled) {
-    pushSaveNotification("warning", "Not saved — the target document changed or closed.");
-  }
 }
 
 function focusChat(): void {
@@ -1011,7 +1006,7 @@ let sourceDrafts = $state(new Map<string, string>());
 let sourceDirtyTabs = $state(new Set<string>());
 type SourceViewCommands = {
   documentId: string;
-  save(intent: "save" | "save-as"): Promise<void>;
+  save(intent: "save" | "save-as"): Promise<boolean>;
   exit(): Promise<void>;
 };
 let sourceViewCommands = $state(new Map<string, SourceViewCommands>());

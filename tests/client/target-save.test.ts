@@ -6,8 +6,8 @@ type Target = { id: string; generation: object };
 function setup(sourceView: boolean, intent: "save" | "save-as" = "save") {
   const target: Target = { id: "doc-a", generation: {} };
   let live: Target | null = target;
-  const commands = { save: vi.fn(async () => {}) };
-  const saveCommitted = vi.fn(async () => {});
+  const commands = { save: vi.fn(async () => true) };
+  const saveCommitted = vi.fn(async () => true);
   const activateTarget = vi.fn();
   const deps = {
     tabId: "doc-a",
@@ -44,6 +44,16 @@ describe("saveExactTarget", () => {
     await expect(saveExactTarget(deps)).resolves.toBe(true);
     expect(commands.save).toHaveBeenCalledWith("save-as");
     expect(saveCommitted).not.toHaveBeenCalled();
+  });
+
+  it("propagates an explicit no-op or failure result", async () => {
+    const source = setup(true);
+    source.commands.save.mockResolvedValueOnce(false);
+    await expect(saveExactTarget(source.deps)).resolves.toBe(false);
+
+    const formatted = setup(false);
+    formatted.saveCommitted.mockResolvedValueOnce(false);
+    await expect(saveExactTarget(formatted.deps)).resolves.toBe(false);
   });
 
   it("persists formatted targets through the post-commit helper", async () => {
