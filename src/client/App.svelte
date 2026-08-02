@@ -117,7 +117,8 @@ import {
   tabIdsToCloseOthers,
   tabIdsToCloseRight,
 } from "./tabs/tab-context-menu.js";
-import { isRenamable } from "./types.js";
+import { saveExactTarget } from "./tabs/target-save.js";
+import { isRenamable, type OpenTab } from "./types.js";
 import { openFileForRuntime } from "./utils/browse-file";
 import { resolveDefaultModelChip } from "./utils/model-chip";
 import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
@@ -707,12 +708,13 @@ function pushSaveNotification(severity: "info" | "warning" | "error", message: s
  * stale object. Plain Save promotes every editable upload-backed document;
  * once promoted, the same id resolves to `source: "file"` and writes in place.
  */
-async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-as"): Promise<void> {
+async function saveDocumentTargetAfterSourceCommit(
+  tabId: string,
+  intent: "save" | "save-as",
+  expectedYdoc?: OpenTab["ydoc"],
+): Promise<void> {
   const tab = yjsSync.tabs.find((candidate) => candidate.id === tabId);
-  if (!tab) {
-    pushSaveNotification("warning", "No active document to save.");
-    return;
-  }
+  if (!tab || (expectedYdoc && tab.ydoc !== expectedYdoc)) return;
 
   const needsPromotion = tab.source === "upload" || isUploadPath(tab.filePath);
   if (needsPromotion) {
@@ -738,6 +740,35 @@ async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-a
     return;
   }
   await triggerSave(tab.id);
+}
+
+/**
+ * Save one exact live tab incarnation. A source-view target must mount and
+ * commit its draft before the post-commit persistence helper is allowed to
+ * run; formatted documents can persist immediately.
+ */
+async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-as"): Promise<void> {
+  if (!tabId) {
+    pushSaveNotification("warning", "No active document to save.");
+    return;
+  }
+
+  const handled = await saveExactTarget<OpenTab>({
+    tabId,
+    intent,
+    resolveTarget: (id) => yjsSync.tabs.find((candidate) => candidate.id === id) ?? null,
+    isSameTarget: (before, after) => before.ydoc === after.ydoc,
+    isSourceView: (id) => sourceViewTabs.has(id),
+    activateTarget: (id) => yjsSync.setActiveTabId(id),
+    afterActivate: tick,
+    getSourceCommands: (id) => sourceViewCommands.get(id) ?? null,
+    saveCommitted: (target, nextIntent) =>
+      saveDocumentTargetAfterSourceCommit(target.id, nextIntent, target.ydoc),
+  });
+
+  if (!handled) {
+    pushSaveNotification("warning", "Not saved — the target document changed or closed.");
+  }
 }
 
 function focusChat(): void {
@@ -2788,7 +2819,8 @@ const shouldShowModelPicker = $derived(
           ydoc={activeTab.ydoc}
           initialDraft={sourceDrafts.get(activeTab.id)}
           onDraftChange={(documentId, text, dirty) => updateSourceDraft(documentId, text, dirty)}
-          onSave={(documentId, intent) => saveDocumentTarget(documentId, intent)}
+          onSave={(documentId, intent, ydoc) =>
+            saveDocumentTargetAfterSourceCommit(documentId, intent, ydoc)}
           onCommandsChange={updateSourceViewCommands}
           onExit={exitSourceView}
         />

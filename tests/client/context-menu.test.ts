@@ -121,7 +121,14 @@ function makeChainSpy() {
   return { proxy, calls };
 }
 
-function makeEditor() {
+interface EditorOptions {
+  destroyed?: boolean;
+  editable?: boolean;
+  linkActive?: boolean;
+  href?: string;
+}
+
+function makeEditor(options: EditorOptions = {}) {
   const chain = makeChainSpy();
   const dispatch = vi.fn();
   const focus = vi.fn();
@@ -130,8 +137,12 @@ function makeEditor() {
     scrollIntoView: () => tr,
   };
   const editor = {
-    isDestroyed: false,
-    isEditable: true,
+    isDestroyed: options.destroyed ?? false,
+    isEditable: options.editable ?? true,
+    isActive: vi.fn((name: string) => name === "link" && (options.linkActive ?? true)),
+    getAttributes: vi.fn((name: string) =>
+      name === "link" ? { href: options.href ?? "https://example.com/page" } : {},
+    ),
     chain: () => chain.proxy,
     state: {
       schema,
@@ -147,7 +158,7 @@ function baseDeps(editor: never) {
   return {
     editor,
     openHref: vi.fn(),
-    getLinkHref: vi.fn(() => "https://example.com/page" as string | null),
+    isTargetCurrent: vi.fn(() => true),
     readClipboardText: vi.fn(async () => "pasted text" as string | null),
     writeClipboardText: vi.fn(async () => {}),
     focusChat: vi.fn(),
@@ -156,8 +167,12 @@ function baseDeps(editor: never) {
   };
 }
 
-async function run(id: ContextMenuActionId, overrides: Partial<ReturnType<typeof baseDeps>> = {}) {
-  const { editor, chainCalls, dispatch, focus } = makeEditor();
+async function run(
+  id: ContextMenuActionId,
+  overrides: Partial<ReturnType<typeof baseDeps>> = {},
+  editorOptions: EditorOptions = {},
+) {
+  const { editor, chainCalls, dispatch, focus } = makeEditor(editorOptions);
   const deps = { ...baseDeps(editor), ...overrides };
   await dispatchContextAction(id, deps);
   return { chainCalls, dispatch, focus, deps };
@@ -181,14 +196,9 @@ describe("dispatchContextAction", () => {
     }
   });
 
-  it("link:open funnels the href through openHref (which re-validates)", async () => {
+  it("link:open resolves the live href and funnels it through openHref", async () => {
     const { deps } = await run("ctx:link:open");
     expect(deps.openHref).toHaveBeenCalledWith("https://example.com/page");
-  });
-
-  it("link:open is a no-op when no href was captured", async () => {
-    const { deps } = await run("ctx:link:open", { getLinkHref: vi.fn(() => null) });
-    expect(deps.openHref).not.toHaveBeenCalled();
   });
 
   it("link:copy writes the validated href to the clipboard", async () => {
@@ -198,9 +208,7 @@ describe("dispatchContextAction", () => {
 
   it("link:copy silently drops dangerous schemes (javascript:, file://)", async () => {
     for (const dangerous of ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,x"]) {
-      const { deps } = await run("ctx:link:copy", {
-        getLinkHref: vi.fn(() => dangerous),
-      });
+      const { deps } = await run("ctx:link:copy", {}, { href: dangerous });
       expect(deps.writeClipboardText).not.toHaveBeenCalled();
     }
   });
@@ -208,12 +216,20 @@ describe("dispatchContextAction", () => {
   it("link:copy allows relative paths and fragments", async () => {
     for (const safe of ["./other.md", "#section", "../dir/file.md"]) {
       const writeClipboardText = vi.fn(async () => {});
-      await run("ctx:link:copy", {
-        getLinkHref: vi.fn(() => safe),
-        writeClipboardText,
-      });
+      await run("ctx:link:copy", { writeClipboardText }, { href: safe });
       expect(writeClipboardText).toHaveBeenCalledWith(safe);
     }
+  });
+
+  it("link actions no-op for a destroyed editor, changed target, or missing live link mark", async () => {
+    const destroyed = await run("ctx:link:open", {}, { destroyed: true });
+    expect(destroyed.deps.openHref).not.toHaveBeenCalled();
+
+    const changed = await run("ctx:link:copy", { isTargetCurrent: vi.fn(() => false) });
+    expect(changed.deps.writeClipboardText).not.toHaveBeenCalled();
+
+    const notLink = await run("ctx:link:edit", {}, { linkActive: false });
+    expect(notLink.deps.editLink).not.toHaveBeenCalled();
   });
 
   it("link:remove extends to the mark range before unsetting", async () => {
@@ -241,8 +257,8 @@ describe("dispatchContextAction", () => {
   it("requests the shared link editor only for a live editable link", async () => {
     const edit = await run("ctx:link:edit");
     expect(edit.deps.editLink).toHaveBeenCalledTimes(1);
-    const absent = await run("ctx:link:edit", { getLinkHref: vi.fn(() => null) });
-    expect(absent.deps.editLink).not.toHaveBeenCalled();
+    const readOnly = await run("ctx:link:edit", {}, { editable: false });
+    expect(readOnly.deps.editLink).not.toHaveBeenCalled();
   });
 
   it("pastePlain reads the clipboard and dispatches an insertion", async () => {

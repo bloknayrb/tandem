@@ -82,7 +82,7 @@ describe("SourceView exact-document commands", () => {
     await savePromise;
     expect(textarea.readOnly).toBe(false);
     expect(document.activeElement).toBe(textarea);
-    expect(onSave).toHaveBeenCalledWith("doc-a", "save");
+    expect(onSave).toHaveBeenCalledWith("doc-a", "save", expect.any(Y.Doc));
     expect(onDraftChange).toHaveBeenLastCalledWith("doc-a", "# Edited\n", false);
   });
 

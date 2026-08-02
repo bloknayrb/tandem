@@ -24,7 +24,7 @@ interface Props {
    */
   onDraftChange: (documentId: string, text: string, dirty: boolean) => void;
   /** Save the committed Y.Doc using the active target's persistence policy. */
-  onSave: (documentId: string, intent: "save" | "save-as") => Promise<void>;
+  onSave: (documentId: string, intent: "save" | "save-as", ydoc: Y.Doc) => Promise<void>;
   /** Publish commit-aware commands to the App-level shortcut dispatcher. */
   onCommandsChange: (documentId: string, commands: SourceViewCommands | null) => void;
   /** Return to the WYSIWYG editor. */
@@ -168,7 +168,7 @@ async function handleExit(): Promise<void> {
 async function saveWithIntent(intent: "save" | "save-as"): Promise<void> {
   if (loading || saving) return;
   if (dirty && !(await commit())) return;
-  await onSave(sourceDocumentId, intent);
+  await onSave(sourceDocumentId, intent, ydoc);
 }
 
 $effect(() => {

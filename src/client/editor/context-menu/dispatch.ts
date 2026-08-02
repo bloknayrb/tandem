@@ -41,8 +41,8 @@ export interface DispatchDeps {
   editor: Editor;
   /** Re-validates via `isSafeExternalHref` before navigating (security). */
   openHref: (href: string) => void;
-  /** The href captured module-local from the clicked anchor, or null. */
-  getLinkHref: () => string | null;
+  /** True only while the editor selection still matches the menu target. */
+  isTargetCurrent: () => boolean;
   /** Read clipboard text on activation; null if unavailable/denied. */
   readClipboardText: () => Promise<string | null>;
   /** Write text to the clipboard (Copy Link). */
@@ -54,6 +54,13 @@ export interface DispatchDeps {
 
 function hasLiveEditableSelection(editor: Editor): boolean {
   return !editor.isDestroyed && editor.isEditable && !editor.state.selection.empty;
+}
+
+/** Resolve link state only when the native action fires. No href is retained. */
+function resolveLiveLinkHref(editor: Editor, deps: DispatchDeps): string | null {
+  if (editor.isDestroyed || !deps.isTargetCurrent() || !editor.isActive("link")) return null;
+  const href = editor.getAttributes("link").href;
+  return typeof href === "string" ? sanitizeHrefForPaste(href) : null;
 }
 
 /**
@@ -121,26 +128,25 @@ export async function dispatchContextAction(
       return;
 
     case "ctx:link:open": {
-      const href = deps.getLinkHref();
+      const href = resolveLiveLinkHref(editor, deps);
       if (href) deps.openHref(href); // openHref re-runs isSafeExternalHref
       return;
     }
     case "ctx:link:copy": {
-      const href = deps.getLinkHref();
+      const href = resolveLiveLinkHref(editor, deps);
       if (!href) return;
-      // Reject javascript:, file://, data:, and any other dangerous scheme before
-      // writing to clipboard — a copied URI can be pasted into a browser bar.
-      const safe = sanitizeHrefForPaste(href);
-      if (safe) await deps.writeClipboardText(safe);
+      await deps.writeClipboardText(href);
       return;
     }
     case "ctx:link:edit":
-      if (!editor.isDestroyed && editor.isEditable && deps.getLinkHref()) deps.editLink?.();
+      if (editor.isEditable && resolveLiveLinkHref(editor, deps)) deps.editLink?.();
       return;
-    case "ctx:link:remove":
+    case "ctx:link:remove": {
+      if (!editor.isEditable || !resolveLiveLinkHref(editor, deps)) return;
       // Caret-inside-link: extend to the whole mark range before unsetting.
       ctxChain(editor).extendMarkRange("link").unsetLink().run();
       return;
+    }
 
     default: {
       // Exhaustiveness guard — a new id added to the union without a case here

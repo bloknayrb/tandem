@@ -11,6 +11,7 @@
 // in teardown so a fast doc-switch can't leak a global listener.
 
 import type { Editor } from "@tiptap/core";
+import type { Selection } from "@tiptap/pm/state";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { loadInvoke } from "../../cowork/cowork-invoke";
 import { detectContext, normalizePlatform, type Platform } from "./detect";
@@ -63,9 +64,9 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
       typeof navigator !== "undefined" ? navigator.platform || navigator.userAgent : "",
     );
 
-  // Sensitive link href captured from the real DOM target at popup time. Stays
-  // module-local — never crosses the Tauri IPC boundary (security contract).
-  let linkHref: string | null = null;
+  // The clicked ProseMirror selection is non-sensitive and lets delayed native
+  // events reject a target that moved or changed. Link hrefs are never retained.
+  let contextSelection: Selection | null = null;
 
   const onContextMenu = async (e: MouseEvent) => {
     const targetEl = e.target as HTMLElement | null;
@@ -98,8 +99,7 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
       }
     }
     req.hasSelection = !editor.state.selection.empty;
-
-    linkHref = targetEl.closest("a[href]")?.getAttribute("href") ?? null;
+    contextSelection = editor.state.selection;
 
     if (req.kind === "tableCell") {
       // Table command-capability augmentations live in @tiptap/extension-table,
@@ -136,7 +136,8 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
       void dispatchContextAction(id, {
         editor,
         openHref: deps.openHref,
-        getLinkHref: () => linkHref,
+        isTargetCurrent: () =>
+          contextSelection !== null && editor.state.selection.eq(contextSelection),
         readClipboardText,
         writeClipboardText,
         focusChat: deps.focusChat,
