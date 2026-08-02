@@ -185,6 +185,8 @@ export const Y_MAP_CHAT = "chat";
 /** User-facing chat acknowledgement state. Separate from ChatMessage.read (AI inbox state). */
 export const Y_MAP_CHAT_SEEN = "chatSeen";
 export const Y_MAP_CHAT_SEEN_INITIALIZED = "initialized";
+/** Path-free document-id → filename history used by durable chat exports. */
+export const Y_MAP_CHAT_DOCUMENT_NAMES = "chatDocumentNames";
 export const Y_MAP_DOCUMENT_META = "documentMeta";
 export const Y_MAP_ANNOTATION_REPLIES = "annotationReplies";
 export const Y_MAP_SAVED_AT_VERSION = "savedAtVersion";

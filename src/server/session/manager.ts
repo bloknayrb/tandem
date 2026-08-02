@@ -1,7 +1,12 @@
 import fs from "fs/promises";
 import path from "path";
 import * as Y from "yjs";
-import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
+import {
+  CTRL_ROOM,
+  SESSION_MAX_AGE,
+  Y_MAP_CHAT,
+  Y_MAP_CHAT_DOCUMENT_NAMES,
+} from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import type { ExternalConflictState, SessionData } from "../../shared/types.js";
@@ -194,6 +199,21 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
     });
   }
 
+  // Defense in depth: only basenames may reach the durable CTRL file even if
+  // an old or hostile client writes a path-bearing value into the shared map.
+  const documentNames = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
+  withInternal(doc, () => {
+    for (const [id, value] of documentNames.entries()) {
+      if (typeof value !== "string") {
+        documentNames.delete(id);
+        continue;
+      }
+      const fileName = path.basename(value.replace(/\\/g, "/")).trim();
+      if (!fileName) documentNames.delete(id);
+      else if (fileName !== value) documentNames.set(id, fileName);
+    }
+  });
+
   const state = Y.encodeStateAsUpdate(doc);
   const ydocState = Buffer.from(state).toString("base64");
   const data = { ydocState, lastAccessed: Date.now() };
@@ -203,7 +223,12 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
 
 /** Save the CTRL_ROOM Y.Doc (chat history) */
 export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
-  return enqueueCtrlSnapshot(() => persistCtrlSnapshot(cloneYDoc(doc)));
+  // Reserve queue order before taking the snapshot. A save called after a
+  // queued clear therefore cannot encode the pre-clear live map.
+  return enqueueCtrlSnapshot(async () => {
+    const snapshot = cloneYDoc(doc);
+    await persistCtrlSnapshot(snapshot);
+  });
 }
 
 /**
@@ -214,11 +239,8 @@ export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
 export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
   const liveChat = doc.getMap(Y_MAP_CHAT);
   const capturedIds = Array.from(liveChat.keys());
-  if (capturedIds.length === 0) {
-    await saveCtrlSession(doc);
-    return 0;
-  }
-
+  // Enqueue synchronously after capturing the request's IDs. Both cloning and
+  // persistence happen inside this shared queue; later saves cannot overtake.
   return enqueueCtrlSnapshot(async () => {
     const snapshot = cloneYDoc(doc);
     const snapshotChat = snapshot.getMap(Y_MAP_CHAT);
@@ -226,9 +248,11 @@ export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
       for (const id of capturedIds) snapshotChat.delete(id);
     });
     await persistCtrlSnapshot(snapshot);
-    withInternal(doc, () => {
-      for (const id of capturedIds) liveChat.delete(id);
-    });
+    if (capturedIds.length > 0) {
+      withInternal(doc, () => {
+        for (const id of capturedIds) liveChat.delete(id);
+      });
+    }
     return capturedIds.length;
   });
 }

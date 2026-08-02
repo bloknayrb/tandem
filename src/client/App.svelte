@@ -1738,6 +1738,8 @@ const chatCanInsert = $derived(!!editor && !!activeTab && !editorReadOnly && !in
 const chatState = createChatState({
   getCtrlYdoc: () => yjsSync.bootstrapYdoc,
   getInitialSyncComplete: () => yjsSync.ctrlInitialSyncComplete,
+  getInitialClaudeMessageIds: () => yjsSync.ctrlInitialClaudeMessageIds,
+  getOpenDocuments: () => openDocs,
   getVisible: () => chatVisible,
 });
 
@@ -1762,7 +1764,10 @@ function sendChatMessage(text: string): boolean {
 }
 
 async function exportChatToScratchpad(): Promise<void> {
-  const content = exportChatMarkdown(chatState.messages, openDocs);
+  const content = exportChatMarkdown(
+    chatState.messages,
+    Array.from(chatState.documentFileNames, ([id, fileName]) => ({ id, fileName })),
+  );
   const response = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_SCRATCHPAD}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

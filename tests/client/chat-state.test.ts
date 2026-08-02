@@ -23,7 +23,12 @@ describe("App-owned chat unread state", () => {
     const view = render(ChatStateHarness, { props: { doc, synced: false, visible: false } });
 
     expect(view.getByTestId("unread").textContent).toBe("0");
-    await view.rerender({ doc, synced: true, visible: false });
+    await view.rerender({
+      doc,
+      synced: true,
+      visible: false,
+      initialClaudeIds: ["old"],
+    });
     await waitFor(() => {
       expect(doc.getMap(Y_MAP_CHAT_SEEN).get(Y_MAP_CHAT_SEEN_INITIALIZED)).toBe(true);
       expect(view.getByTestId("unread").textContent).toBe("0");
@@ -35,6 +40,27 @@ describe("App-owned chat unread state", () => {
     await waitFor(() => {
       expect(view.getByTestId("unread").textContent).toBe("0");
       expect(doc.getMap(Y_MAP_CHAT_SEEN).get("new")).toBe(true);
+    });
+  });
+
+  it("does not baseline a reply injected after the provider sync snapshot", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT).set("history", claude("history", 1));
+    // Models the exact race: provider captured [history], then a reply arrived
+    // before Svelte scheduled the chat-state initial-sync effect.
+    doc.getMap(Y_MAP_CHAT).set("after-boundary", claude("after-boundary", 2));
+    const view = render(ChatStateHarness, {
+      props: {
+        doc,
+        synced: true,
+        visible: false,
+        initialClaudeIds: ["history"],
+      },
+    });
+    await waitFor(() => {
+      expect(view.getByTestId("unread").textContent).toBe("1");
+      expect(doc.getMap(Y_MAP_CHAT_SEEN).get("history")).toBe(true);
+      expect(doc.getMap(Y_MAP_CHAT_SEEN).get("after-boundary")).toBeUndefined();
     });
   });
 
@@ -60,5 +86,32 @@ describe("App-owned chat unread state", () => {
     });
     first.off("update", forward);
     second.off("update", backward);
+  });
+
+  it("persists path-free filenames for closed documents across a CTRL restart", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT_SEEN).set(Y_MAP_CHAT_SEEN_INITIALIZED, true);
+    const view = render(ChatStateHarness, {
+      props: {
+        doc,
+        synced: true,
+        visible: false,
+        openDocuments: [{ id: "closed-doc", fileName: "C:\\private\\Closed notes.md" }],
+      },
+    });
+    await waitFor(() => {
+      expect(view.getByTestId("document-names").textContent).toContain("Closed notes.md");
+      expect(view.getByTestId("document-names").textContent).not.toContain("private");
+    });
+
+    const restarted = new Y.Doc();
+    Y.applyUpdate(restarted, Y.encodeStateAsUpdate(doc));
+    view.unmount();
+    const afterRestart = render(ChatStateHarness, {
+      props: { doc: restarted, synced: true, visible: false, openDocuments: [] },
+    });
+    await waitFor(() => {
+      expect(afterRestart.getByTestId("document-names").textContent).toContain("Closed notes.md");
+    });
   });
 });

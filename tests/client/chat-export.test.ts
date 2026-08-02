@@ -43,4 +43,22 @@ describe("chat export", () => {
     expect(localChatDateLabel(new Date(2026, 6, 10, 1).getTime(), now)).toBe("Today");
     expect(localChatDateLabel(new Date(2026, 6, 9, 23).getTime(), now)).toBe("Yesterday");
   });
+
+  it("uses a persisted closed-document filename while stripping path input defensively", () => {
+    const message: ChatMessage = {
+      id: "closed",
+      author: "claude",
+      text: "answer",
+      timestamp: Date.UTC(2026, 0, 1),
+      documentId: "opaque-document-id",
+      read: true,
+    };
+    const markdown = exportChatMarkdown(
+      [message],
+      [{ id: "opaque-document-id", fileName: "C:\\secret\\Closed.md" }],
+    );
+    expect(markdown).toContain("`Closed.md`");
+    expect(markdown).not.toContain("secret");
+    expect(markdown).not.toContain("opaque-document-id");
+  });
 });

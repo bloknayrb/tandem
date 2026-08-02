@@ -2,6 +2,7 @@ import * as Y from "yjs";
 import {
   DEFAULT_MCP_PORT,
   Y_MAP_CHAT,
+  Y_MAP_CHAT_DOCUMENT_NAMES,
   Y_MAP_CHAT_SEEN,
   Y_MAP_CHAT_SEEN_INITIALIZED,
 } from "../../shared/constants";
@@ -13,6 +14,7 @@ const MAX_SEEN_MESSAGE_IDS = 400;
 
 export interface ChatState {
   readonly messages: ChatMessage[];
+  readonly documentFileNames: ReadonlyMap<string, string>;
   readonly initialSyncComplete: boolean;
   readonly unreadCount: number;
   send(text: string, documentId?: string, anchor?: CapturedAnchor | null): boolean;
@@ -23,10 +25,13 @@ export interface ChatState {
 export function createChatState(options: {
   getCtrlYdoc: () => Y.Doc | null;
   getInitialSyncComplete: () => boolean;
+  getInitialClaudeMessageIds: () => readonly string[];
+  getOpenDocuments: () => readonly { id: string; fileName: string }[];
   getVisible: () => boolean;
 }): ChatState {
   let messages = $state<ChatMessage[]>([]);
   let seenIds = $state(new Set<string>());
+  let documentFileNames = $state(new Map<string, string>());
   const unreadCount = $derived(
     options.getInitialSyncComplete()
       ? messages.filter((message) => message.author === "claude" && !seenIds.has(message.id)).length
@@ -44,6 +49,19 @@ export function createChatState(options: {
         .filter(([id, value]) => id !== Y_MAP_CHAT_SEEN_INITIALIZED && value === true)
         .map(([id]) => id),
     );
+    const names = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
+    documentFileNames = new Map(
+      Array.from(names.entries()).flatMap(([id, value]) => {
+        const fileName = safeFileName(value);
+        return fileName ? [[id, fileName] as const] : [];
+      }),
+    );
+  }
+
+  function safeFileName(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    const fileName = value.split(/[\\/]/).pop()?.trim();
+    return fileName ? fileName : null;
   }
 
   function pruneSeen(doc: Y.Doc): void {
@@ -59,18 +77,22 @@ export function createChatState(options: {
     }
   }
 
-  function acknowledge(doc: Y.Doc, baseline = false): void {
+  function acknowledgeIds(doc: Y.Doc, ids: readonly string[], baseline = false): void {
     const seen = doc.getMap(Y_MAP_CHAT_SEEN);
     doc.transact(() => {
       if (baseline && seen.get(Y_MAP_CHAT_SEEN_INITIALIZED) !== true) {
         seen.set(Y_MAP_CHAT_SEEN_INITIALIZED, true);
       }
-      for (const message of messages) {
-        if (message.author === "claude" && seen.get(message.id) !== true)
-          seen.set(message.id, true);
-      }
+      for (const id of ids) if (seen.get(id) !== true) seen.set(id, true);
       pruneSeen(doc);
     });
+  }
+
+  function acknowledgeVisibleMessages(doc: Y.Doc): void {
+    acknowledgeIds(
+      doc,
+      messages.filter((message) => message.author === "claude").map((message) => message.id),
+    );
   }
 
   $effect(() => {
@@ -78,17 +100,21 @@ export function createChatState(options: {
     if (!doc) {
       messages = [];
       seenIds = new Set();
+      documentFileNames = new Map();
       return;
     }
     const chat = doc.getMap(Y_MAP_CHAT);
     const seen = doc.getMap(Y_MAP_CHAT_SEEN);
+    const names = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
     const observer = () => refresh(doc);
     chat.observe(observer);
     seen.observe(observer);
+    names.observe(observer);
     observer();
     return () => {
       chat.unobserve(observer);
       seen.unobserve(observer);
+      names.unobserve(observer);
     };
   });
 
@@ -97,14 +123,36 @@ export function createChatState(options: {
   $effect(() => {
     const doc = options.getCtrlYdoc();
     const synced = options.getInitialSyncComplete();
+    const initialClaudeIds = options.getInitialClaudeMessageIds();
     void messages;
     if (!doc || !synced) return;
     const seen = doc.getMap(Y_MAP_CHAT_SEEN);
     if (seen.get(Y_MAP_CHAT_SEEN_INITIALIZED) !== true) {
-      acknowledge(doc, true);
+      acknowledgeIds(doc, initialClaudeIds, true);
       return;
     }
-    if (options.getVisible()) acknowledge(doc);
+    if (options.getVisible()) acknowledgeVisibleMessages(doc);
+  });
+
+  // Keep a durable, path-free name snapshot independent of the current open
+  // document list. Closed documents can then still be named after restart.
+  $effect(() => {
+    const doc = options.getCtrlYdoc();
+    const synced = options.getInitialSyncComplete();
+    const openDocuments = options.getOpenDocuments();
+    if (!doc || !synced) return;
+    const names = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
+    doc.transact(() => {
+      for (const [id, value] of names.entries()) {
+        const sanitized = safeFileName(value);
+        if (!sanitized) names.delete(id);
+        else if (sanitized !== value) names.set(id, sanitized);
+      }
+      for (const open of openDocuments) {
+        const fileName = safeFileName(open.fileName);
+        if (fileName && names.get(open.id) !== fileName) names.set(open.id, fileName);
+      }
+    });
   });
 
   return {
@@ -113,6 +161,9 @@ export function createChatState(options: {
     },
     get initialSyncComplete() {
       return options.getInitialSyncComplete();
+    },
+    get documentFileNames() {
+      return documentFileNames;
     },
     get unreadCount() {
       return unreadCount;
@@ -130,12 +181,21 @@ export function createChatState(options: {
         ...(anchor ? { anchor } : {}),
         read: false,
       };
-      doc.getMap(Y_MAP_CHAT).set(message.id, message);
+      doc.transact(() => {
+        if (documentId) {
+          const open = options.getOpenDocuments().find((candidate) => candidate.id === documentId);
+          const fileName = safeFileName(open?.fileName);
+          if (fileName) doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES).set(documentId, fileName);
+        }
+        doc.getMap(Y_MAP_CHAT).set(message.id, message);
+      });
       return true;
     },
     acknowledgeVisible() {
       const doc = options.getCtrlYdoc();
-      if (doc && options.getInitialSyncComplete() && options.getVisible()) acknowledge(doc);
+      if (doc && options.getInitialSyncComplete() && options.getVisible()) {
+        acknowledgeVisibleMessages(doc);
+      }
     },
     async clear() {
       const response = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_CHAT}`, {

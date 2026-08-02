@@ -14,6 +14,7 @@ import {
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
   Y_MAP_CLAUDE,
+  Y_MAP_CHAT,
   Y_MAP_DOCUMENT_META,
   Y_MAP_OPEN_DOCUMENTS,
   Y_MAP_STORE_READ_ONLY,
@@ -93,6 +94,8 @@ export interface YjsSyncState {
   readonly bootstrapYdoc: Y.Doc | null;
   /** True after the current CTRL provider completes its first authoritative sync. */
   readonly ctrlInitialSyncComplete: boolean;
+  /** Claude message IDs present at the exact first-sync boundary for this CTRL doc. */
+  readonly ctrlInitialClaudeMessageIds: readonly string[];
   readonly ready: boolean;
   /** Briefly true after the server restarts and the client reconnects. */
   readonly serverRestarted: boolean;
@@ -165,6 +168,7 @@ export function createYjsSync(opts?: {
   // when the bootstrap step completes (parallel of React's setReady re-render).
   let bootstrapYdocState = $state<Y.Doc | null>(null);
   let ctrlInitialSyncComplete = $state(false);
+  let ctrlInitialClaudeMessageIds = $state<readonly string[]>([]);
 
   // ---------- Refs (non-reactive mutable state) ----------
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -490,6 +494,7 @@ export function createYjsSync(opts?: {
   // stale tab's merge-back could clobber a CRDT-carried value).
   function startBootstrap(gen: string) {
     ctrlInitialSyncComplete = false;
+    ctrlInitialClaudeMessageIds = [];
     generationId = gen;
     const ydoc = new Y.Doc();
     const provider = new HocuspocusProvider(
@@ -506,7 +511,16 @@ export function createYjsSync(opts?: {
 
     provider.on("authenticationFailed", scheduleRebuild);
     const onCtrlSynced = ({ state }: { state: boolean }) => {
-      if (state) ctrlInitialSyncComplete = true;
+      if (!state || ctrlInitialSyncComplete) return;
+      // Capture synchronously in the provider callback. A chat update can land
+      // before Svelte runs consumers' effects; it must not join this baseline.
+      const initialClaudeIds: string[] = [];
+      ydoc.getMap(Y_MAP_CHAT).forEach((value, id) => {
+        if ((value as { author?: unknown }).author === "claude") initialClaudeIds.push(id);
+      });
+      initialClaudeIds.sort();
+      ctrlInitialClaudeMessageIds = initialClaudeIds;
+      ctrlInitialSyncComplete = true;
     };
     provider.on("synced", onCtrlSynced);
     provider.on("status", ({ status }: { status: string }) => {
@@ -573,6 +587,7 @@ export function createYjsSync(opts?: {
       ydoc.destroy();
       bootstrapYdocState = null;
       ctrlInitialSyncComplete = false;
+      ctrlInitialClaudeMessageIds = [];
       bootstrapProviderRef = null;
       bootstrapCleanup = null;
     };
@@ -770,6 +785,9 @@ export function createYjsSync(opts?: {
     },
     get ctrlInitialSyncComplete() {
       return ctrlInitialSyncComplete;
+    },
+    get ctrlInitialClaudeMessageIds() {
+      return ctrlInitialClaudeMessageIds;
     },
     get ready() {
       return ready;

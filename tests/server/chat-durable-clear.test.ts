@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { Y_MAP_CHAT } from "../../src/shared/constants";
+import { Y_MAP_CHAT, Y_MAP_CHAT_DOCUMENT_NAMES } from "../../src/shared/constants";
 
 const controls = vi.hoisted(() => ({
   failWrite: false,
@@ -70,7 +70,7 @@ describe("durable chat clear", () => {
     expect(doc.getMap(Y_MAP_CHAT).has("keep")).toBe(true);
   });
 
-  it("serializes snapshots and preserves messages arriving after clear ID capture", async () => {
+  it("orders preceding and queued-after saves around clear while preserving arrivals", async () => {
     const doc = new Y.Doc();
     const chat = doc.getMap(Y_MAP_CHAT);
     chat.set("old", { id: "old", timestamp: 3 });
@@ -78,14 +78,25 @@ describe("durable chat clear", () => {
     const precedingSave = saveCtrlSession(doc);
     await vi.waitFor(() => expect(controls.release).toBeTypeOf("function"));
     const clear = clearCtrlChatDurably(doc);
+    const queuedAfterClear = saveCtrlSession(doc);
     chat.set("new", { id: "new", timestamp: 4 });
     controls.release?.();
     await precedingSave;
     expect(await clear).toBe(1);
+    await queuedAfterClear;
     expect(Array.from(chat.keys())).toEqual(["new"]);
 
     const restored = new Y.Doc();
     restoreCtrlDoc(restored, (await loadCtrlSession())!);
     expect(Array.from(restored.getMap(Y_MAP_CHAT).keys())).toEqual(["new"]);
+  });
+
+  it("persists only filename snapshots across a server restart", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES).set("closed", "C:\\private\\Closed.md");
+    await saveCtrlSession(doc);
+    const restored = new Y.Doc();
+    restoreCtrlDoc(restored, (await loadCtrlSession())!);
+    expect(restored.getMap(Y_MAP_CHAT_DOCUMENT_NAMES).get("closed")).toBe("Closed.md");
   });
 });

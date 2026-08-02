@@ -26,7 +26,12 @@ export function exportChatMarkdown(
   openDocs: readonly ChatExportDocument[],
   claudeLabel = "Claude",
 ): string {
-  const fileNames = new Map(openDocs.map((doc) => [doc.id, doc.fileName]));
+  const fileNames = new Map(
+    openDocs.flatMap((doc) => {
+      const fileName = doc.fileName.split(/[\\/]/).pop()?.trim();
+      return fileName ? [[doc.id, fileName] as const] : [];
+    }),
+  );
   const sorted = [...messages].sort(
     (a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id),
   );
