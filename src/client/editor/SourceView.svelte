@@ -201,12 +201,20 @@ async function saveWithIntent(intent: "save" | "save-as"): Promise<boolean> {
 }
 
 $effect(() => {
-  onCommandsChange(sourceDocumentId, {
-    documentId: sourceDocumentId,
-    save: saveWithIntent,
-    exit: handleExit,
+  // The parent registry reads and replaces its reactive Map. If that callback
+  // runs inside this effect's tracking context, the parent's read becomes a
+  // dependency of this effect and its write immediately invalidates us again.
+  // Capture the publisher outside dependency tracking so registration remains
+  // a mount/unmount lifecycle action rather than a reactive mirror.
+  const publishCommands = untrack(() => onCommandsChange);
+  untrack(() => {
+    publishCommands(sourceDocumentId, {
+      documentId: sourceDocumentId,
+      save: saveWithIntent,
+      exit: handleExit,
+    });
   });
-  return () => onCommandsChange(sourceDocumentId, null);
+  return () => untrack(() => publishCommands(sourceDocumentId, null));
 });
 
 async function copyToClipboard(): Promise<void> {

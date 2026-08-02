@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import SourceView from "../../src/client/editor/SourceView.svelte";
 import { saveExactTarget } from "../../src/client/tabs/target-save";
+import SourceViewCommandRegistryHarness from "./fixtures/SourceViewCommandRegistryHarness.svelte";
 
 interface SourceCommands {
   documentId: string;
@@ -22,6 +23,19 @@ afterEach(() => {
 });
 
 describe("SourceView exact-document commands", () => {
+  it("registers commands once when the parent stores them in reactive state", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ markdown: "# Original\n" })),
+    );
+
+    const { findByTestId } = render(SourceViewCommandRegistryHarness, {
+      props: { documentId: "registered-source", ydoc: new Y.Doc() },
+    });
+
+    expect((await findByTestId("source-command-count")).textContent).toBe("1");
+  });
+
   it("waits for a delayed inactive-tab source load before committing its carried draft", async () => {
     let commands: SourceCommands | null = null;
     let resolveRaw!: (response: Response) => void;
