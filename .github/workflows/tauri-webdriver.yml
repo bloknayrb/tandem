@@ -37,6 +37,11 @@ permissions:
 jobs:
   webdriver:
     runs-on: windows-latest
+    # Bounded so a systemic driver-CDN failure (TLS interception, proxy 407,
+    # throttling) fails fast instead of burning a runner toward GitHub's
+    # 360-minute default: the driver-resolution loop can try ~35 candidates at
+    # -TimeoutSec 120 each, which is over an hour on its own.
+    timeout-minutes: 45
     # The auto-launcher runs inside the Node server process; it tries to spawn
     # Claude and is irrelevant to webview key-interception coverage. Disable it
     # job-wide so neither the harness-started server nor any app-spawned sidecar
@@ -85,10 +90,27 @@ jobs:
       # Edge *browser* (and the runner's preinstalled msedgedriver matches the
       # browser). A mismatch makes the WebDriver session HANG on connect (Tauri
       # docs warn this). So: read the WebView2 Runtime version from the registry,
-      # resolve the matching Edge WebDriver for that major line, download it, and
-      # put it on PATH (tauri-driver auto-finds msedgedriver.exe on PATH — no
-      # --native-driver arg needed). Fail loudly at every step; never silently
-      # fall back to the browser-matched driver (that reintroduces the hang).
+      # resolve an Edge WebDriver for that major line, download it, and put it on
+      # PATH (tauri-driver finds msedgedriver.exe there by itself; the verbose
+      # shim below wraps THAT binary and is only adopted after it self-verifies).
+      # Fail loudly at every step; never silently fall back to the
+      # browser-matched driver (that reintroduces the hang).
+      #
+      # #1197: the version used to come solely from LATEST_RELEASE_<major>, a
+      # pointer that can name a build whose zip is not on the CDN — v0.17.0's run
+      # died on BlobNotFound for 150.0.4078.80 (.83 appeared days later), with no
+      # retry or fallback. So walk an ordered list of in-major candidates and take
+      # the first whose zip actually yields msedgedriver.exe:
+      #   1. the EXACT runtime version — Microsoft's documented requirement is a
+      #      driver matching the *runtime*, not merely its major;
+      #   2. the LATEST_RELEASE_<major> pointer (the previous behaviour);
+      #   3. a bounded patch walk-back down each of those two version lines, to
+      #      land on the nearest actually-published build;
+      #   4. a hand-pinned known-good build for that major, as the last-resort
+      #      net (add a row when a new WebView2 major reaches the runners).
+      # Every candidate is in-major by construction, and the chosen binary's own
+      # --version output is re-checked against the runtime major afterwards, so
+      # the chain can never quietly degrade into the browser-matched driver.
       - name: Set up Edge WebDriver matching the WebView2 runtime
         shell: pwsh
         run: |
@@ -108,26 +130,111 @@ jobs:
           $major = $pv.Split('.')[0]
           Write-Host "WebView2 Runtime: $pv (major $major)"
 
-          # Resolve the Edge WebDriver version for this major line. The
-          # LATEST_RELEASE_<major> file is a UTF-16 version string; strip BOM/CR
-          # by keeping only version characters. Edge/Chromium driver compat is
-          # by major version, so the latest in-major driver matches the runtime.
-          $relFile = "$env:RUNNER_TEMP\edge_latest_release"
-          Invoke-WebRequest "https://msedgedriver.microsoft.com/LATEST_RELEASE_$major" -OutFile $relFile -UseBasicParsing
-          $driverVersion = ([System.IO.File]::ReadAllText($relFile, [System.Text.Encoding]::Unicode) -replace '[^0-9.]', '')
-          if (-not $driverVersion) { throw "No Edge WebDriver published for major $major" }
-          Write-Host "Edge WebDriver: $driverVersion"
+          # Known-good driver builds keyed by WebView2 major. Only consulted once
+          # every live candidate has missed; keep in sync as majors roll.
+          $pinned = @{ '149' = '149.0.4022.98'; '150' = '150.0.4078.83' }
+          # This table rots silently: when the runners roll to a major with no
+          # row, Add-Candidate gets $null and the last-resort net just vanishes.
+          # Say so out loud (an ::warning:: annotation, visible on the run page)
+          # instead of letting a green-until-it-isn't run hide it.
+          if (-not $pinned.ContainsKey($major)) {
+            Write-Host ("::warning::No hand-pinned Edge WebDriver for WebView2 major " + $major +
+              " - the last-resort fallback is gone. Add a row to `$pinned in .github/workflows/tauri-webdriver.yml.")
+          }
 
-          # Download + unzip; fail if the archive didn't yield the binary.
+          # The LATEST_RELEASE_<major> file is a UTF-16 version string; strip
+          # BOM/CR by keeping only version characters. A miss here is no longer
+          # fatal — it is one candidate among several.
+          $latest = $null
+          try {
+            $relFile = "$env:RUNNER_TEMP\edge_latest_release"
+            Invoke-WebRequest "https://msedgedriver.microsoft.com/LATEST_RELEASE_$major" -OutFile $relFile -UseBasicParsing -TimeoutSec 30
+            $latest = ([System.IO.File]::ReadAllText($relFile, [System.Text.Encoding]::Unicode) -replace '[^0-9.]', '')
+          } catch {
+            Write-Host "LATEST_RELEASE_${major} unavailable: $($_.Exception.Message)"
+          }
+          Write-Host "LATEST_RELEASE_${major}: $(if ($latest) { $latest } else { '(none)' })"
+
+          $candidates = [System.Collections.Generic.List[string]]::new()
+          function Add-Candidate([string]$v) {
+            if (-not $v) { return }
+            # Leaving the runtime's major is exactly the browser-matched-driver
+            # hang this step exists to prevent — drop such candidates outright.
+            if ($v.Split('.')[0] -ne $major) { return }
+            if (-not $candidates.Contains($v)) { $candidates.Add($v) }
+          }
+          Add-Candidate $pv
+          Add-Candidate $latest
+          # The CDN publishes sparsely, so when a version misses, the nearest
+          # existing build is usually a few patch numbers below it.
+          foreach ($seed in @($latest, $pv)) {
+            if (-not $seed) { continue }
+            $parts = $seed.Split('.')
+            if ($parts.Length -ne 4) { continue }
+            $patch = [int]$parts[3]
+            for ($i = 1; $i -le 16 -and ($patch - $i) -ge 0; $i++) {
+              Add-Candidate "$($parts[0]).$($parts[1]).$($parts[2]).$($patch - $i)"
+            }
+          }
+          Add-Candidate $pinned[$major]
+          # No emptiness check here: $major is derived from $pv, so Add-Candidate
+          # $pv is in-major with itself and always lands — the list cannot be
+          # empty (the `if ($candidates.Count -eq 0) { throw }` that used to sit
+          # here was unreachable). The order actually tried IS worth seeing.
+          Write-Host "Candidates ($($candidates.Count)): $($candidates -join ', ')"
+
+          # First candidate whose zip actually yields the binary wins. Each miss
+          # reports WHY: with up to 35 candidates, a systemic failure (TLS
+          # interception, proxy 407, throttling, full disk, corrupt zip) would
+          # otherwise render as 35 identical content-free lines and read exactly
+          # like the ordinary "this build was never published" 404.
           $zip = "$env:RUNNER_TEMP\edgedriver.zip"
           $dir = "$env:RUNNER_TEMP\edgedriver"
-          Invoke-WebRequest "https://msedgedriver.microsoft.com/$driverVersion/edgedriver_win64.zip" -OutFile $zip -UseBasicParsing
-          Expand-Archive -Path $zip -DestinationPath $dir -Force
-          if (-not (Test-Path "$dir\msedgedriver.exe")) { throw "msedgedriver.exe missing after unzip" }
+          $driverVersion = $null
+          foreach ($candidate in $candidates) {
+            Remove-Item $zip, $dir -Recurse -Force -ErrorAction SilentlyContinue
+            $ok = $false
+            $miss = 'unknown'
+            try {
+              # PowerShell 7's default -TimeoutSec is 0 (indefinite): without a
+              # bound, one hung CDN connection stalls until the job timeout, and
+              # the candidate loop multiplies that by the whole list.
+              Invoke-WebRequest "https://msedgedriver.microsoft.com/$candidate/edgedriver_win64.zip" -OutFile $zip -UseBasicParsing -TimeoutSec 120
+              Expand-Archive -Path $zip -DestinationPath $dir -Force
+              $ok = Test-Path "$dir\msedgedriver.exe"
+              if (-not $ok) { $miss = 'zip contained no msedgedriver.exe' }
+            } catch {
+              $status = 0
+              $resp = $_.Exception.PSObject.Properties['Response']
+              if ($resp -and $resp.Value) { $status = [int]$resp.Value.StatusCode }
+              $reason = ($_.Exception.Message -replace '\s+', ' ')
+              if ($status -eq 404) {
+                $miss = 'HTTP 404 (build not published)'
+              } else {
+                $miss = "NOT a 404 - investigate: $reason"
+              }
+            }
+            if ($ok) { $driverVersion = $candidate; break }
+            Write-Host "  miss ${candidate}: $miss"
+          }
+          if (-not $driverVersion) {
+            throw "No downloadable Edge WebDriver for WebView2 major ${major}; tried: $($candidates -join ', ')"
+          }
+          $how = if ($driverVersion -eq $pv) { 'exact runtime match' } else { 'in-major fallback' }
+          Write-Host "Edge WebDriver: $driverVersion ($how; runtime $pv)"
+
+          # Defense in depth: a mislabelled blob must not become a silently
+          # browser-matched driver, which is the connect-hang failure mode.
+          $reported = (& "$dir\msedgedriver.exe" --version) -join ' '
+          Write-Host $reported
+          $reportedVersion = [regex]::Match($reported, '\d+(\.\d+){3}').Value
+          if (-not $reportedVersion) { throw "Could not parse a version out of '$reported'" }
+          if ($reportedVersion.Split('.')[0] -ne $major) {
+            throw "msedgedriver $reportedVersion does not match WebView2 major $major"
+          }
 
           # Visible to SUBSEQUENT steps (the wdio run, where tauri-driver spawns).
           Add-Content -Path $env:GITHUB_PATH -Value $dir
-          & "$dir\msedgedriver.exe" --version
 
       # `--debug` and `--no-bundle` are `tauri build` flags, so they must NOT sit
       # behind `--` (which forwards args to the underlying `cargo build`, where
@@ -163,6 +270,11 @@ jobs:
         env:
           # Binary already built above; don't rebuild inside onPrepare.
           TAURI_SKIP_BUILD: "1"
+          # Route msedgedriver through a verbose-logging shim (see wdio.conf.ts).
+          # Opt-in so local runs keep the plain PATH lookup; the log is surfaced
+          # by "Dump logs" below and is the only first-hand account of why the
+          # driver did or didn't get a CDP endpoint out of the app (#1197).
+          TAURI_DRIVER_VERBOSE_LOG: "1"
         run: |
           $ErrorActionPreference = 'Stop'
           $serverOut = "$env:RUNNER_TEMP\tandem-server.out.log"
@@ -216,3 +328,21 @@ jobs:
           # "tandem" -> tandem.log (bundle id com.tandem.editor).
           Write-Host '=== app log ==='
           Get-Content "$env:LOCALAPPDATA\com.tandem.editor\logs\tandem.log" -ErrorAction SilentlyContinue
+          # #1197 diagnostics. The verbose driver log states the command line and
+          # environment msedgedriver used to launch the app and what it waited
+          # for; head-bounded because a verbose session log can run to megabytes.
+          Write-Host '=== msedgedriver log (first 1500 lines) ==='
+          Get-Content "$env:RUNNER_TEMP\msedgedriver.log" -TotalCount 1500 -ErrorAction SilentlyContinue
+          # Best-effort only — this CANNOT discriminate "written somewhere else"
+          # from "never written". msedgedriver launches the app with its own
+          # scoped temp --user-data-dir and deletes that tree when the session
+          # tears down, so by the time this always() step runs the file is gone
+          # in both cases and an empty result proves nothing. A HIT is
+          # informative (a stray copy survived a crash, or the app wrote one
+          # under its own LOCALAPPDATA); a miss is not evidence of anything. The
+          # verbose driver log above is the discriminating artifact: it names the
+          # user-data dir it passed and the file it waited on.
+          Write-Host '=== DevToolsActivePort files (a hit is informative; a miss is not) ==='
+          Get-ChildItem -Path "$env:LOCALAPPDATA\com.tandem.editor", "$env:TEMP" `
+            -Filter 'DevToolsActivePort' -Recurse -Depth 4 -Force -ErrorAction SilentlyContinue |
+            Select-Object -First 20 -ExpandProperty FullName

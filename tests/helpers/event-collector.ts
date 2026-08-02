@@ -1,4 +1,4 @@
-import { subscribe, unsubscribe } from "../../src/server/events/queue.js";
+import { type SubscriberKind, subscribe, unsubscribe } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
 
 /**
@@ -8,12 +8,20 @@ import type { TandemEvent } from "../../src/server/events/types.js";
  * Several server tests (`event-queue.test.ts`, `event-queue-dwell.test.ts`,
  * `event-queue-observer-split.test.ts`) hand-roll an identical helper; new
  * tests should import this one. Existing copies can migrate onto it over time.
+ *
+ * `kind` defaults to `"external"` — these collectors stand in for a channel shim
+ * or plugin monitor, which is what the Solo forwarder gate and
+ * `wasEmittedViaChannel` ask about. Pass `"internal"` to model the in-process
+ * local-model collaborator, which the gate deliberately does not hold.
  */
-export function collectEvents(): { events: TandemEvent[]; cleanup: () => void } {
+export function collectEvents(kind: SubscriberKind = "external"): {
+  events: TandemEvent[];
+  cleanup: () => void;
+} {
   const events: TandemEvent[] = [];
   const cb = (e: TandemEvent): void => {
     events.push(e);
   };
-  subscribe(cb);
+  subscribe(cb, kind);
   return { events, cleanup: () => unsubscribe(cb) };
 }

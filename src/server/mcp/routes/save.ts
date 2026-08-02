@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import {
   getActiveDocId,
+  persistSkippedSaveSession,
   saveDocumentAsToDisk,
   saveDocumentToDisk,
   serializeDocument,
@@ -106,6 +107,15 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
   // Branch 1: ordinary save (existing behavior)
   try {
     const result = await saveDocumentToDisk(targetId, "manual");
+    if (result.status === "skipped") {
+      // The disk save did NOT happen — persist the dirty flag (#1069) and any
+      // pending conflict (#1238) so a restart doesn't discard the only copy of
+      // unsaved edits or silently launder away a conflict the user still has
+      // to resolve. Mirrors tandem_save's (document.ts) skip handling; both
+      // routes to a skipped `saveDocumentToDisk` share this helper so neither
+      // can drift out of sync with the other again.
+      await persistSkippedSaveSession(targetId);
+    }
     res.json({ data: result });
   } catch (err: unknown) {
     sendApiError(res, err);

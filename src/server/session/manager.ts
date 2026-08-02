@@ -4,7 +4,7 @@ import * as Y from "yjs";
 import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
-import type { SessionData } from "../../shared/types.js";
+import type { ExternalConflictState, SessionData } from "../../shared/types.js";
 import { docHash, ENVELOPE_FILENAME_RE } from "../annotations/doc-hash.js";
 import { parseAnnotationDoc } from "../annotations/schema.js";
 import { createStore, getAnnotationsDir, isStoreReadOnly } from "../annotations/store.js";
@@ -24,15 +24,22 @@ export function sessionKey(filePath: string): string {
  *
  * `opts.dirty` (#1069): pass true when the doc holds body edits not yet written
  * to disk (callers that know the docId pass `isDirty(docId)`). Consumed on
- * reopen by the `.docx` restore-vs-reload prompt — a dirty `.docx` session is
- * the only copy of those edits, so it restores even over a changed source file.
+ * reopen by the restore-vs-reload prompt — a dirty session is the only copy of
+ * those edits, so it restores even over a changed source file.
  * Omitted (falsy) → field absent, matching pre-#1069 sessions.
+ *
+ * `opts.conflict` (#1238): the pending external-conflict flag, if any, so an
+ * unresolved keep-vs-reload choice survives a restart. Deliberately an EXPLICIT
+ * option rather than a read off `doc` here: on the successful-save path the
+ * caller writes the session BEFORE clearing the flag, so a self-read would
+ * persist a conflict the save just resolved and re-raise a banner on a clean,
+ * in-sync document.
  */
 export async function saveSession(
   filePath: string,
   format: string,
   doc: Y.Doc,
-  opts?: { dirty?: boolean },
+  opts?: { dirty?: boolean; conflict?: ExternalConflictState },
 ): Promise<void> {
   const key = sessionKey(filePath);
   let sourceFileMtime = 0;
@@ -56,6 +63,7 @@ export async function saveSession(
     sourceFileMtime,
     lastAccessed: Date.now(),
     ...(opts?.dirty ? { dirty: true } : {}),
+    ...(opts?.conflict ? { conflict: opts.conflict } : {}),
   };
 
   if (!sessionDirReady) {
@@ -86,6 +94,29 @@ export async function loadSession(filePath: string): Promise<SessionData | null>
     console.error(`[Tandem] Failed to read session ${sessionPath}:`, err);
     return null;
   }
+}
+
+/**
+ * Narrow a session's carried `conflict` field to a trustworthy
+ * `ExternalConflictState` (#1238). `loadSession` is a bare `JSON.parse` with no
+ * schema validation, and the restored value is re-published into the Y.Doc and
+ * rendered by the client banner, so it must not be taken on trust.
+ *
+ * `diskChanged` is coerced, not just checked, because it is the discriminator
+ * `saveDocumentToDisk` keys its save block on — a missing or non-boolean value
+ * would produce a banner that blocks nothing, failing open on exactly the field
+ * that matters. An unrecognized `kind` is rejected outright; there is no safe
+ * default for a prompt whose copy is chosen by it.
+ */
+export function narrowConflict(value: unknown): ExternalConflictState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<ExternalConflictState>;
+  if (candidate.kind !== "external-edit" && candidate.kind !== "unsaved-restore") return undefined;
+  return {
+    kind: candidate.kind,
+    diskChanged: candidate.diskChanged === true || candidate.kind === "external-edit",
+    detectedAt: typeof candidate.detectedAt === "number" ? candidate.detectedAt : Date.now(),
+  };
 }
 
 /** Restore a Y.Doc from a session's base64-encoded state */

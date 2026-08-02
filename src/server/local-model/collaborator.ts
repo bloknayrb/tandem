@@ -51,7 +51,10 @@ const SELECTION_TEXT_CAP = 500;
 export interface CollaboratorDeps {
   runTurn: (opts: RunTurnOpts) => Promise<LoopResult>;
   resolveConfig: () => LocalModelConfig | null;
-  subscribe: (cb: (e: TandemEvent) => void, kind?: SubscriberKind) => void;
+  // `kind` is required, mirroring the real `subscribe`: it selects the WS-A2
+  // privacy gate as well as diagnostic counting, so a test double that let it
+  // default would stop modelling the thing this loop depends on (see `wire`).
+  subscribe: (cb: (e: TandemEvent) => void, kind: SubscriberKind) => void;
   unsubscribe: (cb: (e: TandemEvent) => void) => void;
 }
 

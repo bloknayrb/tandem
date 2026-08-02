@@ -56,7 +56,7 @@ vi.mock("../../src/server/documents/registry.js", () => ({ getActiveDocId, hasDo
 import { handleListBackups, handleRestoreBackup } from "../../src/server/mcp/routes/backups.js";
 import { handleGetDocumentRaw } from "../../src/server/mcp/routes/document-raw.js";
 import { handleReloadFromMarkdown } from "../../src/server/mcp/routes/document-reload.js";
-import { handleResolveDocxConflict } from "../../src/server/mcp/routes/docx-conflict.js";
+import { handleResolveExternalConflict } from "../../src/server/mcp/routes/external-conflict.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -229,13 +229,13 @@ describe("POST /api/document/reload — origin gate (#1121 F6)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// F6: POST /api/docx-conflict/resolve — origin gate
+// F6: POST /api/external-conflict/resolve — origin gate
 // ---------------------------------------------------------------------------
 
-describe("POST /api/docx-conflict/resolve — origin gate (#1121 F6)", () => {
+describe("POST /api/external-conflict/resolve — origin gate (#1121 F6)", () => {
   it("rejects a non-allowlisted Origin before resolving", async () => {
     const res = mockRes();
-    await handleResolveDocxConflict(badOriginReq({ body: { choice: "keep" } }), res);
+    await handleResolveExternalConflict(badOriginReq({ body: { choice: "keep" } }), res);
     expect(res._status).toBe(403);
     expect(resolveExternalConflict).not.toHaveBeenCalled();
   });
@@ -247,7 +247,7 @@ describe("POST /api/docx-conflict/resolve — origin gate (#1121 F6)", () => {
       socket: { remoteAddress: "127.0.0.1" },
       body: { choice: "reload" },
     } as unknown as Request;
-    await handleResolveDocxConflict(req, res);
+    await handleResolveExternalConflict(req, res);
     expect(res._status).toBe(403);
     expect(resolveExternalConflict).not.toHaveBeenCalled();
   });

@@ -10,7 +10,7 @@ import {
   API_DIAGNOSTICS,
   API_DOCUMENT_RAW,
   API_DOCUMENT_RELOAD,
-  API_DOCX_CONFLICT_RESOLVE,
+  API_EXTERNAL_CONFLICT_RESOLVE,
   API_INFO,
   API_LICENSE_ACTIVATE,
   API_LICENSE_STATUS,
@@ -41,7 +41,7 @@ import { handleConvert } from "./routes/convert.js";
 import { makeDiagnosticsHandler } from "./routes/diagnostics.js";
 import { handleGetDocumentRaw } from "./routes/document-raw.js";
 import { handleReloadFromMarkdown } from "./routes/document-reload.js";
-import { handleResolveDocxConflict } from "./routes/docx-conflict.js";
+import { handleResolveExternalConflict } from "./routes/external-conflict.js";
 import { makeInfoHandler } from "./routes/info.js";
 import { handleActivateLicense, handleGetLicenseStatus } from "./routes/license.js";
 import { handleMode } from "./routes/mode.js";
@@ -268,16 +268,16 @@ export function registerApiRoutes(
   app.options(API_BACKUPS_RESTORE, mw);
   app.post(API_BACKUPS_RESTORE, mw, licenseGateMiddleware, largeBody, handleRestoreBackup);
 
-  // .docx external-conflict resolution (#1069). Gated on origin allowlist +
-  // loopback inside the handler (#1121 F6); also license-gated (#1116) — it
-  // writes a resolution to the document.
-  app.options(API_DOCX_CONFLICT_RESOLVE, mw);
+  // External-conflict resolution (#1069, all formats since #1238). Gated on
+  // origin allowlist + loopback inside the handler (#1121 F6); also
+  // license-gated (#1116) — it writes a resolution to the document.
+  app.options(API_EXTERNAL_CONFLICT_RESOLVE, mw);
   app.post(
-    API_DOCX_CONFLICT_RESOLVE,
+    API_EXTERNAL_CONFLICT_RESOLVE,
     mw,
     licenseGateMiddleware,
     largeBody,
-    handleResolveDocxConflict,
+    handleResolveExternalConflict,
   );
 
   // Annotation reply: browser user posts a reply to an annotation thread.

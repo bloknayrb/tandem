@@ -761,7 +761,7 @@ describe("chat write helpers — self-wake safety (load-bearing)", () => {
     attachCtrlObservers();
     const events: TandemEvent[] = [];
     const sub = (e: TandemEvent) => events.push(e);
-    subscribe(sub);
+    subscribe(sub, "external");
     try {
       // Claude/local writes — both must be invisible to the channel.
       const id = appendClaudeChatMessage("streamed reply", { documentId: "d1" });

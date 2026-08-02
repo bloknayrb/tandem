@@ -377,3 +377,107 @@ test("toggling the setting live re-sizes the strip, stranding no per-tab floor",
   expect(Math.max(...after.tabs.map((t) => t.wrapper.width))).toBeCloseTo(FLOOR_PX, 0);
   assertNothingSpills(after);
 });
+
+/**
+ * Opening-a-tab timing regression (#1257 Fix 1). The three tests above all run
+ * under `emulateMedia({ reducedMotion: "reduce" })`, which short-circuits
+ * `tabEnter`/`tabExit` to `{ duration: 0 }` — they cannot see this bug even
+ * after the fix. This test deliberately leaves motion ON (Playwright's default
+ * context `reducedMotion` is "no-preference" — nothing in this file forces
+ * "reduce" at the top level, only `openFixtureTabs` does it per-call).
+ *
+ * The bug: `tabEnter` used to read `node.offsetWidth` at transition SETUP time,
+ * which runs during Svelte's render/DOM-patch pass — strictly BEFORE
+ * DocumentTabs' adaptive-floor `$effect` flushes. For a newly-opened adaptive
+ * tab that reads only the un-floored base CSS (`.tab-flip{min-width:142px}`),
+ * so a short-named tab would visibly unroll 0→142px and then SNAP to its real
+ * (smaller) floor the instant the effect ran moments later.
+ *
+ * Rather than sampling mid-animation (timing-sensitive, flaky), this inspects
+ * the actual `Animation` Svelte installs via `element.animate()`: the WIDTH
+ * baked into its keyframes at setup time IS the bug signal — a regression
+ * would show every keyframe's width running up to 142px regardless of the
+ * tab's own name, even though nothing has visually settled yet.
+ */
+test("adaptive mode: a newly-opened tab's enter transition targets its OWN adaptive floor, never the uniform 142px floor (#1257)", async ({
+  page,
+}) => {
+  // Seed several long-named tabs (crowds the strip, matching the other tests'
+  // fixture pattern) and load with motion enabled and adaptive mode on.
+  const longNames = Array.from({ length: 6 }, (_, i) => `tandem-ink-email-runbook-${i + 1}.md`);
+  for (const name of longNames) {
+    const filePath = path.join(tmpDir, name);
+    fs.writeFileSync(filePath, `# ${name}\n\nSizing fixture.\n`);
+    await mcp.callTool("tandem_open", { filePath });
+  }
+
+  await page.addInitScript(
+    ([key, value]) => {
+      window.localStorage.setItem(
+        key as string,
+        JSON.stringify({ schemaVersion: 18, uniformTabWidth: value }),
+      );
+    },
+    ["tandem:settings", false],
+  );
+
+  await page.goto("http://127.0.0.1:5173");
+  await page.waitForSelector("[data-testid='tab-scroll-container']");
+  // Svelte skips intros on the initial render, so these existing tabs mount
+  // without an `in:` transition — settle before opening the probe tab.
+  await expect
+    .poll(() => page.locator(".tab-flip").count(), { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(longNames.length);
+
+  // Open ONE more tab, with a deliberately short name, AFTER the app has
+  // mounted — this is the only way to get a genuine `in:tabEnter` intro.
+  const shortName = "ab.md";
+  const shortPath = path.join(tmpDir, shortName);
+  fs.writeFileSync(shortPath, `# ${shortName}\n\nSizing fixture.\n`);
+  await mcp.callTool("tandem_open", { filePath: shortPath });
+
+  // Poll (from inside the page, to avoid a Playwright-side fixed sleep) for
+  // the REAL eased keyframe set. Svelte's transition setup first installs a
+  // 0-duration "freeze at t=0" dummy animation (two identical width:0px
+  // keyframes) and swaps it for the full multi-sample animation on the dummy's
+  // `onfinish` — so wait for more than 2 keyframes before reading the target.
+  const keyframeWidths = await page.evaluate(async (name) => {
+    function findWrapper(): Element | null {
+      const nameEl = [...document.querySelectorAll("[data-testid^='tab-name-']")].find(
+        (el) => el.textContent === name,
+      );
+      return nameEl?.closest(".tab-flip") ?? null;
+    }
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const wrapper = findWrapper() as (Element & { getAnimations?: () => Animation[] }) | null;
+      const anim = wrapper?.getAnimations?.()[0];
+      const kfs = anim?.effect instanceof KeyframeEffect ? anim.effect.getKeyframes() : [];
+      if (kfs.length > 2) return kfs.map((k) => k.width as string);
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    return null;
+  }, shortName);
+
+  expect(keyframeWidths).not.toBeNull();
+  const targetWidth = parseFloat(String(keyframeWidths?.at(-1)));
+  expect(Number.isFinite(targetWidth)).toBe(true);
+  // THE assertion: the animation's own target, baked in at setup time, must be
+  // this short tab's adaptive floor — well under the 142px uniform floor —
+  // not 142px itself. (A regression here shows up as ~142 regardless of name.)
+  expect(targetWidth).toBeLessThan(120);
+  expect(targetWidth).toBeGreaterThan(40);
+
+  // And once the transition (TAB_ENTER_MS=220ms) plus the adaptive-floor
+  // effect have both settled, the RESTING width must equal that same target —
+  // no post-transition snap to a different number.
+  await page.waitForTimeout(400);
+  const restWidth = await page.evaluate((name) => {
+    const nameEl = [...document.querySelectorAll("[data-testid^='tab-name-']")].find(
+      (el) => el.textContent === name,
+    );
+    return nameEl?.closest(".tab-flip")?.getBoundingClientRect().width ?? null;
+  }, shortName);
+  expect(restWidth).not.toBeNull();
+  expect(Math.abs((restWidth as number) - targetWidth)).toBeLessThan(2);
+});

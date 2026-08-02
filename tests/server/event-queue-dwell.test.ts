@@ -28,7 +28,7 @@ function collectEvents(): { events: TandemEvent[]; cleanup: () => void } {
   const cb = (event: TandemEvent) => {
     events.push(event);
   };
-  subscribe(cb);
+  subscribe(cb, "external");
   return { events, cleanup: () => unsubscribe(cb) };
 }
 
