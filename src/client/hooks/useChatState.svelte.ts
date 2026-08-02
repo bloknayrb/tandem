@@ -12,6 +12,14 @@ import { generateMessageId } from "../../shared/utils";
 
 const MAX_SEEN_MESSAGE_IDS = 400;
 
+function getReferencedDocumentIds(messages: readonly ChatMessage[]): Set<string> {
+  return new Set(
+    messages.flatMap((message) =>
+      typeof message.documentId === "string" && message.documentId ? [message.documentId] : [],
+    ),
+  );
+}
+
 export interface ChatState {
   readonly messages: ChatMessage[];
   readonly documentFileNames: ReadonlyMap<string, string>;
@@ -49,9 +57,11 @@ export function createChatState(options: {
         .filter(([id, value]) => id !== Y_MAP_CHAT_SEEN_INITIALIZED && value === true)
         .map(([id]) => id),
     );
+    const referencedDocumentIds = getReferencedDocumentIds(next);
     const names = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
     documentFileNames = new Map(
       Array.from(names.entries()).flatMap(([id, value]) => {
+        if (!referencedDocumentIds.has(id)) return [];
         const fileName = safeFileName(value);
         return fileName ? [[id, fileName] as const] : [];
       }),
@@ -134,21 +144,29 @@ export function createChatState(options: {
     if (options.getVisible()) acknowledgeVisibleMessages(doc);
   });
 
-  // Keep a durable, path-free name snapshot independent of the current open
-  // document list. Closed documents can then still be named after restart.
+  // Keep path-free names only for documents referenced by current chat. An
+  // open document alone is not permission to copy its filename into CTRL.
+  // Existing names survive tab closure while their messages remain.
   $effect(() => {
     const doc = options.getCtrlYdoc();
     const synced = options.getInitialSyncComplete();
     const openDocuments = options.getOpenDocuments();
+    void messages;
     if (!doc || !synced) return;
+    const referencedDocumentIds = getReferencedDocumentIds(messages);
     const names = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
     doc.transact(() => {
       for (const [id, value] of names.entries()) {
+        if (!referencedDocumentIds.has(id)) {
+          names.delete(id);
+          continue;
+        }
         const sanitized = safeFileName(value);
         if (!sanitized) names.delete(id);
         else if (sanitized !== value) names.set(id, sanitized);
       }
       for (const open of openDocuments) {
+        if (!referencedDocumentIds.has(open.id)) continue;
         const fileName = safeFileName(open.fileName);
         if (fileName && names.get(open.id) !== fileName) names.set(open.id, fileName);
       }

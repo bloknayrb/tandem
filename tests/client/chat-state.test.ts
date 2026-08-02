@@ -6,6 +6,7 @@ import * as Y from "yjs";
 import ChatStateHarness from "./fixtures/ChatStateHarness.svelte";
 import {
   Y_MAP_CHAT,
+  Y_MAP_CHAT_DOCUMENT_NAMES,
   Y_MAP_CHAT_SEEN,
   Y_MAP_CHAT_SEEN_INITIALIZED,
 } from "../../src/shared/constants";
@@ -88,9 +89,36 @@ describe("App-owned chat unread state", () => {
     second.off("update", backward);
   });
 
-  it("persists path-free filenames for closed documents across a CTRL restart", async () => {
+  it("never records filenames for open documents that chat does not reference", async () => {
     const doc = new Y.Doc();
     doc.getMap(Y_MAP_CHAT_SEEN).set(Y_MAP_CHAT_SEEN_INITIALIZED, true);
+    doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES).set("stale-doc", "Stale.md");
+    const view = render(ChatStateHarness, {
+      props: {
+        doc,
+        synced: true,
+        visible: false,
+        openDocuments: [{ id: "unrelated-doc", fileName: "C:\\private\\Unrelated.md" }],
+      },
+    });
+
+    await waitFor(() => {
+      expect(view.getByTestId("document-names").textContent).toBe("[]");
+      expect(doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES).size).toBe(0);
+    });
+  });
+
+  it("persists path-free filenames for closed referenced documents across a CTRL restart", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT_SEEN).set(Y_MAP_CHAT_SEEN_INITIALIZED, true);
+    doc.getMap(Y_MAP_CHAT).set("about-closed-doc", {
+      id: "about-closed-doc",
+      timestamp: 1,
+      author: "user",
+      text: "Remember this document",
+      documentId: "closed-doc",
+      read: false,
+    } satisfies ChatMessage);
     const view = render(ChatStateHarness, {
       props: {
         doc,

@@ -177,6 +177,25 @@ function cloneYDoc(doc: Y.Doc): Y.Doc {
   return clone;
 }
 
+function pruneCtrlDocumentNames(doc: Y.Doc): void {
+  const referencedDocumentIds = new Set<string>();
+  doc.getMap(Y_MAP_CHAT).forEach((value) => {
+    const documentId = (value as { documentId?: unknown } | null)?.documentId;
+    if (typeof documentId === "string" && documentId) referencedDocumentIds.add(documentId);
+  });
+
+  const documentNames = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
+  for (const [id, value] of documentNames.entries()) {
+    if (!referencedDocumentIds.has(id) || typeof value !== "string") {
+      documentNames.delete(id);
+      continue;
+    }
+    const fileName = path.basename(value.replace(/\\/g, "/")).trim();
+    if (!fileName) documentNames.delete(id);
+    else if (fileName !== value) documentNames.set(id, fileName);
+  }
+}
+
 async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
   if (!sessionDirReady) {
     await fs.mkdir(SESSION_DIR, { recursive: true });
@@ -199,20 +218,9 @@ async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
     });
   }
 
-  // Defense in depth: only basenames may reach the durable CTRL file even if
-  // an old or hostile client writes a path-bearing value into the shared map.
-  const documentNames = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
-  withInternal(doc, () => {
-    for (const [id, value] of documentNames.entries()) {
-      if (typeof value !== "string") {
-        documentNames.delete(id);
-        continue;
-      }
-      const fileName = path.basename(value.replace(/\\/g, "/")).trim();
-      if (!fileName) documentNames.delete(id);
-      else if (fileName !== value) documentNames.set(id, fileName);
-    }
-  });
+  // Defense in depth: durable metadata is restricted to basename-only names
+  // for documents referenced by retained chat messages.
+  withInternal(doc, () => pruneCtrlDocumentNames(doc));
 
   const state = Y.encodeStateAsUpdate(doc);
   const ydocState = Buffer.from(state).toString("base64");
@@ -248,11 +256,13 @@ export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
       for (const id of capturedIds) snapshotChat.delete(id);
     });
     await persistCtrlSnapshot(snapshot);
-    if (capturedIds.length > 0) {
-      withInternal(doc, () => {
-        for (const id of capturedIds) liveChat.delete(id);
-      });
-    }
+    withInternal(doc, () => {
+      for (const id of capturedIds) liveChat.delete(id);
+      // Recompute from the current live map so messages that arrived while
+      // the snapshot persisted retain their filename metadata. This also
+      // clears legacy orphan metadata when chat was already empty.
+      pruneCtrlDocumentNames(doc);
+    });
     return capturedIds.length;
   });
 }
