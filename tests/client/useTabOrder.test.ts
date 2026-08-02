@@ -100,4 +100,22 @@ describe("applyReorder", () => {
     const result = applyReorder(["a", "b", "c"], "b", "b", ids);
     expect(result).toEqual(["a", "b", "c"]);
   });
+
+  it("always returns a fresh array, even when the result is identical", () => {
+    // Load-bearing for the A30 drop frame, which discriminates on "was reorder
+    // INVOKED" rather than "did the order change" (see the drop-frame comment in
+    // DocumentTabs.svelte). That only holds because every return path here
+    // allocates: the hook assigns the result to a `$state` array, so a fresh
+    // reference always dirties it, always re-derives `orderedTabs`, and always
+    // reconciles the each block — which is what gives flip a measure()/apply()
+    // pair to settle the dragged tab home. Returning `order` itself on a no-op
+    // would be a harmless-looking micro-optimisation that silently strands a
+    // lifted tab mid-air.
+    const order = ["a", "b", "c"];
+    expect(applyReorder(order, "b", "b", ids)).not.toBe(order); // identical result
+    expect(applyReorder(order, "a", "zz", ids)).not.toBe(order); // missing target
+    expect(applyReorder(order, "zz", "a", ids)).not.toBe(order); // missing source
+    expect(applyReorder(order, "a", "b", ids)).not.toBe(order); // ordinary move
+    expect(order).toEqual(["a", "b", "c"]); // and never mutates its input
+  });
 });

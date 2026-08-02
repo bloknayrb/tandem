@@ -75,8 +75,13 @@ function cubicBezier(x1: number, y1: number, x2: number, y2: number): (t: number
   };
 }
 
-/** Exact `--tandem-ease-out`. */
-const easeOut = cubicBezier(0.2, 0.8, 0.2, 1);
+/**
+ * Exact `--tandem-ease-out`. Exported because `animate:flip` needs an easing
+ * FUNCTION — a CSS `cubic-bezier(...)` string throws inside its apply() — and
+ * without it the tab-strip FLIP silently runs on Svelte's `cubicOut` default
+ * instead of the Tandem curve.
+ */
+export const easeOut = cubicBezier(0.2, 0.8, 0.2, 1);
 /** Exact `--tandem-ease-standard` — the snappier exit curve for chrome bars. */
 const easeStandard = cubicBezier(0.4, 0, 0.2, 1);
 /**

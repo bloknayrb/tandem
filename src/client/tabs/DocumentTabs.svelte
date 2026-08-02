@@ -5,7 +5,7 @@ import { createScratchpad } from "../actions/builtin.svelte.js";
 import { isTauriRuntime } from "../cowork/cowork-helpers.js";
 import { loadInvoke } from "../cowork/cowork-invoke.js";
 import type { ClosedTabRecord } from "../hooks/useClosedTabStack.svelte.js";
-import { motionOff, tabEnter, tabExit } from "../panels/cardMotion.js";
+import { easeOut, motionOff, tabEnter, tabExit } from "../panels/cardMotion.js";
 import { isRenamable, type OpenTab } from "../types.js";
 import { isInActiveDragRegion } from "../utils/dismiss-outside.js";
 import {
@@ -24,8 +24,11 @@ import {
   type TabContextMenuActionId,
 } from "./tab-context-menu.js";
 import { measureTabFloor } from "./tab-floor.js";
+import { gapFromRects, resolveDragFrame, type TabStripSnapshot } from "./tabDragMotion.js";
 // A29 morph (#798): shared timing tokens + reduced-motion token-zeroing.
 import "../panels/morphTiming.css";
+// A30 tab-reorder drag: --a30-lift/shift/settle/shadow + reduced-motion zeroing.
+import "./tabDragMotion.css";
 
 interface Props {
   tabs: OpenTab[];
@@ -216,6 +219,280 @@ let captureEl: HTMLElement | null = null;
 
 const DRAG_THRESHOLD_PX = 5;
 
+// ---- A30 tab-reorder drag motion ("lift, part, drop") -------------------
+// The dragged tab tracks the pointer, its siblings part to open the slot it
+// would land in, and `animate:flip` settles it there on release. Three rules
+// make that work, and all three are load-bearing:
+//
+//  1. The transforms go on `.tab-flip` (the flip host), never on the pill.
+//     `getBoundingClientRect()` reflects an element's OWN transform, so a
+//     sibling parted by exactly the distance the reorder is about to move it
+//     satisfies flip's `from === to` and flip creates no animation for it at
+//     all; the dragged tab, measured mid-air and then cleared, gets a correct
+//     200ms settle from wherever the pointer left it. The parting IS the settle.
+//  2. The transform layer stays IMPERATIVE DOM. Any $effect-driven part of it
+//     would run inside the flush — before flip's queued apply() and before our
+//     clear — silently inverting rule 1. The one deliberate exception is
+//     `invalidateDragGeometry`, where that inversion is exactly what we want.
+//  3. The drop target is computed from `dragSnapshot`, not from
+//     `elementFromPoint`. See tabDragMotion.ts for why the two are incompatible.
+/** The dragged tab, while the transform layer is live. Drives TabItem's lift. */
+let liftedId = $state<string | null>(null);
+/**
+ * No usable geometry: no layout at all (happy-dom, a `display: none` strip), or
+ * the snapshot went stale mid-gesture. Deliberately ONE flag rather than two —
+ * if parting kept running while targeting fell back to live hit-testing, the
+ * void-under-the-pointer defect would come back with the indicator hidden.
+ * Degraded ⇒ no lift, no parting, drop indicator shown, live hit-testing.
+ */
+let dragDegraded = $state(false);
+
+// Non-reactive drag-motion bookkeeping (same family as `pointerId` above).
+let dragSnapshot: TabStripSnapshot | null = null;
+/** Index-parallel to `dragSnapshot.ids`. */
+let dragWrappers: HTMLElement[] = [];
+let dragIdSeed: string | null = null;
+let dragSlot: number | null = null;
+let dragStartScrollLeft = 0;
+let dragLastClientX = 0;
+let revertTimer: ReturnType<typeof setTimeout> | null = null;
+let revertWrappers: HTMLElement[] = [];
+
+/** `--a30-settle` plus slack — when the cancel glide has finished. */
+const A30_REVERT_STRIP_MS = 260;
+
+/**
+ * The `.tab-flip` wrappers currently in the strip, in render order. Walks live
+ * children rather than querying by tab id for the same reason the adaptive-floor
+ * pass does: a closing tab lingers ~200ms with its testid intact.
+ */
+function tabWrappers(el: HTMLElement): HTMLElement[] {
+  return Array.from(el.children).filter(
+    (c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains("tab-flip"),
+  );
+}
+
+/**
+ * The wrappers this gesture may touch: everything except a tab on its way out.
+ *
+ * `inert` is Svelte's synchronous outro signal (`transitions.js` `out()`), and
+ * excluding those is load-bearing — `fix()` *appends* to the same inline
+ * `transform`, so clearing it would fling a closing tab to the container origin
+ * for the rest of its collapse.
+ *
+ * Deliberately NOT filtered on `isConnected`. Writing inline style to a
+ * detached node is an unobservable no-op, so the check buys nothing — while on
+ * the teardown path it would skip every wrapper and silently turn the destroy
+ * clear into a no-op (which is exactly what the unmount test caught).
+ */
+function liveWrappers(wrappers: HTMLElement[]): HTMLElement[] {
+  return wrappers.filter((w) => !w.inert);
+}
+
+function captureSnapshot(wrappers: HTMLElement[]): TabStripSnapshot | null {
+  if (wrappers.length < 2) return null;
+  const ids: string[] = [];
+  const lefts: number[] = [];
+  const widths: number[] = [];
+  for (const w of wrappers) {
+    const id = tabIdFromElement(w.querySelector('[role="tab"]'));
+    const rect = w.getBoundingClientRect();
+    if (!id || rect.width <= 0) return null;
+    ids.push(id);
+    lefts.push(rect.left);
+    widths.push(rect.width);
+  }
+  return { ids, lefts, widths, gap: gapFromRects(lefts, widths) };
+}
+
+/** Pointer travel in SNAPSHOT space: viewport delta plus any strip scroll since. */
+function dragOffsetX(): number {
+  return dragLastClientX - pointerStartX + ((scrollEl?.scrollLeft ?? 0) - dragStartScrollLeft);
+}
+
+function beginDragMotion() {
+  const el = scrollEl;
+  // Seeded HERE, not inside the $effect that consumes it: that effect
+  // early-returns before it reads `tabs`, so a seed maintained there would be a
+  // whole gesture stale, and hoisting the read above its guard would make
+  // `tabs` a permanent dependency — which its own comment forbids.
+  dragIdSeed = tabs.map((t) => t.id).join("\0");
+  dragStartScrollLeft = el?.scrollLeft ?? 0;
+  dragSlot = null;
+
+  // 1. Take back animation control before measuring. A running Web Animation
+  //    outranks normal-priority inline style, so a tab re-grabbed within 200ms
+  //    of any settle/open/close would not follow the pointer at all — and the
+  //    snapshot would be measured mid-glide. This is also what settles an
+  //    INTROING neighbour, whose `tabEnter` animates width 0→w and corrupts
+  //    both its own width and every left to its right.
+  //    cancel(), not finish(): finish() on an `out:` transition runs Svelte's
+  //    completion callback → pause_effect → the node is destroyed, so a closing
+  //    tab would vanish instead of collapsing; and finish() only QUEUES its
+  //    notification while `fill: forwards` stays applied, so the precedence
+  //    problem isn't actually resolved on the next line. cancel() is synchronous.
+  const wrappers = el ? liveWrappers(tabWrappers(el)) : [];
+  for (const w of wrappers) {
+    let anims: Animation[] = [];
+    try {
+      anims = w.getAnimations();
+    } catch {
+      // getAnimations() is absent in happy-dom and can throw on a detached node.
+    }
+    // Per-animation, not around the loop: one InvalidStateError must not skip
+    // the rest of this wrapper's animations, or a re-grab mid-settle would find
+    // a surviving Web Animation still outranking the inline transform.
+    for (const anim of anims) {
+      try {
+        anim.cancel();
+      } catch {
+        // cancel() can throw InvalidStateError, and getAnimations() also returns
+        // CSS transitions — including this module's own revert.
+      }
+    }
+  }
+
+  // 2. Measure. Probe the ENVIRONMENT, not a proxy for it: happy-dom's
+  //    `clientWidth` getter returns a field initialised to 0 and never updated,
+  //    so it holds unconditionally and no per-test rect stub can perturb it.
+  const snap = el && el.clientWidth > 0 ? captureSnapshot(wrappers) : null;
+  if (!snap || !draggedId || !snap.ids.includes(draggedId)) {
+    dragSnapshot = null;
+    dragWrappers = [];
+    dragDegraded = true;
+    return;
+  }
+  dragSnapshot = snap;
+  dragWrappers = wrappers;
+  dragDegraded = false;
+  liftedId = draggedId;
+
+  // The dragged wrapper tracks per-frame, so it must carry no transition.
+  // `z-index` as a token, per CLAUDE.md — `check:tokens` only scans hex/rgba,
+  // so a bare `1` would ship silently. No `position: relative`: flex items
+  // honour z-index at `static`, and it would only add another property for
+  // fix()/unfix() to capture and restore.
+  const dragged = wrappers[snap.ids.indexOf(draggedId)];
+  dragged.style.transition = "none";
+  dragged.style.zIndex = "var(--tandem-z-base)";
+}
+
+function updateDragMotion() {
+  const snap = dragSnapshot;
+  const id = draggedId;
+  if (!snap || !id) return;
+  const dx = dragOffsetX();
+  const frame = resolveDragFrame(snap, pointerStartX + dx, id);
+  if (frame.slot !== dragSlot) {
+    dragSlot = frame.slot;
+    dropTarget = frame.target ? { id: frame.target.toId, side: frame.target.side } : null;
+    // Pure writes: every number came from the snapshot, so there is no read to
+    // interleave and no forced layout per sibling.
+    for (let i = 0; i < dragWrappers.length; i++) {
+      if (snap.ids[i] === id) continue;
+      const w = dragWrappers[i];
+      w.style.transition = "transform var(--a30-shift) var(--tandem-ease-out)";
+      w.style.transform = frame.shifts[i] === 0 ? "" : `translateX(${frame.shifts[i]}px)`;
+    }
+  }
+  const dragged = dragWrappers[snap.ids.indexOf(id)];
+  if (dragged) dragged.style.transform = `translateX(${dx}px)`;
+}
+
+function clearDragMotion(wrappers: HTMLElement[]) {
+  for (const w of liveWrappers(wrappers)) {
+    w.style.removeProperty("transition");
+    w.style.removeProperty("transform");
+    w.style.removeProperty("z-index");
+  }
+}
+
+/** The no-reorder release: glide everything home under CSS, then strip it. */
+function revertDragMotion(wrappers: HTMLElement[]) {
+  const live = liveWrappers(wrappers);
+  if (!live.length) return;
+  endRevert();
+  revertWrappers = live;
+  for (const w of live) {
+    // Same-batch is enough: per CSS Transitions §"Starting of transitions" the
+    // AFTER-change style supplies transition-property, so declaring the
+    // transition and clearing the transform together does animate. No forced
+    // reflow, and none should be added back.
+    w.style.transition = "transform var(--a30-settle) var(--tandem-ease-out)";
+    w.style.removeProperty("transform");
+  }
+  revertTimer = setTimeout(endRevert, A30_REVERT_STRIP_MS);
+}
+
+/**
+ * Strip the revert's leftovers. Runs on the timer, and eagerly on the next
+ * pointerdown / teardown. Stripping the TRANSITION matters as much as the
+ * transform: left behind it stays on the wrapper for good, and `fix()`
+ * early-returns when `getAnimations()` is non-empty — so a tab closed later
+ * would skip its position pinning and jump instead of collapsing in place.
+ */
+function endRevert() {
+  if (revertTimer) {
+    clearTimeout(revertTimer);
+    revertTimer = null;
+  }
+  for (const w of revertWrappers) {
+    w.style.removeProperty("transition");
+    w.style.removeProperty("z-index");
+  }
+  revertWrappers = [];
+}
+
+/**
+ * The snapshot no longer describes the strip. Fall back to degraded mode for
+ * the rest of the gesture rather than re-measuring mid-flight: a fresh snapshot
+ * taken while the transforms are applied would measure transformed rects, and
+ * one taken after clearing them would visibly jump.
+ */
+function invalidateDragGeometry() {
+  if (!dragSnapshot) return;
+  // Same reason `buildDecorations()` warns on a CRDT fallback: the feature
+  // degrades to a visibly poorer mode with no other signal, and "the tabs
+  // stopped animating mid-drag" is otherwise unreproducible from a bug report.
+  // Only this path warns — a strip that never had geometry is zero-width, i.e.
+  // not on screen, so nobody is dragging it and there is nothing to report.
+  console.warn("[tandem] tab strip geometry changed mid-drag; falling back to hit-testing");
+  // The one $effect-driven write into the transform layer, and the inversion is
+  // the point: measure() runs with the transforms still on, this clears them
+  // inside the same flush, apply() then reads an untransformed `to` — so the
+  // dragged tab glides home and the siblings un-part instead of snapping.
+  clearDragMotion(dragWrappers);
+  dragSnapshot = null;
+  dragWrappers = [];
+  dragIdSeed = null; // fire once per gesture
+  dragSlot = null;
+  // Also drop the resolved target: it was computed against the snapshot this
+  // function just discarded, and handlePointerUp reads it unconditionally. An
+  // immediate pointerup with no intervening pointermove to re-resolve a fresh
+  // target must fall through to the "no valid drop target" revert path below,
+  // not commit a reorder against geometry that no longer exists.
+  dropTarget = null;
+  liftedId = null;
+  dragDegraded = true;
+}
+
+// A finished drag may emit a trailing synthetic click that would fire the tab's
+// onclick → switch. Swallow it. A no-move press installs nothing, so plain
+// click-to-switch is unaffected. The setTimeout(0) fallback removes the listener
+// if no click arrives (a drag ending over a different tab often fires no click
+// at all) so it can never eat a later legit click.
+function installClickSuppressor() {
+  let timer: ReturnType<typeof setTimeout>;
+  const suppress = (ev: Event) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    window.removeEventListener("click", suppress, true);
+    clearTimeout(timer);
+  };
+  window.addEventListener("click", suppress, true);
+  timer = setTimeout(() => window.removeEventListener("click", suppress, true), 0);
+}
+
 function onWindowPointerMove(e: PointerEvent) {
   handlePointerMove(e);
 }
@@ -223,10 +500,22 @@ function onWindowPointerUp(e: PointerEvent) {
   handlePointerUp(e);
 }
 function onWindowPointerCancel(e: PointerEvent) {
-  if (pointerId !== null && e.pointerId === pointerId) clearDragState();
+  if (pointerId === null || e.pointerId !== pointerId) return;
+  // No click suppressor: a cancelled pointer emits no trailing click.
+  if (dragging) revertDragMotion(dragWrappers);
+  clearDragState();
 }
 function onWindowKeyDown(e: KeyboardEvent) {
-  if (e.key === "Escape") clearDragState();
+  if (e.key !== "Escape") return;
+  if (dragging) {
+    revertDragMotion(dragWrappers);
+    // clearDragState() nulls pointerId, so the real pointerup early-returns and
+    // never installs this — the trailing click reaches onswitch and the tab
+    // activates. Under A30 that reads as "I cancelled, it flew back, and then
+    // it switched anyway."
+    installClickSuppressor();
+  }
+  clearDragState();
 }
 
 function clearDragState() {
@@ -246,12 +535,33 @@ function clearDragState() {
   pointerId = null;
   dragging = false;
   captureEl = null;
+  // Deliberately does NOT clear the transforms: the caller decides between the
+  // flip settle and the CSS revert, and both outlive this call.
+  liftedId = null;
+  dragDegraded = false;
+  dragSnapshot = null;
+  dragWrappers = [];
+  dragIdSeed = null;
+  dragSlot = null;
 }
 
 // Safety net: a component unmount (or HMR) mid-drag would otherwise leak the
 // window listeners, since clearDragState is only reached via pointer/keyboard
 // events that won't fire after teardown. clearDragState is idempotent.
-onDestroy(clearDragState);
+//
+// The transform layer has to be stripped FIRST and explicitly. Every other exit
+// path decides between the flip settle and the CSS revert before calling
+// clearDragState, which is why clearDragState deliberately leaves the styles
+// alone — but a teardown makes no such decision, and clearDragState empties
+// `dragWrappers` on its way out. A full unmount takes the nodes with it, so this
+// only bites under HMR, where svelte-hmr can keep the elements alive: a leftover
+// inline `transition` there keeps `getAnimations()` non-empty, and `fix()`
+// early-returns on that, so the next tab close would jump instead of collapsing.
+onDestroy(() => {
+  clearDragMotion(dragWrappers);
+  endRevert();
+  clearDragState();
+});
 
 // Clear drag state if the dragged or target tab is unmounted mid-drag.
 // pointerup doesn't fire reliably when the source element leaves the DOM.
@@ -259,9 +569,44 @@ onDestroy(clearDragState);
 // clearDragState() (would null draggedId on every Yjs awareness ping).
 $effect(() => {
   if (!draggedId && !dropTarget) return;
-  const ids = new Set(tabs.map((t) => t.id));
-  if (draggedId && !ids.has(draggedId)) draggedId = null;
-  if (dropTarget && !ids.has(dropTarget.id)) dropTarget = null;
+  const ids = tabs.map((t) => t.id);
+  const idSet = new Set(ids);
+  if (draggedId && !idSet.has(draggedId)) draggedId = null;
+  if (dropTarget && !idSet.has(dropTarget.id)) dropTarget = null;
+  // A30: any change to the ORDERED id list invalidates the snapshot's midpoints
+  // and parting magnitudes — not just the removal of a participant, and order
+  // deliberately counts (a reorder from another surface moves every left). Gated
+  // on the seed being non-null because `draggedId` is set at pointerdown, up to
+  // 5px before the seed exists — an ungated compare would read the PREVIOUS
+  // gesture's seed and drop every drag after the first into degraded mode.
+  // The drop itself is not caught here: `clearDragState()` nulls the seed
+  // synchronously, before the reorder's flush ever reaches this effect.
+  if (dragIdSeed !== null && ids.join("\0") !== dragIdSeed) invalidateDragGeometry();
+});
+
+// A30: width-only snapshot invalidation. The id-set detector above is blind to
+// changes that move lefts without changing the set, and the adaptive-floor pass
+// below makes those routine — `activeTabId` changing re-renders that name at
+// font-weight 500, measurably wider than the 400 it was measured at, and with
+// `flex-shrink: 1` every left and width moves with it. Stale midpoints open the
+// gap at the wrong index AND break flip's `from === to` cancellation on drop,
+// leaving a residual glide.
+//
+// The deps are read BEFORE the guard on purpose: an effect that early-returns
+// before reading a signal registers no dependency on it and never re-runs.
+// `tabs` is deliberately NOT among them — `orderedTabs` is a `$derived.by`
+// returning a fresh array on every evaluation, so tracking it here would fire on
+// every Yjs awareness ping and degrade every drag. A local rename is covered by
+// `renamingTabId`; a remote one isn't. That's not just a cosmetic gap: `dropTarget`
+// is resolved against the same stale snapshot, so a remote rename mid-drag can
+// misplace the COMMITTED reorder, not only the animation. Accepted, deferred gap
+// (see PR's "Deferred, flagged back to design" table) — do not fix here.
+$effect(() => {
+  void activeTabId;
+  void renamingTabId;
+  void fontsSettled;
+  void uniformTabWidth;
+  if (dragSnapshot) invalidateDragGeometry();
 });
 
 // The tab strip's width floor, mirrored by `.tab-flip`'s `min-width` below.
@@ -279,16 +624,33 @@ function updateScrollState() {
   canScrollRight = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
 }
 
+// A30: `scrollBehavior` is "smooth" and the auto-scroll effect below fires on a
+// remote `activeTabId` change (Claude calling tandem_open / tandem_switchDocument),
+// animating `scrollLeft` over ~300ms while emitting ZERO pointermove events. The
+// snapshot's lefts are frozen viewport values, so without recomputing here the
+// dragged tab would slide out from under the cursor and the midpoints would drift.
+function onScrollerScroll() {
+  updateScrollState();
+  if (dragging && !dragDegraded) updateDragMotion();
+}
+
 // Set up scroll listeners and resize observer
 $effect(() => {
   const el = scrollEl;
   if (!el) return;
   updateScrollState();
-  el.addEventListener("scroll", updateScrollState, { passive: true });
-  const observer = new ResizeObserver(updateScrollState);
+  el.addEventListener("scroll", onScrollerScroll, { passive: true });
+  const observer = new ResizeObserver(() => {
+    // A30: the scroller's own box changed, so every snapshot left is stale.
+    // (Child width changes don't reach here — the scroller's box doesn't move
+    // when its children resize — which is why the width-only invalidation
+    // effect above exists as well.)
+    if (dragSnapshot) invalidateDragGeometry();
+    updateScrollState();
+  });
   observer.observe(el);
   return () => {
-    el.removeEventListener("scroll", updateScrollState);
+    el.removeEventListener("scroll", onScrollerScroll);
     observer.disconnect();
   };
 });
@@ -384,9 +746,7 @@ $effect(() => {
   // Kept anyway because it's the more direct way to get "every tab-flip
   // wrapper currently in the DOM, in visual order" without cross-referencing
   // the `tabs` prop per id — not because of the dying-node hazard above.
-  const wrappers = Array.from(el.children).filter(
-    (c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains("tab-flip"),
-  );
+  const wrappers = tabWrappers(el);
 
   if (uniformTabWidth) {
     for (const w of wrappers) w.style.removeProperty("min-width");
@@ -433,6 +793,22 @@ $effect(() => {
 // work identically in the browser, so this single path covers both.
 function handleTabPointerDown(e: PointerEvent, id: string) {
   if (e.button !== 0 || singleTab) return;
+  // A30: never start a gesture on the tab being renamed. A drag from the pill's
+  // padding pulls focus off the input, whose blur commits `finish(false)` — the
+  // rename would be silently discarded by the act of grabbing the tab.
+  if (renamingTabId === id) return;
+  // A cancelled drag's glide is still stripping itself; a new grab supersedes it.
+  endRevert();
+  // So does a gesture that never ended. A second finger on another tab, or a
+  // pointerup swallowed by the OS, would otherwise leave the previous gesture's
+  // lift and parting on the strip while this one overwrites the latch that was
+  // the only handle on them. Tear it down rather than refusing to start: a
+  // guard on `pointerId !== null` would make one lost release kill dragging for
+  // the rest of the session.
+  if (pointerId !== null) {
+    clearDragMotion(dragWrappers);
+    clearDragState();
+  }
   pointerId = e.pointerId;
   pointerStartX = e.clientX;
   pointerStartY = e.clientY;
@@ -472,8 +848,21 @@ function handlePointerMove(e: PointerEvent) {
     const dy = e.clientY - pointerStartY;
     if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
     dragging = true;
+    // A30 fires the lift here rather than on a 150ms hold. A hold gate needs a
+    // "lifted but never moved" terminal state, and without one a deliberate slow
+    // click would lift the tab, set `dragging`, install the click suppressor —
+    // and the tab would not switch, breaking the contract two lines below.
+    beginDragMotion();
   }
   e.preventDefault();
+  dragLastClientX = e.clientX;
+  if (!dragDegraded && dragSnapshot) {
+    updateDragMotion();
+    return;
+  }
+  // Degraded: the pre-A30 live hit-test, kept intact. It is only reachable when
+  // nothing is parting, so the void it would otherwise read as "no target"
+  // cannot exist here.
   const overEl = tabElementAtPoint(e.clientX, e.clientY);
   const overId = tabIdFromElement(overEl);
   if (!overEl || !overId || overId === draggedId) {
@@ -492,35 +881,63 @@ function handlePointerUp(e: PointerEvent) {
   // Capture into a const so the narrowing holds inside the `.some` closure below
   // (a `$state` `let` isn't narrowed across a nested function boundary).
   const target = dropTarget;
+  const from = draggedId;
+  const wrappers = dragWrappers;
+  // Drop the lift before the commit. This is a $state write, so it schedules the
+  // very flush the reorder below will reconcile in.
+  liftedId = null;
+  let invoked = false;
   if (
     wasDragging &&
-    draggedId &&
+    from &&
     target &&
-    target.id !== draggedId &&
+    target.id !== from &&
     reorder &&
-    tabs.some((t) => t.id === draggedId) &&
+    tabs.some((t) => t.id === from) &&
     // A closing tab lingers ~200ms during its s3 `out:` collapse with its tab
     // testid and role intact, so it can still be picked as a drop target — guard
     // against reordering onto an id no longer in `tabs`.
     tabs.some((t) => t.id === target.id)
   ) {
-    reorder(draggedId, target.id, target.side);
+    try {
+      reorder(from, target.id, target.side);
+      invoked = true;
+    } catch (err) {
+      // `reorder` is a host prop — this component can't know what it does. A
+      // throw here used to skip everything below it, stranding the transform
+      // layer, the pointer latch and the window listeners for the rest of the
+      // session. Treat it as not-invoked: no reorder means no reconcile, so the
+      // revert path is the correct one, and the gesture still tears down.
+      console.warn("[tandem] tab reorder threw; reverting the drag", err);
+    }
   }
   if (wasDragging) {
-    // A finished drag may emit a trailing synthetic click that would fire the
-    // tab's onclick → switch. Swallow it. A no-move press installs nothing, so
-    // plain click-to-switch is unaffected. The setTimeout(0) fallback removes
-    // the listener if no click arrives (a drag ending over a different tab
-    // often fires no click at all) so it can never eat a later legit click.
-    let timer: ReturnType<typeof setTimeout>;
-    const suppress = (ev: Event) => {
-      ev.stopPropagation();
-      ev.preventDefault();
-      window.removeEventListener("click", suppress, true);
-      clearTimeout(timer);
-    };
-    window.addEventListener("click", suppress, true);
-    timer = setTimeout(() => window.removeEventListener("click", suppress, true), 0);
+    // The discriminator is "was `reorder` INVOKED", not "did the order change".
+    // `applyReorder` returns `order.filter(...)` — a new array even when it
+    // changes nothing — so any invocation dirties `localOrder`, re-derives
+    // `orderedTabs` and reconciles the each block; and measure()/apply() run on
+    // ALL surviving items on every reconcile, not only the ones that moved. It
+    // cannot be a return value either: `reorder` is typed `void`, so
+    // `const committed = reorder(...)` would be undefined on every call and send
+    // 100% of drops down the revert path.
+    if (invoked) {
+      // Between flip's measure() (already run, with the transforms on, during
+      // this flush's each-reconcile) and its apply() (queued at the end of that
+      // reconcile). Clearing EARLIER makes measure() read the untransformed
+      // original slot, so flip computes a full (w + gap) delta and the drop jumps
+      // backwards then glides forwards; leaving it on at apply() time bakes the
+      // transform into the css flip prepends, and the tab snaps 200ms later.
+      // A flushSync landing between here and the microtask — tick(), an {#await}
+      // resolving — would run measure() AND apply() with the transform still on.
+      queueMicrotask(() => clearDragMotion(wrappers));
+    } else {
+      // No call ⇒ the each collection is never re-evaluated ⇒ the block never
+      // reconciles ⇒ measure()/apply() do not run at all. There is no flip to
+      // settle the tab, so an unconditional clear would snap it home from
+      // mid-air — and equally no flip for this CSS revert to race.
+      revertDragMotion(wrappers);
+    }
+    installClickSuppressor();
   }
   clearDragState();
 }
@@ -530,6 +947,16 @@ function handleKeyDown(e: KeyboardEvent, id: string) {
   if (!e.altKey || !reorder) return;
   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
   e.preventDefault();
+  // A30: Alt+Arrow stays live mid-drag (pointerdown focuses the tab, and
+  // onWindowKeyDown only intercepts Escape). Interleaving them would commit a
+  // keyboard reorder against the pointer gesture's snapshot, leave the parted
+  // siblings gliding toward a drop that will no longer happen, and layer a
+  // second reorder on release. Gate on `dragging` — the flag set past the 5px
+  // threshold — NOT on `pointerId !== null`: that is a latch cleared only by
+  // pointerup/pointercancel/Escape/onDestroy, so it would block keyboard
+  // reorder during a press-and-hold, and any missed release would silently kill
+  // keyboard reorder for the rest of the session.
+  if (dragging) return;
 
   const idx = tabs.findIndex((t) => t.id === id);
   if (idx === -1) return;
@@ -798,17 +1225,23 @@ $effect(() => {
         class="tab-flip"
         class:uniform={uniformTabWidth}
         role="presentation"
-        animate:flip={{ duration: motionOff(reduceMotion) ? 0 : 200 }}
+        animate:flip={{ duration: motionOff(reduceMotion) ? 0 : 200, easing: easeOut }}
         in:tabEnter={{ reduceMotion, uniformTabWidth }}
         out:tabExit={{ reduceMotion }}
       >
+        <!-- A30: the parted gap IS the drop indicator, so the 2px accent wedge
+             renders only in degraded mode — where nothing parts, and where
+             removing it would leave a mid-drag `tabs` change with no feedback at
+             all for the rest of the gesture. `dropIndicator` and `lifted` are
+             mutually exclusive by construction, so this isn't double-signalling. -->
         <TabItem
           {tab}
           isActive={tab.id === activeTabId}
           onswitch={onTabSwitch}
           onclose={guardedClose}
           onpointerdown={handleTabPointerDown}
-          dropIndicator={dropTarget?.id === tab.id ? dropTarget.side : null}
+          dropIndicator={dragDegraded && dropTarget?.id === tab.id ? dropTarget.side : null}
+          lifted={liftedId === tab.id}
           onkeydown={handleKeyDown}
           isRenaming={renamingTabId === tab.id}
           onstartrename={startRename}
@@ -1113,6 +1546,18 @@ $effect(() => {
      collapsing — keep it non-interactive so a stray click can't hit a vanishing item. */
   .nt-morph:not(.open) .nt-cell {
     pointer-events: none;
+  }
+  /* ...but `.nt-cell` is only the body. The FILLED shell itself keeps its card
+     surface for the whole ~860ms close collapse, and while it is wide it sits
+     over the tab strip — so the tabs underneath stay unhittable long after the
+     menu visually left. An A29 correctness bug in its own right; A30 makes it
+     reachable, because a grab that lands on the shell never starts a gesture at
+     all. The `+` must opt back in: it lives inside the same shell. */
+  .nt-morph.filled:not(.open) {
+    pointer-events: none;
+  }
+  .nt-morph.filled:not(.open) .tab-add-pill {
+    pointer-events: auto;
   }
 
   /* 28×28 floating-pill `+` add-tab button — the closed state of the morph. Inherits the
