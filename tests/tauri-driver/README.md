@@ -106,6 +106,21 @@ starts `tauri-driver`, launches the app, and runs the specs. To skip the build
 and reuse an existing `src-tauri/target/debug/tandem-desktop[.exe]`, set
 `TAURI_SKIP_BUILD=1`.
 
+On Windows, `TAURI_DRIVER_VERBOSE_LOG=1` routes `msedgedriver.exe` through a
+generated `.cmd` shim that turns on `--verbose` logging (written to
+`%RUNNER_TEMP%\msedgedriver.log`, falling back to the OS temp dir). CI sets it;
+turn it on locally when a session fails to be created and you need the driver's
+own account of how it launched the app (#1197).
+
+The shim fails soft to the plain `PATH` lookup if it cannot be resolved, created,
+or run — `wdio.conf.ts` probes `tauri-driver --help` for `--native-driver` and
+executes the generated `.cmd` (requiring a version string back) before adopting
+it, and logs which branch it took to stderr. That is not a total guarantee: once
+adopted, the shim is on the critical path, and tauri-driver spawns it from Rust,
+which a Node smoke test cannot stand in for. If a run dies at driver startup,
+read the `[wdio] native-driver shim:` line in the log first — the shim is the one
+thing in that path that a green run does not need.
+
 On Linux (local only), wrap with a virtual display:
 
 ```sh

@@ -110,7 +110,7 @@ describe("evictPartialDocState (#616)", () => {
 
     const received: string[] = [];
     const cb = (ev: { type: string }) => received.push(ev.type);
-    subscribe(cb);
+    subscribe(cb, "external");
     try {
       __testEvictPartialDocState(doc, DOC_ID);
     } finally {

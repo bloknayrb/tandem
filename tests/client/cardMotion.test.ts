@@ -5,7 +5,10 @@ import {
   cardEnter,
   cardExit,
   cardFlyToMargin,
+  emptyUnfold,
   registerFlySource,
+  rowEnter,
+  rowOut,
   tabEnter,
   tabExit,
 } from "../../src/client/panels/cardMotion";
@@ -244,6 +247,95 @@ describe("tabEnter", () => {
       // regardless of effect timing).
       expect(present).toContain("width:0px");
     });
+  });
+});
+
+// A14 activity-row lifecycle. The axis split is the whole point of the scene —
+// vertical reads as "arriving", horizontal as "leaving" — so it is asserted in
+// both directions rather than just checking that some transform exists.
+describe("rowEnter / rowOut", () => {
+  it("are no-ops under the reduce-motion setting", () => {
+    expect(rowEnter(el(), { reduceMotion: true })).toEqual({ duration: 0 });
+    expect(rowOut(el(), { reduceMotion: true })).toEqual({ duration: 0 });
+  });
+
+  it("arrives on the vertical axis only (240ms)", () => {
+    const cfg = rowEnter(el(), { reduceMotion: false });
+    expect(cfg.duration).toBe(240);
+    const mid = cfg.css!(0.5, 0.5);
+    expect(mid).toContain("translateY");
+    expect(mid).not.toContain("translateX");
+    expect(cfg.css!(1, 0)).toContain("opacity:1");
+    expect(cfg.css!(0, 1)).toContain("opacity:0");
+  });
+
+  it("leaves on the horizontal axis only (200ms)", () => {
+    const cfg = rowOut(el(), { reduceMotion: false });
+    expect(cfg.duration).toBe(200);
+    const mid = cfg.css!(0.5, 0.5);
+    expect(mid).toContain("translateX");
+    expect(mid).not.toContain("translateY");
+    // inert while leaving — the row lingers ~200ms after the store dropped it.
+    expect(mid).toContain("pointer-events:none");
+  });
+
+  it("collapses height AND margin so the gap closes with the row", () => {
+    // The gap is the row's own margin-bottom (not an adjacent-sibling margin-top),
+    // so both must ride the same transition or the 2px snaps at splice time.
+    for (const cfg of [rowEnter(el(), {}), rowOut(el(), {})]) {
+      const mid = cfg.css!(0.5, 0.5);
+      expect(mid).toContain("height:");
+      expect(mid).toContain("margin-bottom:");
+      expect(mid).toContain("overflow:clip");
+      expect(mid).toContain("box-sizing:border-box");
+      // padding is NOT animated: `.toast-row`'s padding is horizontal as well as
+      // vertical, so scaling it would shrink the row's inline width mid-flight and
+      // re-wrap the message (text wrapping is a step function of width). The
+      // vertical part is already covered by animating the border-box height.
+      expect(mid).not.toContain("padding");
+    }
+  });
+
+  it("exits on a true ease-in curve — distinct from both existing tokens", () => {
+    const { easing: outEasing } = rowOut(el(), {});
+    const { easing: enterEasing } = rowEnter(el(), {});
+    expect(outEasing!(0)).toBe(0);
+    expect(outEasing!(1)).toBe(1);
+    // ease-in accelerates away: still behind halfway at the midpoint. This is the
+    // property neither --tandem-ease-out nor --tandem-ease-standard has, and the
+    // reason the curve is module-private rather than a dead CSS token.
+    expect(outEasing!(0.5)).toBeLessThan(0.5);
+    // ...and the entrance is front-loaded, so the two are genuinely opposed.
+    expect(enterEasing!(0.5)).toBeGreaterThan(0.5);
+    // monotonic non-decreasing.
+    let prev = -1;
+    for (let i = 0; i <= 10; i++) {
+      const v = outEasing!(i / 10);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      prev = v;
+    }
+  });
+});
+
+describe("emptyUnfold", () => {
+  it("is a no-op under the reduce-motion setting", () => {
+    expect(emptyUnfold(el(), { reduceMotion: true })).toEqual({ duration: 0 });
+  });
+
+  it("waits out the row exit before claiming the space", () => {
+    const cfg = emptyUnfold(el(), { reduceMotion: false });
+    // Svelte mounts an incoming branch BEFORE outroing the outgoing one, so
+    // without a delay >= the row exit the empty state pops in at full height
+    // underneath rows that are still collapsing.
+    expect(cfg.delay).toBe(rowOut(el(), {}).duration);
+  });
+
+  it("unfolds height, not just opacity", () => {
+    // Fading alone would still grow the tray ~80px in one frame and then snap.
+    const mid = emptyUnfold(el(), {}).css!(0.5, 0.5);
+    expect(mid).toContain("height:");
+    expect(mid).toContain("opacity:");
+    expect(mid).toContain("overflow:clip");
   });
 });
 

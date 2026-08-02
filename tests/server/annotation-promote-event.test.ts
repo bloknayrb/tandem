@@ -31,6 +31,7 @@ import {
   resetForTesting,
 } from "../../src/server/events/queue.js";
 import { withBrowser, withInternal } from "../../src/shared/origins.js";
+import { setCtrlMode } from "../helpers/ctrl-mode.js";
 import { collectEvents } from "../helpers/event-collector.js";
 import { getAnnotationsMap, makeImportNote } from "../helpers/ydoc-factory.js";
 
@@ -42,6 +43,10 @@ describe("AR5 channel emit — note→comment promotion", () => {
   beforeEach(() => {
     doc = new Y.Doc();
     attachObservers("promote-doc", doc);
+    // The WS-A2 push hold fails CLOSED on an absent mode key ("indeterminate"),
+    // so a promotion would emit nothing. Stand in for the connected client that
+    // broadcasts Tandem — Solo behaviour is covered in event-queue.test.ts.
+    setCtrlMode("tandem");
   });
 
   afterEach(() => {

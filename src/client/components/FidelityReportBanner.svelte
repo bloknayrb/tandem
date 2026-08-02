@@ -23,7 +23,7 @@ interface Props {
   fileName: string;
 }
 
-// documentId is part of the mount contract (mirrors DocxConflictBanner); the
+// documentId is part of the mount contract (mirrors ExternalConflictBanner); the
 // banner keys off the active tab's ydoc, so it isn't read directly here.
 const { ydoc, fileName }: Props = $props();
 

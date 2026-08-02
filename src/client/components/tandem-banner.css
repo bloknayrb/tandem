@@ -63,8 +63,8 @@
   outline-color: var(--tandem-error-fg-strong);
 }
 
-/* Warning family — DocxConflictBanner (#1069). Same shape as error, swaps the
-   color tokens to the amber warning family. */
+/* Warning family — ExternalConflictBanner (#1069). Same shape as error, swaps
+   the color tokens to the amber warning family. */
 .tandem-banner--warning {
   background: var(--tandem-warning-bg);
   color: var(--tandem-warning-fg-strong);
@@ -91,6 +91,20 @@
 }
 .tandem-banner--warning .tandem-banner__dismiss:focus-visible {
   outline-color: var(--tandem-warning-fg-strong);
+}
+
+/* Sticky within a scrolling ancestor — currently ExternalConflictBanner only
+   (#1238 review finding). A normal-flow banner inside `.editor-scroll` can
+   scroll off-screen in a long document while it's silently blocking autosave,
+   with no other persistent in-editor signal. `top: 0` pins it to the top of
+   the nearest scrolling ancestor, which is exactly `.editor-scroll` for this
+   banner's mount point. Deliberately its own modifier, not folded into
+   `.tandem-banner--warning`, which FidelityReportBanner also uses — that
+   banner's placement is unchanged by this PR. */
+.tandem-banner--sticky {
+  position: sticky;
+  top: 0;
+  z-index: var(--tandem-z-sticky);
 }
 
 .tandem-banner__icon {

@@ -2,7 +2,7 @@
  * `getSubscriberCount()` must track a real consumer through connect and close.
  *
  * The function body is `return subscribers.size` — trivially correct on its own.
- * The risk it carries lives in `sse.ts`, where `subscribe(onEvent)` on connect is
+ * The risk it carries lives in `sse.ts`, where `subscribe(onEvent, "external")` on connect is
  * paired with `unsubscribe(onEvent)` inside `cleanup()`. Drop that pairing and the
  * count ratchets upward forever: `tandem doctor` then reports phantom consumers,
  * `/health` shows a push path that looks attached when nothing is, and the
@@ -62,9 +62,6 @@ describe("getSubscriberCount tracks the SSE fan-out", () => {
   it("does not count an in-process subscriber", () => {
     const baseline = getSubscriberCount();
     const inProcess = () => {};
-
-    subscribe(inProcess); // default kind is "internal"
-    expect(getSubscriberCount()).toBe(baseline);
 
     subscribe(inProcess, "internal");
     expect(getSubscriberCount()).toBe(baseline);

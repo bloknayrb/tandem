@@ -394,7 +394,6 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
       console.warn("[Tandem] Save failed:", message);
       deps?.notify("error", `Save failed: ${message}`);
     } else {
-      ok = true;
       // Surface export-fidelity downgrades (#1145, 0c). The server already
       // returns these on a .docx save (SaveResult.fidelityWarnings) but the
       // success body was previously dropped here. The persistent fidelity
@@ -402,11 +401,32 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
       // `deps?.` guards the pre-mount window (deps is wired in App.onMount).
       const json = (await resp.json().catch(() => null)) as {
         data?: {
+          skipCode?: string;
           fidelityWarnings?: string[];
           integrityWarnings?: string[];
           unpreservedImports?: number;
         };
       } | null;
+      // A skipped save is HTTP 200, so `resp.ok` alone would fire StatusBar's
+      // "Saved HH:MM" flash on a save that never happened. With an external
+      // conflict pending that flash sits on screen next to a banner saying the
+      // opposite — and via the activity-tray retry action it can fire for a
+      // non-active document, where there is no banner at all (#1238).
+      //
+      // Scoped to the conflict skip by `skipCode`, not by `status: "skipped"`
+      // broadly: the other skips (scratchpads, the read-only CHANGELOG tab,
+      // `.html`, a concurrent autosave holding the lock) also report a save
+      // that didn't happen, but their `reason` strings are internal prose and
+      // surfacing them raw would trade one wrong message for another. That is
+      // its own fix, tracked separately.
+      if (json?.data?.skipCode === "EXTERNAL_CONFLICT") {
+        deps?.notify(
+          "warning",
+          "Not saved — this file changed on disk. Choose Keep or Reload in the banner above.",
+        );
+        return;
+      }
+      ok = true;
       // Post-write verification advisory (#1123 0e) — louder + distinct from an
       // announced downgrade: the save may have lost content UNEXPECTEDLY. Point
       // at the restore on-ramp; the persistent notice carries the specifics.

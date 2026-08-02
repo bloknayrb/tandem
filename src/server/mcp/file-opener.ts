@@ -4,6 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import type * as Y from "yjs";
 import {
+  AUTO_SAVE_FORMATS,
   CHARS_PER_PAGE,
   LARGE_FILE_PAGE_THRESHOLD,
   MAX_FILE_SIZE,
@@ -46,6 +47,7 @@ import {
   deleteSession,
   isAutoSaveRunning,
   loadSession,
+  narrowConflict,
   restoreYDoc,
   saveSession,
   sourceFileChanged,
@@ -58,8 +60,10 @@ import {
   addDoc,
   autoSaveAllToDisk,
   broadcastOpenDocs,
+  canSaveToDisk,
   getOpenDocs,
   type OpenDoc,
+  readPendingConflict,
   saveDocumentToDisk,
   setActiveDocId,
 } from "./document-service.js";
@@ -186,7 +190,7 @@ export async function openFileByPath(
 
   // Normal open
   const doc = getOrCreateDocument(id);
-  const restore = await maybeRestoreSession(resolved, doc, fileName, format);
+  const restore = await maybeRestoreSession(resolved, doc, fileName, format, readOnly);
   const restoredFromSession = restore.restored;
   if (!restoredFromSession) {
     await loadContentIntoDoc(doc, format, resolved, id);
@@ -196,34 +200,46 @@ export async function openFileByPath(
   // A restored session that carried unsaved edits re-arms the module-state
   // dirty flag (#1069) — it was lost with the previous process. Must run AFTER
   // finalizeDocOpen's registerDirtyObserver. Without this, autosave would skip
-  // the restored-but-unpersisted edits, and the .docx watcher would treat the
-  // doc as clean and auto-reload over the only copy of them.
+  // the restored-but-unpersisted edits, and the watcher would treat the doc as
+  // clean and auto-reload over the only copy of them.
   if (restore.sessionDirty) {
     markDirty(id);
   }
 
-  // Restore-vs-reload prompt (#1069): a restored `.docx` session carrying
-  // unsaved edits diverges from the on-disk file (binary formats never
-  // auto-save). Flag it AFTER finalizeDocOpen so writeDocMeta's stale-flag
-  // tombstone runs first and this fresh detection wins.
-  if (restore.unsavedDocxRestore) {
-    const { diskChanged, sessionMtime } = restore.unsavedDocxRestore;
+  // Restore-vs-reload prompt (#1069, every format since #1238): a restored
+  // session carrying unsaved edits diverges from the on-disk file. Flag it
+  // AFTER finalizeDocOpen so writeDocMeta's stale-flag tombstone runs first and
+  // this fresh detection wins.
+  if (restore.unsavedRestore) {
+    const { diskChanged, sessionMtime, conflict } = restore.unsavedRestore;
     if (diskChanged && sessionMtime > 0) {
       // The disk file changed UNDER the restored unsaved edits. Hold the save
       // baseline at the SESSION's mtime (overriding initSavedBaseline's
       // current-mtime value) so the explicit-save external-modification guard
       // blocks until the user resolves the banner — "keep" re-baselines to the
       // current mtime, "reload" takes the disk content. Otherwise a habitual
-      // Ctrl+S would silently overwrite the external changes (no pre-overwrite
-      // backup exists for binary formats).
+      // Ctrl+S would silently overwrite the external changes.
+      //
+      // This is belt-and-braces now, and it does NOT reach the carried-conflict
+      // case: there, sessionMtime already equals the current disk mtime, so
+      // `diskChanged` is false and this never fires. What actually holds the
+      // line for a carried conflict is saveDocumentToDisk's flag check.
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       withInternal(doc, () => meta.set(Y_MAP_SAVED_AT_VERSION, sessionMtime));
     }
-    flagExternalConflict(id, doc, resolved, {
-      kind: "unsaved-restore",
-      diskChanged,
-      detectedAt: Date.now(),
-    });
+    // A carried flag is re-raised verbatim — relabelling a detected
+    // "external-edit" as an "unsaved-restore" would show the user the wrong
+    // question about a divergence Tandem had already identified precisely.
+    flagExternalConflict(
+      id,
+      doc,
+      resolved,
+      conflict ?? {
+        kind: "unsaved-restore",
+        diskChanged,
+        detectedAt: Date.now(),
+      },
+    );
   }
 
   // Inject tutorial annotations whenever the sample welcome document is opened,
@@ -386,6 +402,38 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
     throw Object.assign(new Error("Document is read-only."), { code: "READ_ONLY" });
   }
 
+  // Refuse while an external conflict is unresolved (#1238). `clearAndReload`
+  // below deletes the flag and re-baselines SAVED_AT_VERSION, so committing
+  // would resolve the conflict silently — in the "keep" direction — and the
+  // save that follows would overwrite the external change with no notice at
+  // all. The source-view textarea is also stale by then: its content came from
+  // a `documentId`-keyed fetch that never re-runs when the server replaces the
+  // Y.Doc, so a user who had already chosen "Reload from file" would have that
+  // choice reversed by their own commit. SourceView renders this inline and
+  // keeps the draft, so exiting source view to answer the banner is a working
+  // exit.
+  const doc = getDocument(id) ?? getOrCreateDocument(id);
+  if (readPendingConflict(doc)) {
+    throw Object.assign(
+      new Error(
+        "This file changed on disk while you had unsaved edits. Leave source view and choose Keep or Reload before applying markdown changes.",
+      ),
+      { code: "EXTERNAL_CONFLICT" },
+    );
+  }
+  // Captured RAW (not narrowed), immediately after the check above with no
+  // await between — so this is the map's exact value at the moment we
+  // confirmed no conflict was pending (undefined, given the throw above).
+  // Passed through to clearAndReload as a guard (#1238 review finding):
+  // `prepareContent` inside clearAndReload does real async work (markdown
+  // parse), and a genuine external write can land during that gap and flag a
+  // NEW conflict via the file watcher. clearAndReload's delete of
+  // Y_MAP_EXTERNAL_CONFLICT must only fire if the map still holds this exact
+  // value by the time the transact runs — otherwise it would silently wipe a
+  // conflict this reload never saw. Same identity-comparison pattern as
+  // reloadFromDisk's rawConflictBeforeReload guard.
+  const rawConflictBeforeCommit = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT);
+
   // Serialize against the file-watcher reload path (which guards on the same
   // Set) so two clear+repopulate transactions never interleave on one Y.Doc.
   if (reloadInProgress.has(id)) {
@@ -395,13 +443,13 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
   }
   reloadInProgress.add(id);
   try {
-    const doc = getDocument(id) ?? getOrCreateDocument(id);
     // markCleanAfter:false keeps the doc dirty — the repopulation bumps the
     // dirty version past savedVersion, so any concurrent autosave's
     // markCleanIfUnchanged(snapshot) sees a newer version and won't clear-to-
     // clean against stale content (#851 mechanism).
     await clearAndReload(id, doc, existing.filePath, "md", existing, markdown, {
       markCleanAfter: false,
+      conflictGuard: { raw: rawConflictBeforeCommit },
     });
     // File-source docs re-wire the durable annotation store (clearAndReload
     // wiped it) and persist the new markdown to disk immediately. Scratchpads
@@ -412,11 +460,15 @@ export async function reloadDocumentFromMarkdown(id: string, markdown: string): 
       // here is the per-doc autosave lock (`savingDocs`) being held by a
       // concurrent 60s autosave at this instant — every other skip reason is
       // excluded (source is "file", not read-only, .md is save-eligible, the
-      // doc is open, and the just-set savedAt baseline rules out the external-
-      // modification guard). So retry briefly to close the window where this
-      // route would report success while disk still holds the pre-edit bytes
-      // (#1021 review SHOULD-FIX). If still skipped after the retries, the doc
-      // is left dirty (markCleanAfter:false) and the next autosave persists it.
+      // doc is open, the just-set savedAt baseline rules out the external-
+      // modification guard, and the guard at the top of this function plus
+      // clearAndReload's flag delete rule out the #1238 conflict gate). So
+      // retry briefly to close the window where this route would report
+      // success while disk still holds the pre-edit bytes (#1021 review
+      // SHOULD-FIX). If still skipped after the retries, the doc is left dirty
+      // (markCleanAfter:false) and the next autosave persists it — which is
+      // sound precisely BECAUSE no conflict can be pending here; with one
+      // pending, #1238 blocks autosave and that fallback would not fire.
       let saved = await saveDocumentToDisk(id, "manual");
       for (let attempt = 0; attempt < 5 && saved.status === "skipped"; attempt++) {
         await new Promise((r) => setTimeout(r, 50));
@@ -689,17 +741,24 @@ function handleAlreadyOpen(
   };
 }
 
-/** Result of maybeRestoreSession (#1069).
+/** Result of maybeRestoreSession (#1069, widened in #1238).
  *  - `sessionDirty`: the restored session carried unsaved edits — the caller
  *    re-arms the module-state dirty flag (lost across restarts) so autosave
- *    and the .docx watcher's dirty check see the truth.
- *  - `unsavedDocxRestore`: set only for a dirty `.docx` session — the caller
- *    surfaces the restore-vs-reload prompt. `sessionMtime` is the on-disk
- *    mtime recorded when the session was saved (0 if it couldn't be stat'd). */
+ *    and the watcher's dirty check see the truth.
+ *  - `unsavedRestore`: set when the user must be prompted — the caller surfaces
+ *    the restore-vs-reload banner. `sessionMtime` is the on-disk mtime recorded
+ *    when the session was saved (0 if it couldn't be stat'd). `conflict` carries
+ *    a flag that was already pending at session-save time, so the caller can
+ *    re-raise it VERBATIM rather than relabelling an "external-edit" as an
+ *    "unsaved-restore". */
 interface RestoreResult {
   restored: boolean;
   sessionDirty?: boolean;
-  unsavedDocxRestore?: { diskChanged: boolean; sessionMtime: number };
+  unsavedRestore?: {
+    diskChanged: boolean;
+    sessionMtime: number;
+    conflict?: ExternalConflictState;
+  };
 }
 
 /**
@@ -709,34 +768,73 @@ interface RestoreResult {
  * has changed, or the restored fragment is empty (falls back to loading from
  * source file).
  *
- * Exception (#1069): a `.docx` session flagged `dirty` restores EVEN IF the
- * source file changed on disk. Binary formats never auto-save, so that session
- * is the only copy of the user's unsaved edits — dropping it for the disk copy
- * (the `.md` behavior) would be silent data loss. The caller flags the
- * divergence so the user can choose keep-vs-reload explicitly.
+ * Exception (#1069, widened to all formats in #1238): a session flagged `dirty`
+ * restores EVEN IF the source file changed on disk. That session is the only
+ * copy of the user's unsaved edits — dropping it for the disk copy (the old
+ * `.md` behaviour) is silent data loss. The caller flags the divergence so the
+ * user can choose keep-vs-reload explicitly.
  */
 async function maybeRestoreSession(
   resolved: string,
   doc: Y.Doc,
   fileName: string,
   format: string,
+  readOnly: boolean,
 ): Promise<RestoreResult> {
   const session = await loadSession(resolved);
   if (session) {
     const changed = await sourceFileChanged(session);
-    const dirtyDocx = format === "docx" && session.dirty === true;
-    if (!changed || dirtyDocx) {
+    const dirtySession = session.dirty === true;
+    if (!changed || dirtySession) {
       restoreYDoc(doc, session);
       const fragment = doc.getXmlFragment("default");
       if (fragment.length > 0) {
+        // Two independent reasons to prompt:
+        //
+        // (a) A conflict was already pending when the session was written.
+        //     Carry it across verbatim — it CANNOT be re-derived from
+        //     `changed`, because saveSession stats the file at save time, so
+        //     sourceFileMtime IS the external write's mtime and
+        //     sourceFileChanged reads false on reopen. Without the carry a
+        //     restart launders an unresolved conflict away and autosave
+        //     overwrites the external file on the next tick.
+        //
+        // (b) The session holds unpersisted edits that autosave will never
+        //     resolve on its own — either the disk also changed, or the format
+        //     is not autosaveable (.docx, .html). For an autosaveable format
+        //     over an unchanged disk there is nothing to choose: the next tick
+        //     persists them. UNLESS the source was deleted or the mtime guard
+        //     is already blocking, in which case autosave never runs and the
+        //     edits sit unpersisted with no banner. That gap is ACCEPTED, not
+        //     handled: both sub-cases are already unreconcilable.
+        //
+        // `readOnly` gates only (b), the SYNTHESIZED prompt: a read-only doc
+        // refuses every save path, so raising a fresh keep-vs-reload choice
+        // over restored-but-unpersistable edits is noise.
+        //
+        // It must NOT gate (a). Suppressing a CARRIED conflict does not defer
+        // it, it DESTROYS it: `writeDocMeta` has already tombstoned the flag
+        // out of the restored Y.Doc, and the next session write (60s tick or
+        // shutdown, neither of which filters read-only docs) rewrites
+        // `conflict` from that now-empty Y.Doc. Reopening the same file
+        // writable afterwards then finds no flag and autosaves over the
+        // external change — the exact laundering the carry exists to prevent,
+        // reachable via View Changelog or any `POST /api/open {readOnly:true}`.
+        // The banner is not a dead end here either: "Reload from file" is a
+        // working branch on a read-only document.
+        const carried = narrowConflict(session.conflict);
+        const needsPrompt =
+          carried !== undefined ||
+          (!readOnly && dirtySession && (changed || !AUTO_SAVE_FORMATS.has(format)));
         return {
           restored: true,
-          sessionDirty: session.dirty === true,
-          ...(dirtyDocx
+          sessionDirty: dirtySession,
+          ...(needsPrompt
             ? {
-                unsavedDocxRestore: {
+                unsavedRestore: {
                   diskChanged: changed,
                   sessionMtime: session.sourceFileMtime,
+                  ...(carried ? { conflict: carried } : {}),
                 },
               }
             : {}),
@@ -1040,9 +1138,9 @@ async function finalizeDocOpen(
   broadcastOpenDocs();
   ensureAutoSave();
 
-  // Watch for external file changes. `.docx` is watched too (#1069): clean
-  // docs reload like .md; docs with unsaved edits get a conflict flag instead
-  // of an auto-reload (see wireFileWatcher's dirty-docx branch).
+  // Watch for external file changes. Clean docs reload from disk in every
+  // format; docs with unsaved edits get a conflict flag instead of an
+  // auto-reload (see wireFileWatcher's dirty branch).
   wireFileWatcher(id, resolved, format);
 }
 
@@ -1163,6 +1261,18 @@ export async function wireAnnotationStore(
  * `opts.readOnly` (default false): the authoritative readOnly for the rewritten
  * metadata. Previously hardcoded `isDocx` — a #576 leftover from when .docx
  * opened read-only; .docx is writable now, so the caller's value is the truth.
+ *
+ * `opts.conflictGuard` (default undefined — unconditional delete, #1238 review
+ * finding): when provided, the `Y_MAP_EXTERNAL_CONFLICT` delete below only
+ * fires if the map's CURRENT raw value still equals `conflictGuard.raw` — the
+ * value the caller captured before its own async gap. Without a guard, this
+ * function's unconditional delete is correct for its other caller (force-open
+ * via `tandem_open force:true`, which is explicitly "discard everything,
+ * including any conflict"). `reloadDocumentFromMarkdown` passes a guard
+ * because a real external write can land during ITS pre-call gap and flag a
+ * genuinely new conflict that this unrelated repopulation must not silently
+ * wipe. The wrapper object (rather than a bare `unknown`) distinguishes "no
+ * guard requested" from "guard requested, captured value was undefined".
  */
 async function clearAndReload(
   id: string,
@@ -1171,7 +1281,11 @@ async function clearAndReload(
   format: string,
   existing: OpenDoc,
   source: string | Buffer,
-  opts?: { markCleanAfter?: boolean; readOnly?: boolean },
+  opts?: {
+    markCleanAfter?: boolean;
+    readOnly?: boolean;
+    conflictGuard?: { raw: unknown };
+  },
 ): Promise<void> {
   console.error("[Tandem] clearAndReload: reloading %s from disk", id);
 
@@ -1218,7 +1332,20 @@ async function clearAndReload(
       meta.set(Y_MAP_SAVED_AT_VERSION, Date.now());
       // Content was rebuilt from the caller's source — any pending external-
       // conflict flag (#1069) is moot. Y.Map.delete on a missing key is a no-op.
-      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      //
+      // Guarded when the caller opted in (#1238 review finding): a real
+      // external write can land during this function's own async gap
+      // (`prepareContent` above) and flag a NEW conflict via the file watcher.
+      // Deleting unconditionally would silently wipe that newer, real
+      // conflict for content this reload never saw. Only delete if the map's
+      // current raw value still matches what the caller captured before the
+      // gap opened.
+      if (
+        opts?.conflictGuard === undefined ||
+        meta.get(Y_MAP_EXTERNAL_CONFLICT) === opts.conflictGuard.raw
+      ) {
+        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      }
     });
 
     // 3. Reattach event queue observers (idempotent — detaches existing first)
@@ -1350,6 +1477,11 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
     console.error("[FileWatcher] reloadFromDisk: reloading %s from %s", id, filePath);
 
     const doc = getOrCreateDocument(id);
+    // Captured RAW (not narrowed) before any async I/O, so the clear below can
+    // do an identity comparison against whatever's in the map at delete-time —
+    // see the comment there. Not `readPendingConflict()`: its narrowed return
+    // rebuilds a fresh object every call, which would defeat the comparison.
+    const rawConflictBeforeReload = doc.getMap(Y_MAP_DOCUMENT_META).get(Y_MAP_EXTERNAL_CONFLICT);
 
     // 1. Read new content outside the transaction (async I/O). Pre-parse
     //    through the adapter so we use the same code path as opens
@@ -1392,9 +1524,18 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
       // guard (stat.mtimeMs > lastSavedAt + 1000) doesn't permanently block
       // future saves against the pre-reload baseline, and clear any external-
       // conflict flag (#1069) — a completed reload IS the resolution.
+      //
+      // Guarded, not unconditional (review finding): steps 1's fs.stat/readFile
+      // were async, so the file watcher could have flagged a NEWER conflict
+      // while they were in flight. Deleting unconditionally would silently wipe
+      // that newer, real conflict for content this reload never saw. Only clear
+      // if the map's current raw value is still what was captured before the
+      // read started.
       const meta = doc.getMap(Y_MAP_DOCUMENT_META);
       meta.set(Y_MAP_SAVED_AT_VERSION, diskStat?.mtimeMs ?? Date.now());
-      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeReload) {
+        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+      }
       // Refresh the import-loss half of the fidelity report (#1145): this path
       // re-imports the doc but deliberately drops `reloadPrepared.issues` for
       // toast purposes (above), so without this the persistent banner would
@@ -1471,11 +1612,30 @@ async function reloadFromDisk(id: string, filePath: string, format: string): Pro
  * Wire up the file watcher for a document. Calls reloadFromDisk on
  * external changes and pushes a browser notification.
  *
- * `.docx` (#1069): a clean doc reloads exactly like .md (the binary branch in
+ * A CLEAN doc reloads from disk in every format (the binary branch in
  * reloadFromDisk reads a Buffer; comment injection is idempotent). A doc with
- * UNSAVED edits is NEVER auto-reloaded — a binary repopulation would clobber
- * the only copy of those edits — it gets an external-conflict flag the client
- * surfaces as a keep-vs-reload banner instead. Tandem's own saves are filtered
+ * UNSAVED edits is NEVER auto-reloaded, in ANY format (#1069 for `.docx`,
+ * widened in #1238): `reloadFromDisk` clears and repopulates the XmlFragment,
+ * and the Y.Doc is the only copy of an unsaved edit whether that edit is bytes
+ * in a ZIP or characters in Markdown. It gets an external-conflict flag the
+ * client surfaces as a keep-vs-reload banner instead. Read-only docs are
+ * excluded from the DIRTY check because they can never be saved
+ * (`saveDocumentToDisk` refuses every source), so a SYNTHESIZED keep-vs-reload
+ * prompt on one would be a dead end — a merely-dirty read-only doc reloads.
+ *
+ * That exclusion does NOT extend to an ALREADY-pending conflict (review
+ * finding): a document closed mid-conflict carries its `dirty` + `conflict`
+ * flags into its session (closeDocumentById), and a carried conflict is
+ * correctly re-raised even on a read-only reopen (maybeRestoreSession) — so a
+ * doc can be simultaneously read-only, dirty, AND conflict-pending. Gating
+ * only on `isDirty && !readOnly` would let a FURTHER external write on that
+ * doc fall into the reload branch and silently destroy the still-unresolved
+ * edits — exactly the class of bug #1238 exists to prevent. So the dispatch
+ * checks for a pending conflict FIRST, independent of readOnly: once flagged,
+ * a conflict only ever clears via an explicit keep/reload resolution, never by
+ * a readOnly reopen or a subsequent watcher tick.
+ *
+ * Tandem's own saves are filtered
  * out before this callback by the file-watcher's two-layer self-write defense:
  * the arrival-time `suppressNextChange` counter swallows the rename events, and
  * a delivery-time content fingerprint (`recordSelfWrite`) catches any event
@@ -1487,9 +1647,10 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
   try {
     watchFile(filePath, async () => {
       try {
-        if (format === "docx" && isDirty(id)) {
-          const doc = getDocument(id);
-          if (!doc) return; // closed between arrival and delivery
+        const doc = getDocument(id);
+        if (!doc) return; // closed between arrival and delivery (or already evicted)
+        const alreadyConflicted = readPendingConflict(doc) !== undefined;
+        if (alreadyConflicted || (isDirty(id) && !getOpenDocs().get(id)?.readOnly)) {
           flagExternalConflict(id, doc, filePath, {
             kind: "external-edit",
             diskChanged: true,
@@ -1526,8 +1687,8 @@ export function wireFileWatcher(id: string, filePath: string, format: string): v
 }
 
 /**
- * Record an external-conflict on a document (#1069, `.docx` only): write the
- * state into Y_MAP_DOCUMENT_META (CRDT-broadcast, so connected clients render
+ * Record an external-conflict on a document (#1069; every format since #1238):
+ * write the state into Y_MAP_DOCUMENT_META (CRDT-broadcast, so clients render
  * the keep-vs-reload banner and late-joining clients still see it) and push a
  * toast. `withInternal` per ADR-031 — server-detected metadata, not user
  * intent; both the channel queue and durable-sync skip it.
@@ -1549,14 +1710,14 @@ function flagExternalConflict(
         ? `${path.basename(filePath)} changed on disk while you have unsaved edits. Choose to keep your edits or reload from the file.`
         : `Unsaved edits for ${path.basename(filePath)} were restored from your last session${conflict.diskChanged ? ", but the file also changed on disk" : ""}. Choose to keep them or reload from the file.`,
     documentId: id,
-    dedupKey: `docx-conflict:${id}`,
+    dedupKey: `external-conflict:${id}`,
     timestamp: Date.now(),
   });
 }
 
 /**
  * Resolve a pending external-conflict (#1069). Invoked by
- * POST /api/docx-conflict/resolve from the client banner.
+ * POST /api/external-conflict/resolve from the client banner.
  *
  * - "keep": keep the in-memory unsaved edits. Clears the flag and re-baselines
  *   Y_MAP_SAVED_AT_VERSION to the CURRENT disk mtime so the explicit-save
@@ -1567,45 +1728,107 @@ function flagExternalConflict(
  *   re-anchored; reloadFromDisk clears the flag and refreshes the baseline).
  *
  * No-op success when no conflict is pending (double-click / stale banner race).
+ *
+ * `expectedDetectedAt` (optional, #1238 review finding — episode-identity
+ * race): the `detectedAt` of the conflict episode the CLIENT saw when the
+ * user clicked. Between the click and this call landing, a second external
+ * write can have replaced the pending conflict with a DIFFERENT episode (a
+ * new `detectedAt`) — the user saw conflict A, clicked "Keep"; before the
+ * request lands, a write for conflict B arrives and replaces the flag.
+ * Resolving whatever is CURRENTLY pending under A's semantics would silently
+ * accept B's disk state as the new baseline, with the user never having seen
+ * a banner for B. When supplied and it does not match the currently-pending
+ * conflict, this is a no-op — same as the "no conflict pending" case above —
+ * rather than resolving the wrong episode. Only checked when the caller
+ * supplies it; omitting it (older/internal callers) keeps resolving whatever
+ * is pending, same as before this check existed.
+ *
  * Throws coded errors the route maps to HTTP status (NO_DOCUMENT).
  */
 export async function resolveExternalConflict(
   id: string,
   choice: "keep" | "reload",
+  expectedDetectedAt?: number,
 ): Promise<void> {
-  const existing = getOpenDocs().get(id);
+  // path.basename eliminates directory components so CodeQL does not trace
+  // user input (the request body's documentId, per handleResolveExternalConflict's
+  // own comment) through Map.get(id) to existing.filePath FS sinks
+  // (js/path-injection) — same technique as closeDocumentById. The actual FS
+  // path used below (`existing.filePath`) always comes from the server-owned
+  // OpenDoc registry, never from request input, regardless of `id`'s shape.
+  const safeId = path.basename(id);
+  const existing = getOpenDocs().get(safeId);
   if (!existing) {
     throw Object.assign(new Error("Document is not open."), { code: "NO_DOCUMENT" });
   }
-  const doc = getDocument(id) ?? getOrCreateDocument(id);
+  const doc = getDocument(safeId) ?? getOrCreateDocument(safeId);
   const meta = doc.getMap(Y_MAP_DOCUMENT_META);
-  if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === undefined) return;
+  // Captured RAW (not narrowed) for the "keep" branch's post-await identity
+  // check below — see the comment there.
+  const rawConflictBeforeResolve = meta.get(Y_MAP_EXTERNAL_CONFLICT);
+  if (rawConflictBeforeResolve === undefined) return;
+
+  // Episode-identity check — see the doc comment above. `readPendingConflict`
+  // is a second, synchronous read of the same map (no await between here and
+  // the raw read above), so it observes the identical value.
+  if (expectedDetectedAt !== undefined) {
+    const pending = readPendingConflict(doc);
+    if (pending?.detectedAt !== expectedDetectedAt) return;
+  }
 
   const resolvedFilePath = path.resolve(existing.filePath);
 
   if (choice === "keep") {
-    const stat = await fs.stat(resolvedFilePath).catch(() => null);
+    // Only re-baseline for a format that HAS a save path. The baseline exists
+    // to unblock the external-modification guard on the next save; `.html` has
+    // no next save (`saveDocumentToDisk` refuses it outright), so the write
+    // would buy nothing and cost something: TabItem reads any
+    // SAVED_AT_VERSION change as "saved", clearing the unsaved dot and
+    // flashing a check on a document whose edits still exist only in memory
+    // (#1238).
+    const canSave = canSaveToDisk(existing.format);
+    // Safe FS sink (CodeQL js/path-injection): `resolvedFilePath` is derived
+    // from `existing.filePath`, the OpenDoc registry's server-managed path
+    // (only ever set by openFileByPath / resolveAndValidatePath / a validated
+    // rename or save-as) — never raw request input. Same established
+    // false-positive class as document-service.ts's FS sinks; dismiss per
+    // issue #1042.
+    const stat = canSave ? await fs.stat(resolvedFilePath).catch(() => null) : null;
     withInternal(doc, () => {
-      meta.delete(Y_MAP_EXTERNAL_CONFLICT);
-      // Date.now() fallback when the file is transiently unreadable (e.g. a
-      // Word read-lock): clearing the flag without re-baselining would hide
-      // the banner while the external-modification guard kept blocking every
-      // subsequent save until the document was closed and reopened.
-      meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
+      // Guarded, not unconditional (review finding): the fs.stat above was
+      // async, so the file watcher could have flagged a NEWER conflict while
+      // it was in flight. "Keep" only means "keep the edits I saw when I
+      // clicked" — it must not also silently dismiss a conflict that arrived
+      // after the click.
+      if (meta.get(Y_MAP_EXTERNAL_CONFLICT) === rawConflictBeforeResolve) {
+        meta.delete(Y_MAP_EXTERNAL_CONFLICT);
+        // Date.now() fallback when the file is transiently unreadable (e.g. a
+        // Word read-lock): clearing the flag without re-baselining would hide
+        // the banner while the external-modification guard kept blocking every
+        // subsequent save until the document was closed and reopened.
+        if (canSave) {
+          meta.set(Y_MAP_SAVED_AT_VERSION, stat ? stat.mtimeMs : Date.now());
+        }
+      }
     });
     return;
   }
 
-  await reloadFromDisk(id, resolvedFilePath, existing.format);
-  pushNotification({
-    id: generateNotificationId(),
-    type: "file-reloaded",
-    severity: "info",
-    message: `Reloaded from disk: ${path.basename(existing.filePath)}`,
-    documentId: id,
-    dedupKey: `reload:${id}`,
-    timestamp: Date.now(),
-  });
+  // reloadFromDisk returns false (and leaves the flag untouched) when a
+  // concurrent reload already holds `reloadInProgress` — in that case this
+  // click didn't perform a reload, so don't claim it did.
+  const reloaded = await reloadFromDisk(safeId, resolvedFilePath, existing.format);
+  if (reloaded) {
+    pushNotification({
+      id: generateNotificationId(),
+      type: "file-reloaded",
+      severity: "info",
+      message: `Reloaded from disk: ${path.basename(existing.filePath)}`,
+      documentId: safeId,
+      dedupKey: `reload:${safeId}`,
+      timestamp: Date.now(),
+    });
+  }
 }
 
 function ensureAutoSave(): void {
@@ -1613,10 +1836,16 @@ function ensureAutoSave(): void {
   startAutoSave(async () => {
     // Session saves (all documents — preserves CRDT state for restart recovery).
     // `dirty` rides along (#1069) so reopen can tell whether the session holds
-    // unsaved edits — the .docx restore-vs-reload prompt keys off it.
+    // unsaved edits — the restore-vs-reload prompt keys off it. `conflict`
+    // rides along too (#1238): this pass runs BEFORE autoSaveAllToDisk below,
+    // so on a conflicted document it is the writer that persists the pending
+    // keep-vs-reload choice across a restart.
     for (const [docId, state] of getOpenDocs()) {
       const d = getOrCreateDocument(docId);
-      await saveSession(state.filePath, state.format, d, { dirty: isDirty(docId) });
+      await saveSession(state.filePath, state.format, d, {
+        dirty: isDirty(docId),
+        conflict: readPendingConflict(d),
+      });
     }
     // Disk saves (eligible .md/.txt documents only)
     await autoSaveAllToDisk();

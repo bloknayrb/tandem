@@ -30,6 +30,16 @@ import {
   Y_MAP_USER_AWARENESS,
 } from "../../src/shared/constants.js";
 import { FILE_SYNC_ORIGIN, MCP_ORIGIN } from "../../src/shared/origins.js";
+import { setCtrlMode } from "../helpers/ctrl-mode.js";
+
+// Both push-path Solo holds fail CLOSED: they test for mode === "tandem", so an
+// ABSENT mode key ("indeterminate") withholds. Stand in for the connected client
+// that broadcasts its mode on connect, so tests not about mode see events flow.
+// Describes that own the mode (the WS-A2 hold and the forwarder gate) set or
+// clear it themselves, and run after this.
+beforeEach(() => {
+  setCtrlMode("tandem");
+});
 
 afterEach(() => {
   resetForTesting();
@@ -1454,6 +1464,23 @@ describe("WS-A2 Solo privacy hold (pushEvent)", () => {
     cleanup();
   });
 
+  // The higher-severity half of the fail-closed rule: this hold drops CONTENT
+  // (the comment body plus its textSnippet), not just timing. An absent mode key
+  // is the post-restart state in which held items are still being withheld from
+  // the pull surfaces (mode.ts#hideFromAI honours `heldInSolo` there), so pushing
+  // one here would be the leak the whole hold exists to prevent.
+  it("holds a user comment when the mode key is absent (indeterminate)", () => {
+    setMode(undefined);
+    const { events, cleanup } = collectEvents();
+
+    createUserComment("ann_indeterminate");
+
+    expect(events).toHaveLength(0);
+    expect(replaySince("")).toHaveLength(0); // never buffered
+    expect(wasEmittedViaChannel("ann_indeterminate")).toBe(false);
+    cleanup();
+  });
+
   it("holds a user reply in Solo", () => {
     setMode("solo");
     // Parent comment seeded via MCP origin so it emits nothing itself.
@@ -1569,6 +1596,37 @@ describe("Solo forwarder gate (external consumers)", () => {
     const cb = (e: TandemEvent) => internal.push(e);
     subscribe(cb, "internal");
     _pushEventForTests(docEvent("ev-int-solo"));
+    unsubscribe(cb);
+
+    expect(internal).toHaveLength(1);
+  });
+
+  // The mode key is ABSENT after a restart that lost or corrupted the CTRL_ROOM
+  // session, and before the client's first ctrl broadcast lands. `readModeState`
+  // calls that "indeterminate", and the pull surfaces already fail CLOSED on it
+  // (mode.ts#hideFromAI). The push path must too: "we may have been in Solo and
+  // no longer know" is the one state that must not take the deliver-everything
+  // branch. Tested against the ABSENT key, not a "solo" value — a `!== "solo"`
+  // gate passes every other test in this describe.
+  it("withholds from an external consumer when the mode key is absent", () => {
+    setMode(null);
+    const external: TandemEvent[] = [];
+    const cb = (e: TandemEvent) => external.push(e);
+    subscribe(cb, "external");
+    _pushEventForTests(docEvent("ev-ext-indeterminate"));
+    unsubscribe(cb);
+
+    expect(external).toHaveLength(0);
+  });
+
+  // …and the fail-closed direction must not cost the collaborator its aborts:
+  // in-process delivery is unaffected by mode, indeterminate included.
+  it("still delivers to in-process subscribers when the mode key is absent", () => {
+    setMode(null);
+    const internal: TandemEvent[] = [];
+    const cb = (e: TandemEvent) => internal.push(e);
+    subscribe(cb, "internal");
+    _pushEventForTests(docEvent("ev-int-indeterminate"));
     unsubscribe(cb);
 
     expect(internal).toHaveLength(1);

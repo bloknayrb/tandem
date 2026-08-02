@@ -74,7 +74,7 @@ Implemented via unified/remark with MDAST↔Y.Doc conversion:
 
 **Implemented:**
 - `fs.watch()` on source `.md`/`.txt`/`.html` files while open in Tandem
-- On external change: auto-reload content, preserve annotations via CRDT re-anchoring + textSnapshot relocation
+- On external change: auto-reload content, preserve annotations via CRDT re-anchoring + textSnapshot relocation — unless the document has unsaved edits, in which case the reload is held and a keep-vs-reload banner is raised instead (#1069 for `.docx`, every format since #1238)
 - Self-write suppression prevents reload loops when Tandem saves
 - Toast notification on reload
 - Dead `relRange` recovery in `refreshRange` (strips broken CRDT anchors, re-anchors from flat offsets)
@@ -584,7 +584,7 @@ The wave-structure table (top of "Active — Toward v1.0") owns wave numbering a
 - `.claude.json` shapes corpus (PR-4): empty, named-pipe transport, `tandem-channel` block, non-Tandem MCP servers, multiple workspace entries, concurrent Claude Desktop write, 5MB+ size
 
 **Security gate (added 2026-06-11):**
-- `security-reviewer` agent sweep over **all HTTP routes added since v0.13.0**, enumerated at RC time by diffing route registrations in `src/shared/api-paths.ts` / `src/server/mcp/api-routes.ts` / `src/server/mcp/routes/` / `src/server/integrations/api-routes.ts` — the enumerated diff is the floor, not a fixed list. Initial floor (v0.13.6–v0.14.0): store/reclaim-lock, diagnostics, backups + backups/restore, rename, document/raw, document/reload, docx-conflict/resolve, integrations/install-claude-code, integrations/claude-cli-status, sessions + sessions/delete + sessions/clear, shutdown, plus the `/api/info` generationId and `/health` hasSession fields.
+- `security-reviewer` agent sweep over **all HTTP routes added since v0.13.0**, enumerated at RC time by diffing route registrations in `src/shared/api-paths.ts` / `src/server/mcp/api-routes.ts` / `src/server/mcp/routes/` / `src/server/integrations/api-routes.ts` — the enumerated diff is the floor, not a fixed list. Initial floor (v0.13.6–v0.14.0): store/reclaim-lock, diagnostics, backups + backups/restore, rename, document/raw, document/reload, external-conflict/resolve, integrations/install-claude-code, integrations/claude-cli-status, sessions + sessions/delete + sessions/clear, shutdown, plus the `/api/info` generationId and `/health` hasSession fields.
 - Method: the three-surface audit pattern from lessons-learned (CORS allowlist × Host-header validation × loopback-vs-LAN exposure), plus path validation on filesystem-touching routes. **Outbound surfaces are explicitly in scope even though the route-diff enumeration cannot produce them** — at RC this means the v0.17.0 outbound LLM client (#1123 M1: user-supplied endpoint SSRF posture, redirect/DNS handling, response size/time bounds).
 - Threshold: **zero unresolved HIGH findings**; findings recorded as linked issues. Self-graded by the security-reviewer agent — accepted at two-person scale.
 - **First run 2026-06-11: PASS** — zero HIGH/MEDIUM; two LOW consistency findings + one INFO filed as #1121 (loopback-gate uniformity on four document-mutation routes; path disclosure to token-authenticated LAN on `GET /api/sessions`). Close #1121 before the RC re-run.

@@ -79,6 +79,15 @@ function cubicBezier(x1: number, y1: number, x2: number, y2: number): (t: number
 const easeOut = cubicBezier(0.2, 0.8, 0.2, 1);
 /** Exact `--tandem-ease-standard` — the snappier exit curve for chrome bars. */
 const easeStandard = cubicBezier(0.4, 0, 0.2, 1);
+/**
+ * A14 `rowOut` only. Deliberately NOT a `--tandem-ease-*` token: an ease-in curve
+ * (accelerates away, never settles) has no CSS consumer in the app, so adding it
+ * to `index.html`'s `:root` would ship a permanently dead custom property into the
+ * one block whose comment enumerates the curves and what each is for. The two
+ * tokens don't fit here — `easeOut` settles and `easeStandard` decelerates at the
+ * end, both of which read as "arriving" on a row that is leaving.
+ */
+const easeIn = cubicBezier(0.4, 0, 1, 1);
 
 const ENTER_MS = 260;
 const EXIT_MS = 260;
@@ -402,5 +411,94 @@ export function discloseUnfold(node: HTMLElement, { reduceMotion }: BarInParams)
     // t: 0→1 (present), shared by intro (open) and reversed outro (close).
     css: (t) =>
       `opacity:${t}; height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box;`,
+  };
+}
+
+const ROW_ENTER_MS = 240;
+const ROW_EXIT_MS = 200;
+
+/**
+ * A14 — an activity row that arrives while the tray is ALREADY open (`in:` on the
+ * keyed `{#each}` row in ActivityTray). Slides down from +10px while its height
+ * unfolds from 0, so the rows below are pushed by the row's own growth rather than
+ * by a separate layout jump.
+ *
+ * Deliberately ungated. Svelte skips a local intro while its nearest block
+ * ancestor is initializing, so the rows that mount when the tray opens do NOT run
+ * this — A23's `rowSlideUp` cascade owns that case. Only a row appended to an
+ * already-rendered each block intros, which is exactly A14's trigger. This is why
+ * `.tray-list` must NOT live in an `{:else}`: a branch swap re-creates the each
+ * block, and the first event arriving into an open-but-empty tray would silently
+ * lose its entrance.
+ *
+ * Height is measured, not a magic `max-height` — a `save-error` row carries a
+ * Retry button plus a wrapping message and has no fixed height. Padding is NOT
+ * animated: `.toast-row`'s padding is horizontal as well as vertical, so scaling
+ * it would shrink the row's available inline width mid-flight, and text-wrapping
+ * is a step function of width — the message would re-wrap partway through. The
+ * vertical component is already accounted for by animating the border-box height.
+ */
+export function rowEnter(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const { h, mb } = geometry(node);
+  return {
+    duration: ROW_ENTER_MS,
+    easing: easeOut,
+    // t: 0→1 (present), u = 1−t.
+    css: (t, u) =>
+      `opacity:${t}; transform:translateY(${10 * u}px); height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box;`,
+  };
+}
+
+/**
+ * A14 — an activity row leaves (`out:`). Asymmetric to `rowEnter` on purpose:
+ * horizontal for removal, vertical for arrival, so the two are never mistaken for
+ * each other at a glance (the same convention `cardExit` uses for a dismissed
+ * annotation). Collapses height + margin in the same transition so the gap closes
+ * continuously instead of snapping when Svelte splices the node.
+ *
+ * Being LOCAL (no `|global`) is load-bearing, not an omission. It fires per removed
+ * each-item — dismiss, clear-all, info-TTL expiry and cap eviction all take that
+ * path — but NOT when an ancestor block is torn down, which is precisely what we
+ * want on tray close: the rows should vanish with the collapsing panel, not swipe
+ * sideways inside it.
+ */
+export function rowOut(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const { h, mb } = geometry(node);
+  return {
+    duration: ROW_EXIT_MS,
+    easing: easeIn,
+    // t: 1→0 (collapsing), u = 1−t.
+    css: (t, u) =>
+      `opacity:${t}; transform:translateX(${8 * u}px); height:${t * h}px; margin-bottom:${t * mb}px; overflow:clip; box-sizing:border-box; pointer-events:none;`,
+  };
+}
+
+const EMPTY_UNFOLD_MS = 220;
+/** Lets the rows' 200ms `rowOut` finish before the empty state claims the space. */
+const EMPTY_UNFOLD_DELAY_MS = ROW_EXIT_MS;
+
+/**
+ * A14 companion — the activity tray's empty state unfolding after the last row
+ * leaves. Svelte mounts an incoming branch BEFORE outroing the outgoing one, so
+ * without this "Nothing to report." (~80px of padding + two lines) pops in at full
+ * height underneath rows that are still collapsing, growing the tray and then
+ * snapping — the exact artifact this work exists to remove. Delaying past the row
+ * exit and unfolding height (not just opacity) makes the panel settle once.
+ *
+ * Correctly does NOT run on the tray's first open with an empty list: its `{#if}`
+ * block is initializing then, so the local intro is skipped and the empty state
+ * simply is there.
+ */
+export function emptyUnfold(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+  if (motionOff(reduceMotion)) return { duration: 0 };
+  const { h } = geometry(node);
+  return {
+    duration: EMPTY_UNFOLD_MS,
+    delay: EMPTY_UNFOLD_DELAY_MS,
+    easing: easeOut,
+    // t: 0→1 (present).
+    css: (t) => `opacity:${t}; height:${t * h}px; overflow:clip; box-sizing:border-box;`,
   };
 }

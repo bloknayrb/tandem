@@ -128,6 +128,13 @@ the real `src/client` repo, not the design prototype. Classification:
 Durations/easing are the locked spec values. `--ease-out` below means
 `var(--tandem-ease-out)`.
 
+**One exception, stated here once rather than per row: the single-shell morphs
+(A23/A26/A29) share a *single* inherited `--morph-p2` token.** Their specimens
+spec'd P2 per-scene — A23 at 540ms, A26/A29 at 440ms — but one custom property
+cannot be both, and `morphTiming.css` states canon as the **440–540ms range**.
+The shipped value is **480ms**, satisfying all three. The rows below quote 480ms
+so that no row reads as drifting from a number it never owned by itself.
+
 | # | Scene | Production target | Key spec | Production status |
 |---|---|---|---|---|
 | A1 | Accept suggestion — del block collapses, add settles into prose, success flash | `SuggestionCard` / annotation accept | del `200ms`; flash `380ms`; press `200ms` (all `--ease-out`) | **ADD** — static accept ships; motion new |
@@ -143,7 +150,7 @@ Durations/easing are the locked spec values. `--ease-out` below means
 | A11 | Command palette open — scrim fade, modal scale-up, rows cascade, ⌘K hint floats out | `CommandPalette` overlay+modal | scrim `200ms +200ms`; modal `260ms +280ms`; rows `180ms` 60ms stagger | **ADD** — only an 80ms row-bg transition ships |
 | A12 | Side rail → peek strip — width collapses while content fades out / pips fade in | `SidePanel` + `PeekStrip` (always-mounted dual-layer shell) | collapse `480ms cubic-bezier(0.4,0,0.6,1)`; expand `380ms`; pips `180ms` | **ADD** — shell ships always-mounted; "collapse is a snap; width-slide + crossfade deferred to #798" (CHANGELOG R) |
 | A13 | Reply thread — chevron rotate + max-height unfold + cascade | `ReplyThread.svelte` / `AnnotationCard` | arrow `220ms +200ms`; unfold `380ms +200ms`; replies `220ms` 120ms stagger | **REPLACE** — see canon decision 3 |
-| A14 | Toast appears, pushes the stack up, swipes right to dismiss; progress bar | Activity tray `.toast-row` | in `280ms`; stack-up `240ms`; out `280ms ease-in`; progress `2400ms linear` | **ADD/verify** — confirm whether prod `ActivityTray` already ships `rowIn`/`rowOut`; align to canon if so, else add |
+| A14 | Row arrives newest-first and unfolds; swipes right to dismiss, stack reflows continuously | Activity tray `.toast-row` | in `240ms --ease-out` (opacity + `translateY(10px)` + height); out `200ms ease-in` (opacity + `translateX(8px)` + height); empty-state unfold `220ms +200ms` | **SHIPPED** — as-built, superseding the earlier `280/280` + progress-bar spec (see note) |
 | A15 | Rail filter — icon-gated chip bar, sliding thumb, non-matching rows collapse out | `FilterBar.svelte` | bar unfold `260ms`; pill slide `240ms`; card collapse `280ms`; pip bump `280ms` | **REPLACE** — see canon decision 5 |
 | A16 | Highlight wash — selected swatch pulses, color washes L→R across selection | highlight color picker → A8 popup annotate row | swatch `240ms`; wash `540ms --ease-standard` (background-size 0→100%) | **A16a swatch-pulse DROPPED** (2026-06-01) — the picker auto-closes on select (`handleColorSelect` sets `showColorPicker=false`), so the pulse is never visible; A16b L→R wash remains in the morph family (coordinate-adjacent) |
 | A17 | Claude streams a reply — words fade in at cursor, coral caret blinks | `authorship.ts` streaming decoration | word `60ms`; caret `700ms ease-in-out ∞` | **DEFERRED → #964** (2026-06-01) — no substrate: replies go through ChatPanel, not the Tiptap editor; no word-by-word insertion path. Gated on a streaming-insertion feature, out of Phase 4 scope |
@@ -152,14 +159,31 @@ Durations/easing are the locked spec values. `--ease-out` below means
 | A20 | Typing `/` shows a caret chip; block picker drops in; rows cascade | slash menu (`B3`) | chip `200ms`; menu `240ms +520ms`; rows `180ms` 60ms stagger | **ADD** |
 | A21 | ⛔ Connection banner slide | — | — | **RETIRED** (2026-05-28) — banner surface dissolved; connection state moved to the A9 status pill |
 | A22 | Onboarding stepper — progress line extends, next dot pops, panels cross-fade | onboarding tutorial (`D7`) | fill `280ms`; dot `200ms` scale 1.08; panel cross `220ms` | **ADD** |
-| A23 | Activity pill — idle→info→warning→error LED state machine; pill *is* the tray (single-shell two-phase morph) | Activity tray `.activity-shell` | P1 width/radius `340ms`; P2 max-height `540ms +340ms`; row cascade `420ms` staggered; LED `1.4–1.6s ∞` | **ADD/verify** — single-shell morph; confirm prod `ActivityTray` shape, then wire the morph |
+| A23 | Activity pill — idle→info→warning→error LED state machine; pill *is* the tray (single-shell two-phase morph) | Activity tray `.activity-shell` | P1 width/radius `340ms`; P2 max-height `480ms +340ms` (shared token, see note); row cascade `420ms` staggered; LED `1.4–1.6s ∞` | **SHIPPED** — morph + cascade wired. Cascade is anchored to a **snapshot of the ids present when the tray opened**, not `:nth-child`: a row arriving mid-window must not inherit a sibling's delay and hold at `opacity:0` |
 | A24 | Batch promote bar rises from rail bottom; persists; slides down on clear/send | `BatchPromoteBar.svelte` | enter `280ms`; exit `200ms cubic-bezier(.4,0,.2,1)`; spinner `700ms ∞`; hold LED `1.4s ∞` | **ADD** — implement as a class-toggled *transition*, not a re-firing animation |
 | A25 | Bulk mode — checkboxes cascade onto cards (40ms stagger), toolbar slides up; exit snappy | `BulkActions.svelte` | cascade `220ms` 40ms stagger; toolbar `280ms`; exit `180ms` no stagger | **ADD** |
-| A26 | Annotate button → note popover, two-stage single-shell morph (widen → unfurl) | selection popover (`editor/toolbar/`) | P1 width+radius+translate `340ms`; P2 height `440ms` sequenced; reverses on close | **ADD** — use CSS transitions on `width`/`border-radius`/`height` (Phase 2 = delayed `max-height`), **not** a JS rAF loop |
+| A26 | Annotate button → note popover, two-stage single-shell morph (widen → unfurl) | selection popover (`editor/toolbar/`) | P1 width+radius+translate `340ms`; P2 height `480ms` sequenced (shared token, see note); reverses on close | **ADD** — use CSS transitions on `width`/`border-radius`/`height` (Phase 2 = delayed `max-height`), **not** a JS rAF loop |
 | A27 | Annotation fly-to-margin — on submit, card launches from popover footprint into its margin slot | A8 submit → `MarginColumn.svelte` left/right | fly `480ms` (FLIP translate+scale, opacity ramps); underline `220ms` | **ADD** for the motion — two-margin layout already ships; the side split is the fixed C3 lock in `panels/marginSides.ts`: **LEFT = private notes** (`type === "note"`), **RIGHT = outbound comments + imported Word comments** (`author === "import" || type === "comment"`). Imports render **RIGHT from arrival** (by `author`), not left-until-promoted; highlights are inline (neither side) |
 | A28 | Selection-popup entrance — origin-anchored unroll + unfurl + cascade | A8 popup (`popup-format-row` + `popup-annotate-row`) | dwell `360ms`; lead-row unroll `360ms`; cascade `200ms` staggered; trail row `320ms +170ms`; selection deepen `240ms` | **ADD** — **supersedes A7**; unroll = animate `width` + `overflow:hidden`, **never `clip-path`** (clips box-shadow) |
-| A29 | New-tab menu morph — `+` tab button *is* the menu, single-shell two-stage | `NewTabPopover` + `.pop-anchor` | P1 width+radius `340ms`; P2 height `440ms +P1dur`; rows cascade `200ms` 60ms stagger | **ADD** — replaces the old 160ms `popIn` scale. **Homonym:** A29 is *surface* A7's morph, distinct from *motion-scene* A7 |
+| A29 | New-tab menu morph — `+` tab button *is* the menu, single-shell two-stage | `NewTabPopover` + `.pop-anchor` | P1 width+radius `340ms`; P2 height `480ms +P1dur` (shared token, see note); rows cascade `200ms` 60ms stagger | **ADD** — replaces the old 160ms `popIn` scale. **Homonym:** A29 is *surface* A7's morph, distinct from *motion-scene* A7 |
 | — (s3) | Tab close — active tab fades + collapses, adjacent tabs reflow | `DocumentTabs.svelte` close | CSS lives only in the bundle's Svelte scene | **ADD** — extract the CSS from the scene before porting |
+
+**A14 supersession note.** The row above records the Batch-8 `Motion Wiring -
+A14 A23` specimen, which supersedes the earlier `in 280ms / out 280ms` +
+`progress 2400ms` spec. Two substantive changes, not just retimings: the
+**progress bar is dropped** (production rows have none — activity rows persist
+until dismissed or evicted, so there is nothing to count down), and arrivals
+render **newest-first**, reversed at the render boundary only — the store still
+appends, because reversing it would invert cap eviction and the persisted
+array's meaning.
+
+Shipped scope, stated precisely: **all four removal paths** animate (dismiss,
+clear-all, TTL expiry, cap eviction) and **both arrival paths** are covered
+(solo arrival unfolds; a backlog on open is the A23 cascade's job, not
+`rowEnter`'s). **Tray close deliberately does not** animate its rows — a plain
+Svelte `out:` is local, so rows vanish with the collapsing panel instead of
+swiping sideways inside it. That is the desired behaviour, and it is why these
+directives are ungated and carry no `|global`.
 
 ---
 

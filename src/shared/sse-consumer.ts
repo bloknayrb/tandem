@@ -429,17 +429,42 @@ export async function connectAndStreamOnce(
           continue;
         }
 
-        // Solo mode suppression: drop non-chat events when mode is "solo".
+        // Solo mode COMPATIBILITY gate: drop non-chat events when mode is "solo".
         //
-        // The Solo→Tandem RELEASE WAKE must be exempt, or this gate eats the one
-        // event WS-A2 exists to deliver. The release route flips mode server-side
-        // and fires the wake microseconds later in the same handler — but the
-        // check below reads `cachedMode`, and `refreshMode` is fire-and-forget
-        // AND early-returns inside its TTL. So the cache still says "solo" and
-        // the wake is dropped, with `onEventId` advancing past it so it is never
-        // replayed. Any Solo session that saw ANY non-chat event (accept/dismiss
-        // and `document:*` still flow — the server hold is deliberately narrow)
-        // has a warm "solo" cache and hits this.
+        // The SERVER is authoritative for this now — `shouldForwardExternally` in
+        // `server/events/queue.ts` (WS-A2 Phase 7). Against a current server this
+        // gate has nothing left to CATCH while mode is Solo: the events it would
+        // drop are never forwarded to an external consumer in the first place.
+        //
+        // That is not the same as being inert. The two gates read two different
+        // values: the server reads CTRL_ROOM live, per delivery, while this side
+        // reads `cachedMode` — refreshed by a fire-and-forget `/api/mode` fetch
+        // behind a 2s TTL that is STALE-PRESERVING on failure (see
+        // `getCachedMode`). So the two disagree in the Solo→Tandem direction: the
+        // server resumes forwarding the moment mode flips, and this gate keeps
+        // dropping until a SUCCESSFUL refresh lands. Normally that is about one
+        // TTL, but nothing bounds it — while `/api/mode` keeps failing,
+        // `cachedMode` stays "solo" for as long as the failures do, by design.
+        // And the drops are permanent rather than deferred: `onEventId` advances
+        // past each one, so no reconnect replays it.
+        //
+        // It stays anyway, and not as vague defense in depth. The monitor and
+        // channel shim are version-pinned per release in `.claude-plugin/plugin.json`
+        // while the desktop server updates on the Tauri updater's own track, and
+        // neither side does a version handshake. A NEW consumer running against an
+        // OLDER, un-gated server is therefore routine — and on that pairing this
+        // gate is the only thing standing between Solo and a silent privacy leak
+        // with no user-visible symptom. Retire it when monitor and server can no
+        // longer skew (same-artifact shipping, or a hard minimum-server-version
+        // refusal), NOT merely once the server gate looks old enough. See #1213.
+        //
+        // The RELEASE WAKE must be exempt or that same disagreement window eats
+        // the one event WS-A2 exists to deliver: the release route flips mode
+        // server-side and fires the wake microseconds later in the same handler,
+        // but the check below reads `cachedMode`, and `refreshMode` is
+        // fire-and-forget AND early-returns inside its TTL. So the cache still
+        // says "solo", the wake is dropped, and `onEventId` advances past it so
+        // it is never replayed.
         //
         // Exempting by id is safe because the namespace is disjoint by
         // construction: `emitModeReleaseWake` mints `wake_…` precisely so it

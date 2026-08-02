@@ -97,8 +97,8 @@ export function clearDirtyState(docId: string): void {
  * session whose `dirty` flag was set: the restored content was never persisted
  * to disk, but the observer registered at open time starts from a clean
  * baseline — without this bump, autosave would skip the restored edits and the
- * .docx watcher's dirty check would treat the doc as clean (and auto-reload
- * over the only copy of those edits).
+ * file watcher's dirty check would treat the doc as clean (and auto-reload over
+ * the only copy of those edits, in any format since #1238).
  */
 export function markDirty(docId: string): void {
   getOrInit(docId).version += 1;
