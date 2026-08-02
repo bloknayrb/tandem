@@ -19,8 +19,8 @@ import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
 import {
-  defaultAnnotationIntent,
   type AnnotationComposerIntent,
+  defaultAnnotationIntent,
   resolveAnnotationSubmission,
 } from "./annotation-composer-intent";
 import FormattingToolbar from "./FormattingToolbar.svelte";

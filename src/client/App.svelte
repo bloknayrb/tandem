@@ -59,8 +59,8 @@ import {
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
-import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
 import { createChatState } from "./hooks/useChatState.svelte";
+import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
@@ -101,11 +101,11 @@ import {
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
 import { motionOff } from "./panels/cardMotion";
+import { exportChatMarkdown } from "./panels/chat-export";
+import { insertChatMarkdown } from "./panels/chat-insert";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
-import { exportChatMarkdown } from "./panels/chat-export";
-import { insertChatMarkdown } from "./panels/chat-insert";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";

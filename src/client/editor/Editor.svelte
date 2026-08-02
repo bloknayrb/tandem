@@ -10,8 +10,6 @@ import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
 import { installContextMenu } from "./context-menu/install";
-import { applyLink, getInitialLinkHref } from "./toolbar/handlers";
-import LinkEditor from "./toolbar/LinkEditor.svelte";
 // Schema-defining extensions (nodes + marks + static plugins) live in one shared
 // module so the editor and tests register the same schema — see editor-extensions.ts.
 import { buildSchemaExtensions } from "./editor-extensions";
@@ -24,6 +22,8 @@ import { FindReplaceExtension } from "./extensions/find-replace";
 import { HeadingCollapseExtension } from "./extensions/heading-collapse";
 import { SelectionDecorationExtension } from "./extensions/selection-decoration";
 import { SlashCommandExtension } from "./slash-menu";
+import { applyLink, getInitialLinkHref } from "./toolbar/handlers";
+import LinkEditor from "./toolbar/LinkEditor.svelte";
 import { isSafeExternalHref } from "./utils/url-safety";
 import "./editor.css";
 

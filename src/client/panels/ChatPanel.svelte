@@ -7,8 +7,8 @@ import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
-import { renderMarkdown } from "./chat-markdown";
 import { localChatDateLabel } from "./chat-export";
+import { renderMarkdown } from "./chat-markdown";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 

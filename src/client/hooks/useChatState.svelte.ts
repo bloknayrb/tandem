@@ -1,4 +1,5 @@
 import * as Y from "yjs";
+import { API_CHAT } from "../../shared/api-paths";
 import {
   DEFAULT_MCP_PORT,
   Y_MAP_CHAT,
@@ -6,7 +7,6 @@ import {
   Y_MAP_CHAT_SEEN,
   Y_MAP_CHAT_SEEN_INITIALIZED,
 } from "../../shared/constants";
-import { API_CHAT } from "../../shared/api-paths";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
 import { generateMessageId } from "../../shared/utils";
 

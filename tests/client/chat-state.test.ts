@@ -3,7 +3,6 @@
 import { cleanup, render, waitFor } from "@testing-library/svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import ChatStateHarness from "./fixtures/ChatStateHarness.svelte";
 import {
   Y_MAP_CHAT,
   Y_MAP_CHAT_DOCUMENT_NAMES,
@@ -11,6 +10,7 @@ import {
   Y_MAP_CHAT_SEEN_INITIALIZED,
 } from "../../src/shared/constants";
 import type { ChatMessage } from "../../src/shared/types";
+import ChatStateHarness from "./fixtures/ChatStateHarness.svelte";
 
 function claude(id: string, timestamp: number): ChatMessage {
   return { id, timestamp, author: "claude", text: id, read: true };
