@@ -48,7 +48,8 @@ export function exportChatMarkdown(
       message.author === "claude" ? (message.agentIdentity?.displayName ?? claudeLabel) : "You";
     const metadata = [`**${author}**`, isoTime(message.timestamp)];
     const fileName = message.documentId ? fileNames.get(message.documentId) : undefined;
-    if (fileName) metadata.push(`\`${fileName.replace(/`/g, "\\`")}\``);
+    if (fileName)
+      metadata.push(`\`${fileName.replace(/\\/g, "\\\\").replace(/`/g, "\\`")}\``);
     lines.push(metadata.join(" · "), "");
     if (message.anchor) {
       lines.push(anchorBlockquote(message.anchor), "");
