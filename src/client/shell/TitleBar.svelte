@@ -679,10 +679,6 @@ function chooseHelp() {
     z-index: var(--tandem-z-titlebar);
   }
 
-  .title-bar-actions:empty {
-    display: none;
-  }
-
   .title-bar-mode {
     display: inline-flex;
     align-items: center;
