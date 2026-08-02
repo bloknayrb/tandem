@@ -1,4 +1,5 @@
 import type { TransitionConfig } from "svelte/transition";
+import { measureTabFloor } from "../tabs/tab-floor.js";
 
 /**
  * Rail + chrome motion (Phase 4 / #798). Custom Svelte transitions for the
@@ -278,10 +279,13 @@ const TAB_EXIT_MS = 200;
  * s3 — a closing tab collapses on the INLINE axis (width w→0) + fades, so the
  * adjacent tabs glide left to fill (`out:` directive on the `.tab-flip` wrapper
  * in DocumentTabs — NOT the TabItem pill inside it). The `min-width:0` is what
- * makes the collapse reach zero: `.tab-flip` carries the tab strip's 142px
- * compression floor, and a transition can only style its own node, so hosting
- * this on the pill would leave the wrapper pinned at 142px and the neighbours
- * would jump. `overflow:clip` clips the name without becoming a focus-stealing
+ * makes the collapse reach zero: `.tab-flip` carries the tab strip's width
+ * floor (142px under `uniformTabWidth`, a smaller measured per-tab value
+ * otherwise), and a transition can only style its own node, so hosting this on
+ * the pill would leave the wrapper pinned at its floor and the neighbours would
+ * jump. Svelte emits these as keyframes, which outrank the inline `min-width`
+ * the adaptive pass writes — but only while that inline value is not
+ * `!important`, which is why it never is. `overflow:clip` clips the name without becoming a focus-stealing
  * scroll box.
  * `pointer-events:none` makes the leaving node inert for its ~200ms in the DOM:
  * the id is already gone from `tabsState` (that removal is what fired this outro),
@@ -304,19 +308,46 @@ export function tabExit(node: HTMLElement, { reduceMotion }: BarInParams): Trans
 
 const TAB_ENTER_MS = 220;
 
+interface TabEnterParams extends BarInParams {
+  /** `tandem:settings.uniformTabWidth`. Decides the enter target: the
+   * CSS-pinned `TAB_FLOOR_PX` in uniform mode (where `node.offsetWidth` is
+   * already correct — `.tab-flip.uniform` sets both `min-width` AND
+   * `max-width`, so the wrapper is exactly that width the instant it's
+   * inserted, independently of effect timing), or the measured adaptive
+   * floor in adaptive mode (see below). */
+  uniformTabWidth?: boolean;
+}
+
 /**
  * s3 (enter) — the mirror of `tabExit`: a newly-opened tab unrolls on the INLINE
  * axis (width 0→w) + fades in, so the adjacent tabs glide right to make room
  * instead of snapping (`in:` directive on the `.tab-flip` wrapper, for the
  * reason spelled out in `tabExit`). A touch longer than the 200ms exit (220ms)
  * so the unroll reads as settling in rather than snapping shut. `min-width:0`
- * clears that wrapper's 142px floor so the unroll starts from 0. Svelte skips intros on the
+ * clears that wrapper's width floor so the unroll starts from 0. Svelte skips intros on the
  * initial render, so existing tabs don't all animate on app load — only a tab
  * opened after mount unrolls. Reduced motion → instant.
+ *
+ * TARGET WIDTH, adaptive mode (`uniformTabWidth: false`): Svelte's transition
+ * SETUP runs during the render/DOM-patch pass — strictly BEFORE `$effect`s
+ * flush. DocumentTabs' adaptive-floor `$effect` (which writes each wrapper's
+ * measured `min-width`) hasn't run yet at this point, so `node.offsetWidth`
+ * would read only the base `.tab-flip{min-width:142px}` CSS rule — the
+ * un-floored width, not this tab's real (usually smaller) adaptive floor. A
+ * short-named tab would then unroll 0→142px and SNAP to its real floor the
+ * instant the effect runs moments later — the open-path twin of the close-path
+ * bug already documented above tabExit ("collapsed 257→142 and then snapped to
+ * 0"). Fix: compute the SAME floor `measureTabFloor` gives the effect,
+ * synchronously, right here — the wrapper's DOM subtree (TabItem's pill + name
+ * span) is already fully mounted by the time an `in:` transition's setup runs,
+ * so the measurement is accurate even though the effect hasn't written it yet.
  */
-export function tabEnter(node: HTMLElement, { reduceMotion }: BarInParams): TransitionConfig {
+export function tabEnter(
+  node: HTMLElement,
+  { reduceMotion, uniformTabWidth }: TabEnterParams,
+): TransitionConfig {
   if (motionOff(reduceMotion)) return { duration: 0 };
-  const w = node.offsetWidth;
+  const w = uniformTabWidth ? node.offsetWidth : measureTabFloor(node);
   return {
     duration: TAB_ENTER_MS,
     easing: easeOut,

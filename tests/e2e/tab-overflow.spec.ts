@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import {
@@ -6,6 +6,7 @@ import {
   cleanupFixtureDir,
   createFixtureDir,
   McpTestClient,
+  openSettingsViaBrandMenu,
 } from "./helpers";
 
 let mcp: McpTestClient;
@@ -173,42 +174,67 @@ test("open file button is always visible", async ({ page }) => {
 });
 
 /**
- * The tab strip's compression contract (#1250). Three review passes agreed on a
- * mechanism that turned out to be wrong, and only measurement caught it — see
- * lesson 85 in docs/lessons-learned.md — so the floor gets a real guard.
+ * The tab strip's sizing contract (#1250, then the `uniformTabWidth` setting).
+ * Three review passes agreed on a mechanism that turned out to be wrong, and
+ * only measurement caught it — see lesson 85 in docs/lessons-learned.md — so
+ * both modes get a real guard.
+ *
+ * The fixture deliberately MIXES name lengths. An earlier version opened twelve
+ * near-identical names, which cannot express width dispersion: a uniformity
+ * check passes trivially in both modes, so the assertion that actually
+ * distinguishes them was unavailable.
  *
  * `.tab-flip` and `.title-bar-actions` are matched by class, not testid: both
  * are structural boxes owned by the components under test with no user-facing
  * identity of their own, and a testid on either would exist solely for this
  * assertion.
  */
-test("tabs compress to their floor before the strip scrolls, and nothing spills", async ({
-  page,
-}) => {
+const FLOOR_PX = 142;
+
+/** Long names rest at the 240px name cap; the two short ones are the dispersion probe. */
+const FIXTURE_NAMES = [
+  ...Array.from({ length: 10 }, (_, i) => `tandem-ink-email-runbook-${i + 1}.md`),
+  "ab.md",
+  "notes.md",
+];
+
+async function openFixtureTabs(page: Page, uniform: boolean) {
   // `tabEnter`/`tabExit` animate `width` and inject `min-width: 0`, so a pill
   // measured mid-transition reports a collapsing box rather than its resting
   // size. Zeroing both durations makes these measurements deterministic instead
   // of merely slow. `motionOff()` reads this same media query.
   await page.emulateMedia({ reducedMotion: "reduce" });
 
-  // Names long enough that each would rest at the name span's 240px cap given
-  // room, and enough of them that the strip must overflow once every pill is
-  // down at its floor.
-  const names = Array.from({ length: 12 }, (_, i) => `tandem-ink-email-runbook-${i + 1}.md`);
-  for (const name of names) {
+  for (const name of FIXTURE_NAMES) {
     const filePath = path.join(tmpDir, name);
-    fs.writeFileSync(filePath, `# ${name}\n\nCompression fixture.\n`);
+    fs.writeFileSync(filePath, `# ${name}\n\nSizing fixture.\n`);
     await mcp.callTool("tandem_open", { filePath });
   }
+
+  // Seed the setting before first paint. `schemaVersion` must be the CURRENT
+  // one: seed it lower and loadSettings migrates (fine), but seed it higher and
+  // the whole run silently goes `_readOnly`.
+  await page.addInitScript(
+    ([key, value]) => {
+      window.localStorage.setItem(
+        key as string,
+        JSON.stringify({ schemaVersion: 18, uniformTabWidth: value }),
+      );
+    },
+    ["tandem:settings", uniform],
+  );
 
   await page.goto("http://127.0.0.1:5173");
   await page.waitForSelector("[data-testid='tab-scroll-container']");
   await expect
     .poll(() => page.locator(".tab-flip").count(), { timeout: 10_000 })
-    .toBeGreaterThanOrEqual(names.length);
+    .toBeGreaterThanOrEqual(FIXTURE_NAMES.length);
+}
 
-  const measured = await page.evaluate(() => {
-    const box = (el: Element) => {
+async function measureTabStrip(page: Page) {
+  return page.evaluate(() => {
+    const box = (el: Element | null) => {
+      if (!el) return null;
       const b = el.getBoundingClientRect();
       return { left: b.left, right: b.right, width: b.width };
     };
@@ -217,43 +243,241 @@ test("tabs compress to their floor before the strip scrolls, and nothing spills"
     return {
       overflowing: scroller.scrollWidth > scroller.clientWidth,
       scrollerClass: scroller.className,
-      actions: box(actions),
+      actions: box(actions)!,
       viewportWidth: document.documentElement.clientWidth,
       tabs: [...document.querySelectorAll<HTMLElement>(".tab-flip")].map((wrapper) => {
         const pill = wrapper.firstElementChild as HTMLElement;
+        // Null while a tab is renaming — the span is swapped for an input.
+        const name = pill.querySelector("[data-testid^='tab-name-']");
         return {
-          wrapper: box(wrapper),
-          pill: box(pill),
-          name: box(pill.querySelector("[data-testid^='tab-name-']") as HTMLElement),
-          close: box(pill.querySelector("button[aria-label^='Close']") as HTMLElement),
+          uniform: wrapper.classList.contains("uniform"),
+          wrapper: box(wrapper)!,
+          pill: box(pill)!,
+          name: box(name),
+          close: box(pill.querySelector("button[aria-label^='Close']"))!,
         };
       }),
     };
   });
+}
 
-  // The strip actually ran out of room — otherwise the floor below is vacuous.
-  expect(measured.overflowing).toBe(true);
-  expect(measured.scrollerClass).toMatch(/has-overflow|overflow-left|overflow-right/);
-
+/** Shared by both modes: nothing escapes its pill, and the actions cluster survives. */
+function assertNothingSpills(measured: Awaited<ReturnType<typeof measureTabStrip>>) {
   for (const tab of measured.tabs) {
-    // Upper bound is the regression detector: the shipped-then-reverted shape
-    // left a long name pinned at 259px and never compressed at all.
-    expect(tab.wrapper.width).toBeLessThan(200);
-    // Lower bound is the overlap detector: below the floor the pill's children
-    // stop fitting and neighbouring tabs run into each other.
-    expect(tab.wrapper.width).toBeGreaterThanOrEqual(141.5);
-    // A compressed tab must still read as a name, not an ellipsis.
-    expect(tab.name.width).toBeGreaterThan(40);
-    // Nothing escapes its pill (0.5px for subpixel flex rounding).
-    expect(tab.name.left).toBeGreaterThanOrEqual(tab.pill.left - 0.5);
-    expect(tab.name.right).toBeLessThanOrEqual(tab.pill.right + 0.5);
+    // 0.5px for subpixel flex rounding.
+    if (tab.name) {
+      expect(tab.name.left).toBeGreaterThanOrEqual(tab.pill.left - 0.5);
+      expect(tab.name.right).toBeLessThanOrEqual(tab.pill.right + 0.5);
+    }
     expect(tab.close.left).toBeGreaterThanOrEqual(tab.pill.left - 0.5);
     expect(tab.close.right).toBeLessThanOrEqual(tab.pill.right + 0.5);
   }
-
   // The center cluster is the only shrinkable item in the title-bar row, so a
   // crowded strip must never push the actions cluster off-screen.
   expect(measured.actions.width).toBeGreaterThan(0);
   expect(measured.actions.left).toBeGreaterThanOrEqual(-0.5);
   expect(measured.actions.right).toBeLessThanOrEqual(measured.viewportWidth + 0.5);
+}
+
+test("uniform mode: every tab is the same width, and the strip still scrolls", async ({ page }) => {
+  await openFixtureTabs(page, true);
+  const measured = await measureTabStrip(page);
+
+  expect(measured.tabs.every((t) => t.uniform)).toBe(true);
+
+  // Guard against `flex-grow` filling the scroller exactly: if it ever does,
+  // scrollWidth === clientWidth, updateScrollState never fires, and the mask
+  // fade plus horizontal scroll disappear permanently (lesson 85).
+  expect(measured.overflowing).toBe(true);
+  expect(measured.scrollerClass).toMatch(/has-overflow|overflow-left|overflow-right/);
+
+  const widths = measured.tabs.map((t) => t.wrapper.width);
+  // The whole point of the mode: a 2-character name and a 28-character name
+  // occupy identical space. Also the regression detector for a name-span-based
+  // pin, which left read-only and renaming tabs 80-145px wider than the rest.
+  expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+  expect(Math.max(...widths)).toBeCloseTo(FLOOR_PX, 0);
+
+  assertNothingSpills(measured);
+});
+
+test("adaptive mode: tabs size to their own name, and long ones still compress", async ({
+  page,
+}) => {
+  await openFixtureTabs(page, false);
+  const measured = await measureTabStrip(page);
+
+  expect(measured.tabs.some((t) => t.uniform)).toBe(false);
+
+  // Still overflows — otherwise the floor assertions below are vacuous.
+  expect(measured.overflowing).toBe(true);
+  expect(measured.scrollerClass).toMatch(/has-overflow|overflow-left|overflow-right/);
+
+  const widths = measured.tabs.map((t) => t.wrapper.width);
+  // THE assertion for this mode. The bug being fixed was every tab landing on
+  // the floor regardless of its name, which reads as "all tabs are identical".
+  expect(Math.max(...widths) - Math.min(...widths)).toBeGreaterThan(15);
+
+  for (const tab of measured.tabs) {
+    // Upper bound is the no-compression regression detector: the
+    // shipped-then-reverted shape left a long name pinned at 259px. It is also
+    // the adaptive ceiling — a tab is never wider than the uniform width once
+    // the strip is crowded.
+    expect(tab.wrapper.width).toBeLessThanOrEqual(FLOOR_PX + 0.5);
+    // Lower bound: a tab may be narrower than the floor ONLY because its own
+    // name needs less. It may never be narrower than its own chrome, which is
+    // what would make the close button collide with the name.
+    expect(tab.wrapper.width).toBeGreaterThan(60);
+  }
+
+  // A short name must not be truncated — that is what distinguishes this mode
+  // from a uniformly-floored strip, where `ab.md` is padded out to 142px.
+  const shortest = measured.tabs.reduce((a, b) => (a.wrapper.width <= b.wrapper.width ? a : b));
+  expect(shortest.wrapper.width).toBeLessThan(FLOOR_PX - 5);
+
+  assertNothingSpills(measured);
+});
+
+test("toggling the setting live re-sizes the strip, stranding no per-tab floor", async ({
+  page,
+}) => {
+  // The two tests above each seed the setting before first paint, so neither
+  // exercises the transition. That leaves the one path where the CSS clamp is
+  // not self-sufficient: adaptive mode writes an INLINE `min-width` per tab,
+  // and inline beats `.tab-flip.uniform`'s class-selector `min-width`. If the
+  // effect ever stopped clearing those on the way into uniform mode, the CSS
+  // would look correct, every unit test would pass, and the strip would simply
+  // stay ragged.
+  await openFixtureTabs(page, false);
+  const before = await measureTabStrip(page);
+  const beforeWidths = before.tabs.map((t) => t.wrapper.width);
+  expect(Math.max(...beforeWidths) - Math.min(...beforeWidths)).toBeGreaterThan(15);
+
+  await openSettingsViaBrandMenu(page);
+  await page.locator("[data-testid='appearance-uniform-tab-width'] input").check();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-testid='settings-modal']")).toHaveCount(0, { timeout: 2_000 });
+
+  // Poll: the class flip and the effect that clears the inline floors land in
+  // separate flushes, so a single measurement can catch the strip mid-way.
+  await expect
+    .poll(
+      async () => {
+        const w = (await measureTabStrip(page)).tabs.map((t) => t.wrapper.width);
+        return Math.max(...w) - Math.min(...w);
+      },
+      { timeout: 5_000 },
+    )
+    .toBeLessThanOrEqual(1);
+
+  const after = await measureTabStrip(page);
+  expect(after.tabs.every((t) => t.uniform)).toBe(true);
+  // Not just equal to each other — equal at the FLOOR. A stranded 102px inline
+  // min-width would still let the tabs agree with one another at the wrong size.
+  expect(Math.max(...after.tabs.map((t) => t.wrapper.width))).toBeCloseTo(FLOOR_PX, 0);
+  assertNothingSpills(after);
+});
+
+/**
+ * Opening-a-tab timing regression (#1257 Fix 1). The three tests above all run
+ * under `emulateMedia({ reducedMotion: "reduce" })`, which short-circuits
+ * `tabEnter`/`tabExit` to `{ duration: 0 }` — they cannot see this bug even
+ * after the fix. This test deliberately leaves motion ON (Playwright's default
+ * context `reducedMotion` is "no-preference" — nothing in this file forces
+ * "reduce" at the top level, only `openFixtureTabs` does it per-call).
+ *
+ * The bug: `tabEnter` used to read `node.offsetWidth` at transition SETUP time,
+ * which runs during Svelte's render/DOM-patch pass — strictly BEFORE
+ * DocumentTabs' adaptive-floor `$effect` flushes. For a newly-opened adaptive
+ * tab that reads only the un-floored base CSS (`.tab-flip{min-width:142px}`),
+ * so a short-named tab would visibly unroll 0→142px and then SNAP to its real
+ * (smaller) floor the instant the effect ran moments later.
+ *
+ * Rather than sampling mid-animation (timing-sensitive, flaky), this inspects
+ * the actual `Animation` Svelte installs via `element.animate()`: the WIDTH
+ * baked into its keyframes at setup time IS the bug signal — a regression
+ * would show every keyframe's width running up to 142px regardless of the
+ * tab's own name, even though nothing has visually settled yet.
+ */
+test("adaptive mode: a newly-opened tab's enter transition targets its OWN adaptive floor, never the uniform 142px floor (#1257)", async ({
+  page,
+}) => {
+  // Seed several long-named tabs (crowds the strip, matching the other tests'
+  // fixture pattern) and load with motion enabled and adaptive mode on.
+  const longNames = Array.from({ length: 6 }, (_, i) => `tandem-ink-email-runbook-${i + 1}.md`);
+  for (const name of longNames) {
+    const filePath = path.join(tmpDir, name);
+    fs.writeFileSync(filePath, `# ${name}\n\nSizing fixture.\n`);
+    await mcp.callTool("tandem_open", { filePath });
+  }
+
+  await page.addInitScript(
+    ([key, value]) => {
+      window.localStorage.setItem(
+        key as string,
+        JSON.stringify({ schemaVersion: 18, uniformTabWidth: value }),
+      );
+    },
+    ["tandem:settings", false],
+  );
+
+  await page.goto("http://127.0.0.1:5173");
+  await page.waitForSelector("[data-testid='tab-scroll-container']");
+  // Svelte skips intros on the initial render, so these existing tabs mount
+  // without an `in:` transition — settle before opening the probe tab.
+  await expect
+    .poll(() => page.locator(".tab-flip").count(), { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(longNames.length);
+
+  // Open ONE more tab, with a deliberately short name, AFTER the app has
+  // mounted — this is the only way to get a genuine `in:tabEnter` intro.
+  const shortName = "ab.md";
+  const shortPath = path.join(tmpDir, shortName);
+  fs.writeFileSync(shortPath, `# ${shortName}\n\nSizing fixture.\n`);
+  await mcp.callTool("tandem_open", { filePath: shortPath });
+
+  // Poll (from inside the page, to avoid a Playwright-side fixed sleep) for
+  // the REAL eased keyframe set. Svelte's transition setup first installs a
+  // 0-duration "freeze at t=0" dummy animation (two identical width:0px
+  // keyframes) and swaps it for the full multi-sample animation on the dummy's
+  // `onfinish` — so wait for more than 2 keyframes before reading the target.
+  const keyframeWidths = await page.evaluate(async (name) => {
+    function findWrapper(): Element | null {
+      const nameEl = [...document.querySelectorAll("[data-testid^='tab-name-']")].find(
+        (el) => el.textContent === name,
+      );
+      return nameEl?.closest(".tab-flip") ?? null;
+    }
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const wrapper = findWrapper() as (Element & { getAnimations?: () => Animation[] }) | null;
+      const anim = wrapper?.getAnimations?.()[0];
+      const kfs = anim?.effect instanceof KeyframeEffect ? anim.effect.getKeyframes() : [];
+      if (kfs.length > 2) return kfs.map((k) => k.width as string);
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    return null;
+  }, shortName);
+
+  expect(keyframeWidths).not.toBeNull();
+  const targetWidth = parseFloat(String(keyframeWidths?.at(-1)));
+  expect(Number.isFinite(targetWidth)).toBe(true);
+  // THE assertion: the animation's own target, baked in at setup time, must be
+  // this short tab's adaptive floor — well under the 142px uniform floor —
+  // not 142px itself. (A regression here shows up as ~142 regardless of name.)
+  expect(targetWidth).toBeLessThan(120);
+  expect(targetWidth).toBeGreaterThan(40);
+
+  // And once the transition (TAB_ENTER_MS=220ms) plus the adaptive-floor
+  // effect have both settled, the RESTING width must equal that same target —
+  // no post-transition snap to a different number.
+  await page.waitForTimeout(400);
+  const restWidth = await page.evaluate((name) => {
+    const nameEl = [...document.querySelectorAll("[data-testid^='tab-name-']")].find(
+      (el) => el.textContent === name,
+    );
+    return nameEl?.closest(".tab-flip")?.getBoundingClientRect().width ?? null;
+  }, shortName);
+  expect(restWidth).not.toBeNull();
+  expect(Math.abs((restWidth as number) - targetWidth)).toBeLessThan(2);
 });

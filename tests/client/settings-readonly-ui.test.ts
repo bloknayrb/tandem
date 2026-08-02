@@ -97,6 +97,12 @@ const CASES: ControlCase[] = [
     innerInput: true,
   },
   {
+    name: "AppearanceSettings uniform-tab-width checkbox",
+    component: AppearanceSettings,
+    testid: "appearance-uniform-tab-width",
+    innerInput: true,
+  },
+  {
     name: "AppearanceSettings hue slider",
     component: AppearanceSettings,
     testid: "accent-hue-slider",

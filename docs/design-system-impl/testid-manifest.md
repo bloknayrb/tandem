@@ -189,7 +189,8 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
   `text-size-{*}-btn`, `accent-hue-slider`, `editor-font-{*}-btn`,
-  `density-{*}-btn`, `reduce-motion-toggle`, `appearance-formatting-bar` (1.11)
+  `density-{*}-btn`, `reduce-motion-toggle`, `appearance-formatting-bar` (1.11),
+  `appearance-uniform-tab-width`
 - Decorations mirror group (1.13): `appearance-show-{authorship,comments,highlights,notes}`
   (interpolated via `{testid}`, so not in the testid-set snapshot; tracked here).
   Replaces the single `annotation-decorations-toggle` (#596 per-type split).

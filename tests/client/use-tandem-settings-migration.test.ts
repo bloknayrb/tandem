@@ -743,6 +743,7 @@ describe("loadSettings — migration chain", () => {
       marginView: true, // #649 — the canonical "resets on update" field
       smartTypography: true, // A4 — non-default (default false)
       spellcheck: false, // A5 — non-default (default true)
+      uniformTabWidth: false, // non-default (default true)
     };
     writeRaw(userBlob);
     const s = loadSettings();
@@ -774,6 +775,7 @@ describe("loadSettings — migration chain", () => {
     expect(s.marginView).toBe(true);
     expect(s.smartTypography).toBe(true);
     expect(s.spellcheck).toBe(false);
+    expect(s.uniformTabWidth).toBe(false);
   });
 
   it("#941: per-type decoration flags + marginView survive a full v9→current migration", () => {
@@ -907,6 +909,52 @@ describe("loadSettings — migration chain", () => {
     expect(s._readOnly).toBe(true);
     expect(s.smartTypography).toBe(false);
     expect(s.spellcheck).toBe(true);
+  });
+
+  // v17→v18: introduce `uniformTabWidth` (default TRUE). Pure version bump — a
+  // pre-v18 blob without the field defaults to uniform, which is what an
+  // existing user already sees on a crowded strip.
+  it("v17→v18: uniformTabWidth defaults true when absent", () => {
+    writeRaw({ schemaVersion: 17, theme: "dark" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    // This is the assertion that catches wiring the field with the default-FALSE
+    // normalize idiom (`parsed.x === true`) while DEFAULTS claims true — the
+    // failure mode where the shipped default silently never applies.
+    expect(s.uniformTabWidth).toBe(true);
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it.each([
+    { why: "explicit uniformTabWidth=false survives the bump", val: false, expected: false },
+    { why: "explicit uniformTabWidth=true survives the bump", val: true, expected: true },
+  ])("v17→v18: uniformTabWidth=$val — $why", ({ val, expected }) => {
+    writeRaw({ schemaVersion: 17, uniformTabWidth: val });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.uniformTabWidth).toBe(expected);
+  });
+
+  it("forward-compat (v99) sanitizes uniformTabWidth to a boolean", () => {
+    writeRaw({ schemaVersion: 99, uniformTabWidth: "nope" });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.uniformTabWidth).toBe(true);
+  });
+
+  it("uniformTabWidth=false is preserved across EVERY in-range schemaVersion bump", () => {
+    // Same ratchet as the fields below: a future migration step that rebuilds
+    // the object instead of spreading would silently reset it to the default,
+    // and because the default is TRUE that regression is invisible unless the
+    // fixture opts out.
+    for (let v = 2; v < CURRENT_SCHEMA_VERSION; v++) {
+      store.clear();
+      writeRaw({ schemaVersion: v, uniformTabWidth: false });
+      const s = loadSettings();
+      expect(s.schemaVersion, `start v${v}`).toBe(CURRENT_SCHEMA_VERSION);
+      expect(s.uniformTabWidth, `uniformTabWidth dropped starting at v${v}`).toBe(false);
+    }
   });
 
   it("smartTypography=true and spellcheck=false are preserved across EVERY in-range schemaVersion bump", () => {

@@ -390,3 +390,88 @@ describe("DocumentTabs new-tab menu (openMenuTrigger)", () => {
     expect(document.querySelector(menuSelector)).toBeNull();
   });
 });
+
+describe("uniform tab width", () => {
+  // The geometry itself needs a real layout engine and lives in
+  // tests/e2e/tab-overflow.spec.ts. What's checked here is only the wiring the
+  // E2E can't distinguish from a CSS regression: that the prop actually reaches
+  // the wrapper. A dropped or misspelled prop silently leaves every tab in
+  // adaptive mode while the setting reads as on.
+  it("applies .uniform to each tab wrapper only when uniformTabWidth is set", async () => {
+    const reorder = vi.fn();
+    const tabs = [makeTab("a"), makeTab("b")];
+    // Scope to this render's container: earlier tests in this file leave their
+    // trees mounted, so a document-wide query picks up their wrappers too.
+    const { rerender, container } = render(DocumentTabs, {
+      props: { ...baseProps(tabs, reorder), uniformTabWidth: true },
+    });
+    await tick();
+
+    const wrappers = () => Array.from(container.querySelectorAll(".tab-flip"));
+    expect(wrappers()).toHaveLength(2);
+    expect(wrappers().every((w) => w.classList.contains("uniform"))).toBe(true);
+
+    await rerender({ ...baseProps(tabs, reorder), uniformTabWidth: false });
+    await tick();
+    expect(wrappers().some((w) => w.classList.contains("uniform"))).toBe(false);
+  });
+
+  it("defaults to adaptive when the prop is omitted (svelte-harness mounts it bare)", async () => {
+    const reorder = vi.fn();
+    const { container } = render(DocumentTabs, { props: baseProps([makeTab("a")], reorder) });
+    await tick();
+    const wrapper = container.querySelector(".tab-flip");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.classList.contains("uniform")).toBe(false);
+  });
+});
+
+// #1257 Fix 4 investigation: the adaptive-floor $effect's own comment claims it
+// walks live children instead of querying by tab id BECAUSE "a closing tab
+// lingers ~200ms with its testid intact, so a close-then-reopen of the same
+// document would otherwise resolve to the dying node". Tab ids are stable
+// per file path (server-side `docIdFromPath` hash), so closing then reopening
+// the SAME file reuses the SAME `{#each (tab.id)}` key. This pins what Svelte
+// 5 actually does with that scenario.
+describe("same-key close-then-reopen (#1257 Fix 4)", () => {
+  it("resurrects the SAME DOM node instead of leaving a duplicate dying node behind", async () => {
+    const reorder = vi.fn();
+    const tabA = makeTab("a");
+    const tabB = makeTab("b");
+    const { container, rerender } = render(DocumentTabs, {
+      props: baseProps([tabA, tabB], reorder),
+    });
+    await tick();
+
+    const initialNode = container.querySelector('[data-testid="tab-a"]');
+    expect(initialNode).toBeTruthy();
+
+    // Close "a". happy-dom's stubbed `animate()` (see beforeEach) never calls
+    // `onfinish`, so — like the real ~200ms outro — the wrapper lingers in the
+    // DOM rather than being destroyed immediately.
+    await rerender(baseProps([tabB], reorder));
+    await tick();
+
+    const duringOutro = container.querySelectorAll('[data-testid="tab-a"]');
+    expect(duringOutro.length).toBe(1);
+
+    // Reopen the SAME file (same tab id) before the outro has finished.
+    await rerender(baseProps([tabA, tabB], reorder));
+    await tick();
+
+    const afterReopen = container.querySelectorAll('[data-testid="tab-a"]');
+    // Svelte 5's keyed `{#each}` reconcile looks up a reappearing key in its
+    // existing (possibly still-outroing) items and un-inerts that SAME effect
+    // rather than mounting a second one — see `reconcile()` in
+    // svelte/src/internal/client/dom/blocks/each.js, which deletes the
+    // resurrected effect from its outro-group's pending/done sets on the very
+    // reconcile pass that sees the key again. There is never a moment with
+    // both a "dying" node and a separately-mounted "live" node for the same
+    // key, so querying by id would have found the correct node too — the
+    // walk-live-children comment's stated justification does not hold for
+    // this scenario (it may still be the right implementation for other
+    // reasons; this test only pins the resurrection behavior it cites).
+    expect(afterReopen.length).toBe(1);
+    expect(afterReopen[0]).toBe(initialNode);
+  });
+});
