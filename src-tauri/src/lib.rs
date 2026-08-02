@@ -37,7 +37,7 @@ use std::time::Duration;
 
 use tauri::Url;
 use tauri::{Emitter, Manager};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_prevent_default::Flags;
 use tauri_plugin_shell::ShellExt;
@@ -1703,6 +1703,8 @@ struct ContextMenuActionPayload {
 /// webview); `Custom` items carry a `ctx:` id routed back to the editor.
 #[derive(Debug, PartialEq, Eq)]
 enum CtxItem {
+    Undo,
+    Redo,
     Cut,
     Copy,
     Paste,
@@ -1710,6 +1712,19 @@ enum CtxItem {
     Separator,
     /// (id, label, enabled)
     Custom(&'static str, &'static str, bool),
+    /// (id, label, enabled, native accelerator)
+    Accelerated(&'static str, &'static str, bool, &'static str),
+    /// Recursive group. Submenu ids are deliberately not routed leaves.
+    Submenu(&'static str, Vec<CtxItem>),
+}
+
+fn selection_intents(req: &ContextMenuRequest) -> Vec<CtxItem> {
+    let enabled = req.is_editable && req.has_selection;
+    vec![
+        CtxItem::Custom("ctx:selection:askAi", "Ask AI about selection…", enabled),
+        CtxItem::Custom("ctx:selection:comment", "Comment to AI…", enabled),
+        CtxItem::Custom("ctx:selection:privateNote", "Private Note…", enabled),
+    ]
 }
 
 /// Pure builder — returns the item spec for a request. Unit-tested like
@@ -1718,45 +1733,128 @@ enum CtxItem {
 fn build_context_menu_spec(req: &ContextMenuRequest) -> Vec<CtxItem> {
     let ed = req.is_editable;
     match req.kind {
-        ContextMenuKind::Link => vec![
-            CtxItem::Custom("ctx:link:open", "Open Link", true),
-            CtxItem::Custom("ctx:link:copy", "Copy Link", true),
-            CtxItem::Custom("ctx:link:remove", "Remove Link", ed),
-            CtxItem::Separator,
-            CtxItem::Cut,
-            CtxItem::Copy,
-            CtxItem::Paste,
-        ],
-        ContextMenuKind::TableCell => vec![
-            CtxItem::Cut,
-            CtxItem::Copy,
-            CtxItem::Paste,
-            CtxItem::Separator,
-            CtxItem::Custom("ctx:table:insertRowAbove", "Insert Row Above", ed),
-            CtxItem::Custom("ctx:table:insertRowBelow", "Insert Row Below", ed),
-            CtxItem::Custom("ctx:table:insertColLeft", "Insert Column Left", ed),
-            CtxItem::Custom("ctx:table:insertColRight", "Insert Column Right", ed),
-            CtxItem::Separator,
-            CtxItem::Custom("ctx:table:deleteRow", "Delete Row", ed),
-            CtxItem::Custom("ctx:table:deleteCol", "Delete Column", ed),
-            CtxItem::Separator,
-            CtxItem::Custom("ctx:table:mergeCells", "Merge Cells", ed && req.can_merge_cells),
-            CtxItem::Custom("ctx:table:splitCell", "Split Cell", ed && req.can_split_cell),
-            CtxItem::Separator,
-            CtxItem::Custom("ctx:table:deleteTable", "Delete Table", ed),
-        ],
-        ContextMenuKind::EditorText => vec![
-            CtxItem::Custom("ctx:undo", "Undo", ed),
-            CtxItem::Custom("ctx:redo", "Redo", ed),
-            CtxItem::Separator,
-            CtxItem::Cut,
-            CtxItem::Copy,
-            CtxItem::Paste,
-            CtxItem::Custom("ctx:pastePlain", "Paste as Plain Text", ed),
-            CtxItem::Separator,
-            CtxItem::SelectAll,
-        ],
+        ContextMenuKind::Link => {
+            let mut spec = vec![
+                CtxItem::Custom("ctx:link:open", "Open Link", true),
+                CtxItem::Custom("ctx:link:copy", "Copy Link", true),
+                CtxItem::Custom("ctx:link:edit", "Edit Link…", ed),
+                CtxItem::Custom("ctx:link:remove", "Remove Link", ed),
+                CtxItem::Separator,
+                CtxItem::Cut,
+                CtxItem::Copy,
+                CtxItem::Paste,
+            ];
+            if req.has_selection {
+                spec.push(CtxItem::Separator);
+                spec.extend(selection_intents(req));
+            }
+            spec
+        }
+        ContextMenuKind::TableCell => {
+            let mut spec = vec![
+                CtxItem::Cut,
+                CtxItem::Copy,
+                CtxItem::Paste,
+                CtxItem::Separator,
+                CtxItem::Submenu(
+                    "Rows",
+                    vec![
+                        CtxItem::Custom("ctx:table:insertRowAbove", "Insert Above", ed),
+                        CtxItem::Custom("ctx:table:insertRowBelow", "Insert Below", ed),
+                        CtxItem::Separator,
+                        CtxItem::Custom("ctx:table:deleteRow", "Delete Row", ed),
+                    ],
+                ),
+                CtxItem::Submenu(
+                    "Columns",
+                    vec![
+                        CtxItem::Custom("ctx:table:insertColLeft", "Insert Left", ed),
+                        CtxItem::Custom("ctx:table:insertColRight", "Insert Right", ed),
+                        CtxItem::Separator,
+                        CtxItem::Custom("ctx:table:deleteCol", "Delete Column", ed),
+                    ],
+                ),
+                CtxItem::Custom(
+                    "ctx:table:mergeCells",
+                    "Merge Cells",
+                    ed && req.can_merge_cells,
+                ),
+                CtxItem::Custom(
+                    "ctx:table:splitCell",
+                    "Split Cell",
+                    ed && req.can_split_cell,
+                ),
+                CtxItem::Separator,
+                CtxItem::Custom("ctx:table:deleteTable", "Delete Table", ed),
+            ];
+            if req.has_selection {
+                spec.push(CtxItem::Separator);
+                spec.extend(selection_intents(req));
+            }
+            spec
+        }
+        ContextMenuKind::EditorText => {
+            let mut spec = vec![
+                CtxItem::Undo,
+                CtxItem::Redo,
+                CtxItem::Separator,
+                CtxItem::Cut,
+                CtxItem::Copy,
+                CtxItem::Paste,
+                CtxItem::Accelerated(
+                    "ctx:pastePlain",
+                    "Paste as Raw Text",
+                    ed,
+                    "CmdOrCtrl+Shift+V",
+                ),
+                CtxItem::Separator,
+                CtxItem::SelectAll,
+            ];
+            if req.has_selection {
+                spec.push(CtxItem::Separator);
+                spec.extend(selection_intents(req));
+            }
+            spec
+        }
     }
+}
+
+fn build_menu_items_from_spec(
+    window: &tauri::WebviewWindow,
+    spec: &[CtxItem],
+) -> tauri::Result<Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>>> {
+    use tauri::menu::IsMenuItem;
+    let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::with_capacity(spec.len());
+    for item in spec {
+        let boxed: Box<dyn IsMenuItem<tauri::Wry>> =
+            match item {
+                CtxItem::Undo => Box::new(PredefinedMenuItem::undo(window, None)?),
+                CtxItem::Redo => Box::new(PredefinedMenuItem::redo(window, None)?),
+                CtxItem::Cut => Box::new(PredefinedMenuItem::cut(window, None)?),
+                CtxItem::Copy => Box::new(PredefinedMenuItem::copy(window, None)?),
+                CtxItem::Paste => Box::new(PredefinedMenuItem::paste(window, None)?),
+                CtxItem::SelectAll => Box::new(PredefinedMenuItem::select_all(window, None)?),
+                CtxItem::Separator => Box::new(PredefinedMenuItem::separator(window)?),
+                CtxItem::Custom(id, label, enabled) => Box::new(MenuItem::with_id(
+                    window,
+                    *id,
+                    *label,
+                    *enabled,
+                    None::<&str>,
+                )?),
+                CtxItem::Accelerated(id, label, enabled, accelerator) => Box::new(
+                    MenuItem::with_id(window, *id, *label, *enabled, Some(*accelerator))?,
+                ),
+                CtxItem::Submenu(label, children) => {
+                    let child_items = build_menu_items_from_spec(window, children)?;
+                    let child_refs: Vec<&dyn IsMenuItem<tauri::Wry>> =
+                        child_items.iter().map(|item| item.as_ref()).collect();
+                    Box::new(Submenu::with_items(window, *label, true, &child_refs)?)
+                }
+            };
+        items.push(boxed);
+    }
+    Ok(items)
 }
 
 fn build_menu_from_spec(
@@ -1764,20 +1862,7 @@ fn build_menu_from_spec(
     spec: &[CtxItem],
 ) -> tauri::Result<Menu<tauri::Wry>> {
     use tauri::menu::IsMenuItem;
-    let mut items: Vec<Box<dyn IsMenuItem<tauri::Wry>>> = Vec::with_capacity(spec.len());
-    for item in spec {
-        let boxed: Box<dyn IsMenuItem<tauri::Wry>> = match *item {
-            CtxItem::Cut => Box::new(PredefinedMenuItem::cut(window, None)?),
-            CtxItem::Copy => Box::new(PredefinedMenuItem::copy(window, None)?),
-            CtxItem::Paste => Box::new(PredefinedMenuItem::paste(window, None)?),
-            CtxItem::SelectAll => Box::new(PredefinedMenuItem::select_all(window, None)?),
-            CtxItem::Separator => Box::new(PredefinedMenuItem::separator(window)?),
-            CtxItem::Custom(id, label, enabled) => {
-                Box::new(MenuItem::with_id(window, id, label, enabled, None::<&str>)?)
-            }
-        };
-        items.push(boxed);
-    }
+    let items = build_menu_items_from_spec(window, spec)?;
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|b| b.as_ref()).collect();
     Menu::with_items(window, &refs)
 }
@@ -1809,13 +1894,23 @@ fn show_context_menu(window: tauri::WebviewWindow, req: ContextMenuRequest) -> R
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TabContextMenuRequest {
+    /// At least one tab sits to the left of the clicked tab.
+    can_close_left: bool,
     /// More than one tab is open → "Close Others" is meaningful.
     can_close_others: bool,
     /// At least one tab sits to the right of the clicked tab.
     can_close_right: bool,
+    can_rename: bool,
+    can_save: bool,
+    /// Selects the fixed Save As label; no filename/path crosses IPC.
+    save_as: bool,
+    can_copy_file_name: bool,
     /// The tab maps to a real on-disk file (not a scratchpad / upload) →
     /// Copy Path + Reveal are meaningful.
     has_path: bool,
+    can_toggle_source_view: bool,
+    /// Selects the fixed return-to-editor label.
+    source_view_active: bool,
 }
 
 /// OS-appropriate label for the reveal-in-file-manager item. Mirrors the
@@ -1831,9 +1926,39 @@ fn reveal_in_file_manager_label(target_os: &str) -> &'static str {
 fn build_tab_context_menu_spec(req: &TabContextMenuRequest, target_os: &str) -> Vec<CtxItem> {
     vec![
         CtxItem::Custom("ctx:tab:close", "Close", true),
+        CtxItem::Custom(
+            "ctx:tab:closeLeft",
+            "Close Tabs to the Left",
+            req.can_close_left,
+        ),
         CtxItem::Custom("ctx:tab:closeOthers", "Close Others", req.can_close_others),
-        CtxItem::Custom("ctx:tab:closeRight", "Close to the Right", req.can_close_right),
+        CtxItem::Custom(
+            "ctx:tab:closeRight",
+            "Close to the Right",
+            req.can_close_right,
+        ),
         CtxItem::Separator,
+        CtxItem::Custom("ctx:tab:rename", "Rename", req.can_rename),
+        CtxItem::Custom(
+            "ctx:tab:save",
+            if req.save_as { "Save As…" } else { "Save" },
+            req.can_save,
+        ),
+        CtxItem::Custom(
+            "ctx:tab:toggleSourceView",
+            if req.source_view_active {
+                "Return to Formatted Editor"
+            } else {
+                "View Markdown Source"
+            },
+            req.can_toggle_source_view,
+        ),
+        CtxItem::Separator,
+        CtxItem::Custom(
+            "ctx:tab:copyFileName",
+            "Copy File Name",
+            req.can_copy_file_name,
+        ),
         CtxItem::Custom("ctx:tab:copyPath", "Copy Path", req.has_path),
         CtxItem::Custom(
             "ctx:tab:reveal",
@@ -4215,17 +4340,25 @@ mod context_menu_tests {
     }
 
     fn custom_ids(spec: &[CtxItem]) -> Vec<&'static str> {
-        spec.iter()
-            .filter_map(|i| match i {
-                CtxItem::Custom(id, _, _) => Some(*id),
-                _ => None,
-            })
-            .collect()
+        let mut ids = Vec::new();
+        for item in spec {
+            match item {
+                CtxItem::Custom(id, _, _) | CtxItem::Accelerated(id, _, _, _) => ids.push(*id),
+                CtxItem::Submenu(_, children) => ids.extend(custom_ids(children)),
+                _ => {}
+            }
+        }
+        ids
     }
 
     fn enabled_of(spec: &[CtxItem], id: &str) -> Option<bool> {
         spec.iter().find_map(|i| match i {
-            CtxItem::Custom(item_id, _, enabled) if *item_id == id => Some(*enabled),
+            CtxItem::Custom(item_id, _, enabled) | CtxItem::Accelerated(item_id, _, enabled, _)
+                if *item_id == id =>
+            {
+                Some(*enabled)
+            }
+            CtxItem::Submenu(_, children) => enabled_of(children, id),
             _ => None,
         })
     }
@@ -4235,7 +4368,12 @@ mod context_menu_tests {
         let spec = build_context_menu_spec(&req(ContextMenuKind::Link, true));
         assert_eq!(
             custom_ids(&spec),
-            vec!["ctx:link:open", "ctx:link:copy", "ctx:link:remove"]
+            vec![
+                "ctx:link:open",
+                "ctx:link:copy",
+                "ctx:link:edit",
+                "ctx:link:remove"
+            ]
         );
         // Native clipboard items follow.
         assert!(spec.contains(&CtxItem::Cut));
@@ -4274,17 +4412,40 @@ mod context_menu_tests {
     #[test]
     fn editor_text_menu_has_undo_clipboard_paste_plain_select_all() {
         let spec = build_context_menu_spec(&req(ContextMenuKind::EditorText, true));
-        assert_eq!(
-            custom_ids(&spec),
-            vec!["ctx:undo", "ctx:redo", "ctx:pastePlain"]
-        );
+        assert_eq!(custom_ids(&spec), vec!["ctx:pastePlain"]);
+        assert!(spec.contains(&CtxItem::Undo));
+        assert!(spec.contains(&CtxItem::Redo));
         assert!(spec.contains(&CtxItem::SelectAll));
         assert!(spec.contains(&CtxItem::Paste));
+        assert!(spec.contains(&CtxItem::Accelerated(
+            "ctx:pastePlain",
+            "Paste as Raw Text",
+            true,
+            "CmdOrCtrl+Shift+V",
+        )));
+    }
+
+    #[test]
+    fn selection_intents_are_present_only_for_a_non_empty_selection() {
+        let mut r = req(ContextMenuKind::EditorText, true);
+        assert!(!custom_ids(&build_context_menu_spec(&r)).contains(&"ctx:selection:askAi"));
+        r.has_selection = true;
+        let ids = custom_ids(&build_context_menu_spec(&r));
+        assert!(ids.contains(&"ctx:selection:askAi"));
+        assert!(ids.contains(&"ctx:selection:comment"));
+        assert!(ids.contains(&"ctx:selection:privateNote"));
+    }
+
+    #[test]
+    fn table_rows_and_columns_are_recursive_submenus() {
+        let spec = build_context_menu_spec(&req(ContextMenuKind::TableCell, true));
+        assert!(matches!(&spec[4], CtxItem::Submenu("Rows", _)));
+        assert!(matches!(&spec[5], CtxItem::Submenu("Columns", _)));
     }
 
     #[test]
     fn read_only_disables_mutating_items_but_keeps_navigation() {
-        // Read-only doc: table mutations + paste-plain + undo are disabled;
+        // Read-only doc: table mutations + paste-plain are disabled;
         // Open/Copy Link stay enabled (they don't mutate the document).
         let table = build_context_menu_spec(&req(ContextMenuKind::TableCell, false));
         assert_eq!(enabled_of(&table, "ctx:table:deleteRow"), Some(false));
@@ -4292,7 +4453,6 @@ mod context_menu_tests {
 
         let text = build_context_menu_spec(&req(ContextMenuKind::EditorText, false));
         assert_eq!(enabled_of(&text, "ctx:pastePlain"), Some(false));
-        assert_eq!(enabled_of(&text, "ctx:undo"), Some(false));
 
         let link = build_context_menu_spec(&req(ContextMenuKind::Link, false));
         assert_eq!(enabled_of(&link, "ctx:link:open"), Some(true));
@@ -4324,9 +4484,16 @@ mod tab_context_menu_tests {
 
     fn req(can_close_others: bool, can_close_right: bool, has_path: bool) -> TabContextMenuRequest {
         TabContextMenuRequest {
+            can_close_left: false,
             can_close_others,
             can_close_right,
+            can_rename: true,
+            can_save: true,
+            save_as: false,
+            can_copy_file_name: true,
             has_path,
+            can_toggle_source_view: true,
+            source_view_active: false,
         }
     }
 
@@ -4351,8 +4518,13 @@ mod tab_context_menu_tests {
             ids,
             vec![
                 "ctx:tab:close",
+                "ctx:tab:closeLeft",
                 "ctx:tab:closeOthers",
                 "ctx:tab:closeRight",
+                "ctx:tab:rename",
+                "ctx:tab:save",
+                "ctx:tab:toggleSourceView",
+                "ctx:tab:copyFileName",
                 "ctx:tab:copyPath",
                 "ctx:tab:reveal",
             ]
@@ -4397,8 +4569,15 @@ mod tab_context_menu_tests {
     fn request_deserializes_from_camel_case() {
         let r: TabContextMenuRequest = serde_json::from_value(serde_json::json!({
             "canCloseOthers": true,
+            "canCloseLeft": false,
             "canCloseRight": false,
+            "canRename": true,
+            "canSave": true,
+            "saveAs": false,
+            "canCopyFileName": true,
             "hasPath": true,
+            "canToggleSourceView": true,
+            "sourceViewActive": false,
         }))
         .expect("camelCase tab request should deserialize");
         assert!(r.can_close_others);

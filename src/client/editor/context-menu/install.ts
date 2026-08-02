@@ -20,6 +20,12 @@ import { type ContextMenuRequest, isContextMenuActionId } from "./types";
 export interface ContextMenuHostDeps {
   /** Navigate a link href; MUST re-validate via `isSafeExternalHref`. */
   openHref: (href: string) => void;
+  /** Request App's transient chat-focus flow. Never receives selection data. */
+  focusChat?: () => void;
+  /** Open the existing annotation composer for the current PM selection. */
+  composeAnnotation?: (kind: "comment" | "note") => void;
+  /** Open the shared link editor at the current link caret/range. */
+  editLink?: () => void;
   /** Optional platform override (tests); defaults to runtime detection. */
   platform?: Platform;
 }
@@ -133,6 +139,9 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
         getLinkHref: () => linkHref,
         readClipboardText,
         writeClipboardText,
+        focusChat: deps.focusChat,
+        composeAnnotation: deps.composeAnnotation,
+        editLink: deps.editLink,
       });
     }),
   );

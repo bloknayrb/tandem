@@ -40,6 +40,8 @@ interface Props {
    * Ctrl+Alt+M global shortcut in App.svelte.
    */
   requestCommentFocus?: number;
+  /** Desktop native-menu request; carries only a local intent kind + nonce. */
+  requestAnnotationFocus?: { nonce: number; kind: "comment" | "note" } | null;
   // 1.11: decoration display state, threaded through so the popup can mirror
   // the formatting bar's Decorations split button (the reachability guarantee
   // when the bar is hidden). Same prop shape as FormattingBar/DecorationsMenu.
@@ -81,6 +83,7 @@ let {
   selectionToolbar = true,
   suppressSelectionToolbar = false,
   requestCommentFocus = 0,
+  requestAnnotationFocus = null,
   showAuthorship = true,
   showComments = true,
   showHighlights = true,
@@ -108,6 +111,8 @@ let annotationText = $state("");
 let capturedRange = $state<{ from: number; to: number } | null>(null);
 let textareaEl = $state<HTMLTextAreaElement | null>(null);
 let annotateMode = $state(false);
+let annotationIntent = $state<"comment" | "note">("comment");
+let forcedComposer = $state(false);
 
 // A28 dwell + entrance (#798).
 // `dwellSatisfied` gates `showPopup`: the popup appears only after the selection
@@ -235,7 +240,7 @@ const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
 
 const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 const showPopup = $derived(
-  selectionToolbar &&
+  (selectionToolbar || forcedComposer) &&
     !suppressSelectionToolbar &&
     canAnnotate &&
     selectionPosition !== null &&
@@ -521,23 +526,32 @@ $effect(() => {
 // the cursor in $state would create a self-triggering effect loop (the $effect
 // writes to the cursor inside its own reactive scope on every fire).
 let lastSeenCommentTrigger = 0;
+function openRequestedComposer(kind: "comment" | "note"): void {
+  if (!editor) return;
+  const { from, to } = editor.state.selection;
+  if (from === to || !editor.isEditable) return;
+  captureSelectionRange();
+  annotationIntent = kind;
+  annotateMode = true;
+  forcedComposer = true;
+  dwellSatisfied = true;
+  beginEntrance();
+  requestAnimationFrame(() => textareaEl?.focus());
+}
+
 $effect(() => {
   if (requestCommentFocus === lastSeenCommentTrigger) return;
   lastSeenCommentTrigger = requestCommentFocus;
   if (requestCommentFocus === 0 || !editor) return;
-  const { from, to } = editor.state.selection;
-  if (from === to) return; // No selection → no-op
-  untrack(() => captureSelectionRange());
-  annotateMode = true;
-  // A28: explicit "give me a comment box now" intent bypasses the dwell — show
-  // the popup immediately. `selectionPosition` is already non-null here (the live
-  // selection ran updateSelectionAffordance), so flipping `dwellSatisfied`
-  // mounts the popup at once; `beginEntrance()` arms the width-freeze in the same
-  // batched write so it wins the mount ResizeObserver race. Bare writes — no
-  // `untrack` needed (untrack guards reads, not writes).
-  dwellSatisfied = true;
-  beginEntrance();
-  requestAnimationFrame(() => textareaEl?.focus());
+  untrack(() => openRequestedComposer("comment"));
+});
+
+let lastAnnotationRequestNonce = 0;
+$effect(() => {
+  const request = requestAnnotationFocus;
+  if (!request || request.nonce === lastAnnotationRequestNonce) return;
+  lastAnnotationRequestNonce = request.nonce;
+  untrack(() => openRequestedComposer(request.kind));
 });
 
 // Selection-popup focus policy (#653): do NOT auto-focus the textarea on popup
@@ -706,6 +720,7 @@ function dismissPopup() {
   capturedRange = null;
   annotationText = "";
   annotateMode = false;
+  forcedComposer = false;
   clearDwell();
   editor?.chain().focus().run();
 }
@@ -937,7 +952,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           aria-label="Annotation text"
           bind:value={annotationText}
           onkeydown={handleTextareaKeyDown}
-          placeholder="Write a note or instruction..."
+          placeholder={annotationIntent === "note" ? "Write a private note..." : "Write an instruction for AI..."}
           rows={1}
           class="composer-input"
         ></textarea>

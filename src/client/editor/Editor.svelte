@@ -10,6 +10,8 @@ import { createTandemSettings } from "../hooks/useTandemSettings.svelte";
 import { readStoredName, subscribeToUserName } from "../hooks/useUserName";
 import { openServerPath } from "../utils/server-paths";
 import { installContextMenu } from "./context-menu/install";
+import { applyLink, getInitialLinkHref } from "./toolbar/handlers";
+import LinkEditor from "./toolbar/LinkEditor.svelte";
 // Schema-defining extensions (nodes + marks + static plugins) live in one shared
 // module so the editor and tests register the same schema — see editor-extensions.ts.
 import { buildSchemaExtensions } from "./editor-extensions";
@@ -88,6 +90,9 @@ interface Props {
   /** Clicking editor text that is NOT an annotation clears the active selection. */
   onClearAnnotation?: () => void;
   onSlashCommandMenuChange?: (open: boolean) => void;
+  /** Intent-only callbacks used by the desktop native editor menu. */
+  onFocusChat?: () => void;
+  onComposeAnnotation?: (kind: "comment" | "note") => void;
 }
 
 const {
@@ -101,10 +106,15 @@ const {
   onAnnotationClick,
   onClearAnnotation,
   onSlashCommandMenuChange,
+  onFocusChat,
+  onComposeAnnotation,
 }: Props = $props();
 
 let editor = $state<TiptapEditor | null>(null);
 let editorRoot: HTMLDivElement | null = null;
+let showContextLinkEditor = $state(false);
+let contextLinkHref = $state("");
+let contextLinkPosition = $state("position: fixed; left: 16px; top: 16px;");
 
 // Paged white-sheet-on-gray-canvas layout for .docx files. Must be `$derived`
 // (not `const`) so it updates when the active document changes — see
@@ -210,6 +220,23 @@ $effect(() => {
   const teardownContextMenu = installContextMenu(next, {
     openHref: (href) => {
       void openHref(href);
+    },
+    focusChat: () => onFocusChat?.(),
+    composeAnnotation: (kind) => onComposeAnnotation?.(kind),
+    editLink: () => {
+      // Re-read from the current PM selection; the href captured by the
+      // right-click host remains private and is never round-tripped through Rust.
+      if (!next.isEditable || !next.isActive("link")) return;
+      contextLinkHref = getInitialLinkHref(next);
+      try {
+        const coords = next.view.coordsAtPos(next.state.selection.head);
+        const left = Math.max(8, Math.min(coords.left, window.innerWidth - 264));
+        const top = Math.max(8, Math.min(coords.bottom + 6, window.innerHeight - 56));
+        contextLinkPosition = `position: fixed; left: ${left}px; top: ${top}px;`;
+      } catch {
+        contextLinkPosition = "position: fixed; left: 16px; top: 16px;";
+      }
+      showContextLinkEditor = true;
     },
   });
 
@@ -389,6 +416,22 @@ async function handleEditorClick(e: MouseEvent) {
   data-testid="editor-root"
   class:tandem-paged={isPaged}
 ></div>
+<LinkEditor
+  open={showContextLinkEditor}
+  initialValue={contextLinkHref}
+  positionStyle={contextLinkPosition}
+  testIdPrefix="context-link"
+  onApply={(value) => {
+    if (editor && !editor.isDestroyed && editor.isEditable && editor.isActive("link")) {
+      applyLink(editor, value);
+    }
+    showContextLinkEditor = false;
+  }}
+  onClose={() => {
+    showContextLinkEditor = false;
+    editor?.view.focus();
+  }}
+/>
 
 <style>
   /* Apply editor font to the Tiptap content DOM (inside Tiptap's own element tree). */

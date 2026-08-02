@@ -35,10 +35,17 @@ interface Props {
   activeTabId: string | null;
   onTabSwitch: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
+  /** Close every tab to the left of the clicked live tab. */
+  onCloseToLeft?: (tabId: string) => void;
   /** Close every tab except the given one (tab context menu, #923 Phase 2). */
   onCloseOthers?: (tabId: string) => void;
   /** Close every tab to the right of the given one in display order. */
   onCloseToRight?: (tabId: string) => void;
+  /** Target-aware save contract owned by App. */
+  onSaveTarget?: (tabId: string, intent: "save" | "save-as") => void | Promise<void>;
+  /** Target-aware source-view toggle; activates clicked inactive tabs first. */
+  onToggleSourceViewTarget?: (tabId: string) => void | Promise<void>;
+  isTabInSourceView?: (tabId: string) => boolean;
   reorder?: (fromId: string, toId: string, side?: "left" | "right") => void;
   reduceMotion?: boolean;
   onRequestOpenDialog?: () => void;
@@ -65,8 +72,12 @@ const {
   activeTabId,
   onTabSwitch,
   onTabClose,
+  onCloseToLeft,
   onCloseOthers,
   onCloseToRight,
+  onSaveTarget,
+  onToggleSourceViewTarget,
+  isTabInSourceView = () => false,
   reorder,
   reduceMotion = false,
   onRequestOpenDialog,
@@ -142,7 +153,7 @@ function guardedClose(tabId: string) {
 // rides the same `context-menu-action` event as the editor menu; each surface
 // validates against its own closed id set and drops the other's ids.
 let ctxTabId: string | null = null;
-let ctxTabPath: string | null = null;
+let ctxTabYdoc: OpenTab["ydoc"] | null = null;
 
 async function handleTabContextMenu(e: MouseEvent) {
   if (!isTauriRuntime()) return; // browser → native menu
@@ -153,12 +164,14 @@ async function handleTabContextMenu(e: MouseEvent) {
   if (!tab) return;
 
   ctxTabId = id;
-  ctxTabPath = tab.filePath;
+  ctxTabYdoc = tab.ydoc;
   e.preventDefault();
 
   try {
     const invoke = await loadInvoke();
-    await invoke("show_tab_context_menu", { req: buildTabMenuContext(tabs, id) });
+    await invoke("show_tab_context_menu", {
+      req: buildTabMenuContext(tabs, id, isTabInSourceView(id)),
+    });
   } catch {
     // Tauri unavailable / command error — native menu already suppressed.
   }
@@ -166,11 +179,19 @@ async function handleTabContextMenu(e: MouseEvent) {
 
 async function runTabAction(id: TabContextMenuActionId) {
   const tabId = ctxTabId;
-  const path = ctxTabPath;
   if (!tabId) return;
+  // Re-resolve the exact right-clicked target for every event. A closed/reopened
+  // or otherwise stale menu target no-ops; no action falls back to the active tab.
+  const tab = tabs.find((candidate) => candidate.id === tabId);
+  // Stable ids may be reused if the same path closes and reopens while a menu
+  // event is pending; Y.Doc identity distinguishes that new live incarnation.
+  if (!tab || tab.ydoc !== ctxTabYdoc) return;
   switch (id) {
     case "ctx:tab:close":
       guardedClose(tabId);
+      return;
+    case "ctx:tab:closeLeft":
+      onCloseToLeft?.(tabId);
       return;
     case "ctx:tab:closeOthers":
       onCloseOthers?.(tabId);
@@ -178,26 +199,45 @@ async function runTabAction(id: TabContextMenuActionId) {
     case "ctx:tab:closeRight":
       onCloseToRight?.(tabId);
       return;
+    case "ctx:tab:rename":
+      if (isRenamable(tab)) startRename(tabId);
+      return;
+    case "ctx:tab:save":
+      if (!tab.readOnly) {
+        const intent = tab.source === "upload" ? "save-as" : "save";
+        await onSaveTarget?.(tabId, intent);
+      }
+      return;
+    case "ctx:tab:copyFileName":
+      try {
+        await navigator.clipboard.writeText(tab.fileName);
+      } catch {
+        /* clipboard denied — best-effort */
+      }
+      return;
     case "ctx:tab:copyPath":
       // Re-check the path is real here too — don't trust the menu's enabled
       // state alone (defense-in-depth vs a forged action event).
-      if (path && hasRealPath(path)) {
+      if (hasRealPath(tab.filePath)) {
         try {
-          await navigator.clipboard.writeText(path);
+          await navigator.clipboard.writeText(tab.filePath);
         } catch {
           /* clipboard denied — best-effort */
         }
       }
       return;
     case "ctx:tab:reveal":
-      if (path && hasRealPath(path)) {
+      if (hasRealPath(tab.filePath)) {
         try {
           const invoke = await loadInvoke();
-          await invoke("show_in_file_manager", { path });
+          await invoke("show_in_file_manager", { path: tab.filePath });
         } catch {
           /* reveal failed — best-effort */
         }
       }
+      return;
+    case "ctx:tab:toggleSourceView":
+      if (tab.format === "md" && !tab.readOnly) await onToggleSourceViewTarget?.(tabId);
       return;
   }
 }

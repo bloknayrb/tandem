@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { onDestroy, untrack } from "svelte";
+import { onDestroy, tick, untrack } from "svelte";
 import { API_SCRATCHPAD } from "../shared/api-paths";
 import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../shared/constants";
 import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
@@ -112,7 +112,11 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
-import { tabIdsToCloseOthers, tabIdsToCloseRight } from "./tabs/tab-context-menu.js";
+import {
+  tabIdsToCloseLeft,
+  tabIdsToCloseOthers,
+  tabIdsToCloseRight,
+} from "./tabs/tab-context-menu.js";
 import { isRenamable } from "./types.js";
 import { openFileForRuntime } from "./utils/browse-file";
 import { resolveDefaultModelChip } from "./utils/model-chip";
@@ -195,6 +199,10 @@ function closeTabAndRecord(tabId: string) {
 // closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
 function closeOtherTabs(keepId: string) {
   for (const id of tabIdsToCloseOthers(tabOrder.orderedTabs, keepId)) closeTabAndRecord(id);
+}
+
+function closeTabsToLeft(fromId: string) {
+  for (const id of tabIdsToCloseLeft(tabOrder.orderedTabs, fromId)) closeTabAndRecord(id);
 }
 
 function closeTabsToRight(fromId: string) {
@@ -1016,6 +1024,11 @@ function clearSourceDraft(tabId: string): void {
 }
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
+let annotationFocusRequest = $state<{ nonce: number; kind: "comment" | "note" } | null>(null);
+
+function requestAnnotationComposer(kind: "comment" | "note"): void {
+  annotationFocusRequest = { nonce: (annotationFocusRequest?.nonce ?? 0) + 1, kind };
+}
 let newTabMenuTrigger = $state(0);
 // F2 (#1017): increment to start renaming the active tab. DocumentTabs owns the
 // rename-edit state; this counter is its trigger, mirroring newTabMenuTrigger.
@@ -1843,6 +1856,32 @@ function enterSourceView(): void {
   sourceViewTabs = next;
 }
 
+function enterSourceViewTarget(documentId: string): void {
+  const tab = yjsSync.tabs.find((candidate) => candidate.id === documentId);
+  if (!tab || tab.format !== "md" || tab.readOnly || sourceViewTabs.has(documentId)) return;
+  yjsSync.setActiveTabId(documentId);
+  const next = new Set(sourceViewTabs);
+  next.add(documentId);
+  findBarOpen = false;
+  slashCommandMenuOpen = false;
+  paletteOpen = false;
+  sourceViewTabs = next;
+}
+
+async function requestToggleSourceViewTarget(documentId: string): Promise<void> {
+  const tab = yjsSync.tabs.find((candidate) => candidate.id === documentId);
+  if (!tab || tab.format !== "md" || tab.readOnly) return;
+  yjsSync.setActiveTabId(documentId);
+  if (!sourceViewTabs.has(documentId)) {
+    enterSourceViewTarget(documentId);
+    return;
+  }
+  // An inactive SourceView is unmounted. Activate first, then wait for its
+  // command registration so a dirty draft is committed before exit.
+  await tick();
+  await sourceViewCommands.get(documentId)?.exit();
+}
+
 async function requestToggleSourceView(): Promise<void> {
   const documentId = yjsSync.activeTabId;
   if (!documentId) return;
@@ -2124,6 +2163,7 @@ const shouldShowModelPicker = $derived(
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
       requestCommentFocus={commentFocusTrigger}
+      requestAnnotationFocus={annotationFocusRequest}
       showAuthorship={settingsState.settings.showAuthorship}
       showComments={settingsState.settings.showComments}
       showHighlights={settingsState.settings.showHighlights}
@@ -2514,8 +2554,12 @@ const shouldShowModelPicker = $derived(
     activeTabId={yjsSync.activeTabId}
     onTabSwitch={yjsSync.setActiveTabId}
     onTabClose={closeTabAndRecord}
+    onCloseToLeft={closeTabsToLeft}
     onCloseOthers={closeOtherTabs}
     onCloseToRight={closeTabsToRight}
+    onSaveTarget={saveDocumentTarget}
+    onToggleSourceViewTarget={requestToggleSourceViewTarget}
+    isTabInSourceView={(tabId) => sourceViewTabs.has(tabId)}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     uniformTabWidth={settingsState.settings.uniformTabWidth}
@@ -2677,6 +2721,8 @@ const shouldShowModelPicker = $derived(
           activeAnnotationId = null;
         }}
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
+        onFocusChat={focusChat}
+        onComposeAnnotation={requestAnnotationComposer}
       />
     {/snippet}
     <!-- One snippet, two call sites: left wires `marginNotes`, right wires

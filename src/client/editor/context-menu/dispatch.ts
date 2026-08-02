@@ -20,8 +20,6 @@ import type { ContextMenuActionId } from "./types";
 // pure-`.ts` tsc program — so we intersect them onto the chain here rather than
 // pulling the extensions in at runtime. `.focus()` is applied in the helper.
 type CtxChain = ReturnType<Editor["chain"]> & {
-  undo: () => CtxChain;
-  redo: () => CtxChain;
   addRowBefore: () => CtxChain;
   addRowAfter: () => CtxChain;
   addColumnBefore: () => CtxChain;
@@ -49,6 +47,13 @@ export interface DispatchDeps {
   readClipboardText: () => Promise<string | null>;
   /** Write text to the clipboard (Copy Link). */
   writeClipboardText: (text: string) => Promise<void>;
+  focusChat?: () => void;
+  composeAnnotation?: (kind: "comment" | "note") => void;
+  editLink?: () => void;
+}
+
+function hasLiveEditableSelection(editor: Editor): boolean {
+  return !editor.isDestroyed && editor.isEditable && !editor.state.selection.empty;
 }
 
 /**
@@ -63,14 +68,8 @@ export async function dispatchContextAction(
   const { editor } = deps;
 
   switch (id) {
-    case "ctx:undo":
-      ctxChain(editor).undo().run();
-      return;
-    case "ctx:redo":
-      ctxChain(editor).redo().run();
-      return;
-
     case "ctx:pastePlain": {
+      if (editor.isDestroyed || !editor.isEditable) return;
       const text = await deps.readClipboardText();
       if (!text) return;
       // Reuse the exact plain-paste semantics of Ctrl+Shift+V (paragraph split
@@ -82,6 +81,16 @@ export async function dispatchContextAction(
       view.focus();
       return;
     }
+
+    case "ctx:selection:askAi":
+      if (hasLiveEditableSelection(editor)) deps.focusChat?.();
+      return;
+    case "ctx:selection:comment":
+      if (hasLiveEditableSelection(editor)) deps.composeAnnotation?.("comment");
+      return;
+    case "ctx:selection:privateNote":
+      if (hasLiveEditableSelection(editor)) deps.composeAnnotation?.("note");
+      return;
 
     case "ctx:table:insertRowAbove":
       ctxChain(editor).addRowBefore().run();
@@ -125,6 +134,9 @@ export async function dispatchContextAction(
       if (safe) await deps.writeClipboardText(safe);
       return;
     }
+    case "ctx:link:edit":
+      if (!editor.isDestroyed && editor.isEditable && deps.getLinkHref()) deps.editLink?.();
+      return;
     case "ctx:link:remove":
       // Caret-inside-link: extend to the whole mark range before unsetting.
       ctxChain(editor).extendMarkRange("link").unsetLink().run();

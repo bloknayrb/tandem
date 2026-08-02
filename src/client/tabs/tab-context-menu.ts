@@ -14,10 +14,15 @@ import { isScratchpadPath, isUploadPath } from "../../shared/paths";
  */
 export const TAB_CONTEXT_MENU_ACTION_IDS = [
   "ctx:tab:close",
+  "ctx:tab:closeLeft",
   "ctx:tab:closeOthers",
   "ctx:tab:closeRight",
+  "ctx:tab:rename",
+  "ctx:tab:save",
+  "ctx:tab:copyFileName",
   "ctx:tab:copyPath",
   "ctx:tab:reveal",
+  "ctx:tab:toggleSourceView",
 ] as const;
 
 export type TabContextMenuActionId = (typeof TAB_CONTEXT_MENU_ACTION_IDS)[number];
@@ -30,18 +35,36 @@ export function isTabContextMenuActionId(id: unknown): id is TabContextMenuActio
 
 /** Boolean-only request sent to the `show_tab_context_menu` Tauri command. */
 export interface TabContextMenuRequest {
+  /** At least one tab sits to the left of the clicked tab. */
+  canCloseLeft: boolean;
   /** More than one tab is open → "Close Others" is meaningful. */
   canCloseOthers: boolean;
   /** At least one tab sits to the right of the clicked tab (display order). */
   canCloseRight: boolean;
+  /** The clicked tab is a writable on-disk document. */
+  canRename: boolean;
+  /** The clicked tab is writable and can be saved/promoted. */
+  canSave: boolean;
+  /** True selects the fixed Save As label for the save leaf. */
+  saveAs: boolean;
+  /** A live tab always has a display filename; false only for stale ids. */
+  canCopyFileName: boolean;
   /** Tab maps to a real on-disk file (not scratchpad / upload) → Copy Path + Reveal. */
   hasPath: boolean;
+  /** Writable Markdown documents may enter/exit source view. */
+  canToggleSourceView: boolean;
+  /** True selects the fixed Return to Formatted Editor label. */
+  sourceViewActive: boolean;
 }
 
 /** Minimal tab shape the context computation needs. */
 export interface TabRef {
   id: string;
   filePath: string;
+  fileName?: string;
+  format?: string;
+  readOnly?: boolean;
+  source?: "file" | "upload";
 }
 
 /**
@@ -60,14 +83,34 @@ export function hasRealPath(filePath: string): boolean {
  * their current display order. `canCloseRight` is relative to that order; a
  * scratchpad or `upload://` tab has no real path so Copy Path / Reveal are off.
  */
-export function buildTabMenuContext(tabs: readonly TabRef[], tabId: string): TabContextMenuRequest {
+export function buildTabMenuContext(
+  tabs: readonly TabRef[],
+  tabId: string,
+  sourceViewActive = false,
+): TabContextMenuRequest {
   const idx = tabs.findIndex((t) => t.id === tabId);
   const tab = idx >= 0 ? tabs[idx] : undefined;
+  const uploadBacked = !!tab && (tab.source === "upload" || isUploadPath(tab.filePath));
+  const writable = !!tab && tab.readOnly !== true;
   return {
+    canCloseLeft: idx > 0,
     canCloseOthers: tabs.length > 1,
     canCloseRight: idx >= 0 && idx < tabs.length - 1,
+    canRename: writable && !uploadBacked,
+    canSave: writable,
+    saveAs: uploadBacked,
+    canCopyFileName: !!tab,
     hasPath: !!tab && hasRealPath(tab.filePath),
+    canToggleSourceView: writable && tab?.format === "md",
+    sourceViewActive: !!tab && sourceViewActive,
   };
+}
+
+/** Ids before `fromId`, in display order. Stale ids deliberately close nothing. */
+export function tabIdsToCloseLeft(tabs: readonly TabRef[], fromId: string): string[] {
+  const idx = tabs.findIndex((t) => t.id === fromId);
+  if (idx <= 0) return [];
+  return tabs.slice(0, idx).map((t) => t.id);
 }
 
 /**

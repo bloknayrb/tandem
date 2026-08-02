@@ -130,10 +130,12 @@ function makeEditor() {
     scrollIntoView: () => tr,
   };
   const editor = {
+    isDestroyed: false,
+    isEditable: true,
     chain: () => chain.proxy,
     state: {
       schema,
-      selection: { $from: { marks: () => [] } },
+      selection: { empty: false, from: 1, to: 2, $from: { marks: () => [] } },
       tr,
     },
     view: { dispatch, focus },
@@ -148,6 +150,9 @@ function baseDeps(editor: never) {
     getLinkHref: vi.fn(() => "https://example.com/page" as string | null),
     readClipboardText: vi.fn(async () => "pasted text" as string | null),
     writeClipboardText: vi.fn(async () => {}),
+    focusChat: vi.fn(),
+    composeAnnotation: vi.fn(),
+    editLink: vi.fn(),
   };
 }
 
@@ -159,11 +164,6 @@ async function run(id: ContextMenuActionId, overrides: Partial<ReturnType<typeof
 }
 
 describe("dispatchContextAction", () => {
-  it("routes undo/redo through the (Yjs-backed) editor chain", async () => {
-    expect((await run("ctx:undo")).chainCalls).toContain("undo");
-    expect((await run("ctx:redo")).chainCalls).toContain("redo");
-  });
-
   it("maps each table id to the correct Tiptap command", async () => {
     const cases: [ContextMenuActionId, string][] = [
       ["ctx:table:insertRowAbove", "addRowBefore"],
@@ -219,6 +219,30 @@ describe("dispatchContextAction", () => {
   it("link:remove extends to the mark range before unsetting", async () => {
     const { chainCalls } = await run("ctx:link:remove");
     expect(chainCalls).toEqual(expect.arrayContaining(["extendMarkRange", "unsetLink"]));
+  });
+
+  it("routes collaboration actions as intent-only callbacks", async () => {
+    const ask = await run("ctx:selection:askAi");
+    expect(ask.deps.focusChat).toHaveBeenCalledTimes(1);
+    const comment = await run("ctx:selection:comment");
+    expect(comment.deps.composeAnnotation).toHaveBeenCalledWith("comment");
+    const note = await run("ctx:selection:privateNote");
+    expect(note.deps.composeAnnotation).toHaveBeenCalledWith("note");
+  });
+
+  it("revalidates selection/editability when collaboration events fire", async () => {
+    const { editor } = makeEditor();
+    (editor as { isEditable: boolean }).isEditable = false;
+    const deps = baseDeps(editor);
+    await dispatchContextAction("ctx:selection:comment", deps);
+    expect(deps.composeAnnotation).not.toHaveBeenCalled();
+  });
+
+  it("requests the shared link editor only for a live editable link", async () => {
+    const edit = await run("ctx:link:edit");
+    expect(edit.deps.editLink).toHaveBeenCalledTimes(1);
+    const absent = await run("ctx:link:edit", { getLinkHref: vi.fn(() => null) });
+    expect(absent.deps.editLink).not.toHaveBeenCalled();
   });
 
   it("pastePlain reads the clipboard and dispatches an insertion", async () => {

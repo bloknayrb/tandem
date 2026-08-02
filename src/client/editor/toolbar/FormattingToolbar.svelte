@@ -4,6 +4,7 @@ import { yUndoPluginKey } from "y-prosemirror";
 import { clickOutside } from "../../actions/clickOutside.svelte";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
 import { applyLink, getInitialLinkHref, withPreventDefault } from "./handlers.js";
+import LinkEditor from "./LinkEditor.svelte";
 import ToolbarButton from "./ToolbarButton.svelte";
 
 interface Props {
@@ -35,7 +36,6 @@ let tick = $state(0);
 let showHeadingMenu = $state(false);
 let showLinkInput = $state(false);
 let linkInputValue = $state("");
-let linkInputEl = $state<HTMLInputElement | null>(null);
 
 // Capture `editor` so cleanup `.off()` runs against the instance we attached
 // to — the reactive prop getter returns the CURRENT value at cleanup time,
@@ -54,13 +54,6 @@ $effect(() => {
   return () => {
     if (!ed.isDestroyed) ed.off("transaction", handler);
   };
-});
-
-$effect(() => {
-  if (showLinkInput) {
-    linkInputEl?.focus();
-    linkInputEl?.select();
-  }
 });
 
 function findActiveHeading(ed: TiptapEditor): HeadingLevel | null {
@@ -199,22 +192,6 @@ function dismissLinkInput() {
   showLinkInput = false;
   linkInputValue = "";
 }
-
-function handleLinkInputKeyDown(e: KeyboardEvent) {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    // Stop bubbling: when this toolbar renders inside the selection popup, the
-    // popup mounts a window-level Escape listener that calls dismissPopup().
-    // Without stopPropagation an Escape (or Enter) while editing the URL would
-    // tear down the whole popup instead of just closing the link input.
-    e.stopPropagation();
-    submitLinkInput();
-  } else if (e.key === "Escape") {
-    e.preventDefault();
-    e.stopPropagation();
-    dismissLinkInput();
-  }
-}
 </script>
 
 {#if editor}
@@ -314,49 +291,16 @@ function handleLinkInputKeyDown(e: KeyboardEvent) {
           </svg>
         {/snippet}
       </ToolbarButton>
-      {#if showLinkInput}
-        <div
-          role="dialog"
-          aria-label="Insert link"
-          style="position: absolute; top: 100%; left: 0; margin-top: 4px;
-            background: var(--tandem-surface); border: 1px solid var(--tandem-border);
-            border-radius: var(--tandem-r-3); padding: 6px;
-            display: flex; align-items: center; gap: 4px;
-            z-index: var(--tandem-z-dropdown); box-shadow: var(--tandem-shadow-1); min-width: 240px;"
-        >
-          <input
-            bind:this={linkInputEl}
-            bind:value={linkInputValue}
-            data-testid="toolbar-link-input"
-            type="url"
-            placeholder="https://"
-            onkeydown={handleLinkInputKeyDown}
-            style="flex: 1; height: 26px; padding: 2px 6px; font-size: 12px;
-              border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-2);
-              background: var(--tandem-surface); color: var(--tandem-fg);
-              outline: none; font-family: inherit;"
-          />
-          <button
-            type="button"
-            data-testid="toolbar-link-submit"
-            onmousedown={(e) => { e.preventDefault(); submitLinkInput(); }}
-            onclick={onKeyActivate((e) => { e.preventDefault(); submitLinkInput(); })}
-            style="height: 26px; padding: 0 8px; font-size: 12px; font-weight: 500;
-              border: 1px solid var(--tandem-accent-border); background: transparent;
-              color: var(--tandem-accent); border-radius: var(--tandem-r-2); cursor: pointer;
-              white-space: nowrap;"
-          >Apply</button>
-          <button
-            type="button"
-            data-testid="toolbar-link-cancel"
-            onmousedown={(e) => { e.preventDefault(); dismissLinkInput(); }}
-            onclick={onKeyActivate((e) => { e.preventDefault(); dismissLinkInput(); })}
-            style="height: 26px; padding: 0 8px; font-size: 12px; font-weight: 500;
-              border: 1px solid var(--tandem-border); background: transparent;
-              color: var(--tandem-fg-muted); border-radius: var(--tandem-r-2); cursor: pointer;"
-          >Cancel</button>
-        </div>
-      {/if}
+      <LinkEditor
+        open={showLinkInput}
+        initialValue={linkInputValue}
+        onApply={(value) => {
+          linkInputValue = value;
+          submitLinkInput();
+        }}
+        onClose={dismissLinkInput}
+        label="Insert link"
+      />
     </div>
 
     <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
