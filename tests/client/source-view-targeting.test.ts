@@ -55,9 +55,23 @@ describe("SourceView exact-document commands", () => {
     const textarea = (await findByTestId("source-view-textarea")) as HTMLTextAreaElement;
     expect(textarea.value).toContain("Original");
     await fireEvent.input(textarea, { target: { value: "# Edited\n" } });
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
 
     const savePromise = commands!.save("save");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(textarea.readOnly).toBe(true);
+    expect(textarea.disabled).toBe(false);
+    expect(textarea.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(textarea);
+
+    await fireEvent.input(textarea, { target: { value: "# Must be blocked\n" } });
+    expect(textarea.value).toBe("# Edited\n");
+    expect(onDraftChange).not.toHaveBeenCalledWith(
+      "doc-a",
+      expect.stringContaining("Must be blocked"),
+      expect.anything(),
+    );
     const request = fetchMock.mock.calls[1][1] as RequestInit;
     expect(JSON.parse(String(request.body))).toEqual({
       documentId: "doc-a",
@@ -66,6 +80,8 @@ describe("SourceView exact-document commands", () => {
 
     resolveCommit(jsonResponse({ success: true }));
     await savePromise;
+    expect(textarea.readOnly).toBe(false);
+    expect(document.activeElement).toBe(textarea);
     expect(onSave).toHaveBeenCalledWith("doc-a", "save");
     expect(onDraftChange).toHaveBeenLastCalledWith("doc-a", "# Edited\n", false);
   });

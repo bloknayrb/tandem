@@ -53,6 +53,7 @@ let originalMarkdown = $state("");
 let currentMarkdown = $state("");
 let loading = $state(true);
 let saving = $state(false);
+let lockedMarkdown: string | null = null;
 let errorMessage = $state<string | null>(null);
 
 const dirty = $derived(!loading && currentMarkdown !== originalMarkdown);
@@ -114,6 +115,7 @@ $effect(() => {
 async function commit(): Promise<boolean> {
   const targetDocumentId = sourceDocumentId;
   const submittedMarkdown = currentMarkdown;
+  lockedMarkdown = submittedMarkdown;
   saving = true;
   errorMessage = null;
   try {
@@ -135,12 +137,23 @@ async function commit(): Promise<boolean> {
     return false;
   } finally {
     saving = false;
+    lockedMarkdown = null;
   }
 }
 
 /** Report a textarea edit up to App for cross-switch preservation + close/quit warning. */
 function handleInput(e: Event): void {
-  const value = (e.target as HTMLTextAreaElement).value;
+  const target = e.target as HTMLTextAreaElement;
+  if (saving) {
+    // `readonly` blocks real user edits without blurring the textarea. Keep a
+    // defensive event guard as well so synthetic/accessibility input cannot
+    // mutate the bound draft while the submitted snapshot is in flight.
+    const locked = lockedMarkdown ?? currentMarkdown;
+    currentMarkdown = locked;
+    target.value = locked;
+    return;
+  }
+  const value = target.value;
   onDraftChange(sourceDocumentId, value, value !== originalMarkdown);
 }
 
@@ -226,7 +239,8 @@ async function copyToClipboard(): Promise<void> {
       data-testid="source-view-textarea"
       bind:value={currentMarkdown}
       oninput={handleInput}
-      disabled={saving}
+      readonly={saving}
+      aria-busy={saving}
       spellcheck="false"
       autocomplete="off"
       autocapitalize="off"
