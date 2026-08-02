@@ -104,9 +104,6 @@ default-tab-annotations-btn
 default-tab-chat-btn
 density-{*}-btn
 dismiss-btn-{*}
-docx-conflict-banner
-docx-conflict-keep-btn
-docx-conflict-reload-btn
 edit-btn-{*}
 edit-cancel-btn-{*}
 edit-newtext-{*}
@@ -126,6 +123,9 @@ empty-state-open-settings
 empty-state-retry
 error-boundary-recover-btn
 error-boundary-reload-btn
+external-conflict-banner
+external-conflict-keep-btn
+external-conflict-reload-btn
 fidelity-report-banner
 fidelity-report-details
 fidelity-report-details-toggle

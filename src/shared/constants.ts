@@ -198,7 +198,7 @@ export const Y_MAP_ACTIVE_DOCUMENT_EPOCH = "activeDocumentEpoch";
 export const Y_MAP_READ_ONLY = "readOnly";
 export const Y_MAP_STORE_READ_ONLY = "storeReadOnly";
 /**
- * Per-document external-conflict state (#1069, `.docx` only). Holds an
+ * Per-document external-conflict state (#1069; every format since #1238). Holds an
  * `ExternalConflictState` (see shared/types.ts) while the document's unsaved
  * Y.Doc edits diverge from the on-disk source; absent otherwise. Written via
  * `withInternal` (server metadata); cleared on resolve / reload / explicit save.
@@ -350,3 +350,36 @@ export const ZOOM_STORAGE_KEY = "tandem:zoomLevel";
 export const ZOOM_MIN = 0.5;
 export const ZOOM_MAX = 2.0;
 export const ZOOM_DEFAULT = 1.0;
+
+// --- Disk-save eligibility by format ---
+//
+// Shared because both sides need the same answer and a second hand-maintained
+// list drifts: the server gates saves and the restore prompt on these, and the
+// conflict banner's copy branches on them so it never offers to "keep" edits
+// for a format it can't write back (#1238).
+//
+// Three tiers, not two — the restore prompt needs all three: "autosave will
+// persist these edits on its own" (`.md`/`.txt`), "only an explicit save will"
+// (`.docx`), and "nothing ever will" (`.html`).
+
+/** Formats eligible for disk auto-save (adapter.save defined && not binary). */
+export const AUTO_SAVE_FORMATS: ReadonlySet<string> = new Set(["md", "txt"]);
+
+/**
+ * Binary formats that write back via `adapter.saveBinary` + `atomicWriteBuffer`
+ * (#576). EXPLICIT-SAVE-ONLY: deliberately disjoint from `AUTO_SAVE_FORMATS` so
+ * the 60s auto-save timer never round-trips a lossy `.docx` import back to disk.
+ * The protective layer for `.docx` is "never overwrite without an explicit
+ * user save" (supersedes ADR-004's read-only default).
+ */
+export const BINARY_SAVE_FORMATS: ReadonlySet<string> = new Set(["docx"]);
+
+/**
+ * Every format with SOME path back to disk. `.html` is the one supported format
+ * in neither set — `saveDocumentToDisk` refuses it outright — which is why
+ * "keep my edits" there means "keep them in this session only".
+ */
+export const SAVEABLE_FORMATS: ReadonlySet<string> = new Set([
+  ...AUTO_SAVE_FORMATS,
+  ...BINARY_SAVE_FORMATS,
+]);

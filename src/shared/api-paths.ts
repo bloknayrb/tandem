@@ -46,9 +46,9 @@ export const API_DOCUMENT_RELOAD = "/api/document/reload";
 // snapshots; POST restores one through the reload lifecycle.
 export const API_BACKUPS = "/api/backups";
 export const API_BACKUPS_RESTORE = "/api/backups/restore";
-// Resolve a `.docx` external-conflict prompt (#1069): keep the in-memory
-// unsaved edits (re-baseline) or reload fresh from the on-disk file.
-export const API_DOCX_CONFLICT_RESOLVE = "/api/docx-conflict/resolve";
+// Resolve an external-conflict prompt (#1069, all formats since #1238): keep
+// the in-memory unsaved edits (re-baseline) or reload fresh from the on-disk file.
+export const API_EXTERNAL_CONFLICT_RESOLVE = "/api/external-conflict/resolve";
 
 // --- Annotations ------------------------------------------------------------
 export const API_ANNOTATION_REPLY = "/api/annotation-reply";
