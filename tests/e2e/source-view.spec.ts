@@ -1,7 +1,7 @@
 /**
  * E2E tests for the raw-markdown source view / edit mode (#1021).
  *
- * The title-bar `</>` toggle swaps the active .md document between the WYSIWYG
+ * The formatting-bar `</>` toggle swaps the active .md document between the WYSIWYG
  * editor and an editable markdown-source textarea. Editing the source and
  * exiting round-trips the text back through the parser and persists to disk.
  */
@@ -38,7 +38,7 @@ test("toggle reveals editable markdown source, edit round-trips to the editor", 
   await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
 
   // The source toggle is visible for an editable .md document.
-  const toggle = page.getByTestId("titlebar-source-toggle");
+  const toggle = page.getByTestId("formatbar-source-toggle");
   await expect(toggle).toBeVisible();
 
   // Enter source view — the textarea appears with the literal markdown.
@@ -63,7 +63,7 @@ test("entering source view with no edits restores the editor unchanged", async (
   await page.goto("/");
   await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
 
-  await page.getByTestId("titlebar-source-toggle").click();
+  await page.getByTestId("formatbar-source-toggle").click();
   await expect(page.getByTestId("source-view-textarea")).toBeVisible();
 
   // Exit without editing — the toggle flips back to formatted view.
@@ -79,7 +79,7 @@ test("Ctrl+S in source view commits the edit and does not write stale content to
   await page.goto("/");
   await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
 
-  await page.getByTestId("titlebar-source-toggle").click();
+  await page.getByTestId("formatbar-source-toggle").click();
   const textarea = page.getByTestId("source-view-textarea");
   await expect(textarea).toBeVisible();
 
@@ -110,7 +110,7 @@ test("uncommitted source edits survive a tab switch and back", async ({ page }) 
 
   // Switch to the first doc, enter source view, and make an uncommitted edit.
   await inactiveTab.first().click();
-  await page.getByTestId("titlebar-source-toggle").click();
+  await page.getByTestId("formatbar-source-toggle").click();
   const textarea = page.getByTestId("source-view-textarea");
   await expect(textarea).toBeVisible();
   await textarea.fill("# Source Title\n\nUNCOMMITTED DRAFT TEXT.\n");
@@ -130,7 +130,7 @@ test("closing a tab with uncommitted source edits prompts before discarding", as
   await page.goto("/");
   await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
 
-  await page.getByTestId("titlebar-source-toggle").click();
+  await page.getByTestId("formatbar-source-toggle").click();
   const textarea = page.getByTestId("source-view-textarea");
   await expect(textarea).toBeVisible();
   await textarea.fill("# Source Title\n\nUnsaved edit.\n");

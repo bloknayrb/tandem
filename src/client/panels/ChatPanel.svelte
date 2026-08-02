@@ -289,22 +289,23 @@ async function clearChat() {
     {/if}
     {#each messages as msg (msg.id)}
       <div
-        style="margin-bottom: var(--tandem-space-3); padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-4); background: {msg.author ===
-        'user'
-          ? 'var(--tandem-accent-bg)'
-          : 'var(--tandem-surface)'}; border: 1px solid {msg.author === 'user'
-          ? 'var(--tandem-accent-border)'
-          : 'var(--tandem-border)'}; font-size: var(--tandem-text-base); color: var(--tandem-fg); box-shadow: var(--tandem-shadow-1);"
+        class="chat-bubble"
+        class:user={msg.author === "user"}
+        class:claude={msg.author === "claude"}
+        class:identified={msg.author === "claude" && !!msg.agentIdentity}
+        style:--chat-agent-color={msg.author === "claude"
+          ? agentColor(msg.agentIdentity)
+          : undefined}
       >
         <!-- Author + doc badge -->
         <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
-          <!-- #1123 M4: a local-model chat author gets its per-agent color; a
-               real-Claude / dark message (no agentIdentity) keeps the accent
-               token unchanged, so this is byte-identical while dark. -->
+          <!-- A local-model chat author keeps its per-agent token; an
+               identity-less Claude message uses the canonical coral author
+               token, matching the bubble tint and the rest of authorship UI. -->
           <span
             data-testid="chat-author-{msg.id}"
             style="font-weight: 600; font-size: 11px; color: {msg.author === 'claude'
-              ? (msg.agentIdentity ? agentColor(msg.agentIdentity) : 'var(--tandem-accent)')
+              ? agentColor(msg.agentIdentity)
               : 'var(--tandem-fg-muted)'}; text-transform: uppercase;"
           >
             {msg.author === "claude"
@@ -429,6 +430,29 @@ async function clearChat() {
 </div>
 
 <style>
+  .chat-bubble {
+    margin-bottom: var(--tandem-space-3);
+    padding: var(--tandem-space-2) var(--tandem-space-3);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-4);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+    font-size: var(--tandem-text-base);
+    box-shadow: var(--tandem-shadow-1);
+  }
+  .chat-bubble.user {
+    background: var(--tandem-accent-bg);
+    border-color: var(--tandem-accent-border);
+  }
+  .chat-bubble.claude {
+    background: var(--tandem-author-claude-bg);
+    border-color: var(--tandem-author-claude-border);
+  }
+  .chat-bubble.claude.identified {
+    background: color-mix(in srgb, var(--chat-agent-color) 10%, var(--tandem-surface));
+    border-color: color-mix(in srgb, var(--chat-agent-color) 35%, var(--tandem-border));
+  }
+
   :global {
     @keyframes tandem-typing-bounce {
       0%,

@@ -199,10 +199,11 @@ async function copyToClipboard(): Promise<void> {
       type="button"
       class="source-view-btn source-view-exit"
       data-testid="source-view-exit-btn"
+      aria-label="Return to formatted editor"
       disabled={saving}
       onclick={handleExit}
     >
-      ← WYSIWYG
+      ← Formatted editor
     </button>
     <span class="source-view-title">Markdown source</span>
     <button
@@ -281,6 +282,11 @@ async function copyToClipboard(): Promise<void> {
 
   .source-view-btn:hover:not(:disabled) {
     background: var(--tandem-surface-hover);
+  }
+
+  .source-view-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
   }
 
   .source-view-btn:disabled {

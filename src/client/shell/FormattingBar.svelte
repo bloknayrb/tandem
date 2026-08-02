@@ -33,6 +33,10 @@ interface Props {
   }) => void;
   /** Open Settings → Appearance (the canonical home for these toggles). */
   onOpenSettings?: () => void;
+  /** Whether the active document is displaying its raw Markdown source. */
+  sourceViewActive?: boolean;
+  /** Toggle source view. Omitted for formats/read-only documents that cannot use it. */
+  onToggleSourceView?: (() => void) | null;
   /**
    * 1.11: hide the persistent bar (sets `formattingBarVisible: false`). When
    * provided, a trailing collapse control renders. Restoring is via the
@@ -52,6 +56,8 @@ const {
   decorationsMuted = false,
   onUpdateDecorations,
   onOpenSettings,
+  sourceViewActive = false,
+  onToggleSourceView = null,
   onHide,
 }: Props = $props();
 
@@ -153,6 +159,21 @@ function handleHighlight(color: HighlightColor) {
         {onOpenSettings}
       />
     {/if}
+    {#if onToggleSourceView}
+      <div class="fmtbar-divider"></div>
+      <button
+        type="button"
+        class="fmtbar-source"
+        class:on={sourceViewActive}
+        data-testid="formatbar-source-toggle"
+        aria-label={sourceViewActive ? "Return to formatted editor" : "View Markdown source"}
+        aria-pressed={sourceViewActive}
+        title={sourceViewActive ? "Return to formatted editor" : "View Markdown source"}
+        onclick={onToggleSourceView}
+      >
+        <span aria-hidden="true">&lt;/&gt;</span>
+      </button>
+    {/if}
     {#if onHide}
       <!-- Outside the overflow:hidden track so it never truncates. Hiding the
            bar leaves formatting reachable via the always-full selection popup;
@@ -196,6 +217,37 @@ function handleHighlight(color: HighlightColor) {
     cursor: pointer;
     flex-shrink: 0;
     transition: background 120ms, color 120ms;
+  }
+  .fmtbar-source {
+    height: 26px;
+    min-width: 32px;
+    padding: 0 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--tandem-fg-muted);
+    border-radius: var(--tandem-r-pill);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-family: var(--tandem-font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  .fmtbar-source:hover {
+    background: var(--tandem-surface-sunk);
+    color: var(--tandem-fg);
+  }
+  .fmtbar-source.on {
+    background: var(--tandem-accent-bg);
+    border-color: var(--tandem-accent-border);
+    color: var(--tandem-accent-fg-strong, var(--tandem-accent));
+  }
+  .fmtbar-source:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
   .fmtbar-hide:hover {
     background: var(--tandem-surface-sunk);

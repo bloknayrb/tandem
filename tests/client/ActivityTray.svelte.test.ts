@@ -272,3 +272,46 @@ describe("badge pop gating (should-fix: no replay on a bare tray reopen)", () =>
     expect(badge?.classList.contains("pop")).toBe(true);
   });
 });
+
+describe("open tray dismissal", () => {
+  it("closes on an outside pointerdown but not on interaction inside the shell", () => {
+    const onToggle = vi.fn();
+    const props = { ...baseProps([makeItem("a")], true), onToggle };
+    const { container } = render(ActivityTray, { props });
+
+    container
+      .querySelector<HTMLElement>("[data-testid='activity-tray']")
+      ?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(onToggle).not.toHaveBeenCalled();
+
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close/reopen on the pill pointerdown and click sequence", () => {
+    const onToggle = vi.fn();
+    const { container } = render(ActivityTray, {
+      props: { ...baseProps([], true), onToggle },
+    });
+    const pill = container.querySelector<HTMLButtonElement>("[data-testid='activity-pill']")!;
+
+    pill.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    pill.click();
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes on Escape and returns focus to the persistent pill", async () => {
+    const onToggle = vi.fn();
+    const { container } = render(ActivityTray, {
+      props: { ...baseProps([], true), onToggle },
+    });
+    const pill = container.querySelector<HTMLButtonElement>("[data-testid='activity-pill']")!;
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await Promise.resolve();
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(pill);
+  });
+});

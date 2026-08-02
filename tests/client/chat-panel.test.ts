@@ -41,6 +41,11 @@ function authorStyle(container: HTMLElement, id: string): string {
   return container.querySelector(`[data-testid='chat-author-${id}']`)?.getAttribute("style") ?? "";
 }
 
+function bubble(container: HTMLElement, id: string): HTMLElement {
+  return container.querySelector(`[data-testid='chat-author-${id}']`)?.parentElement
+    ?.parentElement as HTMLElement;
+}
+
 describe("ChatPanel per-agent author color (#1123 M4)", () => {
   it("a claude message WITH agentIdentity colors the author with the per-agent token", () => {
     const doc = seedDoc([
@@ -53,18 +58,24 @@ describe("ChatPanel per-agent author color (#1123 M4)", () => {
     // nor to the annotation coral token.
     expect(style).not.toContain("var(--tandem-accent)");
     expect(style).not.toContain("var(--tandem-author-claude)");
+    expect(bubble(container, "m1").classList).toContain("identified");
+    expect(bubble(container, "m1").style.getPropertyValue("--chat-agent-color")).toBe(
+      "var(--tandem-agent-local-ollama)",
+    );
   });
 
-  it("a claude message WITHOUT agentIdentity keeps the accent baseline (byte-identical dark)", () => {
-    // This is the one wiring site whose dark fallback is `--tandem-accent`, NOT
-    // the claude token — a regression that routed it through agentColor's fallback
-    // would silently flip the dark chat-author color from indigo to coral.
+  it("a claude message WITHOUT agentIdentity uses the coral author tokens", () => {
     const doc = seedDoc([claudeMsg()]);
     const { container } = renderChat(doc);
     const style = authorStyle(container, "m1");
-    expect(style).toContain("var(--tandem-accent)");
-    expect(style).not.toContain("var(--tandem-author-claude)");
+    expect(style).toContain("var(--tandem-author-claude)");
+    expect(style).not.toContain("var(--tandem-accent)");
     expect(style).not.toContain("var(--tandem-agent-");
+    expect(bubble(container, "m1").classList).toContain("claude");
+    expect(bubble(container, "m1").classList).not.toContain("identified");
+    expect(bubble(container, "m1").style.getPropertyValue("--chat-agent-color")).toBe(
+      "var(--tandem-author-claude)",
+    );
   });
 
   it("a user message uses the muted token, unaffected by identity wiring", () => {

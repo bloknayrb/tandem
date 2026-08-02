@@ -1964,11 +1964,6 @@ const shouldShowModelPicker = $derived(
     updateAvailable={updateAvailable.showDot}
     defaultModelLabel={BYO_MODELS_ENABLED ? defaultModelLabel : null}
     onOpenModelsSettings={openModelsSettings}
-    aiChip={aiReadiness.chip}
-    onConnectAi={connectAi}
-    onRestartClaude={restartClaude}
-    sourceViewActive={inSourceView}
-    onToggleSourceView={canSourceView || inSourceView ? () => void requestToggleSourceView() : null}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -2040,6 +2035,10 @@ const shouldShowModelPicker = $derived(
         decorationsMuted={settingsState.settings.decorationsMuted}
         onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
         onOpenSettings={openSettingsModalWithAck}
+        sourceViewActive={inSourceView}
+        onToggleSourceView={canSourceView || inSourceView
+          ? () => void requestToggleSourceView()
+          : null}
         onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
       />
     {/if}
@@ -2234,6 +2233,9 @@ const shouldShowModelPicker = $derived(
       claudeActive={yjsSync.claudeActive}
       aiLiveIndicator={aiReadiness.liveIndicator}
       aiState={aiReadiness.state}
+      aiChip={aiReadiness.chip}
+      onConnectAi={connectAi}
+      onRestartClaude={restartClaude}
       soloMode={modeState.tandemMode === "solo"}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
