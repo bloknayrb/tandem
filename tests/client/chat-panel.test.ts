@@ -2,27 +2,22 @@
 
 import { render } from "@testing-library/svelte";
 import { describe, expect, it } from "vitest";
-import * as Y from "yjs";
 import ChatPanel from "../../src/client/panels/ChatPanel.svelte";
-import { Y_MAP_CHAT } from "../../src/shared/constants";
 import type { ChatMessage } from "../../src/shared/types";
 
-function seedDoc(messages: ChatMessage[]): Y.Doc {
-  const doc = new Y.Doc();
-  const chat = doc.getMap(Y_MAP_CHAT);
-  for (const m of messages) chat.set(m.id, m);
-  return doc;
-}
-
-function renderChat(ctrlYdoc: Y.Doc) {
+function renderChat(messages: ChatMessage[]) {
   return render(ChatPanel, {
     props: {
-      ctrlYdoc,
+      messages,
       editor: null,
       activeDocId: null,
       openDocs: [],
       capturedAnchor: null,
       onCapturedAnchorChange: () => {},
+      onSend: () => true,
+      onClear: async () => {},
+      onExport: async () => {},
+      onInsert: () => false,
     },
   });
 }
@@ -48,10 +43,10 @@ function bubble(container: HTMLElement, id: string): HTMLElement {
 
 describe("ChatPanel per-agent author color (#1123 M4)", () => {
   it("a claude message WITH agentIdentity colors the author with the per-agent token", () => {
-    const doc = seedDoc([
+    const messages = [
       claudeMsg({ agentIdentity: { provider: "local-ollama", displayName: "Qwen 2.5" } }),
-    ]);
-    const { container } = renderChat(doc);
+    ];
+    const { container } = renderChat(messages);
     const style = authorStyle(container, "m1");
     expect(style).toContain("var(--tandem-agent-local-ollama)");
     // The distinct fallbacks matter: it must NOT collapse to the accent baseline
@@ -65,8 +60,7 @@ describe("ChatPanel per-agent author color (#1123 M4)", () => {
   });
 
   it("a claude message WITHOUT agentIdentity uses the coral author tokens", () => {
-    const doc = seedDoc([claudeMsg()]);
-    const { container } = renderChat(doc);
+    const { container } = renderChat([claudeMsg()]);
     const style = authorStyle(container, "m1");
     expect(style).toContain("var(--tandem-author-claude-fg-strong)");
     expect(style).not.toContain("color: var(--tandem-author-claude);");
@@ -80,8 +74,13 @@ describe("ChatPanel per-agent author color (#1123 M4)", () => {
   });
 
   it("a user message uses the muted token, unaffected by identity wiring", () => {
-    const doc = seedDoc([claudeMsg({ id: "u1", author: "user", text: "hi" })]);
-    const { container } = renderChat(doc);
+    const { container } = renderChat([claudeMsg({ id: "u1", author: "user", text: "hi" })]);
     expect(authorStyle(container, "u1")).toContain("var(--tandem-fg-muted)");
+  });
+
+  it("disables per-message insertion when the App reports no editable formatted document", () => {
+    const view = renderChat([claudeMsg()]);
+    const button = view.container.querySelector<HTMLButtonElement>(".chat-message-actions button");
+    expect(button?.disabled).toBe(true);
   });
 });

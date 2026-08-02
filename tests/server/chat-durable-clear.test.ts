@@ -1,0 +1,91 @@
+import fs from "fs/promises";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import { Y_MAP_CHAT } from "../../src/shared/constants";
+
+const controls = vi.hoisted(() => ({
+  failWrite: false,
+  blockWrite: false,
+  release: null as (() => void) | null,
+  sessionDir: "",
+}));
+
+vi.mock("../../src/server/platform", async () => {
+  const actual = await vi.importActual<typeof import("../../src/server/platform")>(
+    "../../src/server/platform",
+  );
+  const pathMod = await import("node:path");
+  const osMod = await import("node:os");
+  const cryptoMod = await import("node:crypto");
+  controls.sessionDir = pathMod.join(osMod.tmpdir(), `tandem-chat-clear-${cryptoMod.randomUUID()}`);
+  return { ...actual, SESSION_DIR: controls.sessionDir };
+});
+vi.mock("../../src/server/file-io/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/server/file-io/index.js")>(
+    "../../src/server/file-io/index.js",
+  );
+  return {
+    ...actual,
+    atomicWrite: async (...args: Parameters<typeof actual.atomicWrite>) => {
+      if (controls.failWrite) throw new Error("simulated disk failure");
+      if (controls.blockWrite) {
+        controls.blockWrite = false;
+        await new Promise<void>((resolve) => {
+          controls.release = resolve;
+        });
+        controls.release = null;
+      }
+      return actual.atomicWrite(...args);
+    },
+  };
+});
+
+import {
+  clearCtrlChatDurably,
+  loadCtrlSession,
+  restoreCtrlDoc,
+  saveCtrlSession,
+} from "../../src/server/session/manager";
+
+describe("durable chat clear", () => {
+  beforeAll(() => fs.mkdir(controls.sessionDir, { recursive: true }));
+  afterAll(() => fs.rm(controls.sessionDir, { recursive: true, force: true }));
+
+  it("persists the cleared clone before deleting the same live IDs", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT).set("old", { id: "old", timestamp: 1 });
+    expect(await clearCtrlChatDurably(doc)).toBe(1);
+    expect(doc.getMap(Y_MAP_CHAT).size).toBe(0);
+    const restored = new Y.Doc();
+    restoreCtrlDoc(restored, (await loadCtrlSession())!);
+    expect(restored.getMap(Y_MAP_CHAT).size).toBe(0);
+  });
+
+  it("leaves live chat untouched when persistence fails", async () => {
+    const doc = new Y.Doc();
+    doc.getMap(Y_MAP_CHAT).set("keep", { id: "keep", timestamp: 2 });
+    controls.failWrite = true;
+    await expect(clearCtrlChatDurably(doc)).rejects.toThrow("simulated disk failure");
+    controls.failWrite = false;
+    expect(doc.getMap(Y_MAP_CHAT).has("keep")).toBe(true);
+  });
+
+  it("serializes snapshots and preserves messages arriving after clear ID capture", async () => {
+    const doc = new Y.Doc();
+    const chat = doc.getMap(Y_MAP_CHAT);
+    chat.set("old", { id: "old", timestamp: 3 });
+    controls.blockWrite = true;
+    const precedingSave = saveCtrlSession(doc);
+    await vi.waitFor(() => expect(controls.release).toBeTypeOf("function"));
+    const clear = clearCtrlChatDurably(doc);
+    chat.set("new", { id: "new", timestamp: 4 });
+    controls.release?.();
+    await precedingSave;
+    expect(await clear).toBe(1);
+    expect(Array.from(chat.keys())).toEqual(["new"]);
+
+    const restored = new Y.Doc();
+    restoreCtrlDoc(restored, (await loadCtrlSession())!);
+    expect(Array.from(restored.getMap(Y_MAP_CHAT).keys())).toEqual(["new"]);
+  });
+});

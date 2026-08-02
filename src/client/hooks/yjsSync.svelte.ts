@@ -91,6 +91,8 @@ export interface YjsSyncState {
   readonly storeReadOnly: boolean;
   /** @internal Internal CTRL_ROOM connection mechanism — not intended for consumer use. */
   readonly bootstrapYdoc: Y.Doc | null;
+  /** True after the current CTRL provider completes its first authoritative sync. */
+  readonly ctrlInitialSyncComplete: boolean;
   readonly ready: boolean;
   /** Briefly true after the server restarts and the client reconnects. */
   readonly serverRestarted: boolean;
@@ -162,6 +164,7 @@ export function createYjsSync(opts?: {
   // Surface bootstrap Y.Doc reactively so `bootstrapYdoc` flips from null to populated
   // when the bootstrap step completes (parallel of React's setReady re-render).
   let bootstrapYdocState = $state<Y.Doc | null>(null);
+  let ctrlInitialSyncComplete = $state(false);
 
   // ---------- Refs (non-reactive mutable state) ----------
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -486,6 +489,7 @@ export function createYjsSync(opts?: {
   // token at construction, and a ctrl Y.Map broadcast can't be the source (a
   // stale tab's merge-back could clobber a CRDT-carried value).
   function startBootstrap(gen: string) {
+    ctrlInitialSyncComplete = false;
     generationId = gen;
     const ydoc = new Y.Doc();
     const provider = new HocuspocusProvider(
@@ -501,6 +505,10 @@ export function createYjsSync(opts?: {
     bootstrapProviderRef = provider;
 
     provider.on("authenticationFailed", scheduleRebuild);
+    const onCtrlSynced = ({ state }: { state: boolean }) => {
+      if (state) ctrlInitialSyncComplete = true;
+    };
+    provider.on("synced", onCtrlSynced);
     provider.on("status", ({ status }: { status: string }) => {
       connected = status === "connected";
       const known: ConnectionStatus[] = ["connected", "connecting", "disconnected"];
@@ -556,6 +564,7 @@ export function createYjsSync(opts?: {
     // Stash bootstrap cleanup for destroy() and the rebuild path
     bootstrapCleanup = () => {
       meta.unobserve(bootstrapObserver);
+      provider.off("synced", onCtrlSynced);
       if (restartTimer) {
         clearTimeout(restartTimer);
         restartTimer = null;
@@ -563,6 +572,7 @@ export function createYjsSync(opts?: {
       provider.destroy();
       ydoc.destroy();
       bootstrapYdocState = null;
+      ctrlInitialSyncComplete = false;
       bootstrapProviderRef = null;
       bootstrapCleanup = null;
     };
@@ -757,6 +767,9 @@ export function createYjsSync(opts?: {
     },
     get bootstrapYdoc() {
       return bootstrapYdocState;
+    },
+    get ctrlInitialSyncComplete() {
+      return ctrlInitialSyncComplete;
     },
     get ready() {
       return ready;

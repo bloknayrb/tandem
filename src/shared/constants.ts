@@ -182,6 +182,9 @@ export const Y_MAP_USER_AWARENESS = "userAwareness";
 export const Y_MAP_MODE = "mode";
 export const Y_MAP_DWELL_MS = "selectionDwellMs";
 export const Y_MAP_CHAT = "chat";
+/** User-facing chat acknowledgement state. Separate from ChatMessage.read (AI inbox state). */
+export const Y_MAP_CHAT_SEEN = "chatSeen";
+export const Y_MAP_CHAT_SEEN_INITIALIZED = "initialized";
 export const Y_MAP_DOCUMENT_META = "documentMeta";
 export const Y_MAP_ANNOTATION_REPLIES = "annotationReplies";
 export const Y_MAP_SAVED_AT_VERSION = "savedAtVersion";

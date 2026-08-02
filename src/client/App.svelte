@@ -1,10 +1,11 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import { BYO_MODELS_ENABLED } from "../shared/constants";
+import { API_SCRATCHPAD } from "../shared/api-paths";
+import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../shared/constants";
 import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
-import type { Annotation, CapturedAnchor, TandemNotification } from "../shared/types";
+import type { Annotation, CapturedAnchor, ChatMessage, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
@@ -59,6 +60,7 @@ import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
 import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
+import { createChatState } from "./hooks/useChatState.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
@@ -102,6 +104,8 @@ import { motionOff } from "./panels/cardMotion";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
+import { exportChatMarkdown } from "./panels/chat-export";
+import { insertChatMarkdown } from "./panels/chat-insert";
 import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
@@ -729,10 +733,16 @@ async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-a
 }
 
 function focusChat(): void {
+  // Command/native focus is intentionally context-free. Only the explicit
+  // Chat-tab selection capture path may attach an anchor to a message.
+  capturedAnchor = null;
   activeRailTab = "chat";
-  // Reuse the existing transient floating rail when the saved rail is hidden;
-  // the chat workstream owns the full temporary-reveal lifecycle.
-  if (!effectiveRightVisible) railFloat.right = true;
+  // A command reveal is intentionally independent from hover-float state and
+  // saved rail/Solo preferences. Pinned rails simply switch to Chat.
+  if (!effectiveRightVisible) {
+    chatRevealDocumentId = yjsSync.activeTabId;
+    chatReveal = true;
+  }
   queueMicrotask(() =>
     document.querySelector<HTMLTextAreaElement>('[data-testid="chat-composer-input"]')?.focus(),
   );
@@ -1058,6 +1068,11 @@ const toggleLeftPanel = () => {
   focusToggleTarget("left", nextVisible);
 };
 const toggleRightPanel = () => {
+  if (chatReveal) {
+    railPinSnap.right = true;
+    chatReveal = false;
+    requestAnimationFrame(() => (railPinSnap.right = false));
+  }
   pinFromFloat("right");
   railFloat.right = false;
   const nextVisible = !layoutModel.rightVisible;
@@ -1093,6 +1108,10 @@ const railAnimating = $state({ left: false, right: false });
 // exit), not a lifecycle phase. Kept as separate booleans because each maps 1:1
 // to a CSS class; promote to an explicit enum if a fourth phase ever lands.
 const railFloat = $state({ left: false, right: false });
+// Command-driven Chat-only float. Unlike railFloat, this never mutates saved
+// panel visibility and has an explicit send/Escape/outside/tab/pin lifecycle.
+let chatReveal = $state(false);
+let chatRevealDocumentId: string | null = null;
 // Set for ONE frame when a hover-float is pinned: the floated panel is already
 // painted at full width over the editor, so the shell must snap to that width
 // (transition suppressed) instead of replaying the 14→full open from collapsed,
@@ -1711,6 +1730,98 @@ const isReadOnly = $derived(activeTab?.readOnly === true);
 const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+const chatVisible = $derived(
+  activeRailTab === "chat" &&
+    (effectiveRightVisible || railFloat.right || railFloatClosing.right || chatReveal),
+);
+const chatCanInsert = $derived(!!editor && !!activeTab && !editorReadOnly && !inSourceView);
+const chatState = createChatState({
+  getCtrlYdoc: () => yjsSync.bootstrapYdoc,
+  getInitialSyncComplete: () => yjsSync.ctrlInitialSyncComplete,
+  getVisible: () => chatVisible,
+});
+
+function closeTransientChat(): void {
+  if (!chatReveal) return;
+  chatReveal = false;
+  chatRevealDocumentId = null;
+}
+
+function selectRailTab(tab: "annotations" | "chat"): void {
+  if (tab !== "chat") closeTransientChat();
+  activeRailTab = tab;
+}
+
+function sendChatMessage(text: string): boolean {
+  const sent = chatState.send(text, yjsSync.activeTabId ?? undefined, capturedAnchor);
+  if (!sent) return false;
+  capturedAnchor = null;
+  window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "chat" } }));
+  closeTransientChat();
+  return true;
+}
+
+async function exportChatToScratchpad(): Promise<void> {
+  const content = exportChatMarkdown(chatState.messages, openDocs);
+  const response = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_SCRATCHPAD}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  const result = (await response.json().catch(() => null)) as { message?: string } | null;
+  if (!response.ok) throw new Error(result?.message ?? "Chat could not be exported.");
+}
+
+function insertChatMessage(message: ChatMessage): boolean {
+  const targetEditor = editor;
+  if (!chatCanInsert || !targetEditor) return false;
+  insertChatMarkdown(targetEditor, message.text);
+  return true;
+}
+
+// Reusable webview-local intents for the native-menu slice. No selection text,
+// offsets, document IDs, or message bodies cross IPC.
+$effect(() => {
+  const onFocus = () => focusChat();
+  const onInsert = (event: Event) => {
+    const id = (event as CustomEvent<{ messageId?: string }>).detail?.messageId;
+    const message = id ? chatState.messages.find((candidate) => candidate.id === id) : undefined;
+    if (message) insertChatMessage(message);
+  };
+  window.addEventListener("tandem:focus-chat", onFocus);
+  window.addEventListener("tandem:insert-chat-message", onInsert);
+  return () => {
+    window.removeEventListener("tandem:focus-chat", onFocus);
+    window.removeEventListener("tandem:insert-chat-message", onInsert);
+  };
+});
+
+$effect(() => {
+  if (!chatReveal) return;
+  const onPointerDown = (event: PointerEvent) => {
+    const target = event.target as Node | null;
+    const rail = document.querySelector(".rail-shell-right");
+    if (target && rail?.contains(target)) return;
+    closeTransientChat();
+  };
+  const onEscape = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    event.preventDefault();
+    closeTransientChat();
+    editor?.view.focus();
+  };
+  window.addEventListener("pointerdown", onPointerDown, true);
+  window.addEventListener("keydown", onEscape, true);
+  return () => {
+    window.removeEventListener("pointerdown", onPointerDown, true);
+    window.removeEventListener("keydown", onEscape, true);
+  };
+});
+
+$effect(() => {
+  const activeId = yjsSync.activeTabId;
+  if (chatReveal && activeId !== chatRevealDocumentId) closeTransientChat();
+});
 
 function enterSourceView(): void {
   if (!activeTab) return;
@@ -2136,11 +2247,11 @@ const shouldShowModelPicker = $derived(
         class="rail-shell rail-shell-right"
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
-        class:rail-floating-chrome={railFloat.right || railFloatClosing.right}
-        class:floating={railFloat.right}
+        class:rail-floating-chrome={railFloat.right || railFloatClosing.right || chatReveal}
+        class:floating={railFloat.right || chatReveal}
         class:float-closing={railFloatClosing.right}
         class:pin-snap={railPinSnap.right}
-        data-testid={railFloat.right ? "rail-float-right" : undefined}
+        data-testid={railFloat.right || chatReveal ? "rail-float-right" : undefined}
         style={effectiveRightVisible ? `width: ${dragResizeRight.width}px;` : ""}
         onmouseenter={() => onRailShellEnter("right")}
         onmouseleave={() => onRailShellLeave("right")}
@@ -2148,7 +2259,7 @@ const shouldShowModelPicker = $derived(
         onfocusout={(e) => onRailShellFocusOut("right", e)}
         ontransitionend={(e) => onRailShellTransitionEnd("right", e)}
       >
-        {#if railFloat.right || railFloatClosing.right}
+        {#if railFloat.right || railFloatClosing.right || chatReveal}
           <div
             class="rail-float-shadow rail-float-shadow-right"
             style={`width: ${dragResizeRight.width}px;`}
@@ -2165,7 +2276,7 @@ const shouldShowModelPicker = $derived(
               <button
                 data-testid="annotations-tab"
                 class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
-                onclick={() => { activeRailTab = "annotations"; }}
+                onclick={() => selectRailTab("annotations")}
               >
                 Annotations
                 {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
@@ -2178,15 +2289,21 @@ const shouldShowModelPicker = $derived(
                 data-testid="chat-tab"
                 class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
                 onmousedown={captureSelectionForChat}
-                onclick={() => { activeRailTab = "chat"; }}
+                onclick={() => selectRailTab("chat")}
               >
                 Chat
+                {#if activeRailTab !== "chat" && chatState.unreadCount > 0}
+                  <span class="rail-tab-badge">
+                    {chatState.unreadCount > 9 ? "9+" : chatState.unreadCount}
+                  </span>
+                {/if}
               </button>
             </div>
           </div>
           <PanelSlot
             kind="chat"
-            ctrlYdoc={yjsSync.bootstrapYdoc}
+            messages={chatState.messages}
+            unreadCount={chatState.unreadCount}
             {editor}
             activeDocId={yjsSync.activeTabId}
             {openDocs}
@@ -2194,8 +2311,13 @@ const shouldShowModelPicker = $derived(
             claudeStatus={yjsSync.claudeStatus}
             {capturedAnchor}
             onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+            onSend={sendChatMessage}
+            onClear={() => chatState.clear()}
+            onExport={exportChatToScratchpad}
+            onInsert={insertChatMessage}
+            canInsert={chatCanInsert}
             reduceMotion={settingsState.settings.reduceMotion}
-            visible={activeRailTab === "chat"}
+            visible={chatVisible}
           />
           <PanelSlot
             kind="side"
@@ -2221,6 +2343,15 @@ const shouldShowModelPicker = $derived(
           annotations={visibleAnnotations}
           onActivate={toggleRightPanel}
         />
+        {#if !effectiveRightVisible && chatState.unreadCount > 0}
+          <button
+            type="button"
+            class="chat-unread-peek"
+            aria-label={`${chatState.unreadCount} unread chat message${chatState.unreadCount === 1 ? "" : "s"}`}
+            title="Focus Chat"
+            onclick={focusChat}
+          >{chatState.unreadCount > 9 ? "9+" : chatState.unreadCount}</button>
+        {/if}
       </div>
     </div>
 
@@ -2778,6 +2909,28 @@ const shouldShowModelPicker = $derived(
   .rail-shell.collapsed {
     width: 14px;
     cursor: pointer;
+  }
+  .chat-unread-peek {
+    position: absolute;
+    z-index: 2;
+    inset-inline-start: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border: 2px solid var(--tandem-surface-muted);
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-accent);
+    color: var(--tandem-accent-fg);
+    font: inherit;
+    font-size: var(--tandem-text-2xs);
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .chat-unread-peek:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
   }
   /* Float→pin: snap the shell to the floated width for the commit frame so the
      panel stays put instead of replaying the 14→full open from collapsed. */

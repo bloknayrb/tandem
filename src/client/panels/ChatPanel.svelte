@@ -1,17 +1,14 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { untrack } from "svelte";
-import * as Y from "yjs";
-import { API_CHAT } from "../../shared/api-paths";
-import { DEFAULT_MCP_PORT, Y_MAP_CHAT } from "../../shared/constants";
 import type { FlatOffset } from "../../shared/positions/types";
 import type { CapturedAnchor, ChatMessage } from "../../shared/types";
-import { generateMessageId } from "../../shared/utils";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import { flatOffsetToPmPos } from "../positions";
 import { agentColor } from "../utils/agent-color";
 import { renderMarkdown } from "./chat-markdown";
+import { localChatDateLabel } from "./chat-export";
 
 const TYPING_DOT_DELAYS = [0, 0.2, 0.4];
 
@@ -27,7 +24,8 @@ const COMPOSER_FALLBACK_LEADING = 1.4;
 const agentLabel = createAgentLabel();
 
 interface Props {
-  ctrlYdoc: Y.Doc | null;
+  messages: ChatMessage[];
+  unreadCount?: number;
   editor: TiptapEditor | null;
   activeDocId: string | null;
   openDocs: Array<{ id: string; fileName: string }>;
@@ -36,13 +34,19 @@ interface Props {
   visible?: boolean;
   capturedAnchor: CapturedAnchor | null;
   onCapturedAnchorChange: (anchor: CapturedAnchor | null) => void;
+  onSend: (text: string) => boolean | void;
+  onClear: () => Promise<unknown>;
+  onExport: () => Promise<unknown>;
+  onInsert: (message: ChatMessage) => boolean | void;
+  canInsert?: boolean;
   /** Bind to get a reference to the textarea element. */
   inputEl?: HTMLTextAreaElement | null;
   reduceMotion?: boolean;
 }
 
 let {
-  ctrlYdoc,
+  messages,
+  unreadCount = 0,
   editor,
   activeDocId,
   openDocs,
@@ -51,14 +55,21 @@ let {
   visible,
   capturedAnchor,
   onCapturedAnchorChange,
+  onSend,
+  onClear,
+  onExport,
+  onInsert,
+  canInsert = false,
   inputEl = $bindable(null),
   reduceMotion,
 }: Props = $props();
 
 const scrollBehavior: ScrollBehavior = $derived(reduceMotion ? "auto" : "smooth");
 
-let messages = $state<ChatMessage[]>([]);
 let inputText = $state("");
+let actionError = $state<string | null>(null);
+let clearing = $state(false);
+let exporting = $state(false);
 
 let messagesEndEl: HTMLDivElement | undefined = $state();
 let internalInputEl: HTMLTextAreaElement | undefined = $state();
@@ -67,25 +78,6 @@ let composerMultiline = $state(false);
 // Keep external binding in sync
 $effect(() => {
   inputEl = internalInputEl ?? null;
-});
-
-// Observe Y.Map('chat') for changes
-$effect(() => {
-  if (!ctrlYdoc) return;
-  const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
-
-  const observer = () => {
-    const msgs: ChatMessage[] = [];
-    chatMap.forEach((value) => {
-      msgs.push(value as ChatMessage);
-    });
-    msgs.sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
-    messages = msgs;
-  };
-
-  chatMap.observe(observer);
-  observer(); // initial load
-  return () => chatMap.unobserve(observer);
 });
 
 // Auto-scroll to bottom on new messages or when typing indicator appears
@@ -112,8 +104,6 @@ $effect(() => {
     messagesEndEl?.scrollIntoView({ behavior: sb });
   }
 });
-
-const unreadCount = $derived(messages.filter((m) => m.author === "claude" && !m.read).length);
 
 // Composer auto-grow: size the textarea to its content so a two-line draft
 // doesn't get a scrollbar inside a one-line pill. Past COMPOSER_MAX_LINES the
@@ -184,28 +174,9 @@ $effect(() => {
 });
 
 function sendMessage() {
-  if (!ctrlYdoc || !inputText.trim()) return;
-  const chatMap = ctrlYdoc.getMap(Y_MAP_CHAT);
-
-  const msg: ChatMessage = {
-    id: generateMessageId(),
-    author: "user",
-    text: inputText.trim(),
-    timestamp: Date.now(),
-    ...(activeDocId ? { documentId: activeDocId } : {}),
-    ...(capturedAnchor ? { anchor: capturedAnchor } : {}),
-    read: false,
-  };
-
-  chatMap.set(msg.id, msg);
+  if (!inputText.trim()) return;
+  if (onSend(inputText.trim()) === false) return;
   inputText = "";
-  onCapturedAnchorChange(null);
-
-  // #1018: the message persists in the chat Y.Map and is read whenever an
-  // agent next connects/polls — but if no AI is connected right now, App
-  // surfaces a "saved, will be seen when AI connects" notice. Read-after-write
-  // only; never gates the send.
-  window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "chat" } }));
 }
 
 function handleKeyDown(e: KeyboardEvent) {
@@ -236,10 +207,26 @@ function getDocFileName(docId?: string): string | null {
 }
 
 async function clearChat() {
+  clearing = true;
+  actionError = null;
   try {
-    await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_CHAT}`, { method: "DELETE" });
+    await onClear();
   } catch (err) {
-    console.warn("[ChatPanel] Failed to clear chat:", err);
+    actionError = err instanceof Error ? err.message : "Chat history could not be cleared.";
+  } finally {
+    clearing = false;
+  }
+}
+
+async function exportChat() {
+  exporting = true;
+  actionError = null;
+  try {
+    await onExport();
+  } catch (err) {
+    actionError = err instanceof Error ? err.message : "Chat could not be exported.";
+  } finally {
+    exporting = false;
   }
 }
 </script>
@@ -263,12 +250,21 @@ async function clearChat() {
       {/if}
       {#if messages.length > 0}
         <button
+          onclick={exportChat}
+          disabled={exporting}
+          title="Export complete chat to a scratchpad"
+          class="chat-header-action"
+        >
+          {exporting ? "Exporting…" : "Export"}
+        </button>
+        <button
           onclick={clearChat}
+          disabled={clearing}
           title="Clear chat history"
           data-testid="clear-chat-btn"
-          style="background: none; border: none; cursor: pointer; color: var(--tandem-fg-subtle); font-size: 13px; padding: 2px 4px; line-height: 1;"
+          class="chat-header-action"
         >
-          Clear
+          {clearing ? "Clearing…" : "Clear"}
         </button>
       {/if}
     </div>
@@ -287,7 +283,15 @@ async function clearChat() {
         No messages yet. Select text and send a message to your AI.
       </div>
     {/if}
-    {#each messages as msg (msg.id)}
+    {#if actionError}
+      <div class="chat-action-error" role="alert">{actionError}</div>
+    {/if}
+    {#each messages as msg, index (msg.id)}
+      {#if index === 0 || localChatDateLabel(messages[index - 1].timestamp) !== localChatDateLabel(msg.timestamp)}
+        <div class="chat-date-divider" role="separator">
+          <span>{localChatDateLabel(msg.timestamp)}</span>
+        </div>
+      {/if}
       <div
         class="chat-bubble"
         class:user={msg.author === "user"}
@@ -348,6 +352,14 @@ async function clearChat() {
         {:else}
           <div style="white-space: pre-wrap; word-break: break-word;">{msg.text}</div>
         {/if}
+        <div class="chat-message-actions">
+          <button
+            type="button"
+            onclick={() => onInsert(msg)}
+            disabled={!canInsert}
+            title={canInsert ? "Insert message into the open document" : "Open an editable formatted document to insert"}
+          >Insert into open document</button>
+        </div>
       </div>
     {/each}
 
@@ -453,6 +465,59 @@ async function clearChat() {
   .chat-bubble.claude.identified {
     background: color-mix(in srgb, var(--chat-agent-color) 10%, var(--tandem-surface));
     border-color: color-mix(in srgb, var(--chat-agent-color) 35%, var(--tandem-border));
+  }
+  .chat-header-action,
+  .chat-message-actions button {
+    border: 0;
+    background: transparent;
+    color: var(--tandem-fg-subtle);
+    font: inherit;
+    font-size: var(--tandem-text-xs);
+    cursor: pointer;
+    padding: 2px 4px;
+  }
+  .chat-header-action:hover:not(:disabled),
+  .chat-message-actions button:hover:not(:disabled),
+  .chat-header-action:focus-visible,
+  .chat-message-actions button:focus-visible {
+    color: var(--tandem-accent-fg-strong);
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
+    border-radius: var(--tandem-r-2);
+  }
+  .chat-header-action:disabled,
+  .chat-message-actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .chat-message-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--tandem-space-1);
+  }
+  .chat-action-error {
+    margin-bottom: var(--tandem-space-3);
+    padding: var(--tandem-space-2);
+    border: 1px solid var(--tandem-error-border);
+    border-radius: var(--tandem-r-3);
+    color: var(--tandem-error-fg-strong);
+    background: var(--tandem-error-bg);
+    font-size: var(--tandem-text-sm);
+  }
+  .chat-date-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+    margin: var(--tandem-space-3) 0;
+    color: var(--tandem-fg-subtle);
+    font-size: var(--tandem-text-xs);
+  }
+  .chat-date-divider::before,
+  .chat-date-divider::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: var(--tandem-border);
   }
 
   :global {
