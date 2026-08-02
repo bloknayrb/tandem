@@ -74,21 +74,14 @@ $effect(() => {
 </script>
 
 {#if open}
-  <div
-    role="presentation"
-    style="position: fixed; inset: 0; background: color-mix(in srgb, var(--tandem-bg) 70%, transparent); display: flex; align-items: center; justify-content: center; z-index: var(--tandem-z-above-titlebar);"
-    onclick={onClose}
-    data-testid="help-modal"
-  >
+  <div role="presentation" class="modal-backdrop" onclick={onClose} data-testid="help-modal">
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Keyboard Shortcuts"
+      aria-labelledby="shortcut-modal-title"
       tabindex="-1"
       bind:this={dialogEl}
-      class="tandem-scroll-fade-y"
-      use:scrollFade={"y"}
-      style="background-color: var(--tandem-surface); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-5); box-shadow: var(--tandem-shadow-3); padding: 24px 28px 20px; width: 480px; max-width: 90vw; max-height: 80vh; overflow-y: auto; position: relative;"
+      class="shortcut-modal"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => {
         if (e.key === "Escape") {
@@ -115,10 +108,8 @@ $effect(() => {
         }
       }}
     >
-      <div
-        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;"
-      >
-        <h2 style="margin: 0; font-size: 16px; font-weight: 600; color: var(--tandem-fg);">
+      <header class="modal-header">
+        <h2 id="shortcut-modal-title">
           Keyboard Shortcuts
         </h2>
         <button
@@ -130,58 +121,179 @@ $effect(() => {
         >
           ✕
         </button>
-      </div>
+      </header>
 
-      {#each registryShortcutSections as section (section.title)}
-        <div style="margin-bottom: 18px;">
-          <div
-            style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tandem-fg-subtle); margin-bottom: 6px;"
-          >
-            {section.title}
-          </div>
-          <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
-            {#each section.rows as row (row.description)}
-              <span style="font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; white-space: nowrap;">
-                <kbd style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: inherit; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;">{row.keys}</kbd>
-              </span>
-              <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
-            {/each}
-          </div>
-        </div>
-      {/each}
-
-      <!-- Static shortcuts not yet in the action registry -->
-      <div style="margin-bottom: 18px;">
-        <div
-          style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tandem-fg-subtle); margin-bottom: 6px;"
-        >
-          Other
-        </div>
-        <div style="display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; align-items: center;">
-          {#each STATIC_SHORTCUT_ROWS as row (row.description)}
-            <span style="font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; white-space: nowrap;">
-              <kbd style="display: inline-block; padding: 1px 6px; font-size: 12px; font-family: inherit; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border-strong); border-bottom: 2px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); color: var(--tandem-fg); line-height: 1.5;">{row.keys}</kbd>
-            </span>
-            <span style="font-size: 13px; color: var(--tandem-fg-muted);">{row.description}</span>
-          {/each}
-        </div>
-      </div>
-
+      <!-- Scrollable regions need keyboard focus so Page Up/Down works without
+           routing focus through the fixed header/footer. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div
-        style="margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--tandem-border); font-size: 11px; color: var(--tandem-fg-subtle); text-align: center;"
+        class="modal-content tandem-scroll-fade-y"
+        data-testid="help-modal-content"
+        role="region"
+        aria-label="Shortcut categories"
+        tabindex="0"
+        use:scrollFade={"y"}
       >
-        Press
-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">?</kbd>,
-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">Ctrl+/</kbd>,
-        or
-        <kbd style="font-size: 11px; padding: 1px 4px; background: var(--tandem-surface-muted); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-1); color: var(--tandem-fg-subtle);">Esc</kbd>
-        to close
+        <div class="shortcut-sections">
+          {#each registryShortcutSections as section (section.title)}
+            <section class="shortcut-section">
+              <h3>{section.title}</h3>
+              <div class="shortcut-rows">
+                {#each section.rows as row (row.description)}
+                  <span class="shortcut-keys"><kbd>{row.keys}</kbd></span>
+                  <span class="shortcut-description">{row.description}</span>
+                {/each}
+              </div>
+            </section>
+          {/each}
+
+          <!-- Static shortcuts not yet in the action registry -->
+          <section class="shortcut-section">
+            <h3>Other</h3>
+            <div class="shortcut-rows">
+              {#each STATIC_SHORTCUT_ROWS as row (row.description)}
+                <span class="shortcut-keys"><kbd>{row.keys}</kbd></span>
+                <span class="shortcut-description">{row.description}</span>
+              {/each}
+            </div>
+          </section>
+        </div>
       </div>
+
+      <footer class="modal-footer">
+        Press
+        <kbd>?</kbd>,
+        <kbd>Ctrl+/</kbd>,
+        or
+        <kbd>Esc</kbd>
+        to close
+      </footer>
     </div>
   </div>
 {/if}
 
 <style>
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: color-mix(in srgb, var(--tandem-bg) 70%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--tandem-z-above-titlebar);
+  }
+
+  .shortcut-modal {
+    width: min(760px, 92vw);
+    max-height: min(82vh, 720px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--tandem-surface);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-5);
+    box-shadow: var(--tandem-shadow-3);
+  }
+
+  .modal-header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--tandem-space-4);
+    padding: 20px 24px 14px;
+    border-bottom: 1px solid var(--tandem-border);
+  }
+
+  .modal-header h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--tandem-fg);
+  }
+
+  .modal-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 20px 24px 24px;
+  }
+
+  .modal-content:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -3px;
+  }
+
+  .shortcut-sections {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 22px 32px;
+    align-items: start;
+  }
+
+  .shortcut-section {
+    min-width: 0;
+  }
+
+  .shortcut-section h3 {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--tandem-fg-subtle);
+  }
+
+  .shortcut-rows {
+    display: grid;
+    grid-template-columns: minmax(112px, max-content) minmax(0, 1fr);
+    gap: 7px 12px;
+    align-items: center;
+  }
+
+  .shortcut-keys {
+    font-size: 12px;
+    font-family: var(--tandem-font-mono);
+    white-space: nowrap;
+  }
+
+  .shortcut-keys kbd {
+    display: inline-block;
+    padding: 1px 6px;
+    font: inherit;
+    background: var(--tandem-surface-muted);
+    border: 1px solid var(--tandem-border-strong);
+    border-bottom-width: 2px;
+    border-radius: var(--tandem-r-2);
+    color: var(--tandem-fg);
+    line-height: 1.5;
+  }
+
+  .shortcut-description {
+    min-width: 0;
+    font-size: 13px;
+    color: var(--tandem-fg-muted);
+  }
+
+  .modal-footer {
+    flex: 0 0 auto;
+    padding: 10px 24px 12px;
+    border-top: 1px solid var(--tandem-border);
+    font-size: 11px;
+    color: var(--tandem-fg-subtle);
+    text-align: center;
+    background: var(--tandem-surface);
+  }
+
+  .modal-footer kbd {
+    font-size: 11px;
+    padding: 1px 4px;
+    background: var(--tandem-surface-muted);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-1);
+    color: var(--tandem-fg-subtle);
+  }
+
   /* Close button — mirrors SettingsModal.svelte's `.settings-modal-close` recipe
      (28×28, transparent border, fg-subtle on surface-sunk hover) so the modal
      family reads as one. Lives in a <style> block (not inline) because :hover /
@@ -205,5 +317,22 @@ $effect(() => {
     color: var(--tandem-fg);
     background: var(--tandem-surface-sunk);
     outline: none;
+  }
+
+  @media (max-width: 680px) {
+    .shortcut-modal {
+      width: min(94vw, 520px);
+      max-height: 88vh;
+    }
+    .modal-header,
+    .modal-content,
+    .modal-footer {
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+    .shortcut-sections {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 20px;
+    }
   }
 </style>

@@ -2,11 +2,11 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
-import type { AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
+import type { AiChip, AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
-import { type AiIndicatorTone, aiIndicatorView } from "./status-ai-view";
+import { type AiIndicatorTone, type AiIndicatorView, aiIndicatorView } from "./status-ai-view";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
 interface Props {
@@ -26,6 +26,10 @@ interface Props {
    *  (render nothing) from genuinely-down (`unconfigured`/`stopped` → "AI not
    *  connected"). A boolean can't carry that; see `aiIndicatorView`. */
   aiState: AiReadinessState;
+  /** When present, the AI status indicator becomes the Connect/Restart control. */
+  aiChip?: AiChip;
+  onConnectAi?: () => void;
+  onRestartClaude?: () => void;
   /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
   soloMode: boolean;
   /**
@@ -66,6 +70,9 @@ let {
   claudeActive,
   aiLiveIndicator,
   aiState,
+  aiChip = null,
+  onConnectAi,
+  onRestartClaude,
   soloMode,
   claudeWorkingTool = null,
   readOnly,
@@ -350,25 +357,47 @@ function cycleWordMode() {
        makes the label authoritative without implying a live region — `role="status"`
        would announce every status change AND the presence-expiry clear, which the
        user did not cause. -->
-  {#if aiView}
-    <div
-      data-testid="status-ai-indicator"
-      data-ai-state={aiView.dataState}
-      title={aiView.title}
-      role="img"
-      aria-label={aiView.ariaLabel}
-      style="display: flex; align-items: center; gap: var(--tandem-space-2);"
-    >
+  {#snippet aiIndicatorContent(view: AiIndicatorView)}
       <span
         class="claude-dot"
-        style="width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: {AI_TONE[aiView.tone].dot}; animation: {aiAnimating ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
+        style="width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: {AI_TONE[view.tone].dot}; animation: {aiAnimating ? 'tandem-status-pulse 1.5s ease-in-out infinite' : 'none'};"
       ></span>
       <span
-        style="transition: color 0.3s ease; color: {AI_TONE[aiView.tone].text};"
+        style="transition: color 0.3s ease; color: {AI_TONE[view.tone].text};"
       >
-        {aiView.label}{#if claudeStatus && aiView.canAnimate} · {claudeStatus}{/if}
+        {view.label}{#if claudeStatus && view.canAnimate} · {claudeStatus}{/if}
       </span>
-    </div>
+  {/snippet}
+  {#if aiView}
+    {#if aiChip}
+      <button
+        type="button"
+        class="status-ai-indicator actionable"
+        data-testid="status-ai-indicator"
+        data-ai-state={aiView.dataState}
+        data-ai-action={aiChip}
+        title={aiChip === "connect"
+          ? "AI isn't set up — connect Claude Code"
+          : "Claude Code stopped — restart it"}
+        aria-label={aiChip === "connect"
+          ? "AI isn't set up. Connect Claude Code."
+          : "Claude Code has stopped. Restart Claude Code."}
+        onclick={aiChip === "connect" ? onConnectAi : onRestartClaude}
+      >
+        {@render aiIndicatorContent(aiView)}
+      </button>
+    {:else}
+      <div
+        class="status-ai-indicator"
+        data-testid="status-ai-indicator"
+        data-ai-state={aiView.dataState}
+        title={aiView.title}
+        role="img"
+        aria-label={aiView.ariaLabel}
+      >
+        {@render aiIndicatorContent(aiView)}
+      </div>
+    {/if}
   {/if}
   <!-- #651 "Claude is {verb}…" pill. Gated on a live session (`aiView.canAnimate`)
        as well as an in-flight tool so it can never render "working" while the
@@ -420,6 +449,31 @@ function cycleWordMode() {
   .status-faint {
     opacity: 0.4;
     transition: opacity 180ms ease;
+  }
+  .status-ai-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+    min-height: 24px;
+    white-space: nowrap;
+  }
+  button.status-ai-indicator {
+    margin: -3px -6px;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: var(--tandem-r-pill);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  button.status-ai-indicator:hover {
+    background: var(--tandem-surface-sunk);
+    border-color: var(--tandem-border);
+  }
+  button.status-ai-indicator:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
   }
   .tandem-status-pill:hover .status-faint,
   .tandem-status-pill:focus-within .status-faint {

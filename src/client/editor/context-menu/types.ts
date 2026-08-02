@@ -36,9 +36,10 @@ export interface ContextMenuRequest {
  * and do NOT appear here — only items that must hit Tiptap/Yjs specifically.
  */
 export const CONTEXT_MENU_ACTION_IDS = [
-  "ctx:undo",
-  "ctx:redo",
   "ctx:pastePlain",
+  "ctx:selection:askAi",
+  "ctx:selection:comment",
+  "ctx:selection:privateNote",
   "ctx:table:insertRowAbove",
   "ctx:table:insertRowBelow",
   "ctx:table:insertColLeft",
@@ -50,6 +51,7 @@ export const CONTEXT_MENU_ACTION_IDS = [
   "ctx:table:deleteTable",
   "ctx:link:open",
   "ctx:link:copy",
+  "ctx:link:edit",
   "ctx:link:remove",
 ] as const;
 

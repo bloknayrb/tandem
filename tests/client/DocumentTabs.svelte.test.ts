@@ -5,6 +5,7 @@ import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import DocumentTabs from "../../src/client/tabs/DocumentTabs.svelte";
+import TabItem from "../../src/client/tabs/TabItem.svelte";
 import type { OpenTab } from "../../src/client/types.js";
 
 function makeTab(id: string): OpenTab {
@@ -89,6 +90,30 @@ function overElement(el: Element | null) {
 }
 
 describe("DocumentTabs pointer reorder", () => {
+  it("keeps inactive tabs on an opaque muted surface while lifted and displaced", async () => {
+    const props = {
+      tab: makeTab("b"),
+      isActive: false,
+      onswitch: vi.fn(),
+      onclose: vi.fn(),
+      onpointerdown: vi.fn(),
+      dropIndicator: null,
+      lifted: true,
+      onkeydown: vi.fn(),
+    } as const;
+    const { container, rerender } = render(TabItem, { props });
+    const tab = container.querySelector<HTMLElement>('[data-testid="tab-b"]')!;
+
+    expect(tab.dataset.lifted).toBe("true");
+    expect(tab.style.background).toBe("var(--tandem-surface-muted)");
+
+    // Displacement is carried by DocumentTabs' outer FLIP wrapper; the pill's
+    // own target style stays the same when it is not the lifted source.
+    await rerender({ ...props, lifted: false });
+    expect(tab.dataset.lifted).toBe("false");
+    expect(tab.style.background).toBe("var(--tandem-surface-muted)");
+  });
+
   it("case A: drag from A to B calls reorder(a, b, side) once", async () => {
     const reorder = vi.fn();
     const tabs = [makeTab("a"), makeTab("b")];

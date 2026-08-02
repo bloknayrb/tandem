@@ -4,7 +4,6 @@ import type { Window as TauriWindow } from "@tauri-apps/api/window";
 import { onDestroy, onMount, type Snippet } from "svelte";
 import type { TandemMode } from "../../shared/types";
 import ModeToggle from "../editor/toolbar/ModeToggle.svelte";
-import type { AiChip } from "../hooks/useAiReadiness.svelte";
 import { type ThemePreference } from "../hooks/useTandemSettings.svelte";
 import { onOutsideEvent } from "../utils/dismiss-outside";
 import { THEME_OPTIONS } from "./theme-options";
@@ -46,26 +45,6 @@ interface Props {
   defaultModelLabel?: string | null;
   /** Click handler for the default-model chip. Receives no args. */
   onOpenModelsSettings?: () => void;
-  /**
-   * AI-readiness CTA chip (#1018/#1022). `"connect"` → AI isn't set up (opens
-   * the Claude Code wizard); `"restart"` → configured but the agent stopped
-   * (relaunches it); `null` → ready, booting, or Solo-mode-suppressed (no chip).
-   * This is the secondary status surface; the primary CTA lives in the
-   * empty-state / chat panel where confused first-timers actually look.
-   */
-  aiChip?: AiChip;
-  /** Opens AI setup (the Claude Code integration wizard). */
-  onConnectAi?: () => void;
-  /** Restarts the stopped/crashed Claude Code process. */
-  onRestartClaude?: () => void;
-  /** Whether the active document is currently showing its raw-markdown source (#1021). */
-  sourceViewActive?: boolean;
-  /**
-   * Toggle the raw-markdown source view for the active document. `null` hides
-   * the button — only editable .md documents qualify (non-.md and read-only
-   * .md are excluded by the parent).
-   */
-  onToggleSourceView?: (() => void) | null;
 }
 
 let {
@@ -80,11 +59,6 @@ let {
   updateAvailable = false,
   defaultModelLabel = null,
   onOpenModelsSettings,
-  aiChip = null,
-  onConnectAi,
-  onRestartClaude,
-  sourceViewActive = false,
-  onToggleSourceView = null,
 }: Props = $props();
 
 let win = $state<TauriWindow | null>(null);
@@ -333,57 +307,7 @@ function chooseHelp() {
   <div class="title-bar-spacer" data-tauri-drag-region></div>
 
   <div class="title-bar-actions">
-    {#if onToggleSourceView}
-      <button
-        type="button"
-        class="source-toggle-btn"
-        class:on={sourceViewActive}
-        data-testid="titlebar-source-toggle"
-        data-tauri-drag-region="false"
-        aria-label={sourceViewActive ? "Switch to formatted editor" : "View markdown source"}
-        aria-pressed={sourceViewActive}
-        title={sourceViewActive ? "Switch to formatted editor" : "View markdown source"}
-        onclick={onToggleSourceView}
-      >
-        <span aria-hidden="true">&lt;/&gt;</span>
-      </button>
-    {/if}
-
-    {#if tandemMode && onModeChange}
-      <ModeToggle {tandemMode} {onModeChange} />
-    {/if}
-
-    <!-- AI-connection state (connected / Solo-held / not-connected) now lives in
-         the status pill (StatusBar) as a single consolidated indicator; the
-         titlebar keeps only the setup CTA (connect/restart) below. -->
-
-    {#if aiChip === "connect"}
-      <button
-        type="button"
-        class="model-chip ai-chip ai-chip-connect"
-        data-testid="titlebar-connect-ai"
-        data-ai-chip="connect"
-        aria-label="AI isn't set up. Connect Claude Code."
-        title="AI isn't set up — click to connect Claude Code"
-        onclick={onConnectAi}
-      >
-        <span class="model-chip-dot" aria-hidden="true"></span>
-        <span class="model-chip-label">Connect AI</span>
-      </button>
-    {:else if aiChip === "restart"}
-      <button
-        type="button"
-        class="model-chip ai-chip ai-chip-restart"
-        data-testid="titlebar-connect-ai"
-        data-ai-chip="restart"
-        aria-label="Claude Code has stopped. Restart it."
-        title="Claude Code stopped — click to restart"
-        onclick={onRestartClaude}
-      >
-        <span class="model-chip-dot" aria-hidden="true"></span>
-        <span class="model-chip-label">Restart Claude Code</span>
-      </button>
-    {:else if defaultModelLabel && onOpenModelsSettings}
+    {#if defaultModelLabel && onOpenModelsSettings}
       <button
         type="button"
         class="model-chip"
@@ -397,6 +321,20 @@ function chooseHelp() {
       </button>
     {/if}
   </div>
+
+  <!-- Keep the collaboration toggle immediately beside the native window
+       controls. Dynamic titlebar content lives to its left, so Connect/Restart,
+       source-view eligibility, and document format can no longer move this
+       control's bounding box. -->
+  {#if tandemMode && onModeChange}
+    <div
+      class="title-bar-mode"
+      class:native-window-row={isTauriRuntime()}
+      data-tauri-drag-region="false"
+    >
+      <ModeToggle {tandemMode} {onModeChange} />
+    </div>
+  {/if}
 
   {#if isTauriRuntime()}
     <div class="title-bar-spacer-sm" data-tauri-drag-region></div>
@@ -741,32 +679,17 @@ function chooseHelp() {
     z-index: var(--tandem-z-titlebar);
   }
 
-  /* #1021 raw-markdown source toggle. Monospace `</>` glyph; the active state
-     tints with the accent so it reads as "source mode on". */
-  .source-toggle-btn {
+  .title-bar-mode {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    height: 22px;
-    padding: 0 8px;
-    background: var(--tandem-surface);
-    border: 1px solid var(--tandem-border);
-    border-radius: var(--tandem-r-pill);
-    color: var(--tandem-fg-muted);
-    font-family: var(--tandem-font-mono);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+    position: relative;
+    z-index: var(--tandem-z-titlebar);
   }
-  .source-toggle-btn:hover {
-    background: var(--tandem-surface-muted);
-    color: var(--tandem-fg);
-  }
-  .source-toggle-btn.on {
-    background: var(--tandem-accent-bg);
-    border-color: var(--tandem-accent-border);
-    color: var(--tandem-accent-fg-strong, var(--tandem-accent));
+  .title-bar-mode.native-window-row {
+    height: 30px;
+    margin-top: -14px;
+    align-self: flex-start;
   }
 
   /* #659 default-model chip. Sits in the right action cluster; clicking
@@ -804,16 +727,6 @@ function chooseHelp() {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  /* AI-readiness CTA chip (#1018/#1022) — shares the .model-chip shape. The dot
-     carries the state meaning: info-blue "Connect AI" (not set up) vs
-     warning-amber "Restart" (configured but stopped). */
-  .ai-chip-connect .model-chip-dot {
-    background: var(--tandem-info);
-  }
-  .ai-chip-restart .model-chip-dot {
-    background: var(--tandem-warning);
   }
 
   /* Pinned to the top-right of the brand icon when an updater event has

@@ -15,7 +15,7 @@ import {
  *   - editor.getAttributes(name)
  *   - editor.isActive(name)
  *   - editor.chain().focus().setLink({ href }).run()
- *   - editor.chain().focus().unsetLink().run()
+ *   - editor.chain().focus().extendMarkRange("link").unsetLink().run()
  * All other surfaces stay untyped because the handlers don't touch them.
  */
 function makeEditor(opts: { href?: string; linkActive?: boolean } = {}): {
@@ -23,6 +23,7 @@ function makeEditor(opts: { href?: string; linkActive?: boolean } = {}): {
   spies: {
     setLink: ReturnType<typeof vi.fn>;
     unsetLink: ReturnType<typeof vi.fn>;
+    extendMarkRange: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
     run: ReturnType<typeof vi.fn>;
   };
@@ -30,11 +31,13 @@ function makeEditor(opts: { href?: string; linkActive?: boolean } = {}): {
   const run = vi.fn(() => true);
   const setLink = vi.fn(() => chain);
   const unsetLink = vi.fn(() => chain);
+  const extendMarkRange = vi.fn(() => chain);
   const focus = vi.fn(() => chain);
   const chain = {
     focus,
     setLink,
     unsetLink,
+    extendMarkRange,
     run,
   };
 
@@ -44,7 +47,7 @@ function makeEditor(opts: { href?: string; linkActive?: boolean } = {}): {
     chain: vi.fn(() => chain),
   } as unknown as TiptapEditor;
 
-  return { editor, spies: { setLink, unsetLink, focus, run } };
+  return { editor, spies: { setLink, unsetLink, extendMarkRange, focus, run } };
 }
 
 describe("withPreventDefault", () => {
@@ -98,6 +101,7 @@ describe("applyLink", () => {
     const { editor, spies } = makeEditor({ linkActive: true });
     applyLink(editor, "");
     expect(spies.unsetLink).toHaveBeenCalledTimes(1);
+    expect(spies.extendMarkRange).toHaveBeenCalledWith("link");
     expect(spies.setLink).not.toHaveBeenCalled();
     expect(spies.focus).toHaveBeenCalledTimes(1);
     expect(spies.run).toHaveBeenCalledTimes(1);

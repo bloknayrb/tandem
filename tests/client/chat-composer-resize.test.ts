@@ -2,7 +2,6 @@
 
 import { fireEvent, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as Y from "yjs";
 import ChatPanel from "../../src/client/panels/ChatPanel.svelte";
 
 // resizeComposer() (ChatPanel.svelte) derives its cap from getComputedStyle().
@@ -18,19 +17,19 @@ const PADDING = 16; // paddingTop + paddingBottom
 const BORDER = 2; // borderTopWidth + borderBottomWidth
 const COMPOSER_MAX_LINES = 8; // must track the const in ChatPanel.svelte
 
-function seedDoc(): Y.Doc {
-  return new Y.Doc();
-}
-
-function renderChat(ctrlYdoc: Y.Doc) {
+function renderChat() {
   return render(ChatPanel, {
     props: {
-      ctrlYdoc,
+      messages: [],
       editor: null,
       activeDocId: null,
       openDocs: [],
       capturedAnchor: null,
       onCapturedAnchorChange: () => {},
+      onSend: () => true,
+      onClear: async () => {},
+      onExport: async () => {},
+      onInsert: () => false,
     },
   });
 }
@@ -82,7 +81,7 @@ describe("ChatPanel composer auto-grow (#1247)", () => {
   }
 
   it("stays at the one-line height and hidden overflow for a single-line draft", async () => {
-    const { container } = renderChat(seedDoc());
+    const { container } = renderChat();
     const el = getComposer(container);
     simulatedLines = 1;
     await fireEvent.input(el, { target: { value: "hello" } });
@@ -94,7 +93,7 @@ describe("ChatPanel composer auto-grow (#1247)", () => {
   });
 
   it("grows and marks multiline for a draft past one line, below the cap", async () => {
-    const { container } = renderChat(seedDoc());
+    const { container } = renderChat();
     const el = getComposer(container);
     simulatedLines = 4;
     await fireEvent.input(el, { target: { value: "line1\nline2\nline3\nline4" } });
@@ -108,7 +107,7 @@ describe("ChatPanel composer auto-grow (#1247)", () => {
   });
 
   it("caps at COMPOSER_MAX_LINES exactly, still no scrollbar", async () => {
-    const { container } = renderChat(seedDoc());
+    const { container } = renderChat();
     const el = getComposer(container);
     simulatedLines = COMPOSER_MAX_LINES;
     await fireEvent.input(el, { target: { value: "x".repeat(8 * 40) } });
@@ -119,7 +118,7 @@ describe("ChatPanel composer auto-grow (#1247)", () => {
   });
 
   it("caps the height and switches to a scrollbar past COMPOSER_MAX_LINES", async () => {
-    const { container } = renderChat(seedDoc());
+    const { container } = renderChat();
     const el = getComposer(container);
     simulatedLines = COMPOSER_MAX_LINES + 3;
     await fireEvent.input(el, { target: { value: "x".repeat(11 * 40) } });
@@ -131,7 +130,7 @@ describe("ChatPanel composer auto-grow (#1247)", () => {
   });
 
   it("shrinks back to the one-line height after the draft is cleared (e.g. on send)", async () => {
-    const { container } = renderChat(seedDoc());
+    const { container } = renderChat();
     const el = getComposer(container);
     simulatedLines = 5;
     await fireEvent.input(el, { target: { value: "a\nb\nc\nd\ne" } });
@@ -165,7 +164,7 @@ describe("ChatPanel composer auto-grow (#1247)", () => {
     const originalRO = globalThis.ResizeObserver;
     vi.stubGlobal("ResizeObserver", MockResizeObserver);
 
-    const { container } = renderChat(seedDoc());
+    const { container } = renderChat();
     const el = getComposer(container);
     simulatedLines = 3;
     await fireEvent.input(el, { target: { value: "a\nb\nc" } });

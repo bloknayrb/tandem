@@ -22,12 +22,23 @@ interface Props {
    * a reactive `$effect` reading this prop, which would re-fire on every parent
    * re-render and loop.
    */
-  onDraftChange: (text: string, dirty: boolean) => void;
+  onDraftChange: (documentId: string, text: string, dirty: boolean) => void;
+  /** Save the committed Y.Doc using the active target's persistence policy. */
+  onSave: (documentId: string, intent: "save" | "save-as", ydoc: Y.Doc) => Promise<boolean>;
+  /** Publish commit-aware commands to the App-level shortcut dispatcher. */
+  onCommandsChange: (documentId: string, commands: SourceViewCommands | null) => void;
   /** Return to the WYSIWYG editor. */
-  onExit: () => void;
+  onExit: (documentId: string) => void;
 }
 
-const { documentId, ydoc, initialDraft, onDraftChange, onExit }: Props = $props();
+interface SourceViewCommands {
+  documentId: string;
+  save(intent: "save" | "save-as"): Promise<boolean>;
+  exit(): Promise<void>;
+}
+
+const { documentId, ydoc, initialDraft, onDraftChange, onSave, onCommandsChange, onExit }: Props =
+  $props();
 
 // Capture the draft ONCE at mount (untrack makes the non-reactive read
 // explicit). The component is keyed on documentId by the parent, so this is the
@@ -35,13 +46,29 @@ const { documentId, ydoc, initialDraft, onDraftChange, onExit }: Props = $props(
 // effect from re-running on every keystroke — App updates `sourceDrafts` on
 // input, which would otherwise change the `initialDraft` prop and retrigger a
 // fetch that clobbers the live text.
+const sourceDocumentId = untrack(() => documentId);
 const draftAtMount = untrack(() => initialDraft);
 
 let originalMarkdown = $state("");
 let currentMarkdown = $state("");
 let loading = $state(true);
 let saving = $state(false);
+let lockedMarkdown: string | null = null;
 let errorMessage = $state<string | null>(null);
+
+// Commands are published as soon as the component mounts, while the raw source
+// request may still be in flight. Saving awaits this single-settlement boundary
+// so an inactive source tab cannot turn an early native-menu action into a no-op.
+let settleInitialization!: (ready: boolean) => void;
+let initializationSettled = false;
+const initialization = new Promise<boolean>((resolve) => {
+  settleInitialization = (ready) => {
+    if (initializationSettled) return;
+    initializationSettled = true;
+    resolve(ready);
+  };
+});
+let saveCommandInFlight = false;
 
 const dirty = $derived(!loading && currentMarkdown !== originalMarkdown);
 
@@ -62,8 +89,9 @@ $effect(() => {
 
 // Fetch the literal markdown source on mount / when the target doc changes.
 $effect(() => {
-  const id = documentId;
+  const id = sourceDocumentId;
   let cancelled = false;
+  let loaded = false;
   loading = true;
   errorMessage = null;
   (async () => {
@@ -82,15 +110,18 @@ $effect(() => {
       // content; otherwise start from disk. Uses the mount-captured value so
       // this effect never re-runs when App rewrites the live draft.
       currentMarkdown = draftAtMount ?? originalMarkdown;
+      loaded = true;
     } catch (err) {
       if (cancelled) return;
       errorMessage = err instanceof Error ? err.message : "Failed to load markdown source.";
     } finally {
       if (!cancelled) loading = false;
+      settleInitialization(!cancelled && loaded);
     }
   })();
   return () => {
     cancelled = true;
+    settleInitialization(false);
   };
 });
 
@@ -100,34 +131,48 @@ $effect(() => {
  * and keeps the user in source view with their edits intact.
  */
 async function commit(): Promise<boolean> {
+  const targetDocumentId = sourceDocumentId;
+  const submittedMarkdown = currentMarkdown;
+  lockedMarkdown = submittedMarkdown;
   saving = true;
   errorMessage = null;
   try {
     const res = await fetch(`${API_BASE}${API_DOCUMENT_RELOAD}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId, markdown: currentMarkdown }),
+      body: JSON.stringify({ documentId: targetDocumentId, markdown: submittedMarkdown }),
     });
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { message?: string };
       throw new Error(body.message ?? res.statusText);
     }
-    originalMarkdown = currentMarkdown;
-    // Committed content now matches disk — clear the draft/dirty flag in App.
-    onDraftChange(currentMarkdown, false);
+    originalMarkdown = submittedMarkdown;
+    // Preserve any keystroke that landed while the request was in flight.
+    onDraftChange(targetDocumentId, currentMarkdown, currentMarkdown !== submittedMarkdown);
     return true;
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : "Failed to apply markdown changes.";
     return false;
   } finally {
     saving = false;
+    lockedMarkdown = null;
   }
 }
 
 /** Report a textarea edit up to App for cross-switch preservation + close/quit warning. */
 function handleInput(e: Event): void {
-  const value = (e.target as HTMLTextAreaElement).value;
-  onDraftChange(value, value !== originalMarkdown);
+  const target = e.target as HTMLTextAreaElement;
+  if (saving) {
+    // `readonly` blocks real user edits without blurring the textarea. Keep a
+    // defensive event guard as well so synthetic/accessibility input cannot
+    // mutate the bound draft while the submitted snapshot is in flight.
+    const locked = lockedMarkdown ?? currentMarkdown;
+    currentMarkdown = locked;
+    target.value = locked;
+    return;
+  }
+  const value = target.value;
+  onDraftChange(sourceDocumentId, value, value !== originalMarkdown);
 }
 
 async function handleExit(): Promise<void> {
@@ -135,22 +180,42 @@ async function handleExit(): Promise<void> {
     const ok = await commit();
     if (!ok) return; // stay in source view so edits aren't lost
   }
-  onExit();
+  onExit(sourceDocumentId);
 }
 
-async function handleKeydown(e: KeyboardEvent): Promise<void> {
-  // Ctrl/Cmd+S commits the source edit instead of saving stale Y.Doc content.
-  // stopPropagation is load-bearing: without it the event bubbles to App's
-  // window-level keydown listener, whose `save` branch has no form-field guard
-  // and would `triggerSave()` the STALE Y.Doc to disk, racing this commit
-  // (#1021 review must-fix). This handler runs first (bubble phase, target),
-  // so stopping propagation here keeps the global save from ever firing.
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-    e.preventDefault();
-    e.stopPropagation();
-    if (dirty && !saving) await commit();
+async function saveWithIntent(intent: "save" | "save-as"): Promise<boolean> {
+  if (saveCommandInFlight || saving) return false;
+  saveCommandInFlight = true;
+  try {
+    if (!(await initialization) || saving) return false;
+    if (dirty && !(await commit())) return false;
+    try {
+      return await onSave(sourceDocumentId, intent, ydoc);
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : "Failed to save markdown source.";
+      return false;
+    }
+  } finally {
+    saveCommandInFlight = false;
   }
 }
+
+$effect(() => {
+  // The parent registry reads and replaces its reactive Map. If that callback
+  // runs inside this effect's tracking context, the parent's read becomes a
+  // dependency of this effect and its write immediately invalidates us again.
+  // Capture the publisher outside dependency tracking so registration remains
+  // a mount/unmount lifecycle action rather than a reactive mirror.
+  const publishCommands = untrack(() => onCommandsChange);
+  untrack(() => {
+    publishCommands(sourceDocumentId, {
+      documentId: sourceDocumentId,
+      save: saveWithIntent,
+      exit: handleExit,
+    });
+  });
+  return () => untrack(() => publishCommands(sourceDocumentId, null));
+});
 
 async function copyToClipboard(): Promise<void> {
   try {
@@ -161,16 +226,21 @@ async function copyToClipboard(): Promise<void> {
 }
 </script>
 
-<div class="source-view" data-testid="source-view-container">
+<div
+  class="source-view"
+  data-testid="source-view-container"
+  data-document-id={sourceDocumentId}
+>
   <div class="source-view-toolbar">
     <button
       type="button"
       class="source-view-btn source-view-exit"
       data-testid="source-view-exit-btn"
+      aria-label="Return to formatted editor"
       disabled={saving}
       onclick={handleExit}
     >
-      ← WYSIWYG
+      ← Formatted editor
     </button>
     <span class="source-view-title">Markdown source</span>
     <button
@@ -207,7 +277,8 @@ async function copyToClipboard(): Promise<void> {
       data-testid="source-view-textarea"
       bind:value={currentMarkdown}
       oninput={handleInput}
-      onkeydown={handleKeydown}
+      readonly={saving}
+      aria-busy={saving}
       spellcheck="false"
       autocomplete="off"
       autocapitalize="off"
@@ -248,6 +319,11 @@ async function copyToClipboard(): Promise<void> {
 
   .source-view-btn:hover:not(:disabled) {
     background: var(--tandem-surface-hover);
+  }
+
+  .source-view-btn:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
   }
 
   .source-view-btn:disabled {

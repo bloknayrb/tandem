@@ -18,6 +18,11 @@ import { ENTER_POPUP_MS, motionOff, popupEnter, registerFlySource } from "../../
 import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
+import {
+  type AnnotationComposerIntent,
+  defaultAnnotationIntent,
+  resolveAnnotationSubmission,
+} from "./annotation-composer-intent";
 import FormattingToolbar from "./FormattingToolbar.svelte";
 import { clearHighlight, toggleHighlight } from "./highlight-toggle";
 import {
@@ -40,6 +45,8 @@ interface Props {
    * Ctrl+Alt+M global shortcut in App.svelte.
    */
   requestCommentFocus?: number;
+  /** Desktop native-menu request; carries only a local intent kind + nonce. */
+  requestAnnotationFocus?: { nonce: number; kind: "comment" | "note" } | null;
   // 1.11: decoration display state, threaded through so the popup can mirror
   // the formatting bar's Decorations split button (the reachability guarantee
   // when the bar is hidden). Same prop shape as FormattingBar/DecorationsMenu.
@@ -81,6 +88,7 @@ let {
   selectionToolbar = true,
   suppressSelectionToolbar = false,
   requestCommentFocus = 0,
+  requestAnnotationFocus = null,
   showAuthorship = true,
   showComments = true,
   showHighlights = true,
@@ -108,6 +116,8 @@ let annotationText = $state("");
 let capturedRange = $state<{ from: number; to: number } | null>(null);
 let textareaEl = $state<HTMLTextAreaElement | null>(null);
 let annotateMode = $state(false);
+let annotationIntent = $state<AnnotationComposerIntent>(null);
+let forcedComposer = $state(false);
 
 // A28 dwell + entrance (#798).
 // `dwellSatisfied` gates `showPopup`: the popup appears only after the selection
@@ -196,9 +206,9 @@ function armDwell(from: number, to: number, byPointer: boolean) {
   }, DWELL_MS);
 }
 
-// Platform-correct modifier glyphs for the submit-button hints. The handlers in
-// handleTextareaKeyDown are fixed (Alt+Enter = note, Ctrl/Cmd+Enter = send), so
-// these aren't remappable-shortcut ids — we just need the right modifier per OS:
+// Platform-correct modifier glyphs for the submit-button hints. Alt+Enter is
+// always a note; Ctrl/Cmd+Enter follows the current composer intent (ordinary
+// composers default to outbound comment). These aren't remappable shortcut ids:
 // Mac uses the symbol glyphs, Windows/Linux the spelled-out modifier + the ⏎ key.
 const isMac = isMacPlatform();
 const noteHintKbd = isMac ? "⌥⏎" : "Alt+⏎";
@@ -235,13 +245,14 @@ const MINI_HIGHLIGHT_COLORS = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
 
 const canAnnotate = $derived(!!editor && !!ydoc && hasSelection);
 const showPopup = $derived(
-  selectionToolbar &&
+  (selectionToolbar || forcedComposer) &&
     !suppressSelectionToolbar &&
     canAnnotate &&
     selectionPosition !== null &&
     dwellSatisfied,
 );
 const annotationTextTrimmed = $derived(annotationText.trim());
+const primaryAnnotationIntent = $derived(defaultAnnotationIntent(annotationIntent));
 
 // Plain `let` — see SelectionToolbarPositionArgs.previousPlacement docstring.
 // This is read+written from a Tiptap event listener, NOT from inside a
@@ -521,23 +532,32 @@ $effect(() => {
 // the cursor in $state would create a self-triggering effect loop (the $effect
 // writes to the cursor inside its own reactive scope on every fire).
 let lastSeenCommentTrigger = 0;
+function openRequestedComposer(kind: "comment" | "note"): void {
+  if (!editor) return;
+  const { from, to } = editor.state.selection;
+  if (from === to || !editor.isEditable) return;
+  captureSelectionRange();
+  annotationIntent = kind;
+  annotateMode = true;
+  forcedComposer = true;
+  dwellSatisfied = true;
+  beginEntrance();
+  requestAnimationFrame(() => textareaEl?.focus());
+}
+
 $effect(() => {
   if (requestCommentFocus === lastSeenCommentTrigger) return;
   lastSeenCommentTrigger = requestCommentFocus;
   if (requestCommentFocus === 0 || !editor) return;
-  const { from, to } = editor.state.selection;
-  if (from === to) return; // No selection → no-op
-  untrack(() => captureSelectionRange());
-  annotateMode = true;
-  // A28: explicit "give me a comment box now" intent bypasses the dwell — show
-  // the popup immediately. `selectionPosition` is already non-null here (the live
-  // selection ran updateSelectionAffordance), so flipping `dwellSatisfied`
-  // mounts the popup at once; `beginEntrance()` arms the width-freeze in the same
-  // batched write so it wins the mount ResizeObserver race. Bare writes — no
-  // `untrack` needed (untrack guards reads, not writes).
-  dwellSatisfied = true;
-  beginEntrance();
-  requestAnimationFrame(() => textareaEl?.focus());
+  untrack(() => openRequestedComposer("comment"));
+});
+
+let lastAnnotationRequestNonce = 0;
+$effect(() => {
+  const request = requestAnnotationFocus;
+  if (!request || request.nonce === lastAnnotationRequestNonce) return;
+  lastAnnotationRequestNonce = request.nonce;
+  untrack(() => openRequestedComposer(request.kind));
 });
 
 // Selection-popup focus policy (#653): do NOT auto-focus the textarea on popup
@@ -706,11 +726,16 @@ function dismissPopup() {
   capturedRange = null;
   annotationText = "";
   annotateMode = false;
+  annotationIntent = null;
+  forcedComposer = false;
   clearDwell();
   editor?.chain().focus().run();
 }
 
 function openAnnotateMode() {
+  // Ordinary toolbar entry uses the product default and must not inherit a
+  // prior native-menu Private Note / Comment intent.
+  annotationIntent = null;
   annotateMode = true;
   requestAnimationFrame(() => textareaEl?.focus());
 }
@@ -740,17 +765,15 @@ function submitAsNote() {
 }
 
 function handleTextareaKeyDown(e: KeyboardEvent) {
-  // Keybindings (Conflict #5, overridden by Bryan 2026-05-26): plain Enter =
-  // newline (no submit — let the textarea insert it), Alt+Enter = Note to self
-  // (private), Ctrl/Cmd+Enter = Send to Claude (outbound). Test the modifier
-  // branches first so a note-intent keystroke can never fall through to a
-  // comment submit. Plain/Shift+Enter hit no branch → default newline.
-  if (e.key === "Enter" && e.altKey) {
+  // Plain Enter inserts a newline. Alt+Enter is always private; the primary
+  // Ctrl/Cmd+Enter path follows the native-menu intent and otherwise defaults
+  // to an outbound comment.
+  if (e.key === "Enter") {
+    const submission = resolveAnnotationSubmission(annotationIntent, e);
+    if (!submission) return;
     e.preventDefault();
-    submitAsNote();
-  } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-    e.preventDefault();
-    submitAsComment();
+    if (submission === "note") submitAsNote();
+    else submitAsComment();
   } else if (e.key === "Escape") {
     e.preventDefault();
     dismissPopup();
@@ -928,8 +951,8 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     </div>
     <div class="morph-block morph-annotate" class:is-active={annotateMode} inert={!annotateMode}>
       <div class="morph-block-inner">
-      <!-- Annotate popover. Keybindings: Alt+Enter = Note to self (private),
-           Ctrl/Cmd+Enter = Send to Claude (outbound), plain Enter = newline. -->
+      <!-- Annotate popover. Alt+Enter is always private; Ctrl/Cmd+Enter follows
+           the requested menu intent (ordinary opens default to outbound). -->
       <div class="composer-card">
         <textarea
           bind:this={textareaEl}
@@ -937,7 +960,7 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           aria-label="Annotation text"
           bind:value={annotationText}
           onkeydown={handleTextareaKeyDown}
-          placeholder="Write a note or instruction..."
+          placeholder={annotationIntent === "note" ? "Write a private note..." : "Write an instruction for AI..."}
           rows={1}
           class="composer-input"
         ></textarea>
@@ -945,26 +968,40 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
           <button
             type="button"
             class="composer-btn composer-btn-note"
+            class:is-primary={primaryAnnotationIntent === "note"}
             data-testid="popup-note-submit"
-            aria-label="Note to self (Alt+Enter)"
-            title="Note to self — private, not sent to {agentLabel.family} (Alt+Enter)"
+            aria-label={primaryAnnotationIntent === "note"
+              ? "Note to self (Ctrl+Enter)"
+              : "Note to self (Alt+Enter)"}
+            title={primaryAnnotationIntent === "note"
+              ? `Note to self — private, not sent to ${agentLabel.family} (Ctrl/Cmd+Enter)`
+              : `Note to self — private, not sent to ${agentLabel.family} (Alt+Enter)`}
             disabled={!annotationTextTrimmed}
             onclick={submitAsNote}
           >
             Note to self
-            <kbd class="composer-kbd">{noteHintKbd}</kbd>
+            <kbd class="composer-kbd"
+              >{primaryAnnotationIntent === "note" ? sendHintKbd : noteHintKbd}</kbd
+            >
           </button>
           <button
             type="button"
             class="composer-btn composer-btn-send"
+            class:is-primary={primaryAnnotationIntent === "comment"}
             data-testid="popup-comment-submit"
-            aria-label="Send to {agentLabel.family} (Ctrl+Enter)"
-            title="Send to {agentLabel.family} — outbound comment (Ctrl/Cmd+Enter)"
+            aria-label={primaryAnnotationIntent === "comment"
+              ? `Send to ${agentLabel.family} (Ctrl+Enter)`
+              : `Send to ${agentLabel.family}`}
+            title={primaryAnnotationIntent === "comment"
+              ? `Send to ${agentLabel.family} — outbound comment (Ctrl/Cmd+Enter)`
+              : `Send to ${agentLabel.family} — outbound comment`}
             disabled={!annotationTextTrimmed}
             onclick={submitAsComment}
           >
             Send to {agentLabel.family}
-            <kbd class="composer-kbd">{sendHintKbd}</kbd>
+            {#if primaryAnnotationIntent === "comment"}
+              <kbd class="composer-kbd">{sendHintKbd}</kbd>
+            {/if}
           </button>
         </div>
       </div>
@@ -1180,17 +1217,19 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
     outline: 2px solid var(--tandem-accent);
     outline-offset: 1px;
   }
-  .composer-btn-note {
+  .composer-btn-note,
+  .composer-btn-send {
     border: 1px solid var(--tandem-border);
     background: transparent;
     color: var(--tandem-fg-muted);
     font-weight: 500;
   }
-  .composer-btn-note:hover:not(:disabled) {
+  .composer-btn-note:hover:not(:disabled),
+  .composer-btn-send:hover:not(:disabled) {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
   }
-  .composer-btn-send {
+  .composer-btn-send.is-primary {
     border: 1px solid var(--tandem-author-claude-border);
     background: var(--tandem-author-claude-bg);
     color: var(--tandem-author-claude-fg-strong);
@@ -1199,21 +1238,34 @@ function handleTextareaKeyDown(e: KeyboardEvent) {
   /* Hover deepens the tint from the same seed in both themes (light: 12%
      more coral over the near-white tint; dark: a warmer lift of #4d2419).
      fg-strong holds ≥4.5:1 against both hover composites. */
-  .composer-btn-send:hover:not(:disabled) {
+  .composer-btn-send.is-primary:hover:not(:disabled) {
     background: color-mix(
       in srgb,
       var(--tandem-author-claude) 12%,
       var(--tandem-author-claude-bg)
     );
   }
+  .composer-btn-note.is-primary {
+    border-color: var(--tandem-author-user);
+    background: var(--tandem-author-user-bg);
+    color: var(--tandem-fg);
+    font-weight: 600;
+  }
+  .composer-btn-note.is-primary:hover:not(:disabled) {
+    background: color-mix(
+      in srgb,
+      var(--tandem-author-user) 12%,
+      var(--tandem-author-user-bg)
+    );
+  }
   .composer-kbd {
     font-family: var(--tandem-font-mono);
     font-size: var(--tandem-text-2xs);
   }
-  .composer-btn-note .composer-kbd {
+  .composer-btn:not(.is-primary) .composer-kbd {
     color: var(--tandem-fg-subtle);
   }
-  .composer-btn-send .composer-kbd {
+  .composer-btn.is-primary .composer-kbd {
     color: inherit;
   }
 </style>

@@ -11,6 +11,7 @@
 // in teardown so a fast doc-switch can't leak a global listener.
 
 import type { Editor } from "@tiptap/core";
+import type { Selection } from "@tiptap/pm/state";
 import { isTauriRuntime } from "../../cowork/cowork-helpers";
 import { loadInvoke } from "../../cowork/cowork-invoke";
 import { detectContext, normalizePlatform, type Platform } from "./detect";
@@ -20,6 +21,12 @@ import { type ContextMenuRequest, isContextMenuActionId } from "./types";
 export interface ContextMenuHostDeps {
   /** Navigate a link href; MUST re-validate via `isSafeExternalHref`. */
   openHref: (href: string) => void;
+  /** Request App's transient chat-focus flow. Never receives selection data. */
+  focusChat?: () => void;
+  /** Open the existing annotation composer for the current PM selection. */
+  composeAnnotation?: (kind: "comment" | "note") => void;
+  /** Open the shared link editor at the current link caret/range. */
+  editLink?: () => void;
   /** Optional platform override (tests); defaults to runtime detection. */
   platform?: Platform;
 }
@@ -57,9 +64,9 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
       typeof navigator !== "undefined" ? navigator.platform || navigator.userAgent : "",
     );
 
-  // Sensitive link href captured from the real DOM target at popup time. Stays
-  // module-local — never crosses the Tauri IPC boundary (security contract).
-  let linkHref: string | null = null;
+  // The clicked ProseMirror selection is non-sensitive and lets delayed native
+  // events reject a target that moved or changed. Link hrefs are never retained.
+  let contextSelection: Selection | null = null;
 
   const onContextMenu = async (e: MouseEvent) => {
     const targetEl = e.target as HTMLElement | null;
@@ -92,8 +99,7 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
       }
     }
     req.hasSelection = !editor.state.selection.empty;
-
-    linkHref = targetEl.closest("a[href]")?.getAttribute("href") ?? null;
+    contextSelection = editor.state.selection;
 
     if (req.kind === "tableCell") {
       // Table command-capability augmentations live in @tiptap/extension-table,
@@ -130,9 +136,13 @@ export function installContextMenu(editor: Editor, deps: ContextMenuHostDeps): (
       void dispatchContextAction(id, {
         editor,
         openHref: deps.openHref,
-        getLinkHref: () => linkHref,
+        isTargetCurrent: () =>
+          contextSelection !== null && editor.state.selection.eq(contextSelection),
         readClipboardText,
         writeClipboardText,
+        focusChat: deps.focusChat,
+        composeAnnotation: deps.composeAnnotation,
+        editLink: deps.editLink,
       });
     }),
   );

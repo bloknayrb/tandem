@@ -183,12 +183,21 @@ export interface SaveResult {
   /**
    * Machine-readable discriminator for a `skipped` result (#1238). `reason` is
    * human-facing prose and must stay free to change, so a caller that needs to
-   * act on one particular skip — the browser's save action distinguishing "an
-   * external conflict is blocking this" from the routine skips it should stay
-   * quiet about — branches on this instead. Only set for skips a caller has a
-   * reason to handle; absent means "no special handling".
+   * present an honest result without branching on mutable prose. Every skipped
+   * path sets a code; `reason` remains useful for logs and older clients.
    */
-  skipCode?: "EXTERNAL_CONFLICT";
+  skipCode?:
+    | "NOT_OPEN"
+    | "PROMOTION_REQUIRED"
+    | "READ_ONLY"
+    | "EXPLICIT_ONLY"
+    | "UNSUPPORTED_FORMAT"
+    | "ADAPTER_UNAVAILABLE"
+    | "SAVE_IN_PROGRESS"
+    | "EXTERNAL_CONFLICT"
+    | "FILE_MODIFIED"
+    | "SOURCE_MISSING"
+    | "FILE_STATE_UNAVAILABLE";
   errorCode?: string;
   /**
    * Body-export fidelity warnings (#576, `.docx` only) — content the export
@@ -265,11 +274,17 @@ export async function saveDocumentToDisk(
   // so this is a no-op at runtime.
   const safeDocId = path.basename(docId);
   const docState = openDocs.get(safeDocId);
-  if (!docState) return { status: "skipped", reason: "Document not open" };
+  if (!docState) {
+    return { status: "skipped", reason: "Document not open", skipCode: "NOT_OPEN" };
+  }
 
   // Exclude non-saveable documents
   if (docState.source === "upload") {
-    return { status: "skipped", reason: "Upload-only document" };
+    return {
+      status: "skipped",
+      reason: "Upload-only document",
+      skipCode: "PROMOTION_REQUIRED",
+    };
   }
 
   const isBinary = BINARY_SAVE_FORMATS.has(docState.format);
@@ -279,28 +294,44 @@ export async function saveDocumentToDisk(
   // never overwritten, whether the trigger is auto-save or an explicit save.
   // A writable .docx falls through to the binary branch below.
   if (docState.readOnly) {
-    return { status: "skipped", reason: "Read-only document" };
+    return { status: "skipped", reason: "Read-only document", skipCode: "READ_ONLY" };
   }
 
   // Binary formats (.docx) write back only on an EXPLICIT user/agent save. The
   // auto-save timer must never overwrite the original with a re-export of a
   // lossy mammoth import.
   if (isBinary && source === "auto-save") {
-    return { status: "skipped", reason: "Binary formats save only on explicit save" };
+    return {
+      status: "skipped",
+      reason: "Binary formats save only on explicit save",
+      skipCode: "EXPLICIT_ONLY",
+    };
   }
 
   if (!isBinary && !AUTO_SAVE_FORMATS.has(docState.format)) {
-    return { status: "skipped", reason: `Format '${docState.format}' not eligible for disk save` };
+    return {
+      status: "skipped",
+      reason: `Format '${docState.format}' not eligible for disk save`,
+      skipCode: "UNSUPPORTED_FORMAT",
+    };
   }
 
   const adapter = getAdapter(docState.format);
   if (isBinary ? !adapter.saveBinary : !adapter.save) {
-    return { status: "skipped", reason: "Adapter cannot save" };
+    return {
+      status: "skipped",
+      reason: "Adapter cannot save",
+      skipCode: "ADAPTER_UNAVAILABLE",
+    };
   }
 
   // Per-document lock
   if (savingDocs.has(docId)) {
-    return { status: "skipped", reason: "Save already in progress" };
+    return {
+      status: "skipped",
+      reason: "Save already in progress",
+      skipCode: "SAVE_IN_PROGRESS",
+    };
   }
 
   savingDocs.add(docId);
@@ -355,15 +386,27 @@ export async function saveDocumentToDisk(
       const lastSavedAt = meta.get(Y_MAP_SAVED_AT_VERSION) as number | undefined;
       // If the file is newer than our last save, someone else modified it
       if (lastSavedAt && stat.mtimeMs > lastSavedAt + 1000) {
-        return { status: "skipped", reason: "File modified externally" };
+        return {
+          status: "skipped",
+          reason: "File modified externally",
+          skipCode: "FILE_MODIFIED",
+        };
       }
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        return { status: "skipped", reason: "Source file no longer exists" };
+        return {
+          status: "skipped",
+          reason: "Source file no longer exists",
+          skipCode: "SOURCE_MISSING",
+        };
       }
       console.error("[AutoSave] Unexpected stat error for %s:", docState.filePath, err);
-      return { status: "skipped", reason: `Cannot verify file state: ${code}` };
+      return {
+        status: "skipped",
+        reason: `Cannot verify file state: ${code}`,
+        skipCode: "FILE_STATE_UNAVAILABLE",
+      };
     }
 
     const doc = getOrCreateDocument(docId);

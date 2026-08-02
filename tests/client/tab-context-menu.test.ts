@@ -4,6 +4,7 @@ import {
   hasRealPath,
   isTabContextMenuActionId,
   TAB_CONTEXT_MENU_ACTION_IDS,
+  tabIdsToCloseLeft,
   tabIdsToCloseOthers,
   tabIdsToCloseRight,
 } from "../../src/client/tabs/tab-context-menu";
@@ -39,6 +40,45 @@ describe("buildTabMenuContext", () => {
     expect(buildTabMenuContext(tabs, "a").canCloseRight).toBe(true);
     expect(buildTabMenuContext(tabs, "b").canCloseRight).toBe(true);
     expect(buildTabMenuContext(tabs, "c").canCloseRight).toBe(false); // last tab
+  });
+
+  it("enables Close to the Left only when a tab precedes the target", () => {
+    expect(buildTabMenuContext(tabs, "a").canCloseLeft).toBe(false);
+    expect(buildTabMenuContext(tabs, "b").canCloseLeft).toBe(true);
+  });
+
+  it("derives rename, dynamic save, filename, and source-view gates from the target", () => {
+    const rich = [
+      {
+        id: "disk",
+        filePath: "/x/disk.md",
+        fileName: "disk.md",
+        format: "md",
+        readOnly: false,
+        source: "file" as const,
+      },
+      {
+        id: "upload",
+        filePath: "upload://draft.md",
+        fileName: "draft.md",
+        format: "md",
+        readOnly: false,
+        source: "upload" as const,
+      },
+    ];
+    expect(buildTabMenuContext(rich, "disk", true)).toMatchObject({
+      canRename: true,
+      canSave: true,
+      saveAs: false,
+      canCopyFileName: true,
+      canToggleSourceView: true,
+      sourceViewActive: true,
+    });
+    expect(buildTabMenuContext(rich, "upload")).toMatchObject({
+      canRename: false,
+      canSave: true,
+      saveAs: true,
+    });
   });
 
   it("reports hasPath true for real on-disk files", () => {
@@ -115,5 +155,19 @@ describe("tabIdsToCloseRight", () => {
 
   it("returns empty (never closes all) for a stale/missing id — no slice(0)", () => {
     expect(tabIdsToCloseRight(tabs, "gone")).toEqual([]);
+  });
+});
+
+describe("tabIdsToCloseLeft", () => {
+  const tabs = [
+    { id: "a", filePath: "/x/a.md" },
+    { id: "b", filePath: "/x/b.md" },
+    { id: "c", filePath: "/x/c.md" },
+  ];
+
+  it("returns ids before the target and never acts on a stale id", () => {
+    expect(tabIdsToCloseLeft(tabs, "c")).toEqual(["a", "b"]);
+    expect(tabIdsToCloseLeft(tabs, "a")).toEqual([]);
+    expect(tabIdsToCloseLeft(tabs, "gone")).toEqual([]);
   });
 });

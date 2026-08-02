@@ -167,6 +167,7 @@ font-by-extension-row-{*}
 font-by-extension-section
 font-by-extension-{*}-{*}
 formatbar-hide-btn
+formatbar-source-toggle
 formatting-bar
 harness-acknowledge
 harness-banner-dismiss
@@ -174,6 +175,7 @@ harness-banner-version
 harness-version
 help-modal
 help-modal-close
+help-modal-content
 high-contrast-toggle
 integration-wizard
 integration-wizard-advanced
@@ -292,7 +294,7 @@ popup-highlight-{*}
 popup-note-submit
 popup-show-formatbar-btn
 railFloat.left ? "rail-float-left" : undefined
-railFloat.right ? "rail-float-right" : undefined
+railFloat.right || chatReveal ? "rail-float-right" : undefined
 reachability-harness
 recent-file-{*}
 recent-files-list
@@ -395,9 +397,7 @@ throw-on-render-ok
 title-bar
 titlebar-brand-menu
 titlebar-brand-menu-popover
-titlebar-connect-ai
 titlebar-default-model
-titlebar-source-toggle
 titlebar-update-available-dot
 toast-action-{*}
 toast-container
@@ -406,9 +406,6 @@ toast-dismiss-{*}
 toast-{*}
 toolbar-highlight-color-toggle
 toolbar-highlight-color-{*}
-toolbar-link-cancel
-toolbar-link-input
-toolbar-link-submit
 tutorial-dismiss-btn
 tutorial-next-btn
 undo-btn
@@ -417,4 +414,7 @@ updater-banner
 updater-banner-dismiss
 updater-banner-install
 updater-banner-visible
+{*}-cancel
+{*}-input
+{*}-submit
 {*}-{*}

@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { saveStore, triggerSave, wireActionDeps } from "../../../src/client/actions/builtin.svelte";
+import {
+  saveSkippedMessage,
+  saveStore,
+  triggerSave,
+  wireActionDeps,
+} from "../../../src/client/actions/builtin.svelte";
 
 /** A 200 response carrying a specific SaveResult body. */
 function fetchWith(data: Record<string, unknown>) {
@@ -42,6 +47,8 @@ const baseDeps = {
   toggleAuthorship: () => {},
   toggleFormattingBar: () => {},
   toggleSourceView: () => {},
+  focusChat: () => {},
+  save: async () => {},
   saveAs: async () => {},
 };
 
@@ -58,8 +65,8 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
   });
 
   it("sets lastSaveOk=true after a successful save", async () => {
-    vi.stubGlobal("fetch", vi.fn(fetchWith({})));
-    await triggerSave("doc-1");
+    vi.stubGlobal("fetch", vi.fn(fetchWith({ status: "saved" })));
+    await expect(triggerSave("doc-1")).resolves.toBe(true);
     expect(saveStore.lastSaveOk).toBe(true);
     expect(saveStore.saving).toBe(false);
     expect(notify).not.toHaveBeenCalledWith("error", expect.anything());
@@ -68,7 +75,7 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
 
   it("sets lastSaveOk=false and notifies on a failed (non-ok) response", async () => {
     vi.stubGlobal("fetch", vi.fn(fetchFail));
-    await triggerSave("doc-1");
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
     expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("disk full"));
@@ -80,10 +87,40 @@ describe("triggerSave / saveStore.lastSaveOk", () => {
       "fetch",
       vi.fn(() => Promise.reject(new Error("network down"))),
     );
-    await triggerSave("doc-1");
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
     expect(saveStore.lastSaveOk).toBe(false);
     expect(saveStore.saving).toBe(false);
     expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("try again"));
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("saveSkippedMessage", () => {
+  it.each([
+    ["EXTERNAL_CONFLICT", "changed on disk"],
+    ["PROMOTION_REQUIRED", "Save As"],
+    ["READ_ONLY", "read-only"],
+    ["UNSUPPORTED_FORMAT", "format"],
+    ["SAVE_IN_PROGRESS", "already in progress"],
+    ["SOURCE_MISSING", "no longer exists"],
+  ])("maps %s to honest user-facing copy", (code, expected) => {
+    expect(saveSkippedMessage(code)).toContain(expected);
+  });
+
+  it("uses a reason from an older server without claiming success", () => {
+    expect(saveSkippedMessage(undefined, "Legacy skip")).toBe("Not saved — Legacy skip.");
+  });
+
+  it("keeps the Saved flash off for every skipped response", async () => {
+    const notify = vi.fn();
+    wireDeps(notify, "/tmp/doc.md");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "skipped", skipCode: "READ_ONLY", reason: "Read-only" })),
+    );
+    await expect(triggerSave("doc-1")).resolves.toBe(false);
+    expect(saveStore.lastSaveOk).toBe(false);
+    expect(notify).toHaveBeenCalledWith("warning", expect.stringContaining("read-only"));
     vi.unstubAllGlobals();
   });
 });
@@ -105,13 +142,13 @@ describe("triggerSave — docx fidelity toasts", () => {
   const warnings = () => notify.mock.calls.filter(([level]) => level === "warning");
 
   it("says nothing at all on a clean save", async () => {
-    vi.stubGlobal("fetch", vi.fn(fetchWith({})));
+    vi.stubGlobal("fetch", vi.fn(fetchWith({ status: "saved" })));
     await triggerSave("doc-1");
     expect(notify).not.toHaveBeenCalled();
   });
 
   it("reports export downgrades with a count (that count is real)", async () => {
-    vi.stubGlobal("fetch", vi.fn(fetchWith({ fidelityWarnings: ["a", "b"] })));
+    vi.stubGlobal("fetch", vi.fn(fetchWith({ status: "saved", fidelityWarnings: ["a", "b"] })));
     await triggerSave("doc-1");
     expect(warnings()).toHaveLength(1);
     expect(warnings()[0][1]).toContain("2 Word features were simplified");
@@ -120,7 +157,7 @@ describe("triggerSave — docx fidelity toasts", () => {
   it("reports unpreserved imports WITHOUT a number", async () => {
     // unpreservedImports counts capped report LINES, so publishing it as a
     // feature count would be a falsifiable claim on an honesty surface.
-    vi.stubGlobal("fetch", vi.fn(fetchWith({ unpreservedImports: 3 })));
+    vi.stubGlobal("fetch", vi.fn(fetchWith({ status: "saved", unpreservedImports: 3 })));
     await triggerSave("doc-1");
     expect(warnings()).toHaveLength(1);
     expect(warnings()[0][1]).toContain("backed-up original");
@@ -128,7 +165,10 @@ describe("triggerSave — docx fidelity toasts", () => {
   });
 
   it("merges both facts into ONE toast, never a third", async () => {
-    vi.stubGlobal("fetch", vi.fn(fetchWith({ fidelityWarnings: ["a"], unpreservedImports: 2 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "saved", fidelityWarnings: ["a"], unpreservedImports: 2 })),
+    );
     await triggerSave("doc-1");
     expect(warnings()).toHaveLength(1);
     expect(warnings()[0][1]).toContain("1 Word feature was simplified");
@@ -136,13 +176,16 @@ describe("triggerSave — docx fidelity toasts", () => {
   });
 
   it("agrees the verb with the count (1 was / 2 were)", async () => {
-    vi.stubGlobal("fetch", vi.fn(fetchWith({ fidelityWarnings: ["a"] })));
+    vi.stubGlobal("fetch", vi.fn(fetchWith({ status: "saved", fidelityWarnings: ["a"] })));
     await triggerSave("doc-1");
     expect(warnings()[0][1]).toContain("1 Word feature was simplified");
   });
 
   it("keeps the integrity error toast distinct and unchanged", async () => {
-    vi.stubGlobal("fetch", vi.fn(fetchWith({ integrityWarnings: ["y"], unpreservedImports: 2 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fetchWith({ status: "saved", integrityWarnings: ["y"], unpreservedImports: 2 })),
+    );
     await triggerSave("doc-1");
     expect(notify).toHaveBeenCalledWith("error", expect.stringContaining("backed up"));
     expect(warnings()).toHaveLength(1); // the unpreserved half still speaks

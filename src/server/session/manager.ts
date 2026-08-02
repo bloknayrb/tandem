@@ -1,7 +1,12 @@
 import fs from "fs/promises";
 import path from "path";
 import * as Y from "yjs";
-import { CTRL_ROOM, SESSION_MAX_AGE, Y_MAP_CHAT } from "../../shared/constants.js";
+import {
+  CTRL_ROOM,
+  SESSION_MAX_AGE,
+  Y_MAP_CHAT,
+  Y_MAP_CHAT_DOCUMENT_NAMES,
+} from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
 import type { ExternalConflictState, SessionData } from "../../shared/types.js";
@@ -154,15 +159,51 @@ export async function deleteSession(filePath: string): Promise<void> {
 // --- CTRL_ROOM persistence (chat history) ---
 
 const CTRL_SESSION_KEY = CTRL_ROOM;
+let ctrlSnapshotQueue: Promise<void> = Promise.resolve();
 
-/** Save the CTRL_ROOM Y.Doc (chat history) */
-export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
+function enqueueCtrlSnapshot<T>(task: () => Promise<T>): Promise<T> {
+  const result = ctrlSnapshotQueue.then(task, task);
+  // A failed snapshot must reject its own caller without poisoning later saves.
+  ctrlSnapshotQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+function cloneYDoc(doc: Y.Doc): Y.Doc {
+  const clone = new Y.Doc();
+  Y.applyUpdate(clone, Y.encodeStateAsUpdate(doc));
+  return clone;
+}
+
+function pruneCtrlDocumentNames(doc: Y.Doc): void {
+  const referencedDocumentIds = new Set<string>();
+  doc.getMap(Y_MAP_CHAT).forEach((value) => {
+    const documentId = (value as { documentId?: unknown } | null)?.documentId;
+    if (typeof documentId === "string" && documentId) referencedDocumentIds.add(documentId);
+  });
+
+  const documentNames = doc.getMap(Y_MAP_CHAT_DOCUMENT_NAMES);
+  for (const [id, value] of documentNames.entries()) {
+    if (!referencedDocumentIds.has(id) || typeof value !== "string") {
+      documentNames.delete(id);
+      continue;
+    }
+    const fileName = path.basename(value.replace(/\\/g, "/")).trim();
+    if (!fileName) documentNames.delete(id);
+    else if (fileName !== value) documentNames.set(id, fileName);
+  }
+}
+
+async function persistCtrlSnapshot(doc: Y.Doc): Promise<void> {
   if (!sessionDirReady) {
     await fs.mkdir(SESSION_DIR, { recursive: true });
     sessionDirReady = true;
   }
 
-  // Prune chat to newest 200 messages before saving
+  // Prune the snapshot, never the live CTRL doc. User-visible deletions must not
+  // happen until the corresponding atomic write has succeeded.
   const chatMap = doc.getMap(Y_MAP_CHAT);
   const entries: Array<{ id: string; timestamp: number }> = [];
   chatMap.forEach((value, key) => {
@@ -170,21 +211,60 @@ export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
     entries.push({ id: key, timestamp: msg.timestamp });
   });
   if (entries.length > 200) {
-    entries.sort((a, b) => a.timestamp - b.timestamp);
+    entries.sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
     const toDelete = entries.slice(0, entries.length - 200);
     withInternal(doc, () => {
-      for (const entry of toDelete) {
-        chatMap.delete(entry.id);
-      }
+      for (const entry of toDelete) chatMap.delete(entry.id);
     });
   }
 
+  // Defense in depth: durable metadata is restricted to basename-only names
+  // for documents referenced by retained chat messages.
+  withInternal(doc, () => pruneCtrlDocumentNames(doc));
+
   const state = Y.encodeStateAsUpdate(doc);
   const ydocState = Buffer.from(state).toString("base64");
-
   const data = { ydocState, lastAccessed: Date.now() };
   const sessionPath = path.join(SESSION_DIR, `${CTRL_SESSION_KEY}.json`);
   await atomicWrite(sessionPath, JSON.stringify(data));
+}
+
+/** Save the CTRL_ROOM Y.Doc (chat history) */
+export async function saveCtrlSession(doc: Y.Doc): Promise<void> {
+  // Reserve queue order before taking the snapshot. A save called after a
+  // queued clear therefore cannot encode the pre-clear live map.
+  return enqueueCtrlSnapshot(async () => {
+    const snapshot = cloneYDoc(doc);
+    await persistCtrlSnapshot(snapshot);
+  });
+}
+
+/**
+ * Durably clear the chat IDs visible when the request began. The live CRDT is
+ * unchanged until the cloned CTRL snapshot is atomically on disk. Messages
+ * arriving while the request waits in the queue are retained.
+ */
+export async function clearCtrlChatDurably(doc: Y.Doc): Promise<number> {
+  const liveChat = doc.getMap(Y_MAP_CHAT);
+  const capturedIds = Array.from(liveChat.keys());
+  // Enqueue synchronously after capturing the request's IDs. Both cloning and
+  // persistence happen inside this shared queue; later saves cannot overtake.
+  return enqueueCtrlSnapshot(async () => {
+    const snapshot = cloneYDoc(doc);
+    const snapshotChat = snapshot.getMap(Y_MAP_CHAT);
+    withInternal(snapshot, () => {
+      for (const id of capturedIds) snapshotChat.delete(id);
+    });
+    await persistCtrlSnapshot(snapshot);
+    withInternal(doc, () => {
+      for (const id of capturedIds) liveChat.delete(id);
+      // Recompute from the current live map so messages that arrived while
+      // the snapshot persisted retain their filename metadata. This also
+      // clears legacy orphan metadata when chat was already empty.
+      pruneCtrlDocumentNames(doc);
+    });
+    return capturedIds.length;
+  });
 }
 
 /** Load the CTRL_ROOM session if it exists */

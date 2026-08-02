@@ -132,7 +132,8 @@ $effect(() => {
 
 // Derived styles. v7 floating chrome (Wave 4b minimal): drop the rectangular
 // tab + accent-underline pattern in favor of a soft pill. Active tab gets a
-// surface fill + subtle border; inactive tabs stay transparent. Drop-indicator
+// surface fill + subtle border; inactive tabs use an opaque muted surface so
+// editor content never shows through while a tab is dragged or displaced. Drop-indicator
 // borders are kept on left/right only (vertical wedges) — bottom underline
 // removed since the pill no longer reads as a "tab attached to a strip".
 const tabStyle = $derived(
@@ -144,7 +145,7 @@ const tabStyle = $derived(
     "height: 26px",
     "font-size: var(--tandem-text-sm)",
     "cursor: pointer",
-    `background: ${isActive ? "var(--tandem-surface)" : "transparent"}`,
+    `background: ${isActive ? "var(--tandem-surface)" : "var(--tandem-surface-muted)"}`,
     `color: ${isActive ? "var(--tandem-fg)" : "var(--tandem-fg-subtle)"}`,
     `border: 1px solid ${isActive ? "var(--tandem-border)" : "transparent"}`,
     `border-left: ${dropIndicator === "left" ? "2px solid var(--tandem-accent)" : isActive ? "1px solid var(--tandem-border)" : "2px solid transparent"}`,
@@ -206,8 +207,10 @@ function handleMouseLeaveClose() {
 -->
 <!-- svelte-ignore a11y_interactive_supports_focus -->
 <div
+  class="tab-pill"
   data-testid={`tab-${tab.id}`}
   data-active={isActive}
+  data-lifted={lifted}
   role="tab"
   tabindex={0}
   aria-selected={isActive}
@@ -341,6 +344,23 @@ function handleMouseLeaveClose() {
   [role="tab"]:focus-visible {
     outline: 2px solid var(--tandem-border);
     outline-offset: 1px;
+  }
+
+  @media (forced-colors: active) {
+    .tab-pill {
+      forced-color-adjust: auto;
+      background: Canvas !important;
+      border-color: ButtonText !important;
+    }
+    .tab-pill[data-active="true"] {
+      background: ButtonFace !important;
+      outline: 2px solid Highlight;
+      outline-offset: 0;
+    }
+    .tab-pill:focus-visible {
+      outline-color: Highlight;
+      outline-offset: 1px;
+    }
   }
 
   /* A2 (#798): fixed-width slot keeps the tab from shifting as the indicator

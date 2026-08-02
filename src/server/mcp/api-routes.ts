@@ -1,4 +1,5 @@
 import type { Express, NextFunction, Request, Response } from "express";
+import express from "express";
 
 import {
   API_ANNOTATION_REPLY,
@@ -174,6 +175,27 @@ export function rejectOversizeLicenseBody(req: Request, res: Response, next: Nex
   next();
 }
 
+export const SCRATCHPAD_JSON_LIMIT_BYTES = 1024 * 1024;
+const parseScratchpadJson = express.json({ limit: "1mb" });
+
+/** A route-local parser so seeded exports never pass through the 70 MiB upload parser. */
+export function scratchpadJsonBody(req: Request, res: Response, next: NextFunction): void {
+  parseScratchpadJson(req, res, (err?: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const status = (err as { status?: number }).status === 413 ? 413 : 400;
+    res.status(status).json({
+      error: status === 413 ? "PAYLOAD_TOO_LARGE" : "BAD_REQUEST",
+      message:
+        status === 413
+          ? "Scratchpad content must be no larger than 1 MiB."
+          : "Scratchpad content must be valid JSON.",
+    });
+  });
+}
+
 export function registerApiRoutes(
   app: Express,
   largeBody: Handler,
@@ -243,7 +265,7 @@ export function registerApiRoutes(
   // Scratchpad create / append content is a document mutation — license-gated
   // (#1116 Surface B) so a restricted user can't author into a fresh doc.
   app.options(API_SCRATCHPAD, mw);
-  app.post(API_SCRATCHPAD, mw, licenseGateMiddleware, handleScratchpad);
+  app.post(API_SCRATCHPAD, mw, licenseGateMiddleware, scratchpadJsonBody, handleScratchpad);
 
   app.options(API_CONVERT, mw);
   app.post(API_CONVERT, mw, largeBody, handleConvert);

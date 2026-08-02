@@ -1,10 +1,11 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
-import { onDestroy, untrack } from "svelte";
-import { BYO_MODELS_ENABLED } from "../shared/constants";
+import { onDestroy, tick, untrack } from "svelte";
+import { API_SCRATCHPAD } from "../shared/api-paths";
+import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../shared/constants";
 import { isScratchpadPath, isUploadPath, scratchpadUuidFromPath } from "../shared/paths";
 import { toPmPos } from "../shared/positions/types";
-import type { Annotation, CapturedAnchor, TandemNotification } from "../shared/types";
+import type { Annotation, CapturedAnchor, ChatMessage, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
@@ -58,6 +59,7 @@ import {
 import { createAnnotationPatterns } from "./hooks/useAnnotationPatterns.svelte";
 import { createAnnotationReplies } from "./hooks/useAnnotationReplies.svelte";
 import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/useAppShortcuts.js";
+import { createChatState } from "./hooks/useChatState.svelte";
 import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
@@ -73,7 +75,11 @@ import { createModels } from "./hooks/useModels.svelte";
 import { createNotifications } from "./hooks/useNotifications.svelte";
 import { createScratchpadPersistence } from "./hooks/useScratchpadPersistence.svelte";
 import { createTabCycleKeyboard } from "./hooks/useTabCycleKeyboard.svelte";
-import { pickTabByDigit, shouldIgnoreShortcut } from "./hooks/useTabKeyboardShortcuts.js";
+import {
+  pickTabByDigit,
+  shouldIgnoreSaveAsShortcut,
+  shouldIgnoreShortcut,
+} from "./hooks/useTabKeyboardShortcuts.js";
 import { createTabOrder } from "./hooks/useTabOrder.svelte";
 import { createTandemModeBroadcast } from "./hooks/useTandemModeBroadcast.svelte";
 import { createTandemSettings, resolveFont, TEXT_SIZE_PX } from "./hooks/useTandemSettings.svelte";
@@ -95,6 +101,8 @@ import {
   sendNoteToClaude as marginSendNoteToClaude,
 } from "./panels/annotation-actions";
 import { motionOff } from "./panels/cardMotion";
+import { exportChatMarkdown } from "./panels/chat-export";
+import { insertChatMarkdown } from "./panels/chat-insert";
 import MarginColumn from "./panels/MarginColumn.svelte";
 import { isLeftMarginAnnotation, isRightMarginAnnotation } from "./panels/marginSides";
 import PeekStrip from "./panels/PeekStrip.svelte";
@@ -104,8 +112,13 @@ import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
-import { tabIdsToCloseOthers, tabIdsToCloseRight } from "./tabs/tab-context-menu.js";
-import { isRenamable } from "./types.js";
+import {
+  tabIdsToCloseLeft,
+  tabIdsToCloseOthers,
+  tabIdsToCloseRight,
+} from "./tabs/tab-context-menu.js";
+import { saveExactTarget } from "./tabs/target-save.js";
+import { isRenamable, type OpenTab } from "./types.js";
 import { openFileForRuntime } from "./utils/browse-file";
 import { resolveDefaultModelChip } from "./utils/model-chip";
 import { resolveModelFirstRunNeeded } from "./utils/model-first-run";
@@ -187,6 +200,10 @@ function closeTabAndRecord(tabId: string) {
 // closeTabAndRecord so the scratchpad-unsaved guard + closed-tab stack apply.
 function closeOtherTabs(keepId: string) {
   for (const id of tabIdsToCloseOthers(tabOrder.orderedTabs, keepId)) closeTabAndRecord(id);
+}
+
+function closeTabsToLeft(fromId: string) {
+  for (const id of tabIdsToCloseLeft(tabOrder.orderedTabs, fromId)) closeTabAndRecord(id);
 }
 
 function closeTabsToRight(fromId: string) {
@@ -675,6 +692,96 @@ function openModelsSettings() {
   openSettingsModalWithAck();
 }
 
+function pushSaveNotification(severity: "info" | "warning" | "error", message: string): void {
+  notifications.push({
+    id: generateNotificationId(),
+    type: "launcher",
+    severity,
+    message,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Save a live tab by id. The id is re-resolved at invocation time so later
+ * tab-menu/native callers can safely target inactive tabs without capturing a
+ * stale object. Plain Save promotes every editable upload-backed document;
+ * once promoted, the same id resolves to `source: "file"` and writes in place.
+ */
+async function saveDocumentTargetAfterSourceCommit(
+  tabId: string,
+  intent: "save" | "save-as",
+  expectedYdoc?: OpenTab["ydoc"],
+): Promise<boolean> {
+  const tab = yjsSync.tabs.find((candidate) => candidate.id === tabId);
+  if (!tab || (expectedYdoc && tab.ydoc !== expectedYdoc)) return false;
+
+  const needsPromotion = tab.source === "upload" || isUploadPath(tab.filePath);
+  if (needsPromotion) {
+    if (tab.readOnly) {
+      pushSaveNotification("warning", "Not saved — this document is read-only.");
+      return false;
+    }
+    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
+    return triggerSaveAs({
+      activeDocId: tab.id,
+      defaultName: tab.filePath.slice(lastSlash + 1),
+      sourceFormat: tab.format,
+      notify: pushSaveNotification,
+    });
+  }
+
+  if (intent === "save-as") {
+    pushSaveNotification(
+      "info",
+      "Save As is for uploads and scratchpads; this document already saves to its file.",
+    );
+    return false;
+  }
+  return triggerSave(tab.id);
+}
+
+/**
+ * Save one exact live tab incarnation. A source-view target must mount and
+ * commit its draft before the post-commit persistence helper is allowed to
+ * run; formatted documents can persist immediately.
+ */
+async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-as"): Promise<void> {
+  if (!tabId) {
+    pushSaveNotification("warning", "No active document to save.");
+    return;
+  }
+
+  await saveExactTarget<OpenTab>({
+    tabId,
+    intent,
+    resolveTarget: (id) => yjsSync.tabs.find((candidate) => candidate.id === id) ?? null,
+    isSameTarget: (before, after) => before.ydoc === after.ydoc,
+    isSourceView: (id) => sourceViewTabs.has(id),
+    activateTarget: (id) => yjsSync.setActiveTabId(id),
+    afterActivate: tick,
+    getSourceCommands: (id) => sourceViewCommands.get(id) ?? null,
+    saveCommitted: (target, nextIntent) =>
+      saveDocumentTargetAfterSourceCommit(target.id, nextIntent, target.ydoc),
+  });
+}
+
+function focusChat(): void {
+  // Command/native focus is intentionally context-free. Only the explicit
+  // Chat-tab selection capture path may attach an anchor to a message.
+  capturedAnchor = null;
+  activeRailTab = "chat";
+  // A command reveal is intentionally independent from hover-float state and
+  // saved rail/Solo preferences. Pinned rails simply switch to Chat.
+  if (!effectiveRightVisible) {
+    chatRevealDocumentId = yjsSync.activeTabId;
+    chatReveal = true;
+  }
+  queueMicrotask(() =>
+    document.querySelector<HTMLTextAreaElement>('[data-testid="chat-composer-input"]')?.focus(),
+  );
+}
+
 // Wire action dependencies for builtin actions (save, settings, find, mode)
 // after the reactive state they depend on is available.
 wireActionDeps({
@@ -763,41 +870,11 @@ wireActionDeps({
     settingsState.updateSettings({
       formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
-  toggleSourceView: () => toggleSourceView(),
+  toggleSourceView: () => void requestToggleSourceView(),
+  focusChat,
+  save: async () => saveDocumentTarget(yjsSync.activeTabId, "save"),
   saveAs: async () => {
-    const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
-    // Save-As is a PROMOTION path — only offer it for ephemeral upload://
-    // (scratchpad) docs. A doc already on disk would be silently corrupted by
-    // a promote (orphaned annotations, deleted session). The server enforces
-    // this too (NOT_PROMOTABLE); guard the affordance here so the user gets a
-    // clear toast instead of a server error. See #827 review (Medium).
-    if (!tab || !isUploadPath(tab.filePath)) {
-      notifications.push({
-        id: generateNotificationId(),
-        type: "launcher",
-        severity: "info",
-        message: "Save As is only available for scratchpads; this document is already on disk.",
-        timestamp: Date.now(),
-      });
-      return;
-    }
-    // Default-name hint for the native dialog: prefer the existing basename.
-    // For a synthetic upload:// path that's already "Scratchpad.md".
-    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
-    const defaultName = tab.filePath.slice(lastSlash + 1);
-    await triggerSaveAs({
-      activeDocId: yjsSync.activeTabId,
-      defaultName,
-      sourceFormat: tab.format,
-      notify: (severity, message) =>
-        notifications.push({
-          id: generateNotificationId(),
-          type: "launcher",
-          severity,
-          message,
-          timestamp: Date.now(),
-        }),
-    });
+    await saveDocumentTarget(yjsSync.activeTabId, "save-as");
   },
 });
 
@@ -927,6 +1004,26 @@ let sourceViewTabs = $state(new Set<string>());
 // (#1021 review SHOULD-FIX).
 let sourceDrafts = $state(new Map<string, string>());
 let sourceDirtyTabs = $state(new Set<string>());
+type SourceViewCommands = {
+  documentId: string;
+  save(intent: "save" | "save-as"): Promise<boolean>;
+  exit(): Promise<void>;
+};
+let sourceViewCommands = $state(new Map<string, SourceViewCommands>());
+
+function updateSourceViewCommands(documentId: string, commands: SourceViewCommands | null): void {
+  const next = new Map(sourceViewCommands);
+  if (commands) next.set(documentId, commands);
+  else next.delete(documentId);
+  sourceViewCommands = next;
+}
+
+function sourceCommandsForEvent(e: KeyboardEvent): SourceViewCommands | null {
+  const el = e.target as HTMLElement | null;
+  const container = el?.closest?.<HTMLElement>('[data-testid="source-view-container"]');
+  const documentId = container?.dataset.documentId;
+  return documentId ? (sourceViewCommands.get(documentId) ?? null) : null;
+}
 
 function updateSourceDraft(tabId: string, text: string, dirty: boolean): void {
   const drafts = new Map(sourceDrafts);
@@ -953,6 +1050,11 @@ function clearSourceDraft(tabId: string): void {
 }
 let outlineFocusTrigger = $state(0);
 let commentFocusTrigger = $state(0);
+let annotationFocusRequest = $state<{ nonce: number; kind: "comment" | "note" } | null>(null);
+
+function requestAnnotationComposer(kind: "comment" | "note"): void {
+  annotationFocusRequest = { nonce: (annotationFocusRequest?.nonce ?? 0) + 1, kind };
+}
 let newTabMenuTrigger = $state(0);
 // F2 (#1017): increment to start renaming the active tab. DocumentTabs owns the
 // rename-edit state; this counter is its trigger, mirroring newTabMenuTrigger.
@@ -1005,6 +1107,11 @@ const toggleLeftPanel = () => {
   focusToggleTarget("left", nextVisible);
 };
 const toggleRightPanel = () => {
+  if (chatReveal) {
+    railPinSnap.right = true;
+    chatReveal = false;
+    requestAnimationFrame(() => (railPinSnap.right = false));
+  }
   pinFromFloat("right");
   railFloat.right = false;
   const nextVisible = !layoutModel.rightVisible;
@@ -1040,6 +1147,10 @@ const railAnimating = $state({ left: false, right: false });
 // exit), not a lifecycle phase. Kept as separate booleans because each maps 1:1
 // to a CSS class; promote to an explicit enum if a fourth phase ever lands.
 const railFloat = $state({ left: false, right: false });
+// Command-driven Chat-only float. Unlike railFloat, this never mutates saved
+// panel visibility and has an explicit send/Escape/outside/tab/pin lifecycle.
+let chatReveal = $state(false);
+let chatRevealDocumentId: string | null = null;
 // Set for ONE frame when a hover-float is pinned: the floated panel is already
 // painted at full width over the editor, so the shell must snap to that width
 // (transition suppressed) instead of replaying the 14→full open from collapsed,
@@ -1285,44 +1396,43 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // stopPropagations — this is belt-and-suspenders against that invariant
     // being broken later: the global save must never write the stale Y.Doc to
     // disk underneath an open source edit (#1021 review must-fix).
-    if (inSourceView) return;
-    void triggerSave(yjsSync.activeTabId);
+    const sourceCommands = sourceCommandsForEvent(e);
+    if (sourceCommands) {
+      void sourceCommands.save("save");
+      return;
+    }
+    if (inSourceView) {
+      return;
+    }
+    void saveDocumentTarget(yjsSync.activeTabId, "save");
   },
   "save-as": (e) => {
     // Don't hijack Ctrl+Shift+S while typing in a chat / annotation input.
-    const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+    const sourceCommands = sourceCommandsForEvent(e);
+    if (sourceCommands) {
+      e.preventDefault();
+      void sourceCommands.save("save-as");
       return;
     }
+    if (shouldIgnoreSaveAsShortcut(e)) return;
     e.preventDefault();
-    const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
-    // Save-As is a PROMOTION path — only for ephemeral upload:// (scratchpad)
-    // docs; mirrors the palette `saveAs` gate + server NOT_PROMOTABLE. See #827.
-    if (!tab || !isUploadPath(tab.filePath)) {
-      notifications.push({
-        id: generateNotificationId(),
-        type: "launcher",
-        severity: "info",
-        message: "Save As is only available for scratchpads; this document is already on disk.",
-        timestamp: Date.now(),
-      });
+    void saveDocumentTarget(yjsSync.activeTabId, "save-as");
+  },
+  "focus-chat": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    focusChat();
+  },
+  "toggle-source-view": (e) => {
+    const sourceCommands = sourceCommandsForEvent(e);
+    if (sourceCommands) {
+      e.preventDefault();
+      void sourceCommands.exit();
       return;
     }
-    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
-    const defaultName = tab.filePath.slice(lastSlash + 1);
-    void triggerSaveAs({
-      activeDocId: yjsSync.activeTabId,
-      defaultName,
-      sourceFormat: tab.format,
-      notify: (severity, message) =>
-        notifications.push({
-          id: generateNotificationId(),
-          type: "launcher",
-          severity,
-          message,
-          timestamp: Date.now(),
-        }),
-    });
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    void requestToggleSourceView();
   },
   settings: (e) => {
     e.preventDefault();
@@ -1659,23 +1769,153 @@ const isReadOnly = $derived(activeTab?.readOnly === true);
 const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+const chatVisible = $derived(
+  activeRailTab === "chat" &&
+    (effectiveRightVisible || railFloat.right || railFloatClosing.right || chatReveal),
+);
+const chatCanInsert = $derived(!!editor && !!activeTab && !editorReadOnly && !inSourceView);
+const chatState = createChatState({
+  getCtrlYdoc: () => yjsSync.bootstrapYdoc,
+  getInitialSyncComplete: () => yjsSync.ctrlInitialSyncComplete,
+  getInitialClaudeMessageIds: () => yjsSync.ctrlInitialClaudeMessageIds,
+  getOpenDocuments: () => openDocs,
+  getVisible: () => chatVisible,
+});
 
-function toggleSourceView(): void {
+function closeTransientChat(): void {
+  if (!chatReveal) return;
+  chatReveal = false;
+  chatRevealDocumentId = null;
+}
+
+function selectRailTab(tab: "annotations" | "chat"): void {
+  if (tab !== "chat") closeTransientChat();
+  activeRailTab = tab;
+}
+
+function sendChatMessage(text: string): boolean {
+  const sent = chatState.send(text, yjsSync.activeTabId ?? undefined, capturedAnchor);
+  if (!sent) return false;
+  capturedAnchor = null;
+  window.dispatchEvent(new CustomEvent("tandem:addressed-ai", { detail: { via: "chat" } }));
+  closeTransientChat();
+  return true;
+}
+
+async function exportChatToScratchpad(): Promise<void> {
+  const content = exportChatMarkdown(
+    chatState.messages,
+    Array.from(chatState.documentFileNames, ([id, fileName]) => ({ id, fileName })),
+  );
+  const response = await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}${API_SCRATCHPAD}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  const result = (await response.json().catch(() => null)) as { message?: string } | null;
+  if (!response.ok) throw new Error(result?.message ?? "Chat could not be exported.");
+}
+
+function insertChatMessage(message: ChatMessage): boolean {
+  const targetEditor = editor;
+  if (!chatCanInsert || !targetEditor) return false;
+  insertChatMarkdown(targetEditor, message.text);
+  return true;
+}
+
+// Reusable webview-local intents for the native-menu slice. No selection text,
+// offsets, document IDs, or message bodies cross IPC.
+$effect(() => {
+  const onFocus = () => focusChat();
+  const onInsert = (event: Event) => {
+    const id = (event as CustomEvent<{ messageId?: string }>).detail?.messageId;
+    const message = id ? chatState.messages.find((candidate) => candidate.id === id) : undefined;
+    if (message) insertChatMessage(message);
+  };
+  window.addEventListener("tandem:focus-chat", onFocus);
+  window.addEventListener("tandem:insert-chat-message", onInsert);
+  return () => {
+    window.removeEventListener("tandem:focus-chat", onFocus);
+    window.removeEventListener("tandem:insert-chat-message", onInsert);
+  };
+});
+
+$effect(() => {
+  if (!chatReveal) return;
+  const onPointerDown = (event: PointerEvent) => {
+    const target = event.target as Node | null;
+    const rail = document.querySelector(".rail-shell-right");
+    if (target && rail?.contains(target)) return;
+    closeTransientChat();
+  };
+  const onEscape = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    event.preventDefault();
+    closeTransientChat();
+    editor?.view.focus();
+  };
+  window.addEventListener("pointerdown", onPointerDown, true);
+  window.addEventListener("keydown", onEscape, true);
+  return () => {
+    window.removeEventListener("pointerdown", onPointerDown, true);
+    window.removeEventListener("keydown", onEscape, true);
+  };
+});
+
+$effect(() => {
+  const activeId = yjsSync.activeTabId;
+  if (chatReveal && activeId !== chatRevealDocumentId) closeTransientChat();
+});
+
+function enterSourceView(): void {
   if (!activeTab) return;
   const id = activeTab.id;
+  if (sourceViewTabs.has(id)) return;
   const next = new Set(sourceViewTabs);
-  if (next.has(id)) {
-    next.delete(id);
-  } else {
-    if (!canSourceView) return;
-    next.add(id);
-    // Source view replaces the Tiptap editor; close editor-bound overlays so
-    // they don't linger non-functional over the textarea.
-    findBarOpen = false;
-    slashCommandMenuOpen = false;
-    paletteOpen = false;
-  }
+  if (!canSourceView) return;
+  next.add(id);
+  // Source view replaces the Tiptap editor; close editor-bound overlays so
+  // they don't linger non-functional over the textarea.
+  findBarOpen = false;
+  slashCommandMenuOpen = false;
+  paletteOpen = false;
   sourceViewTabs = next;
+}
+
+function enterSourceViewTarget(documentId: string): void {
+  const tab = yjsSync.tabs.find((candidate) => candidate.id === documentId);
+  if (!tab || tab.format !== "md" || tab.readOnly || sourceViewTabs.has(documentId)) return;
+  yjsSync.setActiveTabId(documentId);
+  const next = new Set(sourceViewTabs);
+  next.add(documentId);
+  findBarOpen = false;
+  slashCommandMenuOpen = false;
+  paletteOpen = false;
+  sourceViewTabs = next;
+}
+
+async function requestToggleSourceViewTarget(documentId: string): Promise<void> {
+  const tab = yjsSync.tabs.find((candidate) => candidate.id === documentId);
+  if (!tab || tab.format !== "md" || tab.readOnly) return;
+  yjsSync.setActiveTabId(documentId);
+  if (!sourceViewTabs.has(documentId)) {
+    enterSourceViewTarget(documentId);
+    return;
+  }
+  // An inactive SourceView is unmounted. Activate first, then wait for its
+  // command registration so a dirty draft is committed before exit.
+  await tick();
+  await sourceViewCommands.get(documentId)?.exit();
+}
+
+async function requestToggleSourceView(): Promise<void> {
+  const documentId = yjsSync.activeTabId;
+  if (!documentId) return;
+  if (sourceViewTabs.has(documentId)) {
+    await sourceViewCommands.get(documentId)?.exit();
+    return;
+  }
+  enterSourceView();
 }
 
 function exitSourceView(id: string): void {
@@ -1905,11 +2145,6 @@ const shouldShowModelPicker = $derived(
     updateAvailable={updateAvailable.showDot}
     defaultModelLabel={BYO_MODELS_ENABLED ? defaultModelLabel : null}
     onOpenModelsSettings={openModelsSettings}
-    aiChip={aiReadiness.chip}
-    onConnectAi={connectAi}
-    onRestartClaude={restartClaude}
-    sourceViewActive={inSourceView}
-    onToggleSourceView={canSourceView || inSourceView ? toggleSourceView : null}
     bind:settingsBtn={settingsBtnEl}
     center={titleBarTabs}
   />
@@ -1954,6 +2189,7 @@ const shouldShowModelPicker = $derived(
       selectionToolbar={settingsState.settings.selectionToolbar}
       suppressSelectionToolbar={slashCommandMenuOpen || findBarOpen || paletteOpen}
       requestCommentFocus={commentFocusTrigger}
+      requestAnnotationFocus={annotationFocusRequest}
       showAuthorship={settingsState.settings.showAuthorship}
       showComments={settingsState.settings.showComments}
       showHighlights={settingsState.settings.showHighlights}
@@ -1981,6 +2217,10 @@ const shouldShowModelPicker = $derived(
         decorationsMuted={settingsState.settings.decorationsMuted}
         onUpdateDecorations={(partial) => settingsState.updateSettings(partial)}
         onOpenSettings={openSettingsModalWithAck}
+        sourceViewActive={inSourceView}
+        onToggleSourceView={canSourceView || inSourceView
+          ? () => void requestToggleSourceView()
+          : null}
         onHide={() => settingsState.updateSettings({ formattingBarVisible: false })}
       />
     {/if}
@@ -2078,11 +2318,11 @@ const shouldShowModelPicker = $derived(
         class="rail-shell rail-shell-right"
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
-        class:rail-floating-chrome={railFloat.right || railFloatClosing.right}
-        class:floating={railFloat.right}
+        class:rail-floating-chrome={railFloat.right || railFloatClosing.right || chatReveal}
+        class:floating={railFloat.right || chatReveal}
         class:float-closing={railFloatClosing.right}
         class:pin-snap={railPinSnap.right}
-        data-testid={railFloat.right ? "rail-float-right" : undefined}
+        data-testid={railFloat.right || chatReveal ? "rail-float-right" : undefined}
         style={effectiveRightVisible ? `width: ${dragResizeRight.width}px;` : ""}
         onmouseenter={() => onRailShellEnter("right")}
         onmouseleave={() => onRailShellLeave("right")}
@@ -2090,7 +2330,7 @@ const shouldShowModelPicker = $derived(
         onfocusout={(e) => onRailShellFocusOut("right", e)}
         ontransitionend={(e) => onRailShellTransitionEnd("right", e)}
       >
-        {#if railFloat.right || railFloatClosing.right}
+        {#if railFloat.right || railFloatClosing.right || chatReveal}
           <div
             class="rail-float-shadow rail-float-shadow-right"
             style={`width: ${dragResizeRight.width}px;`}
@@ -2107,7 +2347,7 @@ const shouldShowModelPicker = $derived(
               <button
                 data-testid="annotations-tab"
                 class={"rail-tab" + (activeRailTab === "annotations" ? " on" : "")}
-                onclick={() => { activeRailTab = "annotations"; }}
+                onclick={() => selectRailTab("annotations")}
               >
                 Annotations
                 {#if activeRailTab !== "annotations" && pendingAnnotationBadge > 0}
@@ -2120,15 +2360,21 @@ const shouldShowModelPicker = $derived(
                 data-testid="chat-tab"
                 class={"rail-tab" + (activeRailTab === "chat" ? " on" : "")}
                 onmousedown={captureSelectionForChat}
-                onclick={() => { activeRailTab = "chat"; }}
+                onclick={() => selectRailTab("chat")}
               >
                 Chat
+                {#if activeRailTab !== "chat" && chatState.unreadCount > 0}
+                  <span class="rail-tab-badge">
+                    {chatState.unreadCount > 9 ? "9+" : chatState.unreadCount}
+                  </span>
+                {/if}
               </button>
             </div>
           </div>
           <PanelSlot
             kind="chat"
-            ctrlYdoc={yjsSync.bootstrapYdoc}
+            messages={chatState.messages}
+            unreadCount={chatState.unreadCount}
             {editor}
             activeDocId={yjsSync.activeTabId}
             {openDocs}
@@ -2136,8 +2382,13 @@ const shouldShowModelPicker = $derived(
             claudeStatus={yjsSync.claudeStatus}
             {capturedAnchor}
             onCapturedAnchorChange={(a) => (capturedAnchor = a)}
+            onSend={sendChatMessage}
+            onClear={() => chatState.clear()}
+            onExport={exportChatToScratchpad}
+            onInsert={insertChatMessage}
+            canInsert={chatCanInsert}
             reduceMotion={settingsState.settings.reduceMotion}
-            visible={activeRailTab === "chat"}
+            visible={chatVisible}
           />
           <PanelSlot
             kind="side"
@@ -2163,6 +2414,15 @@ const shouldShowModelPicker = $derived(
           annotations={visibleAnnotations}
           onActivate={toggleRightPanel}
         />
+        {#if !effectiveRightVisible && chatState.unreadCount > 0}
+          <button
+            type="button"
+            class="chat-unread-peek"
+            aria-label={`${chatState.unreadCount} unread chat message${chatState.unreadCount === 1 ? "" : "s"}`}
+            title="Focus Chat"
+            onclick={focusChat}
+          >{chatState.unreadCount > 9 ? "9+" : chatState.unreadCount}</button>
+        {/if}
       </div>
     </div>
 
@@ -2175,6 +2435,9 @@ const shouldShowModelPicker = $derived(
       claudeActive={yjsSync.claudeActive}
       aiLiveIndicator={aiReadiness.liveIndicator}
       aiState={aiReadiness.state}
+      aiChip={aiReadiness.chip}
+      onConnectAi={connectAi}
+      onRestartClaude={restartClaude}
       soloMode={modeState.tandemMode === "solo"}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
@@ -2317,8 +2580,12 @@ const shouldShowModelPicker = $derived(
     activeTabId={yjsSync.activeTabId}
     onTabSwitch={yjsSync.setActiveTabId}
     onTabClose={closeTabAndRecord}
+    onCloseToLeft={closeTabsToLeft}
     onCloseOthers={closeOtherTabs}
     onCloseToRight={closeTabsToRight}
+    onSaveTarget={saveDocumentTarget}
+    onToggleSourceViewTarget={requestToggleSourceViewTarget}
+    isTabInSourceView={(tabId) => sourceViewTabs.has(tabId)}
     reorder={tabOrder.reorder}
     reduceMotion={settingsState.settings.reduceMotion}
     uniformTabWidth={settingsState.settings.uniformTabWidth}
@@ -2480,6 +2747,8 @@ const shouldShowModelPicker = $derived(
           activeAnnotationId = null;
         }}
         onSlashCommandMenuChange={(open) => (slashCommandMenuOpen = open)}
+        onFocusChat={focusChat}
+        onComposeAnnotation={requestAnnotationComposer}
       />
     {/snippet}
     <!-- One snippet, two call sites: left wires `marginNotes`, right wires
@@ -2544,8 +2813,11 @@ const shouldShowModelPicker = $derived(
           documentId={activeTab.id}
           ydoc={activeTab.ydoc}
           initialDraft={sourceDrafts.get(activeTab.id)}
-          onDraftChange={(text, dirty) => updateSourceDraft(activeTab!.id, text, dirty)}
-          onExit={() => exitSourceView(activeTab!.id)}
+          onDraftChange={(documentId, text, dirty) => updateSourceDraft(documentId, text, dirty)}
+          onSave={(documentId, intent, ydoc) =>
+            saveDocumentTargetAfterSourceCommit(documentId, intent, ydoc)}
+          onCommandsChange={updateSourceViewCommands}
+          onExit={exitSourceView}
         />
       {/key}
     {:else}
@@ -2715,6 +2987,28 @@ const shouldShowModelPicker = $derived(
   .rail-shell.collapsed {
     width: 14px;
     cursor: pointer;
+  }
+  .chat-unread-peek {
+    position: absolute;
+    z-index: 2;
+    inset-inline-start: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border: 2px solid var(--tandem-surface-muted);
+    border-radius: var(--tandem-r-pill);
+    background: var(--tandem-accent);
+    color: var(--tandem-accent-fg);
+    font: inherit;
+    font-size: var(--tandem-text-2xs);
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .chat-unread-peek:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 2px;
   }
   /* Float→pin: snap the shell to the floated width for the commit frame so the
      panel stays put instead of replaying the 14→full open from collapsed. */

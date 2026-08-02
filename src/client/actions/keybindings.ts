@@ -32,6 +32,8 @@ export interface ShortcutChord {
 export const REMAPPABLE_SHORTCUT_IDS = [
   "save",
   "save-as",
+  "focus-chat",
+  "toggle-source-view",
   "settings",
   "toggle-palette",
   "new-scratchpad",
@@ -64,6 +66,8 @@ export function isRemappableShortcutId(id: string): id is RemappableShortcutId {
 export const REMAPPABLE_LABELS: Record<RemappableShortcutId, string> = {
   save: "Save document",
   "save-as": "Save As…",
+  "focus-chat": "Focus Chat",
+  "toggle-source-view": "View / exit Markdown source",
   settings: "Open settings",
   "toggle-palette": "Toggle command palette",
   "new-scratchpad": "New Scratchpad",
@@ -94,6 +98,8 @@ export const REMAPPABLE_LABELS: Record<RemappableShortcutId, string> = {
 export const DEFAULT_BINDINGS: Record<RemappableShortcutId, ShortcutChord> = {
   save: { ctrlOrMeta: true, alt: false, shift: false, code: "KeyS" },
   "save-as": { ctrlOrMeta: true, alt: false, shift: true, code: "KeyS" },
+  "focus-chat": { ctrlOrMeta: true, alt: false, shift: true, code: "KeyJ" },
+  "toggle-source-view": { ctrlOrMeta: true, alt: false, shift: true, code: "KeyE" },
   settings: { ctrlOrMeta: true, alt: false, shift: false, code: "Comma" },
   "toggle-palette": { ctrlOrMeta: true, alt: false, shift: true, code: "KeyP" },
   "new-scratchpad": { ctrlOrMeta: true, alt: false, shift: false, code: "KeyN" },
@@ -171,6 +177,8 @@ export const RESERVED_CHORDS: ReadonlyArray<{ chord: ShortcutChord; label: strin
 export const REGISTRY_TO_SHORTCUT_ID: Record<string, RemappableShortcutId> = {
   save: "save",
   "save-as": "save-as",
+  "focus-chat": "focus-chat",
+  "toggle-source-view": "toggle-source-view",
   settings: "settings",
   "new-scratchpad": "new-scratchpad",
   "close-tab": "close-tab",

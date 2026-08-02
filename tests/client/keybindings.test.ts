@@ -58,6 +58,16 @@ describe("matchShortcut — override layer", () => {
     expect(matchShortcut(eventForChord(chord), overrides)).toEqual({ id: "new-scratchpad" });
   });
 
+  it.each([
+    ["save", "KeyU"],
+    ["save-as", "KeyI"],
+    ["toggle-source-view", "KeyD"],
+  ] as const)("honors the effective remapped %s chord used from Source View", (id, code) => {
+    const chord: ShortcutChord = { ctrlOrMeta: true, alt: false, shift: true, code };
+    const overrides = overridesOf([[id, chord]]);
+    expect(matchShortcut(eventForChord(chord), overrides)).toEqual({ id });
+  });
+
   it("the overridden default's canonical combo goes inert", () => {
     const chord: ShortcutChord = { ctrlOrMeta: true, alt: false, shift: false, code: "KeyJ" };
     const overrides = overridesOf([["new-scratchpad", chord]]);

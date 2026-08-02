@@ -20,8 +20,6 @@ import type { ContextMenuActionId } from "./types";
 // pure-`.ts` tsc program — so we intersect them onto the chain here rather than
 // pulling the extensions in at runtime. `.focus()` is applied in the helper.
 type CtxChain = ReturnType<Editor["chain"]> & {
-  undo: () => CtxChain;
-  redo: () => CtxChain;
   addRowBefore: () => CtxChain;
   addRowAfter: () => CtxChain;
   addColumnBefore: () => CtxChain;
@@ -43,12 +41,26 @@ export interface DispatchDeps {
   editor: Editor;
   /** Re-validates via `isSafeExternalHref` before navigating (security). */
   openHref: (href: string) => void;
-  /** The href captured module-local from the clicked anchor, or null. */
-  getLinkHref: () => string | null;
+  /** True only while the editor selection still matches the menu target. */
+  isTargetCurrent: () => boolean;
   /** Read clipboard text on activation; null if unavailable/denied. */
   readClipboardText: () => Promise<string | null>;
   /** Write text to the clipboard (Copy Link). */
   writeClipboardText: (text: string) => Promise<void>;
+  focusChat?: () => void;
+  composeAnnotation?: (kind: "comment" | "note") => void;
+  editLink?: () => void;
+}
+
+function hasLiveEditableSelection(editor: Editor): boolean {
+  return !editor.isDestroyed && editor.isEditable && !editor.state.selection.empty;
+}
+
+/** Resolve link state only when the native action fires. No href is retained. */
+function resolveLiveLinkHref(editor: Editor, deps: DispatchDeps): string | null {
+  if (editor.isDestroyed || !deps.isTargetCurrent() || !editor.isActive("link")) return null;
+  const href = editor.getAttributes("link").href;
+  return typeof href === "string" ? sanitizeHrefForPaste(href) : null;
 }
 
 /**
@@ -63,14 +75,8 @@ export async function dispatchContextAction(
   const { editor } = deps;
 
   switch (id) {
-    case "ctx:undo":
-      ctxChain(editor).undo().run();
-      return;
-    case "ctx:redo":
-      ctxChain(editor).redo().run();
-      return;
-
     case "ctx:pastePlain": {
+      if (editor.isDestroyed || !editor.isEditable) return;
       const text = await deps.readClipboardText();
       if (!text) return;
       // Reuse the exact plain-paste semantics of Ctrl+Shift+V (paragraph split
@@ -82,6 +88,16 @@ export async function dispatchContextAction(
       view.focus();
       return;
     }
+
+    case "ctx:selection:askAi":
+      if (hasLiveEditableSelection(editor)) deps.focusChat?.();
+      return;
+    case "ctx:selection:comment":
+      if (hasLiveEditableSelection(editor)) deps.composeAnnotation?.("comment");
+      return;
+    case "ctx:selection:privateNote":
+      if (hasLiveEditableSelection(editor)) deps.composeAnnotation?.("note");
+      return;
 
     case "ctx:table:insertRowAbove":
       ctxChain(editor).addRowBefore().run();
@@ -112,23 +128,25 @@ export async function dispatchContextAction(
       return;
 
     case "ctx:link:open": {
-      const href = deps.getLinkHref();
+      const href = resolveLiveLinkHref(editor, deps);
       if (href) deps.openHref(href); // openHref re-runs isSafeExternalHref
       return;
     }
     case "ctx:link:copy": {
-      const href = deps.getLinkHref();
+      const href = resolveLiveLinkHref(editor, deps);
       if (!href) return;
-      // Reject javascript:, file://, data:, and any other dangerous scheme before
-      // writing to clipboard — a copied URI can be pasted into a browser bar.
-      const safe = sanitizeHrefForPaste(href);
-      if (safe) await deps.writeClipboardText(safe);
+      await deps.writeClipboardText(href);
       return;
     }
-    case "ctx:link:remove":
+    case "ctx:link:edit":
+      if (editor.isEditable && resolveLiveLinkHref(editor, deps)) deps.editLink?.();
+      return;
+    case "ctx:link:remove": {
+      if (!editor.isEditable || !resolveLiveLinkHref(editor, deps)) return;
       // Caret-inside-link: extend to the whole mark range before unsetting.
       ctxChain(editor).extendMarkRange("link").unsetLink().run();
       return;
+    }
 
     default: {
       // Exhaustiveness guard — a new id added to the union without a case here

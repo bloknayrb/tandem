@@ -24,6 +24,35 @@ interface Props {
 
 let { items, open, onToggle, onDismiss, onClear, onAction, reduceMotion }: Props = $props();
 
+let shellEl = $state<HTMLDivElement | null>(null);
+let pillEl = $state<HTMLButtonElement | null>(null);
+
+// Dismiss the non-modal tray on the earliest pointer signal so an outside
+// target still receives its own click. The shell contains both the expanded
+// body and its pill, which prevents the pill's pointerdown from closing and
+// its subsequent click from immediately reopening the tray.
+$effect(() => {
+  if (!open) return;
+  const handlePointerDown = (event: PointerEvent): void => {
+    const target = event.target;
+    if (!(target instanceof Node) || shellEl?.contains(target)) return;
+    onToggle();
+  };
+  const handleKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    onToggle();
+    queueMicrotask(() => pillEl?.focus());
+  };
+  document.addEventListener("pointerdown", handlePointerDown, true);
+  window.addEventListener("keydown", handleKeyDown, true);
+  return () => {
+    document.removeEventListener("pointerdown", handlePointerDown, true);
+    window.removeEventListener("keydown", handleKeyDown, true);
+  };
+});
+
 const total = $derived(items.length);
 // Newest-first (A14): the store APPENDS (`[...activity, item]`), so reverse at the
 // render boundary. Reversing in the store instead would invert cap eviction
@@ -142,7 +171,7 @@ onDestroy(() => {
 </script>
 
 <div class="activity-anchor">
-  <div class="activity-shell {shellSeverity}" class:open>
+  <div bind:this={shellEl} class="activity-shell {shellSeverity}" class:open>
     <div class="tray-wrap">
       {#if open}
         <div class="tray-inner" id="activity-tray" role="region" aria-label="Activity" data-testid="activity-tray">
@@ -288,11 +317,13 @@ onDestroy(() => {
       management here would be dead code or would fight the natural focus.
     -->
     <button
+      bind:this={pillEl}
       type="button"
       class="pill-row"
       data-testid="activity-pill"
       onclick={onToggle}
       aria-expanded={open}
+      aria-label={open ? "Close activity tray" : "Open activity tray"}
       aria-controls={open ? "activity-tray" : undefined}
     >
       <span class="led"></span>
@@ -408,6 +439,10 @@ onDestroy(() => {
   }
   .pill-row:hover {
     background: var(--tandem-surface-sunk);
+  }
+  .pill-row:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -2px;
   }
   .activity-shell.idle .pill-row {
     color: var(--tandem-fg-subtle);
@@ -529,6 +564,12 @@ onDestroy(() => {
   .tray-head button:hover {
     background: var(--tandem-surface-sunk);
     color: var(--tandem-fg);
+  }
+  .tray-head button:focus-visible,
+  .toast-row .action:focus-visible,
+  .toast-row .dismiss:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: 1px;
   }
 
   .tray-list {

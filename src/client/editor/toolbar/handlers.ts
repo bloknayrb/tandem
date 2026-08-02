@@ -34,8 +34,10 @@ export function getInitialLinkHref(editor: TiptapEditor): string {
 export function applyLink(editor: TiptapEditor, url: string): void {
   const trimmed = url.trim();
   if (trimmed) {
-    editor.chain().focus().setLink({ href: trimmed }).run();
+    const chain = editor.chain().focus();
+    if (editor.isActive("link")) chain.extendMarkRange("link");
+    chain.setLink({ href: trimmed }).run();
   } else if (editor.isActive("link")) {
-    editor.chain().focus().unsetLink().run();
+    editor.chain().focus().extendMarkRange("link").unsetLink().run();
   }
 }

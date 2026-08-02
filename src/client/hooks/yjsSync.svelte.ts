@@ -13,6 +13,7 @@ import {
   Y_MAP_ACTIVE_DOCUMENT_ID,
   Y_MAP_ANNOTATIONS,
   Y_MAP_AWARENESS,
+  Y_MAP_CHAT,
   Y_MAP_CLAUDE,
   Y_MAP_DOCUMENT_META,
   Y_MAP_OPEN_DOCUMENTS,
@@ -91,6 +92,10 @@ export interface YjsSyncState {
   readonly storeReadOnly: boolean;
   /** @internal Internal CTRL_ROOM connection mechanism — not intended for consumer use. */
   readonly bootstrapYdoc: Y.Doc | null;
+  /** True after the current CTRL provider completes its first authoritative sync. */
+  readonly ctrlInitialSyncComplete: boolean;
+  /** Claude message IDs present at the exact first-sync boundary for this CTRL doc. */
+  readonly ctrlInitialClaudeMessageIds: readonly string[];
   readonly ready: boolean;
   /** Briefly true after the server restarts and the client reconnects. */
   readonly serverRestarted: boolean;
@@ -162,6 +167,8 @@ export function createYjsSync(opts?: {
   // Surface bootstrap Y.Doc reactively so `bootstrapYdoc` flips from null to populated
   // when the bootstrap step completes (parallel of React's setReady re-render).
   let bootstrapYdocState = $state<Y.Doc | null>(null);
+  let ctrlInitialSyncComplete = $state(false);
+  let ctrlInitialClaudeMessageIds = $state<readonly string[]>([]);
 
   // ---------- Refs (non-reactive mutable state) ----------
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -486,6 +493,8 @@ export function createYjsSync(opts?: {
   // token at construction, and a ctrl Y.Map broadcast can't be the source (a
   // stale tab's merge-back could clobber a CRDT-carried value).
   function startBootstrap(gen: string) {
+    ctrlInitialSyncComplete = false;
+    ctrlInitialClaudeMessageIds = [];
     generationId = gen;
     const ydoc = new Y.Doc();
     const provider = new HocuspocusProvider(
@@ -501,6 +510,19 @@ export function createYjsSync(opts?: {
     bootstrapProviderRef = provider;
 
     provider.on("authenticationFailed", scheduleRebuild);
+    const onCtrlSynced = ({ state }: { state: boolean }) => {
+      if (!state || ctrlInitialSyncComplete) return;
+      // Capture synchronously in the provider callback. A chat update can land
+      // before Svelte runs consumers' effects; it must not join this baseline.
+      const initialClaudeIds: string[] = [];
+      ydoc.getMap(Y_MAP_CHAT).forEach((value, id) => {
+        if ((value as { author?: unknown }).author === "claude") initialClaudeIds.push(id);
+      });
+      initialClaudeIds.sort();
+      ctrlInitialClaudeMessageIds = initialClaudeIds;
+      ctrlInitialSyncComplete = true;
+    };
+    provider.on("synced", onCtrlSynced);
     provider.on("status", ({ status }: { status: string }) => {
       connected = status === "connected";
       const known: ConnectionStatus[] = ["connected", "connecting", "disconnected"];
@@ -556,6 +578,7 @@ export function createYjsSync(opts?: {
     // Stash bootstrap cleanup for destroy() and the rebuild path
     bootstrapCleanup = () => {
       meta.unobserve(bootstrapObserver);
+      provider.off("synced", onCtrlSynced);
       if (restartTimer) {
         clearTimeout(restartTimer);
         restartTimer = null;
@@ -563,6 +586,8 @@ export function createYjsSync(opts?: {
       provider.destroy();
       ydoc.destroy();
       bootstrapYdocState = null;
+      ctrlInitialSyncComplete = false;
+      ctrlInitialClaudeMessageIds = [];
       bootstrapProviderRef = null;
       bootstrapCleanup = null;
     };
@@ -757,6 +782,12 @@ export function createYjsSync(opts?: {
     },
     get bootstrapYdoc() {
       return bootstrapYdocState;
+    },
+    get ctrlInitialSyncComplete() {
+      return ctrlInitialSyncComplete;
+    },
+    get ctrlInitialClaudeMessageIds() {
+      return ctrlInitialClaudeMessageIds;
     },
     get ready() {
       return ready;

@@ -9,11 +9,11 @@ import {
   API_EVENTS,
   API_LAUNCH_CLAUDE,
 } from "../../shared/api-paths.js";
-import { CTRL_ROOM, Y_MAP_CHAT } from "../../shared/constants.js";
-import { withMcp } from "../../shared/origins.js";
+import { CTRL_ROOM } from "../../shared/constants.js";
 import { ChannelErrorCodeSchema } from "../../shared/types.js";
 import { recordPushConsumerEvent } from "../events/push-liveness.js";
 import { sseHandler } from "../events/sse.js";
+import { clearCtrlChatDurably } from "../session/manager.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
 import type { Handler } from "./api-routes.js";
 import { appendClaudeChatMessage } from "./awareness.js";
@@ -164,16 +164,18 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
 
   // Clear chat history
   app.options(API_CHAT, apiMiddleware);
-  app.delete(API_CHAT, apiMiddleware, (_req: Request, res: Response) => {
+  app.delete(API_CHAT, apiMiddleware, async (_req: Request, res: Response) => {
     const ctrlDoc = getOrCreateDocument(CTRL_ROOM);
-    const chatMap = ctrlDoc.getMap(Y_MAP_CHAT);
-    const count = chatMap.size;
-    withMcp(ctrlDoc, () => {
-      for (const key of Array.from(chatMap.keys())) {
-        chatMap.delete(key);
-      }
-    });
-    res.json({ ok: true, cleared: count });
+    try {
+      const cleared = await clearCtrlChatDurably(ctrlDoc);
+      res.json({ ok: true, cleared });
+    } catch (err) {
+      console.error("[Tandem] Failed to durably clear chat:", err);
+      res.status(500).json({
+        error: "CHAT_CLEAR_FAILED",
+        message: "Chat history could not be cleared. Your messages were left untouched.",
+      });
+    }
   });
 
   // Claude Code launcher
