@@ -86,6 +86,7 @@ import { onMount, untrack } from "svelte";
 import { BYO_MODELS_ENABLED, TANDEM_ISSUES_NEW_URL } from "../../shared/constants";
 import { scrollFade } from "../actions/scrollFade.svelte";
 import { createAppInfo } from "../hooks/useAppInfo.svelte";
+import { focusablesWithin, trapTab } from "../utils/focus-trap";
 import { activationKeydown } from "../utils/keyboard-activate";
 import { openServerPath } from "../utils/server-paths";
 import SettingsReadonlyBanner from "./SettingsReadonlyBanner.svelte";
@@ -101,8 +102,6 @@ import SettingsLicenseTab from "./settings-tabs/SettingsLicenseTab.svelte";
 import SettingsAboutTab from "./settings-tabs/SettingsAboutTab.svelte";
 
 const HEADING_ID = "tandem-settings-modal-heading";
-const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * Default tabs — the full set of settings sections.
@@ -239,6 +238,7 @@ let {
 }: Props = $props();
 
 let modalEl: HTMLDivElement | undefined = $state();
+let hamburgerEl: HTMLButtonElement | undefined = $state();
 const appInfo = createAppInfo(() => open);
 let changelogLoading = $state(false);
 let changelogError = $state<string | null>(null);
@@ -276,6 +276,125 @@ $effect(() => {
   };
   mql.addEventListener("change", onChange);
   return () => mql.removeEventListener("change", onChange);
+});
+// The `change` handler above writes `$state` from a DOM event, which is the
+// `state_unsafe_mutation` shape createCoalescingTick exists for — but not the
+// hazard. MediaQueryList change events are dispatched from "update the
+// rendering", never synchronously out of a Svelte render the way Tiptap
+// re-enters through ProseMirror's dispatch, so no reaction can be active. The
+// recovery below writes no state at all (focus is a DOM side-effect), so it is
+// doubly out of scope.
+
+// Last element that held focus *inside* the dialog. Maintained from a
+// document-level `focusin` so it survives the blur we are about to detect —
+// `document.activeElement` is already `<body>` by then.
+let lastFocusedInside: HTMLElement | null = null;
+$effect(() => {
+  if (!open) return;
+  lastFocusedInside = null;
+  const onFocusIn = (e: FocusEvent) => {
+    const target = e.target;
+    lastFocusedInside =
+      target instanceof HTMLElement && modalEl?.contains(target) ? target : null;
+  };
+  document.addEventListener("focusin", onFocusIn);
+  return () => document.removeEventListener("focusin", onFocusIn);
+});
+
+/**
+ * Re-home focus that the dialog itself dropped on `<body>`.
+ *
+ * Four reachable paths strand focus here, and none of them re-renders the
+ * dialog in a way we could hook:
+ *   - wide → narrow marks the sidebar `inert` (closed drawer), and the UA is
+ *     required to blur inert content — same for closing the drawer from a nav
+ *     click or Escape;
+ *   - narrow → wide flips the hamburger to `display: none`;
+ *   - View Changelog / Replay tutorial `disabled` the button that was just
+ *     activated, and on the error branch the dialog stays open around it;
+ *   - a delete-confirm button removes the row it lives in, and
+ *     `{#key activeTab.id}` destroys the whole tab body.
+ * Until the next Tab press the dialog then held no focus at all, so Escape
+ * (whose handler requires focus inside) stopped closing it.
+ *
+ * The trigger is the *event that means this*, not a list of the paths above:
+ * a `focusout` carrying no `relatedTarget` is the UA saying focus went
+ * nowhere. Enumerating instead (the first cut keyed an `$effect` on `isNarrow`
+ * / `narrowSidebarOpen`) covered the two reflow paths and silently missed the
+ * other two, and every future path would have to remember to join the list.
+ *
+ * The test is DOM state, not a before/after sample: the element that last held
+ * focus in here is no longer focusable. A user who moved focus away themselves
+ * either landed on a real element (non-null `relatedTarget`, so we never even
+ * run) or leaves `lastFocusedInside` still focusable, so we never steal focus
+ * back from the page. Deliberately NOT gated on focus already sitting on
+ * `<body>`: whether the UA has run its fixup yet is engine timing (Blink defers
+ * it to a posted task), and the outcome is the same either way.
+ */
+function rehomeStrandedFocus(): void {
+  if (!open || !modalEl) return;
+  const stranded = lastFocusedInside;
+  // The dialog container is a legitimate focus holder — it is `tabindex="-1"`,
+  // it takes focus on open, and no restyle can make it unfocusable. But it can
+  // never appear in `focusablesWithin(modalEl)` (a `querySelectorAll` of its
+  // own descendants, and `[tabindex="-1"]` is excluded anyway), so without this
+  // it reads as permanently stranded and we yank focus off the `aria-modal`
+  // element one frame after every open.
+  if (!stranded || stranded === modalEl) return;
+  // A DETACHED former child is still ours to recover — that is the
+  // removed-row / destroyed-tab-body case, and `contains` is false for it.
+  // A live element outside the dialog is not ours; leave it alone.
+  if (stranded.isConnected && !modalEl.contains(stranded)) return;
+  // Reads `offsetParent`, which forces a synchronous style/layout flush, so
+  // this sees the post-restyle truth rather than the pre-resize one.
+  const focusables = focusablesWithin(modalEl);
+  if (focusables.includes(stranded)) return;
+  const active = document.activeElement;
+  // Focus already landed somewhere real inside the dialog — leave it there.
+  if (active instanceof Node && active !== stranded && modalEl.contains(active)) return;
+  // Semantic successor of whatever went away: at narrow widths the hamburger
+  // owns the (now off-canvas) section list; at wide widths the section list is
+  // back and the current tab is its live entry.
+  const preferred = isNarrow
+    ? hamburgerEl
+    : modalEl.querySelector<HTMLElement>('.settings-modal-nav-btn[aria-current="page"]');
+  const target =
+    preferred && focusables.includes(preferred) ? preferred : (focusables[0] ?? modalEl);
+  target.focus();
+}
+
+let rehomeFrame: number | null = null;
+$effect(() => {
+  if (!open) return;
+  // `modalEl` is deliberately not read at effect-evaluation time (that would
+  // reopen the $state + bind:this loop) — the handler reads it untracked.
+  // `focusout` bubbles, so a document listener sees every strand inside the
+  // dialog, including one dispatched at an element the DOM has already
+  // detached (verified in Chromium for inert, display:none, disabled and
+  // removal — all four reach `document` with a null `relatedTarget`).
+  const onFocusOut = (e: FocusEvent) => {
+    if (e.relatedTarget) return; // focus went to a real element; nothing lost
+    if (!lastFocusedInside) return; // focus was never ours to lose
+    if (rehomeFrame !== null) return; // one recovery per burst
+    // rAF, not a timeout, so a whole reflow's worth of blurs coalesces into a
+    // single recovery inside the same frame budget. It is NOT what makes the
+    // read post-restyle — animation-frame callbacks run *before* style and
+    // layout; the `offsetParent` read inside `focusablesWithin` is what forces
+    // that flush. What the frame does buy is letting the UA's own deferred
+    // focus fixup land first.
+    rehomeFrame = requestAnimationFrame(() => {
+      rehomeFrame = null;
+      rehomeStrandedFocus();
+    });
+  };
+  document.addEventListener("focusout", onFocusOut);
+  return () => {
+    document.removeEventListener("focusout", onFocusOut);
+    if (rehomeFrame !== null) {
+      cancelAnimationFrame(rehomeFrame);
+      rehomeFrame = null;
+    }
+  };
 });
 
 const resolvedTabs = $derived(tabs.length > 0 ? tabs : DEFAULT_SETTINGS_TABS);
@@ -394,39 +513,16 @@ onMount(() => {
 });
 
 // Tab focus-trap — open-gated because focus wrap-around only matters while
-// the modal is mounted and visible. Re-queries focusables on every Tab press
-// because the 640px breakpoint reflows the sidebar into a row, which changes
-// the focusable set.
+// the modal is mounted and visible. Delegated to the shared helper, which
+// re-queries on every Tab press and excludes both of the ways this dialog
+// makes a control unfocusable: the closed narrow drawer is `inert` (it stays
+// laid out, so a selector match alone would hand back a button whose `.focus()`
+// is a silent no-op) and the hamburger is `display: none` at wide widths.
+// The 860px breakpoint is what changes the focusable set — 640px only narrows
+// the drawer (see the media queries below).
 $effect(() => {
   if (!open) return;
-  const handler = (e: KeyboardEvent) => {
-    if (e.key !== "Tab" || !modalEl) return;
-    // Exclude the narrow drawer's nav buttons while it's closed: the sidebar is
-    // translated off-canvas AND marked `inert` (not `display:none`), so it still
-    // matches FOCUSABLE_SELECTOR. Without this filter, `first`/`last` can be an
-    // inert button whose `.focus()` is a silent no-op — after a 1280→600 reflow
-    // drops focus off the now-inert tab, the trap would fail to pull focus back
-    // into the dialog and it escapes behind the modal.
-    const focusables = Array.from(
-      modalEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-    ).filter((el) => !el.closest("[inert]"));
-    if (focusables.length === 0) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    const active = document.activeElement as HTMLElement | null;
-    if (!modalEl.contains(active)) {
-      e.preventDefault();
-      first.focus();
-      return;
-    }
-    if (e.shiftKey && active === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && active === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
+  const handler = (e: KeyboardEvent) => trapTab(e, modalEl ?? null);
   window.addEventListener("keydown", handler);
   return () => window.removeEventListener("keydown", handler);
 });
@@ -651,6 +747,7 @@ async function handleReplayTutorial(): Promise<void> {
     <section class="settings-modal-content" data-testid="settings-modal-content">
       <header class="settings-modal-content-head">
         <button
+          bind:this={hamburgerEl}
           type="button"
           class="settings-modal-narrow-hamburger"
           data-testid="settings-modal-narrow-hamburger"

@@ -83,8 +83,9 @@ export type AiChip = "connect" | "restart" | null;
  * titlebar CTA/default-model branches.
  *   - `connected`   — an MCP session is open and mode is Tandem: events flow.
  *   - `solo-paused` — an MCP session is open but mode is Solo: chat still works,
- *                     but the AI won't see the user's edits/comments
- *                     (`sse-consumer.ts` drops non-`chat:message` events in Solo).
+ *                     but the AI won't see the user's edits/comments (the server
+ *                     withholds them — `server/events/queue.ts`
+ *                     `isUserPrivacyHeld` + `shouldForwardExternally`).
  */
 export type AiLiveIndicator = "connected" | "solo-paused" | null;
 

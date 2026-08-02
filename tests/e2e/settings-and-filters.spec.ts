@@ -845,9 +845,60 @@ test("settings dialog resize from 1280 to 600 with focus inside — focus surviv
 
   await page.setViewportSize({ width: 600, height: 800 });
 
+  // Assert BEFORE any keypress. The Tab-key trap has its own escaped-focus
+  // recovery branch, so checking only after a Tab measures the repair rather
+  // than the reflow — #1258 was invisible in this test for exactly that reason.
+  //
+  // Assert the RECOVERY TARGET, not mere containment: containment is already
+  // true before the bug manifests (Blink defers the inert blur to a posted
+  // task, so the pre-reflow nav button can still be `document.activeElement`
+  // at first poll), which makes a `toPass` on containment structurally unable
+  // to tell "focus was lost and recovered" from "focus has not been dropped
+  // yet". Focus started on a sidebar nav button, so only the recovery can put
+  // it on the hamburger.
+  await expect(async () => {
+    expect(
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.testid),
+    ).toBe("settings-modal-narrow-hamburger");
+  }).toPass({ timeout: 2_000 });
+
   await page.keyboard.press("Tab");
   const focusInDialogAfter = await dialog.evaluate((dlg) => dlg.contains(document.activeElement));
   expect(focusInDialogAfter).toBe(true);
+});
+
+test("settings dialog resize from 600 to 1280 with focus on the hamburger — focus survives reflow", async ({
+  page,
+}) => {
+  const dialog = await openSettingsDialog(page, 600, 800);
+
+  // Park focus on the one control the wide layout `display: none`s — the other
+  // half of #1258, and the direction the original test never covered.
+  const hamburger = page.getByTestId("settings-modal-narrow-hamburger");
+  await hamburger.focus();
+  expect(await dialog.evaluate((dlg) => dlg.contains(document.activeElement))).toBe(true);
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  // Same reasoning as the 1280→600 direction: the positive target is the only
+  // assertion the pre-blur state cannot satisfy. Focus started on the
+  // hamburger, so a focused `aria-current="page"` nav button means the
+  // recovery ran — the wide layout's semantic successor for the control it
+  // just `display: none`d.
+  await expect(async () => {
+    expect(
+      await dialog.evaluate((dlg) => {
+        const active = document.activeElement;
+        const current = dlg.querySelector(
+          'nav[aria-label="Settings sections"] [aria-current="page"]',
+        );
+        return active !== null && active === current;
+      }),
+    ).toBe(true);
+  }).toPass({ timeout: 2_000 });
+
+  await page.keyboard.press("Tab");
+  expect(await dialog.evaluate((dlg) => dlg.contains(document.activeElement))).toBe(true);
 });
 
 test("settings dialog at 600x800 viewport — section content readable, no clipped controls", async ({

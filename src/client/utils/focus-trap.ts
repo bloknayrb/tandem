@@ -8,8 +8,12 @@
  * one filters nothing and omits `summary` from its selector. An accessibility
  * fix currently has to be made five times to actually land.
  *
- * The other four are deliberately NOT migrated here yet — that is a bigger
- * change than the one that surfaced this. New dialogs should use this.
+ * `SettingsModal` migrated in #1258 — its copy filtered `[inert]` but not
+ * `offsetParent`, and the dialog has both a `display:none` control and an
+ * `inert` region, so only the union of the two filters is correct. Three
+ * copies remain: `IntegrationWizardModal`, `CoworkAdminDeclinedModal`, and
+ * `HelpModal` (inline in its `onkeydown`, filtering `[hidden]`).
+ * New dialogs should use this.
  */
 
 /**

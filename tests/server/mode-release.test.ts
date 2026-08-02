@@ -92,7 +92,7 @@ function seedHeldDoc() {
 function collect(): { events: TandemEvent[]; stop: () => void } {
   const events: TandemEvent[] = [];
   const cb = (e: TandemEvent) => events.push(e);
-  subscribe(cb);
+  subscribe(cb, "external");
   return { events, stop: () => unsubscribe(cb) };
 }
 
