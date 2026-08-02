@@ -68,7 +68,8 @@ describe("ChatPanel per-agent author color (#1123 M4)", () => {
     const doc = seedDoc([claudeMsg()]);
     const { container } = renderChat(doc);
     const style = authorStyle(container, "m1");
-    expect(style).toContain("var(--tandem-author-claude)");
+    expect(style).toContain("var(--tandem-author-claude-fg-strong)");
+    expect(style).not.toContain("color: var(--tandem-author-claude);");
     expect(style).not.toContain("var(--tandem-accent)");
     expect(style).not.toContain("var(--tandem-agent-");
     expect(bubble(container, "m1").classList).toContain("claude");

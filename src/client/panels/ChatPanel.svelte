@@ -305,7 +305,9 @@ async function clearChat() {
           <span
             data-testid="chat-author-{msg.id}"
             style="font-weight: 600; font-size: 11px; color: {msg.author === 'claude'
-              ? agentColor(msg.agentIdentity)
+              ? (msg.agentIdentity
+                  ? agentColor(msg.agentIdentity)
+                  : 'var(--tandem-author-claude-fg-strong)')
               : 'var(--tandem-fg-muted)'}; text-transform: uppercase;"
           >
             {msg.author === "claude"
