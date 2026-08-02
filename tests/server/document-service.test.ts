@@ -469,6 +469,7 @@ describe("saveDocumentToDisk", () => {
     const result = await saveDocumentToDisk("nonexistent");
     expect(result.status).toBe("skipped");
     expect(result.reason).toContain("not open");
+    expect(result.skipCode).toBe("NOT_OPEN");
   });
 
   it("skips upload-only documents", async () => {
@@ -482,6 +483,7 @@ describe("saveDocumentToDisk", () => {
     const result = await saveDocumentToDisk("upload-doc");
     expect(result.status).toBe("skipped");
     expect(result.reason).toContain("Upload");
+    expect(result.skipCode).toBe("PROMOTION_REQUIRED");
   });
 
   it("skips read-only documents", async () => {
@@ -495,6 +497,7 @@ describe("saveDocumentToDisk", () => {
     const result = await saveDocumentToDisk("ro-doc");
     expect(result.status).toBe("skipped");
     expect(result.reason).toContain("Read-only");
+    expect(result.skipCode).toBe("READ_ONLY");
   });
 
   it("skips .html format", async () => {
@@ -508,6 +511,7 @@ describe("saveDocumentToDisk", () => {
     const result = await saveDocumentToDisk("html-doc");
     expect(result.status).toBe("skipped");
     expect(result.reason).toContain("not eligible");
+    expect(result.skipCode).toBe("UNSUPPORTED_FORMAT");
   });
 
   it("saves eligible .md documents to disk", async () => {

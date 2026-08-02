@@ -23,11 +23,21 @@ interface Props {
    * re-render and loop.
    */
   onDraftChange: (text: string, dirty: boolean) => void;
+  /** Save the committed Y.Doc using the active target's persistence policy. */
+  onSave: (intent: "save" | "save-as") => Promise<void>;
+  /** Publish commit-aware commands to the App-level shortcut dispatcher. */
+  onCommandsChange: (commands: SourceViewCommands | null) => void;
   /** Return to the WYSIWYG editor. */
   onExit: () => void;
 }
 
-const { documentId, ydoc, initialDraft, onDraftChange, onExit }: Props = $props();
+interface SourceViewCommands {
+  save(intent: "save" | "save-as"): Promise<void>;
+  exit(): Promise<void>;
+}
+
+const { documentId, ydoc, initialDraft, onDraftChange, onSave, onCommandsChange, onExit }: Props =
+  $props();
 
 // Capture the draft ONCE at mount (untrack makes the non-reactive read
 // explicit). The component is keyed on documentId by the parent, so this is the
@@ -138,6 +148,17 @@ async function handleExit(): Promise<void> {
   onExit();
 }
 
+async function saveWithIntent(intent: "save" | "save-as"): Promise<void> {
+  if (loading || saving) return;
+  if (dirty && !(await commit())) return;
+  await onSave(intent);
+}
+
+$effect(() => {
+  onCommandsChange({ save: saveWithIntent, exit: handleExit });
+  return () => onCommandsChange(null);
+});
+
 async function handleKeydown(e: KeyboardEvent): Promise<void> {
   // Ctrl/Cmd+S commits the source edit instead of saving stale Y.Doc content.
   // stopPropagation is load-bearing: without it the event bubbles to App's
@@ -145,10 +166,16 @@ async function handleKeydown(e: KeyboardEvent): Promise<void> {
   // and would `triggerSave()` the STALE Y.Doc to disk, racing this commit
   // (#1021 review must-fix). This handler runs first (bubble phase, target),
   // so stopping propagation here keeps the global save from ever firing.
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === "KeyS") {
     e.preventDefault();
     e.stopPropagation();
-    if (dirty && !saving) await commit();
+    await saveWithIntent(e.shiftKey ? "save-as" : "save");
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === "KeyE") {
+    e.preventDefault();
+    e.stopPropagation();
+    await handleExit();
   }
 }
 

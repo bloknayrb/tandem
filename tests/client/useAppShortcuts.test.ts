@@ -267,6 +267,16 @@ describe("matchShortcut — legacy no-modifier-gate preservation", () => {
       id: "save-as",
     });
   });
+  it("Ctrl+Shift+J matches focus-chat", () => {
+    expect(matchShortcut(evt({ code: "KeyJ", ctrlKey: true, shiftKey: true }))).toEqual({
+      id: "focus-chat",
+    });
+  });
+  it("Ctrl+Shift+E matches toggle-source-view", () => {
+    expect(matchShortcut(evt({ code: "KeyE", ctrlKey: true, shiftKey: true }))).toEqual({
+      id: "toggle-source-view",
+    });
+  });
   it("Ctrl+Alt+N still matches new-scratchpad", () => {
     expect(matchShortcut(evt({ code: "KeyN", ctrlKey: true, altKey: true }))).toEqual({
       id: "new-scratchpad",

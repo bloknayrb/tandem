@@ -62,6 +62,8 @@ interface ActionDeps {
    * guards on format + read-only).
    */
   toggleSourceView: () => void;
+  /** Reveal Chat and focus its composer. */
+  focusChat: () => void;
   /**
    * Save the active document under a new file path. Used to promote an
    * ephemeral scratchpad (or any `upload://`-backed doc) into a real file.
@@ -69,6 +71,8 @@ interface ActionDeps {
    * runners can chain notifications.
    */
   saveAs: () => Promise<void>;
+  /** Save the active target, promoting upload-backed documents through Save As. */
+  save: () => Promise<void>;
 }
 
 let deps: ActionDeps | null = null;
@@ -320,8 +324,20 @@ async function runTauriSaveAs(
       return;
     }
     const json = (await res.json().catch(() => null)) as {
-      data?: { fileName?: string; targetPath?: string };
+      data?: {
+        status?: "saved" | "error";
+        fileName?: string;
+        targetPath?: string;
+        reason?: string;
+      };
     } | null;
+    if (json?.data?.status !== "saved") {
+      notify(
+        "error",
+        `Save As failed: ${json?.data?.reason ?? "the server returned an invalid result."}`,
+      );
+      return;
+    }
     const fileName = json?.data?.fileName ?? normalizedPath;
     // Register the promoted file in recents so it surfaces in the New Tab
     // launcher (issue #1019). Use the server's resolved `targetPath` so the
@@ -401,29 +417,34 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
       // `deps?.` guards the pre-mount window (deps is wired in App.onMount).
       const json = (await resp.json().catch(() => null)) as {
         data?: {
+          status?: "saved" | "skipped" | "error";
+          reason?: string;
           skipCode?: string;
           fidelityWarnings?: string[];
           integrityWarnings?: string[];
           unpreservedImports?: number;
         };
       } | null;
-      // A skipped save is HTTP 200, so `resp.ok` alone would fire StatusBar's
+      // A skipped or failed save is HTTP 200, so `resp.ok` alone would fire StatusBar's
       // "Saved HH:MM" flash on a save that never happened. With an external
       // conflict pending that flash sits on screen next to a banner saying the
       // opposite — and via the activity-tray retry action it can fire for a
       // non-active document, where there is no banner at all (#1238).
       //
-      // Scoped to the conflict skip by `skipCode`, not by `status: "skipped"`
-      // broadly: the other skips (scratchpads, the read-only CHANGELOG tab,
-      // `.html`, a concurrent autosave holding the lock) also report a save
-      // that didn't happen, but their `reason` strings are internal prose and
-      // surfacing them raw would trade one wrong message for another. That is
-      // its own fix, tracked separately.
-      if (json?.data?.skipCode === "EXTERNAL_CONFLICT") {
+      const result = json?.data;
+      if (result?.status === "skipped") {
+        deps?.notify("warning", saveSkippedMessage(result.skipCode, result.reason));
+        return;
+      }
+      if (result?.status === "error") {
         deps?.notify(
-          "warning",
-          "Not saved — this file changed on disk. Choose Keep or Reload in the banner above.",
+          "error",
+          `Save failed: ${result.reason ?? "The document could not be saved."}`,
         );
+        return;
+      }
+      if (result?.status !== "saved") {
+        deps?.notify("error", "Save failed: the server returned an invalid result.");
         return;
       }
       ok = true;
@@ -476,8 +497,37 @@ export async function triggerSave(activeDocId: string | null): Promise<void> {
     deps?.notify("error", "Save failed — check your connection and try again.");
   } finally {
     inflight = false;
-    saving = false;
     lastSaveOk = ok;
+    saving = false;
+  }
+}
+
+/** User-facing copy for every structured save skip. The fallback remains
+ * honest for older servers that have not yet added a skip code. */
+export function saveSkippedMessage(skipCode?: string, reason?: string): string {
+  switch (skipCode) {
+    case "EXTERNAL_CONFLICT":
+    case "FILE_MODIFIED":
+      return "Not saved — this file changed on disk. Choose Keep or Reload before saving.";
+    case "PROMOTION_REQUIRED":
+      return "Not saved — choose Save As to turn this upload or scratchpad into a file.";
+    case "READ_ONLY":
+      return "Not saved — this document is read-only.";
+    case "UNSUPPORTED_FORMAT":
+    case "ADAPTER_UNAVAILABLE":
+      return "Not saved — this document format cannot be written to disk.";
+    case "SAVE_IN_PROGRESS":
+      return "Not saved — another save is already in progress. Try again in a moment.";
+    case "SOURCE_MISSING":
+      return "Not saved — the original file no longer exists. Reopen it or use Save As.";
+    case "FILE_STATE_UNAVAILABLE":
+      return "Not saved — Tandem could not verify the file state. Check access and try again.";
+    case "NOT_OPEN":
+      return "Not saved — the document is no longer open.";
+    case "EXPLICIT_ONLY":
+      return "Not saved automatically — use Save to write this document format.";
+    default:
+      return `Not saved${reason ? ` — ${reason}.` : "."}`;
   }
 }
 
@@ -791,7 +841,7 @@ const BUILTINS: Action[] = [
     group: "document",
     shortcut: "Ctrl+S",
     run() {
-      guardedRun("save", (d) => void triggerSave(d.getActiveTabId()));
+      guardedRun("save", (d) => void d.save());
     },
   },
   {
@@ -828,6 +878,15 @@ const BUILTINS: Action[] = [
     shortcut: "Ctrl+Shift+S",
     run() {
       guardedRun("save-as", (d) => void d.saveAs());
+    },
+  },
+  {
+    id: "focus-chat",
+    label: "Focus Chat",
+    group: "view",
+    shortcut: "Ctrl+Shift+J",
+    run() {
+      guardedRun("focus-chat", (d) => d.focusChat());
     },
   },
   {
@@ -981,12 +1040,10 @@ const BUILTINS: Action[] = [
     },
   },
   {
-    // Palette-only: switches the active .md document between the formatted
-    // (WYSIWYG) editor and its raw-markdown source. A no-op for non-.md or
-    // read-only documents (the App handler guards).
     id: "toggle-source-view",
-    label: "Toggle markdown source view",
+    label: "View / exit Markdown source",
     group: "view",
+    shortcut: "Ctrl+Shift+E",
     run() {
       guardedRun("toggle-source-view", (d) => d.toggleSourceView());
     },

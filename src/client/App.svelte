@@ -675,6 +675,65 @@ function openModelsSettings() {
   openSettingsModalWithAck();
 }
 
+function pushSaveNotification(severity: "info" | "warning" | "error", message: string): void {
+  notifications.push({
+    id: generateNotificationId(),
+    type: "launcher",
+    severity,
+    message,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Save a live tab by id. The id is re-resolved at invocation time so later
+ * tab-menu/native callers can safely target inactive tabs without capturing a
+ * stale object. Plain Save promotes every editable upload-backed document;
+ * once promoted, the same id resolves to `source: "file"` and writes in place.
+ */
+async function saveDocumentTarget(tabId: string | null, intent: "save" | "save-as"): Promise<void> {
+  const tab = yjsSync.tabs.find((candidate) => candidate.id === tabId);
+  if (!tab) {
+    pushSaveNotification("warning", "No active document to save.");
+    return;
+  }
+
+  const needsPromotion = tab.source === "upload" || isUploadPath(tab.filePath);
+  if (needsPromotion) {
+    if (tab.readOnly) {
+      pushSaveNotification("warning", "Not saved — this document is read-only.");
+      return;
+    }
+    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
+    await triggerSaveAs({
+      activeDocId: tab.id,
+      defaultName: tab.filePath.slice(lastSlash + 1),
+      sourceFormat: tab.format,
+      notify: pushSaveNotification,
+    });
+    return;
+  }
+
+  if (intent === "save-as") {
+    pushSaveNotification(
+      "info",
+      "Save As is for uploads and scratchpads; this document already saves to its file.",
+    );
+    return;
+  }
+  await triggerSave(tab.id);
+}
+
+function focusChat(): void {
+  activeRailTab = "chat";
+  // Reuse the existing transient floating rail when the saved rail is hidden;
+  // the chat workstream owns the full temporary-reveal lifecycle.
+  if (!effectiveRightVisible) railFloat.right = true;
+  queueMicrotask(() =>
+    document.querySelector<HTMLTextAreaElement>('[data-testid="chat-composer-input"]')?.focus(),
+  );
+}
+
 // Wire action dependencies for builtin actions (save, settings, find, mode)
 // after the reactive state they depend on is available.
 wireActionDeps({
@@ -764,40 +823,10 @@ wireActionDeps({
       formattingBarVisible: !settingsState.settings.formattingBarVisible,
     }),
   toggleSourceView: () => toggleSourceView(),
+  focusChat,
+  save: async () => saveDocumentTarget(yjsSync.activeTabId, "save"),
   saveAs: async () => {
-    const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
-    // Save-As is a PROMOTION path — only offer it for ephemeral upload://
-    // (scratchpad) docs. A doc already on disk would be silently corrupted by
-    // a promote (orphaned annotations, deleted session). The server enforces
-    // this too (NOT_PROMOTABLE); guard the affordance here so the user gets a
-    // clear toast instead of a server error. See #827 review (Medium).
-    if (!tab || !isUploadPath(tab.filePath)) {
-      notifications.push({
-        id: generateNotificationId(),
-        type: "launcher",
-        severity: "info",
-        message: "Save As is only available for scratchpads; this document is already on disk.",
-        timestamp: Date.now(),
-      });
-      return;
-    }
-    // Default-name hint for the native dialog: prefer the existing basename.
-    // For a synthetic upload:// path that's already "Scratchpad.md".
-    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
-    const defaultName = tab.filePath.slice(lastSlash + 1);
-    await triggerSaveAs({
-      activeDocId: yjsSync.activeTabId,
-      defaultName,
-      sourceFormat: tab.format,
-      notify: (severity, message) =>
-        notifications.push({
-          id: generateNotificationId(),
-          type: "launcher",
-          severity,
-          message,
-          timestamp: Date.now(),
-        }),
-    });
+    await saveDocumentTarget(yjsSync.activeTabId, "save-as");
   },
 });
 
@@ -927,6 +956,10 @@ let sourceViewTabs = $state(new Set<string>());
 // (#1021 review SHOULD-FIX).
 let sourceDrafts = $state(new Map<string, string>());
 let sourceDirtyTabs = $state(new Set<string>());
+let sourceViewCommands = $state<{
+  save(intent: "save" | "save-as"): Promise<void>;
+  exit(): Promise<void>;
+} | null>(null);
 
 function updateSourceDraft(tabId: string, text: string, dirty: boolean): void {
   const drafts = new Map(sourceDrafts);
@@ -1285,44 +1318,49 @@ const dispatch: Partial<Record<ShortcutId, ShortcutHandler>> = {
     // stopPropagations — this is belt-and-suspenders against that invariant
     // being broken later: the global save must never write the stale Y.Doc to
     // disk underneath an open source edit (#1021 review must-fix).
-    if (inSourceView) return;
-    void triggerSave(yjsSync.activeTabId);
+    if (inSourceView) {
+      const el = e.target as HTMLElement | null;
+      if (el?.closest?.('[data-testid="source-view-container"]')) {
+        void sourceViewCommands?.save("save");
+      }
+      return;
+    }
+    void saveDocumentTarget(yjsSync.activeTabId, "save");
   },
   "save-as": (e) => {
     // Don't hijack Ctrl+Shift+S while typing in a chat / annotation input.
     const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+    if (inSourceView && el?.closest?.('[data-testid="source-view-container"]')) {
+      e.preventDefault();
+      void sourceViewCommands?.save("save-as");
+      return;
+    }
+    const inEditor = !!el?.closest?.(".ProseMirror");
+    if (
+      el &&
+      !inEditor &&
+      (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)
+    ) {
       return;
     }
     e.preventDefault();
-    const tab = yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId);
-    // Save-As is a PROMOTION path — only for ephemeral upload:// (scratchpad)
-    // docs; mirrors the palette `saveAs` gate + server NOT_PROMOTABLE. See #827.
-    if (!tab || !isUploadPath(tab.filePath)) {
-      notifications.push({
-        id: generateNotificationId(),
-        type: "launcher",
-        severity: "info",
-        message: "Save As is only available for scratchpads; this document is already on disk.",
-        timestamp: Date.now(),
-      });
+    void saveDocumentTarget(yjsSync.activeTabId, "save-as");
+  },
+  "focus-chat": (e) => {
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    focusChat();
+  },
+  "toggle-source-view": (e) => {
+    const el = e.target as HTMLElement | null;
+    if (inSourceView && el?.closest?.('[data-testid="source-view-container"]')) {
+      e.preventDefault();
+      void sourceViewCommands?.exit();
       return;
     }
-    const lastSlash = Math.max(tab.filePath.lastIndexOf("/"), tab.filePath.lastIndexOf("\\"));
-    const defaultName = tab.filePath.slice(lastSlash + 1);
-    void triggerSaveAs({
-      activeDocId: yjsSync.activeTabId,
-      defaultName,
-      sourceFormat: tab.format,
-      notify: (severity, message) =>
-        notifications.push({
-          id: generateNotificationId(),
-          type: "launcher",
-          severity,
-          message,
-          timestamp: Date.now(),
-        }),
-    });
+    if (shouldIgnoreShortcut(e)) return;
+    e.preventDefault();
+    toggleSourceView();
   },
   settings: (e) => {
     e.preventDefault();
@@ -2545,6 +2583,8 @@ const shouldShowModelPicker = $derived(
           ydoc={activeTab.ydoc}
           initialDraft={sourceDrafts.get(activeTab.id)}
           onDraftChange={(text, dirty) => updateSourceDraft(activeTab!.id, text, dirty)}
+          onSave={(intent) => saveDocumentTarget(activeTab!.id, intent)}
+          onCommandsChange={(commands) => (sourceViewCommands = commands)}
           onExit={() => exitSourceView(activeTab!.id)}
         />
       {/key}

@@ -42,6 +42,8 @@ export type ShortcutId =
   | "select-all"
   | "save"
   | "save-as"
+  | "focus-chat"
+  | "toggle-source-view"
   | "settings"
   | "toggle-palette"
   | "new-scratchpad"
@@ -190,6 +192,17 @@ export function matchShortcut(
     // Ctrl+S → save. Legacy: no modifier gate.
     if (e.code === "KeyS") {
       if (!isOverridden("save", overrides)) return { id: "save" };
+    }
+
+    // Ctrl+Shift+J → focus Chat. Exact modifiers keep the unshifted editor
+    // shortcut space free and make remapping behavior deterministic.
+    if (e.shiftKey && !e.altKey && e.code === "KeyJ") {
+      if (!isOverridden("focus-chat", overrides)) return { id: "focus-chat" };
+    }
+
+    // Ctrl+Shift+E → enter/exit raw Markdown source view.
+    if (e.shiftKey && !e.altKey && e.code === "KeyE") {
+      if (!isOverridden("toggle-source-view", overrides)) return { id: "toggle-source-view" };
     }
 
     // Ctrl+Shift+P → toggle palette. Legacy: `shiftKey && KeyP`, no alt gate.
