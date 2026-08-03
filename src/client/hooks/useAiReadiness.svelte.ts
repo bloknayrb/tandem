@@ -57,7 +57,11 @@
  */
 import { onDestroy } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
-import { isTransientlyUnavailable, type LauncherStatus } from "../../shared/launcher/contract.js";
+import {
+  isTransientlyUnavailable,
+  type LauncherErrorCode,
+  type LauncherStatus,
+} from "../../shared/launcher/contract.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
 /** Loopback `/health` response. `hasSession` is omitted for non-loopback
@@ -93,6 +97,8 @@ export interface AiReadiness {
   readonly state: AiReadinessState;
   /** The CTA to surface, with Solo-mode suppression already applied. */
   readonly chip: AiChip;
+  /** Last scrubbed error code from supervisor when state is stopped. */
+  readonly lastError?: LauncherErrorCode;
   /**
    * The affirmative connected indicator, keyed on the authoritative MCP-session
    * signal (`hasSession`) — NOT on `state`, which also reaches `ready` from the
@@ -267,6 +273,14 @@ export function createAiReadiness(deps: {
     return null;
   });
 
+  const lastError = $derived.by((): LauncherErrorCode | undefined => {
+    if (status === null) return undefined;
+    if ("running" in status && status.running === false && "lastError" in status) {
+      return status.lastError;
+    }
+    return undefined;
+  });
+
   // The affirmative indicator keys on `mcpSessionActive` (an open MCP transport,
   // proven by a real `initialize` round-trip) — the honest subset of `ready`.
   // `state === "ready"` also fires from the launcher `running: true` branch with
@@ -285,6 +299,9 @@ export function createAiReadiness(deps: {
     },
     get chip() {
       return chip;
+    },
+    get lastError() {
+      return lastError;
     },
     get liveIndicator() {
       return liveIndicator;

@@ -1,5 +1,6 @@
 <script lang="ts">
 import { DISCONNECT_DEBOUNCE_MS } from "../../shared/constants";
+import type { LauncherErrorCode } from "../../shared/launcher/contract";
 import type { AiChip } from "../hooks/useAiReadiness.svelte";
 
 interface Props {
@@ -11,6 +12,7 @@ interface Props {
    * `claudeActive`-gated line, which keyed on a flapping presence signal.
    */
   aiChip?: AiChip;
+  lastError?: LauncherErrorCode;
   /** State A primary — opens the file-open dialog. */
   onOpenFile: () => void;
   /** State C primary — retries the sync-server connection. */
@@ -21,16 +23,20 @@ interface Props {
   onConnectAi?: () => void;
   /** Restarts the stopped Claude Code process — the `"restart"` CTA. */
   onRestartClaude?: () => void;
+  /** Restarts the stopped Claude Code process with a fresh session (clears circuit breaker). */
+  onStartFreshClaude?: () => void;
 }
 
 let {
   connected,
   aiChip = null,
+  lastError,
   onOpenFile,
   onRetry,
   onOpenSettings,
   onConnectAi,
   onRestartClaude,
+  onStartFreshClaude,
 }: Props = $props();
 
 let showDisconnected = $state(false);
@@ -121,17 +127,43 @@ $effect(() => {
         </button>
       </div>
     {:else if connected && aiChip === "restart"}
-      <p class="empty-sub empty-sub-secondary">Claude Code has stopped.</p>
-      <div class="empty-actions">
-        <button
-          class="empty-cta"
-          data-testid="empty-state-connect-ai"
-          data-ai-chip="restart"
-          onclick={onRestartClaude}
-        >
-          Restart Claude Code
-        </button>
-      </div>
+      {#if lastError === "binary-not-found"}
+        <p class="empty-sub empty-sub-secondary">Let's get Claude set up on your computer.</p>
+        <div class="empty-actions">
+          <button
+            class="empty-cta"
+            data-testid="empty-state-connect-ai"
+            data-ai-chip="connect"
+            onclick={onConnectAi}
+          >
+            Set up Claude Code
+          </button>
+        </div>
+      {:else if lastError === "circuit-open"}
+        <p class="empty-sub empty-sub-secondary">Tandem is having trouble connecting to Claude.</p>
+        <div class="empty-actions">
+          <button
+            class="empty-cta"
+            data-testid="empty-state-connect-ai"
+            data-ai-chip="restart"
+            onclick={onStartFreshClaude ?? onRestartClaude}
+          >
+            Try Again
+          </button>
+        </div>
+      {:else}
+        <p class="empty-sub empty-sub-secondary">Claude Code has stopped.</p>
+        <div class="empty-actions">
+          <button
+            class="empty-cta"
+            data-testid="empty-state-connect-ai"
+            data-ai-chip="restart"
+            onclick={onRestartClaude}
+          >
+            Restart Claude Code
+          </button>
+        </div>
+      {/if}
     {:else if connected}
       <!-- Preserved from production: carries product positioning, not in the bundle. -->
       <p class="empty-sub empty-sub-secondary">

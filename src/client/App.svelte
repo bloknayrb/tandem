@@ -14,6 +14,7 @@ import {
   SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS,
   saveStore,
   shouldAutoOpenScratchpad,
+  startFreshClaudeCode,
   triggerSave,
   triggerSaveAs,
   wireActionDeps,
@@ -498,6 +499,12 @@ function connectAi(): void {
  *  the chip doesn't look stuck waiting for the next 8s background poll. */
 function restartClaude(): void {
   relaunchClaudeCode();
+  setTimeout(() => aiReadiness.refresh(), 2_000);
+  setTimeout(() => aiReadiness.refresh(), 5_000);
+}
+
+function startFreshClaude(): void {
+  startFreshClaudeCode();
   setTimeout(() => aiReadiness.refresh(), 2_000);
   setTimeout(() => aiReadiness.refresh(), 5_000);
 }
@@ -2436,8 +2443,10 @@ const shouldShowModelPicker = $derived(
       aiLiveIndicator={aiReadiness.liveIndicator}
       aiState={aiReadiness.state}
       aiChip={aiReadiness.chip}
+      lastError={aiReadiness.lastError}
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
+      onStartFreshClaude={startFreshClaude}
       soloMode={modeState.tandemMode === "solo"}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
@@ -2879,11 +2888,13 @@ const shouldShowModelPicker = $derived(
             <EmptyState
               connected={yjsSync.connected}
               aiChip={aiReadiness.chip}
+              lastError={aiReadiness.lastError}
               onOpenFile={() => (fileOpenDialogOpen = true)}
               onRetry={() => yjsSync.reconnect()}
               onOpenSettings={openSettingsModalWithAck}
               onConnectAi={connectAi}
               onRestartClaude={restartClaude}
+              onStartFreshClaude={startFreshClaude}
             />
           {/if}
         </div>

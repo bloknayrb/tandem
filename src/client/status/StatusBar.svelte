@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
+import type { LauncherErrorCode } from "../../shared/launcher/contract";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import type { AiChip, AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
@@ -28,8 +29,10 @@ interface Props {
   aiState: AiReadinessState;
   /** When present, the AI status indicator becomes the Connect/Restart control. */
   aiChip?: AiChip;
+  lastError?: LauncherErrorCode;
   onConnectAi?: () => void;
   onRestartClaude?: () => void;
+  onStartFreshClaude?: () => void;
   /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
   soloMode: boolean;
   /**
@@ -71,8 +74,10 @@ let {
   aiLiveIndicator,
   aiState,
   aiChip = null,
+  lastError,
   onConnectAi,
   onRestartClaude,
+  onStartFreshClaude,
   soloMode,
   claudeWorkingTool = null,
   readOnly,
@@ -378,11 +383,23 @@ function cycleWordMode() {
         data-ai-action={aiChip}
         title={aiChip === "connect"
           ? "AI isn't set up — connect Claude Code"
+          : lastError === "binary-not-found"
+          ? "Claude Code needs to be installed"
+          : lastError === "circuit-open"
+          ? "Tandem can't connect to Claude — try again"
           : "Claude Code stopped — restart it"}
         aria-label={aiChip === "connect"
           ? "AI isn't set up. Connect Claude Code."
+          : lastError === "binary-not-found"
+          ? "Claude Code needs to be installed. Set up Claude Code."
+          : lastError === "circuit-open"
+          ? "Tandem is having trouble connecting to Claude. Try again."
           : "Claude Code has stopped. Restart Claude Code."}
-        onclick={aiChip === "connect" ? onConnectAi : onRestartClaude}
+        onclick={aiChip === "connect"
+          ? onConnectAi
+          : lastError === "circuit-open"
+          ? (onStartFreshClaude ?? onRestartClaude)
+          : onRestartClaude}
       >
         {@render aiIndicatorContent(aiView)}
       </button>
