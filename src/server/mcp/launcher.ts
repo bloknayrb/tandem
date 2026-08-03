@@ -28,6 +28,12 @@ export function launchClaude(): { status: string; pid?: number } {
   const tandemUrl = `http://127.0.0.1:${process.env.TANDEM_MCP_PORT || DEFAULT_MCP_PORT}`;
 
   const args = [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
     "--dangerously-load-development-channels",
     "server:tandem-channel",
     "--append-system-prompt",
@@ -42,15 +48,25 @@ export function launchClaude(): { status: string; pid?: number } {
     detached: true,
   });
 
-  // Feed initial prompt via stdin
+  // Feed initial prompt via stdin as JSON user turn
   if (claudeProcess.stdin?.writable) {
-    claudeProcess.stdin.write(
-      "A document has been opened in Tandem for review. " +
-        "Call tandem_checkInbox to see what needs attention, then begin reviewing.\n",
-      (err) => {
-        if (err) console.error("[Launcher] Failed to send initial prompt:", err.message);
+    const turn = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text:
+              "A document has been opened in Tandem for review. " +
+              "Call tandem_checkInbox to see what needs attention, then begin reviewing.",
+          },
+        ],
       },
-    );
+    };
+    claudeProcess.stdin.write(JSON.stringify(turn) + "\n", (err) => {
+      if (err) console.error("[Launcher] Failed to send initial prompt:", err.message);
+    });
   } else {
     console.error("[Launcher] Claude process has no writable stdin — initial prompt not delivered");
   }

@@ -57,6 +57,9 @@ const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
  * an attacker-controlled value flowing into `--resume` could hijack
  * Claude's loaded conversation state. Reject anything not UUID-shaped. */
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SUPERVISOR_INITIAL_PROMPT =
+  "A document has been opened in Tandem for review. " +
+  "Call tandem_checkInbox to see what needs attention, then begin reviewing.";
 
 export interface Supervisor {
   start(): Promise<void>;
@@ -230,7 +233,16 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   function buildClaudeArgs(plan: SpawnPlan): string[] {
-    const args = ["--dangerously-load-development-channels", "server:tandem-channel"];
+    const args = [
+      "-p",
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--dangerously-load-development-channels",
+      "server:tandem-channel",
+    ];
     if (plan.resuming) {
       args.push("--resume", plan.sessionId);
     } else {
@@ -256,6 +268,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   async function spawnOnce(plan: SpawnPlan): Promise<void> {
+    if (child) throw new Error("Supervisor already running — call stop() first");
+
     const reaper = reaperPath();
     const claudeBin = claudeCommand();
     const claudeArgs = buildClaudeArgs(plan);
@@ -298,6 +312,64 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         confirmTimer = null;
       }, RESUME_CONFIRM_MS);
     }
+
+    let stdoutBuffer = "";
+    let initialPromptSent = false;
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString();
+      const parts = stdoutBuffer.split("\n");
+      stdoutBuffer = parts.pop()!;
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        // This parser speaks Claude's stream-json envelope specifically. The
+        // supervisor only spawns Claude today, so no provider guard is needed
+        // here -- but one MUST be added back the moment a second provider can
+        // reach this handler, or we would write a Claude-shaped user turn into
+        // a foreign process's stdin.
+        if (trimmed.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(trimmed) as {
+              type?: string;
+              subtype?: string;
+              is_error?: boolean;
+              errors?: string[];
+            };
+            if (
+              parsed.type === "system" &&
+              parsed.subtype === "init" &&
+              !plan.resuming &&
+              !initialPromptSent
+            ) {
+              initialPromptSent = true;
+              const turn = {
+                type: "user",
+                message: {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: SUPERVISOR_INITIAL_PROMPT,
+                    },
+                  ],
+                },
+              };
+              if (child?.stdin?.writable) {
+                child.stdin.write(JSON.stringify(turn) + "\n", (err) => {
+                  if (err) console.error("[Launcher] Failed to send initial prompt:", err.message);
+                });
+              }
+            }
+            if (parsed.type === "result" && parsed.is_error && Array.isArray(parsed.errors)) {
+              console.error(`[Claude] Output error: ${parsed.errors.join("; ")}`);
+            }
+          } catch {
+            console.error(`[Claude] ${trimmed}`);
+          }
+        }
+      }
+    });
 
     child.stderr?.on("data", (chunk: Buffer) => {
       const line = chunk.toString().trimEnd();
