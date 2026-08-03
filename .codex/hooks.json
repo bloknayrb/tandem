@@ -1,0 +1,118 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\block-sensitive.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\nudge-plan-review.sh'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\block-no-verify.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\nudge-simplify-before-commit.sh'"
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\block-plan-without-agent-review.sh'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\track-workflow-events.sh'"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\format-on-edit.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\typecheck-on-edit.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\check-ymap-keys.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\check-extract-markdown.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\check-console-log.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\check-raw-transact.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\svelte-check-on-edit.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\related-test.sh'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\nudge-pr-review.sh'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\sessionstart-prune-state.sh'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\stop-cycle-check.sh'"
+          }
+        ]
+      }
+    ]
+  }
+}

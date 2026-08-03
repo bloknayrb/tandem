@@ -53,12 +53,15 @@ import {
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
   API_INTEGRATIONS_CLAUDE_CLI_STATUS,
+  API_INTEGRATIONS_CODEX_CLI_STATUS,
   API_INTEGRATIONS_EXISTING,
   API_INTEGRATIONS_FIRST_RUN,
   API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+  API_INTEGRATIONS_INSTALL_CODEX,
   type ApplyItemErrorCode,
   type ApplyItemResult,
   type ClaudeCliStatusResponse,
+  type CodexCliStatusResponse,
   ERROR_CODE_APPLY_IN_PROGRESS,
   ERROR_CODE_BAD_ORIGIN,
   ERROR_CODE_INSTALL_FAILED,
@@ -76,7 +79,9 @@ import {
   ERROR_CODE_UNSUPPORTED_PLATFORM,
   ERROR_CODE_WRITE_FAILED,
   type InstallClaudeCodeResponse,
+  type InstallCodexResponse,
 } from "../../shared/integrations/contract.js";
+import { detectCodexCli } from "../../shared/integrations/detect-codex-cli.js";
 import { isLoopback } from "../auth/middleware.js";
 import { isLocalhostOrigin } from "../mcp/api-routes.js";
 import type { Handler } from "../mcp/routes/_shared.js";
@@ -92,12 +97,14 @@ import {
   type RemovableEntry,
   shouldRegisterChannelShim,
 } from "./apply.js";
+import { applyCodexConfig, detectCodexTargets, installCodexSkill } from "./codex-config.js";
 import { hasExistingTandemEntry, type readExistingTandemEntries } from "./existing-config.js";
 import {
   ClaudeInstallError,
   installClaudeCli,
   UnsupportedPlatformError,
 } from "./install-claude-cli.js";
+import { CodexInstallError, installCodexCli } from "./install-codex-cli.js";
 import { type Keychain, KeychainUnavailableError } from "./keychain.js";
 import { type IntegrationConfig, IntegrationsFileSchema } from "./schema.js";
 import type { IntegrationsStore } from "./storage.js";
@@ -109,6 +116,7 @@ export {
   API_INTEGRATIONS_EXISTING,
   API_INTEGRATIONS_FIRST_RUN,
   API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+  API_INTEGRATIONS_INSTALL_CODEX,
 } from "../../shared/integrations/contract.js";
 /** Express route pattern — `:ref` is filled in by the client via {@link apiIntegrationsSecretPath}. */
 export const API_INTEGRATIONS_SECRET = "/api/integrations/secrets/:ref";
@@ -127,6 +135,8 @@ export interface IntegrationsRoutesDeps {
    * doesn't require the test process to own a real Claude install.
    */
   detectTargets?: typeof detectTargets;
+  /** Optional Codex detector override for hermetic apply-route tests. */
+  detectCodexTargets?: typeof detectCodexTargets;
   /**
    * Optional channel-shim decision override. Production leaves this undefined
    * and calls the real `shouldRegisterChannelShim()`, which probes the disk
@@ -142,12 +152,14 @@ export interface IntegrationsRoutesDeps {
    * happens to have the `claude` binary on PATH.
    */
   detectClaudeCli?: typeof detectClaudeCli;
+  detectCodexCli?: typeof detectCodexCli;
   /**
    * Optional installer-runner override. Production leaves this undefined.
    * Tests inject a stub so the install route never downloads + executes the
    * real installer.
    */
   installClaudeCli?: typeof installClaudeCli;
+  installCodexCli?: typeof installCodexCli;
 }
 
 /**
@@ -243,9 +255,15 @@ export function registerIntegrationsRoutes(
   app.options(API_INTEGRATIONS_CLAUDE_CLI_STATUS, mw);
   app.get(API_INTEGRATIONS_CLAUDE_CLI_STATUS, mw, makeGetClaudeCliStatusHandler(deps));
 
+  app.options(API_INTEGRATIONS_CODEX_CLI_STATUS, mw);
+  app.get(API_INTEGRATIONS_CODEX_CLI_STATUS, mw, makeGetCodexCliStatusHandler(deps));
+
   app.options(API_INTEGRATIONS_INSTALL_CLAUDE_CODE, mw);
   // No body parser — the install route takes no request body.
   app.post(API_INTEGRATIONS_INSTALL_CLAUDE_CODE, mw, makePostInstallClaudeCodeHandler(deps));
+
+  app.options(API_INTEGRATIONS_INSTALL_CODEX, mw);
+  app.post(API_INTEGRATIONS_INSTALL_CODEX, mw, makePostInstallCodexHandler(deps));
 }
 
 /**
@@ -315,8 +333,8 @@ export function assertOriginAllowlisted(
 function makeGetExistingHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (_req: Request, res: Response) => {
     try {
-      const installs = await deps.readExisting();
-      res.json({ installs });
+      const [installs, file] = await Promise.all([deps.readExisting(), deps.store.read()]);
+      res.json({ installs, file });
     } catch (err) {
       sendInternal(res, err, "Failed to read existing integration entries");
     }
@@ -578,7 +596,10 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       const persisted = parsed.data;
 
       // Server-side detection — request body never controls write paths.
-      const targets = (deps.detectTargets ?? detectTargets)();
+      const targets = [
+        ...(deps.detectTargets ?? detectTargets)(),
+        ...(deps.detectCodexTargets ?? detectCodexTargets)(),
+      ];
       const targetByKind = new Map<string, (typeof targets)[number]>();
       for (const t of targets) {
         // Detected paths are server-built; assertPathSafe will run again
@@ -595,7 +616,8 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       const wantedIds = new Set(body.data.ids);
       const removals = body.data.removals ?? {};
       const results: ApplyItemResult[] = [];
-      let anyApplied = false;
+      let claudeApplied = false;
+      let codexApplied = false;
 
       const errorResult = (
         id: string,
@@ -638,6 +660,31 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
               `${entry.kind} not installed on this machine`,
             ),
           );
+          continue;
+        }
+
+        if (entry.kind === "codex") {
+          try {
+            await applyCodexConfig(target);
+            results.push({ id: entry.id, status: "applied" });
+            codexApplied = true;
+          } catch (err) {
+            if (err instanceof PathRejectedError) {
+              console.error(`[Tandem] apply: ${entry.id} Codex path rejected:`, err.message);
+              results.push(
+                errorResult(
+                  entry.id,
+                  ERROR_CODE_PATH_REJECTED,
+                  "Refused to operate on a symlinked or out-of-tree config path",
+                ),
+              );
+            } else {
+              console.error(`[Tandem] apply: ${entry.id} Codex config failed:`, err);
+              results.push(
+                errorResult(entry.id, ERROR_CODE_WRITE_FAILED, "Failed to configure Codex"),
+              );
+            }
+          }
           continue;
         }
 
@@ -709,7 +756,7 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
         try {
           await applyConfig(target.configPath, ops);
           results.push({ id: entry.id, status: "applied" });
-          anyApplied = true;
+          claudeApplied = true;
         } catch (err) {
           if (err instanceof PathRejectedError) {
             // err.message embeds the resolved realpath — keep it for the
@@ -741,12 +788,19 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
       }
 
       // Skill install runs once if anything applied (per-user side effect).
-      if (anyApplied) {
+      if (claudeApplied) {
         try {
           await installSkill();
         } catch (err) {
           // Non-fatal; log only.
           console.error("[Tandem] apply: skill install failed:", err);
+        }
+      }
+      if (codexApplied) {
+        try {
+          await installCodexSkill();
+        } catch (err) {
+          console.error("[Tandem] apply: Codex skill install failed:", err);
         }
       }
 
@@ -847,6 +901,18 @@ function makeGetClaudeCliStatusHandler(deps: IntegrationsRoutesDeps): Handler {
   };
 }
 
+function makeGetCodexCliStatusHandler(deps: IntegrationsRoutesDeps): Handler {
+  return async (_req: Request, res: Response) => {
+    try {
+      const presence = (deps.detectCodexCli ?? detectCodexCli)();
+      const body: CodexCliStatusResponse = { presence };
+      res.json(body);
+    } catch (err) {
+      sendInternal(res, err, "Failed to probe Codex CLI status");
+    }
+  };
+}
+
 /**
  * POST /api/integrations/install-claude-code
  *
@@ -901,6 +967,50 @@ function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler
         return;
       }
       sendInternal(res, err, "Failed to install Claude Code");
+    } finally {
+      gate.inFlight = false;
+    }
+  };
+}
+
+function makePostInstallCodexHandler(deps: IntegrationsRoutesDeps): Handler {
+  return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS_INSTALL_CODEX)) return;
+    if (assertLoopbackForMutation(req, res)) return;
+    const gate = getInstallGate();
+    if (gate.inFlight) {
+      res.status(429).json({
+        error: "TOO_MANY_REQUESTS",
+        code: ERROR_CODE_INSTALL_IN_PROGRESS,
+        message: "Another install is in progress",
+      });
+      return;
+    }
+    try {
+      gate.inFlight = true;
+      const presence = await (deps.installCodexCli ?? installCodexCli)();
+      const body: InstallCodexResponse = { ok: true, presence };
+      res.status(200).json(body);
+    } catch (err) {
+      if (err instanceof UnsupportedPlatformError) {
+        res.status(400).json({
+          error: "BAD_REQUEST",
+          code: ERROR_CODE_UNSUPPORTED_PLATFORM,
+          message: err.message,
+        });
+        return;
+      }
+      if (err instanceof CodexInstallError) {
+        res.status(500).json({
+          error: "INTERNAL",
+          code: ERROR_CODE_INSTALL_FAILED,
+          message: "Codex installer failed",
+          exitCode: err.exitCode,
+          stderrTail: err.stderrTail,
+        });
+        return;
+      }
+      sendInternal(res, err, "Failed to install Codex");
     } finally {
       gate.inFlight = false;
     }

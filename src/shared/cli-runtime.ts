@@ -91,6 +91,8 @@ let _warnedInvalidToken = false;
  * consume it ignore the header, so no server-route schema change is required.
  */
 export const CLAUDE_SESSION_HEADER = "X-Claude-Session-Id";
+/** Validated provider hint forwarded only by Tandem's managed stdio bridge. */
+export const TANDEM_AGENT_PROVIDER_HEADER = "X-Tandem-Agent-Provider";
 
 /**
  * Bound on the session-id length we forward. Claude Code sets a UUID

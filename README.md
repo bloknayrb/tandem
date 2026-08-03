@@ -99,11 +99,11 @@ The desktop app bundles the editor, the server it talks to, and storage for the 
 
 Installing Tandem gives you the editor. The AI half needs one more thing: an AI client running on your machine, and the subscription behind it.
 
-The default — and the one Tandem is tested against — is [Claude Code](https://claude.com/claude-code), Anthropic's Claude that runs on your own computer rather than in a browser tab. **A Claude Pro or Max subscription includes it**, so if you already pay for Claude you are most likely already covered; pay-as-you-go API billing works too. See [Anthropic's pricing](https://claude.com/pricing) for what each plan costs.
+The setup wizard supports [Claude Code](https://claude.com/claude-code) and OpenAI Codex as managed assistants, plus Claude Desktop as an MCP client. Choose which managed assistant Tandem should start; the other can remain configured for sessions you launch yourself.
 
 One thing worth knowing before you start: **the Claude you use at claude.ai in a browser cannot connect to Tandem.** A web page has no way to reach a document sitting on your disk. So a subscription is necessary but not sufficient — you also need Claude Code, or Claude Desktop, installed locally.
 
-You do not have to configure any of this by hand. Tandem opens a setup wizard the first time you run it: if Claude Code is not installed, the wizard can install it for you in one click on Windows, macOS, and Linux, and it then writes the connection settings itself. You can reopen it any time from **Settings → AI Assistant**.
+You do not have to configure any of this by hand. Tandem opens a setup wizard the first time you run it: if Claude Code or Codex is not installed, the wizard can run the provider's official installer, then write the connection settings itself. Codex also asks for an explicit project folder so its workspace-write sandbox is never rooted at your home directory. You can reopen the wizard any time from **Settings → AI Assistant**.
 
 Prefer a different AI? Any MCP-capable client can connect to the same endpoint — see the [compatibility table](#the-mcp-integration-policy) for what is supported and what is untested, and [Cowork](#cowork) for connecting Claude Desktop on Windows.
 
@@ -163,7 +163,7 @@ See [docs/security.md](docs/security.md) for the full security model.
 
 ## Where Tandem is headed
 
-Tandem is on the way to a v1.0 release. Today the supported AI integration is Claude (Claude Code / Claude Desktop) over MCP, set up with a one-click in-app wizard. Local models (Ollama, LM Studio) are committed for v1.0 and in active development (#1123) — they'll use the same one-time license as everything else; cloud API-key providers (OpenAI, Gemini) follow in v1.1. Word documents round-trip: edit a `.docx` and save it back as a real Word file, with the comments you sent your AI written back as native Word comments — and Tandem snapshots a file before its first write, so you can restore the original from inside the app. Work still in progress covers turnkey setup on macOS and Linux, licensing, and final polish; pricing is covered under [License](#license) below. The full plan lives in [docs/roadmap.md](docs/roadmap.md), and [CHANGELOG.md](CHANGELOG.md) records what landed in each release.
+Tandem is on the way to a v1.0 release. Today the setup wizard supports Claude Code, Claude Desktop, and Codex. Claude Code and Codex can be managed by Tandem; Codex runs through its local app-server with workspace-write sandboxing and approval prompts shown in Tandem. Local models (Ollama, LM Studio) are committed for v1.0 and in active development (#1123). Word documents round-trip: edit a `.docx` and save it back as a real Word file, with the comments you sent your AI written back as native Word comments — and Tandem snapshots a file before its first write, so you can restore the original from inside the app. Work still in progress covers turnkey setup on macOS and Linux, licensing, and final polish; pricing is covered under [License](#license) below. The full plan lives in [docs/roadmap.md](docs/roadmap.md), and [CHANGELOG.md](CHANGELOG.md) records what landed in each release.
 
 ## Documentation
 
@@ -211,6 +211,7 @@ Client compatibility:
 | AI surface | Status |
 |---|---|
 | **Claude Code** (local CLI) | Default. Validated. Channel push supported. |
+| **Codex** (local CLI) | Supported. Wizard setup, managed app-server event delivery, workspace-write sandboxing, and in-Tandem command/file approvals. |
 | **Claude Desktop** (local app) | Supported via the [Cowork plugin bridge](#cowork) (Windows today). Request/response only — channel push N/A. |
 | **claude.ai web chat** | Not supported. Would require exposing the local server publicly via a tunnel, which is outside scope. |
 | **Other MCP-capable clients** (Cursor, Continue.dev, LM Studio, Ollama, …) | Best-effort, MCP-contract-compatible, not validated. |

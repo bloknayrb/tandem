@@ -39,6 +39,8 @@ export type LauncherStatus =
       /** Always the literal string "<set>" — the real UUID never crosses the wire. */
       sessionId: "<set>";
       resuming: boolean;
+      /** Active assistant selected in integrations.json. Loopback-only. */
+      provider: "claude-code" | "codex";
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     };

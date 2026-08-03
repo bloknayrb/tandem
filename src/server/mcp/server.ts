@@ -11,8 +11,13 @@ import type { Server } from "http";
 import { createRequire } from "module";
 
 import { API_HEALTH } from "../../shared/api-paths.js";
-import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
+import {
+  CLAUDE_SESSION_HEADER,
+  normalizeSessionId,
+  TANDEM_AGENT_PROVIDER_HEADER,
+} from "../../shared/cli-runtime.js";
 import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
+import type { AgentIdentity } from "../../shared/types.js";
 import { createAuthMiddleware } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
@@ -168,6 +173,11 @@ function readClaudeSessionHeader(req: import("express").Request): string | undef
   return normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
 }
 
+function readAgentIdentityHeader(req: import("express").Request): AgentIdentity | undefined {
+  const raw = req.headers[TANDEM_AGENT_PROVIDER_HEADER.toLowerCase()];
+  return raw === "openai" ? { provider: "openai", displayName: "Codex" } : undefined;
+}
+
 /** Send a JSON-RPC error response. */
 function sendJsonRpcError(
   res: import("express").Response,
@@ -198,6 +208,7 @@ async function openSession(
   registry: McpSessionRegistry<McpServer, StreamableHTTPServerTransport>,
   buildServer: () => McpServer,
   claudeSessionId: string | undefined,
+  agentIdentity: AgentIdentity | undefined,
   handshake: (transport: StreamableHTTPServerTransport) => Promise<void>,
 ): Promise<void> {
   const server = buildServer();
@@ -205,7 +216,7 @@ async function openSession(
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: async (sessionId) => {
-      await registry.add({ sessionId, server, transport, claudeSessionId });
+      await registry.add({ sessionId, server, transport, claudeSessionId, agentIdentity });
       console.error(
         `[Tandem] MCP session established: ${sessionId}` +
           `${claudeSessionId ? ` (claude session ${claudeSessionId})` : ""} — ${registry.size} live`,
@@ -412,7 +423,11 @@ export async function startMcpServerHttp(
     }
     registry.touch(entry.sessionId);
     await runWithMcpContext(
-      { claudeSessionId: entry.claudeSessionId, mcpSessionId: entry.sessionId },
+      {
+        claudeSessionId: entry.claudeSessionId,
+        mcpSessionId: entry.sessionId,
+        agentIdentity: entry.agentIdentity,
+      },
       () => entry.transport.handleRequest(req, res, body),
     );
     return entry;
@@ -425,11 +440,14 @@ export async function startMcpServerHttp(
 
     if (isInit) {
       const claudeSessionId = readClaudeSessionHeader(req);
+      const agentIdentity = readAgentIdentityHeader(req);
       try {
         // handleRequest is what mints the session id and fires
         // onsessioninitialized, so the registry entry appears during this call.
-        await openSession(registry, buildServer, claudeSessionId, (transport) =>
-          runWithMcpContext({ claudeSessionId }, () => transport.handleRequest(req, res, body)),
+        await openSession(registry, buildServer, claudeSessionId, agentIdentity, (transport) =>
+          runWithMcpContext({ claudeSessionId, agentIdentity }, () =>
+            transport.handleRequest(req, res, body),
+          ),
         );
       } catch (err) {
         console.error("[Tandem] Failed to create new MCP session:", err);
@@ -568,6 +586,9 @@ export async function startMcpServerHttp(
     readExisting: readExistingTandemEntries,
     serverVersion: APP_VERSION,
   });
+
+  const { registerCodexApprovalRoutes } = await import("../codex/approval-broker.js");
+  registerCodexApprovalRoutes(app, largeBody);
 
   // --- Auto-launcher endpoints (#477 PR 4b) ---
   // Status, single-use nonce, relaunch, start-fresh, and a narrow

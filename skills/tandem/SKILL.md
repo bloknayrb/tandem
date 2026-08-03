@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 4
+version: 5
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
   document editing, or iterating on text collaboratively. Provides workflow
@@ -8,9 +8,11 @@ description: >
   collaborative editor.
 ---
 
+<!-- tandem-owned-skill -->
+
 # Tandem — Collaborative Document Editor
 
-> **Scope:** This skill teaches Claude Code how to use Tandem effectively. Tandem's integration contract is MCP, and **Claude is the default integration** per [ADR-038](https://github.com/bloknayrb/tandem/blob/master/docs/decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration). This skill is a Claude-Code-specific resource shipped via the npm `skills/` folder; other MCP clients receive the tool descriptions directly through MCP and don't need this file.
+> **Scope:** This skill teaches Claude Code and Codex how to use Tandem effectively. Tandem's integration contract is MCP. The setup wizard can install this resource for either assistant; other MCP clients receive the tool descriptions directly through MCP.
 
 Tandem lets you annotate and edit documents alongside the user in real time. The user sees your changes in the editor; you interact via the tandem_* MCP tool suite.
 
@@ -39,13 +41,13 @@ Standard workflow:
 
 ## Authoring a New Document
 
-When you write a document wholesale (create the file on disk yourself, then open it in Tandem), pass `authoredBy: "claude"` to `tandem_open`:
+When Claude Code writes a document wholesale (creates the file on disk, then opens it in Tandem), pass `authoredBy: "claude"` to `tandem_open`:
 
 ```
 tandem_open({ filePath: "/abs/path/draft.md", authoredBy: "claude" })
 ```
 
-This attributes the document's text to Claude so the editor shows authorship correctly — otherwise a wholesale-written document looks unattributed, because authorship is normally stamped only by `tandem_edit`. The flag is idempotent (safe to re-pass on re-open) and only ever stamps Claude authorship — it never forges user attribution. Authorship is not durably persisted across server restarts, so if you re-open a document you created in an earlier session and want it re-attributed, pass `authoredBy: "claude"` again.
+This attributes the document's text to Claude so the editor shows authorship correctly — otherwise a wholesale-written document looks unattributed, because authorship is normally stamped only by `tandem_edit`. The flag is idempotent and only stamps Claude authorship. Codex must omit this Claude-specific flag; Tandem stamps Codex annotations and replies with its OpenAI identity automatically.
 
 ## Annotation Guide
 
@@ -97,7 +99,7 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 ## Session Handoff
 
-When starting a new Claude session with Tandem already running:
+When starting a new assistant session with Tandem already running:
 
 1. `tandem_status()` — check `openDocuments` array for restored sessions
 2. `tandem_listDocuments()` — see all open docs with details
@@ -111,12 +113,12 @@ When multiple documents are open, always pass `documentId` explicitly — omitti
 
 ## Project Context Discovery
 
-Tandem auto-launches you in a single working directory (the user's home by default, or whatever they configured under Settings → Claude Code → Working directory). The document the user opens may live elsewhere — a different project, a different repo. When you're working on a file outside your launch cwd:
+Tandem auto-launches the selected primary assistant in one working directory. Claude Code may default to the user's home; Codex always requires an explicit project folder. The document the user opens may live elsewhere — a different project or repo. When you're working on a file outside your launch cwd:
 
-1. **Read `<docDir>/CLAUDE.md`** if it exists — it's the project's own playbook.
-2. **Walk up** the directory tree from `<docDir>` looking for `CLAUDE.md`, `.claude/`, `README.md`, or `package.json`/`Cargo.toml`/`pyproject.toml` to identify the project root.
-3. **Surface a relaunch nudge** when you detect project-scoped Claude tools you can't load mid-session:
+1. **Read the provider's project instructions** if present: `CLAUDE.md` for Claude Code or `AGENTS.md` for Codex.
+2. **Walk up** from `<docDir>` looking for `CLAUDE.md`, `AGENTS.md`, `.claude/`, `.agents/`, `README.md`, or a package manifest to identify the project root.
+3. **Surface a relaunch nudge** when you detect project-scoped tools you can't load mid-session:
    - `.claude/skills/`, `.claude/agents/`, `.claude/hooks/`, or a `.mcp.json` you haven't loaded
-   - Tell the user: *"I see project-specific Claude tools at `<path>`. I can't load them in this session — open the command palette and run `Relaunch Claude in this folder` if you'd like me to pick them up."*
+   - Tell the user: *"I see project-specific assistant tools at `<path>`. I can't load them in this session — open the command palette and run `Relaunch assistant in this folder` if you'd like me to pick them up."*
 
-The user is in control: relaunch ends the current conversation, so only suggest it when the project-scoped tools materially change what you can help with.
+The user is in control: relaunch interrupts the current task, so only suggest it when the project-scoped tools materially change what you can help with.

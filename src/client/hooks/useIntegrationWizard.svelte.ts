@@ -69,6 +69,8 @@ export interface IntegrationWizardState {
   readonly detecting: boolean;
   readonly existing: ExistingMcpInstall[];
   readonly picked: PickedIntegration[];
+  /** Persisted primary managed assistant selected independently of checkboxes. */
+  readonly primaryIntegrationId: string | null;
   readonly errorMessage: string | null;
   /** Per-integration apply outcomes after save() succeeds. Populated only when
    *  step === "done"; consult the `status === "error"` items to surface
@@ -88,6 +90,7 @@ export interface IntegrationWizardState {
   readonly keychainUnavailable: boolean;
   begin(): Promise<void>;
   setPicked(picked: PickedIntegration[]): void;
+  setPrimaryIntegrationId(id: string): void;
   submitSecret(picked: PickedIntegration, secret: string): Promise<void>;
   save(): Promise<void>;
   reset(): void;
@@ -179,7 +182,32 @@ export function detectedToPicked(install: ExistingMcpInstall): PickedIntegration
       keychainUnavailable: false,
     };
   }
+  if (install.target.kind === "codex") {
+    const id = newPickedId("codex");
+    return {
+      id,
+      config: {
+        kind: "codex",
+        id,
+        label: install.target.label,
+        configPath: install.target.configPath,
+        transport: "stdio",
+      },
+      hasStoredSecret: false,
+      keychainUnavailable: false,
+    };
+  }
   return null;
+}
+
+function configIdentity(config: IntegrationConfig): string {
+  return "configPath" in config && config.configPath
+    ? `${config.kind}:${config.configPath}`
+    : `${config.kind}:${config.id}`;
+}
+
+function isLaunchCapable(config: IntegrationConfig): boolean {
+  return (config.kind === "claude-code" || config.kind === "codex") && config.apply !== "skip";
 }
 
 export interface IntegrationWizardOptions {
@@ -213,6 +241,11 @@ export function createIntegrationWizard(
   let detecting = $state(true);
   let existing = $state<ExistingMcpInstall[]>([]);
   let picked = $state<PickedIntegration[]>([]);
+  let primaryIntegrationId = $state<string | null>(null);
+  let persistedFile: IntegrationsFile = {
+    schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+    integrations: [],
+  };
   let errorMessage = $state<string | null>(null);
   let applyResults = $state<ApplyItemResult[]>([]);
   // Post-apply push-vs-polling readout (WS-B). `null` until the post-apply
@@ -242,15 +275,42 @@ export function createIntegrationWizard(
         setError(`Could not load existing entries (HTTP ${res.status}).`);
         return;
       }
-      const body = (await res.json()) as { installs: ExistingMcpInstall[] };
+      const body = (await res.json()) as {
+        installs: ExistingMcpInstall[];
+        file?: IntegrationsFile;
+      };
       if (myGen !== beginGen) return;
       existing = body.installs;
+      persistedFile = body.file ?? {
+        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+        integrations: [],
+      };
       // Preselect everything connectable as soon as detection resolves —
       // the connect screen renders cards pre-checked, no separate pick step.
       picked = body.installs
         .filter(isSelectable)
         .map(detectedToPicked)
-        .filter((p): p is PickedIntegration => p !== null);
+        .filter((p): p is PickedIntegration => p !== null)
+        .map((candidate) => {
+          const saved = persistedFile.integrations.find(
+            (config) => configIdentity(config) === configIdentity(candidate.config),
+          );
+          return saved
+            ? {
+                ...candidate,
+                id: saved.id,
+                config: saved,
+                hasStoredSecret: "tokenSecretRef" in saved && saved.tokenSecretRef !== undefined,
+              }
+            : candidate;
+        });
+      const selectedPrimary = picked.find((p) => p.id === persistedFile.defaultIntegrationId);
+      if (selectedPrimary && isLaunchCapable(selectedPrimary.config)) {
+        primaryIntegrationId = selectedPrimary.id;
+      } else {
+        const launchable = picked.filter((p) => isLaunchCapable(p.config));
+        primaryIntegrationId = launchable.length === 1 ? launchable[0].id : null;
+      }
     } catch (err) {
       if (myGen !== beginGen) return;
       // A network failure (server not up yet — common on first launch) rejects
@@ -280,13 +340,25 @@ export function createIntegrationWizard(
     // the separate secrets step, so this couldn't happen. Errors are swallowed
     // — an unreferenced ref in the user's own keychain isn't worth a toast.
     const dropped = picked.filter(
-      (prev) => prev.config.tokenSecretRef && !next.some((n) => n.id === prev.id),
+      (prev) =>
+        "tokenSecretRef" in prev.config &&
+        prev.config.tokenSecretRef &&
+        !next.some((n) => n.id === prev.id),
     );
     picked = next;
+    if (!next.some((p) => p.id === primaryIntegrationId && isLaunchCapable(p.config))) {
+      const launchable = next.filter((p) => isLaunchCapable(p.config));
+      primaryIntegrationId = launchable.length === 1 ? launchable[0].id : null;
+    }
     for (const p of dropped) {
-      const ref = p.config.tokenSecretRef;
+      const ref = "tokenSecretRef" in p.config ? p.config.tokenSecretRef : undefined;
       if (ref) void keychainBackend.delete(ref);
     }
+  };
+
+  const setPrimaryIntegrationId = (id: string) => {
+    const target = picked.find((p) => p.id === id);
+    if (target && isLaunchCapable(target.config)) primaryIntegrationId = id;
   };
 
   const submitSecret = async (target: PickedIntegration, secret: string) => {
@@ -328,7 +400,7 @@ export function createIntegrationWizard(
    */
   const cleanupStoredSecrets = async (): Promise<void> => {
     const storedRefs = picked
-      .map((p) => p.config.tokenSecretRef)
+      .map((p) => ("tokenSecretRef" in p.config ? p.config.tokenSecretRef : undefined))
       .filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
     await Promise.all(storedRefs.map((ref) => keychainBackend.delete(ref)));
   };
@@ -366,13 +438,20 @@ export function createIntegrationWizard(
   const save = async () => {
     step = "applying";
     channelRegistered = null;
+    const codexWithoutWorkspace = picked.find(
+      (p) => p.config.kind === "codex" && !p.config.workingDirectory?.trim(),
+    );
+    if (codexWithoutWorkspace) {
+      setError("Choose a working directory for Codex before connecting.");
+      return;
+    }
     // Determine apply intent per picked integration. Failed-validation
     // existing entries pre-set to "skip" so re-validated entries don't
     // get overwritten with a wizard-generated shape that differs (the
     // user hand-edited a tandem entry to a custom shape; the apply path
     // would silently replace it with our canonical shape and erase the
     // customization).
-    const integrations: IntegrationConfig[] = picked.map((p) => {
+    const selectedIntegrations: IntegrationConfig[] = picked.map((p) => {
       // `other-mcp` is constrained to apply: "skip" by the schema.
       if (p.config.kind === "other-mcp") {
         return { ...p.config, apply: "skip" } as IntegrationConfig;
@@ -389,9 +468,34 @@ export function createIntegrationWizard(
         apply: validationFailed ? "skip" : "create",
       } as IntegrationConfig;
     });
+    const removableDetectedIdentities = new Set(
+      existing
+        .filter(isSelectable)
+        .map((install) => `${install.target.kind}:${install.target.configPath}`),
+    );
+    const selectedIdentities = new Set(selectedIntegrations.map(configIdentity));
+    const preserved = persistedFile.integrations.filter((config) => {
+      const identity = configIdentity(config);
+      // A selectable card omitted by the user is an intentional disconnect.
+      // An unreadable/malformed install cannot be selected at all, so preserve
+      // its persisted record instead of turning a probe failure into deletion.
+      return !selectedIdentities.has(identity) && !removableDetectedIdentities.has(identity);
+    });
+    const integrations = [...preserved, ...selectedIntegrations];
+    const launchable = integrations.filter(isLaunchCapable);
+    const resolvedPrimary = launchable.some((config) => config.id === primaryIntegrationId)
+      ? primaryIntegrationId
+      : launchable.length === 1
+        ? launchable[0].id
+        : null;
+    if (launchable.length > 1 && resolvedPrimary === null) {
+      setError("Choose a primary assistant before connecting.");
+      return;
+    }
     const file: IntegrationsFile = {
       schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
       integrations,
+      ...(resolvedPrimary ? { defaultIntegrationId: resolvedPrimary } : {}),
     };
     // Once persist returns 200 the integrations file on disk durably
     // references the stored keychain refs, so the catch below must NOT delete
@@ -452,6 +556,8 @@ export function createIntegrationWizard(
     detecting = false;
     existing = [];
     picked = [];
+    primaryIntegrationId = null;
+    persistedFile = { schemaVersion: INTEGRATIONS_SCHEMA_VERSION, integrations: [] };
     errorMessage = null;
     applyResults = [];
     channelRegistered = null;
@@ -485,6 +591,9 @@ export function createIntegrationWizard(
     get picked() {
       return picked;
     },
+    get primaryIntegrationId() {
+      return primaryIntegrationId;
+    },
     get errorMessage() {
       return errorMessage;
     },
@@ -499,6 +608,7 @@ export function createIntegrationWizard(
     },
     begin,
     setPicked,
+    setPrimaryIntegrationId,
     submitSecret,
     save,
     reset,

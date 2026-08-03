@@ -40,7 +40,12 @@ describe("readExistingTandemEntries", () => {
   // steers home-rooted lookups; LOCALAPPDATA is a separate env var with its
   // own override field. APPDATA (non-MSIX Desktop branch) is pinned via
   // beforeEach since DetectOptions has no override field for it. See #736.
-  const detectOverrides = () => ({ homeOverride: tmpHome, localAppDataOverride: tmpHome });
+  const detectOverrides = () => ({
+    homeOverride: tmpHome,
+    localAppDataOverride: tmpHome,
+    pathOverride: path.join(tmpHome, "empty-path"),
+    codexHomeOverride: path.join(tmpHome, ".codex"),
+  });
 
   it("returns status: missing when ~/.claude.json does not exist (force-detected target)", async () => {
     const installs = await readExistingTandemEntries({ ...detectOverrides(), force: true });

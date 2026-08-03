@@ -739,6 +739,84 @@ describe("createIntegrationWizard", () => {
     expect((applyBody as { ids: string[] }).ids).toEqual(["cc-1"]);
   });
 
+  it("save(): preserves a persisted integration when its detected config is unreadable", async () => {
+    let savedBody: unknown = null;
+    const persistedCodex = {
+      kind: "codex" as const,
+      id: "codex-1",
+      label: "Codex",
+      configPath: "C:/Users/test/.codex/config.toml",
+      transport: "stdio" as const,
+      apply: "create" as const,
+      workingDirectory: "C:/repo",
+    };
+    const wizard = createIntegrationWizard({
+      fetchFn: makeFetchStub([
+        {
+          method: "GET",
+          urlMatch: /\/api\/integrations\/existing$/,
+          handler: () => ({
+            status: 200,
+            body: {
+              installs: [
+                {
+                  target: {
+                    kind: "codex",
+                    label: "Codex",
+                    configPath: persistedCodex.configPath,
+                  },
+                  status: "error",
+                  errorMessage: "Could not inspect Codex MCP configuration",
+                },
+              ],
+              file: {
+                schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+                integrations: [persistedCodex],
+                defaultIntegrationId: persistedCodex.id,
+              },
+            },
+          }),
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations$/,
+          handler: (body) => {
+            savedBody = body;
+            return {
+              status: 200,
+              body: {
+                ok: true,
+                ids: [persistedCodex.id],
+                confirmationNonce: "nonce-1",
+              },
+            };
+          },
+        },
+        {
+          method: "POST",
+          urlMatch: /\/api\/integrations\/apply$/,
+          handler: () => ({
+            status: 200,
+            body: {
+              results: [{ id: persistedCodex.id, status: "error" }],
+              nextNonce: "nonce-2",
+            },
+          }),
+        },
+      ]),
+    });
+
+    await wizard.begin();
+    flushSync();
+    expect(wizard.picked).toHaveLength(0);
+    await wizard.save();
+
+    expect(savedBody).toMatchObject({
+      integrations: [persistedCodex],
+      defaultIntegrationId: persistedCodex.id,
+    });
+  });
+
   it("save(): 400 surfaces server error message into step=error", async () => {
     const wizard = createIntegrationWizard({
       fetchFn: makeFetchStub([

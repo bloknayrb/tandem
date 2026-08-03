@@ -32,6 +32,15 @@ const claudeDesktop = {
   transport: "stdio" as const,
 };
 
+const codex = {
+  kind: "codex" as const,
+  id: "codex-1",
+  label: "Codex",
+  configPath: "/home/user/.codex/config.toml",
+  transport: "stdio" as const,
+  workingDirectory: "/home/user/project",
+};
+
 describe("createIntegrationsStore", () => {
   let tmpDir: string;
 
@@ -272,15 +281,30 @@ describe("createIntegrationsStore", () => {
     }
   });
 
-  it("read() preserves a valid defaultIntegrationId", async () => {
+  it("read() clears a defaultIntegrationId that points at a non-launchable integration", async () => {
+    const store = createIntegrationsStore(tmpDir);
+    await fs.promises.writeFile(
+      store.filePath,
+      JSON.stringify({
+        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+        integrations: [claudeCode, claudeDesktop],
+        defaultIntegrationId: "cd-1",
+      }),
+      "utf8",
+    );
+    const result = await store.read();
+    expect(result.defaultIntegrationId).toBeUndefined();
+  });
+
+  it("read() preserves Codex as a valid primary integration", async () => {
     const store = createIntegrationsStore(tmpDir);
     await store.write({
       schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
-      integrations: [claudeCode, claudeDesktop],
-      defaultIntegrationId: "cd-1",
+      integrations: [claudeCode, codex],
+      defaultIntegrationId: "codex-1",
     });
     const result = await store.read();
-    expect(result.defaultIntegrationId).toBe("cd-1");
+    expect(result.defaultIntegrationId).toBe("codex-1");
   });
 
   it.runIf(process.platform !== "win32")(

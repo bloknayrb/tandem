@@ -55,7 +55,7 @@ Usage:
   tandem setup                      Print first-run setup guidance (setup is wizard-driven)
   tandem setup --apply              Write MCP config to detected AI clients non-interactively
   tandem setup --apply --force      Apply to default paths regardless of detection
-  tandem setup --apply --target=claude-code|claude-desktop
+  tandem setup --apply --target=claude-code|claude-desktop|codex
                                     Restrict --apply to specific client(s)
   tandem setup --apply --with-channel-shim
                                     Also register the stdio channel shim (legacy opt-in)
@@ -110,13 +110,13 @@ try {
     process.exit(exitCode);
   } else if (args[0] === "setup") {
     const { runSetup, parseTargetArgs } = await import("./setup.js");
-    // `--target=claude-code` / `--target=claude-desktop`, repeatable. Warn on
+    // `--target=claude-code` / `--target=claude-desktop` / `--target=codex`, repeatable. Warn on
     // unrecognized values so a typo doesn't silently become a confusing "No
     // matching installations" downstream.
     const { targets, unknown } = parseTargetArgs(args);
     for (const t of unknown) {
       console.error(
-        `[tandem] Ignoring unrecognized --target value "${t}" (expected claude-code or claude-desktop).`,
+        `[tandem] Ignoring unrecognized --target value "${t}" (expected claude-code, claude-desktop, or codex).`,
       );
     }
     // If the user asked for targets but NONE resolved, fail closed rather than

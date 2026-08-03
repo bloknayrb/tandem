@@ -34,7 +34,10 @@ import {
   API_LAUNCHER_STATUS,
   API_LAUNCHER_WORKING_DIRECTORY,
 } from "../../shared/api-paths.js";
-import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
+import type {
+  ClaudeCodeIntegration,
+  CodexIntegration,
+} from "../../shared/integrations/contract.js";
 import {
   isTransientlyUnavailable,
   LAUNCHER_CWD_MAX_LENGTH,
@@ -228,6 +231,7 @@ function makeStatusHandler(deps: LauncherRoutesDeps): Handler {
         cwd: raw.cwd,
         sessionId: "<set>",
         resuming: raw.resuming,
+        provider: raw.provider,
         skillRefresh,
       };
       res.json(body);
@@ -510,19 +514,36 @@ function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
     try {
       if (deps.workingDirHook) await deps.workingDirHook();
       const file = await deps.store.read();
-      const idx = file.integrations.findIndex(
-        (i): i is ClaudeCodeIntegration => i.kind === "claude-code",
+      const isLaunchable = (
+        integration: IntegrationConfig,
+      ): integration is ClaudeCodeIntegration | CodexIntegration =>
+        (integration.kind === "claude-code" || integration.kind === "codex") &&
+        integration.apply !== "skip";
+      const selectedIdx = file.integrations.findIndex(
+        (integration) => integration.id === file.defaultIntegrationId && isLaunchable(integration),
       );
+      const idx =
+        selectedIdx >= 0
+          ? selectedIdx
+          : file.integrations.findIndex((entry) => isLaunchable(entry));
       if (idx === -1) {
         res.status(404).json({
           error: "NOT_FOUND",
           code: LAUNCHER_ERROR_NO_INTEGRATION,
-          message: "no claude-code integration in integrations.json",
+          message: "no launchable assistant integration in integrations.json",
         });
         return;
       }
-      const current = file.integrations[idx] as ClaudeCodeIntegration;
-      const updated: ClaudeCodeIntegration = { ...current };
+      const current = file.integrations[idx] as ClaudeCodeIntegration | CodexIntegration;
+      if (current.kind === "codex" && validated === null) {
+        sendBadRequest(
+          res,
+          LAUNCHER_ERROR_INVALID_BODY,
+          "Codex requires an explicit workingDirectory",
+        );
+        return;
+      }
+      const updated: ClaudeCodeIntegration | CodexIntegration = { ...current };
       if (validated === null) {
         delete (updated as { workingDirectory?: string }).workingDirectory;
       } else {

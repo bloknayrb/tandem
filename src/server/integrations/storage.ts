@@ -125,8 +125,9 @@ async function readIntegrationsFile(filePath: string): Promise<IntegrationsFile>
 }
 
 async function writeIntegrationsFile(filePath: string, file: IntegrationsFile): Promise<void> {
-  IntegrationsFileSchema.parse(file);
-  await atomicWriteConfigFile(filePath, JSON.stringify(file, null, 2) + "\n");
+  const validated = IntegrationsFileSchema.parse(file);
+  const normalized = enforceReferentialIntegrity(validated);
+  await atomicWriteConfigFile(filePath, JSON.stringify(normalized, null, 2) + "\n");
 }
 
 /**
@@ -399,10 +400,14 @@ function normalizeLocalhostUrls(data: unknown): unknown {
 
 function enforceReferentialIntegrity(file: IntegrationsFile): IntegrationsFile {
   if (file.defaultIntegrationId === undefined) return file;
-  const exists = file.integrations.some((i) => i.id === file.defaultIntegrationId);
-  if (exists) return file;
+  const selected = file.integrations.find((i) => i.id === file.defaultIntegrationId);
+  const launchable =
+    selected !== undefined &&
+    (selected.kind === "claude-code" || selected.kind === "codex") &&
+    selected.apply !== "skip";
+  if (launchable) return file;
   console.error(
-    `[tandem] integrations.json defaultIntegrationId "${file.defaultIntegrationId}" does not match any integration; clearing.`,
+    `[tandem] integrations.json defaultIntegrationId "${file.defaultIntegrationId}" does not match a launchable assistant integration; clearing.`,
   );
   return { ...file, defaultIntegrationId: undefined };
 }

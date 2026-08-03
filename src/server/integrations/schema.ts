@@ -16,6 +16,8 @@
  *   endpoint (`POST /api/integrations/apply`) iterates entries whose
  *   `apply !== "skip"` and writes them to Claude's config — separates intent
  *   (persist) from side-effect (apply) per ADR-038 §2b adversarial review.
+ * - v4: adds a first-class `codex` integration and makes the persisted
+ *   `defaultIntegrationId` the primary managed-assistant selector.
  *
  * `tokenSecretRef` is an opaque pointer into the OS keychain — never a
  * secret value. The keychain backend lives in `./keychain.ts`. Future
@@ -125,6 +127,16 @@ const ClaudeDesktopIntegration = BaseIntegrationFields.extend({
   apply: ApplyIntent.optional(),
 }).strict();
 
+const CodexIntegration = BaseIntegrationFields.omit({ tokenSecretRef: true })
+  .extend({
+    kind: z.literal("codex"),
+    configPath: AbsolutePath,
+    transport: z.literal("stdio"),
+    apply: ApplyIntent.optional(),
+    workingDirectory: AbsolutePath.optional(),
+  })
+  .strict();
+
 /**
  * Generic MCP-capable client (Cursor, Continue.dev, LM Studio, Ollama, etc.).
  * Tandem doesn't auto-configure these — the user wires their client to
@@ -160,10 +172,29 @@ const OtherMcpIntegration = BaseIntegrationFields.extend({
  * consumer from having to defend against a missing `url` on an
  * http-transport integration.
  */
+const IntegrationConfigV3Schema = z
+  .discriminatedUnion("kind", [
+    ClaudeCodeIntegration,
+    ClaudeDesktopIntegration,
+    OtherMcpIntegration,
+  ])
+  .superRefine((val, ctx) => {
+    if (val.kind === "other-mcp" && val.transport === "http") {
+      if (val.url === undefined || val.url.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["url"],
+          message: "url is required when transport is http",
+        });
+      }
+    }
+  });
+
 export const IntegrationConfigSchema = z
   .discriminatedUnion("kind", [
     ClaudeCodeIntegration,
     ClaudeDesktopIntegration,
+    CodexIntegration,
     OtherMcpIntegration,
   ])
   .superRefine((val, ctx) => {
@@ -184,6 +215,15 @@ export const IntegrationsFileSchema = z
   .object({
     schemaVersion: z.literal(SHARED_SCHEMA_VERSION),
     integrations: z.array(IntegrationConfigSchema),
+    defaultIntegrationId: z.string().min(1).optional(),
+  })
+  .strict();
+
+/** Exact v3 input contract used only by the v3→v4 migration. */
+export const IntegrationsFileV3Schema = z
+  .object({
+    schemaVersion: z.literal(3),
+    integrations: z.array(IntegrationConfigV3Schema),
     defaultIntegrationId: z.string().min(1).optional(),
   })
   .strict();

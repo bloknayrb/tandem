@@ -36,6 +36,7 @@ import {
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
 import { createClaudeCliStatus } from "../hooks/useClaudeCliStatus.svelte.js";
+import { createCodexCliStatus } from "../hooks/useCodexCliStatus.svelte.js";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
 import {
   createIntegrationWizard,
@@ -91,6 +92,12 @@ const cliStatus = createClaudeCliStatus(
 // never sees a flash of the install button before the GET resolves.
 const showInstallCta = $derived(cliStatus.presence === "NOT_INSTALLED");
 const showInstalledNotOnPath = $derived(cliStatus.presence === "INSTALLED_NOT_ON_PATH");
+const codexCliStatus = createCodexCliStatus(
+  () => open && wizard.step === "connect",
+  `http://127.0.0.1:${DEFAULT_MCP_PORT}`,
+);
+const showCodexInstallCta = $derived(codexCliStatus.presence === "NOT_INSTALLED");
+const showCodexInstalledNotOnPath = $derived(codexCliStatus.presence === "INSTALLED_NOT_ON_PATH");
 
 // Post-apply reachability (#1174 gap #1). Once the Done screen shows, verify the
 // Tandem MCP server actually answers at the URL we just wrote (HTTP targets =
@@ -241,6 +248,7 @@ function retryDetection(): void {
   secretInputs = {};
   void wizard.begin();
   void cliStatus.refetch();
+  void codexCliStatus.refetch();
   // The Cowork poller only refreshes every 30s — "Check again" must reflect a
   // Cowork session the user just started without the wait.
   void coworkStatus.refetch();
@@ -258,6 +266,11 @@ async function onInstallClaude(): Promise<void> {
   if (next && next !== "NOT_INSTALLED") {
     void wizard.begin();
   }
+}
+
+async function onInstallCodex(): Promise<void> {
+  const next = await codexCliStatus.install();
+  if (next && next !== "NOT_INSTALLED") void wizard.begin();
 }
 
 /**
@@ -320,6 +333,35 @@ const NETWORK_ERROR_RE = /fetch|network|Failed to/i;
 const connectLabel = $derived(
   wizard.picked.length === 1 ? `Connect ${wizard.picked[0].config.label}` : "Connect selected",
 );
+
+const launchablePicked = $derived(
+  wizard.picked.filter((p) => p.config.kind === "claude-code" || p.config.kind === "codex"),
+);
+const primaryPicked = $derived(
+  launchablePicked.find((p) => p.id === wizard.primaryIntegrationId) ?? launchablePicked[0],
+);
+const primaryAssistantName = $derived(primaryPicked?.config.label ?? "Your assistant");
+const primaryIsCodex = $derived(primaryPicked?.config.kind === "codex");
+
+const codexMissingWorkspace = $derived(
+  wizard.picked.some((p) => p.config.kind === "codex" && !p.config.workingDirectory?.trim()),
+);
+
+function setCodexWorkspace(id: string, workingDirectory: string): void {
+  wizard.setPicked(
+    wizard.picked.map((picked) =>
+      picked.id === id && picked.config.kind === "codex"
+        ? {
+            ...picked,
+            config: {
+              ...picked.config,
+              ...(workingDirectory.trim() ? { workingDirectory } : { workingDirectory: undefined }),
+            },
+          }
+        : picked,
+    ),
+  );
+}
 
 /** Friendly name for an apply-result row — results carry integration ids,
  *  so resolve back through `picked` for the human label. */
@@ -485,7 +527,7 @@ const doneHeaderState = $derived(
       <header class="iw-header">
         <div class="iw-header-text">
           <h2 class="iw-title">
-            {view === "cowork" ? "Set up Cowork" : "Connect Claude to Tandem"}
+            {view === "cowork" ? "Set up Cowork" : "Connect an assistant to Tandem"}
           </h2>
           {#if view === "main" && wizard.step === "connect"}
             <p class="iw-subtitle">Connect your AI assistant.</p>
@@ -575,10 +617,10 @@ const doneHeaderState = $derived(
                  visible immediately on open. -->
             <section class="iw-step" data-testid="integration-wizard-step-detect">
             {#if wizard.detecting}
-              {@render loadingDots("Looking for Claude on your computer…")}
+              {@render loadingDots("Looking for AI assistants on your computer…")}
             {:else if wizard.existing.length === 0}
               <div class="iw-empty" data-testid="integration-wizard-empty">
-                <p class="iw-empty-title">We couldn't find Claude on this computer.</p>
+                <p class="iw-empty-title">We couldn't find Claude or Codex on this computer.</p>
                 {#if showInstallCta}
                   <p class="iw-hint-text">
                     Don't have Claude Code yet? Install it now — a small, signed download
@@ -612,17 +654,45 @@ const doneHeaderState = $derived(
                     </span>
                   </div>
                 {/if}
+                {#if showCodexInstallCta}
+                  <p class="iw-hint-text">
+                    Prefer Codex? Install the official Codex CLI from OpenAI.
+                  </p>
+                  <button
+                    type="button"
+                    class="iw-btn iw-btn-secondary"
+                    onclick={onInstallCodex}
+                    disabled={codexCliStatus.installing}
+                    data-testid="integration-wizard-install-codex"
+                  >
+                    {codexCliStatus.installing ? "Installing…" : "Install Codex"}
+                  </button>
+                  {#if codexCliStatus.installError}
+                    <div class="iw-banner-warning" role="alert">
+                      {@render warningIcon()}
+                      <span>{codexCliStatus.installError}</span>
+                    </div>
+                  {/if}
+                {:else if showCodexInstalledNotOnPath}
+                  <div class="iw-whats-next" data-testid="integration-wizard-codex-install-success">
+                    {@render checkIcon()}
+                    <span>
+                      Codex is installed. Open a new terminal and run <code>codex</code> once,
+                      then choose “Check again”.
+                    </span>
+                  </div>
+                {/if}
                 <p class="iw-hint-text">
-                  If you use Claude Code or Claude Desktop, open it once, then check again. To
-                  connect a different MCP-compatible app manually, point it at:
+                  Open Claude Code, Claude Desktop, or Codex once, then check again. To connect a
+                  different MCP-compatible app manually, point it at:
                 </p>
                 <code class="iw-code">http://127.0.0.1:{DEFAULT_MCP_PORT}/mcp</code>
               </div>
             {:else}
               <p class="iw-intro">
-                We'll add a small entry to Claude's settings file so Claude can read and edit the
-                documents you have open in Tandem. Nothing else is touched, and you can undo this
-                any time.
+                We'll add a small entry to each selected assistant's settings so it can read and
+                edit the documents you have open in Tandem. Nothing else is touched, and you can
+                undo this any time.
               </p>
               <div class="iw-cards">
                 {#each wizard.existing as install (install.target.configPath)}
@@ -634,7 +704,45 @@ const doneHeaderState = $derived(
                 {/each}
               </div>
 
-              {#if wizard.picked.length > 0}
+              {#if launchablePicked.length > 1}
+                <fieldset class="iw-primary" data-testid="integration-wizard-primary">
+                  <legend>Primary assistant</legend>
+                  <p class="iw-hint-text">Tandem starts and restarts this assistant.</p>
+                  {#each launchablePicked as picked (picked.id)}
+                    <label>
+                      <input
+                        type="radio"
+                        name="primary-assistant"
+                        value={picked.id}
+                        checked={wizard.primaryIntegrationId === picked.id}
+                        onchange={() => wizard.setPrimaryIntegrationId(picked.id)}
+                      />
+                      <span>{picked.config.label}</span>
+                    </label>
+                  {/each}
+                </fieldset>
+              {/if}
+
+              {#each wizard.picked.filter((p) => p.config.kind === "codex") as picked (picked.id)}
+                <div class="iw-primary" data-testid="integration-wizard-codex-workspace">
+                  <label for="codex-workspace-{picked.id}">Codex working directory</label>
+                  <p class="iw-hint-text">
+                    Codex can write within this folder. Tandem never defaults Codex to your home
+                    directory.
+                  </p>
+                  <input
+                    id="codex-workspace-{picked.id}"
+                    class="iw-input"
+                    type="text"
+                    value={picked.config.kind === "codex" ? (picked.config.workingDirectory ?? "") : ""}
+                    placeholder="Absolute path to your project"
+                    oninput={(event) =>
+                      setCodexWorkspace(picked.id, (event.currentTarget as HTMLInputElement).value)}
+                  />
+                </div>
+              {/each}
+
+              {#if wizard.picked.some((p) => p.config.kind !== "codex")}
                 <details class="iw-advanced" data-testid="integration-wizard-advanced">
                   <summary>
                     {@render chevronIcon()}
@@ -657,7 +765,7 @@ const doneHeaderState = $derived(
                         </span>
                       </div>
                     {/if}
-                    {#each wizard.picked as picked (picked.id)}
+                    {#each wizard.picked.filter((p) => p.config.kind !== "codex") as picked (picked.id)}
                       <div class="iw-secret-row">
                         <span class="iw-secret-label">{picked.config.label}</span>
                         {#if picked.hasStoredSecret}
@@ -704,7 +812,7 @@ const doneHeaderState = $derived(
           </section>
         {:else if wizard.step === "applying"}
           <section class="iw-step iw-center" data-testid="integration-wizard-step-applying">
-            {@render loadingDots("Connecting Claude…")}
+            {@render loadingDots("Connecting your assistant…")}
             <p class="iw-hint-text">Updating Claude's settings file. This takes a second.</p>
           </section>
         {:else if wizard.step === "done"}
@@ -742,9 +850,9 @@ const doneHeaderState = $derived(
               {/if}
               <h3 class="iw-done-title">
                 {#if doneHeaderState === "connected"}
-                  Claude is connected to Tandem
+                  {primaryAssistantName} is connected to Tandem
                 {:else if doneHeaderState === "waiting"}
-                  Config written — waiting for Claude to connect
+                  Config written — waiting for {primaryAssistantName} to connect
                 {:else}
                   Partly connected
                 {/if}
@@ -752,7 +860,7 @@ const doneHeaderState = $derived(
             </div>
             {#if reachability.phase === "verifying"}
               <div class="iw-verifying" data-testid="integration-wizard-step-verifying">
-                {@render loadingDots("Verifying Claude can reach Tandem…")}
+                {@render loadingDots(`Verifying ${primaryAssistantName} can reach Tandem…`)}
               </div>
             {/if}
             {#if wizard.applyResults.length > 0}
@@ -804,15 +912,20 @@ const doneHeaderState = $derived(
               </svg>
               <span>
                 {#if whatsNext === "connected"}
-                  Claude is connected and talking to Tandem. Ask it to open a document.
+                  {primaryAssistantName} is connected and talking to Tandem. Ask it to open a document.
                 {:else if whatsNext === "unreachable"}
-                  Tandem doesn't seem to be running. Start Tandem, then restart Claude and run
-                  <code class="iw-code-inline">/mcp</code>.
+                  Tandem doesn't seem to be running. Start Tandem, then restart
+                  {primaryAssistantName}{#if !primaryIsCodex} and run
+                    <code class="iw-code-inline">/mcp</code>{/if}.
                 {:else if whatsNext === "stdio-only"}
                   Open Claude Desktop to start using Tandem.
                 {:else}
-                  Restart Claude Code, then type <code class="iw-code-inline">/mcp</code> to verify —
-                  or just ask Claude to open a document.
+                  {#if primaryIsCodex}
+                    Restart Tandem to start Codex in the selected project folder.
+                  {:else}
+                    Restart Claude Code, then type <code class="iw-code-inline">/mcp</code> to verify —
+                    or just ask Claude to open a document.
+                  {/if}
                 {/if}
               </span>
             </div>
@@ -960,7 +1073,7 @@ const doneHeaderState = $derived(
               type="button"
               class="iw-btn iw-btn-primary"
               onclick={() => wizard.save()}
-              disabled={wizard.picked.length === 0}
+              disabled={wizard.picked.length === 0 || codexMissingWorkspace}
               data-testid="integration-wizard-connect-btn"
             >
               {connectLabel}
@@ -1209,6 +1322,42 @@ const doneHeaderState = $derived(
     display: flex;
     flex-direction: column;
     gap: var(--tandem-space-2);
+  }
+
+  .iw-primary {
+    display: flex;
+    flex-direction: column;
+    gap: var(--tandem-space-2);
+    margin: 0;
+    padding: var(--tandem-space-3);
+    border: 1px solid var(--tandem-border);
+    border-radius: var(--tandem-r-3);
+  }
+  .iw-primary legend {
+    padding: 0 var(--tandem-space-1);
+    font-size: var(--tandem-text-sm);
+    font-weight: 600;
+  }
+  .iw-primary label {
+    display: flex;
+    align-items: center;
+    gap: var(--tandem-space-2);
+    font-size: var(--tandem-text-sm);
+  }
+  .iw-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--tandem-space-2);
+    border: 1px solid var(--tandem-border-strong);
+    border-radius: var(--tandem-r-2);
+    background: var(--tandem-surface);
+    color: var(--tandem-fg);
+    font-family: var(--tandem-font-mono);
+    font-size: var(--tandem-text-sm);
+  }
+  .iw-input:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -1px;
   }
 
   .iw-empty {

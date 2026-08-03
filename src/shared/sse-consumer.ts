@@ -102,6 +102,10 @@ export interface EventConsumerOptions {
    * `Last-Event-ID` — the server replays the dropped event.
    */
   onEvent: (event: TandemEvent, eventId: string | undefined) => Promise<void> | void;
+  /** Resume cursor restored by a durable consumer such as the Codex worker. */
+  initialLastEventId?: string;
+  /** Persist a delivered cursor before it is acknowledged in memory. */
+  onDeliveredEventId?: (eventId: string) => Promise<void> | void;
   /**
    * Optional hook called after the retry-exhaustion error POST returns but
    * before `process.exit(1)`. The monitor uses it to write the visible
@@ -162,7 +166,7 @@ export async function runEventConsumer(opts: EventConsumerOptions): Promise<void
   await getCachedMode(opts.tandemUrl, opts.logPrefix).catch(() => {});
 
   let retries = 0;
-  let lastEventId: string | undefined;
+  let lastEventId: string | undefined = opts.initialLastEventId;
 
   while (retries < CHANNEL_MAX_RETRIES) {
     try {
@@ -488,6 +492,7 @@ export async function connectAndStreamOnce(
           throw err;
         }
 
+        if (eventId) await opts.onDeliveredEventId?.(eventId);
         if (eventId) cb.onEventId(eventId);
         scheduleAwareness(event);
       }

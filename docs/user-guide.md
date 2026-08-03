@@ -6,6 +6,8 @@ A complete guide to using Tandem — from first launch to advanced workflows.
 
 > **Setting up an AI integration rather than learning the editor?** Skip to [Working with Claude Code](#working-with-claude-code) for the Claude default, or see [README → The MCP integration policy](../README.md#the-mcp-integration-policy) for the generic MCP path.
 
+> **Using Codex?** The first-run wizard detects or installs the Codex CLI, adds Tandem with `codex mcp add`, installs the Tandem skill under `~/.agents/skills`, and asks for the project folder Codex may edit. Choose Codex as the primary assistant if Tandem should start it automatically.
+
 ## Overview
 
 Tandem lets you work on documents with an AI without the constant copy-paste. You open a document — an essay, a report, a proposal, a contract you're reviewing, or any prose — highlight the text you want to discuss, and the AI sees it directly. The AI can suggest rewrites, leave comments, and edit text alongside you in real time. Because the AI connects through MCP, it brings all its knowledge, tools, and conversation context to the document — it's not working in isolation. Each annotation is a first-class object you can accept, dismiss, edit, or discuss. The original file is never modified unless you save.
@@ -331,6 +333,14 @@ With channel push active, Claude receives events automatically without needing t
 5. Continue where the previous session left off
 
 Previously-open documents are auto-restored when the server starts — no manual `tandem_open` needed.
+
+## Working with Codex
+
+Choose Codex in the integration wizard and provide an absolute project folder. Tandem registers its MCP bridge with the Codex CLI and can run Codex as the primary managed assistant through `codex app-server`. Editor events are delivered to that thread as explicitly untrusted document data; Codex is instructed to check `tandem_checkInbox` before acting.
+
+Codex starts with `workspace-write` sandboxing and `on-request` approvals. When it wants to run a command or change files outside the automatic policy, Tandem shows a local approval dialog with **Decline**, **Allow once**, and **Allow for session**. Approval details and decisions are loopback-only, unanswered requests time out as declines, and the worker uses a per-process token that is never stored in `integrations.json`.
+
+If Codex is configured but stopped, use **Relaunch assistant in this folder** from the command palette. Changing the working directory in Settings updates the primary managed assistant. Codex has no home-directory fallback: removing or invalidating the project folder leaves it stopped until you choose a safe folder.
 
 ### Further Reading
 

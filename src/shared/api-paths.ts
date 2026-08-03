@@ -92,3 +92,10 @@ export const API_LAUNCHER_START_FRESH = "/api/launcher/start-fresh";
  * Distinct from `start-fresh`, which restarts an *existing* supervisor. */
 export const API_LAUNCHER_START = "/api/launcher/start";
 export const API_LAUNCHER_WORKING_DIRECTORY = "/api/launcher/working-directory";
+
+// --- Codex app-server approval bridge -------------------------------------
+// The worker endpoint is authenticated with a per-process bearer token. The
+// browser endpoints are loopback-only; decision writes are also origin-gated.
+export const API_CODEX_APPROVAL_REQUEST = "/api/codex/approval-request";
+export const API_CODEX_APPROVALS = "/api/codex/approvals";
+export const API_CODEX_APPROVAL_DECISION = "/api/codex/approval-decision";

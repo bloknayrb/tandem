@@ -33,6 +33,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { AgentIdentity } from "../../shared/types.js";
 
 export interface McpRequestContext {
   /**
@@ -56,6 +57,8 @@ export interface McpRequestContext {
    * as optional; it is not a stable identity.
    */
   mcpSessionId?: string;
+  /** Validated identity supplied by a Tandem-owned provider bridge. */
+  agentIdentity?: AgentIdentity;
 }
 
 const storage = new AsyncLocalStorage<McpRequestContext>();

@@ -1209,6 +1209,26 @@ describe("mcp-stdio token forwarding integration", () => {
     expect(receivedHeaders[0]?.authorization).toBeUndefined();
   }, 30_000);
 
+  it("forwards the fixed OpenAI provider marker for Codex", async () => {
+    const cliEntry = resolve(__dirname, "../../src/cli/index.ts");
+    child = spawn(process.execPath, ["--import", "tsx", cliEntry, "mcp-stdio"], {
+      env: {
+        ...process.env,
+        TANDEM_URL: `http://127.0.0.1:${port}`,
+        TANDEM_AGENT_PROVIDER: "openai",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    await new Promise((r) => setTimeout(r, 500));
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 22, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "test", version: "0" }, capabilities: {} } })}\n`,
+    );
+
+    await readOneLine(child);
+    expect(receivedHeaders[0]?.["x-tandem-agent-provider"]).toBe("openai");
+  }, 30_000);
+
   it("preserves Content-Type when token is set (requestInit merge regression)", async () => {
     const token = "abcdefghijklmnopqrstuvwxyz012345";
     const cliEntry = resolve(__dirname, "../../src/cli/index.ts");

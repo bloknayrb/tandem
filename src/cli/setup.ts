@@ -14,6 +14,13 @@ import {
   type TargetKind,
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
+import {
+  applyCodexConfig,
+  detectCodexTargets,
+  installCodexSkill,
+} from "../server/integrations/codex-config.js";
+
+export type SetupTargetKind = TargetKind | "codex";
 
 /**
  * Parse repeatable `--target=<kind>` CLI args into valid target kinds plus the
@@ -23,12 +30,14 @@ import {
  * treated as a typo by the caller. Pure + side-effect-free for unit testing.
  */
 export function parseTargetArgs(args: string[]): {
-  targets: TargetKind[];
+  targets: SetupTargetKind[];
   unknown: string[];
 } {
   const raw = args.filter((a) => a.startsWith("--target=")).map((a) => a.slice("--target=".length));
-  const targets = raw.filter((t): t is TargetKind => t === "claude-code" || t === "claude-desktop");
-  const unknown = raw.filter((t) => t !== "claude-code" && t !== "claude-desktop");
+  const targets = raw.filter(
+    (t): t is SetupTargetKind => t === "claude-code" || t === "claude-desktop" || t === "codex",
+  );
+  const unknown = raw.filter((t) => t !== "claude-code" && t !== "claude-desktop" && t !== "codex");
   return { targets, unknown };
 }
 
@@ -43,10 +52,10 @@ export interface SetupOptions {
   force?: boolean;
   withChannelShim?: boolean;
   /**
-   * Restrict to specific target kinds (`--target=claude-code|claude-desktop`).
+   * Restrict to specific target kinds (`--target=claude-code|claude-desktop|codex`).
    * Empty/undefined = all detected targets.
    */
-  targets?: TargetKind[];
+  targets?: SetupTargetKind[];
 }
 
 /**
@@ -69,8 +78,8 @@ function printGuidance(): void {
   console.error(
     "\nTandem setup is wizard-driven.\n\n" +
       "  • Run `tandem` to launch the editor; the first-run wizard connects\n" +
-      "    Claude (Claude Code / Claude Desktop) for you.\n" +
-      "  • Or run `tandem setup --apply` to write the default Claude MCP config\n" +
+      "    Claude Code, Claude Desktop, or Codex for you.\n" +
+      "  • Or run `tandem setup --apply` to write detected assistant MCP configs\n" +
       "    non-interactively. Honors --force, --target=<kind>, --with-channel-shim.\n",
   );
 }
@@ -86,9 +95,12 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     process.exit(1);
   }
 
-  console.error("Detecting Claude installations...");
+  console.error("Detecting assistant installations...");
 
-  let targets = detectTargets({ force: opts.force });
+  let targets: DetectedTarget[] = [
+    ...detectTargets({ force: opts.force }),
+    ...detectCodexTargets({ force: opts.force && opts.targets?.includes("codex") }),
+  ];
   if (opts.targets && opts.targets.length > 0) {
     const wanted = new Set(opts.targets);
     targets = targets.filter((t) => wanted.has(t.kind));
@@ -97,8 +109,8 @@ async function applySetup(opts: SetupOptions): Promise<void> {
   let failures = 0;
   if (targets.length === 0) {
     console.error(
-      "  No matching Claude installations detected.\n" +
-        "  If Claude Code is installed, ensure ~/.claude exists.\n" +
+      "  No matching assistant installations detected.\n" +
+        "  Open Claude Code, Claude Desktop, or Codex once, then retry.\n" +
         "  Force configuration to default paths with: tandem setup --apply --force",
     );
   } else {
@@ -117,20 +129,36 @@ async function applySetup(opts: SetupOptions): Promise<void> {
       );
     } else {
       console.error("\nSetup complete! Start Tandem with: tandem");
-      console.error("Then in Claude, your tandem_* tools will be available.");
+      console.error("Then in your assistant, the tandem_* tools will be available.");
     }
   }
 
   // Skill install is per-user, not per-integration — run it on any --apply
   // invocation (contrarian review S5), even when no targets were written.
-  console.error("\nInstalling Claude Code skill...");
-  try {
-    await installSkill();
-    console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
-  } catch (err) {
-    console.error(
-      `  \x1b[33m⚠\x1b[0m Could not install skill: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  const wantsClaudeSkill =
+    !opts.targets ||
+    opts.targets.some((target) => target === "claude-code" || target === "claude-desktop");
+  if (wantsClaudeSkill) {
+    console.error("\nInstalling Claude Code skill...");
+    try {
+      await installSkill();
+      console.error("  \x1b[32m✓\x1b[0m ~/.claude/skills/tandem/SKILL.md");
+    } catch (err) {
+      console.error(
+        `  \x1b[33m⚠\x1b[0m Could not install skill: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  if (targets.some((target) => target.kind === "codex")) {
+    console.error("\nInstalling Codex skill...");
+    try {
+      await installCodexSkill();
+      console.error("  \x1b[32m✓\x1b[0m ~/.agents/skills/tandem/SKILL.md");
+    } catch (err) {
+      console.error(
+        `  \x1b[33m⚠\x1b[0m Could not install Codex skill: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   if (targets.length > 0 && failures < targets.length) {
@@ -147,6 +175,18 @@ async function applySetup(opts: SetupOptions): Promise<void> {
 async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<number> {
   let failures = 0;
   for (const t of targets) {
+    if (t.kind === "codex") {
+      try {
+        await applyCodexConfig(t);
+        console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
+      } catch (err) {
+        failures++;
+        console.error(
+          `  \x1b[31m✗\x1b[0m ${t.label}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      continue;
+    }
     // Default-on for Claude Code (channel shim is its push transport, #985);
     // `--with-channel-shim` is now an explicit override. The helper's
     // existence check degrades to "tandem HTTP entry only" when the build

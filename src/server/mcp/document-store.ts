@@ -32,6 +32,7 @@ import type { AnchoredRangeResult } from "../../shared/positions/index.js";
 import type { SanitizationEvent } from "../../shared/sanitize.js";
 import { sanitizeAnnotation } from "../../shared/sanitize.js";
 import type {
+  AgentIdentity,
   Annotation,
   AnnotationReply,
   AnnotationType,
@@ -148,6 +149,7 @@ export interface DocumentStore {
     annotationId: string,
     text: string,
     author: ReplyAuthor,
+    agentIdentity?: AgentIdentity,
   ): { ok: true; replyId: string } | { ok: false; error: string; code?: string };
 
   /** Collect all replies for an annotation, sorted chronologically. */
@@ -288,8 +290,17 @@ export class YDocStore implements DocumentStore {
     annotationId: string,
     text: string,
     author: ReplyAuthor,
+    agentIdentity?: AgentIdentity,
   ): { ok: true; replyId: string } | { ok: false; error: string; code?: string } {
-    return addReplyToAnnotation(this.ydoc, this.map, annotationId, text, author, withMcp);
+    return addReplyToAnnotation(
+      this.ydoc,
+      this.map,
+      annotationId,
+      text,
+      author,
+      withMcp,
+      agentIdentity,
+    );
   }
 
   /**

@@ -995,3 +995,23 @@ Both are silent from the user's perspective today; both end when the integration
 - Left open deliberately: what opens at boot (`sample/welcome.md`, or `CHANGELOG.md` read-only after an upgrade — so a post-update reboot silently loads the changelog into an invisible window); boot-time native error dialogs from a tray-only app; WebView background throttling of `useAiReadiness`'s poll while indefinitely hidden; and Windows fast-user-switching with two users both autostarting.
 
 **Cross-references:** [ADR-038](#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2 (the consent premise this defers to preserve), ADR-044 (Cowork detection, whose registrations the scrub now actually removes), #477 PR 4a/4b (the Claude Code auto-launcher and its routes).
+
+## ADR-047: Codex as a First-Class Managed Integration
+
+**Status:** Accepted (2026-08-02). Amends ADR-038's Claude-only default-integration depth without changing MCP as the integration contract.
+
+**Context:** Codex could already use Tandem manually as an MCP client, but the first-run wizard, bundled skill, event delivery, launcher lifecycle, identity stamping, and recovery UX were Claude-specific. Treating Codex as another generic MCP client would leave the highest-value collaboration behaviors missing and make a successful-looking setup materially weaker than Claude Code.
+
+**Decisions:**
+
+1. **Codex is a first-class integration kind and a possible primary assistant.** `integrations.json` schema v4 adds `kind: "codex"`; `defaultIntegrationId` may point only at a launch-capable Claude Code or Codex entry. The wizard preserves existing records, requires an explicit primary when both are selected, and requires a Codex working directory before saving.
+2. **Configuration uses the Codex CLI, not a TOML rewriter.** Detection is filesystem-only. Apply invokes `codex mcp get/add` with an argument array, minimal environment, bounded output, and no Tandem bearer secret. The setup skill is installed to `~/.agents/skills/tandem/SKILL.md`; an ownership marker prevents overwriting an unrelated user skill at that path.
+3. **Tandem manages Codex through `codex app-server`.** A dedicated bounded JSONL worker initializes one thread, starts turns for Tandem events, and steers an active turn rather than creating overlapping work. Document/event text is enclosed as untrusted data and paired with instructions to call `tandem_checkInbox`. The existing reaper owns the worker lifecycle, so Tandem shutdown and crash backoff retain the Claude launcher guarantees.
+4. **Codex never receives home as an implicit writable root.** Managed Codex uses `workspace-write`, `on-request`, and the explicit folder chosen in setup or Settings. An absent or invalid folder fails closed and leaves the launcher stopped. Claude Code retains its historical home fallback for compatibility.
+5. **Approvals are native Tandem UI.** Command and file-change approval requests cross a loopback-only broker authenticated by a per-process worker token. The browser sees a bounded, control-character-stripped view rather than raw protocol parameters. Decisions are restricted to decline, allow once, or allow for session; disconnects and timeouts decline. Unsupported app-server requests also fail closed.
+6. **Provider identity crosses the stdio bridge.** The generated Codex MCP entry sets a fixed provider marker; the bridge turns only the exact `openai` value into a server header. MCP session context stamps Codex-created annotations and replies as `{ provider: "openai", displayName: "Codex" }`. No caller-supplied display name is trusted.
+7. **Parity is behavioral, not protocol imitation.** Claude Channels remain Claude-specific. Codex receives the same Tandem event stream through app-server turns; Claude session resume remains Claude-specific, while Codex thread lifecycle belongs to app-server. Claude Desktop remains request/response only. These differences are surfaced in setup copy rather than hidden behind a false common denominator.
+
+**Consequences:** The launcher/status/settings surfaces are provider-neutral, while compatibility aliases such as `relaunchClaudeCode()` remain temporarily to avoid an unrelated public refactor. The Codex worker is a separate bundle (`dist/codex-agent/index.js`). The official installer path is available from the wizard and `tandem setup --apply --target=codex` is the scripted path. ADR-038's claims that Claude is the only validated deep integration are superseded by this ADR; Cowork and Claude Channels remain Claude-only extras.
+
+**Cross-references:** ADR-038 (MCP-first policy and explicit setup), ADR-046 (deferred launcher consent), ADR-045 (per-session MCP identity), `docs/user-guide.md#working-with-codex`.

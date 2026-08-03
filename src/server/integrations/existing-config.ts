@@ -29,6 +29,7 @@ import { readFile } from "node:fs/promises";
 
 import { isValidNodeBinary } from "../mcp/routes/_shared.js";
 import { type DetectedTarget, type DetectOptions, detectTargets, type McpEntry } from "./apply.js";
+import { detectCodexTargets, readExistingCodexEntry } from "./codex-config.js";
 import { LoopbackUrl } from "./schema.js";
 
 export type ExistingConfigReadStatus = "ok" | "missing" | "malformed" | "error";
@@ -185,11 +186,17 @@ interface ClaudeConfigShape {
 export async function readExistingTandemEntries(
   opts: DetectOptions = {},
 ): Promise<ExistingMcpInstall[]> {
-  const targets = detectTargets(opts);
+  const targets = [...detectTargets(opts), ...detectCodexTargets(opts)];
   return Promise.all(targets.map(readOneTarget));
 }
 
 async function readOneTarget(target: DetectedTarget): Promise<ExistingMcpInstall> {
+  if (target.kind === "codex") {
+    const result = await readExistingCodexEntry(target);
+    return result.tandemEntry
+      ? { ...result, tandemValidation: validateTandemEntry(result.tandemEntry) }
+      : result;
+  }
   let raw: string;
   try {
     raw = await readFile(target.configPath, "utf-8");

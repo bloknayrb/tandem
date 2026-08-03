@@ -34,7 +34,7 @@ export function apiModelsSecretPath(ref: string): string {
 
 // --- Schema version ----------------------------------------------------------
 
-export const INTEGRATIONS_SCHEMA_VERSION = 3 as const;
+export const INTEGRATIONS_SCHEMA_VERSION = 4 as const;
 
 // --- Integration kinds (mirrors src/server/integrations/schema.ts v3 union) --
 
@@ -82,6 +82,18 @@ export interface ClaudeDesktopIntegration {
   apply?: ApplyIntent;
 }
 
+/** Codex CLI integration managed through Codex's global MCP configuration. */
+export interface CodexIntegration {
+  kind: "codex";
+  id: string;
+  label: string;
+  configPath: string;
+  transport: "stdio";
+  apply?: ApplyIntent;
+  /** Optional cwd for Tandem's managed Codex app-server runtime. */
+  workingDirectory?: string;
+}
+
 export interface OtherMcpIntegration {
   kind: "other-mcp";
   id: string;
@@ -98,6 +110,7 @@ export interface OtherMcpIntegration {
 export type IntegrationConfig =
   | ClaudeCodeIntegration
   | ClaudeDesktopIntegration
+  | CodexIntegration
   | OtherMcpIntegration;
 
 export interface IntegrationsFile {
@@ -113,7 +126,7 @@ export type ExistingConfigReadStatus = "ok" | "missing" | "malformed" | "error";
 export interface DetectedTarget {
   label: string;
   configPath: string;
-  kind: "claude-code" | "claude-desktop";
+  kind: "claude-code" | "claude-desktop" | "codex";
 }
 
 /**
@@ -259,4 +272,17 @@ export interface InstallClaudeCodeResponse {
   ok: true;
   /** Presence re-probed after the installer exits — usually `INSTALLED_NOT_ON_PATH`. */
   presence: ClaudeCliPresence;
+}
+
+// --- Codex CLI install ------------------------------------------------------
+
+export const API_INTEGRATIONS_CODEX_CLI_STATUS = "/api/integrations/codex-cli-status";
+export const API_INTEGRATIONS_INSTALL_CODEX = "/api/integrations/install-codex";
+export type CodexCliPresence = ClaudeCliPresence;
+export interface CodexCliStatusResponse {
+  presence: CodexCliPresence;
+}
+export interface InstallCodexResponse {
+  ok: true;
+  presence: CodexCliPresence;
 }

@@ -58,7 +58,7 @@ describe("supervisor.start — gating", () => {
 
   it("is a no-op when the only claude-code integration is apply=skip", async () => {
     const file: IntegrationsFile = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       integrations: [
         {
           kind: "claude-code",
@@ -319,7 +319,7 @@ describe("supervisor — early spawn-failure surfacing (Fix A)", () => {
     // apply !== "skip" so readIntegration() returns it and buildPlan() yields a
     // plan, driving execution into spawnOnce().
     const file: IntegrationsFile = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       integrations: [
         {
           kind: "claude-code",
