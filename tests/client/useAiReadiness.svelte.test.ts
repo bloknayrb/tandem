@@ -117,6 +117,38 @@ describe("createAiReadiness", () => {
     await settle();
     expect(h.get().state).toBe("stopped");
     expect(h.get().chip).toBe("restart");
+    expect(h.get().lastError).toBeUndefined();
+  });
+
+  // #1268: `chip` is the single source of truth for the CTA views render —
+  // it must fold `lastError === "circuit-open"` into `"setup"` itself,
+  // rather than leaving each view to re-derive that from `lastError`
+  // (which is how StatusBar and EmptyState drifted out of sync). This is
+  // also the actual live path for an uninstalled Claude CLI — see the
+  // `AiChip` doc comment.
+  it("shows the setup chip (not restart) when the launcher's lastError is circuit-open", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: true, running: false, lastError: "circuit-open" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("stopped");
+    expect(h.get().lastError).toBe("circuit-open");
+    expect(h.get().chip).toBe("setup");
+  });
+
+  it("still shows the restart chip for other lastError values, e.g. binary-not-found", async () => {
+    // binary-not-found is the reaper-missing case, not a missing Claude CLI
+    // (see the AiChip doc comment) — it gets no special CTA.
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: true, running: false, lastError: "binary-not-found" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().lastError).toBe("binary-not-found");
+    expect(h.get().chip).toBe("restart");
   });
 
   it("#1054: an active MCP session promotes a stopped launcher to ready (no restart chip)", async () => {

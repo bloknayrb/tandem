@@ -1,36 +1,49 @@
 <script lang="ts">
 import { DISCONNECT_DEBOUNCE_MS } from "../../shared/constants";
-import type { LauncherErrorCode } from "../../shared/launcher/contract";
 import type { AiChip } from "../hooks/useAiReadiness.svelte";
 
 interface Props {
   connected: boolean;
   /**
-   * AI-readiness CTA (#1018/#1022). `"connect"` → AI isn't set up;
-   * `"restart"` → configured but stopped; `null` → ready / booting / Solo
-   * (no CTA, falls back to the product-positioning line). Replaces the old
-   * `claudeActive`-gated line, which keyed on a flapping presence signal.
+   * AI-readiness CTA (#1018/#1022). This is the ONLY signal the branches
+   * below switch on — `useAiReadiness` already folds `lastError` into this
+   * value (see its `AiChip` doc comment), so this component must not
+   * re-derive its own `lastError`-keyed decision. That duplication is what
+   * let this component's CTA drift out of sync with StatusBar's (#1268).
+   *   `"connect"` → never configured.
+   *   `"setup"`   → configured but stopped with the CLI apparently missing.
+   *   `"restart"` → configured but stopped for any other reason.
+   *   `null`      → ready / booting / Solo (no CTA, falls back to the
+   *                 product-positioning line).
+   * Replaces the old `claudeActive`-gated line, which keyed on a flapping
+   * presence signal.
    */
   aiChip?: AiChip;
-  lastError?: LauncherErrorCode;
   /** State A primary — opens the file-open dialog. */
   onOpenFile: () => void;
   /** State C primary — retries the sync-server connection. */
   onRetry: () => void;
   /** State C ghost link — opens the settings modal. */
   onOpenSettings: () => void;
-  /** Opens AI setup (Claude Code wizard) — the `"connect"` CTA. */
+  /** Opens AI setup (Claude Code wizard) — the `"connect"` and `"setup"` CTAs. */
   onConnectAi?: () => void;
-  /** Restarts the stopped Claude Code process — the `"restart"` CTA. */
+  /** Restarts the stopped Claude Code process — the `"restart"` CTA primary. */
   onRestartClaude?: () => void;
-  /** Restarts the stopped Claude Code process with a fresh session (clears circuit breaker). */
+  /**
+   * Drops Claude's saved conversation and restarts fresh — irreversible (its
+   * own confirm dialog says so). NOT a circuit-breaker clear: a plain restart
+   * (`onRestartClaude`) already clears the breaker on its own. The only
+   * actual difference is that this one discards the conversation, so it's
+   * offered as an explicit, clearly-labeled secondary action — never the
+   * primary/default handler for an ambient CTA (a button a user might click
+   * expecting a safe retry must never destroy their session; see #1268).
+   */
   onStartFreshClaude?: () => void;
 }
 
 let {
   connected,
   aiChip = null,
-  lastError,
   onOpenFile,
   onRetry,
   onOpenSettings,
@@ -126,44 +139,49 @@ $effect(() => {
           Connect AI
         </button>
       </div>
+    {:else if connected && aiChip === "setup"}
+      <!-- Re-keyed off `lastError === "circuit-open"` — see the `AiChip` doc
+           comment in useAiReadiness. This is the branch that actually fires
+           when the Claude CLI isn't installed (the old `binary-not-found` key
+           here rendered for nobody: an uninstalled CLI surfaces as an ordinary
+           reaper exit code, not a Node spawn ENOENT). -->
+      <p class="empty-sub empty-sub-secondary">Let's get Claude set up on your computer.</p>
+      <div class="empty-actions">
+        <button
+          class="empty-cta"
+          data-testid="empty-state-setup-claude"
+          data-ai-chip="setup"
+          onclick={onConnectAi}
+        >
+          Set up Claude Code
+        </button>
+      </div>
     {:else if connected && aiChip === "restart"}
-      {#if lastError === "binary-not-found"}
-        <p class="empty-sub empty-sub-secondary">Let's get Claude set up on your computer.</p>
-        <div class="empty-actions">
-          <button
-            class="empty-cta"
-            data-testid="empty-state-connect-ai"
-            data-ai-chip="connect"
-            onclick={onConnectAi}
-          >
-            Set up Claude Code
-          </button>
-        </div>
-      {:else if lastError === "circuit-open"}
-        <p class="empty-sub empty-sub-secondary">Tandem is having trouble connecting to Claude.</p>
-        <div class="empty-actions">
-          <button
-            class="empty-cta"
-            data-testid="empty-state-connect-ai"
-            data-ai-chip="restart"
-            onclick={onStartFreshClaude ?? onRestartClaude}
-          >
-            Try Again
-          </button>
-        </div>
-      {:else}
-        <p class="empty-sub empty-sub-secondary">Claude Code has stopped.</p>
-        <div class="empty-actions">
-          <button
-            class="empty-cta"
-            data-testid="empty-state-connect-ai"
-            data-ai-chip="restart"
-            onclick={onRestartClaude}
-          >
-            Restart Claude Code
-          </button>
-        </div>
-      {/if}
+      <p class="empty-sub empty-sub-secondary">Claude Code has stopped.</p>
+      <div class="empty-actions">
+        <button
+          class="empty-cta"
+          data-testid="empty-state-restart-claude"
+          data-ai-chip="restart"
+          onclick={onRestartClaude}
+        >
+          Restart Claude Code
+        </button>
+        <!-- Secondary, explicitly-labeled, and never the default action: the
+             underlying flow is irreversible (drops the saved conversation),
+             so it must not hide behind a button a user could click expecting
+             a safe retry (#1268). The primary Restart button above stays
+             available regardless of what the user does with this one's own
+             confirm dialog — cancelling it is never a dead end. -->
+        <button
+          class="empty-link"
+          data-testid="empty-state-start-fresh"
+          data-ai-chip="restart"
+          onclick={onStartFreshClaude}
+        >
+          Start a fresh conversation
+        </button>
+      </div>
     {:else if connected}
       <!-- Preserved from production: carries product positioning, not in the bundle. -->
       <p class="empty-sub empty-sub-secondary">

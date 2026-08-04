@@ -1,7 +1,6 @@
 <script lang="ts">
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
-import type { LauncherErrorCode } from "../../shared/launcher/contract";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import type { AiChip, AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
@@ -27,12 +26,15 @@ interface Props {
    *  (render nothing) from genuinely-down (`unconfigured`/`stopped` → "AI not
    *  connected"). A boolean can't carry that; see `aiIndicatorView`. */
   aiState: AiReadinessState;
-  /** When present, the AI status indicator becomes the Connect/Restart control. */
+  /**
+   * When present, the AI status indicator becomes the Connect/Setup/Restart
+   * control. This is the ONLY signal the CTA lookup below switches on — the
+   * hook (`useAiReadiness`) already folded `lastError` into this value, so
+   * this component must not re-derive its own copy of that decision (#1268).
+   */
   aiChip?: AiChip;
-  lastError?: LauncherErrorCode;
   onConnectAi?: () => void;
   onRestartClaude?: () => void;
-  onStartFreshClaude?: () => void;
   /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
   soloMode: boolean;
   /**
@@ -74,10 +76,8 @@ let {
   aiLiveIndicator,
   aiState,
   aiChip = null,
-  lastError,
   onConnectAi,
   onRestartClaude,
-  onStartFreshClaude,
   soloMode,
   claudeWorkingTool = null,
   readOnly,
@@ -203,6 +203,46 @@ const labelColor = $derived(
 // former "Assistant · idle" segment). The view is a pure mapping — MUST be
 // `$derived` so it recomputes as the reactive props flip connected→solo→down.
 const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode));
+
+/**
+ * The AI indicator's actionable content — title, aria-label, and onclick —
+ * keyed together off `aiChip` as ONE lookup. Previously these were three
+ * separate parallel ternary chains (one each for title/aria-label/onclick);
+ * the onclick chain silently lost its `binary-not-found` branch, so the
+ * button announced "Set up Claude Code" but clicking it restarted Claude
+ * instead (#1268). A single lookup makes that class of bug structurally
+ * impossible — a new `aiChip` value with no entry here is a type error, not
+ * a silently-inherited fallthrough.
+ *
+ * Copy is static (module scope is fine); the handler depends on the
+ * `onConnectAi`/`onRestartClaude` props, so it's resolved inside `aiCta`
+ * below — a plain top-level object would freeze stale closures over the
+ * props' initial values.
+ */
+const AI_CTA_COPY: Record<Exclude<AiChip, null>, { title: string; ariaLabel: string }> = {
+  connect: {
+    title: "AI isn't set up — connect Claude Code",
+    ariaLabel: "AI isn't set up. Connect Claude Code.",
+  },
+  // See the `AiChip` doc comment in useAiReadiness — `setup` is the branch
+  // that actually fires when the Claude CLI isn't installed.
+  setup: {
+    title: "Claude Code needs to be installed",
+    ariaLabel: "Claude Code needs to be installed. Set up Claude Code.",
+  },
+  restart: {
+    title: "Claude Code stopped — restart it",
+    ariaLabel: "Claude Code has stopped. Restart Claude Code.",
+  },
+};
+const aiCta = $derived(
+  aiChip
+    ? {
+        ...AI_CTA_COPY[aiChip],
+        onclick: aiChip === "restart" ? onRestartClaude : onConnectAi,
+      }
+    : null,
+);
 
 // Activity latch (D3): `claudeActive` flaps to false every few seconds while
 // Claude idles between tool calls. Animating the now-full-opacity dot straight
@@ -374,32 +414,16 @@ function cycleWordMode() {
       </span>
   {/snippet}
   {#if aiView}
-    {#if aiChip}
+    {#if aiCta}
       <button
         type="button"
         class="status-ai-indicator actionable"
         data-testid="status-ai-indicator"
         data-ai-state={aiView.dataState}
         data-ai-action={aiChip}
-        title={aiChip === "connect"
-          ? "AI isn't set up — connect Claude Code"
-          : lastError === "binary-not-found"
-          ? "Claude Code needs to be installed"
-          : lastError === "circuit-open"
-          ? "Tandem can't connect to Claude — try again"
-          : "Claude Code stopped — restart it"}
-        aria-label={aiChip === "connect"
-          ? "AI isn't set up. Connect Claude Code."
-          : lastError === "binary-not-found"
-          ? "Claude Code needs to be installed. Set up Claude Code."
-          : lastError === "circuit-open"
-          ? "Tandem is having trouble connecting to Claude. Try again."
-          : "Claude Code has stopped. Restart Claude Code."}
-        onclick={aiChip === "connect"
-          ? onConnectAi
-          : lastError === "circuit-open"
-          ? (onStartFreshClaude ?? onRestartClaude)
-          : onRestartClaude}
+        title={aiCta.title}
+        aria-label={aiCta.ariaLabel}
+        onclick={aiCta.onclick}
       >
         {@render aiIndicatorContent(aiView)}
       </button>

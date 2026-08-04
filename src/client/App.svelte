@@ -493,20 +493,30 @@ function connectAi(): void {
   window.dispatchEvent(new CustomEvent("tandem:open-integration-wizard"));
 }
 
-/** Restarts the stopped Claude Code process (the "Restart Claude Code" CTA),
- *  then re-polls launcher status so the chip clears once it's back up. Two
- *  staggered refreshes cover a slow cold start (MCP init / skill refresh) so
- *  the chip doesn't look stuck waiting for the next 8s background poll. */
-function restartClaude(): void {
-  relaunchClaudeCode();
+/** Re-polls launcher status twice after kicking off a launcher mutation, so
+ *  the chip clears once Claude is back up instead of looking stuck until the
+ *  next 8s background poll. The two staggered refreshes cover a slow cold
+ *  start (MCP init / skill refresh). Shared by `restartClaude` and
+ *  `startFreshClaude` — they differ only in which launcher action they kick
+ *  off, not in how they wait for it. */
+function refreshAiReadinessAfterLauncherAction(): void {
   setTimeout(() => aiReadiness.refresh(), 2_000);
   setTimeout(() => aiReadiness.refresh(), 5_000);
 }
 
+/** Restarts the stopped Claude Code process (the "Restart Claude Code" CTA). */
+function restartClaude(): void {
+  relaunchClaudeCode();
+  refreshAiReadinessAfterLauncherAction();
+}
+
+/** Drops Claude's saved conversation and restarts fresh (the EmptyState
+ *  "Start a fresh conversation" secondary CTA) — irreversible, so it must
+ *  never be an ambient CTA's default handler. See the `onStartFreshClaude`
+ *  doc comment on `EmptyState`'s Props. */
 function startFreshClaude(): void {
   startFreshClaudeCode();
-  setTimeout(() => aiReadiness.refresh(), 2_000);
-  setTimeout(() => aiReadiness.refresh(), 5_000);
+  refreshAiReadinessAfterLauncherAction();
 }
 
 // #1018 loud failures: ChatPanel (chat send) and Toolbar ("Send to Claude"
@@ -2443,10 +2453,8 @@ const shouldShowModelPicker = $derived(
       aiLiveIndicator={aiReadiness.liveIndicator}
       aiState={aiReadiness.state}
       aiChip={aiReadiness.chip}
-      lastError={aiReadiness.lastError}
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
-      onStartFreshClaude={startFreshClaude}
       soloMode={modeState.tandemMode === "solo"}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
@@ -2888,7 +2896,6 @@ const shouldShowModelPicker = $derived(
             <EmptyState
               connected={yjsSync.connected}
               aiChip={aiReadiness.chip}
-              lastError={aiReadiness.lastError}
               onOpenFile={() => (fileOpenDialogOpen = true)}
               onRetry={() => yjsSync.reconnect()}
               onOpenSettings={openSettingsModalWithAck}

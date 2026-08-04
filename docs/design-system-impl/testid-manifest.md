@@ -253,6 +253,7 @@ shipped and were removed:
 
 ### Empty states (3.11 D5)
 - `empty-state-open-file` (state A primary), `empty-state-retry` + `empty-state-open-settings` (state C)
+- State A AI-readiness CTA (#1268, keyed 1:1 off the `useAiReadiness` `chip` value — never re-derive from `lastError` in the view): `empty-state-connect-ai` (`aiChip: "connect"`), `empty-state-setup-claude` (`aiChip: "setup"` — the branch that actually fires for an uninstalled Claude CLI, re-keyed off `lastError === "circuit-open"`), `empty-state-restart-claude` (`aiChip: "restart"` primary), `empty-state-start-fresh` (`aiChip: "restart"` secondary — irreversible, never the default handler)
 
 ### Licensing gate (#1116, ships dark)
 - `license-trial-banner`, `license-trial-days` (trial countdown banner)
