@@ -172,23 +172,27 @@ const OtherMcpIntegration = BaseIntegrationFields.extend({
  * consumer from having to defend against a missing `url` on an
  * http-transport integration.
  */
+function requireUrlOnHttpOtherMcp(
+  val: { kind: string; transport?: string; url?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (val.kind !== "other-mcp" || val.transport !== "http") return;
+  if (val.url === undefined || val.url.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["url"],
+      message: "url is required when transport is http",
+    });
+  }
+}
+
 const IntegrationConfigV3Schema = z
   .discriminatedUnion("kind", [
     ClaudeCodeIntegration,
     ClaudeDesktopIntegration,
     OtherMcpIntegration,
   ])
-  .superRefine((val, ctx) => {
-    if (val.kind === "other-mcp" && val.transport === "http") {
-      if (val.url === undefined || val.url.length === 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["url"],
-          message: "url is required when transport is http",
-        });
-      }
-    }
-  });
+  .superRefine(requireUrlOnHttpOtherMcp);
 
 export const IntegrationConfigSchema = z
   .discriminatedUnion("kind", [
@@ -197,17 +201,7 @@ export const IntegrationConfigSchema = z
     CodexIntegration,
     OtherMcpIntegration,
   ])
-  .superRefine((val, ctx) => {
-    if (val.kind === "other-mcp" && val.transport === "http") {
-      if (val.url === undefined || val.url.length === 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["url"],
-          message: "url is required when transport is http",
-        });
-      }
-    }
-  });
+  .superRefine(requireUrlOnHttpOtherMcp);
 
 export type IntegrationConfig = z.infer<typeof IntegrationConfigSchema>;
 

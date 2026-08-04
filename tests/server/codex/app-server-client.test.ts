@@ -5,6 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CodexAppServerClient } from "../../../src/codex-agent/app-server-client.js";
 
+/** Sentinel letting `onRequest` answer with a JSON-RPC error instead of a result. */
+function rpcError(error: { code?: number; message?: string }) {
+  return { __rpcError: error };
+}
+
+function isRpcError(value: unknown): value is { __rpcError: unknown } {
+  return typeof value === "object" && value !== null && "__rpcError" in value;
+}
+
 function fakeChild(onRequest: (message: Record<string, unknown>) => unknown) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   child.stdin = new PassThrough();
@@ -23,8 +32,11 @@ function fakeChild(onRequest: (message: Record<string, unknown>) => unknown) {
       const message = JSON.parse(line) as Record<string, unknown>;
       sent.push(message);
       if (typeof message.id === "number") {
-        const result = onRequest(message);
-        child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`);
+        const outcome = onRequest(message);
+        const envelope = isRpcError(outcome)
+          ? { jsonrpc: "2.0", id: message.id, error: outcome.__rpcError }
+          : { jsonrpc: "2.0", id: message.id, result: outcome };
+        child.stdout.write(`${JSON.stringify(envelope)}\n`);
       }
     }
   });
@@ -186,6 +198,84 @@ describe("CodexAppServerClient", () => {
     });
     expect(sent.some((message) => message.method === "thread/start")).toBe(false);
     expect(onThreadId).toHaveBeenCalledWith("thread-restored");
+  });
+
+  it("keeps delivering after one delivery fails, and surfaces the peer's error", async () => {
+    let failTurnStart = true;
+    const { child, sent } = fakeChild((message) => {
+      if (message.method === "initialize") return {};
+      if (message.method === "thread/start") return { thread: { id: "thread-1" } };
+      if (message.method === "turn/start") {
+        if (!failTurnStart) return { turn: { id: "turn-1" } };
+        failTurnStart = false;
+        return rpcError({ code: -32000, message: "sandbox denied" });
+      }
+      return {};
+    });
+    const client = new CodexAppServerClient({ cwd: "C:/repo", spawnProcess: () => child });
+    await client.initialize();
+
+    // The peer's own code and message must survive, not collapse to a constant.
+    await expect(
+      client.enqueueEvent({ type: "document_changed", documentId: "doc-1" }),
+    ).rejects.toThrow(/code -32000.*sandbox denied/);
+
+    // And the chain must not have latched rejected: the next event still runs.
+    await client.enqueueEvent({ type: "document_changed", documentId: "doc-2" });
+    expect(sent.filter((message) => message.method === "turn/start")).toHaveLength(2);
+  });
+
+  it("drains a burst of well-formed frames larger than the single-frame cap", async () => {
+    const { child, sent } = fakeChild((message) => {
+      if (message.method === "initialize") return {};
+      if (message.method === "thread/start") return { thread: { id: "thread-1" } };
+      return {};
+    });
+    const client = new CodexAppServerClient({
+      cwd: "C:/repo",
+      spawnProcess: () => child,
+      requestApproval: async () => ({ decision: "accept" }),
+    });
+    await client.initialize();
+
+    // Twelve ~100 KB frames: every one is well under the 1 MiB per-frame cap,
+    // but together they exceed it. Capping before draining killed the child.
+    const burst = `${Array.from({ length: 12 }, (_, i) =>
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: `burst-${i}`,
+        method: "item/commandExecution/requestApproval",
+        params: { command: "x".repeat(100_000) },
+      }),
+    ).join("\n")}\n`;
+    expect(Buffer.byteLength(burst)).toBeGreaterThan(1024 * 1024);
+    child.stdout.write(burst);
+
+    await vi.waitFor(() =>
+      expect(sent.filter((message) => String(message.id).startsWith("burst-"))).toHaveLength(12),
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("treats a stdin failure as fatal instead of an uncaught exception", async () => {
+    const onFatal = vi.fn();
+    const { child } = fakeChild((message) => {
+      if (message.method === "initialize") return {};
+      if (message.method === "thread/start") return { thread: { id: "thread-1" } };
+      return {};
+    });
+    const client = new CodexAppServerClient({
+      cwd: "C:/repo",
+      spawnProcess: () => child,
+      onFatal,
+    });
+    await client.initialize();
+
+    child.stdin.emit("error", new Error("write EPIPE"));
+
+    expect(onFatal).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("write EPIPE") }),
+    );
   });
 
   it("reports unexpected app-server loss so the supervisor can restart the worker", async () => {

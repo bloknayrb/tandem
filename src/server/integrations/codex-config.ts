@@ -12,10 +12,10 @@ import {
   detectCodexCli,
   type ResolvedCodexCli,
   resolveCodexCliPath,
-} from "../../shared/integrations/detect-codex-cli.js";
+} from "../../shared/integrations/detect-claude-cli.js";
 import { resolveAppDataDir } from "../platform.js";
 import { assertPathSafe, type DetectedTarget, type McpEntry, resolveCliVersion } from "./apply.js";
-import { pruneOldBackups } from "./backup.js";
+import { pruneOldBackups, writeBackup } from "./backup.js";
 import type { ExistingMcpInstall } from "./existing-config.js";
 import { atomicWriteConfigFile } from "./storage.js";
 
@@ -24,6 +24,8 @@ const COMMAND_TIMEOUT_MS = 10_000;
 const COMMAND_MAX_BUFFER = 1024 * 1024;
 const BACKUP_PREFIX = "codex-config-";
 const BACKUP_SUFFIX = ".toml";
+/** Matches `backup.ts`'s MAX_BACKUPS — kept explicit because the prefix differs. */
+const MAX_CODEX_BACKUPS = 3;
 
 export interface DetectCodexTargetsOptions extends DetectCodexCliOptions {
   force?: boolean;
@@ -113,31 +115,71 @@ function commandOptions() {
   };
 }
 
+/**
+ * `codex mcp get tandem --json` exits non-zero both when the entry genuinely
+ * isn't configured and when something actually went wrong. The only signal
+ * that distinguishes them is Codex's own "no such server" wording, so match it
+ * narrowly and **only against stderr** — the previous check ran a loose
+ * substring test (`not found` / `does not exist`) over the whole Error
+ * message, which includes the command line and stdout. Any unrelated failure
+ * whose output happened to contain "not found" (a missing interpreter, a
+ * config parse error naming an absent file) was silently reported as
+ * "Tandem is not configured", which makes the wizard offer a clean install
+ * over a broken one.
+ */
+const CODEX_NO_SUCH_SERVER_RE =
+  /\bno\b[^\n]{0,40}\bmcp server\b|\bmcp server\b[^\n]{0,40}\bnot found\b/i;
+
 export async function readExistingCodexEntry(
   target: DetectedTarget,
   run: RunCodex = defaultRunCodex,
 ): Promise<ExistingMcpInstall> {
+  let stdout: string;
   try {
-    const { stdout } = await run(["mcp", "get", "tandem", "--json"], commandOptions());
-    const parsed = JSON.parse(stdout) as {
-      transport?: { type?: string; command?: string; args?: unknown; env?: unknown };
-    };
-    const transport = parsed.transport;
-    if (!transport || typeof transport !== "object") {
-      return { target, status: "malformed" };
-    }
-    const tandemEntry: McpEntry = {
-      ...(typeof transport.command === "string" ? { command: transport.command } : {}),
-      ...(Array.isArray(transport.args) && transport.args.every((arg) => typeof arg === "string")
-        ? { args: transport.args }
-        : {}),
-    };
-    return { target, status: "ok", tandemEntry };
+    ({ stdout } = await run(["mcp", "get", "tandem", "--json"], commandOptions()));
   } catch (err) {
-    const text = err instanceof Error ? err.message : String(err);
-    if (/no mcp server|not found|does not exist/i.test(text)) return { target, status: "ok" };
+    const e = err as NodeJS.ErrnoException & { stderr?: unknown };
+    // A non-numeric `code` means the process never ran (ENOENT for a missing
+    // `codex`, EACCES for a blocked one). That is not an answer about whether
+    // the entry exists, so it must not be reported as "ok, nothing there".
+    const ranAndFailed = typeof e.code === "number";
+    const stderr = typeof e.stderr === "string" ? e.stderr : "";
+    if (ranAndFailed && CODEX_NO_SUCH_SERVER_RE.test(stderr)) {
+      return { target, status: "ok" };
+    }
     return { target, status: "error", errorMessage: "Could not inspect Codex MCP configuration" };
   }
+
+  let parsed: { transport?: { type?: string; command?: string; args?: unknown; env?: unknown } };
+  try {
+    parsed = JSON.parse(stdout) as typeof parsed;
+  } catch {
+    // `--json` produced something that isn't JSON: this is the one case that
+    // genuinely mirrors the Claude reader's `malformed` (there, an unparseable
+    // ~/.claude.json). It used to fall into the catch above and get
+    // substring-classified instead.
+    return { target, status: "malformed" };
+  }
+
+  const transport = parsed.transport;
+  if (!transport || typeof transport !== "object") {
+    // The command SUCCEEDED, so an entry named `tandem` exists — we just can't
+    // read its transport. Surfacing `malformed` here was a misroute: that
+    // status means "the config file could not be parsed" and drives a
+    // corrupt-config recovery prompt, which is a lie about a file that parsed
+    // fine. Surface an empty entry instead, exactly as the Claude reader does
+    // for an unrecognized `mcpServers.tandem` shape: `validateTandemEntry`
+    // marks it `invalid-shape`, so the wizard shows it and pre-sets
+    // `apply: "skip"` rather than silently overwriting it.
+    return { target, status: "ok", tandemEntry: {} };
+  }
+  const tandemEntry: McpEntry = {
+    ...(typeof transport.command === "string" ? { command: transport.command } : {}),
+    ...(Array.isArray(transport.args) && transport.args.every((arg) => typeof arg === "string")
+      ? { args: transport.args }
+      : {}),
+  };
+  return { target, status: "ok", tandemEntry };
 }
 
 export async function applyCodexConfig(
@@ -146,17 +188,20 @@ export async function applyCodexConfig(
 ): Promise<void> {
   assertPathSafe(target.configPath);
 
+  // Backup BEFORE the destination write, and through `backup.ts` rather than a
+  // hand-rolled copy: `writeBackup` is exclusive-create (`wx`, defeating a
+  // pre-planted symlink at a predictable path), applies the restrictive
+  // Windows ACL, and is all-or-nothing — a partial write is removed and the
+  // throw aborts us before `codex mcp add` touches config.toml. The previous
+  // hand-rolled path used `atomicWriteConfigFile`, which would leave a
+  // truncated backup in place on a mid-write failure.
   if (existsSync(target.configPath)) {
     const raw = await readFile(target.configPath);
     const dir = join(resolveAppDataDir(), ".backups");
     assertPathSafe(dir);
     await mkdir(dir, { recursive: true, mode: 0o700 });
-    const backupPath = join(
-      dir,
-      `${BACKUP_PREFIX}${Date.now()}-${crypto.randomUUID()}${BACKUP_SUFFIX}`,
-    );
-    await atomicWriteConfigFile(backupPath, raw.toString("utf8"));
-    await pruneOldBackups(dir, BACKUP_PREFIX, BACKUP_SUFFIX, 3);
+    await writeBackup(dir, raw, BACKUP_PREFIX, BACKUP_SUFFIX);
+    await pruneOldBackups(dir, BACKUP_PREFIX, BACKUP_SUFFIX, MAX_CODEX_BACKUPS);
   }
 
   const version = resolveCliVersion();

@@ -99,7 +99,7 @@ async function applySetup(opts: SetupOptions): Promise<void> {
 
   let targets: DetectedTarget[] = [
     ...detectTargets({ force: opts.force }),
-    ...detectCodexTargets({ force: opts.force && opts.targets?.includes("codex") }),
+    ...detectCodexTargets({ force: opts.force }),
   ];
   if (opts.targets && opts.targets.length > 0) {
     const wanted = new Set(opts.targets);

@@ -75,11 +75,20 @@ export function formatTimestamp(d: Date): string {
 /**
  * Build a backup filename. UUID suffix defeats predictable-path attacks
  * where an attacker pre-creates a symlink at the predicted name.
+ *
+ * `prefix`/`suffix` default to the `.claude.json` scheme and mirror the
+ * parameters `listBackups` / `pruneOldBackups` already take, so a second
+ * caller (Codex's `config.toml` backup) can share this implementation instead
+ * of hand-rolling its own timestamped write.
  */
-export function backupFilename(now: Date = new Date()): string {
+export function backupFilename(
+  now: Date = new Date(),
+  prefix: string = BACKUP_PREFIX,
+  suffix: string = BACKUP_SUFFIX,
+): string {
   const ts = formatTimestamp(now);
   const uuid8 = randomUUID().slice(0, 8);
-  return `${BACKUP_PREFIX}${ts}-${uuid8}${BACKUP_SUFFIX}`;
+  return `${prefix}${ts}-${uuid8}${suffix}`;
 }
 
 /**
@@ -94,8 +103,13 @@ export function backupFilename(now: Date = new Date()): string {
  * with the rewrite. The atomic-failure-leaves-original-intact guarantee
  * depends on this.
  */
-export async function writeBackup(dir: string, content: Buffer): Promise<string> {
-  const backupPath = join(dir, backupFilename());
+export async function writeBackup(
+  dir: string,
+  content: Buffer,
+  prefix: string = BACKUP_PREFIX,
+  suffix: string = BACKUP_SUFFIX,
+): Promise<string> {
+  const backupPath = join(dir, backupFilename(new Date(), prefix, suffix));
 
   // `wx` is exclusive-create: fails if the path already exists (UUID
   // collision is astronomically rare but a symlinked predictable path

@@ -1,7 +1,12 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
 import type { Express, Request, Response } from "express";
-
+import {
+  type CodexApprovalDecision,
+  codexApprovalResult,
+  isCodexApprovalMethod,
+  isCodexFileChangeMethod,
+} from "../../codex-agent/approval-protocol.js";
 import {
   API_CODEX_APPROVAL_DECISION,
   API_CODEX_APPROVAL_REQUEST,
@@ -14,8 +19,41 @@ import type { Handler } from "../mcp/routes/_shared.js";
 const MAX_PENDING = 32;
 const APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_TEXT = 4_000;
+/** Paths render as single rows; a long one is elided, not wrapped. */
+const MAX_PATH = 512;
+/** Per-change diff cap. */
+const MAX_DIFF = 4_000;
+/**
+ * Total diff budget for one approval. `/api/codex/approvals` is polled roughly
+ * once a second while a request is open, so the whole response has to stay
+ * small; paths are always kept, diffs are what get dropped when the budget runs
+ * out.
+ */
+const MAX_DIFF_TOTAL = 20_000;
+/** Paths listed per approval. Beyond this the count is reported, not the rows. */
+const MAX_CHANGES = 64;
+/** Above this, added/removed line counts are skipped rather than scanned. */
+const MAX_COUNTED_BYTES = 1_000_000;
 
-export type CodexApprovalDecision = "accept" | "acceptForSession" | "decline";
+export type { CodexApprovalDecision };
+
+export type CodexFileChangeKind = "add" | "delete" | "update" | "unknown";
+
+/** One file Codex is asking to write, as rendered in the approval dialog. */
+export interface CodexFileChangeView {
+  /** Control-stripped, single-line, <= MAX_PATH chars. As Codex sent it. */
+  path: string;
+  kind: CodexFileChangeKind;
+  /** Rename target, when Codex supplied one. */
+  movePath?: string;
+  /** Unified diff (`update`) or the new file's content (`add`). May be absent. */
+  diff?: string;
+  /** `diff` was cut, or omitted entirely, to stay inside the budget. */
+  diffTruncated?: boolean;
+  /** Counted from the FULL text before truncation, so they stay honest when `diff` is elided. */
+  added?: number;
+  removed?: number;
+}
 
 export interface CodexApprovalView {
   id: string;
@@ -25,7 +63,22 @@ export interface CodexApprovalView {
   cwd?: string;
   reason?: string;
   createdAt: number;
+  /**
+   * May "Allow for session" be offered? `approved_for_session` is a standing
+   * write grant, so it is false whenever the request is a file change whose
+   * change set we could not read — there is nothing to show the user, and a
+   * blind write grant is exactly the thing worth refusing.
+   */
   allowForSession: boolean;
+  /** file-change only. Empty when Codex sent a shape we could not read. */
+  changes?: CodexFileChangeView[];
+  /** file-change only. Changes beyond MAX_CHANGES, reported as a count. */
+  omittedChanges?: number;
+  /**
+   * file-change only. The root Codex asked for write access to, when the
+   * request carries one. This is the scope "Allow for session" hands over.
+   */
+  grantRoot?: string;
 }
 
 interface PendingApproval {
@@ -128,7 +181,7 @@ export function registerCodexApprovalRoutes(app: Express, mw: Handler): void {
       return;
     }
     const body = req.body as { method?: unknown; params?: unknown } | undefined;
-    if (typeof body?.method !== "string" || !isSupportedApprovalMethod(body.method)) {
+    if (typeof body?.method !== "string" || !isCodexApprovalMethod(body.method)) {
       res.status(400).json({ error: "BAD_REQUEST", message: "unsupported approval method" });
       return;
     }
@@ -158,50 +211,183 @@ function requireLoopback(req: Request, res: Response): boolean {
   return false;
 }
 
-function isSupportedApprovalMethod(method: string): boolean {
-  return (
-    method === "item/commandExecution/requestApproval" ||
-    method === "item/fileChange/requestApproval" ||
-    method === "execCommandApproval" ||
-    method === "applyPatchApproval"
-  );
-}
-
 function toApprovalView(method: string, params: unknown): Omit<CodexApprovalView, "id"> {
   const value = isRecord(params) ? params : {};
   const command = boundedString(value.command);
-  const cwd = boundedString(value.cwd);
+  const cwd = boundedLine(value.cwd);
   const reason = boundedString(value.reason);
-  const fileChange =
-    method === "item/fileChange/requestApproval" || method === "applyPatchApproval";
+
+  if (!isCodexFileChangeMethod(method)) {
+    return {
+      kind: "command",
+      title: "Codex wants to run a command",
+      ...(command ? { command } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(reason ? { reason } : {}),
+      createdAt: Date.now(),
+      allowForSession: true,
+    };
+  }
+
+  const { changes, omittedChanges } = extractFileChanges(value);
+  const grantRoot = boundedLine(value.grantRoot ?? value.grant_root);
   return {
-    kind: fileChange ? "file-change" : "command",
-    title: fileChange ? "Codex wants to change files" : "Codex wants to run a command",
+    kind: "file-change",
+    title: "Codex wants to change files",
     ...(command ? { command } : {}),
     ...(cwd ? { cwd } : {}),
     ...(reason ? { reason } : {}),
+    changes,
+    ...(omittedChanges > 0 ? { omittedChanges } : {}),
+    ...(grantRoot ? { grantRoot } : {}),
     createdAt: Date.now(),
-    allowForSession: true,
+    allowForSession: changes.length > 0,
   };
 }
 
+/**
+ * Normalize Codex's change set into rows the dialog can render.
+ *
+ * Tolerant by design: the app-server has shipped the change set as a
+ * path-keyed map (`fileChanges` / `file_changes`, values tagged
+ * `{add|delete|update}`) and as an array of flat records, in both camelCase and
+ * snake_case, across versions. Anything unrecognised degrades to `kind:
+ * "unknown"` with the path still shown, and a request that yields no rows at
+ * all loses its "Allow for session" button rather than granting blind.
+ */
+function extractFileChanges(params: Record<string, unknown>): {
+  changes: CodexFileChangeView[];
+  omittedChanges: number;
+} {
+  const entries = collectChangeEntries(params);
+  const changes: CodexFileChangeView[] = [];
+  let budget = MAX_DIFF_TOTAL;
+  for (const [rawPath, spec] of entries.slice(0, MAX_CHANGES)) {
+    const path = boundedLine(rawPath, MAX_PATH);
+    if (!path) continue;
+    const change = normalizeChange(path, spec, Math.min(MAX_DIFF, budget));
+    budget -= change.diff?.length ?? 0;
+    changes.push(change);
+  }
+  return { changes, omittedChanges: Math.max(0, entries.length - changes.length) };
+}
+
+function collectChangeEntries(params: Record<string, unknown>): [unknown, unknown][] {
+  const candidates = [params.fileChanges, params.file_changes, params.changes];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.map((item) => {
+        const record = isRecord(item) ? item : {};
+        return [record.path ?? record.file ?? record.filePath ?? record.file_path, record];
+      });
+    }
+    if (isRecord(candidate)) return Object.entries(candidate);
+  }
+  return [];
+}
+
+function normalizeChange(path: string, spec: unknown, diffBudget: number): CodexFileChangeView {
+  const record = isRecord(spec) ? spec : {};
+  const { kind, body } = pickVariant(record);
+  const raw = firstString(body, [
+    "unifiedDiff",
+    "unified_diff",
+    "diff",
+    "content",
+    "newContent",
+    "new_content",
+  ]);
+  const movePath = boundedLine(body.movePath ?? body.move_path, MAX_PATH);
+  const diff = raw && diffBudget > 0 ? boundedText(raw, diffBudget) : undefined;
+  // Keyed off the raw length against the cap, not the emitted length: control
+  // stripping also shortens the text, and a diff flagged as possibly-incomplete
+  // is a far better failure than one silently presented as whole.
+  const diffTruncated = raw ? !diff || raw.length > diffBudget : false;
+  return {
+    path,
+    kind,
+    ...(movePath ? { movePath } : {}),
+    ...(diff ? { diff } : {}),
+    ...(diffTruncated ? { diffTruncated: true } : {}),
+    ...countChangedLines(kind, raw),
+  };
+}
+
+/** Tagged-union form (`{ update: {...} }`) first, then a flat `kind`/`type` field. */
+function pickVariant(record: Record<string, unknown>): {
+  kind: CodexFileChangeKind;
+  body: Record<string, unknown>;
+} {
+  for (const key of ["add", "delete", "update"] as const) {
+    if (record[key] === undefined) continue;
+    return { kind: key, body: isRecord(record[key]) ? record[key] : {} };
+  }
+  const tag = typeof record.kind === "string" ? record.kind : record.type;
+  const kind = tag === "add" || tag === "delete" || tag === "update" ? tag : ("unknown" as const);
+  return { kind, body: record };
+}
+
+/**
+ * Counted from the FULL text, before the diff is capped — so a change set too
+ * large to display still tells the user how much it moves.
+ */
+function countChangedLines(
+  kind: CodexFileChangeKind,
+  raw: string | undefined,
+): { added?: number; removed?: number } {
+  if (!raw || raw.length > MAX_COUNTED_BYTES) return {};
+  if (kind === "delete") return {};
+  // An added file is all-new content, not a diff: every line counts, minus the
+  // empty tail a trailing newline produces.
+  if (kind === "add") return { added: raw.replace(/\n$/, "").split("\n").length, removed: 0 };
+  let added = 0;
+  let removed = 0;
+  for (const line of raw.split("\n")) {
+    // `+++`/`---` are the unified-diff file headers, not content.
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) added++;
+    else if (line.startsWith("-")) removed++;
+  }
+  return { added, removed };
+}
+
+function firstString(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    if (typeof record[key] === "string" && record[key]) return record[key];
+  }
+  return undefined;
+}
+
 function decisionResult(method: string, decision: CodexApprovalDecision): unknown {
-  const legacy = method === "execCommandApproval" || method === "applyPatchApproval";
-  if (!legacy) return { decision };
-  if (decision === "accept") return { decision: "approved" };
-  if (decision === "acceptForSession") return { decision: "approved_for_session" };
-  return { decision: { denied: { rejection: "Declined in Tandem" } } };
+  return codexApprovalResult(method, decision);
+}
+
+/** Strip terminal controls, keeping tabs and newlines (a diff needs both). */
+function boundedText(value: unknown, max: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return (
+    value
+      .slice(0, max * 2)
+      .replace(
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal controls
+        /\x1b\[[0-9;?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f]/g,
+        "",
+      )
+      .slice(0, max) || undefined
+  );
 }
 
 function boundedString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  return value
-    .replace(
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal controls
-      /\x1b\[[0-9;?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f]/g,
-      "",
-    )
-    .slice(0, MAX_TEXT);
+  return boundedText(value, MAX_TEXT);
+}
+
+/**
+ * A path or root renders as one row. A newline inside it would let a crafted
+ * change set forge extra rows in the list the user is approving, so whitespace
+ * collapses rather than surviving.
+ */
+function boundedLine(value: unknown, max = MAX_TEXT): string | undefined {
+  return boundedText(value, max)?.replace(/[\t\r\n]+/g, " ") || undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

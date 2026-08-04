@@ -15,11 +15,15 @@
  *   POST   /api/integrations/secrets/:ref        — store a secret in the OS keychain under `ref`.
  *   DELETE /api/integrations/secrets/:ref        — remove a secret.
  *   GET    /api/integrations/claude-cli-status   — `{ presence }` binary probe.
+ *   GET    /api/integrations/codex-cli-status    — ditto, for the Codex CLI.
  *                                                  Read-only, no gates (enum-only
  *                                                  output — never the resolved path).
  *   POST   /api/integrations/install-claude-code — download + run the native
- *                                                  installer. Origin + loopback
+ *   POST   /api/integrations/install-codex         installer. Origin + loopback
  *                                                  gates + mutex, NO nonce (S3).
+ *
+ * The two status routes share one handler and the two install routes share
+ * another, parameterized by `CliRouteSpec` — they were copy-paste twins.
  *
  * **Secrets never travel back to the client.** There is no `GET .../secrets/:ref`
  * route — only the server reads secrets when proxying to MCP clients. The
@@ -60,8 +64,8 @@ import {
   API_INTEGRATIONS_INSTALL_CODEX,
   type ApplyItemErrorCode,
   type ApplyItemResult,
+  type ClaudeCliPresence,
   type ClaudeCliStatusResponse,
-  type CodexCliStatusResponse,
   ERROR_CODE_APPLY_IN_PROGRESS,
   ERROR_CODE_BAD_ORIGIN,
   ERROR_CODE_INSTALL_FAILED,
@@ -79,9 +83,8 @@ import {
   ERROR_CODE_UNSUPPORTED_PLATFORM,
   ERROR_CODE_WRITE_FAILED,
   type InstallClaudeCodeResponse,
-  type InstallCodexResponse,
 } from "../../shared/integrations/contract.js";
-import { detectCodexCli } from "../../shared/integrations/detect-codex-cli.js";
+import { detectCodexCli } from "../../shared/integrations/detect-claude-cli.js";
 import { isLoopback } from "../auth/middleware.js";
 import { isLocalhostOrigin } from "../mcp/api-routes.js";
 import type { Handler } from "../mcp/routes/_shared.js";
@@ -100,11 +103,11 @@ import {
 import { applyCodexConfig, detectCodexTargets, installCodexSkill } from "./codex-config.js";
 import { hasExistingTandemEntry, type readExistingTandemEntries } from "./existing-config.js";
 import {
-  ClaudeInstallError,
+  CliInstallError,
   installClaudeCli,
+  installCodexCli,
   UnsupportedPlatformError,
 } from "./install-claude-cli.js";
-import { CodexInstallError, installCodexCli } from "./install-codex-cli.js";
 import { type Keychain, KeychainUnavailableError } from "./keychain.js";
 import { type IntegrationConfig, IntegrationsFileSchema } from "./schema.js";
 import type { IntegrationsStore } from "./storage.js";
@@ -236,10 +239,10 @@ export function registerIntegrationsRoutes(
   deps: IntegrationsRoutesDeps,
 ): void {
   app.options(API_INTEGRATIONS_EXISTING, mw);
-  app.get(API_INTEGRATIONS_EXISTING, mw, makeGetExistingHandler(deps));
+  app.get(API_INTEGRATIONS_EXISTING, mw, makeIntegrationsReadHandler(deps, { withInstalls: true }));
 
   app.options(API_INTEGRATIONS, mw);
-  app.get(API_INTEGRATIONS, mw, makeGetIntegrationsHandler(deps));
+  app.get(API_INTEGRATIONS, mw, makeIntegrationsReadHandler(deps, { withInstalls: false }));
   app.post(API_INTEGRATIONS, mw, largeBody, makePostIntegrationsHandler(deps));
 
   app.options(API_INTEGRATIONS_FIRST_RUN, mw);
@@ -253,17 +256,21 @@ export function registerIntegrationsRoutes(
   app.delete(API_INTEGRATIONS_SECRET, mw, makeDeleteSecretHandler(deps));
 
   app.options(API_INTEGRATIONS_CLAUDE_CLI_STATUS, mw);
-  app.get(API_INTEGRATIONS_CLAUDE_CLI_STATUS, mw, makeGetClaudeCliStatusHandler(deps));
+  app.get(API_INTEGRATIONS_CLAUDE_CLI_STATUS, mw, makeGetCliStatusHandler(deps, CLI_ROUTES.claude));
 
   app.options(API_INTEGRATIONS_CODEX_CLI_STATUS, mw);
-  app.get(API_INTEGRATIONS_CODEX_CLI_STATUS, mw, makeGetCodexCliStatusHandler(deps));
+  app.get(API_INTEGRATIONS_CODEX_CLI_STATUS, mw, makeGetCliStatusHandler(deps, CLI_ROUTES.codex));
 
   app.options(API_INTEGRATIONS_INSTALL_CLAUDE_CODE, mw);
-  // No body parser — the install route takes no request body.
-  app.post(API_INTEGRATIONS_INSTALL_CLAUDE_CODE, mw, makePostInstallClaudeCodeHandler(deps));
+  // No body parser — the install routes take no request body.
+  app.post(
+    API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+    mw,
+    makePostInstallCliHandler(deps, CLI_ROUTES.claude),
+  );
 
   app.options(API_INTEGRATIONS_INSTALL_CODEX, mw);
-  app.post(API_INTEGRATIONS_INSTALL_CODEX, mw, makePostInstallCodexHandler(deps));
+  app.post(API_INTEGRATIONS_INSTALL_CODEX, mw, makePostInstallCliHandler(deps, CLI_ROUTES.codex));
 }
 
 /**
@@ -330,24 +337,38 @@ export function assertOriginAllowlisted(
   return false;
 }
 
-function makeGetExistingHandler(deps: IntegrationsRoutesDeps): Handler {
+/**
+ * The two read routes are the same read with one extra term:
+ *   - `GET /api/integrations`          → the persisted file.
+ *   - `GET /api/integrations/existing` → `{ installs, file }` — the same file
+ *     plus the detected on-disk MCP entries.
+ *
+ * They stay separate routes (both are in the client contract) but share one
+ * handler, because the `withInstalls: false` path must NOT pay for
+ * `readExisting()` — that detector shells out to `codex mcp get` per detected
+ * Codex target, so folding the cheap read into the expensive one would be a
+ * real regression rather than a de-duplication.
+ */
+function makeIntegrationsReadHandler(
+  deps: IntegrationsRoutesDeps,
+  opts: { withInstalls: boolean },
+): Handler {
   return async (_req: Request, res: Response) => {
     try {
+      if (!opts.withInstalls) {
+        res.json(await deps.store.read());
+        return;
+      }
       const [installs, file] = await Promise.all([deps.readExisting(), deps.store.read()]);
       res.json({ installs, file });
     } catch (err) {
-      sendInternal(res, err, "Failed to read existing integration entries");
-    }
-  };
-}
-
-function makeGetIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
-  return async (_req: Request, res: Response) => {
-    try {
-      const file = await deps.store.read();
-      res.json(file);
-    } catch (err) {
-      sendInternal(res, err, "Failed to read integrations file");
+      sendInternal(
+        res,
+        err,
+        opts.withInstalls
+          ? "Failed to read existing integration entries"
+          : "Failed to read integrations file",
+      );
     }
   };
 }
@@ -881,7 +902,40 @@ function makeDeleteSecretHandler(deps: IntegrationsRoutesDeps): Handler {
 }
 
 /**
- * GET /api/integrations/claude-cli-status
+ * Everything that differs between the Claude and Codex CLI status/install
+ * route pairs. The two were copy-paste twins; the shared handlers below take
+ * one of these instead.
+ */
+interface CliRouteSpec {
+  /** Provider name as it appears in installer error copy ("Claude installer failed"). */
+  label: string;
+  /** Product name as it appears in install-failure log copy ("Failed to install Claude Code"). */
+  productLabel: string;
+  /** Route path of the install endpoint — used as the origin-gate route label. */
+  installPath: string;
+  detect: (deps: IntegrationsRoutesDeps) => ClaudeCliPresence;
+  install: (deps: IntegrationsRoutesDeps) => Promise<ClaudeCliPresence>;
+}
+
+const CLI_ROUTES: Record<"claude" | "codex", CliRouteSpec> = {
+  claude: {
+    label: "Claude",
+    productLabel: "Claude Code",
+    installPath: API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+    detect: (deps) => (deps.detectClaudeCli ?? detectClaudeCli)(),
+    install: (deps) => (deps.installClaudeCli ?? installClaudeCli)(),
+  },
+  codex: {
+    label: "Codex",
+    productLabel: "Codex",
+    installPath: API_INTEGRATIONS_INSTALL_CODEX,
+    detect: (deps) => (deps.detectCodexCli ?? detectCodexCli)(),
+    install: (deps) => (deps.installCodexCli ?? installCodexCli)(),
+  },
+};
+
+/**
+ * GET /api/integrations/{claude,codex}-cli-status
  *
  * Read-only binary probe. Intentionally NO origin / loopback gate (mirrors
  * `GET .../existing`) — it's reachable from LAN under
@@ -889,42 +943,31 @@ function makeDeleteSecretHandler(deps: IntegrationsRoutesDeps): Handler {
  * `ClaudeCliStatusResponse` type carries no path field, and the handler must
  * never widen it (F6 — a path would leak the home layout / username).
  */
-function makeGetClaudeCliStatusHandler(deps: IntegrationsRoutesDeps): Handler {
+function makeGetCliStatusHandler(deps: IntegrationsRoutesDeps, spec: CliRouteSpec): Handler {
   return async (_req: Request, res: Response) => {
     try {
-      const presence = (deps.detectClaudeCli ?? detectClaudeCli)();
-      const body: ClaudeCliStatusResponse = { presence };
+      const body: ClaudeCliStatusResponse = { presence: spec.detect(deps) };
       res.json(body);
     } catch (err) {
-      sendInternal(res, err, "Failed to probe Claude CLI status");
-    }
-  };
-}
-
-function makeGetCodexCliStatusHandler(deps: IntegrationsRoutesDeps): Handler {
-  return async (_req: Request, res: Response) => {
-    try {
-      const presence = (deps.detectCodexCli ?? detectCodexCli)();
-      const body: CodexCliStatusResponse = { presence };
-      res.json(body);
-    } catch (err) {
-      sendInternal(res, err, "Failed to probe Codex CLI status");
+      sendInternal(res, err, `Failed to probe ${spec.label} CLI status`);
     }
   };
 }
 
 /**
- * POST /api/integrations/install-claude-code
+ * POST /api/integrations/{install-claude-code,install-codex}
  *
  * Downloads + runs the official native installer. Gated by origin allowlist +
  * loopback-only (the install touches files outside Tandem's data dir) + a
- * concurrency mutex. NO confirmation nonce (S3): there's no persisted intent
- * to bind, the install is host-pinned + idempotent, and the protection the
- * nonce gives elsewhere (intent-binding for persist→apply) doesn't apply.
+ * concurrency mutex shared across BOTH providers (one install at a time on
+ * this host, whichever assistant it is). NO confirmation nonce (S3): there's
+ * no persisted intent to bind, the install is host-pinned + idempotent, and
+ * the protection the nonce gives elsewhere (intent-binding for persist→apply)
+ * doesn't apply.
  */
-function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler {
+function makePostInstallCliHandler(deps: IntegrationsRoutesDeps, spec: CliRouteSpec): Handler {
   return async (req: Request, res: Response) => {
-    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS_INSTALL_CLAUDE_CODE)) return;
+    if (assertOriginAllowlisted(req, res, spec.installPath)) return;
     if (assertLoopbackForMutation(req, res)) return;
 
     const gate = getInstallGate();
@@ -941,7 +984,7 @@ function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler
       // Set inside the try so a throw between the check and the body can't
       // strand the mutex (mirrors makeApplyHandler).
       gate.inFlight = true;
-      const presence = await (deps.installClaudeCli ?? installClaudeCli)();
+      const presence = await spec.install(deps);
       const body: InstallClaudeCodeResponse = { ok: true, presence };
       res.status(200).json(body);
     } catch (err) {
@@ -953,64 +996,20 @@ function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler
         });
         return;
       }
-      if (err instanceof ClaudeInstallError) {
+      if (err instanceof CliInstallError) {
         // `stderrTail` is the one intentional detail-in-response exception
         // (honest-failure-surfacing); the runner already scrubbed the temp
         // path and the env never reached the script (F1).
         res.status(500).json({
           error: "INTERNAL",
           code: ERROR_CODE_INSTALL_FAILED,
-          message: "Claude installer failed",
+          message: `${spec.label} installer failed`,
           exitCode: err.exitCode,
           stderrTail: err.stderrTail,
         });
         return;
       }
-      sendInternal(res, err, "Failed to install Claude Code");
-    } finally {
-      gate.inFlight = false;
-    }
-  };
-}
-
-function makePostInstallCodexHandler(deps: IntegrationsRoutesDeps): Handler {
-  return async (req: Request, res: Response) => {
-    if (assertOriginAllowlisted(req, res, API_INTEGRATIONS_INSTALL_CODEX)) return;
-    if (assertLoopbackForMutation(req, res)) return;
-    const gate = getInstallGate();
-    if (gate.inFlight) {
-      res.status(429).json({
-        error: "TOO_MANY_REQUESTS",
-        code: ERROR_CODE_INSTALL_IN_PROGRESS,
-        message: "Another install is in progress",
-      });
-      return;
-    }
-    try {
-      gate.inFlight = true;
-      const presence = await (deps.installCodexCli ?? installCodexCli)();
-      const body: InstallCodexResponse = { ok: true, presence };
-      res.status(200).json(body);
-    } catch (err) {
-      if (err instanceof UnsupportedPlatformError) {
-        res.status(400).json({
-          error: "BAD_REQUEST",
-          code: ERROR_CODE_UNSUPPORTED_PLATFORM,
-          message: err.message,
-        });
-        return;
-      }
-      if (err instanceof CodexInstallError) {
-        res.status(500).json({
-          error: "INTERNAL",
-          code: ERROR_CODE_INSTALL_FAILED,
-          message: "Codex installer failed",
-          exitCode: err.exitCode,
-          stderrTail: err.stderrTail,
-        });
-        return;
-      }
-      sendInternal(res, err, "Failed to install Codex");
+      sendInternal(res, err, `Failed to install ${spec.productLabel}`);
     } finally {
       gate.inFlight = false;
     }
