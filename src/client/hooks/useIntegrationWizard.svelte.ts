@@ -40,6 +40,7 @@ import {
   type IntegrationConfig,
   type IntegrationsFile,
 } from "../../shared/integrations/contract.js";
+import { isLaunchablePrimary } from "../../shared/integrations/launchable-primary.js";
 import {
   type ClientKeychainBackend,
   createDefaultKeychainBackend,
@@ -90,6 +91,9 @@ export interface IntegrationWizardState {
   readonly keychainUnavailable: boolean;
   begin(): Promise<void>;
   setPicked(picked: PickedIntegration[]): void;
+  /** Patch one already-picked entry's config. Use this — not `setPicked` — for
+   *  per-keystroke field edits; see the implementation's doc comment. */
+  updatePickedConfig(id: string, patch: Partial<IntegrationConfig>): void;
   setPrimaryIntegrationId(id: string): void;
   submitSecret(picked: PickedIntegration, secret: string): Promise<void>;
   save(): Promise<void>;
@@ -206,10 +210,6 @@ function configIdentity(config: IntegrationConfig): string {
     : `${config.kind}:${config.id}`;
 }
 
-function isLaunchCapable(config: IntegrationConfig): boolean {
-  return (config.kind === "claude-code" || config.kind === "codex") && config.apply !== "skip";
-}
-
 export interface IntegrationWizardOptions {
   /** Override `window.fetch` for tests. */
   fetchFn?: typeof fetch;
@@ -305,10 +305,10 @@ export function createIntegrationWizard(
             : candidate;
         });
       const selectedPrimary = picked.find((p) => p.id === persistedFile.defaultIntegrationId);
-      if (selectedPrimary && isLaunchCapable(selectedPrimary.config)) {
+      if (selectedPrimary && isLaunchablePrimary(selectedPrimary.config)) {
         primaryIntegrationId = selectedPrimary.id;
       } else {
-        const launchable = picked.filter((p) => isLaunchCapable(p.config));
+        const launchable = picked.filter((p) => isLaunchablePrimary(p.config));
         primaryIntegrationId = launchable.length === 1 ? launchable[0].id : null;
       }
     } catch (err) {
@@ -346,8 +346,8 @@ export function createIntegrationWizard(
         !next.some((n) => n.id === prev.id),
     );
     picked = next;
-    if (!next.some((p) => p.id === primaryIntegrationId && isLaunchCapable(p.config))) {
-      const launchable = next.filter((p) => isLaunchCapable(p.config));
+    if (!next.some((p) => p.id === primaryIntegrationId && isLaunchablePrimary(p.config))) {
+      const launchable = next.filter((p) => isLaunchablePrimary(p.config));
       primaryIntegrationId = launchable.length === 1 ? launchable[0].id : null;
     }
     for (const p of dropped) {
@@ -356,9 +356,30 @@ export function createIntegrationWizard(
     }
   };
 
+  /**
+   * Edit ONE picked entry's config in place, without re-running `setPicked`'s
+   * selection bookkeeping.
+   *
+   * The Codex working-directory field fires per keystroke. Routing that through
+   * `setPicked` re-ran the orphaned-keychain diff and re-resolved the primary
+   * integration on every character — work whose whole purpose is to react to
+   * entries appearing and disappearing, which typing into a text box never
+   * does. It happened to be harmless because the map preserved every id, so
+   * `dropped` was always empty; that is a property of the caller, not a
+   * guarantee, and a keystroke path that can reach `keychainBackend.delete` is
+   * not one to leave standing on a coincidence.
+   */
+  const updatePickedConfig = (id: string, patch: Partial<IntegrationConfig>) => {
+    picked = picked.map((entry) =>
+      entry.id === id
+        ? { ...entry, config: { ...entry.config, ...patch } as IntegrationConfig }
+        : entry,
+    );
+  };
+
   const setPrimaryIntegrationId = (id: string) => {
     const target = picked.find((p) => p.id === id);
-    if (target && isLaunchCapable(target.config)) primaryIntegrationId = id;
+    if (target && isLaunchablePrimary(target.config)) primaryIntegrationId = id;
   };
 
   const submitSecret = async (target: PickedIntegration, secret: string) => {
@@ -482,7 +503,7 @@ export function createIntegrationWizard(
       return !selectedIdentities.has(identity) && !removableDetectedIdentities.has(identity);
     });
     const integrations = [...preserved, ...selectedIntegrations];
-    const launchable = integrations.filter(isLaunchCapable);
+    const launchable = integrations.filter(isLaunchablePrimary);
     const resolvedPrimary = launchable.some((config) => config.id === primaryIntegrationId)
       ? primaryIntegrationId
       : launchable.length === 1
@@ -608,6 +629,7 @@ export function createIntegrationWizard(
     },
     begin,
     setPicked,
+    updatePickedConfig,
     setPrimaryIntegrationId,
     submitSecret,
     save,

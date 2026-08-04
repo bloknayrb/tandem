@@ -48,7 +48,11 @@ claude-working-indicator
 clear-chat-btn
 clear-filters-btn
 clear-recent-files
+codex-approval-change-{*}
+codex-approval-changes
+codex-approval-changes-unreadable
 codex-approval-dialog
+codex-approval-grant-root
 color-picker-close
 command-palette
 comment-thread

@@ -22,12 +22,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import type { TandemEvent } from "../../shared/events/types.js";
 import type {
   ClaudeCodeIntegration,
   CodexIntegration,
 } from "../../shared/integrations/contract.js";
+import { isLaunchablePrimary } from "../../shared/integrations/launchable-primary.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
   type LauncherErrorCode,
@@ -43,6 +44,15 @@ import { createIntegrationsStore } from "../integrations/storage.js";
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
   integrationsBase: string;
+  /**
+   * Port the MCP HTTP server actually bound, for the `TANDEM_URL` handed to the
+   * Codex worker. Passed down rather than re-derived here: this module has no
+   * business guessing where its own process is listening, and a hardcoded 3479
+   * pointed the worker at whatever else happened to own that port whenever the
+   * user set `TANDEM_MCP_PORT`. Defaults to {@link DEFAULT_MCP_PORT} so the
+   * existing test fixtures — which never spawn Codex — need no change.
+   */
+  mcpPort?: number;
   /**
    * Seam onto the event fan-out, for tests that need to drive wakes without
    * standing up the real queue's Y.Doc observers. Returns an unsubscribe fn.
@@ -133,6 +143,19 @@ interface SpawnPlan {
   sessionId: string;
   resuming: boolean;
 }
+
+/**
+ * Why `buildPlan` produced no plan. A bare `null` conflated two states that
+ * want opposite handling: "nothing is configured yet" is the ordinary
+ * pre-setup condition, while "a Codex primary is configured but has no
+ * workspace" is a misconfiguration the user asked us to act on and must be
+ * told about. Both used to resolve `{ ok: true }` out of `POST /relaunch` and
+ * `POST /start-fresh` while `status()` reported not-running with no
+ * `lastError` — a launch that reported success and did nothing.
+ */
+type PlanFailure = "no-integration" | "workspace-required";
+
+type PlanResult = { ok: true; plan: SpawnPlan } | { ok: false; reason: PlanFailure };
 
 const SESSION_FILE_NAME = "launcher-session.json";
 /** How long a resumed spawn must run before its session is considered
@@ -347,19 +370,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const store = createIntegrationsStore(opts.integrationsBase);
     const file = await store.read();
     const selected = file.integrations.find((entry) => entry.id === file.defaultIntegrationId);
-    if (
-      selected &&
-      (selected.kind === "claude-code" || selected.kind === "codex") &&
-      selected.apply !== "skip"
-    ) {
-      return selected;
-    }
-    return (
-      file.integrations.find(
-        (entry): entry is ClaudeCodeIntegration =>
-          entry.kind === "claude-code" && entry.apply !== "skip",
-      ) ?? null
-    );
+    if (isLaunchablePrimary(selected)) return selected;
+    // The fallback is deliberately kind-agnostic. It used to accept only
+    // `claude-code`, so a Codex-only install whose `defaultIntegrationId` had
+    // been cleared — which `enforceReferentialIntegrity` does on its own,
+    // silently — could never launch anything at all. `POST /working-directory`
+    // already fell back across both kinds, so the two also disagreed about
+    // which integration they were talking about.
+    //
+    // With BOTH kinds launchable and no default, this now picks file order
+    // where it used to prefer claude-code. That is the intended trade: file
+    // order is the order the user picked them in the wizard, and the wizard
+    // refuses to save two launchables without a primary — so this case is only
+    // reachable after `enforceReferentialIntegrity` drops a default, where
+    // "first configured" is a better answer than a hardcoded provider bias.
+    return file.integrations.find(isLaunchablePrimary) ?? null;
   }
 
   function sessionFilePath(): string {
@@ -473,7 +498,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   function minimalCodexEnv(cwd: string): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       TANDEM_CODEX_CWD: cwd,
-      TANDEM_URL: process.env.TANDEM_URL ?? "http://127.0.0.1:3479",
+      TANDEM_URL: process.env.TANDEM_URL ?? `http://127.0.0.1:${opts.mcpPort ?? DEFAULT_MCP_PORT}`,
       TANDEM_CODEX_WORKER_TOKEN: getCodexApprovalBroker().workerToken,
       TANDEM_CODEX_STATE_PATH: path.join(opts.integrationsBase, "codex-agent-state.json"),
     };
@@ -499,14 +524,36 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   // pinned by the stub-CLI harness. Keeping this copy would have silently
   // reverted the launcher to the pre-#1267 argument shape.
 
-  async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
+  /**
+   * How `relaunch` / `startFresh` — the two entry points a *user* drives — react
+   * to a plan that could not be built. Their routes translate a resolved
+   * promise into `{ ok: true }`, so a quiet return told the user their relaunch
+   * had worked while nothing was spawned.
+   *
+   * Only `workspace-required` throws. `no-integration` stays a silent no-op
+   * because it is the ordinary pre-setup state, and because `startFresh`'s
+   * other job — clearing the saved session — is genuinely done by the time we
+   * get here; the callers that exercise that path with nothing configured are
+   * relying on it. `workspace-required` is different in kind: an assistant IS
+   * configured, the user asked to launch it, and it cannot be launched until
+   * they set a working directory. `lastError` is set alongside the throw so
+   * `GET /status` agrees with the failed response instead of reporting a bare
+   * not-running.
+   */
+  function planFailureError(reason: PlanFailure): Error | null {
+    if (reason !== "workspace-required") return null;
+    lastError = "workspace-required";
+    return new Error("Codex requires an explicit working directory before it can be launched");
+  }
+
+  async function buildPlan(cwdOverride?: string): Promise<PlanResult> {
     const integration = await readIntegration();
-    if (!integration) return null;
+    if (!integration) return { ok: false, reason: "no-integration" };
 
     const cwd = resolveCwd(integration, cwdOverride);
     if (!cwd) {
       console.error("[Launcher] Codex requires an explicit working directory");
-      return null;
+      return { ok: false, reason: "workspace-required" };
     }
 
     const saved = integration.kind === "claude-code" ? readSavedSession() : undefined;
@@ -514,11 +561,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const resuming = !!saved;
 
     return {
-      integration,
-      provider: integration.kind,
-      cwd,
-      sessionId,
-      resuming,
+      ok: true,
+      plan: {
+        integration,
+        provider: integration.kind,
+        cwd,
+        sessionId,
+        resuming,
+      },
     };
   }
 
@@ -978,11 +1028,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
-    const plan = await buildPlan();
-    if (!plan) {
-      console.error("[Launcher] No primary managed integration with apply != skip — skipping");
+    const built = await buildPlan();
+    if (!built.ok) {
+      // No throw here: `startInternal` also runs from `scheduleRestart` and from
+      // boot, where nobody is waiting on a promise. `lastError` is the only
+      // channel back to the user, and only `workspace-required` earns one —
+      // "nothing configured yet" is the ordinary first-run state, and reporting
+      // it as an error would light up the status pill on every fresh install.
+      if (built.reason === "workspace-required") lastError = "workspace-required";
+      console.error(`[Launcher] Cannot build a spawn plan (${built.reason}) — skipping`);
       return;
     }
+    const plan = built.plan;
     // `buildPlan` yields, and `scheduleRestart` calls this function WITHOUT the
     // op lock — so a user `stop()` can complete during that await. It takes the
     // lock, finds `child` already null, and resolves successfully. Without this
@@ -1020,9 +1077,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // new spawn, or the exit handler treats the *next* crash as a deliberate
       // stop and silently declines to restart — the supervisor stays dead.
       stopRequested = false;
-      const plan = await buildPlan(newCwd);
-      if (!plan) return;
-      await spawnOnce(plan);
+      const built = await buildPlan(newCwd);
+      if (!built.ok) {
+        const err = planFailureError(built.reason);
+        if (err) throw err;
+        return;
+      }
+      await spawnOnce(built.plan);
     });
   }
 
@@ -1109,9 +1170,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // See relaunch(): stopInternal() set stopRequested, and leaving it set
       // would disarm the auto-restart for the whole life of the new spawn.
       stopRequested = false;
-      const plan = await buildPlan(cwdOverride);
-      if (!plan) return;
-      await spawnOnce(plan);
+      const built = await buildPlan(cwdOverride);
+      if (!built.ok) {
+        const err = planFailureError(built.reason);
+        if (err) throw err;
+        return;
+      }
+      await spawnOnce(built.plan);
     });
   }
 

@@ -12,9 +12,18 @@ import {
   API_CODEX_APPROVAL_REQUEST,
   API_CODEX_APPROVALS,
 } from "../../shared/api-paths.js";
+import type {
+  CodexApprovalView,
+  CodexFileChangeKind,
+  CodexFileChangeView,
+} from "../../shared/codex/approval.js";
 import { isLoopback } from "../auth/middleware.js";
 import { assertOriginAllowlisted } from "../integrations/api-routes.js";
 import type { Handler } from "../mcp/routes/_shared.js";
+
+// Re-exported so the many existing server-side importers keep working; the
+// definitions themselves live in `shared/` because the client renders them.
+export type { CodexApprovalView, CodexFileChangeKind, CodexFileChangeView };
 
 const MAX_PENDING = 32;
 const APPROVAL_TIMEOUT_MS = 120_000;
@@ -36,50 +45,6 @@ const MAX_CHANGES = 64;
 const MAX_COUNTED_BYTES = 1_000_000;
 
 export type { CodexApprovalDecision };
-
-export type CodexFileChangeKind = "add" | "delete" | "update" | "unknown";
-
-/** One file Codex is asking to write, as rendered in the approval dialog. */
-export interface CodexFileChangeView {
-  /** Control-stripped, single-line, <= MAX_PATH chars. As Codex sent it. */
-  path: string;
-  kind: CodexFileChangeKind;
-  /** Rename target, when Codex supplied one. */
-  movePath?: string;
-  /** Unified diff (`update`) or the new file's content (`add`). May be absent. */
-  diff?: string;
-  /** `diff` was cut, or omitted entirely, to stay inside the budget. */
-  diffTruncated?: boolean;
-  /** Counted from the FULL text before truncation, so they stay honest when `diff` is elided. */
-  added?: number;
-  removed?: number;
-}
-
-export interface CodexApprovalView {
-  id: string;
-  kind: "command" | "file-change";
-  title: string;
-  command?: string;
-  cwd?: string;
-  reason?: string;
-  createdAt: number;
-  /**
-   * May "Allow for session" be offered? `approved_for_session` is a standing
-   * write grant, so it is false whenever the request is a file change whose
-   * change set we could not read — there is nothing to show the user, and a
-   * blind write grant is exactly the thing worth refusing.
-   */
-  allowForSession: boolean;
-  /** file-change only. Empty when Codex sent a shape we could not read. */
-  changes?: CodexFileChangeView[];
-  /** file-change only. Changes beyond MAX_CHANGES, reported as a count. */
-  omittedChanges?: number;
-  /**
-   * file-change only. The root Codex asked for write access to, when the
-   * request carries one. This is the scope "Allow for session" hands over.
-   */
-  grantRoot?: string;
-}
 
 interface PendingApproval {
   view: CodexApprovalView;

@@ -139,6 +139,9 @@ async function startLauncherSupervisor(): Promise<void> {
     // `spawn-failed` reason is the pre-existing shape here.
     launcherSupervisor = createSupervisor({
       integrationsBase: resolveAppDataDir(),
+      // The Codex worker talks back over MCP HTTP; hand it the port we actually
+      // bound rather than letting the supervisor assume the default.
+      mcpPort,
     });
     // Refresh the bundled skill on-disk if the version stamp moved
     // forward — existing users pick up skill updates without re-running

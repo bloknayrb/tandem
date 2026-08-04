@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { isLaunchablePrimary } from "../../shared/integrations/launchable-primary.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { pruneOldBackups } from "./backup.js";
 import { migrateUp } from "./migrations.js";
@@ -401,11 +402,7 @@ function normalizeLocalhostUrls(data: unknown): unknown {
 function enforceReferentialIntegrity(file: IntegrationsFile): IntegrationsFile {
   if (file.defaultIntegrationId === undefined) return file;
   const selected = file.integrations.find((i) => i.id === file.defaultIntegrationId);
-  const launchable =
-    selected !== undefined &&
-    (selected.kind === "claude-code" || selected.kind === "codex") &&
-    selected.apply !== "skip";
-  if (launchable) return file;
+  if (isLaunchablePrimary(selected)) return file;
   console.error(
     `[tandem] integrations.json defaultIntegrationId "${file.defaultIntegrationId}" does not match a launchable assistant integration; clearing.`,
   );

@@ -38,6 +38,7 @@ import type {
   ClaudeCodeIntegration,
   CodexIntegration,
 } from "../../shared/integrations/contract.js";
+import { isLaunchablePrimary } from "../../shared/integrations/launchable-primary.js";
 import {
   isTransientlyUnavailable,
   LAUNCHER_CWD_MAX_LENGTH,
@@ -514,18 +515,14 @@ function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
     try {
       if (deps.workingDirHook) await deps.workingDirHook();
       const file = await deps.store.read();
-      const isLaunchable = (
-        integration: IntegrationConfig,
-      ): integration is ClaudeCodeIntegration | CodexIntegration =>
-        (integration.kind === "claude-code" || integration.kind === "codex") &&
-        integration.apply !== "skip";
+      // Same predicate the supervisor resolves its spawn target with — this
+      // route rewrites the working directory of whichever integration the
+      // supervisor is going to launch, so the two selections MUST agree.
       const selectedIdx = file.integrations.findIndex(
-        (integration) => integration.id === file.defaultIntegrationId && isLaunchable(integration),
+        (integration) =>
+          integration.id === file.defaultIntegrationId && isLaunchablePrimary(integration),
       );
-      const idx =
-        selectedIdx >= 0
-          ? selectedIdx
-          : file.integrations.findIndex((entry) => isLaunchable(entry));
+      const idx = selectedIdx >= 0 ? selectedIdx : file.integrations.findIndex(isLaunchablePrimary);
       if (idx === -1) {
         res.status(404).json({
           error: "NOT_FOUND",

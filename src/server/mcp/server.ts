@@ -18,7 +18,7 @@ import {
 } from "../../shared/cli-runtime.js";
 import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
 import type { AgentIdentity } from "../../shared/types.js";
-import { createAuthMiddleware } from "../auth/middleware.js";
+import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
 import { getSubscriberCount } from "../events/queue.js";
@@ -173,9 +173,42 @@ function readClaudeSessionHeader(req: import("express").Request): string | undef
   return normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
 }
 
-function readAgentIdentityHeader(req: import("express").Request): AgentIdentity | undefined {
+/**
+ * Resolve the agent identity a session's annotations will be attributed to.
+ *
+ * The header's own doc comment calls it "validated ... forwarded only by
+ * Tandem's managed stdio bridge", and neither half was enforced: any value was
+ * silently ignored rather than rejected, and any client that could reach `/mcp`
+ * — including a LAN client under `TANDEM_BIND_HOST` — could assert it. The
+ * identity drives annotation authorship display, so an unenforced header is an
+ * attribution spoof: a LAN caller could publish annotations bylined "Codex".
+ *
+ * Loopback is the strongest transport-level proof available here (the bridge is
+ * a subprocess on the same host, and there is no shared secret distinguishing
+ * it from any other loopback client), so that is what is enforced. An
+ * unrecognized value is logged rather than dropped in silence — the previous
+ * behaviour made a typo'd provider indistinguishable from an absent header.
+ *
+ * Exported for test: the loopback gate is the whole security property, and it
+ * is unreachable through `createMcpExpressApp` without standing up a listener
+ * on a non-loopback interface.
+ */
+export function readAgentIdentityHeader(
+  req: Pick<import("express").Request, "headers" | "socket">,
+): AgentIdentity | undefined {
   const raw = req.headers[TANDEM_AGENT_PROVIDER_HEADER.toLowerCase()];
-  return raw === "openai" ? { provider: "openai", displayName: "Codex" } : undefined;
+  if (raw === undefined) return undefined;
+  if (!isLoopback(req.socket?.remoteAddress)) {
+    console.error(
+      `[Tandem] Ignoring ${TANDEM_AGENT_PROVIDER_HEADER} from a non-loopback client — only Tandem's managed stdio bridge may assert an agent identity`,
+    );
+    return undefined;
+  }
+  if (raw === "openai") return { provider: "openai", displayName: "Codex" };
+  console.error(
+    `[Tandem] Ignoring unrecognized ${TANDEM_AGENT_PROVIDER_HEADER} value: ${JSON.stringify(raw)}`,
+  );
+  return undefined;
 }
 
 /** Send a JSON-RPC error response. */

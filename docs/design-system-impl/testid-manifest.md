@@ -155,6 +155,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `command-palette`, `palette-{input,empty}`, `palette-item-{*}`,
   `palette-item-new-scratchpad`
 - `onboarding-tutorial`, `tutorial-{dismiss,next}-btn`
+- Codex approval gate (#1265): `codex-approval-dialog`, `codex-approval-changes`,
+  `codex-approval-change-{*}` (templated on the change kind — `add` / `update` /
+  `delete` / `unknown`), `codex-approval-changes-unreadable`,
+  `codex-approval-grant-root`
 
 ### Settings — popover (REMOVED 2026-07-21 — consolidated into the modal below; testids deleted)
 - `settings-popover`, `settings-content`, `settings-sidebar-{version,footer}`,

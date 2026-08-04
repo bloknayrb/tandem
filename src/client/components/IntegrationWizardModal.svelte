@@ -27,7 +27,12 @@
  */
 import { untrack } from "svelte";
 import { BYO_MODELS_ENABLED, DEFAULT_MCP_PORT } from "../../shared/constants.js";
-import type { ApplyItemResult, ExistingMcpInstall } from "../../shared/integrations/contract.js";
+import type {
+  ApplyItemResult,
+  ExistingMcpInstall,
+  IntegrationConfig,
+} from "../../shared/integrations/contract.js";
+import { isLaunchablePrimary } from "../../shared/integrations/launchable-primary.js";
 import {
   coworkSettingsVariant,
   formatCoworkError,
@@ -334,9 +339,10 @@ const connectLabel = $derived(
   wizard.picked.length === 1 ? `Connect ${wizard.picked[0].config.label}` : "Connect selected",
 );
 
-const launchablePicked = $derived(
-  wizard.picked.filter((p) => p.config.kind === "claude-code" || p.config.kind === "codex"),
-);
+// `isLaunchablePrimary` rather than a kind test: this list drives the primary
+// picker, and an `apply: "skip"` entry has no config on disk to launch. The
+// local kind-only version silently offered one.
+const launchablePicked = $derived(wizard.picked.filter((p) => isLaunchablePrimary(p.config)));
 const primaryPicked = $derived(
   launchablePicked.find((p) => p.id === wizard.primaryIntegrationId) ?? launchablePicked[0],
 );
@@ -348,19 +354,12 @@ const codexMissingWorkspace = $derived(
 );
 
 function setCodexWorkspace(id: string, workingDirectory: string): void {
-  wizard.setPicked(
-    wizard.picked.map((picked) =>
-      picked.id === id && picked.config.kind === "codex"
-        ? {
-            ...picked,
-            config: {
-              ...picked.config,
-              ...(workingDirectory.trim() ? { workingDirectory } : { workingDirectory: undefined }),
-            },
-          }
-        : picked,
-    ),
-  );
+  // Per-keystroke, so it uses the narrow single-entry updater rather than
+  // `setPicked` — see `updatePickedConfig`'s doc comment for why.
+  if (wizard.picked.find((p) => p.id === id)?.config.kind !== "codex") return;
+  wizard.updatePickedConfig(id, {
+    workingDirectory: workingDirectory.trim() ? workingDirectory : undefined,
+  } as Partial<IntegrationConfig>);
 }
 
 /** Friendly name for an apply-result row — results carry integration ids,

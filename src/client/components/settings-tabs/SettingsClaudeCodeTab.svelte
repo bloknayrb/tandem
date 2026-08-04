@@ -2,6 +2,7 @@
 import { onDestroy } from "svelte";
 import { API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
 import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/constants";
+import { isLaunchablePrimary } from "../../../shared/integrations/launchable-primary";
 import {
   LAUNCHER_ERROR_IN_PROGRESS,
   LAUNCHER_ERROR_INVALID_BODY,
@@ -101,9 +102,10 @@ async function loadWorkingDirectory() {
       integrations?: { id?: string; kind?: string; apply?: string; workingDirectory?: string }[];
     };
     if (!mounted) return;
-    const launchable = file.integrations?.filter(
-      (i) => (i.kind === "claude-code" || i.kind === "codex") && i.apply !== "skip",
-    );
+    // Shared with the server's spawn-target selection — this panel reports
+    // which assistant is active, so a divergent local test would describe a
+    // different integration than the one the launcher would actually run.
+    const launchable = file.integrations?.filter(isLaunchablePrimary);
     const entry = launchable?.find((i) => i.id === file.defaultIntegrationId) ?? launchable?.[0];
     if (entry) {
       hasIntegration = true;
@@ -197,7 +199,10 @@ function handleManualSave(e: SubmitEvent) {
 }
 
 function handleReset() {
-  if (activeProvider === "Codex") return;
+  // Reset means "fall back to home", which only Claude Code has. The button is
+  // rendered inside `{#if activeProvider === "Claude Code"}`, so a Codex guard
+  // here was unreachable — and an unreachable guard reads like the invariant
+  // lives here when it actually lives in the template.
   void persistWorkingDirectory(null);
 }
 </script>
