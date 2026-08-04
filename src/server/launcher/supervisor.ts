@@ -380,12 +380,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }, RESUME_CONFIRM_MS);
     }
 
-    // Loop-invariant, resolved once rather than per line: the bootstrap turn is
-    // only ever sent on a fresh spawn (a resumed session already has its
-    // history — a second copy of the prompt would be a duplicate turn), and
-    // only once. Flipping this to false is what retires both conditions.
-    let awaitingInit = !plan.resuming;
-
     /** Write the one bootstrap user turn. Targets `spawned`, not `child`. */
     function sendInitialTurn(): void {
       const stdin = spawned.stdin;
@@ -397,6 +391,22 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         if (err) console.error("[Launcher] Failed to send initial prompt:", err.message);
       });
     }
+
+    // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
+    // real `claude` binary on 2026-08-04 (docs/spikes/channel-push-stream-json.md):
+    // under `-p --input-format stream-json` the CLI emits nothing at all until
+    // it has received a turn, and `init` then follows the write by <1s. Gating
+    // the write on `init` is therefore a deadlock — each side waits for the
+    // other, and the observed result was a session that sat silent for 200s and
+    // produced no output whatsoever.
+    //
+    // Still fresh-spawn only: a resumed session already carries its history, so
+    // a second copy of the prompt would be a duplicate turn.
+    //
+    // (`init` is also emitted once PER TURN, not once per session, so it could
+    // not have served as a one-shot session-ready signal even if it arrived
+    // first.)
+    if (!plan.resuming) sendInitialTurn();
 
     function handleStdoutLine(line: string): void {
       const trimmed = line.trim();
@@ -424,11 +434,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         return;
       }
 
-      if (awaitingInit && parsed.type === "system" && parsed.subtype === "init") {
-        awaitingInit = false;
-        sendInitialTurn();
-        return;
-      }
       // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's `result`
       // envelope — it can only be settled against a running `claude` binary.
       // Left as-is deliberately; the branch is inert if the field never

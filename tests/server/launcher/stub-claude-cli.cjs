@@ -90,10 +90,24 @@ function firstContinuationByteIndex(buf) {
 }
 
 const splitAt = firstContinuationByteIndex(initBytes);
-process.stdout.write(initBytes.subarray(0, splitAt));
-setTimeout(() => {
-  process.stdout.write(initBytes.subarray(splitAt));
-}, 25);
+
+/** Emit the `init` line, deliberately split mid-UTF-8-character across two
+ * chunks 25 ms apart so a byte-wise (rather than decoder-backed) reader would
+ * corrupt it.
+ *
+ * Emitted only AFTER a turn arrives, because that is what the real CLI does.
+ * An earlier version of this stub wrote `init` on startup, which made the
+ * suite green while the shipped supervisor deadlocked against the real binary:
+ * the supervisor waited for `init` before writing a turn, and the CLI waits for
+ * a turn before writing `init`. The stub was modelling the supervisor's
+ * assumption instead of the CLI's behaviour, so it could only ever confirm it.
+ * Measured 2026-08-04 — see docs/spikes/channel-push-stream-json.md. */
+function emitInit() {
+  process.stdout.write(initBytes.subarray(0, splitAt));
+  setTimeout(() => {
+    process.stdout.write(initBytes.subarray(splitAt));
+  }, 25);
+}
 
 // --- stdin: assert the user turn -------------------------------------------
 
@@ -153,14 +167,18 @@ process.stdin.on("data", (chunk) => {
     answered = true;
     const { problems, text } = turnProblems(line);
     writeRecord(`turn-${process.pid}.json`, { pid: process.pid, raw: line, problems, text });
-    process.stdout.write(
-      `${JSON.stringify({
-        type: "result",
-        subtype: problems.length === 0 ? "success" : "error_during_execution",
-        is_error: problems.length > 0,
-        result: problems.length === 0 ? "ok" : problems.join("; "),
-      })}\n`,
-    );
+    // Real ordering: the turn arrives, THEN `init`, then the result.
+    emitInit();
+    setTimeout(() => {
+      process.stdout.write(
+        `${JSON.stringify({
+          type: "result",
+          subtype: problems.length === 0 ? "success" : "error_during_execution",
+          is_error: problems.length > 0,
+          result: problems.length === 0 ? "ok" : problems.join("; "),
+        })}\n`,
+      );
+    }, 50);
   }
 });
 

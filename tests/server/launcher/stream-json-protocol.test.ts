@@ -173,7 +173,12 @@ describe("launcher stream-json protocol — fresh spawn (#1267)", () => {
     }
   });
 
-  it("writes a well-formed user turn after the CLI's init line", async () => {
+  // This is also the deadlock regression test. The stub emits `init` only after
+  // a turn arrives (as the real CLI does), so a supervisor that waits for `init`
+  // before writing never writes at all and this test times out. Verified by
+  // positive control on 2026-08-04: reintroducing the wait reds exactly this
+  // test.
+  it("writes a well-formed user turn on spawn, without waiting for the CLI's init line", async () => {
     await writeClaudeIntegration();
     const sup = createSupervisor({ integrationsBase: tmpDir });
     try {
@@ -198,32 +203,28 @@ describe("launcher stream-json protocol — fresh spawn (#1267)", () => {
     }
   });
 
-  it("reassembles an init line that arrives split across two stdout chunks", async () => {
-    // The stub writes its init line as two separate stdout chunks 25 ms apart.
-    // A supervisor that parses raw `data` chunks instead of framing on newlines
-    // sees two JSON fragments, never recognises `subtype: "init"`, and never
-    // sends the turn — so receiving a turn at all IS the assertion. Verified as
-    // a real detector: removing the framer reds exactly this test.
-    //
-    // Scope note: the stub splits *inside* a multi-byte UTF-8 sequence, but
-    // that half is NOT what this test detects. U+FFFD from per-chunk decoding
-    // is still valid JSON in a string value, and the supervisor dispatches only
-    // on ASCII fields — reverting `setEncoding("utf8")` to `chunk.toString()`
-    // leaves this test green (measured). The decoding contract is covered where
-    // it is actually observable: `createLineFramer`'s unit tests.
-    await writeClaudeIntegration();
-    const sup = createSupervisor({ integrationsBase: tmpDir });
-    try {
-      await sup.startFresh(spawnDir);
-      const [turn] = await waitFor(() => {
-        const recs = recordsWithPrefix<TurnRecord>("turn-");
-        return recs.length > 0 ? recs : null;
-      }, "a turn to prove the split init line was reassembled");
-      expect(turn.problems).toEqual([]);
-    } finally {
-      await sup.stop();
-    }
-  });
+  // DELIBERATELY ABSENT: an integration-level test that the stdout framer
+  // reassembles a split `init` line.
+  //
+  // One existed and asserted "a turn was received", on the reasoning that a
+  // supervisor parsing raw chunks would never recognise `subtype: "init"` and
+  // so would never send the turn. That reasoning died with the init deadlock
+  // fix: the bootstrap turn is now written on spawn, before any stdout is read,
+  // so the turn proves nothing about parsing. Confirmed by negative control —
+  // suppressing the stub's `init` line ENTIRELY left the test green, i.e. it
+  // would also have passed with the framer deleted.
+  //
+  // It is removed rather than reworded because after the fix the supervisor
+  // does not act on any stdout line: what remains is the (still unconfirmed)
+  // `result.errors` branch and pass-through logging. There is currently no
+  // observable behaviour for a framing bug to break at this level.
+  //
+  // Framing and UTF-8 decoding ARE covered, as direct unit tests over
+  // `createLineFramer` in supervisor.test.ts — including a negative control
+  // showing `chunk.toString()` yields U+FFFD on a split multi-byte character.
+  // Integration-level coverage becomes meaningful again in Group K, when
+  // `result` messages start driving idle tracking; add it back there, with the
+  // assertion keyed on idleness rather than on the turn.
 });
 
 describe("launcher stream-json protocol — resumed spawn (#1267)", () => {
