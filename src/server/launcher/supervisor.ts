@@ -22,6 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { codexChildEnv } from "../../shared/codex/env.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import type { TandemEvent } from "../../shared/events/types.js";
 import type {
@@ -496,26 +497,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   function minimalCodexEnv(cwd: string): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = {
+    return codexChildEnv({
       TANDEM_CODEX_CWD: cwd,
       TANDEM_URL: process.env.TANDEM_URL ?? `http://127.0.0.1:${opts.mcpPort ?? DEFAULT_MCP_PORT}`,
       TANDEM_CODEX_WORKER_TOKEN: getCodexApprovalBroker().workerToken,
       TANDEM_CODEX_STATE_PATH: path.join(opts.integrationsBase, "codex-agent-state.json"),
-    };
-    for (const key of [
-      "PATH",
-      "HOME",
-      "USERPROFILE",
-      "LOCALAPPDATA",
-      "APPDATA",
-      "SystemRoot",
-      "TEMP",
-      "TMP",
-      "CODEX_HOME",
-    ]) {
-      if (process.env[key] !== undefined) env[key] = process.env[key];
-    }
-    return env;
+    });
   }
 
   // NOTE: #1265's local `buildClaudeArgs` is deliberately NOT carried across

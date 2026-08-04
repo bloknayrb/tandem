@@ -1,5 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { codexChildEnv } from "../shared/codex/env.js";
 import type { TandemEvent } from "../shared/events/types.js";
 import { formatEventContent } from "../shared/events/types.js";
 import { resolveCodexCliPath } from "../shared/integrations/detect-claude-cli.js";
@@ -55,14 +56,14 @@ function spawnCodexAppServer(cwd: string): ChildProcessWithoutNullStreams {
     return spawn(
       "pwsh.exe",
       ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved.path, "app-server"],
-      { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: minimalCodexEnvironment() },
+      { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: codexChildEnv() },
     );
   }
   return spawn(resolved?.path ?? "codex", ["app-server"], {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
-    env: minimalCodexEnvironment(),
+    env: codexChildEnv(),
   });
 }
 
@@ -389,24 +390,6 @@ function bounded(value: string): string {
 
 function logStderr(text: string): void {
   process.stderr.write(`[Codex app-server] ${text}\n`);
-}
-
-function minimalCodexEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of [
-    "PATH",
-    "HOME",
-    "USERPROFILE",
-    "LOCALAPPDATA",
-    "APPDATA",
-    "SystemRoot",
-    "TEMP",
-    "TMP",
-    "CODEX_HOME",
-  ]) {
-    if (process.env[key] !== undefined) env[key] = process.env[key];
-  }
-  return env;
 }
 
 function sanitize(value: string): string {

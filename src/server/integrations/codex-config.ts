@@ -6,6 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
+import { codexChildEnv } from "../../shared/codex/env.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import {
   type DetectCodexCliOptions,
@@ -50,24 +51,6 @@ export type RunCodex = (
   options: { env: NodeJS.ProcessEnv; timeout: number; maxBuffer: number },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-function minimalCodexEnv(): NodeJS.ProcessEnv {
-  const result: NodeJS.ProcessEnv = {};
-  for (const key of [
-    "PATH",
-    "HOME",
-    "USERPROFILE",
-    "LOCALAPPDATA",
-    "APPDATA",
-    "SystemRoot",
-    "TEMP",
-    "TMP",
-    "CODEX_HOME",
-  ]) {
-    if (process.env[key] !== undefined) result[key] = process.env[key];
-  }
-  return result;
-}
-
 /**
  * Build the exec plan for a resolved Codex CLI. `.ps1` shims (the only kind
  * that isn't directly exec-able) need an explicit PowerShell interpreter,
@@ -109,7 +92,7 @@ const defaultRunCodex: RunCodex = async (args, options) => {
 
 function commandOptions() {
   return {
-    env: minimalCodexEnv(),
+    env: codexChildEnv(),
     timeout: COMMAND_TIMEOUT_MS,
     maxBuffer: COMMAND_MAX_BUFFER,
   };
