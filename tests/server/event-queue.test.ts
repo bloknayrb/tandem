@@ -18,7 +18,6 @@ import {
   wasEmittedViaChannel,
 } from "../../src/server/events/queue.js";
 import type { TandemEvent } from "../../src/server/events/types.js";
-import { defaultSubscribeToEvents } from "../../src/server/launcher/supervisor.js";
 import { getOrCreateDocument } from "../../src/server/yjs/provider.js";
 import {
   CHANNEL_EVENT_BUFFER_SIZE,
@@ -1588,34 +1587,11 @@ describe("Solo forwarder gate (external consumers)", () => {
     expect(external).toHaveLength(0);
   });
 
-  // The launcher's supervisor subscribes here to wake an idle Claude (#1266).
-  // It runs in-process but the CONSUMER is a separate `claude` process, so it
-  // must register as "external" or Solo mode leaks straight past this gate into
-  // a spawned model. The two tests above show both branches exist; this one
-  // pins which branch the supervisor's default actually takes, because that is
-  // a one-word decision in another file with no other detector.
-  it("withholds from the launcher supervisor's default subscription in Solo", () => {
-    setMode("solo");
-    const seen: TandemEvent[] = [];
-    const off = defaultSubscribeToEvents((e) => seen.push(e));
-    _pushEventForTests(docEvent("ev-sup-solo"));
-    off();
-
-    expect(seen).toHaveLength(0);
-  });
-
-  // Positive control for the test above: same subscription, same event, mode
-  // flipped. Without this, "withheld in Solo" would also pass if the default
-  // subscription were broken outright and never delivered anything at all.
-  it("delivers to the launcher supervisor's default subscription in Tandem", () => {
-    setMode("tandem");
-    const seen: TandemEvent[] = [];
-    const off = defaultSubscribeToEvents((e) => seen.push(e));
-    _pushEventForTests(docEvent("ev-sup-tandem"));
-    off();
-
-    expect(seen).toHaveLength(1);
-  });
+  // The launcher supervisor also subscribes to this fan-out and must be held
+  // by the same gate. Those tests live in
+  // `tests/server/launcher/supervisor-event-subscription.test.ts`, not here:
+  // importing the supervisor pulls `setShouldKeepDocument` into this file's
+  // wholesale `yjs/provider.js` mock and breaks module load for the whole file.
 
   // The in-process collaborator aborts in-flight runs on document:closed /
   // switched. Gating it would silently strand those runs — so the gate is
