@@ -143,10 +143,14 @@ export const AI_CTA: Record<
     ariaLabel: "Claude Code needs to be installed. Set up Claude Code.",
     action: "connect",
   },
+  // Provider-neutral, unlike `setup` above: the supervisor can be running
+  // Codex (#1265), so a stopped managed assistant is not necessarily Claude.
+  // `setup` stays Claude-specific because that branch really is the Claude-CLI
+  // install flow.
   restart: {
-    label: "Restart Claude Code",
-    title: "Claude Code stopped — restart it",
-    ariaLabel: "Claude Code has stopped. Restart Claude Code.",
+    label: "Restart assistant",
+    title: "The assistant stopped — restart it",
+    ariaLabel: "The assistant has stopped. Restart it.",
     action: "restart",
   },
 };

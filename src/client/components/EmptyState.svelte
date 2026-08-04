@@ -157,7 +157,7 @@ $effect(() => {
         </button>
       </div>
     {:else if connected && aiChip === "restart"}
-      <p class="empty-sub empty-sub-secondary">Claude Code has stopped.</p>
+      <p class="empty-sub empty-sub-secondary">The assistant has stopped.</p>
       <div class="empty-actions">
         <button
           class="empty-cta"
@@ -165,7 +165,7 @@ $effect(() => {
           data-ai-chip="restart"
           onclick={onRestartClaude}
         >
-          Restart Claude Code
+          Restart assistant
         </button>
         <!-- Secondary, explicitly-labeled, and never the default action: the
              underlying flow is irreversible (drops the saved conversation),

@@ -45,9 +45,7 @@ describe("StatusBar AI action indicator", () => {
     });
 
     const indicator = getByTestId("status-ai-indicator");
-    expect(indicator.getAttribute("aria-label")).toBe(
-      "Claude Code has stopped. Restart Claude Code.",
-    );
+    expect(indicator.getAttribute("aria-label")).toBe("The assistant has stopped. Restart it.");
     await fireEvent.click(indicator);
     expect(onRestartClaude).toHaveBeenCalledOnce();
   });
