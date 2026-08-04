@@ -3,6 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
 import type { AiChip, AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
+import { AI_CTA } from "../hooks/useAiReadiness.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
@@ -214,32 +215,18 @@ const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode));
  * impossible — a new `aiChip` value with no entry here is a type error, not
  * a silently-inherited fallthrough.
  *
- * Copy is static (module scope is fine); the handler depends on the
- * `onConnectAi`/`onRestartClaude` props, so it's resolved inside `aiCta`
- * below — a plain top-level object would freeze stale closures over the
- * props' initial values.
+ * Copy and the handler *choice* live in `AI_CTA` (useAiReadiness), shared with
+ * App.svelte's "no AI connected" toast — that toast had the same bug against
+ * the same union, so the fix belongs in one place. The handler *values* are
+ * props, so they're bound inside `aiCta` here: a plain top-level object would
+ * freeze stale closures over the props' initial values.
  */
-const AI_CTA_COPY: Record<Exclude<AiChip, null>, { title: string; ariaLabel: string }> = {
-  connect: {
-    title: "AI isn't set up — connect Claude Code",
-    ariaLabel: "AI isn't set up. Connect Claude Code.",
-  },
-  // See the `AiChip` doc comment in useAiReadiness — `setup` is the branch
-  // that actually fires when the Claude CLI isn't installed.
-  setup: {
-    title: "Claude Code needs to be installed",
-    ariaLabel: "Claude Code needs to be installed. Set up Claude Code.",
-  },
-  restart: {
-    title: "Claude Code stopped — restart it",
-    ariaLabel: "Claude Code has stopped. Restart Claude Code.",
-  },
-};
 const aiCta = $derived(
   aiChip
     ? {
-        ...AI_CTA_COPY[aiChip],
-        onclick: aiChip === "restart" ? onRestartClaude : onConnectAi,
+        title: AI_CTA[aiChip].title,
+        ariaLabel: AI_CTA[aiChip].ariaLabel,
+        onclick: AI_CTA[aiChip].action === "restart" ? onRestartClaude : onConnectAi,
       }
     : null,
 );

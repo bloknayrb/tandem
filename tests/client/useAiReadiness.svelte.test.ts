@@ -26,7 +26,8 @@
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
+import type { AiChip, AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
+import { AI_CTA } from "../../src/client/hooks/useAiReadiness.svelte";
 import AiReadinessHarness from "../../src/client/svelte-harness/AiReadinessHarness.svelte";
 import { API_LAUNCHER_STATUS } from "../../src/shared/api-paths.js";
 
@@ -453,5 +454,42 @@ describe("createAiReadiness", () => {
       await settle();
       expect(h.get().liveIndicator).toBeNull();
     });
+  });
+});
+
+/**
+ * `AI_CTA` is the shared chip→call-to-action map consumed by StatusBar's
+ * indicator button and App's "no AI connected" toast. It exists because both
+ * surfaces independently reduced a THREE-member union with a binary
+ * `chip === "connect" ? … : …` ternary, and `setup` — the branch that fires
+ * when the Claude CLI isn't installed — fell through to the restart handler in
+ * both. Restarting is exactly the doomed spawn loop the circuit breaker tripped
+ * to stop, so the wrong branch is actively harmful, not merely mislabelled.
+ */
+describe("AI_CTA", () => {
+  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "restart"];
+
+  it("covers every non-null chip with non-empty copy", () => {
+    // Guards against a future union member landing with no entry: the type
+    // catches it at compile time, this catches a `{} as any` escape hatch.
+    expect(Object.keys(AI_CTA).sort()).toEqual([...CHIPS].sort());
+    for (const chip of CHIPS) {
+      expect(AI_CTA[chip].label).toBeTruthy();
+      expect(AI_CTA[chip].title).toBeTruthy();
+      expect(AI_CTA[chip].ariaLabel).toBeTruthy();
+    }
+  });
+
+  it("routes 'setup' to the connect flow, not restart", () => {
+    expect(AI_CTA.setup.action).toBe("connect");
+    expect(AI_CTA.setup.label).toBe("Set up Claude Code");
+  });
+
+  // Positive control for the assertion above — `restart` proves the `action`
+  // field can actually take the other value, so "not restart" is a real result
+  // rather than an artefact of a map that only ever says "connect".
+  it("routes 'connect' and 'restart' to their own flows", () => {
+    expect(AI_CTA.connect.action).toBe("connect");
+    expect(AI_CTA.restart.action).toBe("restart");
   });
 });

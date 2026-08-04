@@ -103,6 +103,55 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
 export type AiChip = "connect" | "setup" | "restart" | null;
 
 /**
+ * Everything a surface needs to render an `AiChip`'s call to action: its copy
+ * and, crucially, WHICH action it performs.
+ *
+ * A `Record` keyed on the union rather than a ternary at each call site, and
+ * the `action` discriminant is the whole point. `AiChip` grew from two members
+ * to three, and every widening silently left binary `chip === "connect" ? a : b`
+ * ternaries behind — they keep compiling, and the new member just falls down
+ * the wrong branch. That is not hypothetical: it shipped. The "no AI connected"
+ * toast in `App.svelte` offered `setup` users "Restart Claude Code" wired to
+ * `restartClaude()`, re-triggering the doomed spawn loop that tripped the
+ * circuit breaker in the first place — the exact opposite of the intended
+ * "install the CLI".
+ *
+ * With this map a fourth member is a type error at every consumer instead.
+ */
+export const AI_CTA: Record<
+  Exclude<AiChip, null>,
+  {
+    /** Short button/CTA text. */
+    label: string;
+    /** `title` attribute — the hover explanation. */
+    title: string;
+    ariaLabel: string;
+    /** Which handler this CTA must invoke. `setup` resolves to `connect`: the
+     * install flow IS the integration wizard, only with different copy. */
+    action: "connect" | "restart";
+  }
+> = {
+  connect: {
+    label: "Connect AI",
+    title: "AI isn't set up — connect Claude Code",
+    ariaLabel: "AI isn't set up. Connect Claude Code.",
+    action: "connect",
+  },
+  setup: {
+    label: "Set up Claude Code",
+    title: "Claude Code needs to be installed",
+    ariaLabel: "Claude Code needs to be installed. Set up Claude Code.",
+    action: "connect",
+  },
+  restart: {
+    label: "Restart Claude Code",
+    title: "Claude Code stopped — restart it",
+    ariaLabel: "Claude Code has stopped. Restart Claude Code.",
+    action: "restart",
+  },
+};
+
+/**
  * The affirmative "an agent is connected" indicator, or `null` when there's
  * nothing positive to assert (no session, or still booting). Distinct from
  * `chip` (which is the *negative*-state CTA): `chip` and `liveIndicator` are

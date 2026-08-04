@@ -51,7 +51,7 @@ import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
-import { createAiReadiness } from "./hooks/useAiReadiness.svelte";
+import { AI_CTA, createAiReadiness } from "./hooks/useAiReadiness.svelte";
 import {
   nextAnnotationId,
   prevAnnotationId,
@@ -549,8 +549,12 @@ $effect(() => {
         timestamp: Date.now(),
       },
       {
-        label: chip === "connect" ? "Connect AI" : "Restart Claude Code",
-        onClick: chip === "connect" ? connectAi : restartClaude,
+        // Driven by the shared exhaustive map, not a binary ternary: `chip`
+        // has three non-null members, and a `=== "connect"` test sent `setup`
+        // (Claude CLI not installed) down the restart branch — offering to
+        // restart a binary that isn't there.
+        label: AI_CTA[chip].label,
+        onClick: AI_CTA[chip].action === "restart" ? restartClaude : connectAi,
       },
     );
   };
