@@ -207,16 +207,54 @@ export async function applyCodexConfig(
   );
 }
 
+/**
+ * Ownership marker for the Codex skill (ADR-047 §2).
+ *
+ * `~/.agents/skills/` is a cross-tool convention, not Tandem's private
+ * directory, so a user can legitimately have their own skill named `tandem`
+ * there — unlike `~/.claude/skills/`, which `installSkill` overwrites without
+ * asking. The marker is what tells the two apart.
+ */
+const CODEX_SKILL_OWNERSHIP_MARKER = "<!-- tandem-owned-skill -->";
+
+/**
+ * What Tandem actually writes: the bundled skill plus the marker.
+ *
+ * The marker used to be CHECKED but never WRITTEN, which made the guard
+ * self-defeating: the first install left unmarked content on disk, and the
+ * next time `SKILL_CONTENT` changed — i.e. every release that touches
+ * `skills/tandem/SKILL.md` — the equality fast-path missed and the guard threw
+ * "Refusing to overwrite a non-Tandem Codex skill" **against Tandem's own
+ * file**. Codex users could never receive a skill update, and the error blamed
+ * them for a file Tandem wrote. Exported so tests assert against the same
+ * string rather than reconstructing it.
+ *
+ * A trailing HTML comment is inert in Markdown and sits outside the front
+ * matter, so it changes nothing about how Codex reads the skill.
+ */
+export const CODEX_SKILL_CONTENT = `${SKILL_CONTENT.trimEnd()}\n\n${CODEX_SKILL_OWNERSHIP_MARKER}\n`;
+
+/**
+ * Is this file one Tandem wrote? The marker is the durable signal; exact
+ * equality with the unstamped bundled skill is the transition case — that
+ * content is unmistakably ours (it IS the bundled skill, byte for byte), it is
+ * what the pre-fix code left behind, and refusing to upgrade it would
+ * reintroduce the bug for anyone who ran the unreleased version.
+ */
+function isTandemOwnedSkill(current: string): boolean {
+  return current.includes(CODEX_SKILL_OWNERSHIP_MARKER) || current === SKILL_CONTENT;
+}
+
 export async function installCodexSkill(opts: { homeOverride?: string } = {}): Promise<void> {
   const home = opts.homeOverride ?? homedir();
   const skillPath = join(home, ".agents", "skills", "tandem", "SKILL.md");
   assertPathSafe(skillPath, { allowedRoots: [home] });
   if (existsSync(skillPath)) {
     const current = await readFile(skillPath, "utf8");
-    if (current === SKILL_CONTENT) return;
-    if (!current.includes("<!-- tandem-owned-skill -->")) {
+    if (current === CODEX_SKILL_CONTENT) return;
+    if (!isTandemOwnedSkill(current)) {
       throw new Error("Refusing to overwrite a non-Tandem Codex skill");
     }
   }
-  await atomicWriteConfigFile(skillPath, SKILL_CONTENT);
+  await atomicWriteConfigFile(skillPath, CODEX_SKILL_CONTENT);
 }
