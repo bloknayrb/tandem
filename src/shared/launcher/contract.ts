@@ -139,3 +139,63 @@ export const REAPER_NOT_FOUND_MARKER = "tandem-reaper binary not found";
  * all fit comfortably under 1024. Catches malformed/oversized inputs early
  * before they reach `realpathSync`. */
 export const LAUNCHER_CWD_MAX_LENGTH = 1024;
+
+// --- Claude CLI stream-json wire contract ---------------------------------
+
+/**
+ * Flag prefix the supervisor passes to `claude`, ahead of the
+ * session-selection flag (`--session-id` / `--resume`).
+ *
+ * `-p` + the two `stream-json` formats put the CLI in headless streaming mode:
+ * it emits one JSON object per line on stdout and reads user turns as one JSON
+ * object per line on stdin. `--verbose` is what makes the CLI emit the
+ * `{"type":"system","subtype":"init"}` handshake line the supervisor waits for
+ * before writing its bootstrap turn — without it there is no signal that stdin
+ * is ready, and the turn is written into a process that never reads it.
+ *
+ * Lives here (not in `supervisor.ts`) because the spawn path and the stub-CLI
+ * test harness must agree on it byte-for-byte; a drift between them would make
+ * the harness green while the shipped launcher spoke a different protocol.
+ */
+export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
+  "-p",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--dangerously-load-development-channels",
+  "server:tandem-channel",
+];
+
+/** The bootstrap turn the supervisor writes after the CLI's `init` line. Only
+ * sent on a *fresh* spawn — a resumed session already carries its own history,
+ * so re-sending would inject a duplicate turn into the conversation. */
+export const SUPERVISOR_INITIAL_PROMPT =
+  "A document has been opened in Tandem for review. " +
+  "Call tandem_checkInbox to see what needs attention, then begin reviewing.";
+
+/** One `stream-json` user turn as the Claude CLI accepts it on stdin. */
+export interface StreamJsonUserTurn {
+  type: "user";
+  message: {
+    role: "user";
+    content: Array<{ type: "text"; text: string }>;
+  };
+}
+
+/** Build a `stream-json` user-turn envelope. Single definition so the writer
+ * (`supervisor.ts`) and the harness that asserts on the received bytes can
+ * never drift apart. */
+export function buildUserTurn(text: string): StreamJsonUserTurn {
+  return {
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text }] },
+  };
+}
+
+/** Serialized form written to the CLI's stdin — one JSON object, newline
+ * terminated. The newline is the frame delimiter, not cosmetic. */
+export function serializeUserTurn(text: string): string {
+  return `${JSON.stringify(buildUserTurn(text))}\n`;
+}

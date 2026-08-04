@@ -1228,14 +1228,6 @@ data: {"type":"warning","title":"Save Warning","message":"File is read-only","ti
 
 ---
 
-### POST /api/launch-claude
-
-Spawn a Claude Code process with the channel shim connected. No request body required.
-
-**Response:** `{ "status": "launched", "pid": 12345 }` or `{ "status": "already_running", "pid": 12345 }`
-
----
-
 ## Claude Code CLI Runtime Contract
 
 Claude is Tandem's default integration ([ADR-038](decisions.md#adr-038-mcp-first-integration-policy-claude-as-default-integration)), so the Claude Code CLI runtime is part of Tandem's effective MCP wire contract. This section records the contract surfaces and how Tandem behaves against recent CLI changes (issue #1043, reviewing CLI releases 2.1.141–2.1.165).

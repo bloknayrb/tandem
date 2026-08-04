@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emptyIntegrationsFile,
@@ -8,13 +10,20 @@ import {
 } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import {
+  buildClaudeArgs,
+  createLineFramer,
   createSupervisor,
   RESUME_CONFIRM_MS,
   resolveRouteCwd,
   resolveSafeCwd,
   shouldClearSession,
 } from "../../../src/server/launcher/supervisor.js";
-import { REAPER_NOT_FOUND_MARKER } from "../../../src/shared/launcher/contract.js";
+import {
+  CLAUDE_STREAM_JSON_FLAGS,
+  REAPER_NOT_FOUND_MARKER,
+  SUPERVISOR_INITIAL_PROMPT,
+  serializeUserTurn,
+} from "../../../src/shared/launcher/contract.js";
 
 let tmpDir: string;
 
@@ -381,6 +390,147 @@ describe("shouldClearSession — resume-confirmation gate (issue #1169)", () => 
   it("does NOT clear on clean exit (code = 0) while resuming and unconfirmed", () => {
     // User stopped Claude cleanly before the window elapsed — session is valid.
     expect(shouldClearSession({ resuming: true, code: 0, resumeConfirmed: false })).toBe(false);
+  });
+});
+
+describe("buildClaudeArgs — CLI argument vector (#1267)", () => {
+  const SESSION = "550e8400-e29b-41d4-a716-446655440000";
+
+  it("leads with the shared stream-json flag prefix", () => {
+    const args = buildClaudeArgs({ sessionId: SESSION, resuming: false });
+    expect(args.slice(0, CLAUDE_STREAM_JSON_FLAGS.length)).toEqual([...CLAUDE_STREAM_JSON_FLAGS]);
+  });
+
+  it("keeps --verbose — it is what makes the CLI emit the init handshake line", () => {
+    // Without the init line there is no signal that stdin is ready, so the
+    // bootstrap turn is written into a process that never reads it.
+    expect(buildClaudeArgs({ sessionId: SESSION, resuming: false })).toContain("--verbose");
+  });
+
+  it("appends --session-id for a fresh spawn and never --resume", () => {
+    const args = buildClaudeArgs({ sessionId: SESSION, resuming: false });
+    expect(args.slice(-2)).toEqual(["--session-id", SESSION]);
+    expect(args).not.toContain("--resume");
+  });
+
+  it("appends --resume for a resumed spawn and never --session-id", () => {
+    const args = buildClaudeArgs({ sessionId: SESSION, resuming: true });
+    expect(args.slice(-2)).toEqual(["--resume", SESSION]);
+    expect(args).not.toContain("--session-id");
+  });
+
+  it("returns a fresh array — mutating the result cannot corrupt the shared prefix", () => {
+    const args = buildClaudeArgs({ sessionId: SESSION, resuming: false });
+    args.push("--injected");
+    expect(buildClaudeArgs({ sessionId: SESSION, resuming: false })).not.toContain("--injected");
+    expect([...CLAUDE_STREAM_JSON_FLAGS]).not.toContain("--injected");
+  });
+});
+
+describe("serializeUserTurn — stdin envelope (#1267)", () => {
+  it("emits exactly one newline-terminated JSON object", () => {
+    const line = serializeUserTurn(SUPERVISOR_INITIAL_PROMPT);
+    expect(line.endsWith("\n")).toBe(true);
+    expect(line.slice(0, -1)).not.toContain("\n");
+    expect(JSON.parse(line)).toEqual({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: SUPERVISOR_INITIAL_PROMPT }] },
+    });
+  });
+});
+
+describe("createLineFramer — child stdout/stderr framing (#1267)", () => {
+  function collect() {
+    const lines: string[] = [];
+    return { lines, framer: createLineFramer((l) => lines.push(l)) };
+  }
+
+  it("emits complete lines and withholds a trailing partial", () => {
+    const { lines, framer } = collect();
+    framer.push("alpha\nbeta\npar");
+    expect(lines).toEqual(["alpha", "beta"]);
+  });
+
+  it("reassembles a line split across pushes", () => {
+    const { lines, framer } = collect();
+    framer.push('{"type":"sys');
+    expect(lines).toEqual([]);
+    framer.push('tem"}\n');
+    expect(lines).toEqual(['{"type":"system"}']);
+  });
+
+  it("splits multiple lines glued into one push", () => {
+    const { lines, framer } = collect();
+    framer.push("a\nb\nc\n");
+    expect(lines).toEqual(["a", "b", "c"]);
+  });
+
+  it("flush() emits a trailing line that never got its newline", () => {
+    const { lines, framer } = collect();
+    framer.push("no-terminator");
+    expect(lines).toEqual([]);
+    framer.flush();
+    expect(lines).toEqual(["no-terminator"]);
+  });
+
+  it("flush() is a no-op when the buffer is empty, and does not re-emit", () => {
+    const { lines, framer } = collect();
+    framer.push("done\n");
+    framer.flush();
+    framer.flush();
+    expect(lines).toEqual(["done"]);
+  });
+
+  it("preserves empty lines between messages (callers decide to skip them)", () => {
+    const { lines, framer } = collect();
+    framer.push("a\n\nb\n");
+    expect(lines).toEqual(["a", "", "b"]);
+  });
+
+  it("round-trips a multi-byte character split across chunks when fed a setEncoding stream", async () => {
+    // The framer takes strings, so the decoding half of the contract lives on
+    // the stream. This pins BOTH halves against a real stream: `setEncoding`
+    // holds the partial sequence back, the framer joins the halves, and the
+    // original text survives. The negative control below is what makes this a
+    // measurement rather than a restatement.
+    const payload = `${JSON.stringify({ type: "system", subtype: "init", cwd: "café ✓" })}\n`;
+    const bytes = Buffer.from(payload, "utf8");
+    const splitAt = bytes.indexOf(0xc3); // lead byte of "é" — split after it
+    expect(splitAt).toBeGreaterThan(0);
+
+    const decoded = new PassThrough();
+    decoded.setEncoding("utf8");
+    const { lines, framer } = collect();
+    decoded.on("data", (text: string) => framer.push(text));
+    decoded.write(bytes.subarray(0, splitAt + 1));
+    decoded.write(bytes.subarray(splitAt + 1));
+    decoded.end();
+    await once(decoded, "end");
+
+    expect(lines).toEqual([payload.slice(0, -1)]);
+    expect(JSON.parse(lines[0]).cwd).toBe("café ✓");
+  });
+
+  it("NEGATIVE CONTROL: per-chunk chunk.toString() corrupts the same input", async () => {
+    // Documents exactly what `setEncoding("utf8")` buys, and proves the test
+    // above is not vacuous. Note the corruption is U+FFFD inside a JSON string
+    // — still parseable — which is precisely why no end-to-end supervisor test
+    // can catch a `chunk.toString()` regression.
+    const payload = `${JSON.stringify({ cwd: "café ✓" })}\n`;
+    const bytes = Buffer.from(payload, "utf8");
+    const splitAt = bytes.indexOf(0xc3);
+
+    const raw = new PassThrough(); // no setEncoding
+    const { lines, framer } = collect();
+    raw.on("data", (chunk: Buffer) => framer.push(chunk.toString()));
+    raw.write(bytes.subarray(0, splitAt + 1));
+    raw.write(bytes.subarray(splitAt + 1));
+    raw.end();
+    await once(raw, "end");
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("�");
+    expect(JSON.parse(lines[0]).cwd).not.toBe("café ✓");
   });
 });
 

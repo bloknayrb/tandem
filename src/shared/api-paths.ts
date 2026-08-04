@@ -13,7 +13,6 @@ export const API_CHANNEL_ERROR = "/api/channel-error";
 export const API_CHANNEL_REPLY = "/api/channel-reply";
 export const API_CHANNEL_PERMISSION = "/api/channel-permission";
 export const API_CHANNEL_PERMISSION_VERDICT = "/api/channel-permission-verdict";
-export const API_LAUNCH_CLAUDE = "/api/launch-claude";
 
 // --- Mode / metadata --------------------------------------------------------
 export const API_MODE = "/api/mode";

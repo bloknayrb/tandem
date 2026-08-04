@@ -23,7 +23,13 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
-import { type LauncherErrorCode, REAPER_NOT_FOUND_MARKER } from "../../shared/launcher/contract.js";
+import {
+  CLAUDE_STREAM_JSON_FLAGS,
+  type LauncherErrorCode,
+  REAPER_NOT_FOUND_MARKER,
+  SUPERVISOR_INITIAL_PROMPT,
+  serializeUserTurn,
+} from "../../shared/launcher/contract.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 
 interface SupervisorOpts {
@@ -57,9 +63,6 @@ const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
  * an attacker-controlled value flowing into `--resume` could hijack
  * Claude's loaded conversation state. Reject anything not UUID-shaped. */
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SUPERVISOR_INITIAL_PROMPT =
-  "A document has been opened in Tandem for review. " +
-  "Call tandem_checkInbox to see what needs attention, then begin reviewing.";
 
 export interface Supervisor {
   start(): Promise<void>;
@@ -76,8 +79,17 @@ export interface Supervisor {
   status(): SupervisorStatus;
 }
 
-/** Discriminated union: when `running === false` no other fields exist;
- * when `running === true` all process-level fields are guaranteed present. */
+/** Discriminated union: when `running === false` the only extra field is the
+ * (optional) `lastError`; when `running === true` all process-level fields are
+ * guaranteed present.
+ *
+ * `lastError` is deliberately absent from the `running: true` branch, and that
+ * omission is only sound because `spawnOnce()` *clears* `lastError` once a
+ * spawn actually starts. Without the clear, an error from a previous failed
+ * spawn would sit in the closure invisibly for the whole run and then
+ * resurface — attributed to nothing — the moment the user cleanly stopped a
+ * perfectly healthy supervisor. The explicit `lastError?: undefined` below
+ * encodes that invariant instead of leaving it to the reader. */
 export type SupervisorStatus =
   | { running: false; lastError?: LauncherErrorCode }
   | {
@@ -88,6 +100,10 @@ export type SupervisorStatus =
       cwd: string;
       sessionId: string;
       resuming: boolean;
+      /** Never set: a running supervisor has, by construction, no pending
+       * fatal error. Present as an explicit `undefined` so `status.lastError`
+       * type-checks on the un-narrowed union. */
+      lastError?: undefined;
     };
 
 /**
@@ -103,6 +119,65 @@ export function shouldClearSession(opts: {
   resumeConfirmed: boolean;
 }): boolean {
   return opts.resuming && opts.code !== null && opts.code !== 0 && !opts.resumeConfirmed;
+}
+
+/**
+ * Full argument vector handed to the `claude` binary, in order.
+ *
+ * Module-scope and exported (mirroring `resolveSafeCwd` below) so the wire
+ * shape can be asserted without spawning anything: this vector IS the
+ * launcher's half of the CLI contract, and #1267 changed it with no coverage.
+ * Takes only the two fields it reads so callers/tests don't have to construct
+ * a whole `SpawnPlan`.
+ */
+export function buildClaudeArgs(plan: { sessionId: string; resuming: boolean }): string[] {
+  const args = [...CLAUDE_STREAM_JSON_FLAGS];
+  // --resume replays an existing conversation; --session-id names a new one.
+  // Passing both is an error, so this is strictly either/or.
+  if (plan.resuming) {
+    args.push("--resume", plan.sessionId);
+  } else {
+    args.push("--session-id", plan.sessionId);
+  }
+  return args;
+}
+
+/**
+ * Newline framer for a child's stdout/stderr.
+ *
+ * `data` events carry arbitrary byte-range chunks, not lines: a single
+ * stream-json object routinely arrives split across two events, and two small
+ * objects routinely arrive glued into one. Parsing a raw chunk therefore
+ * fails, unpredictably, under exactly the load that matters.
+ *
+ * Callers MUST feed this pre-decoded strings (`stream.setEncoding("utf8")`),
+ * never `chunk.toString()` — a multi-byte character straddling a chunk
+ * boundary is corrupted by per-chunk decoding, and the corruption survives
+ * reassembly here.
+ *
+ * `flush()` emits any trailing partial line, for the case where the stream
+ * ends without a final newline. Exported for unit testing.
+ */
+export function createLineFramer(onLine: (line: string) => void): {
+  push(text: string): void;
+  flush(): void;
+} {
+  let buffer = "";
+  return {
+    push(text: string): void {
+      buffer += text;
+      const parts = buffer.split("\n");
+      // The last element is either "" (chunk ended on a newline) or a partial
+      // line still awaiting its terminator — carry it to the next push.
+      buffer = parts.pop() ?? "";
+      for (const line of parts) onLine(line);
+    },
+    flush(): void {
+      const rest = buffer;
+      buffer = "";
+      if (rest) onLine(rest);
+    },
+  };
 }
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
@@ -232,25 +307,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return process.env.TANDEM_CLAUDE_CMD || "claude";
   }
 
-  function buildClaudeArgs(plan: SpawnPlan): string[] {
-    const args = [
-      "-p",
-      "--input-format",
-      "stream-json",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--dangerously-load-development-channels",
-      "server:tandem-channel",
-    ];
-    if (plan.resuming) {
-      args.push("--resume", plan.sessionId);
-    } else {
-      args.push("--session-id", plan.sessionId);
-    }
-    return args;
-  }
-
   async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
     const integration = await readIntegration();
     if (!integration) return null;
@@ -280,12 +336,23 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       `[Launcher] Spawning Claude via reaper. cwd=${plan.cwd} session=${plan.sessionId} resuming=${plan.resuming}`,
     );
 
-    child = spawn(reaper, reaperArgs, {
+    // Every handler below closes over `spawned`, never the mutable module-level
+    // `child`. `child` is reassigned by the next spawn (and nulled on exit), so
+    // a late callback from THIS process that dereferenced `child` could act on
+    // a *different, newer* process — e.g. writing this spawn's bootstrap turn
+    // into a freshly restarted Claude's stdin.
+    const spawned = spawn(reaper, reaperArgs, {
       cwd: plan.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
       windowsHide: true,
     });
+    child = spawned;
+
+    // A spawn that reached this point supersedes whatever went wrong before it;
+    // leaving the old code set would make it resurface on the next clean stop
+    // (see the note on SupervisorStatus).
+    lastError = undefined;
 
     currentCwd = plan.cwd;
     currentSessionId = plan.sessionId;
@@ -313,70 +380,95 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }, RESUME_CONFIRM_MS);
     }
 
-    let stdoutBuffer = "";
-    let initialPromptSent = false;
+    // Loop-invariant, resolved once rather than per line: the bootstrap turn is
+    // only ever sent on a fresh spawn (a resumed session already has its
+    // history — a second copy of the prompt would be a duplicate turn), and
+    // only once. Flipping this to false is what retires both conditions.
+    let awaitingInit = !plan.resuming;
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString();
-      const parts = stdoutBuffer.split("\n");
-      stdoutBuffer = parts.pop()!;
-      for (const line of parts) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        // This parser speaks Claude's stream-json envelope specifically. The
-        // supervisor only spawns Claude today, so no provider guard is needed
-        // here -- but one MUST be added back the moment a second provider can
-        // reach this handler, or we would write a Claude-shaped user turn into
-        // a foreign process's stdin.
-        if (trimmed.startsWith("{")) {
-          try {
-            const parsed = JSON.parse(trimmed) as {
-              type?: string;
-              subtype?: string;
-              is_error?: boolean;
-              errors?: string[];
-            };
-            if (
-              parsed.type === "system" &&
-              parsed.subtype === "init" &&
-              !plan.resuming &&
-              !initialPromptSent
-            ) {
-              initialPromptSent = true;
-              const turn = {
-                type: "user",
-                message: {
-                  role: "user",
-                  content: [
-                    {
-                      type: "text",
-                      text: SUPERVISOR_INITIAL_PROMPT,
-                    },
-                  ],
-                },
-              };
-              if (child?.stdin?.writable) {
-                child.stdin.write(JSON.stringify(turn) + "\n", (err) => {
-                  if (err) console.error("[Launcher] Failed to send initial prompt:", err.message);
-                });
-              }
-            }
-            if (parsed.type === "result" && parsed.is_error && Array.isArray(parsed.errors)) {
-              console.error(`[Claude] Output error: ${parsed.errors.join("; ")}`);
-            }
-          } catch {
-            console.error(`[Claude] ${trimmed}`);
-          }
-        }
+    /** Write the one bootstrap user turn. Targets `spawned`, not `child`. */
+    function sendInitialTurn(): void {
+      const stdin = spawned.stdin;
+      if (!stdin?.writable) {
+        console.error("[Launcher] Claude stdin not writable — initial prompt not delivered");
+        return;
       }
-    });
+      stdin.write(serializeUserTurn(SUPERVISOR_INITIAL_PROMPT), (err) => {
+        if (err) console.error("[Launcher] Failed to send initial prompt:", err.message);
+      });
+    }
 
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const line = chunk.toString().trimEnd();
-      if (line) console.error(`[Claude] ${line}`);
-    });
+    function handleStdoutLine(line: string): void {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      // Deliberate discard: in stream-json mode stdout carries ONLY the JSON
+      // envelope. Anything else is a non-Claude process, a pre-protocol banner,
+      // or a wrapper's own chatter — none of it is ours to interpret, and none
+      // of it is lost, because a real diagnostic goes to stderr, which the
+      // handler below already logs verbatim. Re-logging it here would double
+      // every message.
+      //
+      // This parser speaks Claude's stream-json envelope specifically. The
+      // supervisor only spawns Claude today, so no provider guard is needed
+      // here -- but one MUST be added back the moment a second provider can
+      // reach this handler, or we would write a Claude-shaped user turn into
+      // a foreign process's stdin.
+      if (!trimmed.startsWith("{")) return;
 
-    child.on("error", (err: NodeJS.ErrnoException) => {
+      let parsed: { type?: string; subtype?: string; is_error?: boolean; errors?: string[] };
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // Started with `{` but isn't JSON — surface it rather than swallow it.
+        console.error(`[Claude] ${trimmed}`);
+        return;
+      }
+
+      if (awaitingInit && parsed.type === "system" && parsed.subtype === "init") {
+        awaitingInit = false;
+        sendInitialTurn();
+        return;
+      }
+      // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's `result`
+      // envelope — it can only be settled against a running `claude` binary.
+      // Left as-is deliberately; the branch is inert if the field never
+      // appears, so guessing a different shape would be strictly worse.
+      if (parsed.type === "result" && parsed.is_error && Array.isArray(parsed.errors)) {
+        console.error(`[Claude] Output error: ${parsed.errors.join("; ")}`);
+      }
+    }
+
+    // setEncoding, not chunk.toString(): the decoder is stateful and holds back
+    // a partial multi-byte sequence until its remaining bytes arrive. Decoding
+    // each chunk independently replaces any non-ASCII character straddling a
+    // chunk boundary with U+FFFD.
+    //
+    // Scope, stated honestly because it was measured: U+FFFD inside a JSON
+    // string is still valid JSON, and the only fields dispatched on today
+    // (`type`, `subtype`) are ASCII — so per-chunk decoding does NOT currently
+    // drop protocol messages, and no end-to-end test can detect it. What it
+    // corrupts is every *content* field: the `result` text logged below, and
+    // anything a future branch reads. Silent, unrecoverable downstream, and one
+    // line to prevent. See `createLineFramer`'s unit tests for the mechanism.
+    spawned.stdout?.setEncoding("utf8");
+    const stdoutFramer = createLineFramer(handleStdoutLine);
+    spawned.stdout?.on("data", (text: string) => stdoutFramer.push(text));
+    // A stream can end mid-line (no trailing newline). Without this the last
+    // message — often the `result` envelope — would never be seen.
+    spawned.stdout?.on("end", () => stdoutFramer.flush());
+
+    // stderr is line-buffered for the same reason stdout is: a per-chunk
+    // console.error splits one Claude diagnostic across two log lines and
+    // glues unrelated ones together.
+    spawned.stderr?.setEncoding("utf8");
+    const stderrFramer = createLineFramer((line) => {
+      const text = line.trimEnd();
+      if (text) console.error(`[Claude] ${text}`);
+    });
+    spawned.stderr?.on("data", (text: string) => stderrFramer.push(text));
+    spawned.stderr?.on("end", () => stderrFramer.flush());
+
+    spawned.on("error", (err: NodeJS.ErrnoException) => {
       // Cancel the confirmation timer — spawn errors don't flow through the
       // exit handler, so confirmTimer must be cleared here too. Without this,
       // the 30s timer from a failed resuming spawn would fire later and null
@@ -389,10 +481,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // running and so subsequent start()/relaunch() actually re-attempt.
       // ENOENT is unrecoverable without user action — trip the breaker
       // immediately rather than schedule a doomed restart.
-      child = null;
-      currentCwd = undefined;
-      currentSessionId = undefined;
-      currentResuming = false;
+      // Guarded on identity: a late event from a superseded spawn must not
+      // erase the handle of the process that replaced it.
+      if (child === spawned) {
+        child = null;
+        currentCwd = undefined;
+        currentSessionId = undefined;
+        currentResuming = false;
+      }
       if (err.code === "ENOENT") {
         lastError = "binary-not-found";
         breakerTripped = true;
@@ -406,10 +502,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }
     });
 
-    child.on("exit", (code, signal) => {
+    spawned.on("exit", (code, signal) => {
       const ranFor = Date.now() - spawnedAt;
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
-      child = null;
+      // Identity-guarded for the same reason as the error handler above.
+      if (child === spawned) child = null;
 
       // Cancel the confirmation timer — the process has already exited.
       if (confirmTimer) {
@@ -442,9 +539,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // beats "spawn". The "exit" guard only fires in the pathological
     // exit-without-spawn case — without it that case would hang this await
     // *while holding withLock*, permanently wedging the supervisor.
-    // Bind to the captured `spawned` ref, not the module-level `child` (the
+    // Bound to the captured `spawned` ref, not the module-level `child` (the
     // long-lived error handler nulls `child`, which would defuse cleanup).
-    const spawned = child;
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => {
         spawned.off("spawn", onSpawn);
@@ -539,6 +635,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Relaunch always means "user is actively asking" → clear breaker.
       breakerTripped = false;
       recentAttempts = [];
+      // stopInternal() raised the stop flag on the way in. Lower it before the
+      // new spawn, or the exit handler treats the *next* crash as a deliberate
+      // stop and silently declines to restart — the supervisor stays dead.
+      stopRequested = false;
       const plan = await buildPlan(newCwd);
       if (!plan) return;
       await spawnOnce(plan);
@@ -556,7 +656,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       confirmTimer = null;
     }
     const c = child;
-    if (!c || c.killed) return;
+    if (!c || c.killed) {
+      // Already dead, or never started — nothing to signal. But we must still
+      // DROP the handle rather than early-returning with `child` set:
+      // spawnOnce() throws when `child` is non-null, so a killed-but-retained
+      // handle turns the very next relaunch()/startFresh() into a user-visible
+      // "relaunch failed" for a supervisor that is, in fact, idle.
+      child = null;
+      currentCwd = undefined;
+      currentSessionId = undefined;
+      currentResuming = false;
+      return;
+    }
     try {
       c.kill("SIGTERM");
     } catch {
@@ -608,6 +719,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       clearSavedSession();
       breakerTripped = false;
       recentAttempts = [];
+      // See relaunch(): stopInternal() set stopRequested, and leaving it set
+      // would disarm the auto-restart for the whole life of the new spawn.
+      stopRequested = false;
       const plan = await buildPlan(cwdOverride);
       if (!plan) return;
       await spawnOnce(plan);
