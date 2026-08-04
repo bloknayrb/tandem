@@ -26,8 +26,9 @@
  * Records are written into `TANDEM_STUB_CLAUDE_RECORD_DIR`:
  *   - `spawn-<pid>.json` — written immediately: the argument vector we were
  *     handed. One file per spawn, so a restart is observable as a second file.
- *   - `turn-<pid>.json`  — written when a user turn arrives on stdin, carrying
+ *   - `turn-<pid>-<seq>.json` — one per user turn arriving on stdin, carrying
  *     the raw line plus a list of protocol violations (empty === well-formed).
+ *     Zero-padded seq so lexicographic order is arrival order.
  *
  * The process deliberately does NOT exit after answering: a real stream-json
  * session stays open, and exiting would trip the supervisor's restart backoff
@@ -153,7 +154,19 @@ function turnProblems(line) {
 }
 
 let stdinBuffer = "";
-let answered = false;
+
+/** Answered-turn counter. Every turn is recorded, not just the first: wake
+ * coalescing is defined by how MANY turns arrive, so a one-shot stub could not
+ * tell "coalesced into one" from "never sent at all". Zero-padded so readdir's
+ * lexicographic order is arrival order. */
+let turnSeq = 0;
+
+/** How long a turn stays "in flight" before its `result` lands.
+ *
+ * The supervisor coalesces wake turns while a turn is in flight, so a test that
+ * needs two events to land inside one window has to be able to widen it. The
+ * default is short enough that ordinary tests don't pay for it. */
+const turnDelayMs = Number(process.env.TANDEM_STUB_CLAUDE_TURN_DELAY_MS ?? 50);
 
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -163,10 +176,20 @@ process.stdin.on("data", (chunk) => {
     const line = stdinBuffer.slice(0, newline);
     stdinBuffer = stdinBuffer.slice(newline + 1);
     newline = stdinBuffer.indexOf("\n");
-    if (!line.trim() || answered) continue;
-    answered = true;
+    if (!line.trim()) continue;
+    const seq = turnSeq++;
     const { problems, text } = turnProblems(line);
-    writeRecord(`turn-${process.pid}.json`, { pid: process.pid, raw: line, problems, text });
+    writeRecord(`turn-${process.pid}-${String(seq).padStart(3, "0")}.json`, {
+      pid: process.pid,
+      seq,
+      // Wall-clock arrival. `seq` restarts at 0 in every new process, so it
+      // orders turns only WITHIN one spawn — across a restart two records can
+      // share seq 0 and sorting by it alone is ambiguous.
+      at: Date.now(),
+      raw: line,
+      problems,
+      text,
+    });
     // Real ordering: the turn arrives, THEN `init`, then the result.
     emitInit();
     setTimeout(() => {
@@ -178,7 +201,7 @@ process.stdin.on("data", (chunk) => {
           result: problems.length === 0 ? "ok" : problems.join("; "),
         })}\n`,
       );
-    }, 50);
+    }, turnDelayMs);
   }
 });
 

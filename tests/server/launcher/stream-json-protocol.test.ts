@@ -16,17 +16,21 @@
  * cross-platform (the "pid-name trick").
  */
 
+import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
+import type { Supervisor } from "../../../src/server/launcher/supervisor.js";
 import { buildClaudeArgs, createSupervisor } from "../../../src/server/launcher/supervisor.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
   SUPERVISOR_INITIAL_PROMPT,
+  SUPERVISOR_WAKE_PROMPT,
 } from "../../../src/shared/launcher/contract.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -42,6 +46,7 @@ const ENV_KEYS = [
   "NODE_ENV",
   "TANDEM_CLAUDE_CMD",
   "TANDEM_STUB_CLAUDE_RECORD_DIR",
+  "TANDEM_STUB_CLAUDE_TURN_DELAY_MS",
 ] as const;
 
 let tmpDir: string;
@@ -59,9 +64,92 @@ interface SpawnRecord {
 
 interface TurnRecord {
   pid: number;
+  seq: number;
+  at: number;
   raw: string;
   problems: string[];
   text: string | null;
+}
+
+/** Every turn the stub has received, in arrival order.
+ *
+ * Ordered by wall-clock first and `seq` only as a tie-break: `seq` restarts at
+ * 0 in each spawned stub, so across a restart two records share seq 0 and a
+ * seq-only sort silently interleaves the two processes' turns. */
+function turnRecords(): TurnRecord[] {
+  return recordsWithPrefix<TurnRecord>("turn-").sort((a, b) => a.at - b.at || a.seq - b.seq);
+}
+
+/** Turns received by one specific stub process. Use this rather than an index
+ * into `turnRecords()` whenever a restart is involved — it is immune to
+ * cross-process ordering entirely. */
+function turnsFromPid(pid: number): TurnRecord[] {
+  return turnRecords().filter((t) => t.pid === pid);
+}
+
+/**
+ * A supervisor whose event subscription is captured rather than wired to the
+ * real queue, so a test can push an event without standing up Y.Doc observers.
+ *
+ * The queue's own gates (Solo hold, privacy hold) are deliberately NOT modelled
+ * here — they run before any subscriber is called, and pinning them against a
+ * fake would only assert that the fake behaves like the fake. What the real
+ * default subscription does in Solo is covered where the real queue lives, in
+ * `event-queue.test.ts`. These tests own the other half: given an event that
+ * has already cleared those gates, what does the supervisor do with it?
+ */
+function supervisorWithEventSink(extra?: { wakeLatchMs?: number }): {
+  sup: Supervisor;
+  emit: (event: TandemEvent) => void;
+  subscriberCount: () => number;
+} {
+  const callbacks = new Set<(event: TandemEvent) => void>();
+  const sup = createSupervisor({
+    integrationsBase: tmpDir,
+    wakeLatchMs: extra?.wakeLatchMs,
+    subscribeToEvents: (cb) => {
+      callbacks.add(cb);
+      return () => callbacks.delete(cb);
+    },
+  });
+  return {
+    sup,
+    emit: (event) => {
+      for (const cb of [...callbacks]) cb(event);
+    },
+    subscriberCount: () => callbacks.size,
+  };
+}
+
+let eventSeq = 0;
+function annotationEvent(): TandemEvent {
+  return {
+    id: `evt_${eventSeq++}`,
+    type: "annotation:created",
+    timestamp: Date.now(),
+    documentId: "d1",
+    payload: { annotationId: `ann_${eventSeq}`, content: "look at this", textSnippet: "x" },
+  } as TandemEvent;
+}
+
+function documentEvent(): TandemEvent {
+  return {
+    id: `evt_${eventSeq++}`,
+    type: "document:switched",
+    timestamp: Date.now(),
+    documentId: "d1",
+    payload: { fileName: "other.md" },
+  } as TandemEvent;
+}
+
+function chatEvent(): TandemEvent {
+  return {
+    id: `evt_${eventSeq++}`,
+    type: "chat:message",
+    timestamp: Date.now(),
+    documentId: "d1",
+    payload: { messageId: `msg_${eventSeq}`, content: "are you there?", author: "user" },
+  } as TandemEvent;
 }
 
 beforeEach(() => {
@@ -90,7 +178,16 @@ afterEach(() => {
     else process.env[k] = savedEnv[k];
   }
   for (const dir of [tmpDir, spawnDir, recordDir]) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Retries, and a swallow of last resort. These are OS temp dirs, and on
+    // Windows a just-exited child can still hold its cwd and its running
+    // script file briefly — `spawnDir` is both. Letting that surface would red
+    // a test whose assertions all passed, blaming the product for a cleanup
+    // race; the dirs are `mkdtemp`-unique, so a leaked one is inert.
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    } catch (err) {
+      console.error(`[test] could not remove temp dir ${dir}:`, (err as Error).message);
+    }
   }
 });
 
@@ -257,6 +354,305 @@ describe("launcher stream-json protocol — resumed spawn (#1267)", () => {
       await sup.stop();
     }
   });
+});
+
+// Group K: the supervisor, not the channel shim, turns Tandem activity into a
+// Claude turn. The spike (docs/spikes/channel-push-stream-json.md) measured a
+// channel notification arriving at the shim and producing no turn at all, with
+// an aliveness control ruling out a dead process — so this path is load-bearing
+// for every event-driven interaction the product has, not an optimisation.
+describe("supervisor-owned turn delivery (#1266)", () => {
+  /** Wait until `n` turns have been recorded, then hold still long enough that
+   * an (n+1)th would have shown up. Both halves matter: the first proves the
+   * wake fired, the second is what distinguishes "coalesced into one" from
+   * "the second one is merely late". */
+  async function expectExactlyTurns(n: number, label: string): Promise<TurnRecord[]> {
+    const turns = await waitFor(() => {
+      const recs = turnRecords();
+      return recs.length >= n ? recs : null;
+    }, label);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(turnRecords()).toHaveLength(n);
+    return turns;
+  }
+
+  it("wakes an idle session when Tandem activity arrives", async () => {
+    await writeClaudeIntegration();
+    const { sup, emit } = supervisorWithEventSink();
+    try {
+      await sup.startFresh(spawnDir);
+      await waitFor(() => (turnRecords().length > 0 ? true : null), "the bootstrap turn");
+
+      emit(annotationEvent());
+
+      const turns = await expectExactlyTurns(2, "the wake turn");
+      expect(turns[0].text).toBe(SUPERVISOR_INITIAL_PROMPT);
+      expect(turns[1].text).toBe(SUPERVISOR_WAKE_PROMPT);
+      // The wake must be as well-formed as the bootstrap turn — it goes through
+      // the same envelope, and a malformed one would be silently ignored.
+      expect(turns[1].problems).toEqual([]);
+    } finally {
+      await sup.stop();
+    }
+  }, 25_000);
+
+  // `chat:message` is the one wake-worthy type that isn't an `annotation:*`
+  // prefix match, so it is the one a dropped clause in `isWakeWorthy` would
+  // silently lose. It is also the only type the queue delivers in Solo, which
+  // makes it the sole wake path a Solo user has.
+  // A wake owed when the child died must survive into the next spawn. The
+  // resumed path sends no bootstrap turn, so without the carry-over the
+  // notification is discarded and the user's comment goes unannounced until
+  // some later, unrelated event happens to wake the session.
+  it("carries an undelivered wake across a crash restart", async () => {
+    // Hold the bootstrap turn open so the event lands while it is in flight and
+    // becomes a pending wake rather than being delivered immediately.
+    process.env.TANDEM_STUB_CLAUDE_TURN_DELAY_MS = "600000";
+    await writeClaudeIntegration();
+    const { sup, emit } = supervisorWithEventSink();
+    try {
+      // Must start FRESH. A resumed spawn killed inside RESUME_CONFIRM_MS has
+      // its saved session cleared as presumed-bad, so the restart would come
+      // back fresh and its bootstrap turn would mask the carry-over. A fresh
+      // spawn is "confirmed" from the start, so its session survives the crash
+      // and the restart genuinely takes the no-bootstrap-turn resume path.
+      await sup.startFresh(spawnDir);
+      const first = sup.status();
+      if (!first.running) throw new Error("expected a running supervisor");
+      await waitFor(() => (turnRecords().length >= 1 ? true : null), "the bootstrap turn");
+
+      // Deferred behind the bootstrap turn, which the stub will never answer.
+      emit(annotationEvent());
+
+      process.kill(first.reaperPid, "SIGKILL");
+
+      // Keyed on the RESPAWNED process, not on an index into all turns: the
+      // stub's per-process seq restarts at 0, so "turn 1 overall" is ambiguous
+      // across a restart. The respawn resumes, so it sends no bootstrap turn of
+      // its own — any turn it does send is the carried-over wake.
+      const second = await waitFor(() => {
+        const s = sup.status();
+        return s.running && s.reaperPid !== first.reaperPid ? s : null;
+      }, "an automatic restart with a new reaper");
+      const carried = await waitFor(
+        () => {
+          const recs = turnsFromPid(second.reaperPid);
+          return recs.length > 0 ? recs : null;
+        },
+        "the carried-over wake on the respawned session",
+        15_000,
+      );
+      expect(carried[0].text).toBe(SUPERVISOR_WAKE_PROMPT);
+    } finally {
+      await sup.stop();
+    }
+  }, 30_000);
+
+  it("wakes on chat as well as annotations", async () => {
+    await writeClaudeIntegration();
+    const { sup, emit } = supervisorWithEventSink();
+    try {
+      await sup.startFresh(spawnDir);
+      await waitFor(() => (turnRecords().length > 0 ? true : null), "the bootstrap turn");
+
+      emit(chatEvent());
+
+      const turns = await expectExactlyTurns(2, "the wake turn from chat");
+      expect(turns[1].text).toBe(SUPERVISOR_WAKE_PROMPT);
+    } finally {
+      await sup.stop();
+    }
+  }, 25_000);
+
+  it("coalesces a burst arriving mid-turn into exactly one wake", async () => {
+    // Hold each turn open long enough that the whole burst lands inside the
+    // bootstrap turn's in-flight window.
+    process.env.TANDEM_STUB_CLAUDE_TURN_DELAY_MS = "700";
+    await writeClaudeIntegration();
+    const { sup, emit } = supervisorWithEventSink();
+    try {
+      await sup.startFresh(spawnDir);
+      for (let i = 0; i < 5; i++) emit(annotationEvent());
+
+      const turns = await expectExactlyTurns(2, "one coalesced wake turn");
+      expect(turns[1].text).toBe(SUPERVISOR_WAKE_PROMPT);
+    } finally {
+      await sup.stop();
+    }
+  });
+
+  it("does not wake on document lifecycle events", async () => {
+    await writeClaudeIntegration();
+    const { sup, emit } = supervisorWithEventSink();
+    try {
+      await sup.startFresh(spawnDir);
+      await waitFor(() => (turnRecords().length > 0 ? true : null), "the bootstrap turn");
+
+      for (let i = 0; i < 3; i++) emit(documentEvent());
+      // Only the bootstrap turn. Tab switching must not conscript the session.
+      await expectExactlyTurns(1, "no additional turn");
+
+      // Positive control from the SAME sample. Without it this test would also
+      // pass with the whole subscription severed — "no wake" would then be true
+      // for the wrong reason. Proving the emit path is still live is what makes
+      // the silence above attributable to the filter.
+      emit(annotationEvent());
+      const turns = await expectExactlyTurns(2, "the control wake");
+      expect(turns[1].text).toBe(SUPERVISOR_WAKE_PROMPT);
+    } finally {
+      await sup.stop();
+    }
+  }, 25_000);
+
+  // The latch is the safeguard against wakes wedging permanently when a
+  // `result` envelope goes missing. Left untested, the safeguard against
+  // silent failure would itself be unverified — so the window is injectable.
+  it("breaks the in-flight latch when no result arrives", async () => {
+    // Stub never answers within the test's lifetime, so `turnInFlight` would
+    // stay set forever without the latch.
+    process.env.TANDEM_STUB_CLAUDE_TURN_DELAY_MS = "600000";
+    await writeClaudeIntegration();
+    const { sup, emit } = supervisorWithEventSink({ wakeLatchMs: 300 });
+    try {
+      await sup.startFresh(spawnDir);
+      await waitFor(() => (turnRecords().length > 0 ? true : null), "the bootstrap turn");
+
+      // Arrives while the (never-answered) bootstrap turn is in flight.
+      emit(annotationEvent());
+
+      const turns = await expectExactlyTurns(2, "the wake released by the latch");
+      expect(turns[1].text).toBe(SUPERVISOR_WAKE_PROMPT);
+    } finally {
+      await sup.stop();
+    }
+  }, 25_000);
+
+  // The docblock on `teardownTurnDelivery` warns specifically about a
+  // superseded spawn's subscription outliving it. A crash-restart is the path
+  // that produces one, so the count must return to 1 — not climb to 2.
+  it("does not accumulate subscriptions across a crash restart", async () => {
+    await writeClaudeIntegration();
+    const { sup, subscriberCount } = supervisorWithEventSink();
+    try {
+      await sup.startFresh(spawnDir);
+      const first = sup.status();
+      if (!first.running) throw new Error("expected a running supervisor");
+      expect(subscriberCount()).toBe(1);
+
+      // Kill the reaper out from under the supervisor — an unrequested exit,
+      // so the restart path (not the stop path) runs.
+      process.kill(first.reaperPid, "SIGKILL");
+
+      await waitFor(() => {
+        const s = sup.status();
+        return s.running && s.reaperPid !== first.reaperPid ? s : null;
+      }, "an automatic restart with a new reaper");
+      expect(subscriberCount()).toBe(1);
+    } finally {
+      await sup.stop();
+    }
+  }, 25_000);
+
+  // The reason this whole group exists. #1267 justified sending no bootstrap
+  // turn on resume by arguing the channel would push work to the session — and
+  // the spike showed it does not, which left a resumed session permanently
+  // inert. It now wakes on activity instead.
+  it("wakes a RESUMED session, which gets no bootstrap turn", async () => {
+    await writeClaudeIntegration();
+    fs.writeFileSync(
+      path.join(tmpDir, "launcher-session.json"),
+      JSON.stringify({ sessionId: VALID_UUID }),
+      "utf8",
+    );
+    const { sup, emit } = supervisorWithEventSink();
+    try {
+      await sup.start();
+      await waitFor(() => {
+        const recs = recordsWithPrefix<SpawnRecord>("spawn-");
+        return recs.length > 0 ? recs : null;
+      }, "the stub CLI to record its argv");
+      expect(turnRecords()).toHaveLength(0);
+
+      emit(annotationEvent());
+
+      const turns = await expectExactlyTurns(1, "the wake turn on a resumed session");
+      expect(turns[0].text).toBe(SUPERVISOR_WAKE_PROMPT);
+    } finally {
+      await sup.stop();
+    }
+  });
+
+  // A subscription outliving its child would write wake turns into a dead pipe
+  // forever, and would keep `getSubscriberCount()` claiming something is
+  // attached after everything has stopped.
+  it("detaches its event subscription when the child stops", async () => {
+    await writeClaudeIntegration();
+    const { sup, subscriberCount } = supervisorWithEventSink();
+    await sup.startFresh(spawnDir);
+    expect(subscriberCount()).toBe(1);
+
+    await sup.stop();
+    await waitFor(() => (subscriberCount() === 0 ? true : null), "the subscription to detach");
+  });
+
+  // `stopInternal` has an escalation path that gives up on a reaper surviving
+  // SIGKILL: it logs "abandoning handle", drops `child`, and returns — with the
+  // process still alive, so its `exit` never fires. Releasing the subscription
+  // only from the `exit` handler would therefore leak it for the life of the
+  // server, and hand the NEXT start a second live subscription. Simulated by
+  // neutering `kill()` on the handle, which is what an unkillable reaper looks
+  // like from here.
+  it("releases the subscription even when the child never exits", async () => {
+    await writeClaudeIntegration();
+    const { sup, subscriberCount } = supervisorWithEventSink();
+    await sup.startFresh(spawnDir);
+    const running = sup.status();
+    if (!running.running) throw new Error("expected a running supervisor");
+    expect(subscriberCount()).toBe(1);
+
+    // `stopInternal` signals via `ChildProcess#kill`, not `process.kill`, so
+    // the prototype is where an unkillable reaper has to be simulated. Neutered
+    // rather than mocked out: the supervisor must still walk its real SIGTERM →
+    // SIGKILL → give-up escalation, which is the branch under test.
+    //
+    // Patching a global prototype is only safe because vitest's default `forks`
+    // pool gives each test FILE its own process (no pool override in
+    // vitest.config.ts) — the patch cannot reach a concurrently running file.
+    // Restored in `finally` regardless.
+    const realKill = ChildProcess.prototype.kill;
+    ChildProcess.prototype.kill = () => true;
+    try {
+      await sup.stop();
+      // The handle was abandoned with the process still alive, so no `exit`
+      // fired and no exit-handler teardown ran. This must still be 0.
+      expect(subscriberCount()).toBe(0);
+      expect(sup.status().running).toBe(false);
+    } finally {
+      ChildProcess.prototype.kill = realKill;
+      // Reap the deliberately-orphaned reaper and WAIT for it to actually go.
+      // Its cwd is `spawnDir`, and Windows refuses to remove a directory that
+      // is a live process's working directory — so returning before it dies
+      // makes `afterEach`'s cleanup throw EPERM and reds a test that passed.
+      try {
+        process.kill(running.reaperPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+      await waitFor(
+        () => {
+          try {
+            // Signal 0 probes liveness without delivering anything.
+            process.kill(running.reaperPid, 0);
+            return null;
+          } catch {
+            return true;
+          }
+        },
+        "the orphaned reaper to die",
+        10_000,
+      );
+    }
+  }, 30_000);
 });
 
 describe("supervisor lastError lifecycle (#1267)", () => {

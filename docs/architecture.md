@@ -328,6 +328,21 @@ The channel **supplements** polling for user actions: the shim pushes events to 
 
 That distinction is load-bearing. The server can observe that it handed an event to a subscribed consumer; it cannot observe that any model received it — an attached channel shim whose host never negotiated the channel accepts the frame and discards it, indistinguishably from a live one. So `checkInbox` never suppresses an item on the strength of a push (it stamps an advisory `alreadyPushed` hint instead), and `skills/tandem/SKILL.md` instructs the model to poll at a steady cadence regardless of channel state. Treating push as authoritative is what silently dropped user comments for every install without a working channel — do not re-derive it.
 
+### Auto-launched sessions do not use the channel (#1266)
+
+The channel is the push transport for **manually started** Claude Code sessions. Sessions started by the auto-launcher get their turns from the supervisor instead, because the channel does not deliver under the flags the launcher uses.
+
+Measured 2026-08-04 against a real `claude` binary (`docs/spikes/channel-push-stream-json.md`): under `-p --input-format stream-json` a channel notification reaches the shim but never becomes a turn. The shim loads and subscribes (`/health` `push.subscribers` rises while the child runs) and the frame is visible on a raw `/api/events` read, so Tandem → shim works; the shim → Claude hop does not. An aliveness control — a second turn written by hand onto the same idle session, answered normally — rules out a dead process. This corrects a claim in [ADR-028](decisions.md#adr-028-plugin-monitor-url-and-auth-resolution--userconfig-over-hardcoded-default)'s 2026-07-19 update that auto-launched sessions "already receive channel push", which had been inferred rather than measured.
+
+`src/server/launcher/supervisor.ts` therefore subscribes to `src/server/events/queue.ts` in-process and writes a user turn onto the child's stdin. Four properties are load-bearing:
+
+- **It registers as an `"external"` subscriber.** The launched Claude is a consumer outside this process, so the WS-A2 Solo gate (`shouldForwardExternally`) must hold for it exactly as for the SSE consumers. `"internal"` would bypass that gate and push Solo-held annotations at a model. Pinned by `tests/server/event-queue.test.ts`.
+- **The wake turn carries no event payload** — only "call `tandem_checkInbox`". A turn written on stdin is indistinguishable from the user speaking, so this path must not become a second content channel racing the pull path; `mode.ts#hideFromAI` stays authoritative over what the AI actually sees.
+- **Only `annotation:*` and `chat:message` wake.** A channel notification is cheap to ignore, but a turn compels a response, so `document:*` lifecycle is excluded — otherwise tab switching would conscript the session.
+- **Wakes coalesce while a turn is in flight**, keyed on the CLI's `result` envelope, with a 10-minute latch-breaker so a missed `result` cannot wedge wakes permanently.
+
+The bootstrap turn is likewise written **on spawn**, not on the CLI's `init` line: under these flags the CLI emits nothing until it has received a turn, so waiting for `init` deadlocks both sides.
+
 ### Activation
 
 The channel shim is registered **by default** for the Claude Code target by every setup path (`tandem setup --apply` and the in-app wizard) — #985. On the desktop bundle the wizard's apply path uses the channel-shim path injected into the sidecar via `TANDEM_CHANNEL_DIST` on spawn (resolved from the resource dir by `src-tauri/src/lib.rs`), since the server's own package-root derivation resolves outside the bundle. Claude Code must additionally be started with the `--dangerously-load-development-channels` flag to activate real-time push (the desktop auto-launcher passes it automatically; hand-started "bring-your-own" sessions need it explicitly):

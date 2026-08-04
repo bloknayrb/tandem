@@ -148,10 +148,14 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
  *
  * `-p` + the two `stream-json` formats put the CLI in headless streaming mode:
  * it emits one JSON object per line on stdout and reads user turns as one JSON
- * object per line on stdin. `--verbose` is what makes the CLI emit the
- * `{"type":"system","subtype":"init"}` handshake line the supervisor waits for
- * before writing its bootstrap turn — without it there is no signal that stdin
- * is ready, and the turn is written into a process that never reads it.
+ * object per line on stdin. `--verbose` is what makes the CLI emit the full
+ * envelope stream rather than just a final answer — the supervisor needs the
+ * `{"type":"result",...}` line to know a turn has finished, which is what gates
+ * its wake-turn coalescing (see `SUPERVISOR_WAKE_PROMPT`).
+ *
+ * `--verbose` is NOT a readiness signal. The CLI emits nothing at all until it
+ * has received a turn, so there is no handshake to wait for; see
+ * `SUPERVISOR_INITIAL_PROMPT`.
  *
  * Lives here (not in `supervisor.ts`) because the spawn path and the stub-CLI
  * test harness must agree on it byte-for-byte; a drift between them would make
@@ -168,12 +172,31 @@ export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
   "server:tandem-channel",
 ];
 
-/** The bootstrap turn the supervisor writes after the CLI's `init` line. Only
- * sent on a *fresh* spawn — a resumed session already carries its own history,
- * so re-sending would inject a duplicate turn into the conversation. */
+/** The bootstrap turn the supervisor writes immediately on a fresh spawn.
+ *
+ * Written on spawn, NOT after the CLI's `init` line: under these flags the CLI
+ * emits nothing until it has received a turn, so waiting for `init` deadlocks.
+ * Measured 2026-08-04 — see `docs/spikes/channel-push-stream-json.md`.
+ *
+ * Fresh spawns only — a resumed session already carries its own history, so
+ * re-sending would inject a duplicate turn into the conversation. */
 export const SUPERVISOR_INITIAL_PROMPT =
   "A document has been opened in Tandem for review. " +
   "Call tandem_checkInbox to see what needs attention, then begin reviewing.";
+
+/** The turn the supervisor writes when Tandem activity should wake an idle
+ * session.
+ *
+ * Deliberately carries NO event payload. The channel shim's notifications embed
+ * the event content (`formatEventContent`), but a turn injected on stdin is
+ * indistinguishable from the user speaking, and this path must not become a
+ * second content channel racing the pull path. `tandem_checkInbox` stays the
+ * single authority on what the AI may see, so `mode.ts#hideFromAI` still gets
+ * the last word even if the queue's Solo gate were ever wrong. A content-free
+ * nudge is also what makes coalescing trivial: N events collapse to one turn
+ * instead of a concatenation that grows without bound. */
+export const SUPERVISOR_WAKE_PROMPT =
+  "Activity in Tandem needs your attention. Call tandem_checkInbox.";
 
 /** One `stream-json` user turn as the Claude CLI accepts it on stdin. */
 export interface StreamJsonUserTurn {

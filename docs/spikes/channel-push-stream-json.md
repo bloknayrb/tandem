@@ -112,6 +112,37 @@ does not leak, coalesce while a turn is in flight, and track idleness from
 Finding 1 is the more urgent one and is independent of all of that: the current
 ordering cannot deliver even the *first* turn.
 
+## Resolution — both findings fixed on #1267
+
+**Finding 1** — the bootstrap turn is written on spawn instead of on `init`.
+
+**Finding 2** — `supervisor.ts` now owns turn delivery. It subscribes to the
+event queue as an **`"external"`** consumer, which is the load-bearing detail:
+the launched Claude is a separate process, so the WS-A2 Solo gate must apply to
+it exactly as it does to the SSE consumers. Subscribing as `"internal"` would
+have bypassed that gate and pushed Solo-held annotations straight at a model.
+`event-queue.test.ts` pins the choice; a negative control confirms that flipping
+the argument reds that test.
+
+Two shape decisions worth recording, because neither is forced by the finding:
+
+- **The wake turn carries no event payload** — just "call `tandem_checkInbox`".
+  A turn on stdin is indistinguishable from the user speaking, and making this a
+  second content channel would race the pull path. Leaving `checkInbox` the only
+  content route keeps `mode.ts#hideFromAI` authoritative even if the queue's
+  gate were ever wrong, and it makes coalescing trivial — N events collapse to
+  one nudge rather than an unbounded concatenation.
+- **`document:*` events do not wake.** The channel shim forwards everything that
+  clears the queue's gates, but a notification is cheap to ignore where a turn
+  compels a response; waking on tab switches would conscript the session during
+  ordinary navigation.
+
+Idleness comes from the `result` envelope, with a 10-minute latch-breaker: if a
+`result` were ever missed, the session would otherwise never be woken again,
+silently and permanently.
+
+This covers the auto-launcher's `-p` shape only — see below.
+
 ## Not established here
 
 - Whether channel push works in an interactive (TTY) session. Untested — this
