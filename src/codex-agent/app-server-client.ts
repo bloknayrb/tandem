@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { TandemEvent } from "../shared/events/types.js";
 import { formatEventContent } from "../shared/events/types.js";
+import { resolveCodexCliPath } from "../shared/integrations/detect-codex-cli.js";
 
 const MAX_FRAME_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -25,6 +26,38 @@ export interface CodexAppServerClientOptions {
   onFatal?: (error: Error) => void;
 }
 
+/**
+ * Spawn the Codex `app-server` subcommand, resolving the concrete CLI path
+ * rather than a bare "codex" name. On Windows, an npm-installed Codex is a
+ * `codex.cmd`/`.ps1` shim, and libuv's spawn doesn't apply PATHEXT
+ * resolution for a bare name (ENOENT) — resolving absolutely also closes a
+ * binary-planting hazard (a bare name spawned with `cwd` set to the user's
+ * workspace searches `cwd` before `%PATH%` on Windows). `shell: true` is
+ * deliberately not used: this is a long-lived child killed via
+ * `child.kill("SIGTERM")` elsewhere in this class, and on Windows a shell
+ * wrapper would swallow the signal, orphaning the real app-server process.
+ * If resolution comes up empty, falls back to the bare name so the
+ * not-installed case still surfaces Node's own ENOENT the same way it
+ * always has.
+ */
+function spawnCodexAppServer(cwd: string): ChildProcessWithoutNullStreams {
+  const resolved = resolveCodexCliPath();
+
+  if (resolved?.needsPwshInterpreter) {
+    return spawn(
+      "pwsh.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved.path, "app-server"],
+      { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: minimalCodexEnvironment() },
+    );
+  }
+  return spawn(resolved?.path ?? "codex", ["app-server"], {
+    cwd,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+    env: minimalCodexEnvironment(),
+  });
+}
+
 /** Bounded JSONL client for Codex's stdio app-server protocol. */
 export class CodexAppServerClient {
   private readonly child: ChildProcessWithoutNullStreams;
@@ -38,14 +71,7 @@ export class CodexAppServerClient {
   private fatalNotified = false;
 
   constructor(private readonly opts: CodexAppServerClientOptions) {
-    this.child =
-      opts.spawnProcess?.() ??
-      spawn("codex", ["app-server"], {
-        cwd: opts.cwd,
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-        env: minimalCodexEnvironment(),
-      });
+    this.child = opts.spawnProcess?.() ?? spawnCodexAppServer(opts.cwd);
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk: string) => this.onData(chunk));
     this.child.stderr.on("data", (chunk: Buffer) => {

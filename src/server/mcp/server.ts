@@ -588,7 +588,7 @@ export async function startMcpServerHttp(
   });
 
   const { registerCodexApprovalRoutes } = await import("../codex/approval-broker.js");
-  registerCodexApprovalRoutes(app, largeBody);
+  registerCodexApprovalRoutes(app, lanAwareApiMiddleware);
 
   // --- Auto-launcher endpoints (#477 PR 4b) ---
   // Status, single-use nonce, relaunch, start-fresh, and a narrow

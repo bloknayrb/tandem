@@ -59,6 +59,7 @@
     "resources": {
       "../dist/server/": "dist/server/",
       "../dist/channel/": "dist/channel/",
+      "../dist/codex-agent/": "dist/codex-agent/",
       "../dist/client/": "dist/client/",
       "../sample/": "sample/",
       "../skills/": "skills/",

@@ -2,6 +2,7 @@
 import { onMount } from "svelte";
 
 import { API_CODEX_APPROVAL_DECISION, API_CODEX_APPROVALS } from "../../shared/api-paths.js";
+import { API_BASE } from "../utils/fileUpload.js";
 
 interface Approval {
   id: string;
@@ -26,7 +27,7 @@ $effect(() => {
 
 async function refresh(): Promise<void> {
   try {
-    const response = await fetch(API_CODEX_APPROVALS);
+    const response = await fetch(`${API_BASE}${API_CODEX_APPROVALS}`);
     if (!response.ok) return;
     const body = (await response.json()) as { approvals?: Approval[] };
     approvals = Array.isArray(body.approvals) ? body.approvals : [];
@@ -41,7 +42,7 @@ async function decide(decision: "accept" | "acceptForSession" | "decline"): Prom
   busy = true;
   error = null;
   try {
-    const response = await fetch(API_CODEX_APPROVAL_DECISION, {
+    const response = await fetch(`${API_BASE}${API_CODEX_APPROVAL_DECISION}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id: current.id, decision }),

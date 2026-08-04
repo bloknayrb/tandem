@@ -10,6 +10,8 @@ import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import {
   type DetectCodexCliOptions,
   detectCodexCli,
+  type ResolvedCodexCli,
+  resolveCodexCliPath,
 } from "../../shared/integrations/detect-codex-cli.js";
 import { resolveAppDataDir } from "../platform.js";
 import { assertPathSafe, type DetectedTarget, type McpEntry, resolveCliVersion } from "./apply.js";
@@ -64,8 +66,37 @@ function minimalCodexEnv(): NodeJS.ProcessEnv {
   return result;
 }
 
+/**
+ * Build the exec plan for a resolved Codex CLI. `.ps1` shims (the only kind
+ * that isn't directly exec-able) need an explicit PowerShell interpreter,
+ * invoked argv-only — mirrors `buildExecPlan` in `install-claude-cli.ts`.
+ */
+function buildCodexExecPlan(
+  resolved: ResolvedCodexCli,
+  args: string[],
+): { command: string; args: string[] } {
+  if (resolved.needsPwshInterpreter) {
+    return {
+      command: "pwsh.exe",
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved.path, ...args],
+    };
+  }
+  return { command: resolved.path, args };
+}
+
 const defaultRunCodex: RunCodex = async (args, options) => {
-  const result = await execFileAsync("codex", args, {
+  // Resolve the concrete shim path rather than passing a bare "codex" name:
+  // Windows' libuv-based spawn doesn't apply PATHEXT resolution for a bare
+  // name, so an npm-installed codex.cmd/.ps1 shim would ENOENT. Resolving
+  // absolutely also closes a binary-planting hazard — execFile with a bare
+  // name searches `cwd` (the user's workspace) before `%PATH%` on Windows.
+  // If resolution comes up empty, fall back to the bare name so the
+  // not-installed case still surfaces Node's own ENOENT the same way it
+  // always has — this fix targets the installed-but-shimmed case, not
+  // "codex isn't installed at all".
+  const resolved = resolveCodexCliPath();
+  const plan = resolved ? buildCodexExecPlan(resolved, args) : { command: "codex", args };
+  const result = await execFileAsync(plan.command, plan.args, {
     env: options.env,
     timeout: options.timeout,
     maxBuffer: options.maxBuffer,
