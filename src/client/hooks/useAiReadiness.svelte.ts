@@ -57,7 +57,11 @@
  */
 import { onDestroy } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
-import { isTransientlyUnavailable, type LauncherStatus } from "../../shared/launcher/contract.js";
+import {
+  isTransientlyUnavailable,
+  type LauncherErrorCode,
+  type LauncherStatus,
+} from "../../shared/launcher/contract.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
 /** Loopback `/health` response. `hasSession` is omitted for non-loopback
@@ -70,8 +74,82 @@ interface HealthResponse {
 
 export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
 
-/** What the titlebar/empty-state CTA should offer, or `null` to show nothing. */
-export type AiChip = "connect" | "restart" | null;
+/**
+ * What the titlebar/empty-state CTA should offer, or `null` to show nothing.
+ * This is the SINGLE source of truth for which CTA a `stopped` state gets —
+ * views must switch on this value alone, never re-derive their own decision
+ * from `lastError` (that duplication is exactly how the titlebar and empty
+ * state CTAs drifted out of sync; see #1268).
+ *   - `connect` — never configured (`state === "unconfigured"`). Opens the
+ *     integration wizard.
+ *   - `setup`   — configured but stopped with the circuit breaker tripped
+ *     (`lastError === "circuit-open"`). This — NOT `binary-not-found` — is
+ *     the branch that actually fires when the Claude Code CLI isn't
+ *     installed: the supervisor spawns the bundled reaper (which always
+ *     exists), and the reaper's own exec of the (missing) `claude` binary
+ *     fails internally and exits with code 127 — an ordinary process exit,
+ *     not a Node `ENOENT` on the reaper spawn itself. That routes through
+ *     `scheduleRestart`, which retries and eventually trips the breaker
+ *     (`circuit-open`), never through the `child.on("error")` handler that
+ *     sets `binary-not-found`. `binary-not-found` is reserved for the
+ *     genuinely rare case where the *reaper* binary is missing/unrunnable —
+ *     a broken Tandem install, not a missing Claude CLI — and gets no
+ *     special CTA (falls into `restart`, since retrying the reaper spawn is
+ *     the only available action). Opens the integration wizard, same as
+ *     `connect`, but with install-specific copy.
+ *   - `restart` — configured but stopped for any other reason (including the
+ *     rare `binary-not-found`). Plain restart.
+ */
+export type AiChip = "connect" | "setup" | "restart" | null;
+
+/**
+ * Everything a surface needs to render an `AiChip`'s call to action: its copy
+ * and, crucially, WHICH action it performs.
+ *
+ * A `Record` keyed on the union rather than a ternary at each call site, and
+ * the `action` discriminant is the whole point. `AiChip` grew from two members
+ * to three, and every widening silently left binary `chip === "connect" ? a : b`
+ * ternaries behind — they keep compiling, and the new member just falls down
+ * the wrong branch. That is not hypothetical: it shipped. The "no AI connected"
+ * toast in `App.svelte` offered `setup` users "Restart Claude Code" wired to
+ * `restartClaude()`, re-triggering the doomed spawn loop that tripped the
+ * circuit breaker in the first place — the exact opposite of the intended
+ * "install the CLI".
+ *
+ * With this map a fourth member is a type error at every consumer instead.
+ */
+export const AI_CTA: Record<
+  Exclude<AiChip, null>,
+  {
+    /** Short button/CTA text. */
+    label: string;
+    /** `title` attribute — the hover explanation. */
+    title: string;
+    ariaLabel: string;
+    /** Which handler this CTA must invoke. `setup` resolves to `connect`: the
+     * install flow IS the integration wizard, only with different copy. */
+    action: "connect" | "restart";
+  }
+> = {
+  connect: {
+    label: "Connect AI",
+    title: "AI isn't set up — connect Claude Code",
+    ariaLabel: "AI isn't set up. Connect Claude Code.",
+    action: "connect",
+  },
+  setup: {
+    label: "Set up Claude Code",
+    title: "Claude Code needs to be installed",
+    ariaLabel: "Claude Code needs to be installed. Set up Claude Code.",
+    action: "connect",
+  },
+  restart: {
+    label: "Restart Claude Code",
+    title: "Claude Code stopped — restart it",
+    ariaLabel: "Claude Code has stopped. Restart Claude Code.",
+    action: "restart",
+  },
+};
 
 /**
  * The affirmative "an agent is connected" indicator, or `null` when there's
@@ -93,6 +171,8 @@ export interface AiReadiness {
   readonly state: AiReadinessState;
   /** The CTA to surface, with Solo-mode suppression already applied. */
   readonly chip: AiChip;
+  /** Last scrubbed error code from supervisor when state is stopped. */
+  readonly lastError?: LauncherErrorCode;
   /**
    * The affirmative connected indicator, keyed on the authoritative MCP-session
    * signal (`hasSession`) — NOT on `state`, which also reaches `ready` from the
@@ -260,12 +340,29 @@ export function createAiReadiness(deps: {
     return status.running === true ? "ready" : "stopped";
   });
 
-  const chip = $derived.by((): AiChip => {
-    if (deps.soloMode()) return null;
-    if (state === "unconfigured") return "connect";
-    if (state === "stopped") return "restart";
-    return null;
-  });
+  // `status` is a discriminated union on `available` (and, once available,
+  // `running`) — narrow on those tags rather than probing shape with `in`
+  // checks, which only happen to work because the `available: false` arm
+  // lacks a `running` field.
+  const lastError = $derived<LauncherErrorCode | undefined>(
+    status !== null && status.available && !status.running ? status.lastError : undefined,
+  );
+
+  // `chip` is the ONE place the `lastError` → CTA decision is made (see the
+  // `AiChip` doc comment for why `circuit-open`, not `binary-not-found`, is
+  // the branch that means "go install Claude Code"). Views must render off
+  // this value alone, not re-derive their own copy of this ternary.
+  const chip = $derived<AiChip>(
+    deps.soloMode()
+      ? null
+      : state === "unconfigured"
+        ? "connect"
+        : state === "stopped"
+          ? lastError === "circuit-open"
+            ? "setup"
+            : "restart"
+          : null,
+  );
 
   // The affirmative indicator keys on `mcpSessionActive` (an open MCP transport,
   // proven by a real `initialize` round-trip) — the honest subset of `ready`.
@@ -274,10 +371,9 @@ export function createAiReadiness(deps: {
   // connected. When no session is open there is nothing affirmative to say
   // (`null`); Solo-with-no-session is still `null` — "AI won't see your edits"
   // only makes sense once an AI is actually connected.
-  const liveIndicator = $derived.by((): AiLiveIndicator => {
-    if (!mcpSessionActive) return null;
-    return deps.soloMode() ? "solo-paused" : "connected";
-  });
+  const liveIndicator = $derived<AiLiveIndicator>(
+    !mcpSessionActive ? null : deps.soloMode() ? "solo-paused" : "connected",
+  );
 
   return {
     get state() {
@@ -285,6 +381,9 @@ export function createAiReadiness(deps: {
     },
     get chip() {
       return chip;
+    },
+    get lastError() {
+      return lastError;
     },
     get liveIndicator() {
       return liveIndicator;

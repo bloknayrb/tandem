@@ -15,6 +15,7 @@ function makeProps(overrides: Record<string, unknown> = {}) {
     onOpenSettings: vi.fn(),
     onConnectAi: vi.fn(),
     onRestartClaude: vi.fn(),
+    onStartFreshClaude: vi.fn(),
     ...overrides,
   };
 }
@@ -34,27 +35,43 @@ describe("EmptyState", () => {
     vi.useRealTimers();
   });
 
+  // Every non-null aiChip branch renders exactly one of these — checking all
+  // three per case (not just the one expected to be present) is the positive
+  // control: it proves an "absent" testid is absent because that branch
+  // genuinely didn't render, not because the whole card failed to mount.
+  const AI_CTA_TESTIDS = [
+    "empty-state-connect-ai",
+    "empty-state-setup-claude",
+    "empty-state-restart-claude",
+  ] as const;
+
   describe("state A — no document open", () => {
     it.each([
       {
         why: "aiChip null (ready/booting/solo) → state A + product-positioning line, no CTA",
         aiChip: null,
         expectSecondary: true,
-        expectCta: false,
+        expectedTestId: null,
       },
       {
         why: "aiChip 'connect' → Connect AI CTA, no positioning line",
         aiChip: "connect",
         expectSecondary: false,
-        expectCta: true,
+        expectedTestId: "empty-state-connect-ai",
       },
       {
-        why: "aiChip 'restart' → Restart CTA, no positioning line",
+        why: "aiChip 'setup' (re-keyed off lastError === circuit-open, #1268) → Set up Claude Code CTA, no positioning line",
+        aiChip: "setup",
+        expectSecondary: false,
+        expectedTestId: "empty-state-setup-claude",
+      },
+      {
+        why: "aiChip 'restart' → Restart Claude Code CTA, no positioning line",
         aiChip: "restart",
         expectSecondary: false,
-        expectCta: true,
+        expectedTestId: "empty-state-restart-claude",
       },
-    ])("$why", ({ aiChip, expectSecondary, expectCta }) => {
+    ])("$why", ({ aiChip, expectSecondary, expectedTestId }) => {
       const { container } = render(EmptyState, {
         props: makeProps({ connected: true, aiChip }),
       });
@@ -68,7 +85,14 @@ describe("EmptyState", () => {
       const hasSecondary =
         container.textContent?.includes("Tandem works alongside Claude") ?? false;
       expect(hasSecondary).toBe(expectSecondary);
-      expect(byTestId(container, "empty-state-connect-ai") !== null).toBe(expectCta);
+
+      // Exactly the expected branch's testid is present — every other AI-CTA
+      // testid must be absent, distinguishing the three reachable branches
+      // from each other (not just "some CTA rendered").
+      for (const testid of AI_CTA_TESTIDS) {
+        const present = byTestId(container, testid) !== null;
+        expect(present).toBe(testid === expectedTestId);
+      }
     });
 
     it("Open file… fires onOpenFile", async () => {
@@ -90,16 +114,110 @@ describe("EmptyState", () => {
       await tick();
 
       expect(props.onConnectAi).toHaveBeenCalledOnce();
+      expect(props.onRestartClaude).not.toHaveBeenCalled();
     });
 
-    it("Restart CTA fires onRestartClaude", async () => {
-      const props = makeProps({ connected: true, aiChip: "restart" });
+    it("aiChip 'connect' carries an honest data-ai-chip attribute", () => {
+      const { container } = render(EmptyState, {
+        props: makeProps({ connected: true, aiChip: "connect" }),
+      });
+      expect(byTestId(container, "empty-state-connect-ai")?.getAttribute("data-ai-chip")).toBe(
+        "connect",
+      );
+    });
+
+    // #1268 defect 2a: the install CTA was keyed on `lastError ===
+    // "binary-not-found"`, which never actually fires for an uninstalled
+    // Claude CLI (that surfaces as an ordinary reaper exit code, routed to
+    // `circuit-open` — see the `AiChip` doc comment in useAiReadiness). The
+    // hook now folds that into `aiChip === "setup"`; EmptyState must render
+    // the install CTA off that value alone.
+    it("Set up Claude Code CTA (aiChip 'setup') fires onConnectAi, not onRestartClaude", async () => {
+      const props = makeProps({ connected: true, aiChip: "setup" });
       const { container } = render(EmptyState, { props });
 
-      byTestId(container, "empty-state-connect-ai")?.click();
+      const btn = byTestId(container, "empty-state-setup-claude");
+      expect(btn?.textContent?.trim()).toBe("Set up Claude Code");
+      expect(btn?.getAttribute("data-ai-chip")).toBe("setup");
+
+      btn?.click();
       await tick();
 
-      expect(props.onRestartClaude).toHaveBeenCalledOnce();
+      expect(props.onConnectAi).toHaveBeenCalledOnce();
+      expect(props.onRestartClaude).not.toHaveBeenCalled();
+      expect(props.onStartFreshClaude).not.toHaveBeenCalled();
+    });
+
+    describe("aiChip 'restart' — primary Restart + secondary Start Fresh", () => {
+      function renderRestart(overrides: Record<string, unknown> = {}) {
+        const props = makeProps({ connected: true, aiChip: "restart", ...overrides });
+        const result = render(EmptyState, { props });
+        return { ...result, props };
+      }
+
+      it("both actions render with distinct testids and an honest data-ai-chip", () => {
+        const { container } = renderRestart();
+
+        const primary = byTestId(container, "empty-state-restart-claude");
+        const secondary = byTestId(container, "empty-state-start-fresh");
+        expect(primary).toBeTruthy();
+        expect(secondary).toBeTruthy();
+        expect(primary).not.toBe(secondary);
+        expect(primary?.getAttribute("data-ai-chip")).toBe("restart");
+        expect(secondary?.getAttribute("data-ai-chip")).toBe("restart");
+      });
+
+      // #1268 defect 2b: this button used to be labelled "Try Again" while
+      // invoking the session-destroying start-fresh flow. The primary CTA
+      // must now be non-destructive — positive control: it still does the
+      // (safe) thing its label promises.
+      it("primary Restart Claude Code CTA calls onRestartClaude, never onStartFreshClaude", async () => {
+        const { container, props } = renderRestart();
+
+        const btn = byTestId(container, "empty-state-restart-claude");
+        expect(btn?.textContent?.trim()).toBe("Restart Claude Code");
+
+        btn?.click();
+        await tick();
+
+        expect(props.onRestartClaude).toHaveBeenCalledOnce();
+        expect(props.onStartFreshClaude).not.toHaveBeenCalled();
+      });
+
+      it("secondary Start Fresh CTA calls onStartFreshClaude, never onRestartClaude", async () => {
+        const { container, props } = renderRestart();
+
+        const btn = byTestId(container, "empty-state-start-fresh");
+        expect(btn?.textContent?.trim()).toBe("Start a fresh conversation");
+
+        btn?.click();
+        await tick();
+
+        expect(props.onStartFreshClaude).toHaveBeenCalledOnce();
+        expect(props.onRestartClaude).not.toHaveBeenCalled();
+      });
+
+      // #1268 defect 2b: "cancelling that confirm leaves the user with no
+      // exit from the empty state." The destructive confirm lives inside the
+      // wired `onStartFreshClaude` handler (out of this component's scope —
+      // a cancel there is a no-op prop call, same as any click), so the
+      // structural guarantee EmptyState owns is that the primary, safe
+      // Restart button is never removed or disabled as a side effect of the
+      // secondary action being present or clicked. Positive control: the
+      // primary button still fires its own handler afterwards.
+      it("the primary Restart button stays a working exit after the secondary CTA is clicked", async () => {
+        const { container, props } = renderRestart();
+
+        byTestId(container, "empty-state-start-fresh")?.click();
+        await tick();
+        expect(props.onStartFreshClaude).toHaveBeenCalledOnce();
+
+        const primary = byTestId(container, "empty-state-restart-claude");
+        expect(primary).toBeTruthy();
+        primary?.click();
+        await tick();
+        expect(props.onRestartClaude).toHaveBeenCalledOnce();
+      });
     });
   });
 

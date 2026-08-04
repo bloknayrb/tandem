@@ -14,6 +14,7 @@ import {
   SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS,
   saveStore,
   shouldAutoOpenScratchpad,
+  startFreshClaudeCode,
   triggerSave,
   triggerSaveAs,
   wireActionDeps,
@@ -50,7 +51,7 @@ import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
-import { createAiReadiness } from "./hooks/useAiReadiness.svelte";
+import { AI_CTA, createAiReadiness } from "./hooks/useAiReadiness.svelte";
 import {
   nextAnnotationId,
   prevAnnotationId,
@@ -492,14 +493,30 @@ function connectAi(): void {
   window.dispatchEvent(new CustomEvent("tandem:open-integration-wizard"));
 }
 
-/** Restarts the stopped Claude Code process (the "Restart Claude Code" CTA),
- *  then re-polls launcher status so the chip clears once it's back up. Two
- *  staggered refreshes cover a slow cold start (MCP init / skill refresh) so
- *  the chip doesn't look stuck waiting for the next 8s background poll. */
-function restartClaude(): void {
-  relaunchClaudeCode();
+/** Re-polls launcher status twice after kicking off a launcher mutation, so
+ *  the chip clears once Claude is back up instead of looking stuck until the
+ *  next 8s background poll. The two staggered refreshes cover a slow cold
+ *  start (MCP init / skill refresh). Shared by `restartClaude` and
+ *  `startFreshClaude` — they differ only in which launcher action they kick
+ *  off, not in how they wait for it. */
+function refreshAiReadinessAfterLauncherAction(): void {
   setTimeout(() => aiReadiness.refresh(), 2_000);
   setTimeout(() => aiReadiness.refresh(), 5_000);
+}
+
+/** Restarts the stopped Claude Code process (the "Restart Claude Code" CTA). */
+function restartClaude(): void {
+  relaunchClaudeCode();
+  refreshAiReadinessAfterLauncherAction();
+}
+
+/** Drops Claude's saved conversation and restarts fresh (the EmptyState
+ *  "Start a fresh conversation" secondary CTA) — irreversible, so it must
+ *  never be an ambient CTA's default handler. See the `onStartFreshClaude`
+ *  doc comment on `EmptyState`'s Props. */
+function startFreshClaude(): void {
+  startFreshClaudeCode();
+  refreshAiReadinessAfterLauncherAction();
 }
 
 // #1018 loud failures: ChatPanel (chat send) and Toolbar ("Send to Claude"
@@ -532,8 +549,12 @@ $effect(() => {
         timestamp: Date.now(),
       },
       {
-        label: chip === "connect" ? "Connect AI" : "Restart Claude Code",
-        onClick: chip === "connect" ? connectAi : restartClaude,
+        // Driven by the shared exhaustive map, not a binary ternary: `chip`
+        // has three non-null members, and a `=== "connect"` test sent `setup`
+        // (Claude CLI not installed) down the restart branch — offering to
+        // restart a binary that isn't there.
+        label: AI_CTA[chip].label,
+        onClick: AI_CTA[chip].action === "restart" ? restartClaude : connectAi,
       },
     );
   };
@@ -2884,6 +2905,7 @@ const shouldShowModelPicker = $derived(
               onOpenSettings={openSettingsModalWithAck}
               onConnectAi={connectAi}
               onRestartClaude={restartClaude}
+              onStartFreshClaude={startFreshClaude}
             />
           {/if}
         </div>

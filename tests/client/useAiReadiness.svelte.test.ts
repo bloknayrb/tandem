@@ -26,7 +26,8 @@
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
+import type { AiChip, AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
+import { AI_CTA } from "../../src/client/hooks/useAiReadiness.svelte";
 import AiReadinessHarness from "../../src/client/svelte-harness/AiReadinessHarness.svelte";
 import { API_LAUNCHER_STATUS } from "../../src/shared/api-paths.js";
 
@@ -116,6 +117,38 @@ describe("createAiReadiness", () => {
     const h = mount();
     await settle();
     expect(h.get().state).toBe("stopped");
+    expect(h.get().chip).toBe("restart");
+    expect(h.get().lastError).toBeUndefined();
+  });
+
+  // #1268: `chip` is the single source of truth for the CTA views render —
+  // it must fold `lastError === "circuit-open"` into `"setup"` itself,
+  // rather than leaving each view to re-derive that from `lastError`
+  // (which is how StatusBar and EmptyState drifted out of sync). This is
+  // also the actual live path for an uninstalled Claude CLI — see the
+  // `AiChip` doc comment.
+  it("shows the setup chip (not restart) when the launcher's lastError is circuit-open", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: true, running: false, lastError: "circuit-open" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("stopped");
+    expect(h.get().lastError).toBe("circuit-open");
+    expect(h.get().chip).toBe("setup");
+  });
+
+  it("still shows the restart chip for other lastError values, e.g. binary-not-found", async () => {
+    // binary-not-found is the reaper-missing case, not a missing Claude CLI
+    // (see the AiChip doc comment) — it gets no special CTA.
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: true, running: false, lastError: "binary-not-found" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().lastError).toBe("binary-not-found");
     expect(h.get().chip).toBe("restart");
   });
 
@@ -421,5 +454,42 @@ describe("createAiReadiness", () => {
       await settle();
       expect(h.get().liveIndicator).toBeNull();
     });
+  });
+});
+
+/**
+ * `AI_CTA` is the shared chip→call-to-action map consumed by StatusBar's
+ * indicator button and App's "no AI connected" toast. It exists because both
+ * surfaces independently reduced a THREE-member union with a binary
+ * `chip === "connect" ? … : …` ternary, and `setup` — the branch that fires
+ * when the Claude CLI isn't installed — fell through to the restart handler in
+ * both. Restarting is exactly the doomed spawn loop the circuit breaker tripped
+ * to stop, so the wrong branch is actively harmful, not merely mislabelled.
+ */
+describe("AI_CTA", () => {
+  const CHIPS: Exclude<AiChip, null>[] = ["connect", "setup", "restart"];
+
+  it("covers every non-null chip with non-empty copy", () => {
+    // Guards against a future union member landing with no entry: the type
+    // catches it at compile time, this catches a `{} as any` escape hatch.
+    expect(Object.keys(AI_CTA).sort()).toEqual([...CHIPS].sort());
+    for (const chip of CHIPS) {
+      expect(AI_CTA[chip].label).toBeTruthy();
+      expect(AI_CTA[chip].title).toBeTruthy();
+      expect(AI_CTA[chip].ariaLabel).toBeTruthy();
+    }
+  });
+
+  it("routes 'setup' to the connect flow, not restart", () => {
+    expect(AI_CTA.setup.action).toBe("connect");
+    expect(AI_CTA.setup.label).toBe("Set up Claude Code");
+  });
+
+  // Positive control for the assertion above — `restart` proves the `action`
+  // field can actually take the other value, so "not restart" is a real result
+  // rather than an artefact of a map that only ever says "connect".
+  it("routes 'connect' and 'restart' to their own flows", () => {
+    expect(AI_CTA.connect.action).toBe("connect");
+    expect(AI_CTA.restart.action).toBe("restart");
   });
 });

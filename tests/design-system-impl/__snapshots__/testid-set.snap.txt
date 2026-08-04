@@ -121,7 +121,10 @@ editor-stage
 empty-state-connect-ai
 empty-state-open-file
 empty-state-open-settings
+empty-state-restart-claude
 empty-state-retry
+empty-state-setup-claude
+empty-state-start-fresh
 error-boundary-recover-btn
 error-boundary-reload-btn
 external-conflict-banner

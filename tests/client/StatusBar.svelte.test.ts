@@ -52,6 +52,37 @@ describe("StatusBar AI action indicator", () => {
     expect(onRestartClaude).toHaveBeenCalledOnce();
   });
 
+  // #1268 defect 1: the "setup" chip (re-keyed off `lastError ===
+  // "circuit-open"` in the hook — see useAiReadiness's `AiChip` doc comment)
+  // used to announce "Set up Claude Code" via title/aria-label while the
+  // separate onclick ternary had silently lost that branch and fell through
+  // to onRestartClaude. Assert the announced label AND the invoked handler
+  // agree, with a positive control proving onRestartClaude is reachable at
+  // all (so a bug that made onclick always resolve to undefined wouldn't
+  // pass by both assertions vacuously succeeding).
+  it("renders Setup with a state-specific accessible name whose handler matches", async () => {
+    const onConnectAi = vi.fn();
+    const onRestartClaude = vi.fn();
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiState: "stopped",
+        aiChip: "setup",
+        onConnectAi,
+        onRestartClaude,
+      },
+    });
+
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.getAttribute("aria-label")).toBe(
+      "Claude Code needs to be installed. Set up Claude Code.",
+    );
+    expect(indicator.getAttribute("data-ai-action")).toBe("setup");
+    await fireEvent.click(indicator);
+    expect(onConnectAi).toHaveBeenCalledOnce();
+    expect(onRestartClaude).not.toHaveBeenCalled();
+  });
+
   it("keeps a connected, non-actionable status as a labelled image", () => {
     const { getByTestId } = render(StatusBar, {
       props: { ...baseProps, aiLiveIndicator: "connected", aiState: "ready" },

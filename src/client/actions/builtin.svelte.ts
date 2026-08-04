@@ -703,6 +703,10 @@ export function relaunchClaudeCode(): void {
   guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d));
 }
 
+export function startFreshClaudeCode(): void {
+  guardedRun("launcher-start-fresh", (d) => void startFreshConversation(d));
+}
+
 async function startFreshConversation(d: ActionDeps): Promise<void> {
   if (!(await checkLauncherAvailable(d))) return;
   if (!confirm("Drop Claude's saved conversation and restart fresh. This cannot be undone.")) {
