@@ -27,6 +27,7 @@ import type { IntegrationsFile } from "../../../src/server/integrations/schema.j
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
 import type { Supervisor } from "../../../src/server/launcher/supervisor.js";
 import { buildClaudeArgs, createSupervisor } from "../../../src/server/launcher/supervisor.js";
+import { INTEGRATIONS_SCHEMA_VERSION } from "../../../src/shared/integrations/contract.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
   SUPERVISOR_INITIAL_PROMPT,
@@ -193,7 +194,11 @@ afterEach(() => {
 
 async function writeClaudeIntegration(): Promise<void> {
   const file: IntegrationsFile = {
-    schemaVersion: 3,
+    // Pinned to the constant, not a literal: this fixture cares that the file
+    // is *current*, not that it is any particular version, and a hardcoded
+    // number silently reds every test in this file on the next schema bump
+    // (which is exactly how it broke when #1265 introduced v4).
+    schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
     integrations: [
       {
         kind: "claude-code",
