@@ -6,11 +6,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\block-sensitive.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/block-sensitive.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\nudge-plan-review.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/nudge-plan-review.sh\""
           }
         ]
       },
@@ -19,20 +19,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\block-no-verify.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/block-no-verify.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\nudge-simplify-before-commit.sh'"
-          }
-        ]
-      },
-      {
-        "matcher": "ExitPlanMode",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\block-plan-without-agent-review.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/nudge-simplify-before-commit.sh\""
           }
         ]
       }
@@ -42,7 +33,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\track-workflow-events.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/track-workflow-events.sh\""
           }
         ]
       },
@@ -51,35 +42,39 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\format-on-edit.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/format-on-edit.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\typecheck-on-edit.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/typecheck-on-edit.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\check-ymap-keys.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/check-ymap-keys.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\check-extract-markdown.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/check-extract-markdown.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\check-console-log.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/check-console-log.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\check-raw-transact.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/check-raw-transact.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\svelte-check-on-edit.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/svelte-check-on-edit.sh\""
           },
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\related-test.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/check-token-violation.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/related-test.sh\""
           }
         ]
       },
@@ -88,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\nudge-pr-review.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/nudge-pr-review.sh\""
           }
         ]
       }
@@ -99,7 +94,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\sessionstart-prune-state.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/sessionstart-prune-state.sh\""
           }
         ]
       }
@@ -109,7 +104,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash 'C:\\Users\\blokn\\GitHub\\tandem\\.codex\\hooks\\stop-cycle-check.sh'"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.codex/hooks/stop-cycle-check.sh\""
           }
         ]
       }

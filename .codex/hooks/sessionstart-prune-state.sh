@@ -5,7 +5,7 @@
 set -uo pipefail
 trap 'exit 0' ERR
 
-STATE_ROOT=".claude/.workflow-state"
+STATE_ROOT=".codex/.workflow-state"
 [[ -d "$STATE_ROOT" ]] || exit 0
 
 find "$STATE_ROOT" -maxdepth 1 -mindepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true

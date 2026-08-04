@@ -34,7 +34,7 @@ _ws_session_id() {
 # Resolve and create the per-session state directory. Echoes its path.
 _ws_state_dir() {
   local session_id="$1"
-  local dir=".claude/.workflow-state/${session_id}"
+  local dir=".codex/.workflow-state/${session_id}"
   mkdir -p "$dir" 2>/dev/null || true
   printf '%s' "$dir"
 }
