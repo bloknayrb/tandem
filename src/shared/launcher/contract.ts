@@ -139,3 +139,86 @@ export const REAPER_NOT_FOUND_MARKER = "tandem-reaper binary not found";
  * all fit comfortably under 1024. Catches malformed/oversized inputs early
  * before they reach `realpathSync`. */
 export const LAUNCHER_CWD_MAX_LENGTH = 1024;
+
+// --- Claude CLI stream-json wire contract ---------------------------------
+
+/**
+ * Flag prefix the supervisor passes to `claude`, ahead of the
+ * session-selection flag (`--session-id` / `--resume`).
+ *
+ * `-p` + the two `stream-json` formats put the CLI in headless streaming mode:
+ * it emits one JSON object per line on stdout and reads user turns as one JSON
+ * object per line on stdin. `--verbose` is what makes the CLI emit the full
+ * envelope stream rather than just a final answer — the supervisor needs the
+ * `{"type":"result",...}` line to know a turn has finished, which is what gates
+ * its wake-turn coalescing (see `SUPERVISOR_WAKE_PROMPT`).
+ *
+ * `--verbose` is NOT a readiness signal. The CLI emits nothing at all until it
+ * has received a turn, so there is no handshake to wait for; see
+ * `SUPERVISOR_INITIAL_PROMPT`.
+ *
+ * Lives here (not in `supervisor.ts`) because the spawn path and the stub-CLI
+ * test harness must agree on it byte-for-byte; a drift between them would make
+ * the harness green while the shipped launcher spoke a different protocol.
+ */
+export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
+  "-p",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--dangerously-load-development-channels",
+  "server:tandem-channel",
+];
+
+/** The bootstrap turn the supervisor writes immediately on a fresh spawn.
+ *
+ * Written on spawn, NOT after the CLI's `init` line: under these flags the CLI
+ * emits nothing until it has received a turn, so waiting for `init` deadlocks.
+ * Measured 2026-08-04 — see `docs/spikes/channel-push-stream-json.md`.
+ *
+ * Fresh spawns only — a resumed session already carries its own history, so
+ * re-sending would inject a duplicate turn into the conversation. */
+export const SUPERVISOR_INITIAL_PROMPT =
+  "A document has been opened in Tandem for review. " +
+  "Call tandem_checkInbox to see what needs attention, then begin reviewing.";
+
+/** The turn the supervisor writes when Tandem activity should wake an idle
+ * session.
+ *
+ * Deliberately carries NO event payload. The channel shim's notifications embed
+ * the event content (`formatEventContent`), but a turn injected on stdin is
+ * indistinguishable from the user speaking, and this path must not become a
+ * second content channel racing the pull path. `tandem_checkInbox` stays the
+ * single authority on what the AI may see, so `mode.ts#hideFromAI` still gets
+ * the last word even if the queue's Solo gate were ever wrong. A content-free
+ * nudge is also what makes coalescing trivial: N events collapse to one turn
+ * instead of a concatenation that grows without bound. */
+export const SUPERVISOR_WAKE_PROMPT =
+  "Activity in Tandem needs your attention. Call tandem_checkInbox.";
+
+/** One `stream-json` user turn as the Claude CLI accepts it on stdin. */
+export interface StreamJsonUserTurn {
+  type: "user";
+  message: {
+    role: "user";
+    content: Array<{ type: "text"; text: string }>;
+  };
+}
+
+/** Build a `stream-json` user-turn envelope. Single definition so the writer
+ * (`supervisor.ts`) and the harness that asserts on the received bytes can
+ * never drift apart. */
+export function buildUserTurn(text: string): StreamJsonUserTurn {
+  return {
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text }] },
+  };
+}
+
+/** Serialized form written to the CLI's stdin — one JSON object, newline
+ * terminated. The newline is the frame delimiter, not cosmetic. */
+export function serializeUserTurn(text: string): string {
+  return `${JSON.stringify(buildUserTurn(text))}\n`;
+}

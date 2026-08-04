@@ -7,7 +7,6 @@ import {
   API_CHANNEL_REPLY,
   API_CHAT,
   API_EVENTS,
-  API_LAUNCH_CLAUDE,
 } from "../../shared/api-paths.js";
 import { CTRL_ROOM } from "../../shared/constants.js";
 import { ChannelErrorCodeSchema } from "../../shared/types.js";
@@ -30,7 +29,7 @@ const pendingPermissions = new Map<
 >();
 const PERMISSION_TTL_MS = 30_000; // Stale after 30s (terminal answer already won)
 
-/** Register channel-related routes (/api/events, /api/channel-*, /api/launch-claude) on the Express app. */
+/** Register channel-related routes (/api/events, /api/channel-*, /api/chat) on the Express app. */
 export function registerChannelRoutes(app: Express, apiMiddleware: Handler): void {
   // SSE event stream for channel shim
   app.get(API_EVENTS, apiMiddleware, sseHandler);
@@ -178,19 +177,11 @@ export function registerChannelRoutes(app: Express, apiMiddleware: Handler): voi
     }
   });
 
-  // Claude Code launcher
-  app.options(API_LAUNCH_CLAUDE, apiMiddleware);
-  app.post(API_LAUNCH_CLAUDE, apiMiddleware, async (_req: Request, res: Response) => {
-    try {
-      const { launchClaude } = await import("./launcher.js");
-      const result = launchClaude();
-      res.json(result);
-    } catch (err) {
-      console.error("[Tandem] Failed to launch Claude:", err);
-      res.status(500).json({
-        error: "LAUNCH_FAILED",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  });
+  // NOTE: `POST /api/launch-claude` (and its `src/server/mcp/launcher.ts`
+  // spawner) lived here until #1267. It had zero callers in the client, tests
+  // or E2E — every launch path goes through the supervisor
+  // (`src/server/launcher/`), which owns reaping, session resume and the
+  // stream-json protocol. Keeping a second, unsupervised spawner alive meant
+  // maintaining a dead copy of the CLI wire contract; it was deleted rather
+  // than taught the new protocol.
 }

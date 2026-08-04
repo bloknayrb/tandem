@@ -22,14 +22,104 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import type { TandemEvent } from "../../shared/events/types.js";
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
-import { type LauncherErrorCode, REAPER_NOT_FOUND_MARKER } from "../../shared/launcher/contract.js";
+import {
+  CLAUDE_STREAM_JSON_FLAGS,
+  type LauncherErrorCode,
+  REAPER_NOT_FOUND_MARKER,
+  SUPERVISOR_INITIAL_PROMPT,
+  SUPERVISOR_WAKE_PROMPT,
+  serializeUserTurn,
+} from "../../shared/launcher/contract.js";
+import { subscribe, unsubscribe } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
   integrationsBase: string;
+  /**
+   * Seam onto the event fan-out, for tests that need to drive wakes without
+   * standing up the real queue's Y.Doc observers. Returns an unsubscribe fn.
+   *
+   * The default subscribes as `"external"`, and that is the load-bearing part:
+   * the launched Claude is a consumer OUTSIDE this process, so it must sit
+   * behind the queue's Solo gate (`shouldForwardExternally`) exactly as the SSE
+   * consumers do. Subscribing as `"internal"` would bypass that gate and push
+   * the user's Solo-held annotations at Claude — the precise leak WS-A2 exists
+   * to prevent. `"external"` is also correct for `alreadyPushed` accounting: a
+   * turn written to the child's stdin genuinely reaches Claude.
+   *
+   * Unlike the always-on local-model collaborator the `externalSubscribers`
+   * docblock warns about, this subscription lives and dies with a running child
+   * process, so `getSubscriberCount() > 0` stays a true statement about
+   * something being attached rather than a constant.
+   */
+  subscribeToEvents?: (cb: (event: TandemEvent) => void) => () => void;
+  /**
+   * Override for `WAKE_LATCH_MAX_MS`, so the latch-breaker can be tested in
+   * milliseconds rather than by waiting ten minutes.
+   *
+   * The latch exists precisely to convert a silent permanent failure into a
+   * delayed one; leaving it unreachable from a test would mean the safeguard
+   * against silent failure was itself unverified.
+   */
+  wakeLatchMs?: number;
 }
+
+/** Exported for test only — the `"external"` argument below is the single line
+ * standing between Solo mode and a leak, so it needs a test that exercises the
+ * real queue rather than an injected fake. */
+export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () => void {
+  subscribe(cb, "external");
+  return () => unsubscribe(cb);
+}
+
+/**
+ * Which events are worth interrupting Claude for.
+ *
+ * Narrower than the channel shim's set, which forwards everything that clears
+ * the queue's gates. A channel notification is cheap to ignore; a turn written
+ * on stdin compels a response, so `document:*` lifecycle — fired whenever the
+ * user clicks a tab — would turn ordinary navigation into a stream of forced
+ * wakes. Annotations and chat are the events where the user is actually asking
+ * for something, and Claude re-reads document state from `tandem_checkInbox`
+ * when it does wake.
+ *
+ * The Solo→Tandem release wake is a synthetic `annotation:created`
+ * (`emitModeReleaseWake`), so it clears this filter by construction.
+ */
+function isWakeWorthy(event: TandemEvent): boolean {
+  return event.type.startsWith("annotation:") || event.type === "chat:message";
+}
+
+/**
+ * Latch-breaker for wake coalescing: if a turn's `result` line never arrives,
+ * treat the session as idle again after this long.
+ *
+ * `turnInFlight` is cleared by the CLI's `result` envelope. If that envelope
+ * were ever missed — a shape change, a wedged turn, a dropped line — the latch
+ * would stay set and the session would never be woken again, silently and
+ * permanently. Deliberately generous: a real turn may legitimately run for
+ * minutes, and the cost of breaking the latch early is only a redundant
+ * `checkInbox` nudge (the CLI reads stdin as a stream and queues turns), while
+ * the cost of never breaking it is a dead feature.
+ *
+ * Two known limitations, recorded rather than papered over:
+ *
+ * 1. Breaking the latch on a turn that is merely SLOW leaves two turns
+ *    outstanding, and `result` envelopes carry no correlation id — so the
+ *    first result to arrive clears the tracking for whichever turn is current.
+ *    The consequence is bounded (an extra content-free nudge; never a lost
+ *    one), and fixing it properly needs a turn id the wire protocol does not
+ *    have. Widening the window is what keeps it rare.
+ * 2. This cannot detect a reaper that is alive but has stopped forwarding to
+ *    Claude: `write()` succeeds into the reaper's pipe, no `result` ever
+ *    returns, and the latch simply expires every window. `result` is the only
+ *    liveness signal available, so that state is indistinguishable from a very
+ *    long turn. It is why the expiry logs at all.
+ */
+const WAKE_LATCH_MAX_MS = 10 * 60_000;
 
 interface SpawnPlan {
   integration: ClaudeCodeIntegration;
@@ -73,8 +163,17 @@ export interface Supervisor {
   status(): SupervisorStatus;
 }
 
-/** Discriminated union: when `running === false` no other fields exist;
- * when `running === true` all process-level fields are guaranteed present. */
+/** Discriminated union: when `running === false` the only extra field is the
+ * (optional) `lastError`; when `running === true` all process-level fields are
+ * guaranteed present.
+ *
+ * `lastError` is deliberately absent from the `running: true` branch, and that
+ * omission is only sound because `spawnOnce()` *clears* `lastError` once a
+ * spawn actually starts. Without the clear, an error from a previous failed
+ * spawn would sit in the closure invisibly for the whole run and then
+ * resurface — attributed to nothing — the moment the user cleanly stopped a
+ * perfectly healthy supervisor. The explicit `lastError?: undefined` below
+ * encodes that invariant instead of leaving it to the reader. */
 export type SupervisorStatus =
   | { running: false; lastError?: LauncherErrorCode }
   | {
@@ -85,6 +184,10 @@ export type SupervisorStatus =
       cwd: string;
       sessionId: string;
       resuming: boolean;
+      /** Never set: a running supervisor has, by construction, no pending
+       * fatal error. Present as an explicit `undefined` so `status.lastError`
+       * type-checks on the un-narrowed union. */
+      lastError?: undefined;
     };
 
 /**
@@ -102,7 +205,68 @@ export function shouldClearSession(opts: {
   return opts.resuming && opts.code !== null && opts.code !== 0 && !opts.resumeConfirmed;
 }
 
+/**
+ * Full argument vector handed to the `claude` binary, in order.
+ *
+ * Module-scope and exported (mirroring `resolveSafeCwd` below) so the wire
+ * shape can be asserted without spawning anything: this vector IS the
+ * launcher's half of the CLI contract, and #1267 changed it with no coverage.
+ * Takes only the two fields it reads so callers/tests don't have to construct
+ * a whole `SpawnPlan`.
+ */
+export function buildClaudeArgs(plan: { sessionId: string; resuming: boolean }): string[] {
+  const args = [...CLAUDE_STREAM_JSON_FLAGS];
+  // --resume replays an existing conversation; --session-id names a new one.
+  // Passing both is an error, so this is strictly either/or.
+  if (plan.resuming) {
+    args.push("--resume", plan.sessionId);
+  } else {
+    args.push("--session-id", plan.sessionId);
+  }
+  return args;
+}
+
+/**
+ * Newline framer for a child's stdout/stderr.
+ *
+ * `data` events carry arbitrary byte-range chunks, not lines: a single
+ * stream-json object routinely arrives split across two events, and two small
+ * objects routinely arrive glued into one. Parsing a raw chunk therefore
+ * fails, unpredictably, under exactly the load that matters.
+ *
+ * Callers MUST feed this pre-decoded strings (`stream.setEncoding("utf8")`),
+ * never `chunk.toString()` — a multi-byte character straddling a chunk
+ * boundary is corrupted by per-chunk decoding, and the corruption survives
+ * reassembly here.
+ *
+ * `flush()` emits any trailing partial line, for the case where the stream
+ * ends without a final newline. Exported for unit testing.
+ */
+export function createLineFramer(onLine: (line: string) => void): {
+  push(text: string): void;
+  flush(): void;
+} {
+  let buffer = "";
+  return {
+    push(text: string): void {
+      buffer += text;
+      const parts = buffer.split("\n");
+      // The last element is either "" (chunk ended on a newline) or a partial
+      // line still awaiting its terminator — carry it to the next push.
+      buffer = parts.pop() ?? "";
+      for (const line of parts) onLine(line);
+    },
+    flush(): void {
+      const rest = buffer;
+      buffer = "";
+      if (rest) onLine(rest);
+    },
+  };
+}
+
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
+  const subscribeToEvents = opts.subscribeToEvents ?? defaultSubscribeToEvents;
+  const wakeLatchMs = opts.wakeLatchMs ?? WAKE_LATCH_MAX_MS;
   let child: ChildProcess | null = null;
   let currentCwd: string | undefined;
   let currentSessionId: string | undefined;
@@ -114,6 +278,43 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * stopInternal and the exit handler. Module-scoped so stopInternal can
    * cancel it if the user-stops the process before it confirms. */
   let confirmTimer: NodeJS.Timeout | null = null;
+  /**
+   * Teardown for the active spawn's event subscription, paired with the handle
+   * it belongs to.
+   *
+   * Module-scoped for the same reason `confirmTimer` is: `stopInternal` has to
+   * be able to release it. Relying on the child's `exit` event alone is not
+   * enough — `stopInternal`'s escalation path can give up on a reaper that
+   * survives SIGKILL, log "abandoning handle", and null `child` while that
+   * process is still alive and its `exit` never fires. The subscription would
+   * then outlive the supervisor's own belief that anything is running, keep
+   * writing wake turns into a process Tandem no longer controls, and be joined
+   * by a second subscription on the next start — once per occurrence, unbounded.
+   *
+   * Paired with `spawned` rather than stored bare so a late release from a
+   * superseded spawn cannot detach the subscription of the one that replaced it.
+   */
+  let activeTurnDelivery: { spawned: ChildProcess; teardown: () => void } | null = null;
+
+  /** Release the active spawn's subscription, whatever state its process is in.
+   * Idempotent — the `exit` handler normally gets here first. */
+  function releaseTurnDelivery(): void {
+    activeTurnDelivery?.teardown();
+    activeTurnDelivery = null;
+  }
+
+  /**
+   * A wake was owed when the last spawn died, and no turn has carried it yet.
+   *
+   * Survives across spawns deliberately. Without it: a fresh spawn's bootstrap
+   * turn is in flight, the user comments (so `pendingWake` is set), Claude
+   * crashes, and the restart resumes — `writeSavedSession` persisted the id
+   * before the process proved stable, so `buildPlan` returns `resuming: true`
+   * and the resumed path sends NO bootstrap turn. The comment would then sit
+   * unannounced until some unrelated later event happened to wake the session.
+   */
+  let wakeOwedAcrossSpawns = false;
+
   /** Circuit-breaker timestamps of recent restart attempts. */
   let recentAttempts: number[] = [];
   /** True once the breaker has tripped — supervisor refuses further restarts. */
@@ -229,16 +430,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return process.env.TANDEM_CLAUDE_CMD || "claude";
   }
 
-  function buildClaudeArgs(plan: SpawnPlan): string[] {
-    const args = ["--dangerously-load-development-channels", "server:tandem-channel"];
-    if (plan.resuming) {
-      args.push("--resume", plan.sessionId);
-    } else {
-      args.push("--session-id", plan.sessionId);
-    }
-    return args;
-  }
-
   async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
     const integration = await readIntegration();
     if (!integration) return null;
@@ -256,6 +447,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   async function spawnOnce(plan: SpawnPlan): Promise<void> {
+    if (child) throw new Error("Supervisor already running — call stop() first");
+
     const reaper = reaperPath();
     const claudeBin = claudeCommand();
     const claudeArgs = buildClaudeArgs(plan);
@@ -266,12 +459,23 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       `[Launcher] Spawning Claude via reaper. cwd=${plan.cwd} session=${plan.sessionId} resuming=${plan.resuming}`,
     );
 
-    child = spawn(reaper, reaperArgs, {
+    // Every handler below closes over `spawned`, never the mutable module-level
+    // `child`. `child` is reassigned by the next spawn (and nulled on exit), so
+    // a late callback from THIS process that dereferenced `child` could act on
+    // a *different, newer* process — e.g. writing this spawn's bootstrap turn
+    // into a freshly restarted Claude's stdin.
+    const spawned = spawn(reaper, reaperArgs, {
       cwd: plan.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
       windowsHide: true,
     });
+    child = spawned;
+
+    // A spawn that reached this point supersedes whatever went wrong before it;
+    // leaving the old code set would make it resurface on the next clean stop
+    // (see the note on SupervisorStatus).
+    lastError = undefined;
 
     currentCwd = plan.cwd;
     currentSessionId = plan.sessionId;
@@ -299,12 +503,235 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }, RESUME_CONFIRM_MS);
     }
 
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const line = chunk.toString().trimEnd();
-      if (line) console.error(`[Claude] ${line}`);
-    });
+    // --- Turn delivery -----------------------------------------------------
+    //
+    // The supervisor, not the channel shim, is what turns Tandem activity into
+    // a Claude turn. Measured 2026-08-04 against a real binary
+    // (docs/spikes/channel-push-stream-json.md): under these flags a channel
+    // notification does NOT become a turn. The shim loads and receives the
+    // event — `push.subscribers` rises while the child runs, and a raw read of
+    // `/api/events` shows the frame — but the session then sits silent. An
+    // aliveness control (a second turn written by hand onto the same idle
+    // session, answered normally) rules out "the process was dead". So the
+    // last hop is the broken one, and this is the replacement for it.
+    //
+    // In-process, by direct subscription: no SSE hop, no localhost round-trip,
+    // and no dependence on the shim being installed at all.
 
-    child.on("error", (err: NodeJS.ErrnoException) => {
+    /** True between writing a turn and seeing that turn's `result` envelope. */
+    let turnInFlight = false;
+    /** An event arrived mid-turn; wake once the current turn finishes. */
+    let pendingWake = false;
+    let latchTimer: NodeJS.Timeout | null = null;
+
+    function clearLatch(): void {
+      turnInFlight = false;
+      if (latchTimer) {
+        clearTimeout(latchTimer);
+        latchTimer = null;
+      }
+    }
+
+    /** Write one user turn. Targets `spawned`, not `child`.
+     *
+     * Returns whether the write was even attempted. Callers must not treat a
+     * `false` as delivered: a wake dropped here is a notification the user will
+     * never get, and there is no error surface between here and them.
+     *
+     * Recovery is by retry, not by queueing, and that works only because the
+     * wake carries no payload: `tandem_checkInbox` returns everything pending,
+     * so ONE later successful wake subsumes every dropped one. A payload-
+     * carrying design would have to buffer here instead. */
+    function sendTurn(text: string): boolean {
+      const stdin = spawned.stdin;
+      if (!stdin?.writable) {
+        console.error("[Launcher] Claude stdin not writable — turn not delivered");
+        return false;
+      }
+      turnInFlight = true;
+      if (latchTimer) clearTimeout(latchTimer);
+      latchTimer = setTimeout(() => {
+        latchTimer = null;
+        // Not an error path we can distinguish from a legitimately long turn,
+        // so log at a level that reads as diagnostic rather than failure.
+        console.error("[Launcher] No result envelope within the wake window — assuming idle");
+        turnInFlight = false;
+        flushPendingWake();
+      }, wakeLatchMs);
+      stdin.write(serializeUserTurn(text), (err) => {
+        if (!err) return;
+        console.error("[Launcher] Failed to write turn:", err.message);
+        // A failed write means the pipe is gone and the exit handler is about
+        // to run. Drop the latch so it cannot outlive the write, and re-arm the
+        // wake so the intent survives into the next spawn rather than dying
+        // with this one. Do NOT retry against this stdin — it just refused.
+        clearLatch();
+        pendingWake = true;
+      });
+      return true;
+    }
+
+    /** Send the deferred wake, if one is owed and the session is idle.
+     *
+     * `pendingWake` is cleared only on a successful write. Clearing it first
+     * would mean a failed flush silently consumed the notification: the flag is
+     * the only record that a wake is owed, and nothing downstream would ever
+     * re-raise it. */
+    function flushPendingWake(): void {
+      if (!pendingWake || turnInFlight) return;
+      if (sendTurn(SUPERVISOR_WAKE_PROMPT)) pendingWake = false;
+    }
+
+    function onTandemEvent(event: TandemEvent): void {
+      if (!isWakeWorthy(event)) return;
+      // Coalesce rather than queue: the wake carries no payload, so N events
+      // arriving mid-turn collapse to a single follow-up nudge. Claude reads
+      // all of them at once via `tandem_checkInbox`.
+      if (turnInFlight) {
+        pendingWake = true;
+        return;
+      }
+      // Keep the wake owed if the write could not be attempted, so the next
+      // turn boundary — or the next spawn — retries it.
+      if (!sendTurn(SUPERVISOR_WAKE_PROMPT)) pendingWake = true;
+    }
+
+    const unsubscribeFromEvents = subscribeToEvents(onTandemEvent);
+
+    /**
+     * Detach this spawn's event subscription and kill its latch timer.
+     *
+     * Deliberately NOT identity-guarded on `child === spawned`, unlike the
+     * child-state resets in the same handlers: the subscription belongs to THIS
+     * process whether or not a newer spawn has since replaced it. Skipping it
+     * for a superseded spawn would leak the callback for the lifetime of the
+     * server, writing wake turns into a dead pipe forever. Idempotent — `exit`
+     * and `error` can both fire.
+     */
+    function teardownTurnDelivery(): void {
+      unsubscribeFromEvents();
+      // Hand an undelivered wake to the next spawn rather than dropping it —
+      // this runs on crash-restart, not just on a deliberate stop.
+      if (pendingWake) wakeOwedAcrossSpawns = true;
+      pendingWake = false;
+      clearLatch();
+      // Identity-guarded: only drop the shared handle if it still points at
+      // THIS spawn. A late exit from a superseded process must not clear the
+      // successor's registration and leave it unreleasable by stopInternal.
+      if (activeTurnDelivery?.spawned === spawned) activeTurnDelivery = null;
+    }
+
+    activeTurnDelivery = { spawned, teardown: teardownTurnDelivery };
+
+    // Written on spawn, NOT gated on the CLI's `init` line. Measured against a
+    // real `claude` binary on 2026-08-04 (docs/spikes/channel-push-stream-json.md):
+    // under `-p --input-format stream-json` the CLI emits nothing at all until
+    // it has received a turn, and `init` then follows the write by <1s. Gating
+    // the write on `init` is therefore a deadlock — each side waits for the
+    // other, and the observed result was a session that sat silent for 200s and
+    // produced no output whatsoever.
+    //
+    // Still fresh-spawn only: a resumed session already carries its history, so
+    // a second copy of the prompt would be a duplicate turn.
+    //
+    // (`init` is also emitted once PER TURN, not once per session, so it could
+    // not have served as a one-shot session-ready signal even if it arrived
+    // first.)
+    //
+    // A resumed session gets no bootstrap turn but IS subscribed above, so it
+    // wakes on the next piece of Tandem activity. That is the whole reason the
+    // resume path is not inert: before this subscription existed it depended on
+    // channel push, which finding 2 of the spike shows does not arrive.
+    if (!plan.resuming) {
+      // The bootstrap prompt already tells Claude to call `tandem_checkInbox`,
+      // which surfaces anything that accumulated while nothing was listening —
+      // so it discharges any owed wake by itself.
+      sendTurn(SUPERVISOR_INITIAL_PROMPT);
+      wakeOwedAcrossSpawns = false;
+    } else if (wakeOwedAcrossSpawns) {
+      if (sendTurn(SUPERVISOR_WAKE_PROMPT)) wakeOwedAcrossSpawns = false;
+    }
+
+    function handleStdoutLine(line: string): void {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      // Deliberate discard: in stream-json mode stdout carries ONLY the JSON
+      // envelope. Anything else is a non-Claude process, a pre-protocol banner,
+      // or a wrapper's own chatter — none of it is ours to interpret, and none
+      // of it is lost, because a real diagnostic goes to stderr, which the
+      // handler below already logs verbatim. Re-logging it here would double
+      // every message.
+      //
+      // This parser speaks Claude's stream-json envelope specifically. The
+      // supervisor only spawns Claude today, so no provider guard is needed
+      // here -- but one MUST be added back the moment a second provider can
+      // reach this handler, or we would write a Claude-shaped user turn into
+      // a foreign process's stdin.
+      if (!trimmed.startsWith("{")) return;
+
+      let parsed: { type?: string; subtype?: string; is_error?: boolean; errors?: string[] };
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // Started with `{` but isn't JSON — surface it rather than swallow it.
+        console.error(`[Claude] ${trimmed}`);
+        return;
+      }
+
+      // A `result` envelope ends a turn, whatever its subtype — that is the
+      // idleness signal wake coalescing runs on. Confirmed against a real
+      // binary (spike, 2026-08-04): `result` follows every turn, and `init` is
+      // re-emitted per turn rather than per session.
+      if (parsed.type === "result") {
+        clearLatch();
+
+        // NOTE (#1267): `errors` is NOT confirmed to exist on the CLI's
+        // `result` envelope — it can only be settled against a running `claude`
+        // binary, and no `is_error` result was produced during the spike. Left
+        // as-is deliberately; the branch is inert if the field never appears,
+        // so guessing a different shape would be strictly worse. Note this is
+        // logging only — it must not gate `clearLatch()` above, or an
+        // unrecognised result shape would wedge wakes permanently.
+        if (parsed.is_error && Array.isArray(parsed.errors)) {
+          console.error(`[Claude] Output error: ${parsed.errors.join("; ")}`);
+        }
+
+        flushPendingWake();
+      }
+    }
+
+    // setEncoding, not chunk.toString(): the decoder is stateful and holds back
+    // a partial multi-byte sequence until its remaining bytes arrive. Decoding
+    // each chunk independently replaces any non-ASCII character straddling a
+    // chunk boundary with U+FFFD.
+    //
+    // Scope, stated honestly because it was measured: U+FFFD inside a JSON
+    // string is still valid JSON, and the only fields dispatched on today
+    // (`type`, `subtype`) are ASCII — so per-chunk decoding does NOT currently
+    // drop protocol messages, and no end-to-end test can detect it. What it
+    // corrupts is every *content* field: the `result` text logged below, and
+    // anything a future branch reads. Silent, unrecoverable downstream, and one
+    // line to prevent. See `createLineFramer`'s unit tests for the mechanism.
+    spawned.stdout?.setEncoding("utf8");
+    const stdoutFramer = createLineFramer(handleStdoutLine);
+    spawned.stdout?.on("data", (text: string) => stdoutFramer.push(text));
+    // A stream can end mid-line (no trailing newline). Without this the last
+    // message — often the `result` envelope — would never be seen.
+    spawned.stdout?.on("end", () => stdoutFramer.flush());
+
+    // stderr is line-buffered for the same reason stdout is: a per-chunk
+    // console.error splits one Claude diagnostic across two log lines and
+    // glues unrelated ones together.
+    spawned.stderr?.setEncoding("utf8");
+    const stderrFramer = createLineFramer((line) => {
+      const text = line.trimEnd();
+      if (text) console.error(`[Claude] ${text}`);
+    });
+    spawned.stderr?.on("data", (text: string) => stderrFramer.push(text));
+    spawned.stderr?.on("end", () => stderrFramer.flush());
+
+    spawned.on("error", (err: NodeJS.ErrnoException) => {
+      teardownTurnDelivery();
       // Cancel the confirmation timer — spawn errors don't flow through the
       // exit handler, so confirmTimer must be cleared here too. Without this,
       // the 30s timer from a failed resuming spawn would fire later and null
@@ -317,10 +744,14 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // running and so subsequent start()/relaunch() actually re-attempt.
       // ENOENT is unrecoverable without user action — trip the breaker
       // immediately rather than schedule a doomed restart.
-      child = null;
-      currentCwd = undefined;
-      currentSessionId = undefined;
-      currentResuming = false;
+      // Guarded on identity: a late event from a superseded spawn must not
+      // erase the handle of the process that replaced it.
+      if (child === spawned) {
+        child = null;
+        currentCwd = undefined;
+        currentSessionId = undefined;
+        currentResuming = false;
+      }
       if (err.code === "ENOENT") {
         lastError = "binary-not-found";
         breakerTripped = true;
@@ -334,10 +765,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       }
     });
 
-    child.on("exit", (code, signal) => {
+    spawned.on("exit", (code, signal) => {
+      teardownTurnDelivery();
       const ranFor = Date.now() - spawnedAt;
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
-      child = null;
+      // Identity-guarded for the same reason as the error handler above.
+      if (child === spawned) child = null;
 
       // Cancel the confirmation timer — the process has already exited.
       if (confirmTimer) {
@@ -370,9 +803,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // beats "spawn". The "exit" guard only fires in the pathological
     // exit-without-spawn case — without it that case would hang this await
     // *while holding withLock*, permanently wedging the supervisor.
-    // Bind to the captured `spawned` ref, not the module-level `child` (the
+    // Bound to the captured `spawned` ref, not the module-level `child` (the
     // long-lived error handler nulls `child`, which would defuse cleanup).
-    const spawned = child;
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => {
         spawned.off("spawn", onSpawn);
@@ -443,6 +875,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       console.error("[Launcher] No claude-code integration with apply != skip — skipping");
       return;
     }
+    // `buildPlan` yields, and `scheduleRestart` calls this function WITHOUT the
+    // op lock — so a user `stop()` can complete during that await. It takes the
+    // lock, finds `child` already null, and resolves successfully. Without this
+    // re-check the restart then spawns anyway: `stop()` reported success and
+    // Claude silently comes back, event subscription and all.
+    if (stopRequested) {
+      console.error("[Launcher] Stop requested while building the spawn plan — not spawning");
+      return;
+    }
     try {
       await spawnOnce(plan);
       // Reset backoff once a spawn runs long enough to be considered stable.
@@ -467,6 +908,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // Relaunch always means "user is actively asking" → clear breaker.
       breakerTripped = false;
       recentAttempts = [];
+      // stopInternal() raised the stop flag on the way in. Lower it before the
+      // new spawn, or the exit handler treats the *next* crash as a deliberate
+      // stop and silently declines to restart — the supervisor stays dead.
+      stopRequested = false;
       const plan = await buildPlan(newCwd);
       if (!plan) return;
       await spawnOnce(plan);
@@ -484,7 +929,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       confirmTimer = null;
     }
     const c = child;
-    if (!c || c.killed) return;
+    if (!c || c.killed) {
+      // Already dead, or never started — nothing to signal. But we must still
+      // DROP the handle rather than early-returning with `child` set:
+      // spawnOnce() throws when `child` is non-null, so a killed-but-retained
+      // handle turns the very next relaunch()/startFresh() into a user-visible
+      // "relaunch failed" for a supervisor that is, in fact, idle.
+      releaseTurnDelivery();
+      child = null;
+      currentCwd = undefined;
+      currentSessionId = undefined;
+      currentResuming = false;
+      return;
+    }
     try {
       c.kill("SIGTERM");
     } catch {
@@ -520,6 +977,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         lastError = "stop-failed";
       }
     }
+    // Unconditional, and NOT left to the `exit` handler: the abandon branch
+    // above reaches here with a process that is still alive and will never emit
+    // `exit`, so this is the only release that runs on that path.
+    releaseTurnDelivery();
     child = null;
     currentCwd = undefined;
     currentSessionId = undefined;
@@ -536,6 +997,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       clearSavedSession();
       breakerTripped = false;
       recentAttempts = [];
+      // See relaunch(): stopInternal() set stopRequested, and leaving it set
+      // would disarm the auto-restart for the whole life of the new spawn.
+      stopRequested = false;
       const plan = await buildPlan(cwdOverride);
       if (!plan) return;
       await spawnOnce(plan);
