@@ -66,7 +66,7 @@ describe("EmptyState", () => {
         expectedTestId: "empty-state-setup-claude",
       },
       {
-        why: "aiChip 'restart' → Restart Claude Code CTA, no positioning line",
+        why: "aiChip 'restart' → Restart assistant CTA, no positioning line",
         aiChip: "restart",
         expectSecondary: false,
         expectedTestId: "empty-state-restart-claude",
@@ -171,11 +171,11 @@ describe("EmptyState", () => {
       // invoking the session-destroying start-fresh flow. The primary CTA
       // must now be non-destructive — positive control: it still does the
       // (safe) thing its label promises.
-      it("primary Restart Claude Code CTA calls onRestartClaude, never onStartFreshClaude", async () => {
+      it("primary Restart assistant CTA calls onRestartClaude, never onStartFreshClaude", async () => {
         const { container, props } = renderRestart();
 
         const btn = byTestId(container, "empty-state-restart-claude");
-        expect(btn?.textContent?.trim()).toBe("Restart Claude Code");
+        expect(btn?.textContent?.trim()).toBe("Restart assistant");
 
         btn?.click();
         await tick();

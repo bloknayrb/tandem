@@ -39,6 +39,8 @@ export type LauncherStatus =
       /** Always the literal string "<set>" — the real UUID never crosses the wire. */
       sessionId: "<set>";
       resuming: boolean;
+      /** Active assistant selected in integrations.json. Loopback-only. */
+      provider: "claude-code" | "codex";
       /** Loopback-only. `null` when last refresh succeeded. */
       skillRefresh?: SkillRefreshError | null;
     };
@@ -81,13 +83,38 @@ export function isTransientlyUnavailable(reason: LauncherUnavailableReason | und
   return reason === "deferred-autostart";
 }
 
-/** Scrubbed `lastError` enum. Verbose error strings stay server-side. */
+/**
+ * Scrubbed `lastError` enum. Verbose error strings stay server-side.
+ *
+ * `workspace-required` is a *configuration* failure, not a process failure: the
+ * supervisor never got as far as a spawn. It exists because that state used to
+ * resolve as success — `POST /relaunch` answered `{ ok: true }` while
+ * `GET /status` reported not-running with no `lastError`, so a Codex primary
+ * with no `workingDirectory` looked like a launch that had simply evaporated.
+ * Restarting cannot clear it; only setting a working directory can, which is
+ * why {@link isConfigurationError} exists to keep UI from offering a retry that
+ * must fail.
+ */
 export type LauncherErrorCode =
   | "spawn-failed"
   | "binary-not-found"
   | "stop-failed"
   | "circuit-open"
-  | "status-check-failed";
+  | "status-check-failed"
+  | "workspace-required";
+
+/**
+ * True for `lastError` values a restart cannot fix. The distinction matters at
+ * every CTA: "Restart Claude Code" on a `workspace-required` error respawns
+ * straight back into the same failure.
+ *
+ * A predicate rather than an inline `=== "workspace-required"` for the same
+ * reason as {@link isTransientlyUnavailable}: the next configuration-shaped
+ * error should update one function, not every surface that renders a CTA.
+ */
+export function isConfigurationError(code: LauncherErrorCode | undefined): boolean {
+  return code === "workspace-required";
+}
 
 /** Loopback-only side-channel for bundled-skill refresh failures. The user
  * has no other signal that the skill is stale, so `/status` surfaces this

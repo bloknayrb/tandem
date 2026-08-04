@@ -91,6 +91,19 @@ let _warnedInvalidToken = false;
  * consume it ignore the header, so no server-route schema change is required.
  */
 export const CLAUDE_SESSION_HEADER = "X-Claude-Session-Id";
+/**
+ * Provider hint forwarded by Tandem's managed stdio bridge, deciding which
+ * assistant a session's annotations are attributed to.
+ *
+ * The server enforces two things on it (`mcp/server.ts#readAgentIdentityHeader`):
+ * the value must be a recognized provider, and the request must come from
+ * loopback. Loopback is the strongest available proof — the bridge is a
+ * subprocess on the same host and shares no secret that would distinguish it
+ * from another local client — so a co-operative local process can still assert
+ * an identity. What it stops is a LAN client under `TANDEM_BIND_HOST`
+ * publishing annotations bylined as another provider.
+ */
+export const TANDEM_AGENT_PROVIDER_HEADER = "X-Tandem-Agent-Provider";
 
 /**
  * Bound on the session-id length we forward. Claude Code sets a UUID

@@ -407,6 +407,25 @@ describe("IntegrationsFileSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts a first-class Codex integration", () => {
+    const result = IntegrationsFileSchema.safeParse({
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [
+        {
+          kind: "codex",
+          id: "codex-1",
+          label: "Codex",
+          configPath: "/home/user/.codex/config.toml",
+          transport: "stdio",
+          apply: "create",
+          workingDirectory: "/home/user/project",
+        },
+      ],
+      defaultIntegrationId: "codex-1",
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects a wrong schemaVersion", () => {
     const result = IntegrationsFileSchema.safeParse({
       schemaVersion: INTEGRATIONS_SCHEMA_VERSION + 1,

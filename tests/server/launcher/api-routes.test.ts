@@ -121,7 +121,7 @@ async function request(
 
 function makeStubStore(): LauncherRoutesDeps["store"] {
   return {
-    read: async () => ({ schemaVersion: 3, integrations: [] }),
+    read: async () => ({ schemaVersion: 4, integrations: [] }),
     write: async () => {},
   } as unknown as LauncherRoutesDeps["store"];
 }
@@ -444,7 +444,7 @@ describe("POST /api/launcher/working-directory", () => {
     let writtenFile: { integrations: Array<{ workingDirectory?: string }> } | null = null;
     const store = {
       read: async () => ({
-        schemaVersion: 3 as const,
+        schemaVersion: 4 as const,
         integrations: [
           {
             kind: "claude-code" as const,
@@ -476,7 +476,7 @@ describe("POST /api/launcher/working-directory", () => {
     let writtenFile: { integrations: Array<{ workingDirectory?: string }> } | null = null;
     const store = {
       read: async () => ({
-        schemaVersion: 3 as const,
+        schemaVersion: 4 as const,
         integrations: [
           {
             kind: "claude-code" as const,
@@ -577,7 +577,7 @@ describe("per-route 429 inflight gates (T2)", () => {
     const gate = deferred();
     const store = {
       read: async () => ({
-        schemaVersion: 3 as const,
+        schemaVersion: 4 as const,
         integrations: [
           {
             kind: "claude-code" as const,

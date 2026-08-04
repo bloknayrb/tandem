@@ -24,6 +24,7 @@ import { scrollFade } from "./actions/scrollFade.svelte.js";
 import { buildOverrides } from "./actions/shortcut-conflicts.js";
 import ActivityTray from "./components/ActivityTray.svelte";
 import { resolveActivityAction } from "./components/activityActions.js";
+import CodexApprovalModal from "./components/CodexApprovalModal.svelte";
 import CommandPalette from "./components/CommandPalette.svelte";
 import ConnectionBanner from "./components/ConnectionBanner.svelte";
 import CoworkAdminDeclinedModal from "./components/CoworkAdminDeclinedModal.svelte";
@@ -2534,6 +2535,8 @@ const shouldShowModelPicker = $derived(
     />
 
     <ToastContainer toasts={notifications.toasts} onDismiss={notifications.dismiss} />
+
+    <CodexApprovalModal />
 
     <ActivityTray
       items={notifications.activity}

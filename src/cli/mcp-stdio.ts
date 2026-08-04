@@ -33,6 +33,7 @@ import {
   resolveAuthTokenCandidate,
   resolveClaudeSessionId,
   resolveTandemUrl,
+  TANDEM_AGENT_PROVIDER_HEADER,
 } from "../shared/cli-runtime.js";
 import { probeTandemServer } from "./preflight.js";
 
@@ -128,6 +129,9 @@ export async function runMcpStdio(): Promise<void> {
   const upstreamHeaders: Record<string, string> = {};
   if (authToken) upstreamHeaders.Authorization = `Bearer ${authToken}`;
   if (sessionId !== undefined) upstreamHeaders[CLAUDE_SESSION_HEADER] = sessionId;
+  if (process.env.TANDEM_AGENT_PROVIDER === "openai") {
+    upstreamHeaders[TANDEM_AGENT_PROVIDER_HEADER] = "openai";
+  }
 
   const http = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
     requestInit: Object.keys(upstreamHeaders).length > 0 ? { headers: upstreamHeaders } : undefined,

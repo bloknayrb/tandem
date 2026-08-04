@@ -2,6 +2,7 @@
 import { onDestroy } from "svelte";
 import { API_LAUNCHER_WORKING_DIRECTORY } from "../../../shared/api-paths";
 import { SELECTION_DWELL_MAX_MS, SELECTION_DWELL_MIN_MS } from "../../../shared/constants";
+import { isLaunchablePrimary } from "../../../shared/integrations/launchable-primary";
 import {
   LAUNCHER_ERROR_IN_PROGRESS,
   LAUNCHER_ERROR_INVALID_BODY,
@@ -30,7 +31,7 @@ function workingDirErrorForCode(code: unknown): string {
     case LAUNCHER_ERROR_IN_PROGRESS:
       return "Another working-directory update is in progress. Try again.";
     case LAUNCHER_ERROR_NO_INTEGRATION:
-      return "No Claude Code integration is configured.";
+      return "No managed assistant integration is configured.";
     case LAUNCHER_ERROR_NOT_AVAILABLE:
       return "Auto-launcher is not available in this Tandem build.";
     default:
@@ -58,6 +59,7 @@ let wdInflight = $state(false);
 let wdError = $state<string | null>(null);
 let wdLoaded = $state(false);
 let hasIntegration = $state(false);
+let activeProvider = $state<"Claude Code" | "Codex">("Claude Code");
 /**
  * Captures the load-failure reason so the UI can surface a banner instead
  * of silently hiding the working-directory section. `null` means either
@@ -96,12 +98,18 @@ async function loadWorkingDirectory() {
       return;
     }
     const file = (await res.json()) as {
-      integrations?: { kind?: string; workingDirectory?: string }[];
+      defaultIntegrationId?: string;
+      integrations?: { id?: string; kind?: string; apply?: string; workingDirectory?: string }[];
     };
     if (!mounted) return;
-    const entry = file.integrations?.find((i) => i.kind === "claude-code");
+    // Shared with the server's spawn-target selection — this panel reports
+    // which assistant is active, so a divergent local test would describe a
+    // different integration than the one the launcher would actually run.
+    const launchable = file.integrations?.filter(isLaunchablePrimary);
+    const entry = launchable?.find((i) => i.id === file.defaultIntegrationId) ?? launchable?.[0];
     if (entry) {
       hasIntegration = true;
+      activeProvider = entry.kind === "codex" ? "Codex" : "Claude Code";
       workingDirectory = entry.workingDirectory ?? null;
     }
   } catch (err) {
@@ -110,7 +118,7 @@ async function loadWorkingDirectory() {
     // can contain absolute paths and URLs from the underlying fetch error).
     // Debug detail still goes to the console for developer triage.
     console.warn("[Settings] Failed to load workingDirectory:", err);
-    lastLoadError = "Couldn't load Claude working directory.";
+    lastLoadError = "Couldn't load assistant working directory.";
   } finally {
     if (mounted) wdLoaded = true;
   }
@@ -172,7 +180,7 @@ async function pickFolder() {
     const selected = await openFn({
       directory: true,
       multiple: false,
-      title: "Choose Claude working directory",
+      title: `Choose ${activeProvider} working directory`,
     });
     if (typeof selected === "string") {
       void persistWorkingDirectory(selected);
@@ -191,6 +199,10 @@ function handleManualSave(e: SubmitEvent) {
 }
 
 function handleReset() {
+  // Reset means "fall back to home", which only Claude Code has. The button is
+  // rendered inside `{#if activeProvider === "Claude Code"}`, so a Codex guard
+  // here was unreachable — and an unreachable guard reads like the invariant
+  // lives here when it actually lives in the template.
   void persistWorkingDirectory(null);
 }
 </script>
@@ -204,7 +216,7 @@ function handleReset() {
       No AI connected yet
     </div>
     <div style="font-size: 12px; line-height: 1.5; color: var(--tandem-info-fg);">
-      Tandem's AI works through Claude Code or Claude Desktop using your existing Claude
+      Tandem works through Claude Code, Claude Desktop, or Codex using your existing provider
       sign-in — no API key needed. The setup wizard connects it in one step.
     </div>
     <button
@@ -221,10 +233,10 @@ function handleReset() {
 <p
   style="font-size: 12px; line-height: 1.5; color: var(--tandem-fg-muted); margin: 0 0 var(--tandem-space-3);"
 >
-  Tandem connects to any MCP-capable AI client over its MCP endpoint. Claude (Claude Code and
-  Claude Desktop) is the default integration — auto-configured, tested, and the only client whose
-  channel-push, cowork, and auto-launch extras are validated today. Other clients can connect
-  manually using the MCP endpoint on the Network tab.
+  Tandem connects to MCP-capable assistants over its MCP endpoint. Claude Code, Claude Desktop,
+  and Codex are auto-configured; Claude Code and Codex can also be selected as the managed
+  assistant Tandem starts for you. Other clients can connect manually using the MCP endpoint on
+  the Network tab.
 </p>
 
 <div>
@@ -306,16 +318,18 @@ function handleReset() {
 
 {#if wdLoaded && hasIntegration}
   <div data-testid="settings-modal-working-directory" style="display: flex; flex-direction: column; gap: var(--tandem-space-2);">
-    <div class="settings-section-label">Claude working directory</div>
+    <div class="settings-section-label">{activeProvider} working directory</div>
     <div class="settings-hint">
-      Folder where Claude launches. Defaults to your home directory if empty.
+      Folder where {activeProvider} launches.{activeProvider === "Claude Code"
+        ? " Defaults to your home directory if empty."
+        : " Codex requires an explicit project folder."}
     </div>
     <form onsubmit={handleManualSave} style="display: flex; gap: var(--tandem-space-2);">
       <input
         type="text"
         name="wd"
         value={workingDirectory ?? ""}
-        placeholder={"(default: home)"}
+        placeholder={activeProvider === "Claude Code" ? "(default: home)" : "Absolute project path"}
         disabled={wdInflight}
         data-testid="settings-modal-working-directory-input"
         style="flex: 1; font-size: 12px; padding: var(--tandem-space-2); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface); color: var(--tandem-fg); font-family: var(--tandem-font-mono);"
@@ -337,13 +351,15 @@ function handleReset() {
           style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: var(--tandem-surface-muted); color: var(--tandem-fg); cursor: pointer;"
         >Choose folder…</button>
       {/if}
-      <button
-        type="button"
-        onclick={handleReset}
-        disabled={wdInflight || workingDirectory === null}
-        data-testid="settings-modal-working-directory-reset"
-        style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); cursor: pointer;"
-      >Reset to default</button>
+      {#if activeProvider === "Claude Code"}
+        <button
+          type="button"
+          onclick={handleReset}
+          disabled={wdInflight || workingDirectory === null}
+          data-testid="settings-modal-working-directory-reset"
+          style="font-size: 12px; padding: var(--tandem-space-2) var(--tandem-space-3); border-radius: var(--tandem-r-2); border: 1px solid var(--tandem-border); background: transparent; color: var(--tandem-fg-muted); cursor: pointer;"
+        >Reset to default</button>
+      {/if}
     </div>
     {#if wdError}
       <div role="alert" style="font-size: 11px; color: var(--tandem-error-fg);">

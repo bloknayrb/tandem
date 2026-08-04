@@ -87,6 +87,21 @@ export default defineConfig([
     ...selfContained,
   },
   {
+    entry: ["src/codex-agent/index.ts"],
+    outDir: "dist/codex-agent",
+    format: ["esm"],
+    target: "node22",
+    platform: "node",
+    splitting: false,
+    clean: true,
+    dts: false,
+    sourcemap: true,
+    ...selfContained,
+    define: {
+      __TANDEM_VERSION__: JSON.stringify(pkg.version),
+    },
+  },
+  {
     entry: ["src/cli/index.ts"],
     outDir: "dist/cli",
     format: ["esm"],

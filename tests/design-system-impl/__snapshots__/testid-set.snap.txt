@@ -48,6 +48,11 @@ claude-working-indicator
 clear-chat-btn
 clear-filters-btn
 clear-recent-files
+codex-approval-change-{*}
+codex-approval-changes
+codex-approval-changes-unreadable
+codex-approval-dialog
+codex-approval-grant-root
 color-picker-close
 command-palette
 comment-thread
@@ -186,6 +191,8 @@ integration-wizard-apply-result-{*}
 integration-wizard-card-{*}
 integration-wizard-check-again
 integration-wizard-close
+integration-wizard-codex-install-success
+integration-wizard-codex-workspace
 integration-wizard-connect-btn
 integration-wizard-cowork-back
 integration-wizard-cowork-error
@@ -197,12 +204,14 @@ integration-wizard-done-retry
 integration-wizard-empty
 integration-wizard-error-retry
 integration-wizard-install-claude
+integration-wizard-install-codex
 integration-wizard-install-error
 integration-wizard-install-success
 integration-wizard-keychain-fallback
 integration-wizard-models-setup
 integration-wizard-more
 integration-wizard-pick-{*}
+integration-wizard-primary
 integration-wizard-push-mode
 integration-wizard-reachability-{*}
 integration-wizard-reopen-hint

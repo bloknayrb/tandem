@@ -36,6 +36,7 @@ import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { hideFromAI, readModeState } from "../mode.js";
 import { pushNotification } from "../notifications.js";
 import { anchoredRange } from "../positions.js";
+import { getMcpContext } from "../sessions/context.js";
 import { extractText, getCurrentDoc } from "./document.js";
 import { getDocumentStore } from "./document-store.js";
 import { gatedTool } from "./license-gate.js";
@@ -324,6 +325,7 @@ export function createAnnotation(
     status: "pending" as const,
     timestamp: Date.now(),
     rev: nextRev(),
+    ...(getMcpContext()?.agentIdentity ? { agentIdentity: getMcpContext()?.agentIdentity } : {}),
     ...extras,
   } as Annotation;
   withMcp(ydoc, () => map.set(id, annotation));
@@ -904,7 +906,12 @@ export function registerAnnotationTools(server: McpServer): void {
           ...(safeId ? { annotationId: safeId } : {}),
         },
         async () => {
-          const result = store.addReply(annotationId, text, "claude");
+          const result = store.addReply(
+            annotationId,
+            text,
+            "claude",
+            getMcpContext()?.agentIdentity,
+          );
           if (!result.ok) {
             const code =
               result.code === "NOT_FOUND"

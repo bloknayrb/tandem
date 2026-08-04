@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emptyIntegrationsFile,
+  INTEGRATIONS_SCHEMA_VERSION,
   type IntegrationsFile,
 } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
@@ -58,7 +59,7 @@ describe("supervisor.start — gating", () => {
 
   it("is a no-op when the only claude-code integration is apply=skip", async () => {
     const file: IntegrationsFile = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       integrations: [
         {
           kind: "claude-code",
@@ -319,7 +320,7 @@ describe("supervisor — early spawn-failure surfacing (Fix A)", () => {
     // apply !== "skip" so readIntegration() returns it and buildPlan() yields a
     // plan, driving execution into spawnOnce().
     const file: IntegrationsFile = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       integrations: [
         {
           kind: "claude-code",
@@ -360,6 +361,108 @@ describe("supervisor — early spawn-failure surfacing (Fix A)", () => {
       await expect(sup.startFresh(fs.realpathSync(os.homedir()))).rejects.toThrow(
         REAPER_NOT_FOUND_MARKER,
       );
+    } finally {
+      await sup.stop();
+    }
+  });
+});
+
+describe("supervisor — Codex plan preconditions", () => {
+  // Same unrunnable-reaper trick as "early spawn-failure surfacing" above: a
+  // REAPER_NOT_FOUND rejection proves execution reached spawnOnce, i.e. that a
+  // plan WAS built. It is the only observable that distinguishes "buildPlan
+  // declined" from "buildPlan succeeded" without a real reaper binary.
+  const savedEnv: Record<string, string | undefined> = {};
+  const ENV_KEYS = ["TANDEM_REAPER_PATH", "TANDEM_TAURI_SIDECAR", "NODE_ENV"];
+
+  beforeEach(() => {
+    for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
+    process.env.NODE_ENV = "test";
+    delete process.env.TANDEM_TAURI_SIDECAR;
+    process.env.TANDEM_REAPER_PATH = os.tmpdir(); // exists, not executable
+  });
+
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  function codexFile(opts: {
+    workingDirectory?: string;
+    defaultIntegrationId?: string;
+  }): IntegrationsFile {
+    return {
+      schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+      integrations: [
+        {
+          kind: "codex",
+          id: "codex-1",
+          label: "Codex",
+          configPath:
+            process.platform === "win32"
+              ? "C:\\Users\\test\\.codex\\config.toml"
+              : "/home/test/.codex/config.toml",
+          transport: "stdio",
+          apply: "create",
+          ...(opts.workingDirectory ? { workingDirectory: opts.workingDirectory } : {}),
+        },
+      ],
+      ...(opts.defaultIntegrationId ? { defaultIntegrationId: opts.defaultIntegrationId } : {}),
+    };
+  }
+
+  it("rejects startFresh and records workspace-required when Codex has no workingDirectory", async () => {
+    await writeIntegrations(codexFile({ defaultIntegrationId: "codex-1" }));
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await expect(sup.startFresh()).rejects.toThrow(/working directory/i);
+      // The whole point: `POST /start-fresh` used to answer `{ ok: true }` here
+      // while status reported a bare not-running, so the launch looked like it
+      // had silently evaporated.
+      expect(sup.status()).toMatchObject({ running: false, lastError: "workspace-required" });
+    } finally {
+      await sup.stop();
+    }
+  });
+
+  it("relaunch rejects the same way (route parity)", async () => {
+    await writeIntegrations(codexFile({ defaultIntegrationId: "codex-1" }));
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      // relaunch() passes its cwd as an override, but resolveCwd only accepts a
+      // directory that survives resolveSafeCwd — an empty string does not, so
+      // this exercises the same missing-workspace path.
+      await expect(sup.relaunch("")).rejects.toThrow(/working directory/i);
+    } finally {
+      await sup.stop();
+    }
+  });
+
+  // Positive control for both assertions above: the rejection must be about the
+  // MISSING workspace, not about Codex being unlaunchable in general. With a
+  // real directory the same fixture gets all the way to spawnOnce.
+  it("builds a plan once Codex has a workingDirectory", async () => {
+    const cwd = fs.realpathSync(os.homedir());
+    await writeIntegrations(codexFile({ workingDirectory: cwd, defaultIntegrationId: "codex-1" }));
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await expect(sup.startFresh()).rejects.toThrow(REAPER_NOT_FOUND_MARKER);
+    } finally {
+      await sup.stop();
+    }
+  });
+
+  // The fallback used to match `kind === "claude-code"` only, so a Codex-only
+  // install whose defaultIntegrationId had been cleared — which
+  // enforceReferentialIntegrity does on its own — could never launch anything.
+  it("falls back to a Codex integration when defaultIntegrationId is unset", async () => {
+    const cwd = fs.realpathSync(os.homedir());
+    await writeIntegrations(codexFile({ workingDirectory: cwd }));
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await expect(sup.startFresh()).rejects.toThrow(REAPER_NOT_FOUND_MARKER);
     } finally {
       await sup.stop();
     }

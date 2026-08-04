@@ -42,6 +42,8 @@
  * closed laptop).
  */
 
+import type { AgentIdentity } from "../../shared/types.js";
+
 /** Minimal structural type — the registry only ever closes a session's server. */
 export interface ClosableServer {
   close(): Promise<void>;
@@ -58,6 +60,7 @@ export interface McpSessionEntry<S extends ClosableServer = ClosableServer, T = 
    * `.mcp.json` entries — see `sessions/context.ts`.
    */
   claudeSessionId?: string;
+  agentIdentity?: AgentIdentity;
   createdAt: number;
   lastSeenAt: number;
 }

@@ -24,6 +24,12 @@ vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
   };
 });
 
+vi.mock("../../src/server/integrations/codex-config.js", () => ({
+  detectCodexTargets: vi.fn(() => []),
+  applyCodexConfig: vi.fn(),
+  installCodexSkill: vi.fn(),
+}));
+
 import { runSetup } from "../../src/cli/setup.js";
 import {
   applyConfig,
@@ -124,7 +130,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
     expect(installSkill).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     const out = stderr();
-    expect(out).toContain("No matching Claude installations detected");
+    expect(out).toContain("No matching assistant installations detected");
     expect(out).toContain("Installing Claude Code skill");
   });
 

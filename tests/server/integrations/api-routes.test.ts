@@ -13,11 +13,15 @@ import {
   API_INTEGRATIONS_EXISTING,
   API_INTEGRATIONS_FIRST_RUN,
   API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+  API_INTEGRATIONS_INSTALL_CODEX,
   API_INTEGRATIONS_SECRET,
   type IntegrationsRoutesDeps,
   registerIntegrationsRoutes,
 } from "../../../src/server/integrations/api-routes.js";
-import type { ExistingMcpInstall } from "../../../src/server/integrations/existing-config.js";
+import {
+  type ExistingMcpInstall,
+  readExistingTandemEntries,
+} from "../../../src/server/integrations/existing-config.js";
 import {
   ClaudeInstallError,
   UnsupportedPlatformError,
@@ -192,6 +196,64 @@ describe("integrations API routes", () => {
       const app = makeApp(deps);
       const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
       expect(res.status).toBe(500);
+    });
+
+    it("scrubs env/headers from a real ~/.claude.json entry before it reaches the wire", async () => {
+      // The route handler forwards `deps.readExisting()`'s result straight to
+      // `res.json` with no scrubbing of its own (see makeIntegrationsReadHandler)
+      // — the wire-safety contract lives entirely in existing-config.ts's
+      // extractEntry. A mocked readExisting (as `deps` uses by default) would
+      // just echo back whatever we hand it and prove nothing about that real
+      // path, so this test wires the REAL readExistingTandemEntries, pinned
+      // into a tmpdir "home" the way existing-config.test.ts does.
+      const tmpHome = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tandem-existing-wire-"));
+      const prevAppData = process.env.APPDATA;
+      process.env.APPDATA = tmpHome;
+      try {
+        await fs.promises.writeFile(
+          path.join(tmpHome, ".claude.json"),
+          JSON.stringify({
+            mcpServers: {
+              tandem: {
+                type: "http",
+                url: "http://127.0.0.1:3479/mcp",
+                headers: { Authorization: "Bearer wire-leak-http-token" },
+              },
+              "tandem-channel": {
+                command: "node",
+                args: ["/path/to/channel.js"],
+                env: { TANDEM_AUTH_TOKEN: "wire-leak-channel-secret" },
+              },
+            },
+          }),
+          "utf-8",
+        );
+        const app = makeApp({
+          ...deps,
+          readExisting: () =>
+            readExistingTandemEntries({
+              homeOverride: tmpHome,
+              localAppDataOverride: tmpHome,
+              pathOverride: path.join(tmpHome, "empty-path"),
+              codexHomeOverride: path.join(tmpHome, ".codex"),
+            }),
+        });
+        const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+        expect(res.status).toBe(200);
+        const body = JSON.stringify(res.body);
+        // Positive control: ordinary (non-secret) fields DO cross the wire —
+        // proves this is a targeted scrub, not an empty/broken response.
+        expect(body).toContain("http://127.0.0.1:3479/mcp");
+        expect(body).toContain("/path/to/channel.js");
+        // The scrub itself: secret-bearing fields never reach the client.
+        expect(body).not.toContain("wire-leak-http-token");
+        expect(body).not.toContain("wire-leak-channel-secret");
+        expect(body).not.toContain("Authorization");
+      } finally {
+        if (prevAppData === undefined) delete process.env.APPDATA;
+        else process.env.APPDATA = prevAppData;
+        await fs.promises.rm(tmpHome, { recursive: true, force: true });
+      }
     });
   });
 
@@ -1053,6 +1115,12 @@ describe("integrations API routes", () => {
         url: API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
         body: undefined,
       },
+      {
+        label: "POST /api/integrations/install-codex",
+        method: "POST" as const,
+        url: API_INTEGRATIONS_INSTALL_CODEX,
+        body: undefined,
+      },
     ])("$label rejects non-loopback callers", async ({ method, url, body }) => {
       const app = makeAppWithRemoteAddress(deps, "192.168.1.100");
       const res = await request(app, method, url, body);
@@ -1102,6 +1170,12 @@ describe("integrations API routes", () => {
         label: "POST /api/integrations/install-claude-code",
         method: "POST" as const,
         url: API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+        body: undefined,
+      },
+      {
+        label: "POST /api/integrations/install-codex",
+        method: "POST" as const,
+        url: API_INTEGRATIONS_INSTALL_CODEX,
         body: undefined,
       },
     ])("$label rejects evil origin with 403 BAD_ORIGIN", async ({ method, url, body }) => {

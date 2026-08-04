@@ -1,8 +1,8 @@
 /**
- * Claude Code supervisor — spawns Claude as a child of Tandem and guarantees
+ * Managed-assistant supervisor — spawns Claude Code or Codex as a child of Tandem and guarantees
  * OS-level reaping when Tandem dies (via the tandem-reaper helper binary).
  *
- * Gating: HTTP mode only. Requires a `claude-code` integration with
+ * Gating: HTTP mode only. Requires a launch-capable primary integration with
  * `apply !== "skip"` in `integrations.json`. Otherwise no-op.
  *
  * Lifecycle:
@@ -21,9 +21,15 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
+import { fileURLToPath } from "node:url";
+import { codexChildEnv } from "../../shared/codex/env.js";
+import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import type { TandemEvent } from "../../shared/events/types.js";
-import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
+import type {
+  ClaudeCodeIntegration,
+  CodexIntegration,
+} from "../../shared/integrations/contract.js";
+import { isLaunchablePrimary } from "../../shared/integrations/launchable-primary.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
   type LauncherErrorCode,
@@ -32,12 +38,22 @@ import {
   SUPERVISOR_WAKE_PROMPT,
   serializeUserTurn,
 } from "../../shared/launcher/contract.js";
+import { getCodexApprovalBroker } from "../codex/approval-broker.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 
 interface SupervisorOpts {
   /** Directory containing `integrations.json` (typically `resolveAppDataDir()`). */
   integrationsBase: string;
+  /**
+   * Port the MCP HTTP server actually bound, for the `TANDEM_URL` handed to the
+   * Codex worker. Passed down rather than re-derived here: this module has no
+   * business guessing where its own process is listening, and a hardcoded 3479
+   * pointed the worker at whatever else happened to own that port whenever the
+   * user set `TANDEM_MCP_PORT`. Defaults to {@link DEFAULT_MCP_PORT} so the
+   * existing test fixtures — which never spawn Codex — need no change.
+   */
+  mcpPort?: number;
   /**
    * Seam onto the event fan-out, for tests that need to drive wakes without
    * standing up the real queue's Y.Doc observers. Returns an unsubscribe fn.
@@ -122,11 +138,25 @@ function isWakeWorthy(event: TandemEvent): boolean {
 const WAKE_LATCH_MAX_MS = 10 * 60_000;
 
 interface SpawnPlan {
-  integration: ClaudeCodeIntegration;
+  integration: ClaudeCodeIntegration | CodexIntegration;
+  provider: "claude-code" | "codex";
   cwd: string;
   sessionId: string;
   resuming: boolean;
 }
+
+/**
+ * Why `buildPlan` produced no plan. A bare `null` conflated two states that
+ * want opposite handling: "nothing is configured yet" is the ordinary
+ * pre-setup condition, while "a Codex primary is configured but has no
+ * workspace" is a misconfiguration the user asked us to act on and must be
+ * told about. Both used to resolve `{ ok: true }` out of `POST /relaunch` and
+ * `POST /start-fresh` while `status()` reported not-running with no
+ * `lastError` — a launch that reported success and did nothing.
+ */
+type PlanFailure = "no-integration" | "workspace-required";
+
+type PlanResult = { ok: true; plan: SpawnPlan } | { ok: false; reason: PlanFailure };
 
 const SESSION_FILE_NAME = "launcher-session.json";
 /** How long a resumed spawn must run before its session is considered
@@ -188,6 +218,7 @@ export type SupervisorStatus =
        * fatal error. Present as an explicit `undefined` so `status.lastError`
        * type-checks on the un-narrowed union. */
       lastError?: undefined;
+      provider: "claude-code" | "codex";
     };
 
 /**
@@ -271,6 +302,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let currentCwd: string | undefined;
   let currentSessionId: string | undefined;
   let currentResuming = false;
+  let currentProvider: "claude-code" | "codex" | undefined;
   let stopRequested = false;
   let restartIndex = 0;
   let restartTimer: NodeJS.Timeout | null = null;
@@ -335,13 +367,25 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return next;
   }
 
-  async function readIntegration(): Promise<ClaudeCodeIntegration | null> {
+  async function readIntegration(): Promise<ClaudeCodeIntegration | CodexIntegration | null> {
     const store = createIntegrationsStore(opts.integrationsBase);
     const file = await store.read();
-    const found = file.integrations.find(
-      (i): i is ClaudeCodeIntegration => i.kind === "claude-code" && i.apply !== "skip",
-    );
-    return found ?? null;
+    const selected = file.integrations.find((entry) => entry.id === file.defaultIntegrationId);
+    if (isLaunchablePrimary(selected)) return selected;
+    // The fallback is deliberately kind-agnostic. It used to accept only
+    // `claude-code`, so a Codex-only install whose `defaultIntegrationId` had
+    // been cleared — which `enforceReferentialIntegrity` does on its own,
+    // silently — could never launch anything at all. `POST /working-directory`
+    // already fell back across both kinds, so the two also disagreed about
+    // which integration they were talking about.
+    //
+    // With BOTH kinds launchable and no default, this now picks file order
+    // where it used to prefer claude-code. That is the intended trade: file
+    // order is the order the user picked them in the wizard, and the wizard
+    // refuses to save two launchables without a primary — so this case is only
+    // reachable after `enforceReferentialIntegrity` drops a default, where
+    // "first configured" is a better answer than a hardcoded provider bias.
+    return file.integrations.find(isLaunchablePrimary) ?? null;
   }
 
   function sessionFilePath(): string {
@@ -383,13 +427,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
   }
 
-  function resolveCwd(integration: ClaudeCodeIntegration, override?: string): string {
+  function resolveCwd(
+    integration: ClaudeCodeIntegration | CodexIntegration,
+    override?: string,
+  ): string | null {
     const candidate = override ?? (integration as { workingDirectory?: unknown }).workingDirectory;
     if (typeof candidate === "string") {
       const normalized = safeCwd(candidate);
       if (normalized) return normalized;
     }
-    return os.homedir();
+    // Claude's historical default remains home for compatibility. Automatic
+    // Codex turns require an explicit workspace and never receive home as a
+    // writable root.
+    return integration.kind === "claude-code" ? os.homedir() : null;
   }
 
   function safeCwd(candidate: string): string | null {
@@ -430,19 +480,82 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return process.env.TANDEM_CLAUDE_CMD || "claude";
   }
 
-  async function buildPlan(cwdOverride?: string): Promise<SpawnPlan | null> {
-    const integration = await readIntegration();
-    if (!integration) return null;
+  function codexWorkerArgs(): string[] {
+    if (process.env.NODE_ENV !== "production" && process.env.TANDEM_CODEX_WORKER_PATH) {
+      return [process.env.TANDEM_CODEX_WORKER_PATH];
+    }
+    const modulePath = fileURLToPath(import.meta.url);
+    const here = path.dirname(modulePath);
+    if (modulePath.endsWith(".ts")) {
+      // `dev:server` runs this source through tsx, while the managed worker is
+      // a separate Node process. Give that process the same loader rather than
+      // depending on a possibly stale dist/codex-agent bundle.
+      const tsxLoader = fileURLToPath(import.meta.resolve("tsx"));
+      return ["--import", tsxLoader, path.resolve(here, "../../codex-agent/index.ts")];
+    }
+    return [path.resolve(here, "../codex-agent/index.js")];
+  }
 
-    const saved = readSavedSession();
+  function minimalCodexEnv(cwd: string): NodeJS.ProcessEnv {
+    return codexChildEnv({
+      TANDEM_CODEX_CWD: cwd,
+      TANDEM_URL: process.env.TANDEM_URL ?? `http://127.0.0.1:${opts.mcpPort ?? DEFAULT_MCP_PORT}`,
+      TANDEM_CODEX_WORKER_TOKEN: getCodexApprovalBroker().workerToken,
+      TANDEM_CODEX_STATE_PATH: path.join(opts.integrationsBase, "codex-agent-state.json"),
+    });
+  }
+
+  // NOTE: #1265's local `buildClaudeArgs` is deliberately NOT carried across
+  // this rebase. #1267 replaced it with a module-scope, exported version that
+  // emits the full stream-json flag vector (`CLAUDE_STREAM_JSON_FLAGS`) and is
+  // pinned by the stub-CLI harness. Keeping this copy would have silently
+  // reverted the launcher to the pre-#1267 argument shape.
+
+  /**
+   * How `relaunch` / `startFresh` — the two entry points a *user* drives — react
+   * to a plan that could not be built. Their routes translate a resolved
+   * promise into `{ ok: true }`, so a quiet return told the user their relaunch
+   * had worked while nothing was spawned.
+   *
+   * Only `workspace-required` throws. `no-integration` stays a silent no-op
+   * because it is the ordinary pre-setup state, and because `startFresh`'s
+   * other job — clearing the saved session — is genuinely done by the time we
+   * get here; the callers that exercise that path with nothing configured are
+   * relying on it. `workspace-required` is different in kind: an assistant IS
+   * configured, the user asked to launch it, and it cannot be launched until
+   * they set a working directory. `lastError` is set alongside the throw so
+   * `GET /status` agrees with the failed response instead of reporting a bare
+   * not-running.
+   */
+  function planFailureError(reason: PlanFailure): Error | null {
+    if (reason !== "workspace-required") return null;
+    lastError = "workspace-required";
+    return new Error("Codex requires an explicit working directory before it can be launched");
+  }
+
+  async function buildPlan(cwdOverride?: string): Promise<PlanResult> {
+    const integration = await readIntegration();
+    if (!integration) return { ok: false, reason: "no-integration" };
+
+    const cwd = resolveCwd(integration, cwdOverride);
+    if (!cwd) {
+      console.error("[Launcher] Codex requires an explicit working directory");
+      return { ok: false, reason: "workspace-required" };
+    }
+
+    const saved = integration.kind === "claude-code" ? readSavedSession() : undefined;
     const sessionId = saved ?? randomUUID();
     const resuming = !!saved;
 
     return {
-      integration,
-      cwd: resolveCwd(integration, cwdOverride),
-      sessionId,
-      resuming,
+      ok: true,
+      plan: {
+        integration,
+        provider: integration.kind,
+        cwd,
+        sessionId,
+        resuming,
+      },
     };
   }
 
@@ -450,13 +563,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (child) throw new Error("Supervisor already running — call stop() first");
 
     const reaper = reaperPath();
-    const claudeBin = claudeCommand();
-    const claudeArgs = buildClaudeArgs(plan);
-
-    const reaperArgs = [String(process.pid), claudeBin, ...claudeArgs];
+    const targetCommand = plan.provider === "codex" ? process.execPath : claudeCommand();
+    const targetArgs = plan.provider === "codex" ? codexWorkerArgs() : buildClaudeArgs(plan);
+    const reaperArgs = [String(process.pid), targetCommand, ...targetArgs];
 
     console.error(
-      `[Launcher] Spawning Claude via reaper. cwd=${plan.cwd} session=${plan.sessionId} resuming=${plan.resuming}`,
+      `[Launcher] Spawning ${plan.provider} via reaper. cwd=${plan.cwd} resuming=${plan.resuming}`,
     );
 
     // Every handler below closes over `spawned`, never the mutable module-level
@@ -467,7 +579,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const spawned = spawn(reaper, reaperArgs, {
       cwd: plan.cwd,
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      env: plan.provider === "codex" ? minimalCodexEnv(plan.cwd) : process.env,
       windowsHide: true,
     });
     child = spawned;
@@ -480,11 +592,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentCwd = plan.cwd;
     currentSessionId = plan.sessionId;
     currentResuming = plan.resuming;
+    currentProvider = plan.provider;
 
     // Persist the session id on first successful spawn. We mark it as
     // "current" immediately; if Claude crashes during the resume window we'll
     // drop it in the exit handler.
-    if (!plan.resuming) {
+    if (plan.provider === "claude-code" && !plan.resuming) {
       writeSavedSession(plan.sessionId);
     }
 
@@ -596,7 +709,24 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       if (!sendTurn(SUPERVISOR_WAKE_PROMPT)) pendingWake = true;
     }
 
-    const unsubscribeFromEvents = subscribeToEvents(onTandemEvent);
+    /**
+     * Whether this spawn speaks Claude's `stream-json` protocol.
+     *
+     * Turn delivery is that protocol specifically — a newline-framed
+     * `{"type":"user",...}` envelope on stdin, and a `{"type":"result"}` line
+     * on stdout as the idleness signal. The Codex worker speaks JSON-RPC over
+     * the same pipes, so every part of the mechanism has to be gated here:
+     * subscribing would write Claude-shaped user turns into a foreign process's
+     * stdin, and its stdout would never produce a `result`, so `turnInFlight`
+     * would latch on the first wake until the 10-minute breaker — every time.
+     *
+     * Writing to Codex is inert *today* only because `codex-agent/index.ts`
+     * never reads stdin. That is a property of the worker, not a contract, and
+     * it is not the kind of thing to leave a correctness argument resting on.
+     */
+    const deliversTurns = plan.provider === "claude-code";
+
+    const unsubscribeFromEvents = deliversTurns ? subscribeToEvents(onTandemEvent) : () => {};
 
     /**
      * Detach this spawn's event subscription and kill its latch timer.
@@ -642,15 +772,19 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // wakes on the next piece of Tandem activity. That is the whole reason the
     // resume path is not inert: before this subscription existed it depended on
     // channel push, which finding 2 of the spike shows does not arrive.
-    if (!plan.resuming) {
-      // The bootstrap prompt already tells Claude to call `tandem_checkInbox`,
-      // which surfaces anything that accumulated while nothing was listening —
-      // so it discharges any owed wake by itself.
-      sendTurn(SUPERVISOR_INITIAL_PROMPT);
-      wakeOwedAcrossSpawns = false;
-    } else if (wakeOwedAcrossSpawns) {
-      if (sendTurn(SUPERVISOR_WAKE_PROMPT)) wakeOwedAcrossSpawns = false;
+    if (deliversTurns) {
+      if (!plan.resuming) {
+        // The bootstrap prompt already tells Claude to call
+        // `tandem_checkInbox`, which surfaces anything that accumulated while
+        // nothing was listening — so it discharges any owed wake by itself.
+        sendTurn(SUPERVISOR_INITIAL_PROMPT);
+        wakeOwedAcrossSpawns = false;
+      } else if (wakeOwedAcrossSpawns) {
+        if (sendTurn(SUPERVISOR_WAKE_PROMPT)) wakeOwedAcrossSpawns = false;
+      }
     }
+    // A Codex spawn deliberately leaves `wakeOwedAcrossSpawns` set: the wake is
+    // owed to a Claude session, and a Codex process cannot discharge it.
 
     function handleStdoutLine(line: string): void {
       const trimmed = line.trim();
@@ -662,11 +796,15 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // handler below already logs verbatim. Re-logging it here would double
       // every message.
       //
-      // This parser speaks Claude's stream-json envelope specifically. The
-      // supervisor only spawns Claude today, so no provider guard is needed
-      // here -- but one MUST be added back the moment a second provider can
-      // reach this handler, or we would write a Claude-shaped user turn into
-      // a foreign process's stdin.
+      // This parser speaks Claude's stream-json envelope specifically, so a
+      // non-Claude provider must not reach it. The Codex worker emits JSON-RPC
+      // — which also starts with `{` — so the cheap structural check below is
+      // NOT a provider guard; it would happily parse a JSON-RPC frame and read
+      // Claude's fields off it. Drain and log instead.
+      if (!deliversTurns) {
+        console.error(`[${plan.provider}] ${trimmed}`);
+        return;
+      }
       if (!trimmed.startsWith("{")) return;
 
       let parsed: { type?: string; subtype?: string; is_error?: boolean; errors?: string[] };
@@ -751,6 +889,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         currentCwd = undefined;
         currentSessionId = undefined;
         currentResuming = false;
+        currentProvider = undefined;
       }
       if (err.code === "ENOENT") {
         lastError = "binary-not-found";
@@ -770,7 +909,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       const ranFor = Date.now() - spawnedAt;
       console.error(`[Launcher] Reaper exited (code=${code} signal=${signal} after ${ranFor}ms)`);
       // Identity-guarded for the same reason as the error handler above.
-      if (child === spawned) child = null;
+      if (child === spawned) {
+        child = null;
+        currentProvider = undefined;
+      }
 
       // Cancel the confirmation timer — the process has already exited.
       if (confirmTimer) {
@@ -784,7 +926,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // The old ranFor < RESUME_GRACE_MS guard was broken because claude --resume
       // takes ~6 s to detect a missing conversation — longer than RESUME_GRACE_MS
       // was set (5 s), so the session was never cleared (issue #1169).
-      if (shouldClearSession({ resuming: plan.resuming, code, resumeConfirmed })) {
+      if (
+        plan.provider === "claude-code" &&
+        shouldClearSession({ resuming: plan.resuming, code, resumeConfirmed })
+      ) {
         console.error("[Launcher] Resume failed before confirmation — clearing saved session");
         clearSavedSession();
       }
@@ -870,11 +1015,18 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     if (child) return;
     if (breakerTripped) return;
     stopRequested = false;
-    const plan = await buildPlan();
-    if (!plan) {
-      console.error("[Launcher] No claude-code integration with apply != skip — skipping");
+    const built = await buildPlan();
+    if (!built.ok) {
+      // No throw here: `startInternal` also runs from `scheduleRestart` and from
+      // boot, where nobody is waiting on a promise. `lastError` is the only
+      // channel back to the user, and only `workspace-required` earns one —
+      // "nothing configured yet" is the ordinary first-run state, and reporting
+      // it as an error would light up the status pill on every fresh install.
+      if (built.reason === "workspace-required") lastError = "workspace-required";
+      console.error(`[Launcher] Cannot build a spawn plan (${built.reason}) — skipping`);
       return;
     }
+    const plan = built.plan;
     // `buildPlan` yields, and `scheduleRestart` calls this function WITHOUT the
     // op lock — so a user `stop()` can complete during that await. It takes the
     // lock, finds `child` already null, and resolves successfully. Without this
@@ -912,9 +1064,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // new spawn, or the exit handler treats the *next* crash as a deliberate
       // stop and silently declines to restart — the supervisor stays dead.
       stopRequested = false;
-      const plan = await buildPlan(newCwd);
-      if (!plan) return;
-      await spawnOnce(plan);
+      const built = await buildPlan(newCwd);
+      if (!built.ok) {
+        const err = planFailureError(built.reason);
+        if (err) throw err;
+        return;
+      }
+      await spawnOnce(built.plan);
     });
   }
 
@@ -985,6 +1141,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     currentCwd = undefined;
     currentSessionId = undefined;
     currentResuming = false;
+    currentProvider = undefined;
   }
 
   async function stop(): Promise<void> {
@@ -1000,9 +1157,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // See relaunch(): stopInternal() set stopRequested, and leaving it set
       // would disarm the auto-restart for the whole life of the new spawn.
       stopRequested = false;
-      const plan = await buildPlan(cwdOverride);
-      if (!plan) return;
-      await spawnOnce(plan);
+      const built = await buildPlan(cwdOverride);
+      if (!built.ok) {
+        const err = planFailureError(built.reason);
+        if (err) throw err;
+        return;
+      }
+      await spawnOnce(built.plan);
     });
   }
 
@@ -1012,7 +1173,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       !child.killed &&
       child.pid !== undefined &&
       currentCwd !== undefined &&
-      currentSessionId !== undefined
+      currentSessionId !== undefined &&
+      currentProvider !== undefined
     ) {
       return {
         running: true,
@@ -1020,6 +1182,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         cwd: currentCwd,
         sessionId: currentSessionId,
         resuming: currentResuming,
+        provider: currentProvider,
       };
     }
     return lastError ? { running: false, lastError } : { running: false };

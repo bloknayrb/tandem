@@ -195,8 +195,135 @@ describe("migrateUp", () => {
     });
   });
 
+  describe("v3 → v4", () => {
+    it("preserves an existing launch-capable primary", () => {
+      const v3 = {
+        schemaVersion: 3,
+        integrations: [
+          {
+            kind: "claude-code",
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+            apply: "create",
+          },
+        ],
+        defaultIntegrationId: "cc-1",
+      };
+
+      expect(migrateUp(v3, 3, 4)).toEqual({ ...v3, schemaVersion: 4 });
+    });
+
+    it("backfills the first usable Claude Code integration as primary", () => {
+      const v3 = {
+        schemaVersion: 3,
+        integrations: [
+          {
+            kind: "claude-desktop",
+            id: "desktop-1",
+            label: "Claude Desktop",
+            configPath: "/home/user/.config/Claude/config.json",
+            transport: "stdio",
+            apply: "create",
+          },
+          {
+            kind: "claude-code",
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+            apply: "create",
+          },
+        ],
+      };
+
+      const out = migrateUp(v3, 3, 4) as { defaultIntegrationId?: string };
+      expect(out.defaultIntegrationId).toBe("cc-1");
+    });
+
+    it("clears a non-launch-capable legacy primary when no Claude Code entry exists", () => {
+      const v3 = {
+        schemaVersion: 3,
+        integrations: [
+          {
+            kind: "claude-desktop",
+            id: "desktop-1",
+            label: "Claude Desktop",
+            configPath: "/home/user/.config/Claude/config.json",
+            transport: "stdio",
+            apply: "create",
+          },
+        ],
+        defaultIntegrationId: "desktop-1",
+      };
+
+      const out = migrateUp(v3, 3, 4) as Record<string, unknown>;
+      expect("defaultIntegrationId" in out).toBe(false);
+    });
+
+    it("does not preserve a claude-code primary whose apply is 'skip' — promotes another usable claude-code entry instead", () => {
+      // cc-1 IS `kind: "claude-code"`, so a check that only tested
+      // `currentPrimary?.kind === "claude-code"` (dropping the `apply !==
+      // "skip"` half) would wrongly keep it as primary. Pairing this against
+      // the "clears..." test below (same cc-1, but with vs without a
+      // fallback candidate) isolates that the `apply !== "skip"` condition
+      // is what's actually gating the decision.
+      const v3 = {
+        schemaVersion: 3,
+        integrations: [
+          {
+            kind: "claude-code",
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+            apply: "skip",
+          },
+          {
+            kind: "claude-code",
+            id: "cc-2",
+            label: "Claude Code (second)",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+            apply: "create",
+          },
+        ],
+        defaultIntegrationId: "cc-1",
+      };
+
+      const out = migrateUp(v3, 3, 4) as { defaultIntegrationId?: string };
+      expect(out.defaultIntegrationId).toBe("cc-2");
+    });
+
+    it("clears defaultIntegrationId when the only claude-code entry has apply: 'skip'", () => {
+      const v3 = {
+        schemaVersion: 3,
+        integrations: [
+          {
+            kind: "claude-code",
+            id: "cc-1",
+            label: "Claude Code",
+            configPath: "/home/user/.claude.json",
+            transport: "http",
+            url: "http://127.0.0.1:3479",
+            apply: "skip",
+          },
+        ],
+        defaultIntegrationId: "cc-1",
+      };
+
+      const out = migrateUp(v3, 3, 4) as Record<string, unknown>;
+      expect("defaultIntegrationId" in out).toBe(false);
+    });
+  });
+
   describe("chained migrations", () => {
-    it("v1 → v3 stamps apply per kind via the full chain", () => {
+    it("v1 → current stamps apply and backfills primary via the full chain", () => {
       const v1 = {
         schemaVersion: 1,
         integrations: [
@@ -210,12 +337,14 @@ describe("migrateUp", () => {
           },
         ],
       };
-      const out = migrateUp(v1, 1, 3) as {
+      const out = migrateUp(v1, 1, INTEGRATIONS_SCHEMA_VERSION) as {
         schemaVersion: number;
         integrations: Array<{ apply?: string }>;
+        defaultIntegrationId?: string;
       };
-      expect(out.schemaVersion).toBe(3);
+      expect(out.schemaVersion).toBe(INTEGRATIONS_SCHEMA_VERSION);
       expect(out.integrations[0]?.apply).toBe("create");
+      expect(out.defaultIntegrationId).toBe("cc-1");
     });
   });
 });

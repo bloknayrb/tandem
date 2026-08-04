@@ -32,7 +32,23 @@ jobs:
       - name: Create stubs for tauri_build resource checks
         shell: bash
         run: |
-          mkdir -p src-tauri/binaries dist/channel dist/server dist/client
+          # Derived from tauri.conf.json, not hardcoded. tauri_build::build()
+          # validates every declared resource, so a literal list here silently
+          # drifts the moment a new one is added -- and the build then dies with
+          # a bare "resource path ... doesn't exist" that reads like a code bug
+          # rather than a missing stub. Resource paths are relative to src-tauri/,
+          # hence the ../ strip. Directory-shaped entries (trailing /) are created
+          # empty; file-shaped ones are only touched when absent, so repo-tracked
+          # resources like CHANGELOG.md are never clobbered.
+          mkdir -p src-tauri/binaries
+          jq -r '.bundle.resources | keys[]' src-tauri/tauri.conf.json \
+            | sed 's|^\.\./||' \
+            | while read -r res; do
+                case "$res" in
+                  */) mkdir -p "$res" ;;
+                  *)  mkdir -p "$(dirname "$res")"; [ -e "$res" ] || touch "$res" ;;
+                esac
+              done
           TRIPLE="$(rustc -Vv | grep '^host' | cut -d' ' -f2)"
           touch "src-tauri/binaries/node-sidecar-${TRIPLE}"
           touch "src-tauri/binaries/node-sidecar-${TRIPLE}.exe"

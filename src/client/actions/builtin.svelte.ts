@@ -628,7 +628,7 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
   const result = await fetchLauncherStatus();
   if (!result.ok) {
     if (result.kind === "not-built") {
-      d.notify("warning", "Claude launcher not active in this Tandem build.");
+      d.notify("warning", "Assistant launcher not active in this Tandem build.");
     } else if (result.kind === "network") {
       d.notify("error", `Cannot reach Tandem server${result.detail ? `: ${result.detail}` : ""}.`);
     } else {
@@ -646,10 +646,10 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
     // yet. Showing the window is what releases it, and the user is by
     // definition looking at the window to have run this command.
     if (isTransientlyUnavailable(status.reason)) {
-      d.notify("info", "Claude is starting up — try again in a moment.");
+      d.notify("info", "Your assistant is starting up — try again in a moment.");
       return false;
     }
-    d.notify("warning", "Claude launcher not active in this Tandem build.");
+    d.notify("warning", "Assistant launcher not active in this Tandem build.");
     return false;
   }
   // Side-channel: surface bundled-skill refresh failures to the user. The
@@ -670,11 +670,14 @@ async function relaunchHere(d: ActionDeps): Promise<void> {
   if (!cwd) {
     d.notify(
       "warning",
-      "Active document isn't saved to a folder. Set a working directory in Settings → Claude Code.",
+      "Active document isn't saved to a folder. Set a working directory in Settings → AI Assistants.",
     );
     return;
   }
-  if (!confirm(`Restart Claude in:\n${cwd}\n\nYour current task may be interrupted.`)) return;
+  if (
+    !confirm(`Restart the managed assistant in:\n${cwd}\n\nYour current task may be interrupted.`)
+  )
+    return;
   launcherInflight = true;
   try {
     await postLauncherMutation(
@@ -684,7 +687,7 @@ async function relaunchHere(d: ActionDeps): Promise<void> {
       {
         failPrefix: "Relaunch failed",
         requestFailPrefix: "Relaunch request failed",
-        successMessage: `Claude restarting in ${cwd}.`,
+        successMessage: `Assistant restarting in ${cwd}.`,
       },
     );
   } finally {
@@ -709,7 +712,7 @@ export function startFreshClaudeCode(): void {
 
 async function startFreshConversation(d: ActionDeps): Promise<void> {
   if (!(await checkLauncherAvailable(d))) return;
-  if (!confirm("Drop Claude's saved conversation and restart fresh. This cannot be undone.")) {
+  if (!confirm("Drop the saved assistant conversation and restart fresh. This cannot be undone.")) {
     return;
   }
   launcherInflight = true;
@@ -721,7 +724,7 @@ async function startFreshConversation(d: ActionDeps): Promise<void> {
       {
         failPrefix: "Start fresh failed",
         requestFailPrefix: "Start-fresh request failed",
-        successMessage: "Claude restarting with a fresh conversation.",
+        successMessage: "Assistant restarting with a fresh conversation.",
       },
     );
   } finally {
@@ -1069,7 +1072,7 @@ const BUILTINS: Action[] = [
   },
   {
     id: "launcher-relaunch-here",
-    label: "Relaunch Claude in this folder",
+    label: "Relaunch assistant in this folder",
     group: "claude",
     run() {
       guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d));
@@ -1077,7 +1080,7 @@ const BUILTINS: Action[] = [
   },
   {
     id: "launcher-start-fresh",
-    label: "Start fresh Claude conversation",
+    label: "Start fresh assistant conversation",
     group: "claude",
     run() {
       guardedRun("launcher-start-fresh", (d) => void startFreshConversation(d));

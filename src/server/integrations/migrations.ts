@@ -14,7 +14,11 @@
  * we can revisit.
  */
 
-import { IntegrationsFileV1Schema, IntegrationsFileV2Schema } from "./schema.js";
+import {
+  IntegrationsFileV1Schema,
+  IntegrationsFileV2Schema,
+  IntegrationsFileV3Schema,
+} from "./schema.js";
 
 export type MigrationFn = (input: unknown) => unknown;
 
@@ -61,11 +65,33 @@ const migrateV2ToV3: MigrationFn = (input) => {
 };
 
 /**
+ * v3 → v4: preserve the existing primary when it is launch-capable, or
+ * deterministically select the first usable Claude Code entry. Codex did not
+ * exist in v3, so this keeps upgrades on their current provider.
+ */
+const migrateV3ToV4: MigrationFn = (input) => {
+  const parsed = IntegrationsFileV3Schema.parse(input);
+  const currentPrimary = parsed.integrations.find(
+    (entry) => entry.id === parsed.defaultIntegrationId,
+  );
+  const primary =
+    currentPrimary?.kind === "claude-code" && currentPrimary.apply !== "skip"
+      ? currentPrimary
+      : parsed.integrations.find((entry) => entry.kind === "claude-code" && entry.apply !== "skip");
+
+  return {
+    schemaVersion: 4,
+    integrations: parsed.integrations,
+    ...(primary ? { defaultIntegrationId: primary.id } : {}),
+  };
+};
+
+/**
  * Ordered migration chain. `migrations[i]` migrates v(i+1) → v(i+2).
  * Module-local — exposed only via `migrateUp` so external code cannot
  * inject a migration at runtime.
  */
-const migrations: ReadonlyArray<MigrationFn> = [migrateV1ToV2, migrateV2ToV3];
+const migrations: ReadonlyArray<MigrationFn> = [migrateV1ToV2, migrateV2ToV3, migrateV3ToV4];
 
 /**
  * Run the migration chain forward from `fromVersion` to `toVersion`. The

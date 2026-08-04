@@ -1,6 +1,16 @@
 /**
- * One-click "Install Claude Code" runner — the ONLY module that downloads and
- * executes the official native installer.
+ * One-click "Install <assistant> CLI" runner — the ONLY module that downloads
+ * and executes an official native installer.
+ *
+ * Originally Claude-only; the Codex twin (`install-codex-cli.ts`) was a
+ * copy-paste of this module that had drifted, and has been folded back in.
+ * Everything provider-specific lives in {@link CliInstallerSpec} / the
+ * {@link CLI_INSTALLERS} table: pinned hosts, install URLs, temp-file prefix,
+ * detector, error class, the per-platform env **key list**, and the **base env
+ * object** (Claude's installer wants `CI=1`; Codex's wants
+ * `CODEX_NON_INTERACTIVE=1`). Everything else below is shared and must stay
+ * byte-for-byte equivalent for Claude — this file's hardening is the reason
+ * the merge went this direction rather than the other.
  *
  * Security contract (folded in from the security-reviewer pass on the plan):
  * - **Never `| bash` / `| iex`.** That needs `shell: true`, which violates
@@ -16,7 +26,8 @@
  *   wire-fetched script the server's full environment incl. the MCP auth
  *   token, which a hostile/verbose script could echo into `stderrTail`. We
  *   pass only what the installer needs (PATH/HOME or PATH/USERPROFILE/
- *   SystemRoot) plus `CI=1` to suppress interactive prompts.
+ *   SystemRoot) plus the provider's non-interactive flag (`CI=1` for Claude)
+ *   to suppress interactive prompts.
  * - **TOCTOU-locked temp file (S2/F3).** POSIX: `mkdtemp` (0700) + write 0600.
  *   Windows: `0o600` is a no-op, so lock the *directory* ACL + self-verify
  *   BEFORE writing the `.ps1`, then re-verify the *file* too (acl-win doctrine:
@@ -41,7 +52,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import type { ClaudeCliPresence } from "../../shared/integrations/contract.js";
+import type { ClaudeCliPresence, CodexCliPresence } from "../../shared/integrations/contract.js";
+import {
+  type CliProvider,
+  detectCodexCli as detectCodexCliDefault,
+} from "../../shared/integrations/detect-claude-cli.js";
 import {
   assertNoBroadAce as assertNoBroadAceDefault,
   setRestrictiveAcl as setRestrictiveAclDefault,
@@ -50,21 +65,20 @@ import { detectClaudeCli as detectClaudeCliDefault } from "./apply.js";
 
 const execFileAsyncDefault = promisify(execFile);
 
-/** Apex of the pinned installer domain. */
-const INSTALLER_HOST = "claude.ai";
-const INSTALLER_URL_POSIX = "https://claude.ai/install.sh";
-const INSTALLER_URL_WIN = "https://claude.ai/install.ps1";
+/** Apexes of the pinned installer domains, per provider. */
+const CLAUDE_INSTALLER_HOSTS = ["claude.ai"] as const;
+const CODEX_INSTALLER_HOSTS = ["chatgpt.com", "openai.com"] as const;
 
 /**
- * Accept the apex AND any `*.claude.ai` subdomain. The official installer
+ * Accept a pinned apex AND any subdomain of it. The official Claude installer
  * 302-redirects `https://claude.ai/install.{sh,ps1}` →
  * `https://downloads.claude.ai/claude-code-releases/bootstrap.{sh,ps1}`, so an
  * exact-apex pin would reject the real download host. The leading-dot suffix
  * check means `evilclaude.ai` / `claude.ai.evil.com` do NOT match (the former
  * lacks the `.claude.ai` suffix; the latter's hostname ends in `.evil.com`).
  */
-function isPinnedHost(hostname: string): boolean {
-  return hostname === INSTALLER_HOST || hostname.endsWith(`.${INSTALLER_HOST}`);
+function isPinnedHost(hostname: string, hosts: readonly string[]): boolean {
+  return hosts.some((host) => hostname === host || hostname.endsWith(`.${host}`));
 }
 /** Streamed-byte cap. Aborts mid-response; does not trust Content-Length. */
 const MAX_SCRIPT_BYTES = 10 * 1024 * 1024;
@@ -90,30 +104,56 @@ const EXEC_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
 /** Thrown when the host OS isn't one the native installer supports. */
 export class UnsupportedPlatformError extends Error {
-  constructor(platform: string) {
-    super(`Claude installer does not support platform: ${platform}`);
+  constructor(platform: string, providerLabel = "Claude") {
+    super(`${providerLabel} installer does not support platform: ${platform}`);
     this.name = "UnsupportedPlatformError";
   }
 }
 
-/** Thrown when the installer exits non-zero or the interpreter fails to spawn. */
-export class ClaudeInstallError extends Error {
+/**
+ * Thrown when an installer exits non-zero or the interpreter fails to spawn.
+ * The per-provider subclasses below exist so `instanceof` still discriminates
+ * at call sites that care which installer failed; route handlers that don't
+ * care catch this base class.
+ */
+export class CliInstallError extends Error {
   /** Process exit code, or null for spawn failures / timeouts (no exit code). */
   readonly exitCode: number | null;
   /** Last {@link STDERR_TAIL_CHARS} of stderr, temp-path-scrubbed. */
   readonly stderrTail: string;
 
-  constructor(exitCode: number | null, stderrTail: string) {
-    super(`Claude installer failed (exit ${exitCode ?? "null"})`);
-    this.name = "ClaudeInstallError";
+  constructor(providerLabel: string, exitCode: number | null, stderrTail: string) {
+    super(`${providerLabel} installer failed (exit ${exitCode ?? "null"})`);
+    this.name = "CliInstallError";
     this.exitCode = exitCode;
     this.stderrTail = stderrTail;
+  }
+}
+
+export class ClaudeInstallError extends CliInstallError {
+  constructor(exitCode: number | null, stderrTail: string) {
+    super("Claude", exitCode, stderrTail);
+    this.name = "ClaudeInstallError";
+  }
+}
+
+/** Re-homed from the deleted `install-codex-cli.ts`. */
+export class CodexInstallError extends CliInstallError {
+  constructor(exitCode: number | null, stderrTail: string) {
+    super("Codex", exitCode, stderrTail);
+    this.name = "CodexInstallError";
   }
 }
 
 export interface FetchInstallerScriptOptions {
   httpsGet?: typeof httpsGetDefault;
   maxRedirects?: number;
+  /**
+   * Apexes the fetch is pinned to (apex or any subdomain). Defaults to
+   * Claude's — the parameter exists so the Codex installer shares this
+   * hardened fetch rather than carrying its own copy.
+   */
+  pinnedHosts?: readonly string[];
 }
 
 /**
@@ -128,6 +168,7 @@ export function fetchInstallerScript(
 ): Promise<string> {
   const httpsGet = opts.httpsGet ?? httpsGetDefault;
   const maxRedirects = opts.maxRedirects ?? MAX_REDIRECTS;
+  const pinnedHosts = opts.pinnedHosts ?? CLAUDE_INSTALLER_HOSTS;
 
   return new Promise<string>((resolve, reject) => {
     // Per-hop F2 scheme+host gate. The redirect recursion below re-enters this
@@ -141,10 +182,10 @@ export function fetchInstallerScript(
       reject(err);
       return;
     }
-    if (parsed.protocol !== "https:" || !isPinnedHost(parsed.hostname)) {
+    if (parsed.protocol !== "https:" || !isPinnedHost(parsed.hostname, pinnedHosts)) {
       reject(
         new Error(
-          `Installer URL must be https://(*.)${INSTALLER_HOST}/… — refusing ${parsed.protocol}//${parsed.hostname}`,
+          `Installer URL must be https://(*.){${pinnedHosts.join("|")}}/… — refusing ${parsed.protocol}//${parsed.hostname}`,
         ),
       );
       return;
@@ -182,16 +223,17 @@ export function fetchInstallerScript(
           reject(err);
           return;
         }
-        fetchInstallerScript(next, { httpsGet, maxRedirects: maxRedirects - 1 }).then(
-          resolve,
-          reject,
-        );
+        fetchInstallerScript(next, {
+          httpsGet,
+          maxRedirects: maxRedirects - 1,
+          pinnedHosts,
+        }).then(resolve, reject);
         return;
       }
 
       if (status !== 200) {
         res.resume();
-        reject(new Error(`Installer fetch: unexpected status ${status} from ${INSTALLER_HOST}`));
+        reject(new Error(`Installer fetch: unexpected status ${status} from ${parsed.hostname}`));
         return;
       }
 
@@ -219,15 +261,84 @@ export function fetchInstallerScript(
   });
 }
 
-export interface InstallClaudeCliDeps {
+/**
+ * Everything that differs between the providers' installers. Adding a provider
+ * means adding a row to {@link CLI_INSTALLERS} — never forking this module
+ * again.
+ */
+interface CliInstallerSpec {
+  /** Human-readable provider name, used in error messages. */
+  label: string;
+  /** Apexes the script fetch is pinned to (apex or any subdomain). */
+  pinnedHosts: readonly string[];
+  urlWin: string;
+  urlPosix: string;
+  /** `mkdtemp` prefix — distinct per provider so concurrent installs can't collide. */
+  tempPrefix: string;
+  /** Presence probe, run before (idempotency) and after (result) the install. */
+  detect: () => ClaudeCliPresence;
+  /**
+   * Base env handed to the interpreter, BEFORE the allowlisted keys are copied
+   * in. This is the provider's non-interactive flag, and it is deliberately
+   * part of the spec rather than hardcoded — Claude's installer keys off `CI`,
+   * Codex's off `CODEX_NON_INTERACTIVE`.
+   */
+  baseEnv: NodeJS.ProcessEnv;
+  /**
+   * `process.env` keys copied through, per platform. Codex's win32 list must
+   * keep `LOCALAPPDATA`: its installer targets
+   * `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` and the detector reads the same
+   * var, so dropping it makes the closing `detect()` report NOT_INSTALLED
+   * after a *successful* install.
+   */
+  envKeys: { win32: readonly string[]; posix: readonly string[] };
+  makeError: (exitCode: number | null, stderrTail: string) => CliInstallError;
+}
+
+const CLI_INSTALLERS: Record<CliProvider, CliInstallerSpec> = {
+  claude: {
+    label: "Claude",
+    pinnedHosts: CLAUDE_INSTALLER_HOSTS,
+    urlWin: "https://claude.ai/install.ps1",
+    urlPosix: "https://claude.ai/install.sh",
+    tempPrefix: "tandem-claude-install-",
+    detect: () => detectClaudeCliDefault(),
+    baseEnv: { CI: "1" },
+    envKeys: { win32: ["PATH", "USERPROFILE", "SystemRoot"], posix: ["PATH", "HOME"] },
+    makeError: (exitCode, stderrTail) => new ClaudeInstallError(exitCode, stderrTail),
+  },
+  codex: {
+    label: "Codex",
+    pinnedHosts: CODEX_INSTALLER_HOSTS,
+    urlWin: "https://chatgpt.com/codex/install.ps1",
+    urlPosix: "https://chatgpt.com/codex/install.sh",
+    tempPrefix: "tandem-codex-install-",
+    detect: () => detectCodexCliDefault(),
+    baseEnv: { CODEX_NON_INTERACTIVE: "1" },
+    envKeys: {
+      win32: ["PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "SystemRoot"],
+      posix: ["PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "SystemRoot"],
+    },
+    makeError: (exitCode, stderrTail) => new CodexInstallError(exitCode, stderrTail),
+  },
+};
+
+export interface InstallCliDeps {
   /** Injected so tests assert argv without spawning a real interpreter. */
   execFileAsync?: typeof execFileAsyncDefault;
-  detectClaudeCli?: typeof detectClaudeCliDefault;
   /** Injected so tests never hit the real network. */
   fetchScript?: (url: string) => Promise<string>;
   /** Injected so tests don't invoke real icacls/PowerShell on Windows. */
   setRestrictiveAcl?: typeof setRestrictiveAclDefault;
   assertNoBroadAce?: typeof assertNoBroadAceDefault;
+}
+
+export interface InstallClaudeCliDeps extends InstallCliDeps {
+  detectClaudeCli?: typeof detectClaudeCliDefault;
+}
+
+export interface InstallCodexCliDeps extends InstallCliDeps {
+  detectCodexCli?: typeof detectCodexCliDefault;
 }
 
 interface ExecPlan {
@@ -236,9 +347,9 @@ interface ExecPlan {
   env: NodeJS.ProcessEnv;
 }
 
-/** Copy only the named env vars (if set), always adding `CI=1`. */
-function minimalEnv(keys: string[]): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { CI: "1" };
+/** Copy only the named env vars (if set) on top of the provider's base env. */
+function minimalEnv(baseEnv: NodeJS.ProcessEnv, keys: readonly string[]): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
   for (const key of keys) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
@@ -246,18 +357,33 @@ function minimalEnv(keys: string[]): NodeJS.ProcessEnv {
   return env;
 }
 
-function buildExecPlan(isWin: boolean, scriptPath: string): ExecPlan {
+function buildExecPlan(spec: CliInstallerSpec, isWin: boolean, scriptPath: string): ExecPlan {
   if (isWin) {
     return {
       interpreter: "pwsh.exe",
       args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-      env: minimalEnv(["PATH", "USERPROFILE", "SystemRoot"]),
+      env: minimalEnv(spec.baseEnv, spec.envKeys.win32),
     };
   }
   return {
     interpreter: "/bin/sh",
     args: [scriptPath],
-    env: minimalEnv(["PATH", "HOME"]),
+    env: minimalEnv(spec.baseEnv, spec.envKeys.posix),
+  };
+}
+
+/**
+ * `execFile` options shared by both the primary interpreter invocation and the
+ * Windows PowerShell 5.1 fallback. `windowsHide` suppresses the PowerShell
+ * console window that would otherwise flash on every Windows install — it was
+ * present only on the Codex copy before the merge, and applies to both.
+ */
+function execOptions(env: NodeJS.ProcessEnv) {
+  return {
+    timeout: EXEC_TIMEOUT_MS,
+    env,
+    maxBuffer: EXEC_MAX_BUFFER_BYTES,
+    windowsHide: true,
   };
 }
 
@@ -273,11 +399,7 @@ async function runInterpreter(
   isWin: boolean,
 ): Promise<void> {
   try {
-    await execFileAsync(plan.interpreter, plan.args, {
-      timeout: EXEC_TIMEOUT_MS,
-      env: plan.env,
-      maxBuffer: EXEC_MAX_BUFFER_BYTES,
-    });
+    await execFileAsync(plan.interpreter, plan.args, execOptions(plan.env));
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (isWin && code === "ENOENT" && plan.interpreter === "pwsh.exe") {
@@ -288,11 +410,7 @@ async function runInterpreter(
         "v1.0",
         "powershell.exe",
       );
-      await execFileAsync(fallback, plan.args, {
-        timeout: EXEC_TIMEOUT_MS,
-        env: plan.env,
-        maxBuffer: EXEC_MAX_BUFFER_BYTES,
-      });
+      await execFileAsync(fallback, plan.args, execOptions(plan.env));
       return;
     }
     throw err;
@@ -300,12 +418,12 @@ async function runInterpreter(
 }
 
 /**
- * Map an `execFile` rejection to a `ClaudeInstallError`. The promisified
+ * Map an `execFile` rejection to the provider's install error. The promisified
  * `execFile` attaches `code` (numeric exit code, or a string errno like ENOENT
  * for spawn failures) and `stderr`. The temp dir is scrubbed from the tail in
  * case the script echoed `$0`.
  */
-function toClaudeInstallError(err: unknown, tmpDir: string): ClaudeInstallError {
+function toInstallError(spec: CliInstallerSpec, err: unknown, tmpDir: string): CliInstallError {
   const e = err as NodeJS.ErrnoException & { stderr?: unknown; code?: unknown };
   const exitCode = typeof e.code === "number" ? e.code : null;
   let stderr = typeof e.stderr === "string" ? e.stderr : (e.message ?? String(err));
@@ -313,7 +431,7 @@ function toClaudeInstallError(err: unknown, tmpDir: string): ClaudeInstallError 
   // Strip ANSI/control bytes BEFORE the tail-slice so the 500-char budget is
   // real text — PowerShell's Write-Error emits SGR color codes that would
   // otherwise render as literal `[31;1m…` junk in the wizard's error banner.
-  return new ClaudeInstallError(exitCode, sanitizeStderr(stderr).slice(-STDERR_TAIL_CHARS));
+  return spec.makeError(exitCode, sanitizeStderr(stderr).slice(-STDERR_TAIL_CHARS));
 }
 
 /**
@@ -334,29 +452,31 @@ function sanitizeStderr(s: string): string {
 }
 
 /**
- * Download + run the official native Claude Code installer, returning the
- * re-probed {@link ClaudeCliPresence} on success (usually
- * `INSTALLED_NOT_ON_PATH` — the binary lands in `~/.local/bin`, off the
- * server's PATH).
+ * Download + run a provider's official native installer, returning the
+ * re-probed presence on success (usually `INSTALLED_NOT_ON_PATH` — the binary
+ * lands in a standalone location off the server's PATH).
  *
- * Idempotent: if `detectClaudeCli()` already reports the CLI present, returns
- * that presence without touching the network or spawning anything.
+ * Idempotent: if the provider's detector already reports the CLI present,
+ * returns that presence without touching the network or spawning anything.
  *
  * @throws {UnsupportedPlatformError} on a non win32/darwin/linux host.
- * @throws {ClaudeInstallError} when the installer exits non-zero / fails to spawn.
+ * @throws {CliInstallError} when the installer exits non-zero / fails to spawn.
  */
-export async function installClaudeCli(
-  deps: InstallClaudeCliDeps = {},
+async function installCli(
+  spec: CliInstallerSpec,
+  deps: InstallCliDeps & { detect?: () => ClaudeCliPresence } = {},
 ): Promise<ClaudeCliPresence> {
   const execFileAsync = deps.execFileAsync ?? execFileAsyncDefault;
-  const detect = deps.detectClaudeCli ?? detectClaudeCliDefault;
-  const fetchScript = deps.fetchScript ?? ((url: string) => fetchInstallerScript(url));
+  const detect = deps.detect ?? spec.detect;
+  const fetchScript =
+    deps.fetchScript ??
+    ((url: string) => fetchInstallerScript(url, { pinnedHosts: spec.pinnedHosts }));
   const lockDirAcl = deps.setRestrictiveAcl ?? setRestrictiveAclDefault;
   const verifyNoBroadAce = deps.assertNoBroadAce ?? assertNoBroadAceDefault;
 
   const platform = process.platform;
   if (platform !== "win32" && platform !== "darwin" && platform !== "linux") {
-    throw new UnsupportedPlatformError(platform);
+    throw new UnsupportedPlatformError(platform, spec.label);
   }
 
   // Idempotency guard — never reinstall over an existing CLI.
@@ -365,22 +485,22 @@ export async function installClaudeCli(
 
   const isWin = platform === "win32";
   // Map fetch failures (timeout, byte-cap, redirect downgrade, non-200) to a
-  // ClaudeInstallError so the client gets an actionable tail instead of an
+  // CliInstallError so the client gets an actionable tail instead of an
   // opaque generic 500. These messages are path/secret-free (the temp dir
   // doesn't exist yet). The ACL/prep failures below deliberately do NOT get
   // this treatment — acl-win errors can embed the user's SID/username, which
   // must not reach the response; they stay on the generic sendInternal path.
   let script: string;
   try {
-    script = await fetchScript(isWin ? INSTALLER_URL_WIN : INSTALLER_URL_POSIX);
+    script = await fetchScript(isWin ? spec.urlWin : spec.urlPosix);
   } catch (err) {
-    throw new ClaudeInstallError(
+    throw spec.makeError(
       null,
       sanitizeStderr(err instanceof Error ? err.message : String(err)).slice(-STDERR_TAIL_CHARS),
     );
   }
 
-  const tmpDir = await mkdtemp(join(tmpdir(), "tandem-claude-install-"));
+  const tmpDir = await mkdtemp(join(tmpdir(), spec.tempPrefix));
   try {
     const scriptPath = join(tmpDir, isWin ? "install.ps1" : "install.sh");
 
@@ -399,11 +519,11 @@ export async function installClaudeCli(
       await writeFile(scriptPath, script, { encoding: "utf8", mode: 0o600 });
     }
 
-    const plan = buildExecPlan(isWin, scriptPath);
+    const plan = buildExecPlan(spec, isWin, scriptPath);
     try {
       await runInterpreter(execFileAsync, plan, isWin);
     } catch (err) {
-      throw toClaudeInstallError(err, tmpDir);
+      throw toInstallError(spec, err, tmpDir);
     }
 
     return detect();
@@ -415,7 +535,29 @@ export async function installClaudeCli(
     // script, 0700/user-only ACL, OS temp sweep — NOT the annotations-dir
     // reaper, which doesn't sweep this path).
     await rm(tmpDir, { recursive: true, force: true }).catch((err) => {
-      console.error("[Tandem] install: temp cleanup failed:", err);
+      console.error(`[Tandem] ${spec.label} install: temp cleanup failed:`, err);
     });
   }
+}
+
+/**
+ * Download + run the official native Claude Code installer. The binary lands
+ * in `~/.local/bin`, off the server's PATH, so the returned presence is
+ * usually `INSTALLED_NOT_ON_PATH`.
+ *
+ * @throws {UnsupportedPlatformError} on a non win32/darwin/linux host.
+ * @throws {ClaudeInstallError} when the installer exits non-zero / fails to spawn.
+ */
+export function installClaudeCli(deps: InstallClaudeCliDeps = {}): Promise<ClaudeCliPresence> {
+  return installCli(CLI_INSTALLERS.claude, { ...deps, detect: deps.detectClaudeCli });
+}
+
+/**
+ * Download + run the official native Codex CLI installer.
+ *
+ * @throws {UnsupportedPlatformError} on a non win32/darwin/linux host.
+ * @throws {CodexInstallError} when the installer exits non-zero / fails to spawn.
+ */
+export function installCodexCli(deps: InstallCodexCliDeps = {}): Promise<CodexCliPresence> {
+  return installCli(CLI_INSTALLERS.codex, { ...deps, detect: deps.detectCodexCli });
 }

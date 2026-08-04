@@ -279,6 +279,10 @@ export type TargetKind = "claude-code" | "claude-desktop";
 export interface DetectedTarget {
   label: string;
   configPath: string;
+  kind: TargetKind | "codex";
+}
+
+export interface ClaudeDetectedTarget extends DetectedTarget {
   kind: TargetKind;
 }
 
@@ -373,9 +377,9 @@ export interface DetectOptions {
   force?: boolean;
 }
 
-export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
+export function detectTargets(opts: DetectOptions = {}): ClaudeDetectedTarget[] {
   const home = opts.homeOverride ?? homedir();
-  const targets: DetectedTarget[] = [];
+  const targets: ClaudeDetectedTarget[] = [];
 
   // Claude Code — cross-platform.
   // MCP servers are configured in ~/.claude.json under the "mcpServers" key.

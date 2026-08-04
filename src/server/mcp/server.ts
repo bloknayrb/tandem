@@ -11,9 +11,14 @@ import type { Server } from "http";
 import { createRequire } from "module";
 
 import { API_HEALTH } from "../../shared/api-paths.js";
-import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runtime.js";
+import {
+  CLAUDE_SESSION_HEADER,
+  normalizeSessionId,
+  TANDEM_AGENT_PROVIDER_HEADER,
+} from "../../shared/cli-runtime.js";
 import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
-import { createAuthMiddleware } from "../auth/middleware.js";
+import type { AgentIdentity } from "../../shared/types.js";
+import { createAuthMiddleware, isLoopback } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
 import { getSubscriberCount } from "../events/queue.js";
@@ -168,6 +173,44 @@ function readClaudeSessionHeader(req: import("express").Request): string | undef
   return normalizeSessionId(req.headers[CLAUDE_SESSION_HEADER.toLowerCase()]);
 }
 
+/**
+ * Resolve the agent identity a session's annotations will be attributed to.
+ *
+ * The header's own doc comment calls it "validated ... forwarded only by
+ * Tandem's managed stdio bridge", and neither half was enforced: any value was
+ * silently ignored rather than rejected, and any client that could reach `/mcp`
+ * — including a LAN client under `TANDEM_BIND_HOST` — could assert it. The
+ * identity drives annotation authorship display, so an unenforced header is an
+ * attribution spoof: a LAN caller could publish annotations bylined "Codex".
+ *
+ * Loopback is the strongest transport-level proof available here (the bridge is
+ * a subprocess on the same host, and there is no shared secret distinguishing
+ * it from any other loopback client), so that is what is enforced. An
+ * unrecognized value is logged rather than dropped in silence — the previous
+ * behaviour made a typo'd provider indistinguishable from an absent header.
+ *
+ * Exported for test: the loopback gate is the whole security property, and it
+ * is unreachable through `createMcpExpressApp` without standing up a listener
+ * on a non-loopback interface.
+ */
+export function readAgentIdentityHeader(
+  req: Pick<import("express").Request, "headers" | "socket">,
+): AgentIdentity | undefined {
+  const raw = req.headers[TANDEM_AGENT_PROVIDER_HEADER.toLowerCase()];
+  if (raw === undefined) return undefined;
+  if (!isLoopback(req.socket?.remoteAddress)) {
+    console.error(
+      `[Tandem] Ignoring ${TANDEM_AGENT_PROVIDER_HEADER} from a non-loopback client — only Tandem's managed stdio bridge may assert an agent identity`,
+    );
+    return undefined;
+  }
+  if (raw === "openai") return { provider: "openai", displayName: "Codex" };
+  console.error(
+    `[Tandem] Ignoring unrecognized ${TANDEM_AGENT_PROVIDER_HEADER} value: ${JSON.stringify(raw)}`,
+  );
+  return undefined;
+}
+
 /** Send a JSON-RPC error response. */
 function sendJsonRpcError(
   res: import("express").Response,
@@ -198,6 +241,7 @@ async function openSession(
   registry: McpSessionRegistry<McpServer, StreamableHTTPServerTransport>,
   buildServer: () => McpServer,
   claudeSessionId: string | undefined,
+  agentIdentity: AgentIdentity | undefined,
   handshake: (transport: StreamableHTTPServerTransport) => Promise<void>,
 ): Promise<void> {
   const server = buildServer();
@@ -205,7 +249,7 @@ async function openSession(
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: async (sessionId) => {
-      await registry.add({ sessionId, server, transport, claudeSessionId });
+      await registry.add({ sessionId, server, transport, claudeSessionId, agentIdentity });
       console.error(
         `[Tandem] MCP session established: ${sessionId}` +
           `${claudeSessionId ? ` (claude session ${claudeSessionId})` : ""} — ${registry.size} live`,
@@ -412,7 +456,11 @@ export async function startMcpServerHttp(
     }
     registry.touch(entry.sessionId);
     await runWithMcpContext(
-      { claudeSessionId: entry.claudeSessionId, mcpSessionId: entry.sessionId },
+      {
+        claudeSessionId: entry.claudeSessionId,
+        mcpSessionId: entry.sessionId,
+        agentIdentity: entry.agentIdentity,
+      },
       () => entry.transport.handleRequest(req, res, body),
     );
     return entry;
@@ -425,11 +473,14 @@ export async function startMcpServerHttp(
 
     if (isInit) {
       const claudeSessionId = readClaudeSessionHeader(req);
+      const agentIdentity = readAgentIdentityHeader(req);
       try {
         // handleRequest is what mints the session id and fires
         // onsessioninitialized, so the registry entry appears during this call.
-        await openSession(registry, buildServer, claudeSessionId, (transport) =>
-          runWithMcpContext({ claudeSessionId }, () => transport.handleRequest(req, res, body)),
+        await openSession(registry, buildServer, claudeSessionId, agentIdentity, (transport) =>
+          runWithMcpContext({ claudeSessionId, agentIdentity }, () =>
+            transport.handleRequest(req, res, body),
+          ),
         );
       } catch (err) {
         console.error("[Tandem] Failed to create new MCP session:", err);
@@ -568,6 +619,9 @@ export async function startMcpServerHttp(
     readExisting: readExistingTandemEntries,
     serverVersion: APP_VERSION,
   });
+
+  const { registerCodexApprovalRoutes } = await import("../codex/approval-broker.js");
+  registerCodexApprovalRoutes(app, lanAwareApiMiddleware);
 
   // --- Auto-launcher endpoints (#477 PR 4b) ---
   // Status, single-use nonce, relaunch, start-fresh, and a narrow
