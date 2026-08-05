@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
@@ -44,6 +45,10 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
 /**
  * Isolated app-data dir, wiped in globalSetup.
  *
+ * Lives in the OS temp dir, NOT under the repo. Inside the working tree on
+ * Windows, the server's own doc-backup writes and the setup wipe both hit
+ * EPERM — the same reason the E2E harness keeps its app-data outside the repo.
+ *
  * The wipe is a correctness requirement, not hygiene. The fixture is
  * byte-identical across runs (seeded) while its path changes per run — exactly
  * the two preconditions for content-hash rename-recovery (#313/#318) to
@@ -51,7 +56,7 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
  * `scripts/e2e-server.mjs` avoids this by wiping at every server start; this
  * harness runs its own server and so does not inherit that.
  */
-const PERF_APP_DATA_DIR = path.join(REPO_ROOT, "tests", "perf", ".generated", "app-data");
+const PERF_APP_DATA_DIR = path.join(os.tmpdir(), "tandem-perf-data");
 
 /** Deliberately not 5173 — a running `npm run dev` must not be silently reused. */
 const PREVIEW_PORT = 4318;
@@ -76,6 +81,12 @@ for (const [label, p] of [
 
 export default defineConfig({
   testDir: "./",
+  // `testDir: "./"` makes Playwright walk this directory recursively looking
+  // for specs, and it walks straight into the generated fixture output —
+  // where, on Windows, a doc-backup subdirectory can be permission-denied and
+  // abort the whole run before a single test starts. Nothing under
+  // `.generated/` is ever a spec.
+  testIgnore: "**/.generated/**",
   globalSetup: "./global-setup.ts",
   fullyParallel: false,
   workers: 1,
@@ -95,12 +106,18 @@ export default defineConfig({
       url: `http://127.0.0.1:${PREVIEW_PORT}`,
       reuseExistingServer: false,
       timeout: 120_000,
+      // Playwright defaults webServer.cwd to the CONFIG file's directory, not
+      // the repo root. Without this, vite resolves `dist` against tests/perf/,
+      // fails to find it, and never reads vite.config.ts at all (so it would
+      // also miss `build.outDir: dist/client`).
+      cwd: REPO_ROOT,
     },
     {
       command: `node ${JSON.stringify(SERVER_DIST)}`,
       url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
       reuseExistingServer: false,
       timeout: 120_000,
+      cwd: REPO_ROOT,
       env: {
         ...(process.env as Record<string, string>),
         [TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV]: "1",

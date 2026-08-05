@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const GENERATED_DIR = path.join(__dirname, ".generated");
-const APP_DATA_DIR = path.join(GENERATED_DIR, "app-data");
+const APP_DATA_DIR = path.join(os.tmpdir(), "tandem-perf-data");
 
 /**
  * Runs once before the perf harness, BEFORE the webServers start.
