@@ -11,12 +11,16 @@
  *   - `src-tauri/Cargo.toml` — the Cowork installer pins via `env!("CARGO_PKG_VERSION")`,
  *     which is only correct while the Rust crate version equals the npm version.
  *   - `src-tauri/tauri.conf.json` — drives the desktop bundle artifact names
- *     (`Tandem_<version>_x64.dmg`, …) AND the tauri-action `__VERSION__` that
- *     names/targets the GitHub release. A stale value here builds correctly-coded
- *     installers under the WRONG version and uploads them onto the PREVIOUS
- *     release (observed on v0.15.0: 0.14.3-named artifacts clobbered the
- *     published v0.14.3 release). This surface has no CARGO_PKG_VERSION-style
- *     derivation, so it silently rots.
+ *     (`Tandem_<version>_x64.dmg`, …). A stale value here builds
+ *     correctly-coded installers under the WRONG version. It used to also
+ *     mis-*target* the release, via the tauri-action `__VERSION__`
+ *     substitution — that is how v0.15.0's 0.14.3-named artifacts clobbered
+ *     the published v0.14.3 release. `tauri-release.yml` no longer works that
+ *     way: the release is targeted by the pushed git tag, and its
+ *     `create-release` job fails the build outright when the tag and this file
+ *     disagree. So the wrong-release failure mode is gone; the wrong-*name*
+ *     one is what this assertion still guards, and this surface has no
+ *     CARGO_PKG_VERSION-style derivation, so it silently rots.
  *
  * This test fails CI the moment any of them diverges from package.json.
  * (`src/server/integrations/apply.ts` build-injects the version from package.json
@@ -81,8 +85,10 @@ describe("plugin/version pin drift guard", () => {
   });
 
   it("src-tauri/tauri.conf.json version matches package.json", () => {
-    // Drives desktop artifact names and the tauri-action release __VERSION__.
-    // A stale value ships mis-versioned installers onto the wrong release.
+    // Drives desktop artifact names. A stale value ships mis-versioned
+    // installers; the release it lands ON is now the pushed git tag, and
+    // tauri-release.yml's create-release job refuses to build when the two
+    // disagree.
     expect(tauriConf.version).toBe(expected);
   });
 
