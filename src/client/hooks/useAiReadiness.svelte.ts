@@ -82,23 +82,30 @@ export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
  * state CTAs drifted out of sync; see #1268).
  *   - `connect` — never configured (`state === "unconfigured"`). Opens the
  *     integration wizard.
- *   - `setup`   — configured but stopped with the circuit breaker tripped
- *     (`lastError === "circuit-open"`). This — NOT `binary-not-found` — is
- *     the branch that actually fires when the Claude Code CLI isn't
- *     installed: the supervisor spawns the bundled reaper (which always
- *     exists), and the reaper's own exec of the (missing) `claude` binary
- *     fails internally and exits with code 127 — an ordinary process exit,
- *     not a Node `ENOENT` on the reaper spawn itself. That routes through
- *     `scheduleRestart`, which retries and eventually trips the breaker
- *     (`circuit-open`), never through the `child.on("error")` handler that
- *     sets `binary-not-found`. `binary-not-found` is reserved for the
- *     genuinely rare case where the *reaper* binary is missing/unrunnable —
- *     a broken Tandem install, not a missing Claude CLI — and gets no
- *     special CTA (falls into `restart`, since retrying the reaper spawn is
- *     the only available action). Opens the integration wizard, same as
- *     `connect`, but with install-specific copy.
- *   - `restart` — configured but stopped for any other reason (including the
- *     rare `binary-not-found`). Plain restart.
+ *   - `setup`   — configured but stopped because the Claude CLI is missing or
+ *     unstartable (`lastError === "cli-unusable"`). Opens the integration
+ *     wizard, same as `connect`, but with install-specific copy.
+ *
+ *     #1268 keyed this off `circuit-open` instead, on a correct observation
+ *     with an incorrect conclusion. The observation: a missing CLI really does
+ *     surface as `circuit-open`, not `binary-not-found`. The supervisor spawns
+ *     the bundled reaper (which always exists); the reaper's own exec of the
+ *     missing `claude` fails internally and exits 127 — an ordinary process
+ *     exit, not a Node `ENOENT` on the reaper spawn — so it routes through
+ *     `scheduleRestart` and eventually trips the breaker, never through the
+ *     `child.on("error")` handler that sets `binary-not-found`. The error was
+ *     treating that *sufficient* cause as the *only* one: the breaker also
+ *     trips on a stale `--resume` session, an auth failure, OOM, or a bad
+ *     plugin, and the wizard cannot clear a tripped breaker — only relaunch
+ *     and start-fresh do. So a crash-looping user with a perfectly good
+ *     install was told, by every surface at once, to install software they
+ *     already had. The supervisor now probes at trip time and reports which
+ *     it is; `binary-not-found` remains the *reaper*-missing case (a broken
+ *     Tandem install) and still falls into `restart`, since retrying the
+ *     reaper spawn is the only available action.
+ *   - `restart` — configured but stopped for any other reason, including
+ *     `circuit-open` with a healthy CLI and the rare `binary-not-found`.
+ *     Plain restart.
  */
 export type AiChip = "connect" | "setup" | "restart" | null;
 
@@ -139,7 +146,12 @@ export const AI_CTA: Record<
   },
   setup: {
     label: "Set up Claude Code",
-    title: "Claude Code needs to be installed",
+    // The `title` names the escape hatch because the status pill is a compact,
+    // single-action surface and deliberately grows no secondary button. The
+    // empty state, which has room, renders a real "Restart Claude anyway" — so
+    // a user whose CLI the probe missed is not stranded on either surface.
+    title:
+      "Claude Code needs to be installed — already have it? Run “Relaunch Claude in this folder” from the command palette",
     ariaLabel: "Claude Code needs to be installed. Set up Claude Code.",
     action: "connect",
   },
@@ -349,16 +361,17 @@ export function createAiReadiness(deps: {
   );
 
   // `chip` is the ONE place the `lastError` → CTA decision is made (see the
-  // `AiChip` doc comment for why `circuit-open`, not `binary-not-found`, is
-  // the branch that means "go install Claude Code"). Views must render off
-  // this value alone, not re-derive their own copy of this ternary.
+  // `AiChip` doc comment for why `cli-unusable` — a server-side probe taken at
+  // breaker-trip time — is the branch that means "go install Claude Code", and
+  // why `circuit-open` on its own does not). Views must render off this value
+  // alone, not re-derive their own copy of this ternary.
   const chip = $derived<AiChip>(
     deps.soloMode()
       ? null
       : state === "unconfigured"
         ? "connect"
         : state === "stopped"
-          ? lastError === "circuit-open"
+          ? lastError === "cli-unusable"
             ? "setup"
             : "restart"
           : null,

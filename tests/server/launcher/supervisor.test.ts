@@ -543,3 +543,116 @@ describe("RESUME_CONFIRM_MS threshold constraint (issue #1169)", () => {
     expect(RESUME_CONFIRM_MS).toBeGreaterThanOrEqual(30_000);
   });
 });
+
+describe("circuit breaker — trip-time CLI diagnosis (#1268 follow-up)", () => {
+  /**
+   * Drives the REAL restart loop to the trip. `TANDEM_REAPER_PATH` points at
+   * the Node binary, which spawns successfully and then exits non-zero when
+   * handed the reaper's argv — an ordinary process exit, which is the only
+   * path that reaches `scheduleRestart` (a missing reaper is ENOENT and trips
+   * the breaker directly, with `binary-not-found`, without ever going through
+   * the branch under test). Zeroed backoffs collapse the 1s/5s/30s ladder.
+   */
+  async function tripBreaker(probeCliUsable: () => boolean): Promise<{
+    lastError: string | undefined;
+    stop: () => Promise<void>;
+  }> {
+    await writeIntegrations({
+      schemaVersion: 3,
+      integrations: [
+        {
+          kind: "claude-code",
+          id: "active",
+          label: "Active Claude",
+          configPath:
+            process.platform === "win32"
+              ? "C:\\Users\\test\\.claude.json"
+              : "/home/test/.claude.json",
+          transport: "http",
+          url: "http://127.0.0.1:3479/mcp",
+          apply: "create",
+        },
+      ],
+    });
+    const prev = process.env.TANDEM_REAPER_PATH;
+    process.env.TANDEM_REAPER_PATH = process.execPath;
+    const sup = createSupervisor({
+      integrationsBase: tmpDir,
+      probeCliUsable,
+      restartBackoffsMs: [0],
+    });
+    try {
+      await sup.start();
+      // Poll rather than sleep a fixed span: each iteration is a real process
+      // spawn, and eleven of them take as long as this machine takes.
+      const deadline = Date.now() + 20_000;
+      let status = sup.status();
+      while (Date.now() < deadline) {
+        status = sup.status();
+        if (!status.running && status.lastError === "circuit-open") break;
+        if (!status.running && status.lastError === "cli-unusable") break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      return {
+        lastError: status.running ? undefined : status.lastError,
+        stop: async () => {
+          await sup.stop();
+          if (prev === undefined) delete process.env.TANDEM_REAPER_PATH;
+          else process.env.TANDEM_REAPER_PATH = prev;
+        },
+      };
+    } catch (err) {
+      await sup.stop();
+      if (prev === undefined) delete process.env.TANDEM_REAPER_PATH;
+      else process.env.TANDEM_REAPER_PATH = prev;
+      throw err;
+    }
+  }
+
+  it("reports circuit-open when the CLI probe says the CLI is fine", async () => {
+    // The crash-loop-with-a-working-install case: a stale --resume session, an
+    // auth failure, OOM. Routing this to the wizard (which cannot clear the
+    // breaker) is the #1268 defect this whole branch exists to fix.
+    const r = await tripBreaker(() => true);
+    try {
+      expect(r.lastError).toBe("circuit-open");
+    } finally {
+      await r.stop();
+    }
+  }, 30_000);
+
+  it("reports cli-unusable when the CLI probe says the CLI is missing/unstartable", async () => {
+    const r = await tripBreaker(() => false);
+    try {
+      expect(r.lastError).toBe("cli-unusable");
+    } finally {
+      await r.stop();
+    }
+  }, 30_000);
+
+  it("probes once per trip, not once per restart attempt", async () => {
+    // Pins the probe's POSITION: inside the trip branch, not in the body of
+    // `scheduleRestart`. Hoisting it one level out makes this 12, verified by
+    // running that mutation — a filesystem walk on every crash of a
+    // restart-looping process is exactly the hot-path cost the design avoids.
+    //
+    // It does NOT pin `scheduleRestart`'s `if (breakerTripped) return` guard:
+    // removing that guard leaves this test green, because a reaper that
+    // spawns and then exits emits only "exit", never "error", so scheduleRestart
+    // is entered once per crash here. That guard is defense-in-depth for the
+    // case where both handlers fire for one spawn — which is what the file's
+    // own `child === spawned` identity guards already anticipate — and it is
+    // honestly untested rather than falsely claimed.
+    let calls = 0;
+    const r = await tripBreaker(() => {
+      calls++;
+      return true;
+    });
+    try {
+      expect(r.lastError).toBe("circuit-open");
+      expect(calls).toBe(1);
+    } finally {
+      await r.stop();
+    }
+  }, 30_000);
+});

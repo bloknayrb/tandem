@@ -81,10 +81,27 @@ export function isTransientlyUnavailable(reason: LauncherUnavailableReason | und
   return reason === "deferred-autostart";
 }
 
-/** Scrubbed `lastError` enum. Verbose error strings stay server-side. */
+/**
+ * Scrubbed `lastError` enum. Verbose error strings stay server-side.
+ *
+ * `binary-not-found` is about the **reaper**, not the Claude CLI — a broken
+ * Tandem install. `cli-unusable` is the Claude CLI one, and it is a strictly
+ * more specific `circuit-open`: the breaker tripped *and* a filesystem probe
+ * says the CLI is absent, or present as an unstartable Windows shim. Both of
+ * those have the same remedy (install/repair it), which is why one member
+ * covers them; `circuit-open` keeps its literal meaning of "it crash-looped
+ * and the CLI itself is fine", which is what routes the user to a restart
+ * rather than to the integration wizard.
+ *
+ * The probe runs once when the breaker trips, so this is a snapshot: a CLI
+ * installed afterwards will not update it. That is acceptable because the
+ * supervisor spawns from the PATH the *process* started with, so such a user
+ * needs a Tandem restart regardless of what the enum says.
+ */
 export type LauncherErrorCode =
   | "spawn-failed"
   | "binary-not-found"
+  | "cli-unusable"
   | "stop-failed"
   | "circuit-open"
   | "status-check-failed";
@@ -100,7 +117,13 @@ export interface SkillRefreshError {
 // --- Request bodies -------------------------------------------------------
 
 export interface LauncherRelaunchBody {
-  cwd: string;
+  /**
+   * Optional cwd override; if omitted, uses the integration's setting. The
+   * palette's "relaunch here" always sends one — "here" is its whole meaning —
+   * but the chip CTAs can fire with no document open, and refusing those was
+   * how the empty state's only safe recovery path came to be unreachable.
+   */
+  cwd?: string;
   /** Single-use nonce from `GET /api/launcher/nonce`. */
   nonce: string;
 }

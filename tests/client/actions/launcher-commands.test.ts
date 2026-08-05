@@ -23,7 +23,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Importing the module registers the actions as a top-level side effect.
 // `wireActionDeps` is the documented seam for injecting the dependency bag.
-import { wireActionDeps } from "../../../src/client/actions/builtin.svelte.js";
+import { relaunchClaudeCode, wireActionDeps } from "../../../src/client/actions/builtin.svelte.js";
 import { type Action, getActionsMap } from "../../../src/client/actions/registry.svelte.js";
 import { API_BASE } from "../../../src/client/utils/fileUpload.js";
 import {
@@ -201,5 +201,119 @@ describe("launcher-start-fresh", () => {
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
     await new Promise((r) => setTimeout(r, 0));
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === START_FRESH_URL)).toBe(false);
+  });
+});
+
+/**
+ * The AI-chip restart path (`relaunchClaudeCode`) versus the palette command.
+ *
+ * They share `relaunchHere`, but differ in one respect that #1268 got wrong:
+ * the chip FALLS BACK to the server's configured working directory when no
+ * document is open, while the palette command — "Relaunch Claude in this
+ * folder" — still refuses. The empty state, the chip's most important surface,
+ * renders exactly when no tab is active, so requiring a cwd there made its only
+ * safe recovery unreachable while the session-destroying secondary kept working.
+ */
+describe("AI-chip relaunch vs. palette relaunch", () => {
+  /** Re-wire deps with a different active-document answer. */
+  function wireWithDocPath(docPath: string | null): void {
+    wireActionDeps({
+      getActiveTabId: () => (docPath ? "doc-1" : null),
+      getActiveDocumentPath: () => docPath,
+      notify,
+      openSettings: vi.fn(),
+      toggleSoloMode: vi.fn(),
+      openFindBar: vi.fn(),
+      openFindBarTabs: vi.fn(),
+      findNext: vi.fn(),
+      findPrev: vi.fn(),
+      closeActiveTab: vi.fn(),
+      openFileDialog: vi.fn(),
+      toggleLeftPanel: vi.fn(),
+      toggleRightPanel: vi.fn(),
+      reopenClosedTab: vi.fn(),
+      annotationNext: vi.fn(),
+      annotationPrev: vi.fn(),
+      annotationAccept: vi.fn(),
+      annotationDismiss: vi.fn(),
+      selectBlock: vi.fn(),
+      toggleAuthorship: vi.fn(),
+    });
+  }
+
+  async function drive(fn: () => void, fetchSpy: ReturnType<typeof vi.fn>): Promise<void> {
+    fn();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it("POSTs with no cwd when no document is open (the empty-state case)", async () => {
+    // Against the pre-change code this test fails at the POST assertion: the
+    // `if (!cwd)` guard fired and the request was never made at all.
+    wireWithDocPath(null);
+    const fetchSpy = installFetchStub();
+    await drive(relaunchClaudeCode, fetchSpy);
+
+    const post = fetchSpy.mock.calls.find(([url]) => String(url) === RELAUNCH_URL);
+    expect(post).toBeDefined();
+    const body = JSON.parse(post![1]?.body as string);
+    expect(body).toEqual({ nonce: TEST_NONCE });
+    expect(body.cwd).toBeUndefined();
+  });
+
+  it("still sends the document's folder when one IS open (fall back, don't switch)", async () => {
+    // The regression guard for the fix itself. StatusBar's pill and the
+    // addressed-AI toast share this entry point and are NOT gated on having a
+    // tab — switching them all to the no-cwd form would silently move Claude's
+    // project root for every user it already worked for.
+    wireWithDocPath("/home/user/project/notes.md");
+    const fetchSpy = installFetchStub();
+    await drive(relaunchClaudeCode, fetchSpy);
+
+    const post = fetchSpy.mock.calls.find(([url]) => String(url) === RELAUNCH_URL);
+    expect(post).toBeDefined();
+    const body = JSON.parse(post![1]?.body as string);
+    expect(body.cwd).toBe("/home/user/project");
+  });
+
+  it("the palette command still refuses with no document open", async () => {
+    // "Relaunch Claude in this folder" has no folder to name here, so refusing
+    // and saying why is right. This is what keeps the change from reading as
+    // "the cwd requirement was dropped everywhere".
+    wireWithDocPath(null);
+    const fetchSpy = installFetchStub();
+    await drive(() => getAction("launcher-relaunch-here").run(), fetchSpy);
+
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === RELAUNCH_URL)).toBe(false);
+    expect(notify).toHaveBeenCalledWith(
+      "warning",
+      expect.stringContaining("isn't saved to a folder"),
+    );
+  });
+
+  it("names the folder the server reports when it sent none", async () => {
+    // The success toast is the only place a user learns where Claude landed
+    // after a no-cwd restart; the server echoes it back from live state.
+    wireWithDocPath(null);
+    const fetchSpy = vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u === STATUS_URL) {
+        return jsonResponse(200, {
+          available: true,
+          running: true,
+          reaperPid: 42,
+          sessionId: "<set>",
+          resuming: false,
+        });
+      }
+      if (u === NONCE_URL) return jsonResponse(200, { nonce: TEST_NONCE });
+      if (u === RELAUNCH_URL) return jsonResponse(200, { ok: true, cwd: "/home/user/configured" });
+      throw new Error(`unexpected fetch to ${u}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    await drive(relaunchClaudeCode, fetchSpy);
+
+    expect(notify).toHaveBeenCalledWith("info", "Claude restarting in /home/user/configured.");
   });
 });

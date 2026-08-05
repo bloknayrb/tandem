@@ -122,12 +122,30 @@ describe("createAiReadiness", () => {
   });
 
   // #1268: `chip` is the single source of truth for the CTA views render —
-  // it must fold `lastError === "circuit-open"` into `"setup"` itself,
+  // it must fold the "go install Claude" `lastError` into `"setup"` itself,
   // rather than leaving each view to re-derive that from `lastError`
-  // (which is how StatusBar and EmptyState drifted out of sync). This is
-  // also the actual live path for an uninstalled Claude CLI — see the
-  // `AiChip` doc comment.
-  it("shows the setup chip (not restart) when the launcher's lastError is circuit-open", async () => {
+  // (which is how StatusBar and EmptyState drifted out of sync).
+  it("shows the setup chip when the launcher's lastError is cli-unusable", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ available: true, running: false, lastError: "cli-unusable" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("stopped");
+    expect(h.get().lastError).toBe("cli-unusable");
+    expect(h.get().chip).toBe("setup");
+  });
+
+  // This assertion is the INVERSE of the one #1268 shipped, deliberately.
+  // `circuit-open` means the breaker tripped, which happens for a stale
+  // --resume session, an auth failure, OOM or a bad plugin just as readily as
+  // for a missing CLI — and the wizard `setup` opens cannot clear a tripped
+  // breaker, only relaunch/start-fresh can. Routing it to `setup` told a
+  // crash-looping user with a working install to install it again. The
+  // supervisor now probes at trip time and reports `cli-unusable` when the CLI
+  // really is the problem, leaving `circuit-open` to mean "it crashed".
+  it("shows the restart chip (not setup) when lastError is a bare circuit-open", async () => {
     globalThis.fetch = routedFetch({
       launcher: mkResponse({ available: true, running: false, lastError: "circuit-open" }),
       health: mkResponse({ status: "ok", hasSession: false }),
@@ -136,7 +154,7 @@ describe("createAiReadiness", () => {
     await settle();
     expect(h.get().state).toBe("stopped");
     expect(h.get().lastError).toBe("circuit-open");
-    expect(h.get().chip).toBe("setup");
+    expect(h.get().chip).toBe("restart");
   });
 
   it("still shows the restart chip for other lastError values, e.g. binary-not-found", async () => {

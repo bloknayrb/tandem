@@ -592,7 +592,14 @@ async function postLauncherMutation(
   d: ActionDeps,
   endpoint: string,
   extraBody: Record<string, unknown>,
-  labels: { failPrefix: string; requestFailPrefix: string; successMessage: string },
+  labels: {
+    failPrefix: string;
+    requestFailPrefix: string;
+    /** A function when the message depends on what the server decided — e.g. a
+     * relaunch that sent no cwd and can only learn where it landed from the
+     * response. A malformed body reaches it as `{}`, never as a throw. */
+    successMessage: string | ((body: Record<string, unknown>) => string);
+  },
 ): Promise<void> {
   const nonceResult = await fetchLauncherNonce();
   if (!nonceResult.ok) {
@@ -614,7 +621,12 @@ async function postLauncherMutation(
       d.notify("error", `${labels.failPrefix}: ${body.message ?? res.statusText}`);
       return;
     }
-    d.notify("info", labels.successMessage);
+    if (typeof labels.successMessage === "string") {
+      d.notify("info", labels.successMessage);
+    } else {
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      d.notify("info", labels.successMessage(body));
+    }
   } catch (err) {
     d.notify("error", `${labels.requestFailPrefix}: ${err instanceof Error ? err.message : err}`);
   }
@@ -664,29 +676,46 @@ async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
   return true;
 }
 
-async function relaunchHere(d: ActionDeps): Promise<void> {
+/**
+ * `cwdRequired: true` is the palette's `launcher-relaunch-here` — "here" is its
+ * whole meaning, so a run with no folder to name is a user error worth
+ * reporting. `false` is the AI-chip path, which falls back to the server's
+ * configured working directory instead of refusing.
+ *
+ * The distinction is not cosmetic. The chip's most important surface is the
+ * empty state, which renders *only* when no tab is active — so its cwd is
+ * guaranteed null, and requiring one made the safe recovery unreachable while
+ * the session-destroying secondary beside it kept working.
+ */
+async function relaunchHere(
+  d: ActionDeps,
+  { cwdRequired }: { cwdRequired: boolean },
+): Promise<void> {
   if (!(await checkLauncherAvailable(d))) return;
   const cwd = deriveCwdFromDocPath(d.getActiveDocumentPath());
-  if (!cwd) {
+  if (!cwd && cwdRequired) {
     d.notify(
       "warning",
       "Active document isn't saved to a folder. Set a working directory in Settings → Claude Code.",
     );
     return;
   }
-  if (!confirm(`Restart Claude in:\n${cwd}\n\nYour current task may be interrupted.`)) return;
+  // The confirm has to branch with the body: without a cwd there is no folder
+  // to name, and naming one anyway would be a promise the request doesn't make.
+  const prompt = cwd
+    ? `Restart Claude in:\n${cwd}\n\nYour current task may be interrupted.`
+    : "Restart Claude in its configured working directory.\n\nYour current task may be interrupted.";
+  if (!confirm(prompt)) return;
   launcherInflight = true;
   try {
-    await postLauncherMutation(
-      d,
-      API_LAUNCHER_RELAUNCH,
-      { cwd },
-      {
-        failPrefix: "Relaunch failed",
-        requestFailPrefix: "Relaunch request failed",
-        successMessage: `Claude restarting in ${cwd}.`,
-      },
-    );
+    await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, cwd ? { cwd } : {}, {
+      failPrefix: "Relaunch failed",
+      requestFailPrefix: "Relaunch request failed",
+      // The server answers with where the respawn actually landed, which is
+      // the only source for that when we didn't send one.
+      successMessage: (body) =>
+        typeof body?.cwd === "string" ? `Claude restarting in ${body.cwd}.` : "Claude restarting.",
+    });
   } finally {
     launcherInflight = false;
   }
@@ -698,9 +727,14 @@ async function relaunchHere(d: ActionDeps): Promise<void> {
  * "Restart Claude Code" chip and the palette command share one code path
  * (cwd derivation + confirm + nonce + notify). Used when launcher status is
  * `available: true, running: false` (configured but crashed/stopped).
+ *
+ * Differs from the palette command in one respect: it *falls back* to the
+ * configured working directory rather than refusing when no document is open.
+ * The three surfaces wired to it (empty state, status pill, addressed-AI toast)
+ * are not all gated on having a tab, and one of them can only ever run without.
  */
 export function relaunchClaudeCode(): void {
-  guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d));
+  guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d, { cwdRequired: false }));
 }
 
 export function startFreshClaudeCode(): void {
@@ -1072,7 +1106,7 @@ const BUILTINS: Action[] = [
     label: "Relaunch Claude in this folder",
     group: "claude",
     run() {
-      guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d));
+      guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d, { cwdRequired: true }));
     },
   },
   {

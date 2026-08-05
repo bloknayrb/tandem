@@ -33,7 +33,7 @@ const passthrough: import("express").Handler = (_req, _res, next) => next();
 interface FakeSupervisorOpts {
   running?: boolean;
   cwd?: string;
-  relaunchHook?: (cwd: string) => Promise<void>;
+  relaunchHook?: (cwd?: string) => Promise<void>;
   startFreshHook?: (cwd?: string) => Promise<void>;
 }
 
@@ -41,7 +41,7 @@ function makeFakeSupervisor(opts: FakeSupervisorOpts = {}): Supervisor {
   return {
     start: async () => {},
     stop: async () => {},
-    relaunch: async (cwd: string) => {
+    relaunch: async (cwd?: string) => {
       await opts.relaunchHook?.(cwd);
     },
     startFresh: async (cwd?: string) => {
@@ -290,6 +290,53 @@ describe("POST /api/launcher/relaunch", () => {
     } finally {
       fs.rmSync(inside, { recursive: true, force: true });
     }
+  });
+
+  // Absence and garbage are different. The three tests above (PATH_REJECTED,
+  // INVALID_BODY, and the happy path) are the controls that keep the pair
+  // below from reading as "validation was removed" — a present cwd is still
+  // fully validated; only an ABSENT one is now allowed through.
+  it("accepts an omitted cwd and passes undefined to the supervisor", async () => {
+    let called = false;
+    let calledWith: string | undefined = "sentinel";
+    const sup = makeFakeSupervisor({
+      relaunchHook: async (cwd) => {
+        called = true;
+        calledWith = cwd;
+      },
+    });
+    const { app } = makeApp(baseDeps(sup));
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const res = await request(app, "POST", "/api/launcher/relaunch", { nonce: nonce.nonce });
+    expect(res.status).toBe(200);
+    // Positive control for the assertion below: the handler really ran, so
+    // `undefined` means "received no cwd", not "never got called".
+    expect(called).toBe(true);
+    expect(calledWith).toBeUndefined();
+  });
+
+  it("still rejects a present-but-invalid cwd (cwd: 123) with INVALID_BODY", async () => {
+    const { app } = makeApp(baseDeps(makeFakeSupervisor()));
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const res = await request(app, "POST", "/api/launcher/relaunch", {
+      cwd: 123,
+      nonce: nonce.nonce,
+    });
+    expect(res.status).toBe(400);
+    expect((res.body as { code: string }).code).toBe("INVALID_BODY");
+  });
+
+  it("echoes the cwd the supervisor actually landed in, not the requested one", async () => {
+    // With cwd omittable, echoing the request field back would report `null`
+    // for exactly the calls that most need an answer. The running supervisor
+    // knows where it is; a distinct value proves the response came from there.
+    const landed = path.join(os.homedir(), "configured-workdir");
+    const sup = makeFakeSupervisor({ running: true, cwd: landed });
+    const { app } = makeApp(baseDeps(sup));
+    const nonce = (await request(app, "GET", "/api/launcher/nonce")).body as { nonce: string };
+    const res = await request(app, "POST", "/api/launcher/relaunch", { nonce: nonce.nonce });
+    expect(res.status).toBe(200);
+    expect((res.body as { cwd: string }).cwd).toBe(landed);
   });
 
   // Drive a relaunch that throws inside the supervisor and assert the 500 body
