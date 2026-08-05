@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-08-05
+
 ### Fixed
 
 - **"Restart Claude Code" no longer fails right after you install or update Tandem (#1282).** The button reported *"cwd must be an absolute path inside the user's home directory"* and restarted nothing. It restarts your AI in the folder of whatever document you have open, and Tandem opens two documents on your behalf — the changelog after an update, and the welcome document on a fresh install — both of which live inside the application itself rather than in your own files. Restarting there isn't allowed, so the request was refused outright. That made the failure specific to the two moments every desktop user passes through, which are exactly the moments someone is most likely to reach for a button labelled "Restart Claude Code". The folder is now treated as a preference rather than a requirement: if it can't be used, Tandem restarts in your configured working directory instead and the notification tells you where it landed. The same thing happened for a document on an external drive, on a network share, or in a folder that had since been deleted, and those are fixed by the same change. The command-palette version still refuses, because "Relaunch Claude in this folder" has no meaning without a usable folder. Present since the launcher shipped, not new in v0.20.0 — the recovery buttons added in that release are what made it easy to hit.
