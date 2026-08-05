@@ -755,7 +755,21 @@ jobs:
   # mistake is free to fix.
   verify-release-manifest:
     permissions:
-      contents: read
+      # `write`, not `read`, and NOT because this job writes anything -- it is
+      # purely an assertion. A DRAFT release is invisible to a read-scoped
+      # token: both `listReleaseAssets` and `getReleaseAsset` 403 with
+      # "Resource not accessible by integration". `contents` is the only scope
+      # covering releases and it has no read-only-plus-drafts level, so `write`
+      # is the whole menu.
+      #
+      # Drafts are awkward in TWO independent ways, and it is worth not
+      # conflating them: this one is token-visibility, while `create-release`
+      # above works around a *resolution* problem (`getReleaseByTag` 404s
+      # because the API will not resolve a tag to an unpublished release, at
+      # any permission level). Fixing one does not fix the other -- which is
+      # how this gate 403'd on the very first release it guarded (v0.20.1),
+      # while the manifest it was checking was in fact perfect.
+      contents: write
     needs: [create-release, build-tauri]
     if: needs.build-tauri.result == 'success'
     runs-on: ubuntu-latest
@@ -788,7 +802,20 @@ jobs:
               owner, repo, asset_id: manifest.id,
               headers: { accept: 'application/octet-stream' },
             });
-            const json = JSON.parse(Buffer.from(res.data).toString('utf8'));
+            // octokit picks its body parser from the RESPONSE content-type, not
+            // from the `accept` we sent -- and that content-type is whatever was
+            // recorded at upload time. tauri-action currently stores every asset
+            // as application/zip, so this lands as bytes; but nothing in this
+            // repo controls that, and an upload that tagged latest.json as
+            // application/json would arrive pre-parsed and make `Buffer.from`
+            // throw ERR_INVALID_ARG_TYPE -- a crash in the gate, on a release
+            // that may well be fine. Accept both shapes.
+            const raw = res.data;
+            const json =
+              typeof raw === 'string' ? JSON.parse(raw)
+              : raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)
+                ? JSON.parse(Buffer.from(raw).toString('utf8'))
+                : raw;
             const keys = Object.keys(json.platforms ?? {});
             core.info(`platform keys (${keys.length}): ${keys.join(', ')}`);
 
