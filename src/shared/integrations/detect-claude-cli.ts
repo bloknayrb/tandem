@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, extname, join } from "node:path";
 
 import type { ClaudeCliPresence } from "./contract.js";
 
@@ -21,6 +21,20 @@ export interface DetectClaudeCliOptions {
 }
 
 /**
+ * Does this path name a FILE?
+ *
+ * Not `existsSync`, which is also true for a directory — and one of the names
+ * probed below is the extensionless `claude`, so a PATH entry holding an
+ * ordinary `claude/` folder (a source checkout on a `PATH`-listed parent, say)
+ * would otherwise read as an installed CLI. `statSync` follows symlinks, so a
+ * link to a real binary still counts; `throwIfNoEntry: false` keeps a dangling
+ * one from throwing.
+ */
+function isFile(path: string): boolean {
+  return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+}
+
+/**
  * Every filename `claude` can be installed under, in the order a shell would
  * find them.
  *
@@ -30,11 +44,15 @@ export interface DetectClaudeCliOptions {
  * reported a perfectly usable npm-global install as NOT_INSTALLED — the exact
  * false "not installed" warning this check exists to avoid — so we check every
  * candidate. POSIX only ever has the bare `claude`.
+ *
+ * `stem` is `"claude"` for the detector; {@link isBareNameLaunchable} passes the
+ * `TANDEM_CLAUDE_CMD` override's basename, since that is the name the launcher
+ * will actually search PATH for.
  */
-function binNamesFor(platform: NodeJS.Platform): string[] {
+function binNamesFor(platform: NodeJS.Platform, stem = "claude"): string[] {
   return platform === "win32"
-    ? ["claude.exe", "claude.cmd", "claude.bat", "claude.ps1", "claude"]
-    : ["claude"];
+    ? [`${stem}.exe`, `${stem}.cmd`, `${stem}.bat`, `${stem}.ps1`, stem]
+    : [stem];
 }
 
 /**
@@ -62,7 +80,7 @@ export function detectClaudeCli(opts: DetectClaudeCliOptions = {}): ClaudeCliPre
   const home = opts.homeOverride ?? homedir();
 
   const binNames = binNamesFor(platform);
-  const foundIn = (dir: string): boolean => binNames.some((name) => existsSync(join(dir, name)));
+  const foundIn = (dir: string): boolean => binNames.some((name) => isFile(join(dir, name)));
 
   // `delimiter` is platform-specific (`;` on win32, `:` elsewhere). When a
   // platformOverride disagrees with the host, the override is for test
@@ -109,37 +127,49 @@ export interface BareNameLaunchableOptions extends DetectClaudeCliOptions {
  * directory *ahead* of a real `claude.exe` launches fine; answering from the
  * first hit would tell that working user they are broken.
  *
+ * `TANDEM_CLAUDE_CMD` replaces the command the launcher spawns, so every branch
+ * below is about *that* command when it is set — including the full-path-to-a-
+ * `.exe` form this check's own remedy text recommends (the reaper quotes the
+ * program, so spaces are fine).
+ *
  * Returns `true` whenever the question doesn't apply — on POSIX (bare names are
  * the executable) and when no candidate is on PATH at all (that is
  * `NOT_INSTALLED` / `INSTALLED_NOT_ON_PATH`, which callers already report on
  * their own terms). `false` is reserved for the one affirmative finding: a
- * shim is on PATH and no `.exe` is anywhere on it.
+ * shim, and no `.exe`, under the name the launcher will actually search for.
  */
 export function isBareNameLaunchable(opts: BareNameLaunchableOptions = {}): boolean {
   const platform = opts.platformOverride ?? process.platform;
   if (platform !== "win32") return true;
 
-  // `TANDEM_CLAUDE_CMD` replaces the command the launcher spawns, so when it
-  // names an extension it settles the question outright — including the case
-  // this check's own remedy text recommends (a full path to a `.exe`, which the
-  // reaper quotes, so spaces are fine). An extensionless override falls through
-  // to the PATH walk: it launches by the same bare-name rule the default does.
   const override = opts.claudeCmdOverride ?? process.env.TANDEM_CLAUDE_CMD;
-  if (override) {
-    const lower = override.toLowerCase();
-    if (lower.endsWith(".exe")) return true;
-    if (lower.endsWith(".cmd") || lower.endsWith(".bat") || lower.endsWith(".ps1")) return false;
+  const ext = override ? extname(override).toLowerCase() : "";
+  if (ext) {
+    // An explicit extension settles it: `CreateProcessW` runs a `.exe` and
+    // cannot run the wrapper formats, whatever the rest of PATH holds.
+    if (ext === ".exe") return true;
+    if (ext === ".cmd" || ext === ".bat" || ext === ".ps1") return false;
+    return true; // Some other extension — not a shim we know how to indict.
+  }
+  if (override && basename(override) !== override) {
+    // Extensionless but a concrete path, so there is no PATH search at all:
+    // `CreateProcessW` appends `.exe` to this literal path and runs that.
+    return isFile(`${override}.exe`);
   }
 
-  const binNames = binNamesFor(platform);
-  const launchable = binNames.filter((name) => name.endsWith(".exe"));
+  // Bare name — the PATH search. Probe the name the launcher will really use,
+  // NOT `claude`: with `TANDEM_CLAUDE_CMD=claude-canary` an unrelated
+  // `claude.cmd` on PATH would otherwise produce a confident finding about a
+  // program that is never spawned.
+  const binNames = binNamesFor(platform, override || "claude");
+  const launchable = binNames.filter((name) => name.toLowerCase().endsWith(".exe"));
 
   let sawShimOnPath = false;
   const pathVar = opts.pathOverride ?? process.env.PATH ?? "";
   for (const dir of pathVar.split(delimiter)) {
     if (dir.length === 0) continue;
-    if (launchable.some((name) => existsSync(join(dir, name)))) return true;
-    if (binNames.some((name) => existsSync(join(dir, name)))) sawShimOnPath = true;
+    if (launchable.some((name) => isFile(join(dir, name)))) return true;
+    if (binNames.some((name) => isFile(join(dir, name)))) sawShimOnPath = true;
   }
   return !sawShimOnPath;
 }

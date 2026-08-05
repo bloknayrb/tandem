@@ -263,6 +263,67 @@ describe("isBareNameLaunchable", () => {
         }),
       ).toBe(false);
     });
+
+    it("walks PATH for the OVERRIDE's name, not `claude`", () => {
+      // The launcher spawns the override verbatim. Answering from `claude.cmd`
+      // would be a confident finding about a program that is never started.
+      const dir = seedBins("bindir", "claude.cmd", "claude-canary.exe");
+
+      expect(
+        isBareNameLaunchable({
+          platformOverride: "win32",
+          pathOverride: dir,
+          claudeCmdOverride: "claude-canary",
+        }),
+      ).toBe(true);
+      // And the mirror: a real claude.exe says nothing about `mycli`.
+      expect(
+        isBareNameLaunchable({
+          platformOverride: "win32",
+          pathOverride: seedBins("exeonly", "claude.exe", "mycli.cmd"),
+          claudeCmdOverride: "mycli",
+        }),
+      ).toBe(false);
+    });
+
+    it("resolves an extensionless concrete path against `<path>.exe`", () => {
+      // No PATH search happens for a path — CreateProcessW appends .exe to the
+      // literal string. PATH is seeded shim-only to prove it isn't consulted.
+      const dir = seedBins("tools", "mytool.exe");
+      expect(
+        isBareNameLaunchable({
+          platformOverride: "win32",
+          pathOverride: shimOnlyPath(),
+          claudeCmdOverride: join(dir, "mytool"),
+        }),
+      ).toBe(true);
+      expect(
+        isBareNameLaunchable({
+          platformOverride: "win32",
+          pathOverride: shimOnlyPath(),
+          claudeCmdOverride: join(dir, "absent"),
+        }),
+      ).toBe(false);
+    });
+  });
+
+  it("ignores a DIRECTORY named `claude` on PATH", () => {
+    // `existsSync` is true for a directory, and one probed candidate is the
+    // extensionless `claude` — so a PATH entry holding a `claude/` checkout
+    // would produce an affirmative, specific, wrong "your CLI is a shim" claim
+    // for someone who has no CLI at all.
+    const dir = join(root, "srcroot");
+    mkdirSync(join(dir, "claude"), { recursive: true });
+
+    expect(isBareNameLaunchable({ platformOverride: "win32", pathOverride: dir })).toBe(true);
+    // Same defect one level down: presence must not count it either.
+    expect(
+      detectClaudeCli({
+        platformOverride: "win32",
+        pathOverride: dir,
+        homeOverride: join(root, "nohome"),
+      }),
+    ).toBe("NOT_INSTALLED");
   });
 });
 

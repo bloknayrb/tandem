@@ -222,6 +222,18 @@ export function fetchInstallerScript(
   });
 }
 
+/**
+ * Set once the installer has actually run to completion in this process. Guards
+ * the widened idempotency check below from re-downloading and re-executing on
+ * every call in the one state that cannot resolve itself before a restart.
+ */
+let installedThisProcess = false;
+
+/** Test-only reset — the latch is process-scoped and would leak across cases. */
+export function _resetInstallLatchForTests(): void {
+  installedThisProcess = false;
+}
+
 export interface InstallClaudeCliDeps {
   /** Injected so tests assert argv without spawning a real interpreter. */
   execFileAsync?: typeof execFileAsyncDefault;
@@ -371,18 +383,21 @@ export async function installClaudeCli(
   // one the launcher can actually start: a Windows shim-only install (`.cmd` /
   // `.ps1`, no `.exe`) reports INSTALLED_ON_PATH but is unstartable, and
   // answering "already installed" to a caller asking for a *usable* CLI is the
-  // same lie this route's presence field used to tell.
+  // same lie this route's presence field used to tell. No UI reaches that state
+  // today (the wizard's install CTA renders only for NOT_INSTALLED, and a shim
+  // on PATH always reads as INSTALLED_ON_PATH), so this is about the route's own
+  // honesty rather than a live button.
   //
-  // No UI reaches this state today — the wizard's install CTA renders only for
-  // NOT_INSTALLED, and a shim on PATH always reads as INSTALLED_ON_PATH — so
-  // this is about the route's own honesty, not a live button. If a CTA is ever
-  // wired to the shim banner, note that the guard will NOT converge within a
-  // session: the native installer leaves the shim in place and drops
-  // `claude.exe` in `~/.local/bin`, off the server's start-time PATH, so
-  // `launchable()` keeps returning false until Tandem restarts and every click
-  // re-runs the installer.
+  // `installedThisProcess` is what keeps the widened guard convergent. The shim
+  // case can't clear itself within a session — the native installer leaves the
+  // shim in place and drops `claude.exe` in `~/.local/bin`, off the server's
+  // start-time PATH — so `launchable()` stays false and a retrying caller would
+  // re-download and re-exec the installer without bound. One successful install
+  // per process is all that can possibly help; the rest waits on a restart.
+  // Latched on SUCCESS only: a failed attempt must stay retryable, or one
+  // transient network blip disables the remedy for the life of the process.
   const before = detect();
-  if (before !== "NOT_INSTALLED" && launchable()) return before;
+  if (before !== "NOT_INSTALLED" && (launchable() || installedThisProcess)) return before;
 
   const isWin = platform === "win32";
   // Map fetch failures (timeout, byte-cap, redirect downgrade, non-200) to a
@@ -427,6 +442,8 @@ export async function installClaudeCli(
       throw toClaudeInstallError(err, tmpDir);
     }
 
+    // Only here — past every throw — so a failed attempt stays retryable.
+    installedThisProcess = true;
     return detect();
   } finally {
     // Best-effort cleanup. A throw here (Windows EBUSY/EPERM — e.g. AV holding

@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  _resetInstallLatchForTests,
   ClaudeInstallError,
   fetchInstallerScript,
   type InstallClaudeCliDeps,
@@ -47,6 +48,8 @@ describe("installClaudeCli", () => {
   const realPlatform = process.platform;
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    // Process-scoped latch — without this it leaks into every later case.
+    _resetInstallLatchForTests();
     vi.restoreAllMocks();
   });
 
@@ -92,6 +95,50 @@ describe("installClaudeCli", () => {
     expect(presence).toBe("INSTALLED_ON_PATH");
     expect(fetchScript).toHaveBeenCalledTimes(1);
     expect(execFileAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the installer at most once per process for an unresolvable shim", async () => {
+    // The shim case can't clear within a session (the .exe lands off the
+    // server's start-time PATH), so without a latch a retrying caller would
+    // re-download and re-exec forever.
+    const fetchScript = vi.fn(async () => FAKE_SCRIPT);
+    const execFileAsync = vi.fn(async () => ({ stdout: "", stderr: "" })) as never;
+    const deps = baseDeps({
+      detectClaudeCli: detectQueue("INSTALLED_ON_PATH"),
+      isBareNameLaunchable: vi.fn(() => false),
+      fetchScript,
+      execFileAsync,
+    });
+
+    await installClaudeCli(deps);
+    await installClaudeCli(deps);
+    await installClaudeCli(deps);
+
+    expect(fetchScript).toHaveBeenCalledTimes(1);
+    expect(execFileAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a FAILED install retryable — the latch is success-only", async () => {
+    // A once-per-process guard keyed on having attempted would let one network
+    // blip disable the remedy for the life of the process.
+    const failing = baseDeps({
+      detectClaudeCli: detectQueue("INSTALLED_ON_PATH"),
+      isBareNameLaunchable: vi.fn(() => false),
+      fetchScript: vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    });
+    await expect(installClaudeCli(failing)).rejects.toBeInstanceOf(ClaudeInstallError);
+
+    const fetchScript = vi.fn(async () => FAKE_SCRIPT);
+    await installClaudeCli(
+      baseDeps({
+        detectClaudeCli: detectQueue("INSTALLED_ON_PATH"),
+        isBareNameLaunchable: vi.fn(() => false),
+        fetchScript,
+      }),
+    );
+    expect(fetchScript).toHaveBeenCalledTimes(1);
   });
 
   it("execs the interpreter with NO shell and the script path as final arg", async () => {
