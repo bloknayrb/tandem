@@ -465,6 +465,7 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
 export {
   type DetectClaudeCliOptions,
   detectClaudeCli,
+  isBareNameLaunchable,
 } from "../../shared/integrations/detect-claude-cli.js";
 
 /**

@@ -3,6 +3,7 @@ import { onDestroy } from "svelte";
 import {
   API_INTEGRATIONS_CLAUDE_CLI_STATUS,
   API_INTEGRATIONS_INSTALL_CLAUDE_CODE,
+  type BareNameLaunchable,
   type ClaudeCliPresence,
   type ClaudeCliStatusResponse,
   type InstallClaudeCodeResponse,
@@ -10,6 +11,12 @@ import {
 
 export interface ClaudeCliStatusState {
   readonly presence: ClaudeCliPresence | null;
+  /**
+   * `false` only when the CLI on PATH is a Windows shim the launcher can't
+   * spawn. `null` until the first probe answers; absent-or-`true` from the
+   * server normalizes to `true` (see {@link BareNameLaunchable}).
+   */
+  readonly bareNameLaunchable: boolean | null;
   readonly loading: boolean;
   readonly error: string | null;
   readonly installing: boolean;
@@ -50,6 +57,7 @@ export function createClaudeCliStatus(
   fetchFn: typeof fetch = globalThis.fetch.bind(globalThis),
 ): ClaudeCliStatusState {
   let presence = $state<ClaudeCliPresence | null>(null);
+  let bareNameLaunchable = $state<boolean | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let installing = $state(false);
@@ -73,6 +81,7 @@ export function createClaudeCliStatus(
       const body = (await res.json()) as ClaudeCliStatusResponse;
       if (!mounted || isStale()) return;
       presence = body.presence;
+      bareNameLaunchable = readLaunchable(body);
       error = null;
     } catch (err) {
       if (!mounted || isStale()) return;
@@ -110,6 +119,7 @@ export function createClaudeCliStatus(
       const body = (await res.json()) as InstallClaudeCodeResponse;
       if (!mounted) return null;
       presence = body.presence;
+      bareNameLaunchable = readLaunchable(body);
       if (body.presence === "NOT_INSTALLED") {
         // The install POST succeeded (exit 0) but the binary still isn't
         // detected. The server honestly reports NOT_INSTALLED rather than
@@ -148,6 +158,9 @@ export function createClaudeCliStatus(
     get presence() {
       return presence;
     },
+    get bareNameLaunchable() {
+      return bareNameLaunchable;
+    },
     get loading() {
       return loading;
     },
@@ -163,6 +176,15 @@ export function createClaudeCliStatus(
     install,
     refetch,
   };
+}
+
+/**
+ * Normalize the additive `bareNameLaunchable` field. Only an explicit `false`
+ * is a finding — an omitted field means either "the question doesn't apply" or
+ * a server predating the field, and both must read as "no problem here".
+ */
+function readLaunchable(body: BareNameLaunchable): boolean {
+  return body.bareNameLaunchable !== false;
 }
 
 interface InstallErrorBody {

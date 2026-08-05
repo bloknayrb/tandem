@@ -46,7 +46,10 @@ import {
   assertNoBroadAce as assertNoBroadAceDefault,
   setRestrictiveAcl as setRestrictiveAclDefault,
 } from "./acl-win.js";
-import { detectClaudeCli as detectClaudeCliDefault } from "./apply.js";
+import {
+  detectClaudeCli as detectClaudeCliDefault,
+  isBareNameLaunchable as isBareNameLaunchableDefault,
+} from "./apply.js";
 
 const execFileAsyncDefault = promisify(execFile);
 
@@ -223,6 +226,8 @@ export interface InstallClaudeCliDeps {
   /** Injected so tests assert argv without spawning a real interpreter. */
   execFileAsync?: typeof execFileAsyncDefault;
   detectClaudeCli?: typeof detectClaudeCliDefault;
+  /** Injected alongside `detectClaudeCli` — the real one reads the test process's PATH. */
+  isBareNameLaunchable?: typeof isBareNameLaunchableDefault;
   /** Injected so tests never hit the real network. */
   fetchScript?: (url: string) => Promise<string>;
   /** Injected so tests don't invoke real icacls/PowerShell on Windows. */
@@ -339,8 +344,10 @@ function sanitizeStderr(s: string): string {
  * `INSTALLED_NOT_ON_PATH` — the binary lands in `~/.local/bin`, off the
  * server's PATH).
  *
- * Idempotent: if `detectClaudeCli()` already reports the CLI present, returns
- * that presence without touching the network or spawning anything.
+ * Idempotent: if `detectClaudeCli()` already reports the CLI present AND the
+ * launcher can start it, returns that presence without touching the network or
+ * spawning anything. A present-but-unstartable Windows shim install does NOT
+ * short-circuit — installing the native `.exe` over it is the fix.
  *
  * @throws {UnsupportedPlatformError} on a non win32/darwin/linux host.
  * @throws {ClaudeInstallError} when the installer exits non-zero / fails to spawn.
@@ -350,6 +357,7 @@ export async function installClaudeCli(
 ): Promise<ClaudeCliPresence> {
   const execFileAsync = deps.execFileAsync ?? execFileAsyncDefault;
   const detect = deps.detectClaudeCli ?? detectClaudeCliDefault;
+  const launchable = deps.isBareNameLaunchable ?? isBareNameLaunchableDefault;
   const fetchScript = deps.fetchScript ?? ((url: string) => fetchInstallerScript(url));
   const lockDirAcl = deps.setRestrictiveAcl ?? setRestrictiveAclDefault;
   const verifyNoBroadAce = deps.assertNoBroadAce ?? assertNoBroadAceDefault;
@@ -359,9 +367,22 @@ export async function installClaudeCli(
     throw new UnsupportedPlatformError(platform);
   }
 
-  // Idempotency guard — never reinstall over an existing CLI.
+  // Idempotency guard — never reinstall over an existing CLI. "Existing" means
+  // one the launcher can actually start: a Windows shim-only install (`.cmd` /
+  // `.ps1`, no `.exe`) reports INSTALLED_ON_PATH but is unstartable, and
+  // answering "already installed" to a caller asking for a *usable* CLI is the
+  // same lie this route's presence field used to tell.
+  //
+  // No UI reaches this state today — the wizard's install CTA renders only for
+  // NOT_INSTALLED, and a shim on PATH always reads as INSTALLED_ON_PATH — so
+  // this is about the route's own honesty, not a live button. If a CTA is ever
+  // wired to the shim banner, note that the guard will NOT converge within a
+  // session: the native installer leaves the shim in place and drops
+  // `claude.exe` in `~/.local/bin`, off the server's start-time PATH, so
+  // `launchable()` keeps returning false until Tandem restarts and every click
+  // re-runs the installer.
   const before = detect();
-  if (before !== "NOT_INSTALLED") return before;
+  if (before !== "NOT_INSTALLED" && launchable()) return before;
 
   const isWin = platform === "win32";
   // Map fetch failures (timeout, byte-cap, redirect downgrade, non-200) to a

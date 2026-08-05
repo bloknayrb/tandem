@@ -208,6 +208,7 @@ integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
 integration-wizard-secret-submit-{*}
+integration-wizard-shim-warning
 integration-wizard-step-applying
 integration-wizard-step-detect
 integration-wizard-step-done

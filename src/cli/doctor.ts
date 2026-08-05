@@ -32,7 +32,7 @@ import { join } from "node:path";
 import { parseLockfile } from "../server/annotations/lockfile.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
-import { detectClaudeCli } from "../shared/integrations/detect-claude-cli.js";
+import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
 
 // Injected by tsup into dist/cli. Absent in tsx dev / vitest (typeof-guarded at
 // use). This is the version the `npx` bridge entries are pinned to.
@@ -698,11 +698,36 @@ function checkUserMcpConfig(r: Recorder): void {
  * presence→status mapping is directly unit-testable without probing the real
  * filesystem — see tests/cli/doctor.test.ts.
  */
-export function evaluateClaudeCli(presence: ClaudeCliPresence): {
+export function evaluateClaudeCli(
+  presence: ClaudeCliPresence,
+  /**
+   * From {@link isBareNameLaunchable}. Defaults to `true` so a caller that
+   * can't answer the question gets today's behavior rather than a false alarm.
+   */
+  bareNameLaunchable = true,
+): {
   status: "pass" | "warn";
   message: string;
   fix?: string;
 } {
+  // Checked BEFORE the pass branch, and keyed on the same presence that branch
+  // claims: a shim on PATH always reads as INSTALLED_ON_PATH (the detector
+  // walks the same PATH with the same names), so "pass" would be answered on a
+  // CLI the launcher provably cannot start — the lie this check exists to end.
+  // Deliberately NOT `presence !== "NOT_INSTALLED"`: the message says "on
+  // PATH", and a branch that can fire for a presence its own text contradicts
+  // is a smaller version of the same problem.
+  if (presence === "INSTALLED_ON_PATH" && !bareNameLaunchable) {
+    return {
+      status: "warn",
+      message:
+        "Claude Code CLI on PATH is a Windows shim (.cmd/.ps1) that Tandem's launcher can't start — " +
+        "it's usable from a terminal, but auto-launch will fail",
+      fix:
+        "Install Claude Code from https://claude.com/claude-code (the native installer drops a real " +
+        "claude.exe), or set TANDEM_CLAUDE_CMD to the full path of a .exe",
+    };
+  }
   if (presence === "INSTALLED_ON_PATH") {
     return { status: "pass", message: "Claude Code CLI found on PATH" };
   }
@@ -710,7 +735,11 @@ export function evaluateClaudeCli(presence: ClaudeCliPresence): {
     return {
       status: "warn",
       message: "Claude Code CLI installed but not on PATH (found in ~/.local/bin)",
-      fix: "Open a new terminal, or add ~/.local/bin to your PATH, then run `claude` once",
+      // Not just "open a new terminal": doctor reads its own fresh process's
+      // PATH, while the launcher spawns from the long-running server's env
+      // captured at start. A new terminal fixes what doctor sees, not what the
+      // launcher uses — Tandem itself has to be restarted.
+      fix: "Add ~/.local/bin to your PATH and open a new terminal; restart Tandem so its launcher picks up the new PATH too",
     };
   }
   return {
@@ -721,7 +750,7 @@ export function evaluateClaudeCli(presence: ClaudeCliPresence): {
 }
 
 function checkClaudeCli(r: Recorder): void {
-  const result = evaluateClaudeCli(detectClaudeCli());
+  const result = evaluateClaudeCli(detectClaudeCli(), isBareNameLaunchable());
   if (result.status === "pass") {
     r.pass(result.message);
   } else {

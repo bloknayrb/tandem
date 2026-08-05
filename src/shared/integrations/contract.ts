@@ -243,6 +243,32 @@ export const ERROR_CODE_UNSUPPORTED_PLATFORM = "UNSUPPORTED_PLATFORM";
 export type ClaudeCliPresence = "NOT_INSTALLED" | "INSTALLED_ON_PATH" | "INSTALLED_NOT_ON_PATH";
 
 /**
+ * Whether the detected CLI is one Tandem's auto-launcher can actually start.
+ *
+ * Deliberately an **additive optional field** rather than a fourth
+ * `ClaudeCliPresence` member. Presence is compared with `===`/`!==` in `if`
+ * chains, never exhaustive switches, so a new member would silently flip the
+ * truth value of every "is it basically installed" reduction with nothing
+ * type-checking the change — the installer's idempotency guard and the wizard's
+ * install-CTA gate both reduce presence that way. As an additive field,
+ * absent-or-`true` means today's behavior and only code that opts in changes.
+ *
+ * **F6 note.** It carries no path, so the enum-only constraint's letter holds.
+ * It does disclose install *mechanism* (npm-global shim vs native `.exe`) — a
+ * coarse toolchain fingerprint the original F6 reasoning, written about
+ * home-directory/username leakage, did not weigh. Recorded here so the next F6
+ * audit doesn't have to rediscover the trade.
+ */
+export interface BareNameLaunchable {
+  /**
+   * `false` only when the CLI exists solely as a Windows shim (`.cmd`/`.bat`/
+   * `.ps1`) that Tandem's launcher cannot spawn. Absent or `true` = the
+   * question doesn't apply or the answer is yes.
+   */
+  bareNameLaunchable?: boolean;
+}
+
+/**
  * GET /api/integrations/claude-cli-status response.
  *
  * **Enum only — never the resolved binary path or PATH contents.** This route
@@ -250,12 +276,12 @@ export type ClaudeCliPresence = "NOT_INSTALLED" | "INSTALLED_ON_PATH" | "INSTALL
  * path would leak the home-directory layout / username to the network. The
  * type carries no path field by design (F6).
  */
-export interface ClaudeCliStatusResponse {
+export interface ClaudeCliStatusResponse extends BareNameLaunchable {
   presence: ClaudeCliPresence;
 }
 
 /** POST /api/integrations/install-claude-code success response. */
-export interface InstallClaudeCodeResponse {
+export interface InstallClaudeCodeResponse extends BareNameLaunchable {
   ok: true;
   /** Presence re-probed after the installer exits — usually `INSTALLED_NOT_ON_PATH`. */
   presence: ClaudeCliPresence;

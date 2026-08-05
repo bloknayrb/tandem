@@ -463,6 +463,42 @@ describe("evaluateClaudeCli", () => {
     expect(result.message).toContain("not found");
     expect(result.fix).toContain("claude.com/claude-code");
   });
+
+  it("tells the user to restart Tandem, not just open a new terminal", () => {
+    // Doctor reads its own fresh process's PATH; the launcher spawns from the
+    // long-running server's env captured at start. A new terminal fixes what
+    // doctor sees, not what the launcher uses.
+    const result = evaluateClaudeCli("INSTALLED_NOT_ON_PATH");
+    expect(result.fix).toContain("restart Tandem");
+  });
+
+  it("warns instead of passing when on PATH but not launchable", () => {
+    const result = evaluateClaudeCli("INSTALLED_ON_PATH", false);
+    expect(result.status).toBe("warn");
+    expect(result.message).toContain("shim");
+    expect(result.fix).toContain("TANDEM_CLAUDE_CMD");
+  });
+
+  it("keeps the PATH message for INSTALLED_NOT_ON_PATH regardless of launchability", () => {
+    // The shim branch's text says "on PATH", and a shim on PATH always detects
+    // as INSTALLED_ON_PATH — so this pairing can't arise from the real
+    // detector. If it ever did, the honest answer is the not-on-PATH one, not a
+    // message that contradicts its own presence value.
+    const result = evaluateClaudeCli("INSTALLED_NOT_ON_PATH", false);
+    expect(result.message).toContain("not on PATH");
+  });
+
+  it("defaults to launchable so a caller that can't answer gets today's behavior", () => {
+    expect(evaluateClaudeCli("INSTALLED_ON_PATH").status).toBe("pass");
+    expect(evaluateClaudeCli("INSTALLED_ON_PATH", true).status).toBe("pass");
+  });
+
+  it("keeps the not-installed message when nothing is installed at all", () => {
+    // The shim branch is gated on something being found — a machine with no
+    // CLI must not be told its CLI is a shim.
+    const result = evaluateClaudeCli("NOT_INSTALLED", false);
+    expect(result.message).toContain("not found");
+  });
 });
 
 describe("globalTandemEditorVersion", () => {

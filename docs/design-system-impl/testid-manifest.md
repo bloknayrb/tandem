@@ -222,6 +222,8 @@ shipped and were removed:
   `integration-wizard-apply-result-{*}`
 - Post-apply reachability (#1174): `integration-wizard-reachability-{*}`,
   `integration-wizard-whats-next`
+- CLI honesty: `integration-wizard-shim-warning` — renders in the connect step
+  for ALL detection outcomes, unlike the empty-state-only install testids
 - More integrations + Cowork sub-view: `integration-wizard-more`,
   `integration-wizard-cowork-{setup,step,back,error,explainer}`, plus the reused
   `cowork-enable-confirm-btn` / `cowork-vethernet-cidr`

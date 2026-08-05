@@ -31,6 +31,10 @@ function detectQueue(...values: ReturnType<typeof String>[]) {
 function baseDeps(over: Partial<InstallClaudeCliDeps> = {}): InstallClaudeCliDeps {
   return {
     detectClaudeCli: detectQueue("NOT_INSTALLED", "INSTALLED_NOT_ON_PATH"),
+    // Injected for the same reason as the detector: the real one reads the
+    // test process's own PATH, so the idempotency guard's outcome would
+    // otherwise depend on whether the host happens to have a real claude.exe.
+    isBareNameLaunchable: vi.fn(() => true),
     fetchScript: vi.fn(async () => FAKE_SCRIPT),
     execFileAsync: vi.fn(async () => ({ stdout: "", stderr: "" })) as never,
     setRestrictiveAcl: vi.fn(async () => {}),
@@ -69,6 +73,25 @@ describe("installClaudeCli", () => {
     expect(presence).toBe("INSTALLED_ON_PATH");
     expect(fetchScript).not.toHaveBeenCalled();
     expect(execFileAsync).not.toHaveBeenCalled();
+  });
+
+  it("does NOT short-circuit on a present-but-unlaunchable Windows shim", async () => {
+    // The wizard's install button is the remedy for this state. Short-circuiting
+    // here would return 200 with nothing downloaded — a button that silently
+    // does nothing, exactly when it's needed.
+    const fetchScript = vi.fn(async () => FAKE_SCRIPT);
+    const execFileAsync = vi.fn(async () => ({ stdout: "", stderr: "" })) as never;
+    const presence = await installClaudeCli(
+      baseDeps({
+        detectClaudeCli: detectQueue("INSTALLED_ON_PATH"),
+        isBareNameLaunchable: vi.fn(() => false),
+        fetchScript,
+        execFileAsync,
+      }),
+    );
+    expect(presence).toBe("INSTALLED_ON_PATH");
+    expect(fetchScript).toHaveBeenCalledTimes(1);
+    expect(execFileAsync).toHaveBeenCalledTimes(1);
   });
 
   it("execs the interpreter with NO shell and the script path as final arg", async () => {

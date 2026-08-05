@@ -26,6 +26,7 @@ import type { ClaudeCliPresence } from "../../src/client/../shared/integrations/
 // Mutable stub the mocked hook returns; tests set fields BEFORE render.
 const cliStub: {
   presence: ClaudeCliPresence | null;
+  bareNameLaunchable: boolean | null;
   loading: boolean;
   error: string | null;
   installing: boolean;
@@ -34,6 +35,7 @@ const cliStub: {
   refetch: ReturnType<typeof vi.fn>;
 } = {
   presence: null,
+  bareNameLaunchable: null,
   loading: false,
   error: null,
   installing: false,
@@ -46,12 +48,20 @@ vi.mock("../../src/client/hooks/useClaudeCliStatus.svelte", () => ({
   createClaudeCliStatus: () => cliStub,
 }));
 
-// Empty-connect MCP state — keeps the connect empty state rendered, no /api.
-vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", () => ({
+// Detected Claude installs. Empty by default (the connect empty state, which
+// the install CTA lives in); the shim-warning tests push an entry to reach the
+// NON-empty branch, where that empty state never renders.
+const wizardExisting: unknown[] = [];
+
+// Only the stateful hook is replaced — the module's other exports are pure
+// helpers the rendered cards call (`isSelectable`, `tandemEntryValidationFailed`,
+// …), and stubbing them one failure at a time replaces real logic with guesses.
+vi.mock("../../src/client/hooks/useIntegrationWizard.svelte", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   createIntegrationWizard: () => ({
     step: "connect",
     detecting: false,
-    existing: [],
+    existing: wizardExisting,
     picked: [],
     applyResults: [],
     errorMessage: null,
@@ -79,6 +89,8 @@ import IntegrationWizardModal from "../../src/client/components/IntegrationWizar
 
 function resetStub() {
   cliStub.presence = null;
+  cliStub.bareNameLaunchable = null;
+  wizardExisting.length = 0;
   cliStub.loading = false;
   cliStub.error = null;
   cliStub.installing = false;
@@ -156,5 +168,57 @@ describe("IntegrationWizardModal — Install Claude Code CTA", () => {
     await tick();
     const banner = q(container, "integration-wizard-install-error");
     expect(banner?.textContent).toContain("Install failed");
+  });
+});
+
+/**
+ * The shim warning is the one CLI message that must survive OUTSIDE the "we
+ * couldn't find Claude" empty state. Its audience — a Windows npm-global
+ * install — has almost always run `claude` from a terminal (where PATHEXT makes
+ * the shim work), which writes the config `detectTargets` keys on, so they land
+ * in the non-empty branch. Gating it on the empty state would reach nearly
+ * nobody, which is why every test here seeds a detected install.
+ */
+describe("IntegrationWizardModal — unlaunchable-shim warning", () => {
+  beforeEach(() => {
+    resetStub();
+    wizardExisting.push({
+      target: { kind: "claude-code", label: "Claude Code", configPath: "/x" },
+      status: "ok",
+      tandemEntry: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      tandemValidation: { status: "valid" },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  function mount() {
+    return render(IntegrationWizardModal, { props: { open: true, onClose: vi.fn() } });
+  }
+
+  it("renders alongside a detected install (not only in the empty state)", async () => {
+    cliStub.presence = "INSTALLED_ON_PATH";
+    cliStub.bareNameLaunchable = false;
+    const { container } = mount();
+    await tick();
+    expect(q(container, "integration-wizard-empty")).toBeNull();
+    const banner = q(container, "integration-wizard-shim-warning");
+    expect(banner?.textContent).toContain("npm");
+  });
+
+  it.each([
+    { launchable: true, label: "launchable" },
+    { launchable: null, label: "not yet probed" },
+  ])("stays hidden when $label", async ({ launchable }) => {
+    cliStub.presence = "INSTALLED_ON_PATH";
+    cliStub.bareNameLaunchable = launchable;
+    const { container } = mount();
+    await tick();
+    // Positive control: the step this banner lives in DID render, so the
+    // absence below is the flag's doing and not an unrendered subtree.
+    expect(q(container, "integration-wizard-step-detect")).toBeTruthy();
+    expect(q(container, "integration-wizard-shim-warning")).toBeNull();
   });
 });

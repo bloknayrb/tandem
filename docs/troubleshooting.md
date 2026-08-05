@@ -46,6 +46,30 @@ If you restart the server while Claude Code is open, run `/mcp` inside Claude Co
 
 `tandem doctor` (or **Settings → About → Copy Diagnostics**) distinguishes 1 from 2–4: if the health checks pass but tool calls still fail, the problem is on the config side.
 
+## Tandem can't start Claude on Windows, but `claude` works in a terminal
+
+Symptom: the "Restart Claude" / "Set up Claude Code" prompt keeps coming back, or the AI
+indicator never goes live — yet typing `claude` in a terminal starts it fine.
+
+Cause: `npm i -g @anthropic-ai/claude-code` installs wrapper scripts (`claude.cmd`,
+`claude.ps1`) rather than a real `claude.exe`. Terminals run those wrappers because `PATHEXT`
+tells them to; Windows' process-creation API doesn't consult `PATHEXT` at all, so Tandem's
+launcher — which starts Claude by name, without a shell — never finds anything to run. The CLI
+is genuinely installed and genuinely usable; it just isn't startable by another program.
+
+Fix: install Claude Code from [claude.com/claude-code](https://claude.com/claude-code). The
+native installer drops a real `claude.exe`, which both terminals and Tandem can start. (The npm
+install method is deprecated.) Alternatively, set `TANDEM_CLAUDE_CMD` to the full path of a
+`.exe`.
+
+**Restart Tandem after installing.** The launcher searches the PATH Tandem started with, so a
+CLI installed while Tandem is running stays invisible to it — and the old wrapper keeps
+winning — until the restart.
+
+`tandem doctor` names this state explicitly — a warning that the CLI on PATH is a wrapper
+Tandem's launcher can't start — and the integration wizard shows the same warning. Launching
+Claude yourself in a terminal keeps working either way; only Tandem's auto-launch is affected.
+
 ## Port already in use
 
 Tandem kills stale processes on `:3478` / `:3479` at startup. If another application owns those ports and won't yield, set alternate ports:
