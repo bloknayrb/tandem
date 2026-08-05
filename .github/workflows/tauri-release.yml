@@ -5,8 +5,121 @@ on:
     tags:
       - "v*"
 
+# The create-release job below removes the race BETWEEN matrix legs. This
+# removes it between whole workflow RUNS: a double push, a webhook redelivery,
+# or an operator re-running while a prior run is mid-flight would otherwise give
+# two `create-release` jobs that each see zero existing releases and each create
+# one -- the same duplicate-release bug, one level up.
+# `cancel-in-progress: false` deliberately: a release build is signed and
+# notarized, and cancelling one halfway leaves a partially-populated draft,
+# which is the state we are trying to make impossible.
+concurrency:
+  group: tauri-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Create the draft release EXACTLY ONCE, before any build starts.
+  #
+  # Without this job, every matrix leg called tauri-action with `tagName` and
+  # `releaseDraft: true` and each one independently found-or-created the draft.
+  # Four legs starting within the same second race, and when two of them win the
+  # create, the artifacts split across two draft releases that share a tag --
+  # each with its own partial `latest.json`.
+  #
+  # That is not hypothetical. v0.18.0 SHIPPED that way: its published release
+  # carries 8 assets and a 5-key `latest.json` with no `darwin-aarch64` and no
+  # linux keys, while a 10-asset sibling draft holding the Apple Silicon and
+  # Linux artifacts was left orphaned and never published. Every M-series Mac
+  # checking for an update in that window was told it was up to date, because a
+  # missing platform key is indistinguishable from "no update available".
+  # v0.19.0 and v0.20.0 came out complete by luck, not by construction -- the
+  # create simply didn't race those times. v0.20.1 hit it again.
+  #
+  # Passing a single `releaseId` to every leg removes the create from the
+  # matrix entirely.
+  #
+  # It does NOT make concurrent uploads provably safe, and this comment used to
+  # claim it did on the grounds that v0.19.0/v0.20.0 came out complete -- which
+  # is the same luck-for-construction mistake described above, made about our
+  # own fix. tauri-action's `upload-version-json` does an unguarded
+  # read-modify-write on the `latest.json` asset (list assets, GET, merge this
+  # leg's keys locally, delete, re-upload) with no ETag or compare-and-swap, so
+  # two legs whose GET-to-PUT windows overlap can still drop a platform key.
+  # That is why `verify-release-manifest` below asserts the finished manifest
+  # rather than trusting the merge -- the same "check the artifact you actually
+  # shipped" philosophy as the Linux install smoke and the notarization staple
+  # check.
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # The pushed tag now names the release (previously tauri-action derived it
+      # from tauri.conf.json via `v__VERSION__`). That is the more correct
+      # source -- artifacts land on the tag a human actually pushed -- but it
+      # makes a tag/manifest mismatch silent, where before it produced a
+      # visibly wrong-tagged release. `plugin-version-pin.test.ts` proves the
+      # four in-repo surfaces agree with each other; nothing proved they agree
+      # with the TAG. Assert it here, before spending a signed 4-platform build
+      # on a version that would ship mis-named installers.
+      - name: Tag must match tauri.conf.json version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          CONF=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "tag=$TAG  tauri.conf.json=$CONF"
+          if [ "$TAG" != "v$CONF" ]; then
+            echo "::error::tag $TAG does not match tauri.conf.json version $CONF — bump all six surfaces before tagging"
+            exit 1
+          fi
+
+      - uses: actions/github-script@v8
+        id: create
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            // listReleases, NOT getReleaseByTag: the REST API does not resolve a
+            // tag to a DRAFT release, so getReleaseByTag 404s on the very thing
+            // we need to find and would re-create a duplicate on any re-run.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const existing = releases.filter((r) => r.tag_name === tag);
+            if (existing.length > 1) {
+              // Refuse rather than pick one: publishing either would ship a
+              // partial manifest, which is the exact failure this job exists to
+              // prevent. Delete the extras and re-run.
+              throw new Error(
+                `${existing.length} releases already exist for ${tag} (ids: ${existing
+                  .map((r) => r.id)
+                  .join(', ')}). Delete all but one and re-run.`,
+              );
+            }
+            if (existing.length === 1) {
+              core.info(`Reusing existing release ${existing[0].id} for ${tag}`);
+              core.setOutput('release_id', existing[0].id);
+              return;
+            }
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `Tandem ${tag}`,
+              body: 'See the assets to download and install Tandem.',
+              draft: true,
+              prerelease: false,
+            });
+            core.info(`Created draft release ${data.id} for ${tag}`);
+            core.setOutput('release_id', data.id);
+
   build-tauri:
+    needs: create-release
     permissions:
       contents: write
       # OIDC token write for azure/login@v2 (Windows signing).
@@ -234,11 +347,17 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         with:
-          tagName: v__VERSION__
-          releaseName: "Tandem v__VERSION__"
-          releaseBody: "See the assets to download and install Tandem."
-          releaseDraft: true
-          prerelease: false
+          # `releaseId` makes tauri-action upload into an existing release
+          # instead of finding-or-creating one, which is what removes the race
+          # (see the create-release job). tagName/releaseName/releaseBody/
+          # releaseDraft are deliberately gone: with releaseId set they are
+          # ignored, and leaving them would imply this step still decides where
+          # the artifacts land. The create-release job owns that now.
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          # `prerelease` is dropped for the same reason as the four above -- it
+          # is only read on the create path. `updaterJsonPreferNsis` stays: it
+          # feeds uploadVersionJSON's signature-priority choice, which still
+          # runs in releaseId mode.
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
@@ -621,3 +740,76 @@ jobs:
         run: |
           echo "::error::Some platform builds failed. Check the matrix jobs before publishing the release."
           exit 1
+
+  # Assert the thing the updater actually reads.
+  #
+  # Four green build jobs do not prove a complete release: the artifacts land
+  # via concurrent read-modify-write into one `latest.json`, and a lost update
+  # there removes a platform silently. A missing key is indistinguishable from
+  # "no update available" to `tauri-plugin-updater`, so the failure mode is an
+  # entire platform being told it is up to date, forever, with nothing red
+  # anywhere. v0.18.0 shipped exactly that for Apple Silicon and Linux behind a
+  # fully green matrix.
+  #
+  # This runs before a human publishes the draft, which is the last moment the
+  # mistake is free to fix.
+  verify-release-manifest:
+    permissions:
+      contents: read
+    needs: [create-release, build-tauri]
+    if: needs.build-tauri.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const EXPECTED = [
+              'darwin-aarch64', 'darwin-aarch64-app',
+              'darwin-x86_64', 'darwin-x86_64-app',
+              'linux-x86_64', 'linux-x86_64-appimage',
+              'linux-x86_64-deb', 'linux-x86_64-rpm',
+              'windows-x86_64', 'windows-x86_64-nsis', 'windows-x86_64-msi',
+            ];
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const release_id = Number('${{ needs.create-release.outputs.release_id }}');
+
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner, repo, release_id, per_page: 100,
+            });
+            const names = new Set(assets.map((a) => a.name));
+            core.info(`release ${release_id} has ${assets.length} assets`);
+
+            const manifest = assets.find((a) => a.name === 'latest.json');
+            if (!manifest) {
+              throw new Error(`latest.json is not attached to release ${release_id}`);
+            }
+            const res = await github.rest.repos.getReleaseAsset({
+              owner, repo, asset_id: manifest.id,
+              headers: { accept: 'application/octet-stream' },
+            });
+            const json = JSON.parse(Buffer.from(res.data).toString('utf8'));
+            const keys = Object.keys(json.platforms ?? {});
+            core.info(`platform keys (${keys.length}): ${keys.join(', ')}`);
+
+            const missing = EXPECTED.filter((k) => !keys.includes(k));
+            if (missing.length) {
+              throw new Error(
+                `latest.json is missing ${missing.length} platform key(s): ${missing.join(', ')}. ` +
+                `A missing key silently tells that platform it is up to date. Do NOT publish.`,
+              );
+            }
+
+            // Every URL must point at a file actually attached to THIS release.
+            // Catches the split-release case, where a manifest looks complete
+            // but half its artifacts live on a sibling draft.
+            const dangling = [];
+            for (const [key, p] of Object.entries(json.platforms)) {
+              const file = decodeURIComponent(String(p.url).split('/').pop() ?? '');
+              if (!names.has(file)) dangling.push(`${key} -> ${file}`);
+              if (!p.signature) dangling.push(`${key} -> missing signature`);
+            }
+            if (dangling.length) {
+              throw new Error(`latest.json references assets not on this release:\n${dangling.join('\n')}`);
+            }
+            core.info('manifest OK: all platform keys present, every URL resolves to an attached asset');

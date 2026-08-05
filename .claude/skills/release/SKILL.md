@@ -27,10 +27,14 @@ prevents them drifting.
    npx spec via `env!("CARGO_PKG_VERSION")`; stale = ships a build pinning the
    WRONG published npm version)
 4. `src-tauri/tauri.conf.json` — `version` (drives desktop artifact names
-   `Tandem_<version>_x64.dmg`, … AND the tauri-action `__VERSION__` that
-   names/targets the GitHub release; stale = installers uploaded onto the
-   PREVIOUS release — this bit v0.15.0, clobbering v0.14.3's published
-   artifacts before the guard was added)
+   `Tandem_<version>_x64.dmg`, …). It used to also *target* the GitHub release
+   through the tauri-action `__VERSION__` substitution, which is how a stale
+   value uploaded v0.15.0's build onto the PREVIOUS release and clobbered
+   v0.14.3's published artifacts. That mechanism is gone: `tauri-release.yml`
+   targets the pushed git tag, and its `create-release` job fails the build
+   before anything is signed when the tag and this file disagree. Still bump
+   it — a stale value now ships mis-*named* installers instead of mis-placed
+   ones.
 5. `package-lock.json` — regenerate, never hand-edit:
    ```bash
    npm install --package-lock-only
@@ -143,11 +147,31 @@ prevents them drifting.
    full notes; v0.17.0 and v0.19.0 shipped with the boilerplate), so it needs
    to be a step rather than a habit.
 
-6. Wait for every matrix build and `release-check` to go green, then publish
-   the draft:
+6. Wait for every matrix build, `release-check`, AND `verify-release-manifest`
+   to go green, then publish the draft:
    ```bash
    gh release edit v<version> --draft=false --latest
    ```
+
+   **A green matrix is not a complete release.** Until v0.20.1 every matrix leg
+   independently found-or-created the draft, so four jobs starting in the same
+   second could race and split the artifacts across TWO drafts sharing one tag,
+   each with a partial `latest.json`. v0.18.0 shipped that way — 8 assets and 5
+   platform keys, no `darwin-aarch64`, no linux, while a 10-asset sibling draft
+   sat orphaned and unpublished. Nothing was red. A missing platform key is
+   indistinguishable from "no update available", so every M-series Mac was told
+   it was up to date until the next release.
+
+   `create-release` + `verify-release-manifest` now make that structural, but
+   the cheap manual confirmation is worth keeping — the counts are the tell:
+   ```bash
+   gh api repos/bloknayrb/tandem/releases --jq \
+     '[.[]|select(.tag_name=="v<version>")]|length'   # must be 1, never 2
+   gh release view v<version> --json assets --jq '.assets|length'  # 17
+   ```
+   17 assets and 11 platform keys is the healthy shape (`latest.json`, 4
+   installers + 4 `.sig`, 2 `.app.tar.gz` + 2 `.sig`, 2 dmg, deb/rpm/AppImage
+   + sigs).
    Publishing is the npm trigger: `.github/workflows/publish.yml` fires on
    `release: [published]` and runs `npm publish --provenance`. If macOS
    notarization 403s on "agreement missing/expired," that is an Apple
