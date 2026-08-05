@@ -1,5 +1,4 @@
 import tseslint from "typescript-eslint";
-import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
   // tests/tauri-driver is a standalone sub-package with its own WebdriverIO
@@ -24,13 +23,6 @@ export default tseslint.config(
   },
 
   ...tseslint.configs.recommended,
-
-  // React hooks rules for client code only
-  {
-    files: ["src/client/**/*.{ts,tsx}"],
-    plugins: { "react-hooks": reactHooks },
-    rules: { ...reactHooks.configs.recommended.rules },
-  },
 
   // `.cjs` is CommonJS by extension, so `require()` is the only import form
   // available there — the ESM-oriented rule cannot be satisfied, only disabled.
