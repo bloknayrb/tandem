@@ -636,7 +636,16 @@ async function postLauncherMutation(
  * probe. Returns true when the caller should proceed, false when it
  * should bail (caller need not notify — guards notify when appropriate). */
 async function checkLauncherAvailable(d: ActionDeps): Promise<boolean> {
-  if (launcherInflight) return false;
+  // The one guard here that used to bail without saying anything. Harmless
+  // while these were palette-only commands; this branch now backs visible
+  // buttons in the empty state, including a "Restart Claude anyway" offered to
+  // someone who has just been told to install software they believe they have.
+  // That is a double-click waiting to happen, and the second click landing on
+  // silence reads as a broken button.
+  if (launcherInflight) {
+    d.notify("info", "Already restarting Claude — hang on.");
+    return false;
+  }
   const result = await fetchLauncherStatus();
   if (!result.ok) {
     if (result.kind === "not-built") {

@@ -630,6 +630,30 @@ describe("circuit breaker — trip-time CLI diagnosis (#1268 follow-up)", () => 
     }
   }, 30_000);
 
+  it("survives a probe that THROWS, and reports a plain crash loop", async () => {
+    // The probe runs inside the child's "error"/"exit" handlers, which Node
+    // calls synchronously from emit() with no try/catch in supervisor.ts. An
+    // escaping throw is therefore not a failed diagnosis — it is an
+    // uncaughtException, and index.ts exits the process for anything that is
+    // not a known Hocuspocus error. The whole editor would die at the moment
+    // the launcher was trying to explain itself.
+    //
+    // `probeCliUsable` is an injection seam, so its totality cannot be assumed
+    // from the default implementation even after making that one total.
+    //
+    // Fails OPEN: a probe that could not run is not evidence the CLI is
+    // missing, and "go install Claude Code" is the more alarming and less
+    // recoverable claim to make wrongly.
+    const r = await tripBreaker(() => {
+      throw new Error("EACCES: permission denied, stat 'Z:\\offline-share\\claude.exe'");
+    });
+    try {
+      expect(r.lastError).toBe("circuit-open");
+    } finally {
+      await r.stop();
+    }
+  }, 30_000);
+
   it("probes once per trip, not once per restart attempt", async () => {
     // Pins the probe's POSITION: inside the trip branch, not in the body of
     // `scheduleRestart`. Hoisting it one level out makes this 12, verified by

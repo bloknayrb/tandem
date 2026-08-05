@@ -292,6 +292,57 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
     );
   });
 
+  it("tells the user when a restart is already in flight instead of doing nothing", async () => {
+    // `checkLauncherAvailable`'s in-flight guard was the one branch that bailed
+    // without notifying. That was tolerable while these were palette-only
+    // commands; the empty state now renders buttons for the same code path,
+    // including a "Restart Claude anyway" shown to someone who has just been
+    // told to install software they believe they already have. A second click
+    // landing on complete silence reads as a broken button.
+    wireWithDocPath(null);
+    let releaseRelaunch: (() => void) | undefined;
+    const fetchSpy = vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u === STATUS_URL) {
+        return jsonResponse(200, {
+          available: true,
+          running: true,
+          reaperPid: 42,
+          sessionId: "<set>",
+          resuming: false,
+        });
+      }
+      if (u === NONCE_URL) return jsonResponse(200, { nonce: TEST_NONCE });
+      if (u === RELAUNCH_URL) {
+        // Hold the mutation open so the second click lands mid-flight.
+        await new Promise<void>((r) => {
+          releaseRelaunch = r;
+        });
+        return jsonResponse(200, { ok: true, cwd: "/home/user/configured" });
+      }
+      throw new Error(`unexpected fetch to ${u}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    relaunchClaudeCode();
+    await vi.waitFor(() =>
+      expect(fetchSpy.mock.calls.some(([u]) => String(u) === RELAUNCH_URL)).toBe(true),
+    );
+
+    // Second click while the first is still open.
+    notify.mockClear();
+    relaunchClaudeCode();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+    expect(notify).toHaveBeenCalledWith("info", expect.stringContaining("Already restarting"));
+
+    // Positive control: exactly one relaunch was actually issued, so the notify
+    // above is the guard reporting itself — not a second request going through.
+    expect(fetchSpy.mock.calls.filter(([u]) => String(u) === RELAUNCH_URL).length).toBe(1);
+
+    releaseRelaunch?.();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
   it("names the folder the server reports when it sent none", async () => {
     // The success toast is the only place a user learns where Claude landed
     // after a no-cwd restart; the server echoes it back from live state.

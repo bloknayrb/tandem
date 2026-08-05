@@ -904,7 +904,27 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       // and the answer cannot change usefully mid-run anyway (the supervisor
       // spawns from the PATH this process started with). Synchronous, so this
       // and `breakerTripped` above land in the same tick — see `probeCliUsable`.
-      const cliUsable = probeCliUsable();
+      // Guarded because this runs inside the child's "error"/"exit" handlers,
+      // which Node calls synchronously from `emit()` with no try/catch in this
+      // file. A throw there is not a failed diagnosis — it becomes an
+      // `uncaughtException`, and `index.ts`'s handler exits the process for
+      // anything that isn't a known Hocuspocus error. That would kill the whole
+      // editor at the precise moment the launcher was trying to explain itself,
+      // which is strictly worse than the bug this branch exists to fix. The
+      // pre-change code could not throw here — it was one assignment — so the
+      // guard is a cost of adding I/O, not defensive habit. `probeCliUsable` is
+      // also an injection seam, so totality cannot be assumed from the default.
+      //
+      // Fails OPEN to `circuit-open`: a probe that could not run is not
+      // evidence the CLI is missing, and "go install Claude Code" is the more
+      // alarming and less recoverable of the two claims to make wrongly. This
+      // is exactly the pre-change behaviour.
+      let cliUsable = true;
+      try {
+        cliUsable = probeCliUsable();
+      } catch (err) {
+        console.error("[Launcher] CLI probe failed; reporting a plain crash loop:", err);
+      }
       lastError = cliUsable ? "circuit-open" : "cli-unusable";
       console.error(
         `[Launcher] Circuit breaker tripped: ${recentAttempts.length} restart attempts in ${CIRCUIT_BREAKER_WINDOW_MS}ms — giving up. ${
