@@ -569,6 +569,17 @@ The wave-structure table (top of "Active — Toward v1.0") owns wave numbering a
 - Ubuntu 22.04 LTS (.AppImage + .deb)
 - Fedora 39 (.rpm)
 
+*Partial evidence as of v0.20.0 (2026-08-05):* one real-hardware macOS pass —
+browser-downloaded `.dmg` (so quarantine was set), installed and launched with
+**no Gatekeeper dialog at all**. That is the first hardware confirmation the
+notarization ticket is honored in the wild, and the residual #428 was closed
+with. It does **not** tick a row above: the machine was a MacBook Air of
+unrecorded OS version and architecture, so neither the "macOS 14 (Intel + Apple
+Silicon)" nor the "macOS 26.1 M1" row is satisfied. It de-risks them rather
+than closing them. Linux `.deb`/`.rpm` install-and-load is separately automated
+per tag (containers, `linux-package-smoke.sh`); everything else here is still
+unobserved.
+
 **Functional gates:**
 - Claude Code CLI: loopback-exempt, zero-config, tools work unchanged
 - Tauri update flow: download → install → restart verified on all three platforms; sidecar restart succeeds; no data loss
