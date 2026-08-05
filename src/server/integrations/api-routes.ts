@@ -88,6 +88,7 @@ import {
   detectClaudeCli,
   detectTargets,
   installSkill,
+  isBareNameLaunchable,
   PathRejectedError,
   type RemovableEntry,
   shouldRegisterChannelShim,
@@ -142,6 +143,11 @@ export interface IntegrationsRoutesDeps {
    * happens to have the `claude` binary on PATH.
    */
   detectClaudeCli?: typeof detectClaudeCli;
+  /**
+   * Optional launchability-probe override, injected for the same reason as
+   * `detectClaudeCli`: the real one reads the test process's own PATH.
+   */
+  isBareNameLaunchable?: typeof isBareNameLaunchable;
   /**
    * Optional installer-runner override. Production leaves this undefined.
    * Tests inject a stub so the install route never downloads + executes the
@@ -839,7 +845,10 @@ function makeGetClaudeCliStatusHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (_req: Request, res: Response) => {
     try {
       const presence = (deps.detectClaudeCli ?? detectClaudeCli)();
-      const body: ClaudeCliStatusResponse = { presence };
+      const body: ClaudeCliStatusResponse = {
+        presence,
+        bareNameLaunchable: (deps.isBareNameLaunchable ?? isBareNameLaunchable)(),
+      };
       res.json(body);
     } catch (err) {
       sendInternal(res, err, "Failed to probe Claude CLI status");
@@ -876,7 +885,11 @@ function makePostInstallClaudeCodeHandler(deps: IntegrationsRoutesDeps): Handler
       // strand the mutex (mirrors makeApplyHandler).
       gate.inFlight = true;
       const presence = await (deps.installClaudeCli ?? installClaudeCli)();
-      const body: InstallClaudeCodeResponse = { ok: true, presence };
+      const body: InstallClaudeCodeResponse = {
+        ok: true,
+        presence,
+        bareNameLaunchable: (deps.isBareNameLaunchable ?? isBareNameLaunchable)(),
+      };
       res.status(200).json(body);
     } catch (err) {
       if (err instanceof UnsupportedPlatformError) {

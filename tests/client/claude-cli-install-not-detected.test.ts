@@ -100,4 +100,58 @@ describe("IntegrationWizardModal — install completes but binary still not dete
       expect(banner?.textContent).toContain("wasn't detected yet");
     });
   });
+
+  it("keeps the shim warning up when the install succeeded but a shim still shadows it", async () => {
+    // The server's PATH was captured at startup, so the freshly-installed
+    // claude.exe is invisible to it and the npm shim still wins. The install
+    // CTA (and with it the install-error banner) vanishes when presence flips,
+    // so the persistent shim banner is the ONLY surface left to carry the
+    // remaining step — which is why it names the restart, not just the install.
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (method === "GET" && /claude-cli-status/.test(url)) {
+        return new Response(JSON.stringify({ presence: "NOT_INSTALLED" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (method === "POST" && /install-claude-code/.test(url)) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            presence: "INSTALLED_ON_PATH",
+            bareNameLaunchable: false,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "no-stub", url }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchStub);
+
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+
+    const btn = await waitFor(() => {
+      const el = q(container, "integration-wizard-install-claude");
+      if (!el) throw new Error("install CTA not yet rendered");
+      return el;
+    });
+
+    // Absent before the install (the status GET reports no shim), present
+    // after — so this measures the response field, not a banner that was
+    // always there.
+    expect(q(container, "integration-wizard-shim-warning")).toBeNull();
+    await fireEvent.click(btn);
+
+    await waitFor(() => {
+      const banner = q(container, "integration-wizard-shim-warning");
+      expect(banner?.textContent).toContain("restart Tandem");
+    });
+  });
 });

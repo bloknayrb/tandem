@@ -91,6 +91,13 @@ const cliStatus = createClaudeCliStatus(
 // never sees a flash of the install button before the GET resolves.
 const showInstallCta = $derived(cliStatus.presence === "NOT_INSTALLED");
 const showInstalledNotOnPath = $derived(cliStatus.presence === "INSTALLED_NOT_ON_PATH");
+// Rendered OUTSIDE the "we couldn't find Claude" empty state, unlike the two
+// flags above. The affected user — a Windows npm-global install — has almost
+// always run `claude` from a terminal once (cmd/PowerShell honor PATHEXT, so
+// the shim works there), which writes the config `detectTargets` keys on. They
+// land in the NON-empty branch, where the empty state's CLI messaging never
+// renders, so gating this on it would reach nearly nobody.
+const showShimWarning = $derived(cliStatus.bareNameLaunchable === false);
 
 // Post-apply reachability (#1174 gap #1). Once the Done screen shows, verify the
 // Tandem MCP server actually answers at the URL we just wrote (HTTP targets =
@@ -574,6 +581,25 @@ const doneHeaderState = $derived(
                  sub-states incl. loading/empty) — the E2E spec asserts it
                  visible immediately on open. -->
             <section class="iw-step" data-testid="integration-wizard-step-detect">
+            {#if showShimWarning}
+              <div
+                class="iw-banner-warning"
+                role="alert"
+                data-testid="integration-wizard-shim-warning"
+              >
+                {@render warningIcon()}
+                <span>
+                  The <code>claude</code> on your PATH was installed with npm, which leaves a
+                  wrapper Tandem's launcher can't start — it works in a terminal, but Tandem
+                  can't start Claude for you. Reinstall Claude Code from
+                  <a href="https://claude.com/claude-code" target="_blank" rel="noreferrer"
+                    >claude.com/claude-code</a
+                  > to fix it, then restart Tandem — its launcher reads the PATH it started
+                  with, so a fresh install stays invisible until then. Connecting here still
+                  works if you launch Claude yourself.
+                </span>
+              </div>
+            {/if}
             {#if wizard.detecting}
               {@render loadingDots("Looking for Claude on your computer…")}
             {:else if wizard.existing.length === 0}
@@ -1313,6 +1339,13 @@ const doneHeaderState = $derived(
     height: 18px;
     flex-shrink: 0;
     margin-top: 1px;
+  }
+  /* Inherits the banner's warning foreground rather than --tandem-accent (the
+     convention in neutral surfaces): accent-on-warning-bg loses the contrast
+     the banner's own palette is tuned for. Underline carries the affordance. */
+  .iw-banner-warning a {
+    color: inherit;
+    text-decoration: underline;
   }
 
   .iw-secret-row {

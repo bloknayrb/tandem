@@ -1157,10 +1157,26 @@ describe("integrations API routes", () => {
 
   describe(`GET ${API_INTEGRATIONS_CLAUDE_CLI_STATUS}`, () => {
     it("returns the probed presence enum", async () => {
-      const app = makeApp({ ...deps, detectClaudeCli: () => "INSTALLED_NOT_ON_PATH" });
+      const app = makeApp({
+        ...deps,
+        detectClaudeCli: () => "INSTALLED_NOT_ON_PATH",
+        isBareNameLaunchable: () => true,
+      });
       const res = await request(app, "GET", API_INTEGRATIONS_CLAUDE_CLI_STATUS);
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ presence: "INSTALLED_NOT_ON_PATH" });
+      expect(res.body).toEqual({ presence: "INSTALLED_NOT_ON_PATH", bareNameLaunchable: true });
+    });
+
+    it("reports a shim-only install as not launchable", async () => {
+      // The state the whole field exists for: presence says installed, the
+      // launcher still can't start it.
+      const app = makeApp({
+        ...deps,
+        detectClaudeCli: () => "INSTALLED_ON_PATH",
+        isBareNameLaunchable: () => false,
+      });
+      const res = await request(app, "GET", API_INTEGRATIONS_CLAUDE_CLI_STATUS);
+      expect(res.body).toEqual({ presence: "INSTALLED_ON_PATH", bareNameLaunchable: false });
     });
 
     it("is read-only: no origin gate (reachable with an evil Origin)", async () => {
@@ -1184,9 +1200,16 @@ describe("integrations API routes", () => {
     });
 
     it("never includes a path field in the response (F6)", async () => {
-      const app = makeApp({ ...deps, detectClaudeCli: () => "INSTALLED_NOT_ON_PATH" });
+      // Exact key set, not a `path` spot-check: the guarantee is that this
+      // LAN-reachable route can't be widened with a filesystem path under any
+      // name, so any new key has to be added here deliberately.
+      const app = makeApp({
+        ...deps,
+        detectClaudeCli: () => "INSTALLED_NOT_ON_PATH",
+        isBareNameLaunchable: () => true,
+      });
       const res = await request(app, "GET", API_INTEGRATIONS_CLAUDE_CLI_STATUS);
-      expect(Object.keys(res.body as object)).toEqual(["presence"]);
+      expect(Object.keys(res.body as object).sort()).toEqual(["bareNameLaunchable", "presence"]);
     });
   });
 
@@ -1195,14 +1218,21 @@ describe("integrations API routes", () => {
       _resetInstallGateForTests();
     });
 
-    it("returns { ok, presence } on a successful install", async () => {
+    it("returns { ok, presence, bareNameLaunchable } on a successful install", async () => {
+      // The field is re-probed AFTER the install, so a user who installed the
+      // native .exe over a shim sees the state flip in the same response.
       const app = makeApp({
         ...deps,
         installClaudeCli: async () => "INSTALLED_NOT_ON_PATH",
+        isBareNameLaunchable: () => true,
       });
       const res = await request(app, "POST", API_INTEGRATIONS_INSTALL_CLAUDE_CODE);
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true, presence: "INSTALLED_NOT_ON_PATH" });
+      expect(res.body).toEqual({
+        ok: true,
+        presence: "INSTALLED_NOT_ON_PATH",
+        bareNameLaunchable: true,
+      });
     });
 
     it("maps UnsupportedPlatformError to 400", async () => {
