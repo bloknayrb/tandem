@@ -147,7 +147,7 @@ const aboutRows = $derived.by(() => {
     {docsLoading ? "Opening…" : "View Documentation"}
   </button>
   {#if docsError}
-    <div style="margin-top: 6px; font-size: 11px; color: var(--tandem-error-fg);">
+    <div style="margin-top: 6px; font-size: 11px; color: var(--tandem-error-fg-strong);">
       {docsError}
     </div>
   {/if}

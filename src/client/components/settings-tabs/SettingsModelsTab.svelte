@@ -250,7 +250,7 @@ async function confirmDelete(id: string) {
                       data-testid={`model-delete-btn-${entry.id}`}
                       disabled={readOnly}
                       onclick={() => (pendingDeleteId = entry.id)}
-                      style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-error-fg); {disabledControlStyle(readOnly)}"
+                      style="padding: 2px var(--tandem-space-2); font-size: 11px; border: 1px solid var(--tandem-border-strong); border-radius: var(--tandem-r-2); background: var(--tandem-surface); color: var(--tandem-error-fg-strong); {disabledControlStyle(readOnly)}"
                     >
                       Delete
                     </button>
