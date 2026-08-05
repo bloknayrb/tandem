@@ -7,7 +7,7 @@
  *
  * Lifecycle:
  *   start() — read integration, spawn reaper(claude). Backoff on crash.
- *   relaunch(cwd) — stop + respawn with a new cwd (used by /relaunch-here).
+ *   relaunch(cwd?) — stop + respawn, optionally with a new cwd (/relaunch-here).
  *   stop() — SIGTERM the reaper; reaper forwards to Claude with 5s SIGKILL escalation.
  *
  * Session persistence: stores the last session ID in
@@ -24,6 +24,10 @@ import path from "node:path";
 
 import type { TandemEvent } from "../../shared/events/types.js";
 import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
+import {
+  detectClaudeCli,
+  isBareNameLaunchable,
+} from "../../shared/integrations/detect-claude-cli.js";
 import {
   CLAUDE_STREAM_JSON_FLAGS,
   type LauncherErrorCode,
@@ -65,6 +69,38 @@ interface SupervisorOpts {
    * against silent failure was itself unverified.
    */
   wakeLatchMs?: number;
+  /**
+   * Seam onto the "is the Claude CLI usable at all?" filesystem probe, so the
+   * breaker-trip tests don't depend on whether the host running them happens
+   * to have a `claude` binary installed.
+   *
+   * MUST stay synchronous. `scheduleRestart` sets `breakerTripped` and the
+   * discriminated `lastError` in one tick, which is the only reason `status()`
+   * can never observe one without the other; an async probe would open that
+   * window silently, with nothing in the type to warn the next editor.
+   */
+  probeCliUsable?: () => boolean;
+  /**
+   * Override for `RESTART_BACKOFFS_MS`, so a test can drive the eleven crashes
+   * the circuit breaker needs without waiting out the real 1s/5s/30s ladder.
+   *
+   * Same justification as `wakeLatchMs`: the breaker is a safeguard whose whole
+   * job is to stop an invisible restart loop, and testing it through a mirror of
+   * `scheduleRestart` rather than the function itself would verify the mirror.
+   */
+  restartBackoffsMs?: number[];
+}
+
+/**
+ * Default `probeCliUsable`: the CLI is usable if it exists *and* the launcher's
+ * bare-name spawn can actually start it. The second half is the Windows npm
+ * shim case — `claude.cmd` on PATH answers "installed" to every check a user
+ * would run by hand, and `CreateProcessW` still cannot launch it (#1273).
+ *
+ * Both halves are `statSync`-based, hence synchronous; see `probeCliUsable`.
+ */
+function defaultProbeCliUsable(): boolean {
+  return detectClaudeCli() !== "NOT_INSTALLED" && isBareNameLaunchable();
 }
 
 /** Exported for test only — the `"external"` argument below is the single line
@@ -151,7 +187,8 @@ const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 export interface Supervisor {
   start(): Promise<void>;
   /** Respawn Claude with a new cwd. Loses conversation context. */
-  relaunch(newCwd: string): Promise<void>;
+  /** Omit `newCwd` to fall back to the integration's configured directory. */
+  relaunch(newCwd?: string): Promise<void>;
   /** Idempotent — safe to call when not running. */
   stop(): Promise<void>;
   /** Drop any persisted session and respawn fresh.
@@ -267,6 +304,10 @@ export function createLineFramer(onLine: (line: string) => void): {
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const subscribeToEvents = opts.subscribeToEvents ?? defaultSubscribeToEvents;
   const wakeLatchMs = opts.wakeLatchMs ?? WAKE_LATCH_MAX_MS;
+  const probeCliUsable = opts.probeCliUsable ?? defaultProbeCliUsable;
+  const restartBackoffs = opts.restartBackoffsMs?.length
+    ? opts.restartBackoffsMs
+    : RESTART_BACKOFFS_MS;
   let child: ChildProcess | null = null;
   let currentCwd: string | undefined;
   let currentSessionId: string | undefined;
@@ -840,6 +881,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   function scheduleRestart(): void {
+    // Already given up — nothing to schedule, and re-entering would re-run the
+    // trip branch's probe. One failed spawn can reach here TWICE: the "error"
+    // and "exit" handlers both call this, and both firing for a single spawn is
+    // why each carries its own `child === spawned` identity guard.
+    if (breakerTripped) return;
     if (restartTimer) clearTimeout(restartTimer);
 
     // Circuit breaker: drop attempts older than the window, then check count.
@@ -848,14 +894,49 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     recentAttempts.push(now);
     if (recentAttempts.length > CIRCUIT_BREAKER_MAX_ATTEMPTS) {
       breakerTripped = true;
-      lastError = "circuit-open";
+      // Disambiguate WHY it crash-looped, because the two causes have opposite
+      // remedies and the UI routes off this one field. A missing or unstartable
+      // CLI needs the integration wizard; anything else (stale --resume session,
+      // auth failure, OOM, bad plugin) needs a restart, and sending that user to
+      // the wizard tells them to install software they already have.
+      //
+      // Probed once, here, rather than per status poll: it is a filesystem walk,
+      // and the answer cannot change usefully mid-run anyway (the supervisor
+      // spawns from the PATH this process started with). Synchronous, so this
+      // and `breakerTripped` above land in the same tick — see `probeCliUsable`.
+      // Guarded because this runs inside the child's "error"/"exit" handlers,
+      // which Node calls synchronously from `emit()` with no try/catch in this
+      // file. A throw there is not a failed diagnosis — it becomes an
+      // `uncaughtException`, and `index.ts`'s handler exits the process for
+      // anything that isn't a known Hocuspocus error. That would kill the whole
+      // editor at the precise moment the launcher was trying to explain itself,
+      // which is strictly worse than the bug this branch exists to fix. The
+      // pre-change code could not throw here — it was one assignment — so the
+      // guard is a cost of adding I/O, not defensive habit. `probeCliUsable` is
+      // also an injection seam, so totality cannot be assumed from the default.
+      //
+      // Fails OPEN to `circuit-open`: a probe that could not run is not
+      // evidence the CLI is missing, and "go install Claude Code" is the more
+      // alarming and less recoverable of the two claims to make wrongly. This
+      // is exactly the pre-change behaviour.
+      let cliUsable = true;
+      try {
+        cliUsable = probeCliUsable();
+      } catch (err) {
+        console.error("[Launcher] CLI probe failed; reporting a plain crash loop:", err);
+      }
+      lastError = cliUsable ? "circuit-open" : "cli-unusable";
       console.error(
-        `[Launcher] Circuit breaker tripped: ${recentAttempts.length} restart attempts in ${CIRCUIT_BREAKER_WINDOW_MS}ms — giving up. Restart Tandem to retry.`,
+        `[Launcher] Circuit breaker tripped: ${recentAttempts.length} restart attempts in ${CIRCUIT_BREAKER_WINDOW_MS}ms — giving up. ${
+          cliUsable
+            ? "Restart Tandem to retry."
+            : "The Claude CLI is missing or cannot be started — check the integration setup."
+        }`,
       );
       return;
     }
 
-    const delay = RESTART_BACKOFFS_MS[Math.min(restartIndex, RESTART_BACKOFFS_MS.length - 1)];
+    const delay = restartBackoffs[Math.min(restartIndex, restartBackoffs.length - 1)];
     restartIndex++;
     console.error(`[Launcher] Restarting Claude in ${delay}ms (attempt ${restartIndex})`);
     restartTimer = setTimeout(() => {
@@ -902,7 +983,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return withLock(() => startInternal());
   }
 
-  async function relaunch(newCwd: string): Promise<void> {
+  // `newCwd` is optional for the same reason `startFresh`'s is: `buildPlan`
+  // already falls back through the integration's `workingDirectory` to home, and
+  // the chip CTAs fire from surfaces that legitimately have no document open.
+  // Requiring one here is what made the empty state's safe recovery unreachable
+  // while its session-destroying secondary kept working.
+  async function relaunch(newCwd?: string): Promise<void> {
     return withLock(async () => {
       await stopInternal();
       // Relaunch always means "user is actively asking" → clear breaker.

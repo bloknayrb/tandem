@@ -356,6 +356,20 @@ function requireSupervisor(deps: LauncherRoutesDeps, res: Response): Supervisor 
   return sup;
 }
 
+/**
+ * Where the respawn actually landed, for the caller's success toast.
+ *
+ * With `cwd` now omittable, echoing the request field back would report `null`
+ * for exactly the calls that most need an answer — the user asked to restart
+ * "wherever you're configured", and the only other way to find out where that
+ * was is to open Settings. The supervisor knows, so ask it; fall back to the
+ * requested value if the spawn resolved but the process has already exited.
+ */
+function landedCwd(sup: Supervisor, requested: string | undefined): string | null {
+  const st = sup.status();
+  return st.running ? st.cwd : (requested ?? null);
+}
+
 function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
   return async (req: Request, res: Response) => {
     if (assertOriginAllowlisted(req, res, API_LAUNCHER_RELAUNCH)) return;
@@ -365,8 +379,17 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     // Nonce consumption MUST precede cwd validation — the nonce rotates on
     // every mutating attempt (good or bad) to prevent replay.
     if (!consumeNonce(body.nonce, res)) return;
-    const cwd = validateCwdString(body.cwd, res, "cwd");
-    if (cwd === null) return;
+    // Absence and garbage are different: an omitted cwd means "restart where
+    // you're configured to run" (the chip CTAs, which can fire with no document
+    // open), while a present-but-invalid one is still a 400. Mirrors the
+    // start-fresh handler below — the two operations differ only in whether the
+    // conversation survives, so their bodies should not differ in strictness.
+    let cwd: string | undefined;
+    if (body.cwd !== undefined) {
+      const resolved = validateCwdString(body.cwd, res, "cwd");
+      if (resolved === null) return;
+      cwd = resolved;
+    }
     const sup = requireSupervisor(deps, res);
     if (sup === null) return;
     // relaunch and startFresh are mutually exclusive — they're two flavors
@@ -379,7 +402,7 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     try {
       if (deps.relaunchHook) await deps.relaunchHook();
       await sup.relaunch(cwd);
-      res.json({ ok: true, cwd });
+      res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "relaunch failed");
     } finally {
@@ -411,7 +434,7 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
     try {
       if (deps.startFreshHook) await deps.startFreshHook();
       await sup.startFresh(cwd);
-      res.json({ ok: true, cwd: cwd ?? null });
+      res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "start-fresh failed");
     } finally {

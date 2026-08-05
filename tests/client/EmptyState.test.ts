@@ -60,7 +60,7 @@ describe("EmptyState", () => {
         expectedTestId: "empty-state-connect-ai",
       },
       {
-        why: "aiChip 'setup' (re-keyed off lastError === circuit-open, #1268) → Set up Claude Code CTA, no positioning line",
+        why: "aiChip 'setup' (keyed off lastError === cli-unusable) → Set up Claude Code CTA, no positioning line",
         aiChip: "setup",
         expectSecondary: false,
         expectedTestId: "empty-state-setup-claude",
@@ -127,11 +127,13 @@ describe("EmptyState", () => {
     });
 
     // #1268 defect 2a: the install CTA was keyed on `lastError ===
-    // "binary-not-found"`, which never actually fires for an uninstalled
-    // Claude CLI (that surfaces as an ordinary reaper exit code, routed to
-    // `circuit-open` — see the `AiChip` doc comment in useAiReadiness). The
-    // hook now folds that into `aiChip === "setup"`; EmptyState must render
-    // the install CTA off that value alone.
+    // "binary-not-found"`, which never fires for an uninstalled Claude CLI
+    // (that surfaces as an ordinary reaper exit code). #1268 re-keyed it to
+    // `circuit-open`, which fires for *any* crash loop; the supervisor now
+    // probes at trip time and reports `cli-unusable` when the CLI really is
+    // the problem — see the `AiChip` doc comment in useAiReadiness. Either
+    // way the hook folds it into `aiChip === "setup"`, and EmptyState must
+    // render the install CTA off that value alone.
     it("Set up Claude Code CTA (aiChip 'setup') fires onConnectAi, not onRestartClaude", async () => {
       const props = makeProps({ connected: true, aiChip: "setup" });
       const { container } = render(EmptyState, { props });
@@ -146,6 +148,37 @@ describe("EmptyState", () => {
       expect(props.onConnectAi).toHaveBeenCalledOnce();
       expect(props.onRestartClaude).not.toHaveBeenCalled();
       expect(props.onStartFreshClaude).not.toHaveBeenCalled();
+    });
+
+    // The `setup` branch used to offer exactly one CTA. That is a dead end
+    // whenever the trip-time probe is wrong — it looks for a `claude` on PATH,
+    // so an install under another name reads as absent — and it is the same
+    // objection #1268 raised about the restart branch's single action.
+    it("the setup branch offers a restart escape that fires onRestartClaude", async () => {
+      const props = makeProps({ connected: true, aiChip: "setup" });
+      const { container } = render(EmptyState, { props });
+
+      // Positive control from the same render: the primary is present too, so
+      // a passing assertion below can't be "the branch didn't render at all".
+      expect(byTestId(container, "empty-state-setup-claude")).toBeTruthy();
+
+      const escape = byTestId(container, "empty-state-setup-restart-anyway");
+      expect(escape).toBeTruthy();
+      escape?.click();
+      await tick();
+      expect(props.onRestartClaude).toHaveBeenCalledTimes(1);
+      expect(props.onConnectAi).not.toHaveBeenCalled();
+    });
+
+    it("the restart branch does NOT render the setup branch's escape", () => {
+      // Absence assertion, paired with a positive control: the restart branch
+      // renders its own primary, so this pins branch-exclusivity rather than
+      // an empty container.
+      const { container } = render(EmptyState, {
+        props: makeProps({ connected: true, aiChip: "restart" }),
+      });
+      expect(byTestId(container, "empty-state-restart-claude")).toBeTruthy();
+      expect(byTestId(container, "empty-state-setup-restart-anyway")).toBeNull();
     });
 
     describe("aiChip 'restart' — primary Restart + secondary Start Fresh", () => {

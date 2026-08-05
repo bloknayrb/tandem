@@ -29,9 +29,24 @@ export interface DetectClaudeCliOptions {
  * would otherwise read as an installed CLI. `statSync` follows symlinks, so a
  * link to a real binary still counts; `throwIfNoEntry: false` keeps a dangling
  * one from throwing.
+ *
+ * Total by construction — it answers `false` rather than throwing when it
+ * cannot tell. `throwIfNoEntry: false` suppresses only the "no entry" case;
+ * `EACCES` on a locked-down directory, `ELOOP` on a symlink cycle, and a
+ * disconnected network share named in `PATH` (routine on Windows) all still
+ * throw. Both callers walk every `PATH` entry, so one unreadable directory
+ * anywhere on it would otherwise abort the whole walk — and these run inside
+ * `tandem doctor`, a LAN-reachable status route, and the launcher's crash
+ * handler, where an exception is respectively a crashed CLI, a 500, and a
+ * dead server process. "I could not read it" is not evidence of an install,
+ * so `false` is the honest answer as well as the safe one.
  */
 function isFile(path: string): boolean {
-  return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+  try {
+    return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -305,6 +305,43 @@ describe("isBareNameLaunchable", () => {
         }),
       ).toBe(false);
     });
+  });
+
+  it("survives a PATH entry that makes statSync THROW, and keeps walking", () => {
+    // `throwIfNoEntry: false` suppresses only "no entry". EACCES on a
+    // locked-down directory, ELOOP on a symlink cycle, and a disconnected
+    // network share named in PATH all still throw — and both functions walk
+    // every PATH entry, so one bad directory would otherwise abort the whole
+    // walk. That matters because these run inside `tandem doctor`, a
+    // LAN-reachable status route, and the launcher's crash handler.
+    //
+    // A NUL in the path is the deterministic cross-platform stand-in: Node
+    // rejects it before the syscall, which is a non-ENOENT throw from the same
+    // call. Built with String.fromCharCode so no literal NUL enters this file —
+    // one would make git classify the source as binary.
+    const poison = join(root, `bad${String.fromCharCode(0)}dir`);
+    const exeDir = seedBins("late", "claude.exe");
+
+    // Positive control: the poisoned entry really does throw for the raw call
+    // these functions are built on, so the assertions below are the guard
+    // working rather than an inert fixture.
+    expect(() => statSync(join(poison, "claude.exe"), { throwIfNoEntry: false })).toThrow();
+
+    // Poison FIRST, real binary AFTER — pins that the walk *continued* rather
+    // than merely swallowing the error and giving up early.
+    expect(
+      isBareNameLaunchable({
+        platformOverride: "win32",
+        pathOverride: [poison, exeDir].join(delimiter),
+      }),
+    ).toBe(true);
+    expect(
+      detectClaudeCli({
+        platformOverride: "win32",
+        pathOverride: [poison, exeDir].join(delimiter),
+        homeOverride: join(root, "nohome"),
+      }),
+    ).toBe("INSTALLED_ON_PATH");
   });
 
   it("ignores a DIRECTORY named `claude` on PATH", () => {

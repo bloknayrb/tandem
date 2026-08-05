@@ -52,8 +52,8 @@ describe("StatusBar AI action indicator", () => {
     expect(onRestartClaude).toHaveBeenCalledOnce();
   });
 
-  // #1268 defect 1: the "setup" chip (re-keyed off `lastError ===
-  // "circuit-open"` in the hook — see useAiReadiness's `AiChip` doc comment)
+  // #1268 defect 1: the "setup" chip (keyed off `lastError === "cli-unusable"`
+  // in the hook — see useAiReadiness's `AiChip` doc comment)
   // used to announce "Set up Claude Code" via title/aria-label while the
   // separate onclick ternary had silently lost that branch and fell through
   // to onRestartClaude. Assert the announced label AND the invoked handler

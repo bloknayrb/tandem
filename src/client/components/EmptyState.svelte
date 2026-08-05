@@ -140,11 +140,9 @@ $effect(() => {
         </button>
       </div>
     {:else if connected && aiChip === "setup"}
-      <!-- Re-keyed off `lastError === "circuit-open"` — see the `AiChip` doc
-           comment in useAiReadiness. This is the branch that actually fires
-           when the Claude CLI isn't installed (the old `binary-not-found` key
-           here rendered for nobody: an uninstalled CLI surfaces as an ordinary
-           reaper exit code, not a Node spawn ENOENT). -->
+      <!-- Keyed off `lastError === "cli-unusable"` — a server-side probe taken
+           when the breaker trips — see the `AiChip` doc comment in
+           useAiReadiness for why `circuit-open` alone is not that signal. -->
       <p class="empty-sub empty-sub-secondary">Let's get Claude set up on your computer.</p>
       <div class="empty-actions">
         <button
@@ -154,6 +152,22 @@ $effect(() => {
           onclick={onConnectAi}
         >
           Set up Claude Code
+        </button>
+        <!-- The probe can be wrong — it looks for a `claude` on PATH, so an
+             install under another name reads as absent — and a branch offering
+             one CTA that might not apply is a dead end. Deliberately modest
+             copy: this retries a spawn, it does NOT help someone who installed
+             the CLI after Tandem started, because the supervisor spawns from
+             the PATH this process was launched with. That case needs a Tandem
+             restart, which is what the wizard's own banner says. -->
+        <button
+          class="empty-link"
+          data-testid="empty-state-setup-restart-anyway"
+          data-ai-chip="setup"
+          title="Already installed? Try starting it again."
+          onclick={onRestartClaude}
+        >
+          Restart Claude anyway
         </button>
       </div>
     {:else if connected && aiChip === "restart"}

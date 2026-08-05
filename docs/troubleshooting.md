@@ -70,6 +70,24 @@ winning — until the restart.
 Tandem's launcher can't start — and the integration wizard shows the same warning. Launching
 Claude yourself in a terminal keeps working either way; only Tandem's auto-launch is affected.
 
+## Tandem says "Set up Claude Code" but Claude Code is already installed
+
+Tandem gives up restarting Claude after repeated crashes in a short window, and asks the
+supervisor which kind of failure it was: the CLI being missing or unstartable, or the CLI being
+fine and crashing for some other reason (a stale saved conversation, an expired login, a plugin
+that fails on load). Only the first routes you to the setup wizard.
+
+That check looks for a `claude` on the PATH Tandem itself started with, so it can be wrong in two
+ways. If you installed Claude Code under a different name, use **Restart Claude anyway** on the
+empty-state screen, or run **Relaunch Claude in this folder** from the command palette
+(`Ctrl/Cmd+K`). If you installed it *after* opening Tandem, restart Tandem — a running process
+cannot see a PATH change made after it launched.
+
+If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead, and
+the likeliest cause is a saved conversation Claude can no longer resume. **Start a fresh
+conversation** (the secondary action beside Restart, or the palette command) drops it and starts
+clean — irreversible, so it is never the default.
+
 ## Port already in use
 
 Tandem kills stale processes on `:3478` / `:3479` at startup. If another application owns those ports and won't yield, set alternate ports:
