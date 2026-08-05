@@ -2285,6 +2285,8 @@ const shouldShowModelPicker = $derived(
            focusable buttons, and keyboard users pin via Alt+Shift+Arrow. -->
       <div
         class="rail-shell rail-shell-left"
+        role="complementary"
+        aria-label="Document outline"
         class:collapsed={!effectiveLeftVisible}
         class:animating={railAnimating.left}
         class:rail-floating-chrome={railFloat.left || railFloatClosing.left}
@@ -2337,6 +2339,8 @@ const shouldShowModelPicker = $derived(
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="rail-shell rail-shell-right"
+        role="complementary"
+        aria-label="Annotations and chat"
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
         class:rail-floating-chrome={railFloat.right || railFloatClosing.right || chatReveal}
@@ -2697,13 +2701,19 @@ const shouldShowModelPicker = $derived(
        editor column's top-right so it floats above the doc and never scrolls
        away. `.editor-scroll` keeps all its bindings, handlers, and styles. -->
   <div class="editor-column-wrap">
+    <!-- `role="main"`, not `region`: this is the document being edited, so it
+         is the page's main content. As a bare region it satisfied no landmark
+         rule, and axe's `page-has-main` / `landmark-one-main` both fired —
+         invisibly, because the audit scoped itself to `#root`, where page-level
+         landmark rules do not apply. Exactly one editor column, so exactly one
+         `main`. -->
     <div
       bind:this={editorScrollEl}
       data-testid="editor-scroll-container"
       class="editor-scroll tandem-scroll-fade-y"
       class:hide-raw-md={!settingsState.settings.showRawMarkdown}
       use:scrollFade={"y"}
-      role="region"
+      role="main"
       aria-label="Document editor"
       style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
       ondragover={fileDrop.handleEditorDragOver}
@@ -3338,7 +3348,12 @@ const shouldShowModelPicker = $derived(
     background: var(--tandem-surface-muted);
     border-radius: var(--tandem-r-pill);
     padding: var(--tandem-space-1) var(--tandem-space-3);
-    opacity: 0.6;
+    /* No `opacity` here. `--tandem-fg-faint` is tuned to sit just above the AA
+       floor, so compositing it at 0.6 pushed the *rendered* contrast back under
+       4.5:1 — the token's guarantee is about the colour, and opacity silently
+       spends it. The wrapper is `aria-hidden`, which exempts this from the
+       accessibility tree but not from being visible text a sighted user has to
+       read. De-emphasis comes from the faint token and the 2xs size instead. */
   }
   .panel-edge-collapse {
     position: absolute;

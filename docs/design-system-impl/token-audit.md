@@ -211,3 +211,56 @@ The text-form audit above is paired with a swatch comparison HTML at [`preview/t
 
 - **Apply WCAG re-audit if a future PR wants to adopt bundle's hue 270° dark canon.** Production at hue 280° passed the audit; switching hue would need fresh contrast checks against every text-on-surface combination in the dark theme. Not in scope for this umbrella branch.
 - **Bundle's `--tandem-font-sans` ("Inter") vs production's ("SN Pro, Inter Tight"):** the bundle treats Inter as primary chrome font; production treats SN Pro as primary. If we want to reconsider, that's a single-purpose PR (chrome font swap with screenshot baselines), not part of this umbrella.
+
+---
+
+## Re-audit 2026-08-05 — de-emphasis ladder retuned for WCAG AA (v1.0 accessibility gate)
+
+Committed alongside a protected-token snapshot update, as the gate above requires.
+
+**Why.** The v1.0 accessibility gate expanded the axe suite from 2 surfaces to 15
+and it measured `--tandem-fg-faint` failing AA for text: **2.78:1** light,
+**3.20:1** dark, against a 4.5:1 requirement. `EmptyState.svelte` already carried
+a comment noting this token was under-contrast, so this was a known-but-unfixed
+defect rather than a new discovery.
+
+**The trap.** Darkening `faint` alone produced a **rank inversion**: at
+oklch(0.52) it became darker — more prominent — than `--tandem-fg-subtle` at
+oklch(0.54), inverting two rungs of a de-emphasis ladder. `AnnotationCardHeader`
+renders `muted`, `subtle` and `faint` adjacent in one header row, so the
+timestamp (least important) would have out-weighted the author name. axe cannot
+see this: it checks each pair against its background, never the tokens against
+each other. Caught by adversarial visual review, not by the audit.
+
+**Result (light and warm).** The whole ladder moved so it stays monotonic and
+every rung clears AA:
+
+| Token | Was | Now | Worst ratio (now) |
+|---|---|---|---|
+| `--tandem-fg-muted` | oklch(0.48 0.008 280) | oklch(0.44 0.008 280) | 6.14:1 |
+| `--tandem-fg-subtle` | oklch(0.54 0.008 280) | oklch(0.47 0.008 280) | 5.40:1 |
+| `--tandem-fg-faint` | oklch(0.64 0.005 280) | oklch(0.50 0.005 280) | 4.73:1 |
+
+Worst case is the minimum across every surface these render text on: `surface`,
+`surface-sunk`, `accent-bg`, and the warm theme's own `surface`/`surface-sunk`/`bg`
+— warm's `surface-sunk` (oklch 0.920) is the tightest and is what set the floor.
+Measured by painting each colour to a canvas and reading the pixel back, so the
+values are Chromium's, not a reimplementation of the oklch conversion.
+
+**Dark.** Only `faint` moved, 0.58 → **0.67** (4.58:1 worst, on `accent-bg`).
+Dark was already monotonic (muted 0.74 > subtle 0.70 > faint 0.67) and its
+`muted`/`subtle` remain at their audited values — the protected snapshot for dark
+is unchanged.
+
+**Known limit, recorded rather than papered over.** Dark `faint` does **not**
+clear AA against `--tandem-info-bg` (#0c4a6e): **3.16:1**. No consumer pairs
+faint text with that background today. Do not introduce one without re-checking;
+the token comment in `index.html` says so at the definition site.
+
+**Honest note on the ladder's resolution.** AA leaves roughly 0.06 of oklch
+lightness between "primary text" and the contrast floor on light backgrounds, so
+three de-emphasis tiers now sit 0.03 apart rather than 0.06 and 0.10. They remain
+correctly ordered and all pass, but the tiers are separated as much by font-size
+as by colour. If a future pass wants genuinely distinct tiers in light mode, the
+honest options are fewer tokens or a non-colour differentiator — not a lighter
+`faint`, which is what failed AA to begin with.

@@ -201,7 +201,7 @@ function chooseHelp() {
 <!-- Root carries the drag region; interactive descendants opt back out
      with `data-tauri-drag-region="false"` (Tauri 2 inverse-opt-out pattern)
      so every non-button pixel is a window grab surface. -->
-<div class="title-bar" data-testid="title-bar" data-tauri-drag-region>
+<div class="title-bar" data-testid="title-bar" data-tauri-drag-region role="banner">
   <div class="title-bar-left">
     <button
       bind:this={settingsBtn}
