@@ -237,8 +237,8 @@ every rung clears AA:
 
 | Token | Was | Now | Worst ratio (now) |
 |---|---|---|---|
-| `--tandem-fg-muted` | oklch(0.48 0.008 280) | oklch(0.44 0.008 280) | 6.14:1 |
-| `--tandem-fg-subtle` | oklch(0.54 0.008 280) | oklch(0.47 0.008 280) | 5.40:1 |
+| `--tandem-fg-muted` | oklch(0.48 0.008 280) | oklch(0.42 0.008 280) | 6.65:1 |
+| `--tandem-fg-subtle` | oklch(0.54 0.008 280) | oklch(0.455 0.008 280) | 5.75:1 |
 | `--tandem-fg-faint` | oklch(0.64 0.005 280) | oklch(0.50 0.005 280) | 4.73:1 |
 
 Worst case is the minimum across every surface these render text on: `surface`,
@@ -257,10 +257,22 @@ clear AA against `--tandem-info-bg` (#0c4a6e): **3.16:1**. No consumer pairs
 faint text with that background today. Do not introduce one without re-checking;
 the token comment in `index.html` says so at the definition site.
 
-**Honest note on the ladder's resolution.** AA leaves roughly 0.06 of oklch
-lightness between "primary text" and the contrast floor on light backgrounds, so
-three de-emphasis tiers now sit 0.03 apart rather than 0.06 and 0.10. They remain
-correctly ordered and all pass, but the tiers are separated as much by font-size
-as by colour. If a future pass wants genuinely distinct tiers in light mode, the
-honest options are fewer tokens or a non-colour differentiator — not a lighter
-`faint`, which is what failed AA to begin with.
+**Spacing is deliberately uneven.** A first attempt used 0.44/0.47/0.50 — equal
+0.03 steps. Adversarial visual review rejected it: the shipped ladder's steps were
+0.06 (muted->subtle) and 0.10 (subtle->faint), so equalising them cut the bottom
+step by 70% while the top lost only 50%. That matters because `subtle` and `faint`
+render skin-to-skin with no separator in `AnnotationCardHeader` ("Assistant 3m
+ago"), and flattening that pair is exactly where a lost tier shows.
+
+`faint` cannot move: 0.50 is the AA floor against warm's `surface-sunk`. So the
+range was bought by darkening the top of the ladder instead, giving steps of
+0.035 and 0.045 — narrower than shipped, but the same shape. Widening further
+would keep darkening `muted`, which has by far the largest fan-out; visual review
+found 0.44 already indistinguishable from 0.48 at body sizes, and there is a point
+past which "more contrast" becomes "heavier UI".
+
+The honest summary: AA leaves roughly 0.08 of oklch lightness below primary text
+on light backgrounds, and three de-emphasis tiers is what fits in it. A future
+pass wanting genuinely distinct tiers should reach for fewer tokens or a
+non-colour differentiator — not a lighter `faint`, which is what failed AA to
+begin with.

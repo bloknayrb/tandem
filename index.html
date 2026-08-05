@@ -73,10 +73,10 @@
         --tandem-surface-sunk: oklch(0.96 0.006 80);
         --tandem-border: oklch(0.92 0.005 280);
         --tandem-border-strong: oklch(0.86 0.006 280);
-        --tandem-fg-muted: oklch(0.44 0.008 280);
+        --tandem-fg-muted: oklch(0.42 0.008 280);
         /* Backed off from 0.44 → 0.54 to preserve visual hierarchy while meeting WCAG AA 4.5:1 */
-        --tandem-fg-subtle: oklch(0.47 0.008 280);
-        --tandem-fg-faint: oklch(0.50 0.005 280); /* De-emphasis ladder retuned for AA: muted 6.14:1, subtle 5.40:1, faint 4.73:1, worst case across every light+warm surface these render text on (surface, surface-sunk, accent-bg). Verified, not assumed. */
+        --tandem-fg-subtle: oklch(0.455 0.008 280);
+        --tandem-fg-faint: oklch(0.50 0.005 280); /* De-emphasis ladder retuned for AA: muted 6.65:1, subtle 5.75:1, faint 4.73:1, worst case across every light+warm surface these render text on. Spacing is deliberately uneven — the subtle->faint step is wider than muted->subtle, preserving the shipped ladder's shape. faint is pinned at 0.50 by the AA floor, so the range is bought by darkening the top, not lightening the bottom. */
         --tandem-accent-h: 275deg;
         --tandem-accent: oklch(0.52 0.16 var(--tandem-accent-h));
         /* Hover state for accent-filled buttons: darker in light mode. The
@@ -565,9 +565,9 @@
         --tandem-surface-sunk: oklch(0.920 0.014 65);
         --tandem-border: oklch(0.91 0.006 75);
         --tandem-border-strong: oklch(0.84 0.008 75);
-        --tandem-fg-muted: oklch(0.44 0.008 280);
-        --tandem-fg-subtle: oklch(0.47 0.008 280);
-        --tandem-fg-faint: oklch(0.50 0.005 280); /* De-emphasis ladder retuned for AA: muted 6.14:1, subtle 5.40:1, faint 4.73:1, worst case across every light+warm surface these render text on (surface, surface-sunk, accent-bg). Verified, not assumed. */
+        --tandem-fg-muted: oklch(0.42 0.008 280);
+        --tandem-fg-subtle: oklch(0.455 0.008 280);
+        --tandem-fg-faint: oklch(0.50 0.005 280); /* De-emphasis ladder retuned for AA: muted 6.65:1, subtle 5.75:1, faint 4.73:1, worst case across every light+warm surface these render text on. Spacing is deliberately uneven — the subtle->faint step is wider than muted->subtle, preserving the shipped ladder's shape. faint is pinned at 0.50 by the AA floor, so the range is bought by darkening the top, not lightening the bottom. */
         --tandem-scrollbar-track: oklch(0.94 0.012 70);
         --tandem-scrollbar-thumb: oklch(0.78 0.010 75);
         --tandem-page-bg: oklch(0.925 0.012 70);

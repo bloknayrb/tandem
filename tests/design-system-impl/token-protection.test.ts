@@ -67,8 +67,8 @@ describe("protected design tokens — light mode (:root)", () => {
       "color-mix(in srgb, var(--tandem-suggestion) 40%, var(--tandem-border))",
     ],
     // WCAG AA audit-protected fg pair
-    ["--tandem-fg-muted", "oklch(0.44 0.008 280)"],
-    ["--tandem-fg-subtle", "oklch(0.47 0.008 280)"],
+    ["--tandem-fg-muted", "oklch(0.42 0.008 280)"],
+    ["--tandem-fg-subtle", "oklch(0.455 0.008 280)"],
   ])("%s equals audited value %s", (token, expected) => {
     expect(extractToken(lightBlock, token)).toBe(expected);
   });
