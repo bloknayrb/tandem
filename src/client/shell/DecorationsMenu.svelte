@@ -1,5 +1,6 @@
 <script lang="ts">
 import { clickOutside } from "../actions/clickOutside.svelte";
+import { focusFirstMenuItem, handleMenuArrowKeys } from "../utils/menuKeys";
 
 interface Props {
   showAuthorship: boolean;
@@ -35,6 +36,13 @@ let {
 
 let menuOpen = $state(false);
 let caretBtn = $state<HTMLButtonElement | null>(null);
+let menuEl = $state<HTMLDivElement | null>(null);
+
+// The caret button is a sibling of the dropdown, so focus has to be moved into
+// the menu explicitly or arrow keys never reach its handler.
+$effect(() => {
+  if (menuOpen) focusFirstMenuItem(menuEl);
+});
 
 function toggleMute() {
   onUpdate({ decorationsMuted: !decorationsMuted });
@@ -55,6 +63,7 @@ function closeMenu() {
 }
 
 function handleKey(e: KeyboardEvent) {
+  if (handleMenuArrowKeys(e)) return;
   if (e.key === "Escape" && menuOpen) {
     e.stopPropagation();
     closeMenu();
@@ -115,7 +124,7 @@ function chooseSettings() {
   </button>
 
   {#if menuOpen}
-    <div class="menu" role="menu" aria-label="Decorations">
+    <div bind:this={menuEl} class="menu" role="menu" aria-label="Decorations">
       <div class="menu-head">Decorations</div>
       <p class="menu-help">
         Inline editor overlays — author colors, comment, highlight, and note

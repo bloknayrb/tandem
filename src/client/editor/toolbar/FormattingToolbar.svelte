@@ -3,6 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { yUndoPluginKey } from "y-prosemirror";
 import { clickOutside } from "../../actions/clickOutside.svelte";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
+import { focusFirstMenuItem, handleMenuArrowKeys } from "../../utils/menuKeys";
 import { applyLink, getInitialLinkHref, withPreventDefault } from "./handlers.js";
 import LinkEditor from "./LinkEditor.svelte";
 import ToolbarButton from "./ToolbarButton.svelte";
@@ -34,6 +35,7 @@ const HEADING_FONT_WEIGHTS: Record<HeadingLevel, number> = { 1: 700, 2: 600, 3: 
 // Force-reactive tick — Tiptap's isActive() is imperative; bump on transaction.
 let tick = $state(0);
 let showHeadingMenu = $state(false);
+let headingMenuEl = $state<HTMLDivElement | null>(null);
 let showLinkInput = $state(false);
 let linkInputValue = $state("");
 
@@ -55,6 +57,22 @@ $effect(() => {
     if (!ed.isDestroyed) ed.off("transaction", handler);
   };
 });
+
+// The trigger sits outside the dropdown, so opening the menu leaves focus on
+// the button — and this trigger's mousedown handler preventDefaults, keeping
+// focus in the editor entirely. Either way an arrow press never reaches the
+// menu's handler unless focus is moved in explicitly.
+$effect(() => {
+  if (showHeadingMenu) focusFirstMenuItem(headingMenuEl);
+});
+
+// Escape closes the menu; without this, focus falls to <body> when the focused
+// item unmounts. The editor is the right destination: the trigger deliberately
+// keeps focus there on the mouse path.
+function closeHeadingMenu() {
+  showHeadingMenu = false;
+  editor?.commands.focus();
+}
 
 function findActiveHeading(ed: TiptapEditor): HeadingLevel | null {
   for (const level of HEADING_LEVELS) {
@@ -310,7 +328,7 @@ function dismissLinkInput() {
       use:clickOutside={() => (showHeadingMenu = false)}
       style="position: relative;"
       onkeydown={(e) => {
-        if (e.key === "Escape") showHeadingMenu = false;
+        if (e.key === "Escape") closeHeadingMenu();
       }}
       role="presentation"
     >
@@ -340,9 +358,13 @@ function dismissLinkInput() {
         {/snippet}
       </ToolbarButton>
       {#if showHeadingMenu}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div
+          bind:this={headingMenuEl}
           role="menu"
           aria-label="Heading level"
+          tabindex="-1"
+          onkeydown={handleMenuArrowKeys}
             style="position: absolute; top: 100%; left: 0; margin-top: 4px;
             background: var(--tandem-surface); border: 1px solid var(--tandem-border);
             border-radius: var(--tandem-r-3); padding: 4px; display: flex; flex-direction: column;

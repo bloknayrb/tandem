@@ -150,10 +150,27 @@ async function setTheme(page: Page, theme: "light" | "dark") {
  *
  * `getAnimations()` covers CSS transitions and Web Animations alike, so this
  * waits for the real condition instead of guessing a duration.
+ *
+ * Two things it must NOT do, both learned by hanging:
+ *
+ *   - Wait on infinitely-repeating animations. A looping pulse (the working
+ *     indicator, a spinner) never resolves `finished`, by definition. Waiting on
+ *     one is not a slow settle, it is a settle that can never happen — this hung
+ *     the whole 30s test budget the first time such an element was on screen.
+ *     They are also irrelevant here: a loop has no final state to sample.
+ *   - Wait without a ceiling. Even among finite animations, a scan that blocks
+ *     forever reports as a timeout rather than as a contrast result, which tells
+ *     nobody anything about the palette.
  */
 async function settle(page: Page) {
   await page.evaluate(async () => {
-    await Promise.allSettled(document.getAnimations().map((a) => a.finished));
+    const finite = document
+      .getAnimations()
+      .filter((a) => (a.effect?.getComputedTiming().iterations ?? 1) !== Number.POSITIVE_INFINITY);
+    await Promise.race([
+      Promise.allSettled(finite.map((a) => a.finished)),
+      new Promise((r) => setTimeout(r, 2_000)),
+    ]);
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   });
 }

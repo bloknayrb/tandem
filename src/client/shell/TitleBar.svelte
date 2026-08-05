@@ -6,6 +6,7 @@ import type { TandemMode } from "../../shared/types";
 import ModeToggle from "../editor/toolbar/ModeToggle.svelte";
 import { type ThemePreference } from "../hooks/useTandemSettings.svelte";
 import { onOutsideEvent } from "../utils/dismiss-outside";
+import { focusFirstMenuItem, handleMenuArrowKeys } from "../utils/menuKeys";
 import { THEME_OPTIONS } from "./theme-options";
 
 interface Props {
@@ -170,12 +171,20 @@ function toggleBrandMenu() {
   brandMenuOpen = !brandMenuOpen;
 }
 
+// Focus enters the menu on open. Without this the first arrow press is a no-op:
+// focus is still on the brand button, which sits OUTSIDE the popover carrying
+// the keydown handler.
+$effect(() => {
+  if (brandMenuOpen) focusFirstMenuItem(brandMenuEl);
+});
+
 function closeBrandMenu() {
   brandMenuOpen = false;
   settingsBtn?.focus();
 }
 
 function handleBrandMenuKey(e: KeyboardEvent) {
+  if (handleMenuArrowKeys(e)) return;
   if (e.key === "Escape") {
     e.stopPropagation();
     closeBrandMenu();
