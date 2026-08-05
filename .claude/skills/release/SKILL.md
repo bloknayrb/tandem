@@ -87,6 +87,24 @@ prevents them drifting.
    `changelog` skill sets `disable-model-invocation: true`, which makes it
    user-invocable only.
 
+   **Ask for it again AFTER the cut, over `v<prev>..v<new>`.** At v0.20.0 that
+   post-release run found a whole missing category that two dedicated review
+   agents had not: no `### Security` section, despite the release pinning
+   `@hono/node-server` past GHSA-frvp-7c67-39w9 in code that ships. A reviewer
+   pointed at the entries can only grade the entries that exist; nothing asks
+   which category is *absent*. Concretely, before calling the section done:
+   - Walk the merged-PR list (`git log v<prev>..HEAD --merges`), not only the
+     commit subjects — a fix can land with no issue number anywhere in its
+     subject and be invisible to a `#\d+` scan.
+   - Check every dependency bump against the repo's real Dependabot alert list
+     (`gh api repos/<owner>/<repo>/dependabot/alerts`). A bump next to a
+     security bump is not itself a security fix, and an automated update can
+     widen a peer range without moving the resolved version off the affected
+     one.
+   - When recording a security fix, state reachability honestly in both
+     directions — "bundled but we never call it" belongs in the entry, or the
+     note implies an exposure that did not exist.
+
 3. Verify the full test suite is green — `plugin-version-pin.test.ts` proves
    surfaces 1–4 agree (it also checks `plugin.json`'s pinned npx specs);
    `tests/plugin-manifest.test.ts` additionally fails if `package.json` and
@@ -116,6 +134,14 @@ prevents them drifting.
    GitHub Release (`releaseDraft: true`) with artifacts + `latest.json`. The
    tag alone does NOT publish to npm. (`HUSKY=0` on the tag push is fine — the
    commit is already CI-green.)
+
+5b. Populate the GitHub release body from the `## [<version>]` changelog
+   section — `tauri-action` writes only "See the assets to download and install
+   Tandem." Extract the section between its heading and the previous version's
+   and pass it via `gh release edit v<version> --notes-file <file>`. Do this
+   before publishing where possible. Inconsistent historically (v0.18.0 had
+   full notes; v0.17.0 and v0.19.0 shipped with the boilerplate), so it needs
+   to be a step rather than a habit.
 
 6. Wait for every matrix build and `release-check` to go green, then publish
    the draft:
