@@ -569,20 +569,31 @@ The wave-structure table (top of "Active — Toward v1.0") owns wave numbering a
 - Ubuntu 22.04 LTS (.AppImage + .deb)
 - Fedora 39 (.rpm)
 
-*Partial evidence as of v0.20.0 (2026-08-05):* one real-hardware macOS pass —
-browser-downloaded `.dmg` (so quarantine was set), installed and launched with
-**no Gatekeeper dialog at all**. That is the first hardware confirmation the
-notarization ticket is honored in the wild, and the residual #428 was closed
-with. It does **not** tick a row above: the machine was a MacBook Air of
-unrecorded OS version and architecture, so neither the "macOS 14 (Intel + Apple
-Silicon)" nor the "macOS 26.1 M1" row is satisfied. It de-risks them rather
-than closing them. Linux `.deb`/`.rpm` install-and-load is separately automated
-per tag (containers, `linux-package-smoke.sh`); everything else here is still
-unobserved.
+*Partial evidence as of v0.20.0 (2026-08-05).* Two independent real-hardware
+macOS observations — the first this project has had. Treat them as separate
+data points, not one machine's story; nothing establishes they were the same
+Mac.
+
+1. **Gatekeeper.** A browser-downloaded `.dmg` (so `com.apple.quarantine` was
+   set and Gatekeeper genuinely engaged) installed and launched with **no
+   dialog at all**. First hardware confirmation that the notarization ticket is
+   honored in the wild, and the residual #428 was closed with.
+2. **Updater, `v0.19.0 → v0.20.0`.** The in-app path, not a reinstall:
+   titlebar update dot → install → restart → and a document opened and edited
+   afterward. That last clause is the load-bearing one — the sidecar is killed
+   and respawned across `app.restart()`, and a dead one still shows the new
+   version in About while the editor sits inert.
+
+Neither ticks a row above. Both machines' OS versions and CPU architectures
+went unrecorded, so neither "macOS 14 (Intel + Apple Silicon)" nor "macOS 26.1
+M1" is satisfied; this de-risks those rows rather than closing them. Linux
+`.deb`/`.rpm` install-and-load is separately automated per tag (containers,
+`linux-package-smoke.sh`). Everything else here — all of Windows, macOS file
+associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 
 **Functional gates:**
 - Claude Code CLI: loopback-exempt, zero-config, tools work unchanged
-- Tauri update flow: download → install → restart verified on all three platforms; sidecar restart succeeds; no data loss
+- Tauri update flow: download → install → restart verified on all three platforms; sidecar restart succeeds; no data loss — **macOS observed 2026-08-05** (`v0.19.0 → v0.20.0`, in-app update dot, document editable after restart, so the sidecar respawn held); Windows and Linux still unobserved
 - Tutorial: completes end-to-end on `sample/welcome.md`; tutorial annotation anchors hold (anchor-drift regression test)
 - Dark/light toggle: works in both desktop and browser
 - ~~Multi-provider models registry (D4): user can add/remove/edit Anthropic + #477 local + at least one third-party provider~~ **Replaced per D4 amendment (2026-06-11):** first-run wizard one-click Claude Code connect works on all three platforms (detect → connect → `/mcp` shows Tandem tools); **cloud** BYO-models surfaces remain hidden until v1.1 (local surfaces re-enable in v0.17.0 per #1123 M4); **and** the keychain secrets layer (shipped v0.13.0, still holding live v0.13.x user keys) passes a store→read round-trip against the real OS keychain (Windows Credential Manager + macOS Keychain) on the smoke-checklist machines — CI cannot cover this (no libsecret/keychain in runners), and the struck criterion was previously the only release-time check that touched it
