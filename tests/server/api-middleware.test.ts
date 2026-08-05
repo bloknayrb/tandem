@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createApiMiddleware,
   errorCodeToHttpStatus,
   isHostAllowed,
   isLocalhostOrigin,
@@ -178,5 +179,105 @@ describe("jsonrpcId", () => {
 
   it("returns null when no id field", () => {
     expect(jsonrpcId({ method: "notify" })).toBeNull();
+  });
+});
+
+/**
+ * Emitted-header tests for the middleware itself (#1291).
+ *
+ * The `isLocalhostOrigin` tests above are thorough and every one of them passed
+ * on the vulnerable code — the predicate was always correct. What was never
+ * tested is what the middleware DID with the answer: it sent
+ * `Access-Control-Allow-Origin: null` for a rejected origin, which is not a
+ * deny value but the origin serialization of an opaque context, so a sandboxed
+ * iframe on any page could read every loopback-gated response.
+ *
+ * These drive real requests through `createApiMiddleware()` and assert on the
+ * response headers. The `Origin: null` case is the load-bearing one: a test
+ * written against `https://evil.com` alone passes on the vulnerable code too.
+ */
+describe("createApiMiddleware — CORS headers (#1291)", () => {
+  const TAURI_LINUX = "tauri://localhost";
+
+  /** Drive one request through the middleware, return what it emitted. */
+  function run(
+    headers: Record<string, string>,
+    method = "GET",
+  ): { headers: Record<string, string>; nextCalled: boolean; status?: number } {
+    const emitted: Record<string, string> = {};
+    let nextCalled = false;
+    let status: number | undefined;
+
+    const req = { headers: { host: "127.0.0.1:3479", ...headers }, method } as never;
+    const res = {
+      header(name: string, value: string) {
+        emitted[name] = value;
+        return this;
+      },
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json() {
+        return this;
+      },
+      sendStatus(code: number) {
+        status = code;
+        return this;
+      },
+    } as never;
+
+    createApiMiddleware()(req, res, () => {
+      nextCalled = true;
+    });
+    return { headers: emitted, nextCalled, status };
+  }
+
+  it("sends NO Access-Control-Allow-Origin for the opaque `null` origin", () => {
+    // The regression test for #1291. `null` is what a sandboxed iframe sends.
+    const { headers } = run({ origin: "null" });
+    expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
+  });
+
+  it("sends NO Access-Control-Allow-Origin for an external origin", () => {
+    const { headers } = run({ origin: "https://evil.com" });
+    expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
+  });
+
+  it("echoes an allowlisted 127.0.0.1 origin exactly", () => {
+    const { headers } = run({ origin: "http://127.0.0.1:5173" });
+    expect(headers["Access-Control-Allow-Origin"]).toBe("http://127.0.0.1:5173");
+  });
+
+  it("echoes the Tauri WebView origin", () => {
+    const { headers } = run({ origin: "http://tauri.localhost" });
+    expect(headers["Access-Control-Allow-Origin"]).toBe("http://tauri.localhost");
+  });
+
+  it("echoes the Linux Tauri custom-scheme origin", () => {
+    const { headers } = run({ origin: TAURI_LINUX });
+    expect(headers["Access-Control-Allow-Origin"]).toBe(TAURI_LINUX);
+  });
+
+  it("passes a request with NO Origin header through without a CORS header", () => {
+    // The compatibility guard: the CLI, `tandem doctor` and every non-browser
+    // caller send no Origin and never enforced CORS. They must keep working.
+    const { headers, nextCalled } = run({});
+    expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
+    expect(nextCalled).toBe(true);
+  });
+
+  it("sets Vary: Origin on both the allowed and the denied response", () => {
+    expect(run({ origin: "http://127.0.0.1:5173" }).headers.Vary).toBe("Origin");
+    expect(run({ origin: "null" }).headers.Vary).toBe("Origin");
+  });
+
+  it("answers an opaque-origin preflight 204 with no CORS grant", () => {
+    // 204 rather than 403 is deliberate: without ACAO the browser blocks the
+    // real request anyway, and the Allow-Methods/Allow-Headers values are inert
+    // because the origin check is evaluated first.
+    const { headers, status } = run({ origin: "null" }, "OPTIONS");
+    expect(status).toBe(204);
+    expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
   });
 });
