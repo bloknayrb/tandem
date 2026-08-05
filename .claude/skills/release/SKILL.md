@@ -129,6 +129,16 @@ prevents them drifting.
    developer.apple.com / App Store Connect — re-run the failed jobs after he
    signs.
 
+6b. Upgrade the local global install: `npm install -g tandem-editor@<version>`.
+   This is a smoke-checklist §4 step, but it is also a *correctness* step for
+   the plugin path and easy to skip because nothing fails loudly without it. A
+   stale global `tandem-editor` shadows `npx -y tandem-editor@<pin>`, so the
+   plugin's exact per-release pin in `.claude-plugin/plugin.json` silently
+   resolves to whatever old version is installed. Found at v0.20.0 sitting two
+   versions behind, at 0.18.0. Verify with `npm ls -g tandem-editor --depth=0`;
+   `tandem doctor` also asserts it (`Global tandem-editor@<v> matches this
+   build`).
+
 7. Walk `docs/release-smoke-checklist.md`: CI signal first (matrix +
    `tauri-webdriver.yml` + macOS launch smoke), then real installers on real
    machines — SmartScreen/Gatekeeper, updater from the *previous* version,
