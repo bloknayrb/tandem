@@ -19,7 +19,11 @@ import {
   API_SAVE,
   API_SCRATCHPAD,
 } from "../../shared/api-paths.js";
-import { isTransientlyUnavailable, type LauncherStatus } from "../../shared/launcher/contract.js";
+import {
+  isTransientlyUnavailable,
+  LAUNCHER_ERROR_PATH_REJECTED,
+  type LauncherStatus,
+} from "../../shared/launcher/contract.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
@@ -587,7 +591,12 @@ function deriveCwdFromDocPath(docPath: string | null): string | null {
  * POST to the endpoint, notify on success/failure. Diverges on the
  * preflight (status check, cwd derivation, confirm prompt) — that lives
  * in each caller. The `extraBody` carries action-specific fields (cwd
- * for relaunch; nothing for start-fresh). */
+ * for relaunch; nothing for start-fresh).
+ *
+ * Returns the server's error `code` when it matches `opts.retryOnCode`, having
+ * deliberately NOT notified — that combination means "the caller asked to
+ * handle this failure itself", and a toast here would fire before the caller's
+ * recovery attempt. Every other outcome notifies and returns null. */
 async function postLauncherMutation(
   d: ActionDeps,
   endpoint: string,
@@ -600,14 +609,15 @@ async function postLauncherMutation(
      * response. A malformed body reaches it as `{}`, never as a throw. */
     successMessage: string | ((body: Record<string, unknown>) => string);
   },
-): Promise<void> {
+  opts: { retryOnCode?: string } = {},
+): Promise<string | null> {
   const nonceResult = await fetchLauncherNonce();
   if (!nonceResult.ok) {
     d.notify(
       "error",
       `Failed to acquire launcher nonce: ${nonceResult.kind}${nonceResult.detail ? ` (${nonceResult.detail})` : ""}.`,
     );
-    return;
+    return null;
   }
   const nonce = nonceResult.value;
   try {
@@ -617,9 +627,12 @@ async function postLauncherMutation(
       body: JSON.stringify({ ...extraBody, nonce }),
     });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      const body = (await res.json().catch(() => ({}))) as { message?: string; code?: string };
+      if (opts.retryOnCode !== undefined && body.code === opts.retryOnCode) {
+        return body.code;
+      }
       d.notify("error", `${labels.failPrefix}: ${body.message ?? res.statusText}`);
-      return;
+      return null;
     }
     if (typeof labels.successMessage === "string") {
       d.notify("info", labels.successMessage);
@@ -630,6 +643,7 @@ async function postLauncherMutation(
   } catch (err) {
     d.notify("error", `${labels.requestFailPrefix}: ${err instanceof Error ? err.message : err}`);
   }
+  return null;
 }
 
 /** Guards that both palette actions share: in-flight check + availability
@@ -711,20 +725,44 @@ async function relaunchHere(
   }
   // The confirm has to branch with the body: without a cwd there is no folder
   // to name, and naming one anyway would be a promise the request doesn't make.
+  // On the fallback-allowed path the folder is a preference, not a guarantee,
+  // so the prompt says so rather than promising a destination the retry below
+  // may override.
   const prompt = cwd
-    ? `Restart Claude in:\n${cwd}\n\nYour current task may be interrupted.`
+    ? cwdRequired
+      ? `Restart Claude in:\n${cwd}\n\nYour current task may be interrupted.`
+      : `Restart Claude in:\n${cwd}\n\nIf that folder isn't usable, Claude restarts in its configured directory instead.\n\nYour current task may be interrupted.`
     : "Restart Claude in its configured working directory.\n\nYour current task may be interrupted.";
   if (!confirm(prompt)) return;
+  const labels = {
+    failPrefix: "Relaunch failed",
+    requestFailPrefix: "Relaunch request failed",
+    // The server answers with where the respawn actually landed, which is
+    // the only source for that when we didn't send one.
+    successMessage: (body: Record<string, unknown>) =>
+      typeof body?.cwd === "string" ? `Claude restarting in ${body.cwd}.` : "Claude restarting.",
+  };
   launcherInflight = true;
   try {
-    await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, cwd ? { cwd } : {}, {
-      failPrefix: "Relaunch failed",
-      requestFailPrefix: "Relaunch request failed",
-      // The server answers with where the respawn actually landed, which is
-      // the only source for that when we didn't send one.
-      successMessage: (body) =>
-        typeof body?.cwd === "string" ? `Claude restarting in ${body.cwd}.` : "Claude restarting.",
-    });
+    // A derived cwd is a guess: it is `dirname` of whatever tab happens to be
+    // active, and the server home-confines it (`resolveRouteCwd`). Tandem
+    // itself auto-opens CHANGELOG.md after an upgrade and sample/welcome.md on
+    // first run, both from inside the app bundle — so on the two states every
+    // desktop user passes through, the guess is guaranteed to be rejected. A
+    // doc on an external drive, a network share, or in a since-deleted folder
+    // rejects the same way. None of that should sink a recovery action whose
+    // caller already said the cwd is optional, so re-send without it.
+    const rejected =
+      cwd && !cwdRequired
+        ? await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, { cwd }, labels, {
+            retryOnCode: LAUNCHER_ERROR_PATH_REJECTED,
+          })
+        : await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, cwd ? { cwd } : {}, labels);
+    // Fresh nonce, not a replay: the server rotates it on every attempt,
+    // including the rejected one. `postLauncherMutation` acquires its own.
+    if (rejected !== null) {
+      await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, {}, labels);
+    }
   } finally {
     launcherInflight = false;
   }

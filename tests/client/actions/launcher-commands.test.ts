@@ -57,9 +57,11 @@ function jsonResponse(status: number, body: unknown): Response {
  * `available` toggles whether the launcher reports as usable; defaults to a
  * running, available launcher so the happy path proceeds to the POST.
  */
-function installFetchStub(opts: { available?: boolean } = {}): ReturnType<typeof vi.fn> {
+function installFetchStub(
+  opts: { available?: boolean; rejectCwd?: boolean } = {},
+): ReturnType<typeof vi.fn> {
   const available = opts.available ?? true;
-  const fetchSpy = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
+  const fetchSpy = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     const u = String(url);
     if (u === STATUS_URL) {
       return available
@@ -76,7 +78,21 @@ function installFetchStub(opts: { available?: boolean } = {}): ReturnType<typeof
       return jsonResponse(200, { nonce: TEST_NONCE });
     }
     if (u === RELAUNCH_URL || u === START_FRESH_URL) {
-      return jsonResponse(200, { ok: true });
+      // Mirrors the server: `resolveRouteCwd` home-confines, so ANY cwd this
+      // stub is handed is rejected, while an omitted one is accepted. That is
+      // the real shape of the bug — the rejection is a property of the path,
+      // not of the request being malformed.
+      if (opts.rejectCwd && u === RELAUNCH_URL) {
+        const body = JSON.parse((init?.body as string) ?? "{}") as { cwd?: unknown };
+        if (body.cwd !== undefined) {
+          return jsonResponse(400, {
+            error: "BAD_REQUEST",
+            code: "PATH_REJECTED",
+            message: "cwd must be an absolute path inside the user's home directory",
+          });
+        }
+      }
+      return jsonResponse(200, { ok: true, cwd: "/home/user/configured" });
     }
     throw new Error(`unexpected fetch to ${u}`);
   });
@@ -112,9 +128,17 @@ beforeEach(() => {
     vi.fn(() => true),
   );
   // Active document lives in a real folder so relaunch can derive a cwd.
+  wireDeps("/home/user/project/notes.md");
+});
+
+/** Rewire the dependency bag with a different active-document path. Only that
+ * path varies across these tests, and it is what `deriveCwdFromDocPath` reads
+ * to build the cwd — so it is the one knob worth parameterizing. `null` models
+ * the empty state: no tab, hence no derivable cwd. */
+function wireDeps(activeDocumentPath: string | null): void {
   wireActionDeps({
-    getActiveTabId: () => "doc-1",
-    getActiveDocumentPath: () => "/home/user/project/notes.md",
+    getActiveTabId: () => (activeDocumentPath ? "doc-1" : null),
+    getActiveDocumentPath: () => activeDocumentPath,
     notify,
     openSettings: vi.fn(),
     toggleSoloMode: vi.fn(),
@@ -134,7 +158,7 @@ beforeEach(() => {
     selectBlock: vi.fn(),
     toggleAuthorship: vi.fn(),
   });
-});
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -215,32 +239,6 @@ describe("launcher-start-fresh", () => {
  * safe recovery unreachable while the session-destroying secondary kept working.
  */
 describe("AI-chip relaunch vs. palette relaunch", () => {
-  /** Re-wire deps with a different active-document answer. */
-  function wireWithDocPath(docPath: string | null): void {
-    wireActionDeps({
-      getActiveTabId: () => (docPath ? "doc-1" : null),
-      getActiveDocumentPath: () => docPath,
-      notify,
-      openSettings: vi.fn(),
-      toggleSoloMode: vi.fn(),
-      openFindBar: vi.fn(),
-      openFindBarTabs: vi.fn(),
-      findNext: vi.fn(),
-      findPrev: vi.fn(),
-      closeActiveTab: vi.fn(),
-      openFileDialog: vi.fn(),
-      toggleLeftPanel: vi.fn(),
-      toggleRightPanel: vi.fn(),
-      reopenClosedTab: vi.fn(),
-      annotationNext: vi.fn(),
-      annotationPrev: vi.fn(),
-      annotationAccept: vi.fn(),
-      annotationDismiss: vi.fn(),
-      selectBlock: vi.fn(),
-      toggleAuthorship: vi.fn(),
-    });
-  }
-
   async function drive(fn: () => void, fetchSpy: ReturnType<typeof vi.fn>): Promise<void> {
     fn();
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
@@ -251,7 +249,7 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
   it("POSTs with no cwd when no document is open (the empty-state case)", async () => {
     // Against the pre-change code this test fails at the POST assertion: the
     // `if (!cwd)` guard fired and the request was never made at all.
-    wireWithDocPath(null);
+    wireDeps(null);
     const fetchSpy = installFetchStub();
     await drive(relaunchClaudeCode, fetchSpy);
 
@@ -267,7 +265,7 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
     // addressed-AI toast share this entry point and are NOT gated on having a
     // tab — switching them all to the no-cwd form would silently move Claude's
     // project root for every user it already worked for.
-    wireWithDocPath("/home/user/project/notes.md");
+    wireDeps("/home/user/project/notes.md");
     const fetchSpy = installFetchStub();
     await drive(relaunchClaudeCode, fetchSpy);
 
@@ -281,7 +279,7 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
     // "Relaunch Claude in this folder" has no folder to name here, so refusing
     // and saying why is right. This is what keeps the change from reading as
     // "the cwd requirement was dropped everywhere".
-    wireWithDocPath(null);
+    wireDeps(null);
     const fetchSpy = installFetchStub();
     await drive(() => getAction("launcher-relaunch-here").run(), fetchSpy);
 
@@ -299,7 +297,7 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
     // including a "Restart Claude anyway" shown to someone who has just been
     // told to install software they believe they already have. A second click
     // landing on complete silence reads as a broken button.
-    wireWithDocPath(null);
+    wireDeps(null);
     let releaseRelaunch: (() => void) | undefined;
     const fetchSpy = vi.fn(async (url: RequestInfo | URL) => {
       const u = String(url);
@@ -346,7 +344,7 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
   it("names the folder the server reports when it sent none", async () => {
     // The success toast is the only place a user learns where Claude landed
     // after a no-cwd restart; the server echoes it back from live state.
-    wireWithDocPath(null);
+    wireDeps(null);
     const fetchSpy = vi.fn(async (url: RequestInfo | URL) => {
       const u = String(url);
       if (u === STATUS_URL) {
@@ -366,5 +364,92 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
     await drive(relaunchClaudeCode, fetchSpy);
 
     expect(notify).toHaveBeenCalledWith("info", "Claude restarting in /home/user/configured.");
+  });
+});
+
+/**
+ * A derived cwd the server refuses.
+ *
+ * `deriveCwdFromDocPath` is `dirname` of whatever tab is active — a guess, and
+ * the server home-confines it via `resolveRouteCwd`. Tandem itself auto-opens
+ * CHANGELOG.md after an upgrade and sample/welcome.md on first run, both from
+ * inside the app bundle, so on the two states EVERY desktop user passes through
+ * the guess is guaranteed to be rejected. A real macOS tester hit exactly this
+ * on v0.20.0 with CHANGELOG.md open: the 400 landed before any relaunch, so the
+ * recovery button reported failure and did nothing.
+ *
+ * The bug predates v0.20.0 — `cwdRequired: false` only ever forgave a *null*
+ * cwd, never a present-but-rejected one. External drives, network shares and
+ * since-deleted folders reject identically, so this covers a class rather than
+ * the two bundled documents.
+ */
+describe("relaunch with a server-rejected cwd", () => {
+  const BUNDLE_DOC = "/Applications/Tandem.app/Contents/Resources/CHANGELOG.md";
+  const BUNDLE_DIR = "/Applications/Tandem.app/Contents/Resources";
+
+  async function drive(fn: () => void, fetchSpy: ReturnType<typeof vi.fn>): Promise<void> {
+    fn();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(STATUS_URL));
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+  }
+
+  function relaunchPosts(fetchSpy: ReturnType<typeof vi.fn>): Record<string, unknown>[] {
+    return fetchSpy.mock.calls
+      .filter(([url]) => String(url) === RELAUNCH_URL)
+      .map(([, init]) => JSON.parse((init as RequestInit)?.body as string));
+  }
+
+  it("chip path retries without the cwd and succeeds", async () => {
+    wireDeps(BUNDLE_DOC);
+    const fetchSpy = installFetchStub({ rejectCwd: true });
+    await drive(relaunchClaudeCode, fetchSpy);
+
+    const posts = relaunchPosts(fetchSpy);
+    expect(posts, "should have attempted, been rejected, then retried").toHaveLength(2);
+    // First attempt carries the bundle folder — we still PREFER the document's
+    // directory; the retry is a fallback, not a replacement.
+    expect(posts[0]).toEqual({ cwd: BUNDLE_DIR, nonce: TEST_NONCE });
+    // Retry drops cwd entirely rather than substituting a guess of its own.
+    expect(posts[1]).toEqual({ nonce: TEST_NONCE });
+    expect(posts[1].cwd).toBeUndefined();
+  });
+
+  it("chip path reports success, not the rejection, to the user", async () => {
+    // The rejection is an implementation detail of a recovery that worked.
+    // Surfacing it too would be the bug's symptom with extra steps.
+    wireDeps(BUNDLE_DOC);
+    const fetchSpy = installFetchStub({ rejectCwd: true });
+    await drive(relaunchClaudeCode, fetchSpy);
+
+    expect(notify).toHaveBeenCalledWith("info", "Claude restarting in /home/user/configured.");
+    expect(notify).not.toHaveBeenCalledWith("error", expect.stringContaining("Relaunch failed"));
+  });
+
+  it("palette command surfaces the rejection and does NOT retry", async () => {
+    // "Relaunch Claude in this folder" named a folder in its confirm prompt.
+    // Silently restarting somewhere else would make that prompt a lie, and it
+    // is also the security-review ask: the strict path must not inherit the
+    // fallback, or a genuine client bug fails open instead of loud.
+    wireDeps(BUNDLE_DOC);
+    const fetchSpy = installFetchStub({ rejectCwd: true });
+    await drive(() => getAction("launcher-relaunch-here").run(), fetchSpy);
+
+    expect(relaunchPosts(fetchSpy)).toHaveLength(1);
+    expect(notify).toHaveBeenCalledWith(
+      "error",
+      expect.stringContaining("must be an absolute path inside"),
+    );
+  });
+
+  it("a cwd the server accepts is never retried", async () => {
+    // Negative control. Without this, the two tests above would still pass if
+    // the retry fired unconditionally on every relaunch.
+    wireDeps("/home/user/project/notes.md");
+    const fetchSpy = installFetchStub();
+    await drive(relaunchClaudeCode, fetchSpy);
+
+    const posts = relaunchPosts(fetchSpy);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toEqual({ cwd: "/home/user/project", nonce: TEST_NONCE });
   });
 });
