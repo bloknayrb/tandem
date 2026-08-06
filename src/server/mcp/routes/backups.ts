@@ -14,7 +14,6 @@ import path from "node:path";
 
 import type { Request, Response } from "express";
 import { API_BACKUPS_RESTORE } from "../../../shared/api-paths.js";
-import { isLoopback } from "../../auth/middleware.js";
 import { listDocBackups } from "../../file-io/doc-backup.js";
 import {
   assertLoopbackForMutation,
@@ -23,7 +22,7 @@ import {
 import { resolveAppDataDir } from "../../platform.js";
 import { getCurrentDoc } from "../document-service.js";
 import { restoreDocumentFromBackup } from "../file-opener.js";
-import { sendApiError } from "./_shared.js";
+import { scrubPathForCaller, sendApiError } from "./_shared.js";
 
 export async function handleListBackups(req: Request, res: Response): Promise<void> {
   const raw = req.query.documentId;
@@ -42,9 +41,10 @@ export async function handleListBackups(req: Request, res: Response): Promise<vo
     return;
   }
   // Strip the absolute path to a basename for non-loopback callers (#1121 F5):
-  // the home-directory layout must not be disclosed across the network.
-  const loopback = isLoopback(req.socket.remoteAddress);
-  const filePath = loopback ? docState.filePath : path.basename(docState.filePath);
+  // the home-directory layout must not be disclosed across the network. Routed
+  // through the shared helper (#1294) so this read twin and the mutating twin
+  // below cannot drift apart again — that drift is what created #1294.
+  const filePath = scrubPathForCaller(req, docState.filePath);
   try {
     const backups = await listDocBackups(docState.filePath, resolveAppDataDir());
     res.json({ data: { filePath, backups } });
@@ -73,7 +73,16 @@ export async function handleRestoreBackup(req: Request, res: Response): Promise<
   }
   try {
     const result = await restoreDocumentFromBackup(docState.id, safeBackup);
-    res.json({ data: result });
+    // #1294: the read twin above already basenames `filePath` for non-loopback
+    // callers; this mutating twin returned `restoredFrom` and `filePath`
+    // verbatim. Same route family, same disclosure — scrub both identically.
+    res.json({
+      data: {
+        ...result,
+        restoredFrom: scrubPathForCaller(req, result.restoredFrom),
+        filePath: scrubPathForCaller(req, result.filePath),
+      },
+    });
   } catch (err) {
     sendApiError(res, err);
   }

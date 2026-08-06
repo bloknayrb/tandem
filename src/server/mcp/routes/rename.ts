@@ -7,7 +7,7 @@ import {
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { renameDocument } from "../document-service.js";
-import { errorCodeToHttpStatus } from "./_shared.js";
+import { errorCodeToHttpStatus, scrubOptionalPathForCaller } from "./_shared.js";
 
 /**
  * POST /api/rename — rename an open on-disk document's file in place (#1017).
@@ -61,7 +61,14 @@ export async function handleRename(req: Request, res: Response): Promise<void> {
     return;
   }
 
+  // #1294: oldPath/newPath were returned verbatim. `fileName` is already a
+  // basename, so a non-loopback caller loses nothing actionable — only the
+  // directory layout and username the absolute paths disclosed.
   res.json({
-    data: { oldPath: result.oldPath, newPath: result.newPath, fileName: result.fileName },
+    data: {
+      oldPath: scrubOptionalPathForCaller(req, result.oldPath),
+      newPath: scrubOptionalPathForCaller(req, result.newPath),
+      fileName: result.fileName,
+    },
   });
 }

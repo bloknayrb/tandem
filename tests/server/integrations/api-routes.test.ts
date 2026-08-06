@@ -177,6 +177,92 @@ describe("integrations API routes", () => {
     if (tmpDir) await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
+  describe("path disclosure on the two ungated GETs (#1294)", () => {
+    const HOME_CONFIG = "/home/alice/.claude.json";
+
+    function depsWithPaths(): IntegrationsRoutesDeps {
+      return {
+        ...deps,
+        readExisting: async () =>
+          [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: HOME_CONFIG },
+              status: "error",
+              errorMessage: `EACCES: permission denied, open '${HOME_CONFIG}'`,
+            },
+          ] satisfies ExistingMcpInstall[],
+      };
+    }
+
+    it(`basenames configPath and drops the raw error for a LAN caller on ${API_INTEGRATIONS_EXISTING}`, async () => {
+      const app = makeAppWithRemoteAddress(depsWithPaths(), "192.168.1.50");
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      const body = JSON.stringify(res.body);
+
+      expect(res.status).toBe(200);
+      // The username is the disclosure; the raw readFile message carries it too.
+      expect(body).not.toContain("alice");
+      expect(body).not.toContain(HOME_CONFIG);
+      // `status` still carries the actionable signal, so nothing usable is lost.
+      expect(body).toContain('"status":"error"');
+    });
+
+    it("still returns the real path to a loopback caller", async () => {
+      // Positive control on the same sample. Without it the assertion above
+      // also passes against a route that returns an empty array, or one whose
+      // field was renamed — neither of which is the fix.
+      const app = makeAppWithRemoteAddress(depsWithPaths(), "127.0.0.1");
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      expect(JSON.stringify(res.body)).toContain(HOME_CONFIG);
+    });
+
+    it(`basenames configPath and workingDirectory for a LAN caller on ${API_INTEGRATIONS}`, async () => {
+      // This route is the one #1294 names alongside /existing and that the
+      // first pass at this work dropped: its handler took `_req` and returned
+      // the stored file verbatim, and every claude-code / claude-desktop entry
+      // carries configPath as an AbsolutePath.
+      await deps.store.write({
+        schemaVersion: INTEGRATIONS_SCHEMA_VERSION,
+        integrations: [
+          {
+            id: "cc",
+            label: "Claude Code",
+            kind: "claude-code",
+            configPath: HOME_CONFIG,
+            transport: "http",
+            url: "http://127.0.0.1:3479/mcp",
+            workingDirectory: "/home/alice/projects/secret-merger",
+          },
+        ],
+      });
+
+      const lan = await request(
+        makeAppWithRemoteAddress(deps, "192.168.1.50"),
+        "GET",
+        API_INTEGRATIONS,
+      );
+      const lanBody = JSON.stringify(lan.body);
+      expect(lan.status).toBe(200);
+      expect(lanBody).not.toContain("alice");
+      expect(lanBody).not.toContain("/home/alice/projects");
+      // NOTE: the basename itself survives — `workingDirectory` becomes
+      // "secret-merger". That is the documented accepted residual on
+      // scrubPathForCaller: a basename can be sensitive, but matching the
+      // existing read-side convention exactly is what stops twins drifting.
+      // Asserting the basename were gone would be asserting a behaviour the
+      // helper deliberately does not have.
+      // Non-path fields must survive — the wizard still needs to render the row.
+      expect(lanBody).toContain('"label":"Claude Code"');
+
+      const local = await request(
+        makeAppWithRemoteAddress(deps, "127.0.0.1"),
+        "GET",
+        API_INTEGRATIONS,
+      );
+      expect(JSON.stringify(local.body)).toContain(HOME_CONFIG);
+    });
+  });
+
   describe(`GET ${API_INTEGRATIONS_EXISTING}`, () => {
     it("returns the existing-installs array", async () => {
       const app = makeApp(deps);

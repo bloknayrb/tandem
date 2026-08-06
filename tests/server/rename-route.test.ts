@@ -30,10 +30,15 @@ function mockRes(): Response & { _status: number; _json: unknown } {
 // Include an allowlisted Origin so the assertOriginAllowlisted gate passes
 // in direct-handler unit tests. The Origin gate itself is exercised by the
 // integration tests below (they use a real Express server).
-const reqWith = (body: unknown) =>
+// `socket.remoteAddress` matters since #1294: the response's path fields are
+// basenamed for non-loopback callers, and an absent address fails CLOSED (is
+// treated as remote). These direct-handler tests model the local UI, which is
+// the only caller that gets full paths.
+const reqWith = (body: unknown, remoteAddress = "127.0.0.1") =>
   ({
     body,
     headers: { origin: `http://${TAURI_HOSTNAME}` },
+    socket: { remoteAddress },
   }) as unknown as Request;
 
 beforeEach(() => renameDocument.mockReset());
@@ -81,6 +86,24 @@ describe("handleRename — success + error mapping", () => {
     expect(res._json).toEqual({
       data: { oldPath: "/d/a.md", newPath: "/d/b.md", fileName: "b.md" },
     });
+  });
+
+  it("basenames oldPath/newPath for a non-loopback caller (#1294)", async () => {
+    renameDocument.mockResolvedValue({
+      status: "renamed",
+      oldPath: "/home/alice/d/a.md",
+      newPath: "/home/alice/d/b.md",
+      fileName: "b.md",
+    });
+    const res = mockRes();
+    await handleRename(reqWith({ documentId: "d1", newName: "b.md" }, "192.168.1.50"), res);
+    expect(res._status).toBe(200);
+    // fileName is already a basename, so the caller loses nothing actionable —
+    // only the directory layout and the username the absolute paths disclosed.
+    expect(res._json).toEqual({
+      data: { oldPath: "a.md", newPath: "b.md", fileName: "b.md" },
+    });
+    expect(JSON.stringify(res._json)).not.toContain("alice");
   });
 
   it.each([

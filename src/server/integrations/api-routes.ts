@@ -79,7 +79,12 @@ import {
 } from "../../shared/integrations/contract.js";
 import { isLoopback } from "../auth/middleware.js";
 import { isLocalhostOrigin } from "../mcp/api-routes.js";
-import type { Handler } from "../mcp/routes/_shared.js";
+import {
+  type Handler,
+  isLoopbackRequest,
+  type PeerRequest,
+  scrubPathForCaller,
+} from "../mcp/routes/_shared.js";
 import {
   type ApplyOps,
   applyConfig,
@@ -93,7 +98,11 @@ import {
   type RemovableEntry,
   shouldRegisterChannelShim,
 } from "./apply.js";
-import { hasExistingTandemEntry, type readExistingTandemEntries } from "./existing-config.js";
+import {
+  type ExistingMcpInstall,
+  hasExistingTandemEntry,
+  type readExistingTandemEntries,
+} from "./existing-config.js";
 import {
   ClaudeInstallError,
   installClaudeCli,
@@ -318,11 +327,36 @@ export function assertOriginAllowlisted(
   return false;
 }
 
+/**
+ * Scrub the two GET responses below for non-loopback callers (#1294).
+ *
+ * Both routes are ungated — no origin check, no loopback check — deliberately,
+ * so the wizard can read them; that makes them the widest-reaching disclosure
+ * of the four surfaces in #1294. `readOneTarget` has no request context at all
+ * and neither handler used to keep one, which is exactly how the existing
+ * basename convention was missed here.
+ *
+ * `errorMessage` is replaced wholesale rather than pattern-scrubbed: it is a
+ * raw `readFile` failure, and Node's formatting embeds the path it was reading.
+ * `status` already carries the actionable signal, so the enum loses nothing a
+ * caller can act on.
+ */
+function scrubExistingInstalls(req: PeerRequest, installs: ExistingMcpInstall[]) {
+  if (isLoopbackRequest(req)) return installs;
+  return installs.map((install) => ({
+    ...install,
+    target: { ...install.target, configPath: scrubPathForCaller(req, install.target.configPath) },
+    ...(install.errorMessage === undefined
+      ? {}
+      : { errorMessage: "Could not read the configuration file." }),
+  }));
+}
+
 function makeGetExistingHandler(deps: IntegrationsRoutesDeps): Handler {
-  return async (_req: Request, res: Response) => {
+  return async (req: Request, res: Response) => {
     try {
       const installs = await deps.readExisting();
-      res.json({ installs });
+      res.json({ installs: scrubExistingInstalls(req, installs) });
     } catch (err) {
       sendInternal(res, err, "Failed to read existing integration entries");
     }
@@ -330,10 +364,29 @@ function makeGetExistingHandler(deps: IntegrationsRoutesDeps): Handler {
 }
 
 function makeGetIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
-  return async (_req: Request, res: Response) => {
+  return async (req: Request, res: Response) => {
     try {
       const file = await deps.store.read();
-      res.json(file);
+      // #1294 names this route alongside /existing. Every claude-code and
+      // claude-desktop entry carries `configPath` (and optionally
+      // `workingDirectory`) as an AbsolutePath, and this handler returned the
+      // stored file verbatim through a discarded `_req`.
+      if (isLoopbackRequest(req)) {
+        res.json(file);
+        return;
+      }
+      res.json({
+        ...file,
+        integrations: file.integrations.map((entry) => ({
+          ...entry,
+          ...("configPath" in entry && typeof entry.configPath === "string"
+            ? { configPath: scrubPathForCaller(req, entry.configPath) }
+            : {}),
+          ...("workingDirectory" in entry && typeof entry.workingDirectory === "string"
+            ? { workingDirectory: scrubPathForCaller(req, entry.workingDirectory) }
+            : {}),
+        })),
+      });
     } catch (err) {
       sendInternal(res, err, "Failed to read integrations file");
     }

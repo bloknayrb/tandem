@@ -37,7 +37,7 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { get as httpsGetDefault } from "node:https";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -320,13 +320,19 @@ async function runInterpreter(
  * Map an `execFile` rejection to a `ClaudeInstallError`. The promisified
  * `execFile` attaches `code` (numeric exit code, or a string errno like ENOENT
  * for spawn failures) and `stderr`. The temp dir is scrubbed from the tail in
- * case the script echoed `$0`.
+ * case the script echoed `$0`, and so is the home directory (#1294): the
+ * install script routinely names `$HOME/.local/bin` on permission or disk
+ * errors, and this tail is surfaced verbatim to the caller as `stderrTail`.
+ * `tmpDir` was already scrubbed here — `homedir()` was the miss, and it is the
+ * one that discloses the username.
  */
 function toClaudeInstallError(err: unknown, tmpDir: string): ClaudeInstallError {
   const e = err as NodeJS.ErrnoException & { stderr?: unknown; code?: unknown };
   const exitCode = typeof e.code === "number" ? e.code : null;
   let stderr = typeof e.stderr === "string" ? e.stderr : (e.message ?? String(err));
   if (tmpDir) stderr = stderr.split(tmpDir).join("<tmp>");
+  const home = homedir();
+  if (home) stderr = stderr.split(home).join("<home>");
   // Strip ANSI/control bytes BEFORE the tail-slice so the 500-char budget is
   // real text — PowerShell's Write-Error emits SGR color codes that would
   // otherwise render as literal `[31;1m…` junk in the wizard's error banner.
