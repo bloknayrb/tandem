@@ -21,7 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
@@ -52,6 +52,9 @@ const ENV_KEYS = [
 let tmpDir: string;
 let spawnDir: string;
 let recordDir: string;
+/** Extra spawn dirs minted mid-test (the relocation cases need a second
+ * folder). Cleaned by the same retry-tolerant sweep as the fixed three. */
+let extraDirs: string[] = [];
 const savedEnv: Record<string, string | undefined> = {};
 
 interface SpawnRecord {
@@ -162,6 +165,7 @@ beforeEach(() => {
   // and node treats its first argument as the script path. Copying the stub to
   // that exact name inside the spawn cwd makes node run it.
   fs.copyFileSync(STUB_SOURCE, path.join(spawnDir, String(process.pid)));
+  extraDirs = [];
 
   // reaperPath()'s dev override only applies when NODE_ENV !== "production"
   // AND TANDEM_TAURI_SIDECAR !== "1".
@@ -177,7 +181,7 @@ afterEach(() => {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
-  for (const dir of [tmpDir, spawnDir, recordDir]) {
+  for (const dir of [tmpDir, spawnDir, recordDir, ...extraDirs]) {
     // Retries, and a swallow of last resort. These are OS temp dirs, and on
     // Windows a just-exited child can still hold its cwd and its running
     // script file briefly — `spawnDir` is both. Letting that surface would red
@@ -191,7 +195,20 @@ afterEach(() => {
   }
 });
 
-async function writeClaudeIntegration(): Promise<void> {
+/**
+ * `workingDirectory` defaults to `spawnDir` and must normally be SET, not just
+ * passed as a startFresh() override: a supervisor-initiated restart rebuilds
+ * the plan with no override and falls back to os.homedir(), where the stub does
+ * not exist.
+ *
+ * Pass `null` to omit the key entirely. That fixture exists for the one
+ * assertion that cannot be made with it present — that a bare relaunch leaves
+ * the key ABSENT. With `workingDirectory: spawnDir` configured, a bare relaunch
+ * resolves to exactly `spawnDir`, so `persistWorkingDirectory`'s
+ * unchanged-value early return makes the write a no-op whether or not the
+ * intent guard exists, and the test cannot fail.
+ */
+async function writeClaudeIntegration(workingDirectory: string | null = spawnDir): Promise<void> {
   const file: IntegrationsFile = {
     schemaVersion: 3,
     integrations: [
@@ -206,14 +223,19 @@ async function writeClaudeIntegration(): Promise<void> {
         transport: "http",
         url: "http://127.0.0.1:3479/mcp",
         apply: "create",
-        // Must be set, not just passed as a startFresh() override: a
-        // supervisor-initiated restart rebuilds the plan with no override and
-        // falls back to os.homedir(), where the stub does not exist.
-        workingDirectory: spawnDir,
+        ...(workingDirectory === null ? {} : { workingDirectory }),
       },
     ],
   };
   await createIntegrationsStore(tmpDir).write(file);
+}
+
+/** The claude-code entry as currently persisted. */
+async function readClaudeEntry(): Promise<Record<string, unknown> | undefined> {
+  const file = await createIntegrationsStore(tmpDir).read();
+  return file.integrations.find((i) => i.kind === "claude-code") as
+    | Record<string, unknown>
+    | undefined;
 }
 
 function recordsWithPrefix<T>(prefix: string): T[] {
@@ -731,4 +753,299 @@ describe("supervisor restart lifecycle after relaunch/startFresh (#1267)", () =>
       await sup.stop();
     }
   }, 20_000);
+});
+
+/**
+ * Relocating Claude to another folder.
+ *
+ * Two independent defects made "restart Claude here" a no-op that also cost the
+ * user their conversation, and both are only observable from the far end of the
+ * pipe — hence this harness rather than a mock:
+ *
+ *   1. Claude Code stores conversations per working directory, so the resumed
+ *      spawn ran `--resume <id>` in a folder where that id does not exist. It
+ *      exited 1, which `shouldClearSession` read as a failed resume (dropping
+ *      the conversation) and `scheduleRestart` read as a crash.
+ *   2. That restart rebuilt the plan with NO cwd override, so Claude reappeared
+ *      in the folder the user had just moved it out of.
+ *
+ * Asserting the argv proves (1); asserting the persisted integration proves (2).
+ */
+describe("launcher — relocating Claude to a different folder", () => {
+  /** A second spawn dir carrying the stub under the pid-name trick. */
+  function makeSpawnDir(): string {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "stream-json-cwd2-")));
+    fs.copyFileSync(STUB_SOURCE, path.join(dir, String(process.pid)));
+    extraDirs.push(dir);
+    return dir;
+  }
+
+  /** The either/or session flag and its value — `buildClaudeArgs` guarantees
+   * exactly one of `--resume` / `--session-id` is present. */
+  function sessionArg(args: string[]): { flag: string; id: string } {
+    const i = args.findIndex((a) => a === "--resume" || a === "--session-id");
+    expect(i).toBeGreaterThanOrEqual(0);
+    return { flag: args[i], id: args[i + 1] };
+  }
+
+  /** Spawn records once at least `n` exist. Sorted by pid purely for
+   * determinism — pids are neither monotonic nor recycle-free, so callers must
+   * identify records by pid (`find(r => r.pid !== first.pid)`), never by index,
+   * whenever more than one spawn is involved. */
+  async function spawnsInOrder(n: number): Promise<SpawnRecord[]> {
+    return waitFor(() => {
+      const recs = recordsWithPrefix<SpawnRecord>("spawn-");
+      return recs.length >= n ? recs.sort((a, b) => a.pid - b.pid) : null;
+    }, `${n} spawn record(s)`);
+  }
+
+  it("starts a fresh session rather than a doomed --resume", async () => {
+    await writeClaudeIntegration();
+    const otherDir = makeSpawnDir();
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await sup.startFresh(spawnDir);
+      const [first] = await spawnsInOrder(1);
+      const firstArg = sessionArg(first.claudeArgs);
+      expect(firstArg.flag).toBe("--session-id");
+
+      await sup.relaunch(otherDir);
+      const recs = await spawnsInOrder(2);
+      const second = recs.find((r) => r.pid !== first.pid);
+      if (!second) throw new Error("no second spawn record");
+
+      // The spawn actually moved...
+      expect(second.cwd).toBe(otherDir);
+      // ...and did NOT try to resume a conversation that cannot exist there.
+      expect(second.claudeArgs).not.toContain("--resume");
+      const secondArg = sessionArg(second.claudeArgs);
+      expect(secondArg.flag).toBe("--session-id");
+      expect(secondArg.id).not.toBe(firstArg.id);
+    } finally {
+      await sup.stop();
+    }
+  }, 30_000);
+
+  it("still resumes when the folder has not changed", async () => {
+    // The gate must be a cwd comparison, not "any relaunch starts fresh" —
+    // otherwise the ordinary recovery restart silently discards the
+    // conversation it exists to preserve.
+    await writeClaudeIntegration();
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await sup.startFresh(spawnDir);
+      const [first] = await spawnsInOrder(1);
+      const firstArg = sessionArg(first.claudeArgs);
+
+      await sup.relaunch(spawnDir);
+      const recs = await spawnsInOrder(2);
+      const second = recs.find((r) => r.pid !== first.pid);
+      if (!second) throw new Error("no second spawn record");
+
+      expect(second.cwd).toBe(spawnDir);
+      const secondArg = sessionArg(second.claudeArgs);
+      expect(secondArg.flag).toBe("--resume");
+      expect(secondArg.id).toBe(firstArg.id);
+    } finally {
+      await sup.stop();
+    }
+  }, 30_000);
+
+  it("startFresh() in the SAME folder still starts a new conversation", async () => {
+    // The one statement `startFresh` does not share with `relaunch` —
+    // `clearSavedSession()` — and it is only load-bearing in the case the
+    // previous test proves resumes. It must also run BEFORE `buildPlan`, or
+    // the plan reads the session it was asked to drop and resumes it. Nothing
+    // else pins that ordering, and a silent reorder is invisible in every
+    // cross-folder test because the cwd gate starts fresh there anyway.
+    await writeClaudeIntegration();
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await sup.startFresh(spawnDir);
+      const [first] = await spawnsInOrder(1);
+      const firstArg = sessionArg(first.claudeArgs);
+
+      await sup.startFresh(spawnDir);
+      const recs = await spawnsInOrder(2);
+      const second = recs.find((r) => r.pid !== first.pid);
+      if (!second) throw new Error("no second spawn record");
+
+      const secondArg = sessionArg(second.claudeArgs);
+      expect(secondArg.flag).toBe("--session-id");
+      expect(secondArg.id).not.toBe(firstArg.id);
+    } finally {
+      await sup.stop();
+    }
+  }, 30_000);
+
+  it("records the RESOLVED cwd in the session file", async () => {
+    // `writeSavedSession(plan.sessionId, plan.cwd)` must store the resolved
+    // path, not the caller's raw string. Every other test passes an already
+    // realpath'd dir, so a regression to storing the raw input would be
+    // invisible there — and very visible in production, where /tmp resolves to
+    // /private/tmp on macOS and casing/8.3 names differ on Windows, mismatching
+    // the plan's own realpath on the next boot and starting fresh every launch.
+    await writeClaudeIntegration();
+    const otherDir = makeSpawnDir();
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await sup.relaunch(otherDir, { persistCwd: true });
+      const recs = await spawnsInOrder(1);
+      const saved = JSON.parse(
+        fs.readFileSync(path.join(tmpDir, "launcher-session.json"), "utf8"),
+      ) as { sessionId: string; cwd: string };
+      expect(saved.cwd).toBe(otherDir);
+      expect(saved.sessionId).toBe(sessionArg(recs[0].claudeArgs).id);
+    } finally {
+      await sup.stop();
+    }
+  }, 30_000);
+
+  describe("persisting the folder (only on explicit intent)", () => {
+    for (const op of ["relaunch", "startFresh"] as const) {
+      it(`${op}() persists a folder the caller explicitly asked to keep`, async () => {
+        await writeClaudeIntegration();
+        const otherDir = makeSpawnDir();
+        const sup = createSupervisor({ integrationsBase: tmpDir });
+        try {
+          await sup[op](otherDir, { persistCwd: true });
+          await spawnsInOrder(1);
+          // Without this, `scheduleRestart` → `buildPlan()` (no override) reads
+          // the OLD value and undoes the move on the first crash.
+          expect((await readClaudeEntry())?.workingDirectory).toBe(otherDir);
+        } finally {
+          await sup.stop();
+        }
+      }, 30_000);
+
+      it(`${op}() does NOT persist a folder the caller merely passed through`, async () => {
+        // The recovery chip sends dirname(activeDocumentPath) whenever a tab is
+        // open. Durably repointing Claude off that guess would mean clicking
+        // "Restart Claude Code" with a stray note open moves Claude forever.
+        await writeClaudeIntegration();
+        const otherDir = makeSpawnDir();
+        const sup = createSupervisor({ integrationsBase: tmpDir });
+        try {
+          await sup[op](otherDir);
+          const recs = await spawnsInOrder(1);
+          expect(recs[0].cwd).toBe(otherDir); // moved for THIS spawn...
+          expect((await readClaudeEntry())?.workingDirectory).toBe(spawnDir); // ...only
+        } finally {
+          await sup.stop();
+        }
+      }, 30_000);
+    }
+
+    it("an unresolvable override is neither persisted nor silent", async () => {
+      // TOCTOU: the route home-confines and realpaths the request, then the
+      // folder is renamed / the share drops / AV holds `realpathSync` before
+      // `buildPlan` resolves it. The spawn falls back to home, so persisting
+      // the request would durably overwrite the user's project directory with
+      // a folder Claude is not running in.
+      //
+      // The `workingDirectory` assertion is a regression guard carried over
+      // from the pre-fix `resolved === null` early return; the console.error
+      // assertion is the new behaviour — this was the only untraced branch in
+      // a change whose stated purpose is removing exactly that.
+      await writeClaudeIntegration();
+      const gone = path.join(os.tmpdir(), `tandem-gone-${Date.now()}`);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const sup = createSupervisor({ integrationsBase: tmpDir });
+      try {
+        // The spawn itself fails (homedir has no stub) — irrelevant, the
+        // persist is awaited first.
+        await sup.relaunch(gone, { persistCwd: true });
+        expect((await readClaudeEntry())?.workingDirectory).toBe(spawnDir);
+        expect(
+          errSpy.mock.calls.some((c) => c.some((a) => typeof a === "string" && a.includes(gone))),
+        ).toBe(true);
+      } finally {
+        errSpy.mockRestore();
+        await sup.stop();
+      }
+    }, 30_000);
+
+    it("a bare relaunch leaves an unset working directory unset", async () => {
+      // Needs the key absent: with it set to spawnDir, a bare relaunch resolves
+      // to spawnDir and the unchanged-value early return makes the write a
+      // no-op regardless, so the assertion could not fail. The spawn itself
+      // fails (homedir has no stub) — irrelevant, the persist is awaited first.
+      await writeClaudeIntegration(null);
+      const sup = createSupervisor({ integrationsBase: tmpDir });
+      try {
+        await sup.relaunch();
+        expect(await readClaudeEntry()).toBeDefined();
+        expect("workingDirectory" in ((await readClaudeEntry()) ?? {})).toBe(false);
+      } finally {
+        await sup.stop();
+      }
+    }, 30_000);
+  });
+
+  it("a crash-restart lands in the persisted folder, and resumes there", async () => {
+    // The headline behaviour. Asserting the persisted CONFIG value is a proxy;
+    // this asserts the thing the bug report is about — where Claude actually
+    // comes back. Everything between the stored field and the spawn's cwd
+    // (`readIntegration`'s predicate, `resolveCwd`, `resolveSafeCwd`) is only
+    // exercised here.
+    await writeClaudeIntegration();
+    const otherDir = makeSpawnDir();
+    const sup = createSupervisor({ integrationsBase: tmpDir, restartBackoffsMs: [50] });
+    try {
+      await sup.relaunch(otherDir, { persistCwd: true });
+      const [first] = await spawnsInOrder(1);
+      expect(first.cwd).toBe(otherDir);
+
+      process.kill(first.pid);
+
+      const recs = await waitFor(
+        () => {
+          const all = recordsWithPrefix<SpawnRecord>("spawn-");
+          return all.length >= 2 ? all : null;
+        },
+        "the supervisor to auto-restart after a crash",
+        15_000,
+      );
+      const second = recs.find((r) => r.pid !== first.pid);
+      if (!second) throw new Error("no second spawn record");
+
+      // Before the fix this was spawnDir — the folder the user moved out of.
+      expect(second.cwd).toBe(otherDir);
+      // And the relocated conversation is resumable from its new home, which is
+      // the whole product claim.
+      const secondArg = sessionArg(second.claudeArgs);
+      expect(secondArg.flag).toBe("--resume");
+      expect(secondArg.id).toBe(sessionArg(first.claudeArgs).id);
+    } finally {
+      await sup.stop();
+    }
+  }, 40_000);
+
+  it("a fresh supervisor resumes into the persisted folder at boot", async () => {
+    // The "across a Tandem restart" half of the claim, and the path a Settings
+    // working-directory edit takes: a NEW supervisor over the same appData,
+    // started with no override at all.
+    await writeClaudeIntegration();
+    const otherDir = makeSpawnDir();
+    const first = createSupervisor({ integrationsBase: tmpDir });
+    let firstRec: SpawnRecord;
+    try {
+      await first.relaunch(otherDir, { persistCwd: true });
+      [firstRec] = await spawnsInOrder(1);
+    } finally {
+      await first.stop();
+    }
+
+    const second = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await second.start();
+      const recs = await spawnsInOrder(2);
+      const bootRec = recs.find((r) => r.pid !== firstRec.pid);
+      if (!bootRec) throw new Error("no boot spawn record");
+      expect(bootRec.cwd).toBe(otherDir);
+      expect(sessionArg(bootRec.claudeArgs).flag).toBe("--resume");
+    } finally {
+      await second.stop();
+    }
+  }, 40_000);
 });

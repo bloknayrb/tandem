@@ -175,7 +175,7 @@ describe("launcher palette commands — registration", () => {
 });
 
 describe("launcher-relaunch-here", () => {
-  it("POSTs the relaunch endpoint with { cwd, nonce }", async () => {
+  it("POSTs the relaunch endpoint with { cwd, nonce, persistCwd }", async () => {
     const fetchSpy = installFetchStub();
     await runAction("launcher-relaunch-here");
 
@@ -186,8 +186,53 @@ describe("launcher-relaunch-here", () => {
     expect(String(url)).toBe(RELAUNCH_URL);
     expect(init?.method).toBe("POST");
     const body = JSON.parse(init?.body as string);
-    // cwd is path.dirname of the active document path.
-    expect(body).toEqual({ cwd: "/home/user/project", nonce: TEST_NONCE });
+    // cwd is path.dirname of the active document path. `persistCwd` rides along
+    // because THIS action is the explicit one: the user picked "relaunch here",
+    // so the folder is a choice and may be made to stick. The recovery chip
+    // sends the same kind of derived cwd and must NOT set it — see below.
+    expect(body).toEqual({ cwd: "/home/user/project", nonce: TEST_NONCE, persistCwd: true });
+  });
+
+  it("the recovery chip sends the derived cwd WITHOUT persistCwd", async () => {
+    // `relaunchClaudeCode()` backs the status-pill / empty-state / AI-toast
+    // "Restart Claude Code" CTA. It is a recovery action, and its cwd is
+    // whatever tab happens to be open — a guess, not a choice. Sending
+    // persistCwd here would mean clicking Restart with a stray note open
+    // repoints Claude at that note's folder for every future launch.
+    const fetchSpy = installFetchStub();
+    relaunchClaudeCode();
+    await vi.waitFor(() =>
+      expect(fetchSpy.mock.calls.some(([url]) => String(url) === RELAUNCH_URL)).toBe(true),
+    );
+
+    const post = fetchSpy.mock.calls.find(([url]) => String(url) === RELAUNCH_URL);
+    const body = JSON.parse(post![1]?.body as string);
+    expect(body.cwd).toBe("/home/user/project");
+    expect(body.persistCwd).toBeUndefined();
+  });
+
+  it("discloses the durable half in the confirm — and only where it applies", async () => {
+    // The palette action is the only caller that sets persistCwd, so its click
+    // rewrites the integration's workingDirectory for every future launch,
+    // with no undo and no backup of the previous value. The confirm is the one
+    // place that can make that non-silent. The recovery chip must NOT make the
+    // same claim — it sends the same kind of derived cwd and persists nothing.
+    installFetchStub();
+    const confirmMock = globalThis.confirm as unknown as ReturnType<typeof vi.fn>;
+    await runAction("launcher-relaunch-here");
+    const palettePrompt = String(confirmMock.mock.calls[0]?.[0]);
+    expect(palettePrompt).toContain("future restarts");
+    expect(palettePrompt).toContain("interrupted");
+
+    confirmMock.mockClear();
+    // Drive the chip with the SAME derivable cwd, so the two prompts differ by
+    // the branch under test rather than by collapsing to the shared no-cwd
+    // string (which would make the negative assertion vacuous).
+    relaunchClaudeCode();
+    await vi.waitFor(() => expect(confirmMock.mock.calls.length).toBeGreaterThan(0));
+    const chipPrompt = String(confirmMock.mock.calls[0]?.[0]);
+    expect(chipPrompt).toContain("/home/user/project");
+    expect(chipPrompt).not.toContain("future restarts");
   });
 
   it("does not POST when the launcher is unavailable", async () => {

@@ -13,9 +13,11 @@ import {
   buildClaudeArgs,
   createLineFramer,
   createSupervisor,
+  homeCwd,
   RESUME_CONFIRM_MS,
   resolveRouteCwd,
   resolveSafeCwd,
+  sessionCwdMatches,
   shouldClearSession,
 } from "../../../src/server/launcher/supervisor.js";
 import {
@@ -96,6 +98,94 @@ describe("supervisor — session persistence", () => {
     // effect must have fired.
     expect(fs.existsSync(sessionFile)).toBe(false);
     await sup.stop();
+  });
+});
+
+describe("sessionCwdMatches — a session is only resumable from its own directory", () => {
+  it("treats a legacy session file (no recorded cwd) as a match", () => {
+    // Assuming a mismatch would discard a live conversation on upgrade for
+    // every user; assuming a match costs at most the one doomed resume that
+    // was the unconditional behaviour before this gate existed.
+    expect(sessionCwdMatches(undefined, "/home/u/project")).toBe(true);
+  });
+
+  it("matches an identical directory", () => {
+    expect(sessionCwdMatches("/home/u/project", "/home/u/project")).toBe(true);
+  });
+
+  it("rejects a different directory", () => {
+    // The case the whole gate exists for: `claude --resume <id>` here would
+    // exit 1 with "No conversation found with session ID".
+    expect(sessionCwdMatches("/home/u/project-a", "/home/u/project-b")).toBe(false);
+  });
+
+  it("rejects a parent or child of the saved directory", () => {
+    expect(sessionCwdMatches("/home/u/project", "/home/u/project/docs")).toBe(false);
+    expect(sessionCwdMatches("/home/u/project/docs", "/home/u/project")).toBe(false);
+  });
+
+  // Both branches run on every host. vitest runs on ubuntu-latest in CI, so a
+  // `runIf(platform === "win32")` guard would leave the case-insensitive
+  // compare — the branch that matters on the product's primary desktop
+  // platform — verified nowhere but a maintainer's laptop.
+  it("compares case-insensitively on win32", () => {
+    expect(sessionCwdMatches("C:\\Users\\U\\Project", "c:\\users\\u\\project", "win32")).toBe(true);
+  });
+
+  it("compares case-sensitively off win32", () => {
+    expect(sessionCwdMatches("/home/u/Project", "/home/u/project", "linux")).toBe(false);
+    expect(sessionCwdMatches("/home/u/Project", "/home/u/project", "darwin")).toBe(false);
+  });
+
+  it("still rejects genuinely different directories on win32", () => {
+    // The case-fold must not degrade into "always matches on Windows".
+    expect(sessionCwdMatches("C:\\a\\project", "C:\\b\\project", "win32")).toBe(false);
+  });
+});
+
+describe("homeCwd — the last-resort cwd is canonicalized like every other", () => {
+  // `plan.cwd` is written verbatim into `launcher-session.json` and then
+  // compared by `sessionCwdMatches`, whose contract is "both sides are
+  // realpath'd". A raw `os.homedir()` breaks that on any host where $HOME is
+  // reached through a symlink: the bare-restart spelling and the override
+  // spelling of the same folder compare unequal, discarding a live
+  // conversation — and oscillating, since a crash-restart and an explicit
+  // restart land on different spellings.
+  it.skipIf(process.platform === "win32")(
+    "resolves a symlinked $HOME to its canonical path",
+    () => {
+      const real = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "home-real-")));
+      const link = path.join(tmpDir, "home-link");
+      fs.symlinkSync(real, link, "dir");
+      const prev = process.env.HOME;
+      try {
+        // Node's os.homedir() prefers $HOME on POSIX.
+        process.env.HOME = link;
+        expect(homeCwd()).toBe(real);
+        expect(homeCwd()).not.toBe(link);
+      } finally {
+        if (prev === undefined) delete process.env.HOME;
+        else process.env.HOME = prev;
+        fs.rmSync(real, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("falls back to the raw home when it does not resolve to a directory", () => {
+    // The fallback branch is platform-independent, but the env var that steers
+    // os.homedir() is not: POSIX prefers $HOME, Windows reads %USERPROFILE%.
+    // Setting only HOME here made this pass on Ubuntu CI and fail on every
+    // Windows dev machine — where `.husky/pre-push` runs the same suite.
+    const homeVar = process.platform === "win32" ? "USERPROFILE" : "HOME";
+    const missing = path.join(tmpDir, "does-not-exist");
+    const prev = process.env[homeVar];
+    try {
+      process.env[homeVar] = missing;
+      expect(homeCwd()).toBe(missing);
+    } finally {
+      if (prev === undefined) delete process.env[homeVar];
+      else process.env[homeVar] = prev;
+    }
   });
 });
 
