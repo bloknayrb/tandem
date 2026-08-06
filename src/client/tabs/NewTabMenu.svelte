@@ -459,9 +459,16 @@ $effect(() => {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* No `opacity` on these two focus rules. Alpha composites away the token's AA
+     margin — measured 4.32:1 (path) and 3.84:1 (timestamp) against a 4.5 floor —
+     and a composite is invisible to every contrast instrument in this repo, so
+     nothing catches it. Worse, these are `:focus` states, which axe never
+     renders. At full opacity they measure 7.74:1. The cost is that on the focused
+     row these read the same weight as the label; exactly one row is focused at a
+     time, so the de-emphasis is doing no disambiguating work there. See
+     App.svelte's `.app-*` note for the same argument. */
   .ntl-recent:focus .ntl-path {
     color: var(--tandem-accent-fg-strong);
-    opacity: 0.75;
   }
   .ntl-when {
     flex: 0 0 auto;
@@ -473,7 +480,6 @@ $effect(() => {
   }
   .ntl-recent:focus .ntl-when {
     color: var(--tandem-accent-fg-strong);
-    opacity: 0.7;
   }
 
   /* Empty + no-match states */
@@ -570,9 +576,12 @@ $effect(() => {
     color: var(--tandem-fg-faint);
     flex-shrink: 0;
   }
+  /* `--tandem-accent-fg` on the solid `--tandem-accent` fill is the pairing this
+     token exists for; at 0.7 it composited to 3.64:1, under the 4.5 floor. The
+     shortcut hint is `aria-hidden`, which exempts it from the accessibility tree
+     but not from being text a sighted user reads. Full opacity measures 5.63:1. */
   .ntl-action-primary .ntl-kbd {
     color: var(--tandem-accent-fg);
-    opacity: 0.7;
   }
 
   /* Footer */

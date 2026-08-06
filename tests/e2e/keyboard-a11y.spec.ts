@@ -209,3 +209,30 @@ test("command palette returns focus to the editor on Escape", async ({ page }) =
   const parked = await page.evaluate(() => document.activeElement === document.body);
   expect(parked, "focus was stranded on <body> after closing the palette").toBe(false);
 });
+
+test("brand menu returns focus to its trigger when dismissed from outside", async ({ page }) => {
+  await boot(page);
+
+  await page.locator("[data-testid='titlebar-brand-menu']").click();
+  await expect(page.locator("[data-testid='titlebar-brand-menu-popover']")).toBeVisible({
+    timeout: 5_000,
+  });
+  // Opening moves focus onto a menu item — the element that is about to unmount.
+  expect(await focusId(page), "opening the menu should put focus inside it").not.toBe("<none>");
+
+  // A mousedown on a NON-focusable region. This is the case that strands focus:
+  // the browser performs no focus transfer of its own, so if the close path does
+  // not restore, `activeElement` falls to <body> and the user's next Tab
+  // restarts from the top of the document. Dispatched rather than clicked so the
+  // target is guaranteed non-focusable regardless of layout.
+  await page.evaluate(() => {
+    document.documentElement.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  });
+  await expect(page.locator("[data-testid='titlebar-brand-menu-popover']")).toBeHidden({
+    timeout: 5_000,
+  });
+
+  const parked = await page.evaluate(() => document.activeElement === document.body);
+  expect(parked, "focus was stranded on <body> after an outside dismiss").toBe(false);
+  expect(await focusId(page)).toBe("titlebar-brand-menu");
+});

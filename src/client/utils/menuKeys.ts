@@ -17,11 +17,13 @@
  * Deliberately not a full APG menu implementation: no typeahead, no submenu
  * traversal, and Tab is left alone rather than being trapped. These menus are
  * short flat lists, and leaving Tab working means the pre-existing escape route
- * out of a menu keeps working exactly as it did.
+ * out of a menu keeps working exactly as it did. The APG's "focus the checked
+ * radio on open" rule IS implemented — see `focusMenuEntryPoint`.
  */
 
 /**
- * Move focus onto a menu's first item.
+ * Move focus onto a menu's entry point: the checked `menuitemradio` if there is
+ * one, else the first item.
  *
  * Required, not a nicety. Opening a menu leaves focus on the *trigger*, and in
  * all three of Tandem's menus the trigger is a SIBLING of the `role="menu"`
@@ -30,17 +32,44 @@
  * once the user had Tabbed into the menu, which is the traversal that already
  * worked and not the one that was broken.
  *
+ * The checked-radio preference is the APG rule for a menu containing a group of
+ * radio items, and both of Tandem's radio menus already expose the state in the
+ * DOM (TitleBar's theme swatches, FormattingToolbar's heading levels), so this
+ * only reads what is already there.
+ *
+ * Restricted to `menuitemradio` ON PURPOSE. `menuitemcheckbox` items are
+ * independent toggles with no "currently selected" one — DecorationsMenu's four
+ * rows are all checkboxes and all checked by default, so honouring `aria-checked`
+ * there would make the menu's entry point depend on the user's decoration
+ * settings (turn off "authorship" and it would open on row 2).
+ *
  * Called from an effect that runs after the menu renders.
  */
-export function focusFirstMenuItem(menu: HTMLElement | null | undefined): void {
+export function focusMenuEntryPoint(menu: HTMLElement | null | undefined): void {
   if (!menu) return;
-  items(menu)[0]?.focus();
+  const list = items(menu);
+  const checkedRadio = list.find(
+    (el) =>
+      el.getAttribute("role") === "menuitemradio" && el.getAttribute("aria-checked") === "true",
+  );
+  (checkedRadio ?? list[0])?.focus();
 }
 
-/** Items in DOM order: `menuitem`, `menuitemcheckbox`, `menuitemradio`. */
+/**
+ * Items in DOM order: `menuitem`, `menuitemcheckbox`, `menuitemradio`.
+ *
+ * `aria-disabled` is filtered as well as `disabled`, because the native
+ * attribute only exists on form controls — an APG menu item need not be a
+ * `<button>`, and `aria-disabled` is the only way such an item can say
+ * "unavailable". A disabled item that still takes focus is worse than one that
+ * is skipped.
+ */
 function items(menu: HTMLElement): HTMLElement[] {
   return Array.from(menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')).filter(
-    (el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
+    (el) =>
+      !el.hasAttribute("disabled") &&
+      el.getAttribute("aria-disabled") !== "true" &&
+      el.getAttribute("aria-hidden") !== "true",
   );
 }
 

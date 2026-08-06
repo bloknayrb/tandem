@@ -6,7 +6,7 @@ import type { TandemMode } from "../../shared/types";
 import ModeToggle from "../editor/toolbar/ModeToggle.svelte";
 import { type ThemePreference } from "../hooks/useTandemSettings.svelte";
 import { onOutsideEvent } from "../utils/dismiss-outside";
-import { focusFirstMenuItem, handleMenuArrowKeys } from "../utils/menuKeys";
+import { focusMenuEntryPoint, handleMenuArrowKeys } from "../utils/menuKeys";
 import { THEME_OPTIONS } from "./theme-options";
 
 interface Props {
@@ -162,7 +162,7 @@ $effect(() => {
     () => brandMenuEl ?? settingsBtn,
     ["mousedown"],
     () => {
-      brandMenuOpen = false;
+      closeBrandMenu();
     },
   );
 });
@@ -175,12 +175,25 @@ function toggleBrandMenu() {
 // focus is still on the brand button, which sits OUTSIDE the popover carrying
 // the keydown handler.
 $effect(() => {
-  if (brandMenuOpen) focusFirstMenuItem(brandMenuEl);
+  if (brandMenuOpen) focusMenuEntryPoint(brandMenuEl);
 });
 
+// Single close path, so focus never strands. The new focus-in effect above puts
+// focus on a menu item, and every dismissal unmounts the element holding it —
+// which leaves `document.activeElement` on <body>, so the next Tab restarts at
+// the top of the document (the same defect this branch fixed for CommandPalette).
+//
+// The containment check is what keeps this from becoming a focus thief: an
+// outside mousedown fires BEFORE the browser's own focus transfer, so if the
+// user clicked something focusable we must not override where they are heading.
+// Restore only when focus is still ours to move.
 function closeBrandMenu() {
+  const ours =
+    (!!brandMenuEl && brandMenuEl.contains(document.activeElement)) ||
+    document.activeElement === document.body ||
+    document.activeElement === null;
   brandMenuOpen = false;
-  settingsBtn?.focus();
+  if (ours) settingsBtn?.focus();
 }
 
 function handleBrandMenuKey(e: KeyboardEvent) {
@@ -198,12 +211,12 @@ function selectTheme(t: ThemePreference) {
 
 function chooseSettings() {
   onOpenSettings?.();
-  brandMenuOpen = false;
+  closeBrandMenu();
 }
 
 function chooseHelp() {
   onOpenHelp?.();
-  brandMenuOpen = false;
+  closeBrandMenu();
 }
 </script>
 

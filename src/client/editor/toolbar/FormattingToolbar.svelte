@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { yUndoPluginKey } from "y-prosemirror";
 import { clickOutside } from "../../actions/clickOutside.svelte";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
-import { focusFirstMenuItem, handleMenuArrowKeys } from "../../utils/menuKeys";
+import { focusMenuEntryPoint, handleMenuArrowKeys } from "../../utils/menuKeys";
 import { applyLink, getInitialLinkHref, withPreventDefault } from "./handlers.js";
 import LinkEditor from "./LinkEditor.svelte";
 import ToolbarButton from "./ToolbarButton.svelte";
@@ -63,15 +63,26 @@ $effect(() => {
 // focus in the editor entirely. Either way an arrow press never reaches the
 // menu's handler unless focus is moved in explicitly.
 $effect(() => {
-  if (showHeadingMenu) focusFirstMenuItem(headingMenuEl);
+  if (showHeadingMenu) focusMenuEntryPoint(headingMenuEl);
 });
 
-// Escape closes the menu; without this, focus falls to <body> when the focused
-// item unmounts. The editor is the right destination: the trigger deliberately
-// keeps focus there on the mouse path.
+// The single close path, for Escape AND for outside dismissal; without it focus
+// falls to <body> when the focused item unmounts. The editor is the right
+// destination: the trigger deliberately keeps focus there on the mouse path.
+//
+// Guarded restore. `editor.commands.focus()` is not a bare `.focus()` — it
+// restores the ProseMirror selection and can scroll the document to it — so an
+// outside mousedown (clickOutside fires on mousedown, before the browser's own
+// focus transfer) must NOT yank focus into the editor when the user was heading
+// somewhere else. Restore only when focus is still inside the menu, or has
+// already fallen to <body> because the focused item unmounted.
 function closeHeadingMenu() {
+  const ours =
+    (!!headingMenuEl && headingMenuEl.contains(document.activeElement)) ||
+    document.activeElement === document.body ||
+    document.activeElement === null;
   showHeadingMenu = false;
-  editor?.commands.focus();
+  if (ours) editor?.commands.focus();
 }
 
 function findActiveHeading(ed: TiptapEditor): HeadingLevel | null {
@@ -325,7 +336,7 @@ function dismissLinkInput() {
 
     <!-- Heading dropdown (A8: leads the block group). -->
     <div
-      use:clickOutside={() => (showHeadingMenu = false)}
+      use:clickOutside={closeHeadingMenu}
       style="position: relative;"
       onkeydown={(e) => {
         if (e.key === "Escape") closeHeadingMenu();

@@ -12,11 +12,21 @@ inferred from the automated rows.
 | A1 | Windows Narrator full editor walkthrough | **Unrun** | Requires a human driving Narrator on Windows. No automated substitute; see §A1. |
 | A2 | macOS VoiceOver full editor walkthrough | **Unrun** | Same, on macOS. |
 | A3 | Forced-colors mode (Windows high contrast) | **Pass** | `tests/e2e/forced-colors.spec.ts` — 6 tests. |
-| A4 | axe-core scan, zero CRITICAL findings | **Pass**, qualified | `tests/e2e/accessibility.spec.ts` — 30 tests (15 surfaces × 2 themes). Qualifier below. |
-| A5 | Keyboard-only navigation | **Pass**, with fixes | `tests/e2e/keyboard-a11y.spec.ts` — 5 tests. Three defects found and fixed. |
-| A6 | WCAG AA contrast across all status colours and themes | **Pass**, with fixes | `tests/e2e/token-contrast.spec.ts` (3) + `tests/e2e/editor-contrast.spec.ts` (3). Fourteen defects found and fixed. |
+| A4 | axe-core scan, zero CRITICAL findings | **Pass**, qualified | `tests/e2e/accessibility.spec.ts` — 45 tests (15 surfaces × 3 themes). Qualifier below. |
+| A5 | Keyboard-only navigation | **Pass**, with fixes | `tests/e2e/keyboard-a11y.spec.ts` — 7 tests. Four defects found and fixed. |
+| A6 | WCAG AA contrast across all status colours and themes | **Pass**, with fixes | `tests/e2e/token-contrast.spec.ts` (3) + `tests/e2e/editor-contrast.spec.ts` (3). Fifteen defects found and fixed, one recorded as a non-assertion. |
 
-Total: 44 automated tests across four files, all passing.
+Total: 64 automated tests across four files.
+
+> **Revised 2026-08-06 (post-review).** The first version of this table said "44
+> automated tests … all passing", and both halves were wrong. The arithmetic did
+> not add up against its own rows, and the branch was CI-red at the time on
+> `accessibility.spec.ts` "dark mode > annotation card" — axe reporting
+> `.ach-time` at 4.44:1 (`#94959a` on the `--tandem-author-claude-bg` card tint).
+> That is fixed (the span moved from `--tandem-fg-faint` to `--tandem-fg-subtle`,
+> 4.96:1) and A4 now runs the warm theme as well, which is where the retuned
+> ladder's margins are thinnest. The A6 changes are described under "The
+> underline probe measured tokens nothing paints" below.
 
 ---
 
@@ -85,12 +95,12 @@ which would speak every word-count tick) describes what that bar is.
 
 ## A5 — keyboard-only
 
-Five tests: arrow-key operability of composite widgets, visible focus
-indication, no positive `tabindex`, and focus restoration on modal dismiss.
-Retries are disabled for this file — a focus trap that fails once and passes on
-retry is exactly the defect these tests exist to catch.
+Seven tests: arrow-key operability of the three composite widgets, visible focus
+indication, no positive `tabindex`, and focus restoration on modal dismiss and on
+outside dismiss. Retries are disabled for this file — a focus trap that fails once
+and passes on retry is exactly the defect these tests exist to catch.
 
-Three real defects, all found by the suite failing first:
+Four real defects, all found by the suite failing first:
 
 1. **Three `role="menu"` widgets had no arrow-key handling** — the brand menu,
    the decorations menu, and the formatting toolbar's heading dropdown. Each
@@ -113,7 +123,27 @@ Three real defects, all found by the suite failing first:
    and restored on dismiss — dismiss only; running a result moves focus
    deliberately and must not be undone.
 
-3. Not a product defect but recorded because it shaped the file: the first test
+3. **The menus' own dismiss paths stranded focus the same way** (found
+   2026-08-06, and *caused* by fix 1). The new focus-in effects put focus on a
+   menu item; the brand menu's item handlers and all three menus' outside-click
+   handlers then unmounted that element while assigning `open = false` directly,
+   bypassing the `close*()` functions that restore focus. Benign before this
+   branch, real after it. All five paths now route through the close function.
+
+   The restore is **guarded** on focus still being inside the menu (or already
+   lost to `<body>`): `clickOutside` fires on `mousedown`, i.e. *before* the
+   browser's own focus transfer, so an unguarded restore would override wherever
+   the user was actually heading. That matters most for the heading menu, whose
+   close calls `editor.commands.focus()` — which restores the ProseMirror
+   selection and can scroll the document.
+
+   Not fixed here, and reported instead: the focus-in effect also pulls focus out
+   of the editor when the heading menu is opened by a plain mouse click, since
+   that trigger deliberately `preventDefault`s to keep focus in ProseMirror.
+   Gating the effect on keyboard-initiated opens needs a pointer-vs-keyboard
+   intent signal these components do not have.
+
+4. Not a product defect but recorded because it shaped the file: the first test
    in the suite pays for Vite's cold module compile and exceeded the default
    30s. Fixed with a longer timeout, **not** retries — retries would also have
    masked the flake class the file guards.
@@ -133,6 +163,10 @@ authorship colours, highlight fills (alpha-composited over the editor
 background, since what the eye receives is the composite, not the token), and
 annotation underlines.
 
+> **Correction, 2026-08-06.** The sentence above claimed underline coverage that
+> the suite did not have when it was written; see "The underline probe measured
+> tokens nothing paints". It is accurate now.
+
 ### Fixes
 
 - **Twelve components paired `-fg` with `-bg`** — e.g. `--tandem-error-fg`
@@ -147,6 +181,23 @@ annotation underlines.
   `fg-subtle` 0.455, `fg-faint` 0.50) and `fg-faint` in dark (0.67). Recorded
   per-token in `docs/design-system-impl/token-audit.md`, as the protected-token
   gate requires.
+- **`.ach-time` moved `fg-faint` → `fg-subtle`** (`AnnotationCardHeader.svelte`).
+  It was the only faint-tier text in the app landing on a tinted surface, at
+  4.44:1 on the dark Claude card tint; both sibling spans in the same header were
+  already on `fg-subtle`. This is the axe failure that had the branch CI-red.
+- **Four composited-opacity sites** where alpha spent the AA margin the token
+  guarantees. A composite is invisible to every instrument here by construction,
+  which is why these needed finding by hand: `.margin-pin-btn`
+  (`--tandem-fg-subtle` at 0.55 → 2.54:1, under SC 1.4.11's 3:1 for a control's
+  identifying graphic) now expresses its rest/hover/pinned ramp as three colour
+  rungs; `NewTabMenu`'s `.ntl-path` / `.ntl-when` focus rules (4.32 / 3.84) and
+  `.ntl-action-primary .ntl-kbd` (3.64) drop their alpha and land at 7.74 / 7.74
+  / 5.63. Two of the three were `:focus`-only states, which axe never renders.
+
+  Adjacent and deliberately **not** swept, because nobody measured them and they
+  are pre-existing: `.margin-bubble [data-testid^="edit-btn-"]` at 0.55 (text, so
+  a 4.5 floor), `.ntl-search-clr` (measured at 3.83:1 — passes the icon floor),
+  and `.ntl-glyph` at 0.65.
 
 ### Known cost of the ladder retune — accepted 2026-08-05
 
@@ -226,6 +277,64 @@ design bought with no accessibility gain, in service of a criterion that does
 not apply. Where a border *is* the sole state indicator (focus rings), that is
 covered by A5's focus-visible assertions, against the colours the ring actually
 sits between.
+
+### The underline probe measured tokens nothing paints (found 2026-08-06)
+
+`editor-contrast.spec.ts`'s "annotation underlines" block probed
+`--tandem-accent` (comment), `--tandem-warning` (note) and `--tandem-suggestion`
+(suggestion) against `--tandem-bg`. `annotation.ts` paints none of those for a
+comment or a note: a Claude comment underline is `--tandem-author-claude`, a
+user/import comment is `--tandem-author-user`, a note is `--tandem-fg-muted`, and
+the suggestion span sets its own `--tandem-suggestion-bg` background, so
+`--tandem-bg` was the wrong surface for that row too. The block reported 5.52:1
+for a colour no code path writes, while the real Claude underline sat at 2.99:1.
+A probe that measures a token nothing paints is worse than no probe, because it
+reports the criterion covered.
+
+The block now mirrors `annotation.ts` and names it as its source. Measured:
+
+| Underline | Token | Light | Dark | Warm |
+|---|---|---|---|---|
+| Claude comment | `--tandem-author-claude` vs `--tandem-bg` | **2.99** | 7.70 | **2.65** |
+| user/import comment | `--tandem-author-user` vs `--tandem-bg` | 4.60 | 7.06 | 4.09 |
+| note | `--tandem-fg-muted` vs `--tandem-bg` | 8.11 | 7.51 | 7.20 |
+| suggestion | `--tandem-suggestion` vs `--tandem-suggestion-bg` | 5.22 | 5.60 | 4.87 |
+
+**The Claude row is recorded as a non-assertion, not asserted at 3:1** — the same
+reasoning already applied to `-border` vs `-bg` above. SC 1.4.11 governs what is
+needed to *identify* a component, and an annotated span is identified by its
+side-panel card, its margin bubble and its own `aria-label`; the hairline is a
+locator on top of that. It is also a pre-existing value, unchanged by this
+branch, so moving it is a brand-identity call rather than an accessibility-gate
+one. Two options are measured and ready if it is taken: wrapping the underline in
+the same `color-mix(… 64%, var(--tandem-fg))` `editor.css` already uses for
+authorship *text* (5.50 / 9.71 / 4.88), or `--tandem-author-claude-border`
+(`#c2613e`, hand-tuned for exactly this job — 3.96 light / 3.52 warm).
+
+### The ladder loop swept only neutral surfaces (found 2026-08-06)
+
+`token-contrast.spec.ts` asserted the four de-emphasis tiers against `bg`,
+`surface` and `surface-sunk` — the three neutrals — while every *tinted* surface
+the ladder lands on sat outside the instrument, including the `--tandem-accent-bg`
+that `index.html` names as dark's binding constraint. That is the blind spot that
+let dark `--tandem-fg-faint` ship at 4.44:1 on the Claude card tint with no signal
+but an axe scan that happened to render one annotation card in one theme.
+
+The loop now sweeps twelve surfaces (four neutrals, `accent-bg`, both author
+tints, five status fills) × four tiers × three themes. Light and warm clear 4.5
+everywhere; four dark pairs do not, and are carried as named waivers with their
+measured numbers next to the loop rather than being omitted:
+
+| Pair (dark) | Ratio | Why waived |
+|---|---|---|
+| `fg-muted` on `info-bg` | 4.10 | no consumer pairs a de-emphasis tier with `#0c4a6e` |
+| `fg-subtle` on `info-bg` | 3.54 | same |
+| `fg-faint` on `info-bg` | 3.16 | same; already recorded in `index.html` |
+| `fg-faint` on `author-claude-bg` | 4.43 | consumer removed (see A4 note); removing it does not raise the ratio |
+
+Retuning `--tandem-info-bg` would close three of these and is worth doing, but it
+reaches into every info banner — wider than this gate should go. Tracked, not
+silently dropped.
 
 ### Three instrument errors worth recording
 

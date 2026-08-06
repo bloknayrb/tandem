@@ -1,6 +1,6 @@
 <script lang="ts">
 import { clickOutside } from "../actions/clickOutside.svelte";
-import { focusFirstMenuItem, handleMenuArrowKeys } from "../utils/menuKeys";
+import { focusMenuEntryPoint, handleMenuArrowKeys } from "../utils/menuKeys";
 
 interface Props {
   showAuthorship: boolean;
@@ -41,7 +41,7 @@ let menuEl = $state<HTMLDivElement | null>(null);
 // The caret button is a sibling of the dropdown, so focus has to be moved into
 // the menu explicitly or arrow keys never reach its handler.
 $effect(() => {
-  if (menuOpen) focusFirstMenuItem(menuEl);
+  if (menuOpen) focusMenuEntryPoint(menuEl);
 });
 
 function toggleMute() {
@@ -57,9 +57,18 @@ function toggleRow(
   onUpdate({ [field]: !current, ...(decorationsMuted ? { decorationsMuted: false } : {}) });
 }
 
+// Single close path so focus never strands on <body> when the focused menu item
+// unmounts. Guarded: `clickOutside` fires on mousedown, i.e. before the browser
+// moves focus itself, so restoring unconditionally would override wherever the
+// user just clicked. Restore only when focus is still inside the menu (or has
+// already been lost).
 function closeMenu() {
+  const ours =
+    (!!menuEl && menuEl.contains(document.activeElement)) ||
+    document.activeElement === document.body ||
+    document.activeElement === null;
   menuOpen = false;
-  caretBtn?.focus();
+  if (ours) caretBtn?.focus();
 }
 
 function handleKey(e: KeyboardEvent) {
@@ -72,7 +81,7 @@ function handleKey(e: KeyboardEvent) {
 
 function chooseSettings() {
   onOpenSettings?.();
-  menuOpen = false;
+  closeMenu();
 }
 </script>
 
@@ -88,7 +97,7 @@ function chooseSettings() {
   class:open={menuOpen}
   data-testid="decorations-menu"
   data-tauri-drag-region="false"
-  use:clickOutside={() => (menuOpen = false)}
+  use:clickOutside={closeMenu}
   onkeydown={handleKey}
 >
   <button

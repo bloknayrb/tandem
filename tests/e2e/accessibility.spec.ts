@@ -133,7 +133,7 @@ async function scan(page: Page) {
  * revision of this file relied on. It would break if a second `applyTheme()`
  * caller ever appeared.
  */
-async function setTheme(page: Page, theme: "light" | "dark") {
+async function setTheme(page: Page, theme: "light" | "dark" | "warm") {
   await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
 }
 
@@ -363,7 +363,14 @@ const SURFACES: Surface[] = [
   },
 ];
 
-for (const theme of ["light", "dark"] as const) {
+// Warm is not a spare theme. It carries its own surface ramp (surface-sunk at
+// 0.920 against light's 0.96) while inheriting :root's de-emphasis ladder and
+// status family wholesale — so it is where the retuned ladder's margins are
+// thinnest, and index.html's recorded worst cases (6.65 / 5.75 / 4.73) are all
+// warm numbers. token-contrast and editor-contrast cover warm as declared token
+// pairs; axe is the only instrument here that sees what a component actually
+// composites and paints.
+for (const theme of ["light", "dark", "warm"] as const) {
   test.describe(`WCAG AA — ${theme} mode`, () => {
     for (const surface of SURFACES) {
       test(`${surface.name} has no violations`, async ({ page }) => {
