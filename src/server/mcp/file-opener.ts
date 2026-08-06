@@ -32,6 +32,7 @@ import { loadAndMerge } from "../annotations/sync.js";
 import { isDirty, markClean, markDirty, registerDirtyObserver } from "../documents/dirty.js";
 import { attachObservers, clearFileSyncContext, setFileSyncContext } from "../events/queue.js";
 import { docBackupSnapshotPath, snapshotBeforeFirstWrite } from "../file-io/doc-backup.js";
+import { assertDocxWithinSizeLimits } from "../file-io/docx-size-gate.js";
 import {
   atomicWrite,
   atomicWriteBuffer,
@@ -589,6 +590,19 @@ export async function restoreDocumentFromBackup(
   // is itself reversible (first overwrite per path per run; never throws — a
   // skip or snapshot failure must not block the restore).
   await snapshotBeforeFirstWrite(existing.filePath, { appDataDir, documentId: id });
+
+  // #1310: validate BEFORE the write, not during the reload below.
+  //
+  // The ordering is the whole point. `reloadFromDisk` is where `adapter.parse` — and therefore the
+  // size gate — would otherwise run, and that is AFTER `atomicWriteBuffer` has already committed
+  // these bytes to disk. A refusal at that point would leave the rejected archive on disk, the
+  // Y.Doc still holding pre-restore content, and the `savedAtVersion` baseline below never updated
+  // — the exact split this function's own comments describe as making the autosave
+  // external-modification guard misfire. Snapshots can predate this gate, so restoring an old
+  // hostile file reaches that ordering by an ordinary route, not a contrived one.
+  if (isDocx) {
+    await assertDocxWithinSizeLimits(content as Buffer);
+  }
 
   suppressNextChange(existing.filePath);
   if (isDocx) {
