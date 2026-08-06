@@ -53,6 +53,8 @@ Quality over speed. Claude is an AI — time and effort have no cost. Never abbr
 
 For every feature or fix: draft a plan (`/plan`), spawn adversarial agents to review the plan from multiple angles before writing any code, implement, run `/simplify`, then verify (`npm run typecheck` + `npm test`; add `npm run test:e2e` for client/integration changes), run whatever manual testing is possible (browser automation via `claude-in-chrome`, MCP probing, etc.), and prompt Bryan to complete any testing that requires human interaction before continuing. Then commit and open the PR with `/commit-commands:commit-push-pr`. After `/pr-review-toolkit:review-pr` surfaces findings, repeat: plan the fixes, adversarial agent review, implement, update PR.
 
+**`/diverge`** is an optional step *before* `/plan`, for genuinely open-ended design problems where the right shape isn't obvious: 6 frame-isolated generators, a critic, then a picker (~16 `Agent` calls, 60–180s). Invoke only when the next artifact would be `/plan`, there's no confident one-sentence answer, and the problem is design-shaped rather than bug-shaped. **When it informs a piece of work, write `via /diverge` in that work's commit or PR body** — its own output lands in gitignored `.claude/plans/`, so a tracked trace is the only thing that can later show it was used. See `.claude/commands/diverge.md`.
+
 This is a two-person project (Bryan + Claude). Scope gates are minimal — if you encounter something broken while working, fix it rather than filing it for later. For small tangential fixes, bundle them in; for larger detours, note them and finish the current task first.
 
 ## Architecture
