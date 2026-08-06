@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
 
 /**
  * The delivery notice: a comment or chat message saved while an agent IS
@@ -18,17 +17,27 @@ import { cleanupAllOpenDocuments, McpTestClient } from "./helpers";
  * case flip a single variable.
  */
 
-let mcp: McpTestClient;
+// No MCP client: the whole point is that this state does not require a real
+// agent. `/health` is stubbed, the send is client-side, and nothing here opens
+// or mutates a document — so there is nothing to clean up between runs.
 
-test.beforeAll(async () => {
-  mcp = new McpTestClient();
-  await mcp.initialize();
-});
-
-test.afterAll(async () => {
-  await cleanupAllOpenDocuments(mcp);
-  await mcp.close();
-});
+/**
+ * Reveal the chat composer.
+ *
+ * `ChatPanel` is always mounted (CSS display toggle, so local state survives
+ * panel switches), which means "not visible" here is a layout state, not an
+ * unmounted component — hence checking visibility rather than presence, and
+ * toggling only when it is actually hidden.
+ */
+async function openChat(page: import("@playwright/test").Page): Promise<void> {
+  const composer = page.locator("[data-testid='chat-composer-input']");
+  if (await composer.isVisible()) return;
+  const rail = page.locator("[data-testid='titlebar-toggle-right']");
+  if ((await rail.count()) > 0) await rail.click();
+  const tab = page.locator("[data-testid='chat-tab']");
+  if ((await tab.count()) > 0) await tab.click();
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+}
 
 /** Stub `/health` with a chosen session + push-consumer state. */
 async function stubHealth(
@@ -56,6 +65,7 @@ test("a chat send with an attached agent but no push consumer explains the delay
   await stubHealth(page, { hasSession: true, subscribers: 0 });
   await page.goto("/");
   await page.waitForSelector("[data-testid='title-bar']", { timeout: 15_000 });
+  await openChat(page);
 
   // Send a chat message — ChatPanel dispatches `tandem:addressed-ai` after it
   // persists, which is what the notice hangs off.
@@ -73,18 +83,31 @@ test("a chat send with an attached agent but no push consumer explains the delay
 });
 
 test("the same send stays silent when a push consumer IS attached", async ({ page }) => {
-  // The negative control. Without it, a notice that fired unconditionally
-  // would pass the test above.
+  // The negative control for the user-visible behaviour. Verified by mutation
+  // that it pins the FAST PATH in `App.svelte` (`chip === null && pushDelivery
+  // === "attached"` returns before the decision function is reached), not
+  // `addressedAiNotice`'s rule 3 — forcing rule 3 to fire unconditionally
+  // leaves this green. Rule 3 itself is pinned by
+  // `tests/client/addressed-ai-notice.test.ts`, where the same mutation fails
+  // two cases. Both paths must stay silent, so both are worth having; this one
+  // is the one a user would notice.
   await stubHealth(page, { hasSession: true, subscribers: 1 });
   await page.goto("/");
   await page.waitForSelector("[data-testid='title-bar']", { timeout: 15_000 });
+  await openChat(page);
 
-  await page.locator("[data-testid='chat-composer-input']").fill("are you there?");
-  await page.locator("[data-testid='chat-composer-input']").press("Enter");
+  const composer = page.locator("[data-testid='chat-composer-input']");
+  await composer.fill("are you there?");
+  await composer.press("Enter");
+
+  // Prove the send actually happened, so "no toast" means "deliberately
+  // silent" rather than "the event never fired".
+  await expect(composer).toHaveValue("", { timeout: 5_000 });
 
   // Give the handler its probe round-trip before asserting absence.
   await page.waitForTimeout(1_500);
-  await expect(page.locator("[data-testid='toast-container']")).not.toContainText(
-    "next time it checks in",
-  );
+  // By text, not via the container: when nothing is raised the container is
+  // absent entirely, and `not.toContainText` on a missing element fails rather
+  // than passing.
+  await expect(page.getByText("next time it checks in")).toHaveCount(0);
 });
