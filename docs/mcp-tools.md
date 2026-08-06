@@ -46,6 +46,15 @@ For these tools, `structuredContent` carries the exact same object as the text e
 | `RANGE_MOVED` | Target text has moved. Response includes `resolvedFrom`/`resolvedTo` with relocated coordinates. |
 | `RANGE_GONE` | Target text was deleted from the document. |
 | `PERMISSION_DENIED` | File path is not accessible (OS-level permission denied, e.g., `EACCES`). |
+| `DEPRECATED` | A removed tool or parameter was used — the deprecated stubs (`tandem_highlight`, `tandem_suggest`, `tandem_flag`) and `tandem_comment`'s `directedAt`. |
+| `READ_ONLY` | The document is read-only, so the mutation was refused. |
+| `EXTERNAL_CONFLICT` | The file changed on disk since Tandem loaded it. Saving is blocked until the user answers the keep-vs-reload banner, so a save reports this rather than claiming success. |
+| `RELOAD_IN_PROGRESS` | A reload from disk is mid-flight; retry once it settles. |
+| `LICENSE_REQUIRED` | The license gate is active and restricted. Reads, `tandem_open`, saves and exports still work; content mutations do not. Never returned while the gate ships dark. |
+| `NO_SUGGESTIONS` | `tandem_applyChanges` found no accepted suggestions to write. |
+| `BACKUP_FAILED` | `tandem_applyChanges` could not write its backup, so it refused to touch the original. |
+| `INVALID_NAME` | `tandem_rename` was given a name that is empty, path-separated, or otherwise unusable. |
+| `INVALID_PATH` | A supplied path was relative where an absolute one is required, or used a UNC / extended-length / device-namespace prefix. |
 
 ## Coordinate System
 
@@ -80,6 +89,7 @@ Open a file in the Tandem editor. Returns a `documentId` for multi-document work
 |-----------|------|----------|-------------|
 | `filePath` | string | yes | Absolute path to the file to open |
 | `force` | boolean | no | Force reload from disk even if already open. Clears annotations and session. |
+| `authoredBy` | `"claude"` | no | Pass when you wrote the file wholesale before opening it, to stamp Claude authorship across its content. Idempotent, and only ever stamps Claude — it cannot forge user attribution. |
 
 **Returns:**
 ```json
@@ -223,13 +233,14 @@ Replace text at a specific range. Single-paragraph replacements only.
 | `to` | number | yes | End position (flat text character offset) |
 | `newText` | string | yes | Replacement text (no newlines -- inserted literally) |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `textSnapshot` | string | no | The text you expect to find at `[from, to]`. Strongly recommended: on mismatch the edit is refused rather than applied to whatever moved into that range. |
 
 **Returns:**
 ```json
 { "edited": true, "from": 42, "to": 67, "newTextLength": 31 }
 ```
 
-**Errors:** `INVALID_RANGE` (offsets out of bounds, overlaps heading markup), `FORMAT_ERROR` (read-only document)
+**Errors:** `INVALID_RANGE` (offsets out of bounds, overlaps heading markup), `FORMAT_ERROR` (read-only document), and — only when `textSnapshot` is supplied — `RANGE_MOVED` (the text shifted; the error carries the relocated `resolvedFrom` / `resolvedTo`) or `RANGE_GONE` (the text was deleted)
 
 **Example:**
 ```
@@ -474,6 +485,7 @@ Add a comment attached to a text range. Appears in the side panel. Use `suggeste
 | `suggestedText` | string | no | Proposed replacement text. When set, the comment renders as a tracked-change suggestion with accept/reject controls. |
 | `documentId` | string | no | Target document ID (defaults to active document) |
 | `textSnapshot` | string | no | Expected text at range — returns `RANGE_MOVED` with relocated range on mismatch, or `RANGE_GONE` if deleted |
+| `directedAt` | `"claude"` | no | **Deprecated (ADR-027).** Still accepted by the schema, but passing it returns `DEPRECATED` — omit it. |
 
 **Returns:**
 ```json
@@ -650,12 +662,16 @@ tandem_annotationReply({
 
 ### tandem_exportAnnotations
 
-Export all annotations as a formatted summary. Useful for review reports, especially on read-only .docx files.
+Export all annotations as a formatted summary. Useful for review reports.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `format` | enum | no | `markdown` (default) or `json` |
 | `documentId` | string | no | Target document ID (defaults to active document) |
+| `writeToDisk` | boolean | no | Also write the export to a sharable sidecar next to the document (`<docPath>.annotations.{json\|md}`). Overwrites any existing sidecar. |
+| `outputPath` | string | no | Custom sidecar path for `writeToDisk` — a file path, or an existing directory the default filename is appended to. Must be **absolute** (a relative path would silently resolve against the server's CWD), and UNC / extended-length / device-namespace prefixes are rejected. |
+
+Solo mode applies here: while Solo is on, held comments and replies are withheld from the export and the count is disclosed as `heldFromExport` rather than being silently omitted.
 
 **Returns (markdown):**
 ```json
@@ -973,10 +989,12 @@ Returns app metadata for the client's About panel and version indicator. All fie
 **Response (200) — non-loopback caller (public fields only):**
 ```json
 {
-  "version": "0.8.0",
-  "toolCount": 28,
+  "version": "0.20.1",
+  "toolCount": 32,
   "mcpSdkVersion": "1.27.1",
-  "transport": "http"
+  "transport": "http",
+  "bindHost": "127.0.0.1",
+  "bindPort": 3479
 }
 ```
 
@@ -986,8 +1004,14 @@ Returns app metadata for the client's About panel and version indicator. All fie
 | `toolCount` | number \| null | no | MCP tools registered at startup; `null` if SDK private field shape drifted |
 | `mcpSdkVersion` | string | no | `@modelcontextprotocol/sdk` version, baked at build time |
 | `transport` | `"http"` | no | Always `"http"` for HTTP mode |
+| `bindHost` | string | no | Present only when the server was given an explicit bind host |
+| `bindPort` | number | no | Present only when the server was given an explicit bind port |
+| `changelogPath` | string | no | Absolute path to `CHANGELOG.md`; present only when the file exists. Drives the changelog auto-open on upgrade. |
+| `workflowsPath` | string | no | Absolute path to the bundled `docs/workflows.md`; present only when the file exists |
+| `welcomePath` | string | no | Absolute path to `sample/welcome.md`; present only when the file exists |
 | `storagePath` | string | yes | Absolute path to session storage directory |
 | `tokenRotatedAt` | number \| null | yes | Auth token file mtime in epoch ms; `null` if token file absent or unreadable |
+| `generationId` | string \| null | yes | Identifies this server run. Browser clients pin it as their Hocuspocus auth token so a tab that survived a restart is rejected instead of CRDT-merging stale state. Loopback-only because Hocuspocus binds `127.0.0.1`, so no one else could use it. |
 
 **Errors:** `403 FORBIDDEN` (Host header is not `127.0.0.1` or `tauri.localhost` — DNS-rebinding protection, narrowed in PR #637)
 
