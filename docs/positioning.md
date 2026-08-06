@@ -38,7 +38,7 @@ The AI has a cursor, a status indicator, and awareness of what the user is doing
 
 ### The .docx review workflow
 
-Tandem opens .docx files in review-only mode via mammoth.js. The original file is never modified. Claude annotates the content. The user accepts or dismisses annotations. Session persistence preserves annotations across restarts. `tandem_exportAnnotations` outputs a Markdown review report.
+Tandem opens .docx files via mammoth.js. Claude annotates the content; the user accepts or dismisses annotations; session persistence preserves them across restarts, and `tandem_exportAnnotations` outputs a Markdown review report. Since #576 the round-trip closes: a `.docx` opens editable, and an explicit save writes the body back as a real Word file with shared comments written back as native Word comments. The original is never overwritten implicitly — auto-save skips `.docx`, Tandem snapshots the file's bytes before its first write so a save is reversible, and conversion losses are reported rather than swallowed.
 
 This maps directly to how a huge amount of real document work actually happens: someone hands you a Word document, you review it, you send back comments. A grad student marking up an advisor's draft, a freelancer reviewing a client's brief, an analyst checking a colleague's report — the loop is the same. No one is building AI tooling for this round-trip today.
 
@@ -76,7 +76,7 @@ Near-zero outside legal contracts and e-discovery. The Gartner 2024 Hype Cycle p
 | Grammarly | Overlay suggestions | Inline, not addressable | No | Via overlay | Style only |
 | GitHub Copilot | PR review comments | Yes — first-class | Yes | No (code) | Yes (code) |
 | LegalOn / Harvey | Batch contract review | Structured findings | Export only | Yes | Yes (contracts) |
-| **Tandem** | **Live CRDT collaboration** | **Yes — first-class** | **Yes** | **Review-only** | **Yes (prose)** |
+| **Tandem** | **Live CRDT collaboration** | **Yes — first-class** | **Yes** | **Read/write round-trip** | **Yes (prose)** |
 
 ## Risks
 

@@ -40,7 +40,7 @@ tandem doctor
 tandem doctor --json
 ```
 
-The desktop app's **Settings → About → Copy Diagnostics** button runs the same checks (minus the two source-checkout-only items). See [troubleshooting.md → Sharing diagnostics](troubleshooting.md#sharing-diagnostics).
+The desktop app's **Settings → About → Copy Diagnostics** button runs the same checks (minus the five source-checkout-only items). See [troubleshooting.md → Sharing diagnostics](troubleshooting.md#sharing-diagnostics).
 
 ### `tandem --uninstall-scrub`
 
@@ -81,6 +81,43 @@ tandem channel
 ```
 
 Not intended for direct user invocation — the `tandem-channel` MCP entry (written by `tandem setup --with-channel-shim`) wires it up.
+
+### `tandem monitor`
+
+Runs the Tandem plugin monitor: subscribes to `/api/events` and streams event lines to stdout for Claude Code to surface as notifications. This is the flagless alternative to the channel shim — it needs no `--dangerously-load-development-channels`, but it requires **Claude Code 2.1.212 or newer**. On older versions the plugin installs fine and the monitor simply never runs, with nothing to say so.
+
+```bash
+tandem monitor
+```
+
+Not intended for direct user invocation — the plugin's `experimental.monitors[]` entry runs it as `npx -y tandem-editor@<version> monitor`. Reads `TANDEM_URL` to find the local server. Do not run this *and* the channel shim: each delivers independently, so a session with both receives every event twice.
+
+### `tandem activate <license|path>`
+
+Activates a signed license, given either the license blob itself or a path to the `.license` file you were emailed. Writes `license.json` into the app-data directory. Verification is offline — an Ed25519 signature checked against a public key baked into the build — so activation works air-gapped.
+
+```bash
+tandem activate ~/Downloads/tandem.license
+tandem activate "eyJ...blob..."
+```
+
+The desktop equivalent is Settings → License. Licensing ships dark until v1.0; activating early is still worth doing, because an unactivated key is easy to lose.
+
+### `tandem license`
+
+Prints the current license or trial status: whether enforcement is on at all (it is off until v1.0), then either the licensee name and type plus the update window, or the days remaining on the trial. An expired update window is called out explicitly, because "Tandem keeps running but new releases are no longer offered" otherwise shows up only as the app saying you are up to date forever.
+
+```bash
+tandem license
+```
+
+### `tandem start`
+
+Explicit alias for bare `tandem`. Identical behavior; useful in scripts and service units where an explicit verb reads better than a bare command.
+
+```bash
+tandem start
+```
 
 ### `tandem --version` / `tandem -v`
 

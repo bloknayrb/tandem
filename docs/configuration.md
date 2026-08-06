@@ -26,6 +26,7 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_DISABLE_FIRST_RUN_WIZARD` | unset | Set to `1` to suppress the integration setup wizard's first-run auto-open. Useful for scripted/CI setups where the wizard would otherwise appear on a fresh profile. |
 | `TANDEM_OPEN_FILE` | unset | Absolute path to a file the server should open on startup. Set by the Tauri runtime when Tandem is launched via an OS file association; not intended for manual use. |
 | `TANDEM_TAURI_SIDECAR` | unset | Set to `1` by the Tauri runtime when the server is running as a sidecar process. Suppresses noisy stderr logs in production builds. Not intended for manual use. |
+| `TANDEM_CHANNEL_DIST` | unset | Absolute path to the bundled channel-shim entry point, injected by the Tauri runtime so `tandem setup --apply --with-channel-shim` registers the shipped shim rather than a source checkout. Not intended for manual use. |
 | `TANDEM_DEFER_LAUNCHER` | unset | Set to `1` by the Tauri runtime on a start-at-login launch, so the auto-launcher holds off until you open the window. **Not the same as `TANDEM_DISABLE_LAUNCHER`:** this one is temporary and self-releasing, and it is ignored unless `TANDEM_TAURI_SIDECAR=1` (otherwise an exported var would permanently disable the launcher on the npm install, which has no way to release it). `TANDEM_DISABLE_LAUNCHER=1` outranks it. Not intended for manual use. |
 | `TANDEM_DISABLE_AUTOSTART` | unset | Set to `1` to make a start-at-login launch behave like an ordinary one — the window shows and the AI launcher is not deferred. Debugging escape hatch; does not remove the OS registration (turn the setting off in Settings → Network for that). Desktop app only. |
 
@@ -34,8 +35,8 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | Variable | Default | Description |
 |---|---|---|
 | `TANDEM_BIND_HOST` | `127.0.0.1` | Address the server binds to. Use `0.0.0.0` to listen on all interfaces, or a specific LAN IP to bind to one interface. **See LAN exposure below.** |
-| `TANDEM_AUTH_TOKEN` | auto-generated | Override the auth token. Tandem auto-generates a 32-byte base64url token on first run and stores it at `{APP_DATA_DIR}/tandem_auth_token`; this variable lets you supply an explicit value (set by Tauri; manual use is rare). |
-| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | Set to `1` to disable the token requirement for non-loopback requests. **Insecure** — intended for trusted-network development only. |
+| `TANDEM_AUTH_TOKEN` | auto-generated | Override the auth token. Tandem auto-generates a 32-byte base64url token on first run and stores it at `{APP_DATA_DIR}/auth-token`; this variable lets you supply an explicit value (set by Tauri; manual use is rare). |
+| `TANDEM_ALLOW_UNAUTHENTICATED_LAN` | unset | Set to `1` to allow binding to a non-loopback host before an auth token has been provisioned; without it that startup is refused. **The name overstates it** — it does not turn authentication off. Non-loopback callers still need a valid Bearer token. See [security.md](security.md#network-posture). **Insecure** — trusted-network development only. |
 | `TANDEM_LAN_IP` | auto-detected | Explicit LAN IP for the welcome banner's "share this URL" message. Useful on multi-homed machines where auto-detection picks the wrong interface. |
 
 ### App-data and storage
@@ -45,6 +46,13 @@ A copy-paste template lives at [.env.example](../.env.example) in the repo root.
 | `TANDEM_APP_DATA_DIR` | platform default (see below) | Override the app-data root that holds sessions, the auth token, and durable annotations. |
 | `TANDEM_DATA_DIR` | repo-relative | Override the project-relative data dir used to locate `sample/welcome.md`. Distinct from `TANDEM_APP_DATA_DIR`; most users don't need this. |
 | `TANDEM_ANNOTATION_STORE` | unset | Set to `off` to disable durable annotation persistence (annotations then live only in session files). |
+
+### Crash reporting and licensing
+
+| Variable | Default | Description |
+|---|---|---|
+| `TANDEM_SENTRY_DSN` | unset | The **only** switch that turns crash reporting on. Set it to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) DSN you control and Tandem reports crashes to *your* endpoint, scrubbed of home-directory paths, secrets, and document payloads. Unset (the default), no crash-reporting code path is initialized at all. See [security.md](security.md#telemetry-none-by-default-crash-reporting-strictly-opt-in). |
+| `TANDEM_LICENSE_GATE` | unset | Set to `1` to force the licensing gate on in `tsx`/`vitest` runs, where the `__LICENSE_GATE_ENABLED__` build define is absent. Development and testing only — in shipped builds the gate is fixed at build time by `LICENSE_GATE_ENABLED` in `tsup.config.ts`, which stays off until v1.0. |
 
 ## LAN exposure
 
@@ -94,8 +102,8 @@ The contents:
 | `sessions/` | One file per opened document, named by URL-encoded file path. Holds the Y.Doc snapshot and ephemeral state. |
 | `sessions/CTRL_ROOM.json` | Cross-document state — chat history, Solo/Tandem mode, multi-doc UI state. |
 | `annotations/` | Durable annotation store. One `.json` file per document. Corrupt files are renamed to `.corrupt.json` and quarantined instead of deleted. |
-| `tandem_auth_token` | Auto-generated auth token, mode `0o600`. |
-| `store.lock` | PID file for the annotation writer, used for cross-process safety. |
+| `auth-token` | Auto-generated auth token, mode `0o600`. |
+| `annotations/store.lock` | PID file for the annotation writer, used for cross-process safety. Lives inside `annotations/`, not at the app-data root. |
 | `last-seen-version` | Tracks the last Tandem version to launch — drives the CHANGELOG auto-open on upgrade. |
 | `autostart-seen` | Linux only, and only when start-at-login is on. Marks that at least one login launch has happened, so the first one always shows a window even if the tray icon turns out to be invisible. |
 

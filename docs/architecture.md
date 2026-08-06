@@ -394,7 +394,7 @@ Components:
 - **`index.ts`** — MCP server setup, `tandem_reply` tool, permission relay handler
 - **`event-bridge.ts`** — SSE client with reconnection (5 retries, 2s delay), debounced awareness posts (500ms), selection event debouncing (1.5s) with cleared-selection filtering
 
-The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously (HTTP for 29 document tools, stdio for channel push + reply).
+The shim coexists with the HTTP MCP server — Claude Code connects to both simultaneously. This is not a split of the tool surface: every Tandem tool is registered on the HTTP server, `tandem_reply` included. The shim exists to carry channel push, and it re-exposes `tandem_reply` so a reply can be sent on the same transport that delivered the event.
 
 ### Permission Relay
 
@@ -782,12 +782,12 @@ Tauri v2 uses a capabilities model to grant permissions:
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-038), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-046), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket
 - MCP over REST for Claude integration
-- .docx review-only by default
+- .docx handling — review-only in ADR-004, editable with write-back since #576
 - Node-anchored ranges for overlays
 - console.error for server logs
 - Y.Map for annotations
@@ -823,11 +823,30 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `session/` -- Session persistence to %LOCALAPPDATA%\tandem\sessions\; `listSessionFilePaths()` for startup auto-restore
 - `models/` -- Server-authoritative Models registry (`models.json`, #1123 M1a/M2). `store.ts` (atomic read/write, backup-on-malformed, canonical `serializeModelsFile`, referential-integrity on read AND write), `registry.ts` (process-singleton cache + content-hash ETag via `getModelsEtag`/`hashModelsFile` + optimistic-concurrency single-flight `persistModelsFileIfMatch`), `api-routes.ts` (`GET /api/models` loopback-full / LAN-allowlist-scrubbed with a scrubbed-file ETag; `POST /api/models` origin+loopback-gated `.strict()` If-Match write), `schema.ts` (Zod `.strict()` versioned wrapper). Read by the local-model resolver (`local-model/config-source.ts`).
 
+- `launcher/` -- The auto-launcher that starts and supervises a Claude Code session (#477 PR 4, #1266, #1268). `supervisor.ts` subscribes to the event queue in-process and writes wake turns directly to the child's stdin, because a channel notification never becomes a turn under the launcher's `-p --input-format stream-json` flags; it registers as an **`"external"`** subscriber so the Solo gate applies. Also holds the crash-loop breaker, the trip-time CLI probe that distinguishes "missing" from "unstartable", and `api-routes.ts` for the `/api/launcher/*` surface.
+- `license/` -- The licensing gate, which **ships dark** (ADR-040, #1116). `license-state.ts` re-reads `trial.json` + `license.json` on every call (no cache), `gate-flag.ts` reads the build define, and the two enforcement surfaces live in `yjs/provider.ts` (read-only document rooms) and `mcp/license-gate.ts` (`gatedTool` + the Express twin).
+- `local-model/` -- The local-model collaborator loop (ADR-039, #1123), also **dark**. `ollama-client.ts` (loopback-only, validate-at-use), `tools.ts`, `loop.ts`, `prompts.ts`, `config.ts`, and `collaborator.ts` — the only server importer of the engine, whose `subscribe()` call is gated behind `BYO_MODELS_ENABLED`.
+- `annotations/` -- The durable annotation store: atomic per-document JSON, the `store.lock` cross-process guard, tombstone ledgers, and GC.
+- `auth/` -- `middleware.ts` (loopback bypass by socket address only, never the `Host` header; rate-limited, hash-then-`timingSafeEqual` token compare) and token file handling.
+- `documents/` / `sessions/` -- Document registry and session persistence entry points.
+
 ### CLI (`src/cli/`)
 
-- `index.ts` -- CLI entrypoint for the `tandem` global command. Handles `--help`, `--version`, `setup`, and default start. Top-level error handler with reinstall guidance.
+- `index.ts` -- CLI entrypoint for the `tandem` global command. Dispatches `setup`, `doctor`, `rotate-token`, `activate`, `license`, `mcp-stdio`, `channel`, `monitor`, `--uninstall-scrub`, `--help`, `--version`, and bare/`start`. Top-level error handler with reinstall guidance. See [docs/cli.md](cli.md) for the user-facing reference.
 - `setup.ts` -- `tandem setup` command. Bare invocation prints wizard-driven guidance; `tandem setup --apply [--force] [--target=<kind>] [--with-channel-shim]` writes MCP config non-interactively. The config-writing helpers (`buildMcpEntries`, `detectTargets`, `applyConfig`, `applyConfigWithToken`, `installSkill`) live in `src/server/integrations/apply.ts` (#477 PR 3c-ii-a).
 - `start.ts` -- `tandem start` (default command). Spawns `node dist/server/index.js` with the user environment, forwards signals, pre-validates server entry point exists.
+- `doctor.ts` -- The `tandem doctor` check collector, bundled into `dist/cli` rather than spawned: `scripts/` is not shipped in the npm package. Shared with `GET /api/diagnostics` and the `tandem_diagnostics` MCP tool.
+- `license.ts` -- `tandem activate` and `tandem license`.
+- `rotate-token.ts`, `uninstall-scrub.ts`, `mcp-stdio.ts`, `channel.ts` -- one file per remaining subcommand.
+- `preflight.ts`, `node-version.ts`, `win-path-guard.ts`, `skill-content.ts` -- startup checks, the Windows path guard, and the bundled skill text.
+
+### Plugin Monitor (`src/monitor/`)
+
+The flagless alternative to the channel shim, run as `tandem monitor` by the plugin's `experimental.monitors[]` entry (#1201, live to users since v0.18.0).
+
+- `index.ts` -- Standalone entry with an auto-run guard. **Not** what the CLI imports: the guard resolves true inside the bundled CLI, which would fire `main()` twice and double every event.
+- `run.ts` -- The runtime the CLI's `monitor` branch imports. Subscribes to `GET /api/events` and writes event lines to stdout for Claude Code to surface as notifications.
+- Shares the Solo-mode consumer gate in `src/shared/sse-consumer.ts`, retained as a version-skew compatibility layer — see [ADR-028](decisions.md).
 
 ### Channel Shim (`src/channel/`)
 
@@ -878,7 +897,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 - `panels/ReplyThread.svelte` -- Reply thread display and reply input for an annotation (extracted from AnnotationCard)
 - `ChatPanel` + `SidePanel` are both always mounted (CSS display toggle, not conditional rendering) so local state (filters, scroll position) persists across panel switches
 - `ChatPanel` -- Shows Claude typing indicator (animated dots + status text) when `claudeActive` is true
-- `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time) and Claude activity indicator. Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. The Solo/Tandem mode toggle lives in the Toolbar (not StatusBar); client broadcasts `mode` via `Y_MAP_MODE` key to `Y_MAP_USER_AWARENESS` on `CTRL_ROOM`.
+- `StatusBar` -- Connection status (three-state: connected/connecting/disconnected with reconnect attempt count + elapsed time) and Claude activity indicator. Prolonged disconnect (>30s) shows a dismissible banner that auto-clears on reconnect. The Solo/Tandem mode toggle lives in the title bar (`src/client/shell/TitleBar.svelte`), not the StatusBar or the Toolbar; client broadcasts `mode` via `Y_MAP_MODE` key to `Y_MAP_USER_AWARENESS` on `CTRL_ROOM`.
 
 ### Tauri Desktop (`src-tauri/`)
 
@@ -904,6 +923,6 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 ### Claude Code Automation (`.claude/`)
 
 - `.claude/settings.json` -- Hook wiring: PreToolUse (block) and PostToolUse (warn) matchers
-- `.claude/hooks/` -- 11 shell scripts enforcing Critical Rules, type-checking, formatting, and test running
+- `.claude/hooks/` -- 19 shell scripts plus one `.mjs` helper, enforcing Critical Rules, type-checking, formatting, test running, and the workflow nudges. Inventory and semantics: [`.claude/hooks/README.md`](../.claude/hooks/README.md)
 - `.claude/agents/` -- 4 specialized reviewer agents (annotation-model, svelte-migration, crdt, security)
-- `.claude/skills/` -- Project-local skills (dev-server, e2e, e2e-debug, changelog, screenshots, issue-pipeline) + symlinked generic skills
+- `.claude/skills/` -- Project-local skills: changelog, dev-server, e2e, e2e-debug, release, screenshots

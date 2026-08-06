@@ -13,6 +13,7 @@ matrix across OS versions, observer soak, accessibility) live in
 ## 0. CI signal (before touching hardware)
 
 - [ ] `tauri-release.yml` — every matrix build green, `release-check` summary green, artifacts + `latest.json` on the GitHub Release.
+- [ ] `verify-release-manifest` green **before** publishing the draft. The workflow creates the draft once and verifies the manifest against it; publishing ahead of this check is what the gate exists to prevent. See [`.claude/skills/release/SKILL.md`](../.claude/skills/release/SKILL.md).
 - [ ] `tauri-webdriver.yml` — the tag-triggered run is green (webview-level key-interception E2E on Windows/WebView2). A failure here doesn't block artifact publishing — it's a signal to investigate **before announcing** the release.
 - [ ] macOS arm64 **launch smoke** (the "Smoke-test bundled sidecar" step inside `tauri-release.yml`) green — confirms the bundled `node-sidecar` actually boots and serves `/health` on Apple Silicon. A red here means the app is dead-on-arrival even though signing/notarization passed (e.g. the #983 V8-init SIGTRAP), so it no longer falls to the manual macOS pass below.
 - [ ] CHANGELOG section for the version is final (the in-app View Changelog button serves this file).

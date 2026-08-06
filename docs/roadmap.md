@@ -610,8 +610,9 @@ associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 - Method: the three-surface audit pattern from lessons-learned (CORS allowlist × Host-header validation × loopback-vs-LAN exposure), plus path validation on filesystem-touching routes. **Outbound surfaces are explicitly in scope even though the route-diff enumeration cannot produce them** — at RC this means the v0.17.0 outbound LLM client (#1123 M1: user-supplied endpoint SSRF posture, redirect/DNS handling, response size/time bounds).
 - Threshold: **zero unresolved HIGH findings**; findings recorded as linked issues. Self-graded by the security-reviewer agent — accepted at two-person scale.
 - **First run 2026-06-11: PASS** — zero HIGH/MEDIUM; two LOW consistency findings + one INFO filed as #1121 (loopback-gate uniformity on four document-mutation routes; path disclosure to token-authenticated LAN on `GET /api/sessions`). #1121 closed 2026-08-05, which unblocked the RC re-run below.
-- **RC re-run 2026-08-05: FAIL** — two HIGH, so the zero-unresolved-HIGH threshold is not met. Four `security-reviewer` agents, partitioned by surface (document/filesystem routes; license+launcher+lifecycle; outbound local-model client; integrations), over the 17 route constants added since v0.13.0 — four more than the "initial floor" above listed, which is the enumerated-diff-is-the-floor clause working as intended.
-  - **HIGH #1291, reachable today.** `Access-Control-Allow-Origin: null` (`mcp/api-routes.ts:122`) is written as a deny value but is the origin serialization of *opaque* contexts, so a sandboxed iframe on any public page reads every loopback-gated GET — licensee name/email/licenseId, absolute paths, `hasSession`. Mutations are unaffected and the `generationId` escalation is blocked by the WS layer, which rejects `"null"` explicitly. Read disclosure only.
+- **RC re-run 2026-08-05: FAIL at the time of the run** — two HIGH, so the zero-unresolved-HIGH threshold was not met. Four `security-reviewer` agents, partitioned by surface (document/filesystem routes; license+launcher+lifecycle; outbound local-model client; integrations), over the 17 route constants added since v0.13.0 — four more than the "initial floor" above listed, which is the enumerated-diff-is-the-floor clause working as intended.
+- **Status as of 2026-08-06: one HIGH outstanding, and it does not gate this release.** #1291 was fixed and closed the same day by `8596240` (PR #1296). That leaves #1292, which is reachable only with `BYO_MODELS_ENABLED` on — so it blocks the local-model flag flip, not the RC. The gate's own threshold is still formally unmet until #1292 is resolved; what has changed is that nothing outstanding is reachable in a shipped build.
+  - **~~HIGH #1291~~ — FIXED 2026-08-05 (`8596240`, PR #1296).** `Access-Control-Allow-Origin: null` (`mcp/api-routes.ts:122`) was written as a deny value but is the origin serialization of *opaque* contexts, so a sandboxed iframe on any public page could read every loopback-gated GET — licensee name/email/licenseId, absolute paths, `hasSession`. Mutations were unaffected and the `generationId` escalation was blocked by the WS layer, which rejects `"null"` explicitly. Read disclosure only. The fix emits the header only for an allowlisted origin (absence is the denial) and adds `Vary: Origin`; `/api/events` was exposed identically and is covered because `res.writeHead` merges rather than replaces — a rewrite to a replacing write would silently drop that coverage.
   - **HIGH #1292, flag-flip-only.** The local-model streaming sink re-`set`s the whole chat message into CTRL_ROOM every 80 chars, so a 16 MB stream costs O(n²) in Yjs encoding and broadcast. Blocks the BYO-models flip, not this release.
   - MEDIUM #1293 (`assertLoopbackForMutation` is a no-op unless `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`, while ~10 comments and CLAUDE.md claim it gates — found independently by three of the four agents), MEDIUM #1294 (absolute paths reach non-loopback callers on four surfaces the existing basename convention missed), LOW batch #1295.
   - Verified sound, worth recording: the local-model SSRF posture (allowlist correct against 26 URL encodings, validate-at-use, `redirect: "error"` on the single shared fetch site, pre-decode byte cap); the installer's pinned host re-validated per redirect hop with an allowlist-built env, so the auth token cannot reach the wire-fetched script; no path traversal on any of the eight document routes; no CSRF path to `/api/shutdown`; and the launcher's deferred-autostart-before-nonce ordering creating no bypass of `TANDEM_DISABLE_LAUNCHER=1`.
@@ -655,10 +656,10 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 |------|--------|
 | ~~#260 Coordinate system refactoring~~ | **Completed v0.8.0** (PR #423). Residual #425, #426 stay non-blocking. |
 | #24 Tailwind CSS 4 | Token system is correct. Tailwind is a code-style question. |
-| #153 Inline images | Nice-to-have. |
+| ~~#153 Inline images~~ | **Completed v0.13.6.** Markdown and .docx inline images render in the editor. |
 | #299 "Show in file explorer" | Bryan triage Defer. |
 | #314 Export annotations as sharable file | Bryan triage Defer. |
-| #319 Diagnostics dashboard | Bryan triage Defer. |
+| ~~#319 Diagnostics dashboard~~ | **Completed v0.13.6.** Shipped as `tandem doctor` + `--json`, Settings → About → Copy Diagnostics / Open log folder, and the `tandem_diagnostics` MCP tool — the issue's scope, minus the tray entry point. |
 | #103 Session management browser | Bryan triage Defer. |
 | #269 §2.1-2.4/§3.1/§3.4 desktop UI tier 2 polish | Identity decisions; v1.1+. |
 | Three-way merge / conflict UI | Complex; reload behavior acceptable for v1.0. |
@@ -666,12 +667,12 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 | #321 WS LAN auth | Rare use case. |
 | #315 DocumentStore interface | Architecture cleanup; refactor for refactor. |
 | #320 Annotation schema v2 framework | Bryan triage Defer. |
-| #318 Tombstone / GC for annotation store | "Year+ scale" per issue body; not v1.0-relevant. |
-| #438 Per-client identity (Code + Cowork) | Prereq for #452 multi-Claude; v1.1+. |
-| #452 Multi-Claude concurrent | Depends on #438. |
+| ~~#318 Tombstone / GC for annotation store~~ | **Completed v0.13.5** (with #313 content-hash rename recovery). |
+| #438 Per-client identity (Code + Cowork) | **Partially shipped v0.20.0**: transport multiplexing landed (ADR-045, #1233), so two sessions no longer evict each other. Still open — per-client inbox state (`surfacedIds`), client-type identity, and event routing are not done. Remains the prereq for #452. |
+| #452 Multi-Claude concurrent | Depends on the unshipped half of #438 (per-client inbox + identity), not the transport work already landed. |
 | #433 Cowork installer TOCTOU | Bryan triage Defer. |
 | #552 Linux/KDE titlebar verification | Bryan triage Defer. |
-| #378 Windows file picker | Current dialog works. |
+| ~~#378 Windows file picker~~ | **Completed v0.13.0.** Native OS picker plus drag-and-drop. |
 | #560 tauri-driver E2E harness | Test-infra polish. |
 | #632 Workflow-nudge perf | Hooks/CI polish. |
 | #633 Extract `matchShortcut` helper | Refactor for refactor. |
@@ -697,7 +698,7 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 
 These are intentional scope boundaries, not bugs:
 
-- .docx is review-only — use Word for final formatting/production
+- .docx round-trips but is lossy at the edges — the body and comments write back, but tracked changes and page headers/footers are not carried across (they are detected and reported, not preserved). Use Word for final formatting/production.
 - No formula support in tables
 - No .xlsx/.csv support (deferred to v2)
 - No drawing/freeform annotation (deferred to v2)

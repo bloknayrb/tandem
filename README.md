@@ -93,7 +93,7 @@ Windows 10 version 22H2 or Windows 11. macOS 12 (Monterey) or later. Linux with 
 
 Pick the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest). Windows, macOS, and Linux builds are available.
 
-The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.markdown`, `.txt`, `.html`, or `.docx` file opens it directly in Tandem.
+The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.txt`, `.html`, or `.docx` file opens it directly in Tandem.
 
 ### Connect your AI
 
@@ -155,7 +155,7 @@ See [docs/workflows.md](docs/workflows.md) for examples of how this looks in dai
 - Tandem itself runs on your computer and stores your documents on your disk. We do not operate any servers that hold your files.
 - When you ask the AI to do something, the text you share with it goes to whichever AI service you are using. For example, if you connect Claude, the text goes to Anthropic under their terms. Tandem does not relay or copy your document anywhere else.
 - Tandem includes a private notes feature. Notes you mark as private are stripped from every response the AI sees ([ADR-027](docs/decisions.md)).
-- **Solo mode holds your work back from the AI.** The Solo / Tandem toggle in the title bar (`Ctrl+Shift+M`) is not just a notification setting: while you are in Solo, the comments and replies *you* write are withheld from what the AI is told and from what it can look up — its inbox, its reads of the annotation list, and the live updates pushed to it. Each held item shows an amber **Held** pill, the status bar keeps a running count, and switching back to Tandem releases the set together. One limit worth knowing: exporting an annotation report is a deliberate "give the AI everything" action and includes held comments. See [the user guide](docs/user-guide.md#solo--tandem-mode) for exactly what the hold does and does not cover.
+- **Solo mode holds your work back from the AI.** The Solo / Tandem toggle in the title bar (`Ctrl+Shift+M`) is not just a notification setting: while you are in Solo, the comments and replies *you* write are withheld from what the AI is told and from what it can look up — its inbox, its reads of the annotation list, and the live updates pushed to it. Each held item shows an amber **Held** pill, the status bar keeps a running count, and switching back to Tandem releases the set together. The hold is enforced where the AI reads, not just where things are displayed — including the annotation export, which reports how many items it withheld rather than quietly including them. What Solo does *not* cover: it holds comments and replies, not the document text itself, which the AI can still read. See [the user guide](docs/user-guide.md#solo--tandem-mode) for the full boundary.
 - Tandem does not collect telemetry or analytics by default — no usage data, and **crash reporting is off unless you turn it on**. It activates only if you set `TANDEM_SENTRY_DSN` to a [Sentry](https://sentry.io) or self-hosted [GlitchTip](https://glitchtip.com) endpoint of your own; unset (the default), no crash data ever leaves your machine. Sent reports are scrubbed of home-directory paths, API keys, and document payloads — see [docs/security.md](docs/security.md) for the details.
 - When paid licensing arrives at v1.0, running the app will validate a signed license file on your own machine (no network call required); update checks will remain network-only, carry no analytics, and the update service will log only what it needs to authorize the download.
 
@@ -237,13 +237,14 @@ This activates the MCP tools, the bundled skill, and — on Claude Code 2.1.212 
 
 ### MCP tools at a glance
 
-Tandem's MCP tools span five capability areas. Full reference: [docs/mcp-tools.md](docs/mcp-tools.md).
+Tandem's MCP tools span six capability areas. Full reference: [docs/mcp-tools.md](docs/mcp-tools.md).
 
-- **Document.** Open, switch, list, close, and convert documents; read text content and outlines; save back to disk.
-- **Annotation.** Create, resolve, remove, and edit annotations; query the annotation list; export a review report.
-- **Apply.** Edit text ranges directly when an annotation is not the right surface.
-- **Navigation.** Inspect the active selection, jump to ranges, and resolve internal links.
+- **Document.** Open, switch, list, close, rename, and convert documents; read text content and outlines; edit text ranges; append content; save back to disk.
+- **Annotation.** Create, resolve, remove, and edit annotations and replies; query the annotation list; export a review report.
+- **Apply.** Write accepted suggestions into a `.docx` as Word tracked changes, and restore a document from a pre-write snapshot.
+- **Navigation.** Search the document, resolve a match to a range, and pull surrounding context.
 - **Awareness.** Read user presence and Solo/Tandem mode; check the inbox for selection events, chat messages, and annotation actions; reply in the chat sidebar.
+- **Diagnostics.** Report connection and boot health over MCP itself, so a client that can't reach loopback can still self-diagnose.
 
 ### Channel push and real-time updates
 
@@ -279,7 +280,8 @@ Verify the server is up:
 
 ```bash
 curl http://127.0.0.1:3479/health
-# → {"status":"ok","version":"x.y.z","transport":"http","hasSession":false}
+# → {"status":"ok","version":"x.y.z","transport":"http","hasSession":false,
+#    "push":{"subscribers":0,"lastEventAt":null,"eventCount":0}}
 ```
 
 For exposing the server on a LAN, set `TANDEM_BIND_HOST` and use `tandem rotate-token` to rotate the auth token. See [docs/security.md](docs/security.md) for the full network posture.

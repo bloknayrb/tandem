@@ -8,7 +8,7 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 - Workflow-nudge hooks emit stderr and never block.
 - Per-session state lives in `.claude/.workflow-state/<session_id>/` (gitignored, pruned at SessionStart after 7 days via `sessionstart-prune-state.sh`).
 
-## Inventory (18 scripts)
+## Inventory (19 scripts + 1 `.mjs` helper)
 
 ### Shared / helper
 
@@ -27,6 +27,10 @@ Wired in `.claude/settings.json`. Each script's purpose is documented in its fir
 
 - **`block-no-verify.sh`** — Blocks `--no-verify` flag (Husky bypass). Fail-closed on parse error.
 - **`nudge-simplify-before-commit.sh`** — Warns on `git commit` when source edits have happened since last `/simplify`. One-shot per edit batch.
+
+### PreToolUse — `ExitPlanMode` matcher
+
+- **`block-plan-without-agent-review.sh`** (+ `block-plan-without-agent-review.mjs`) — Blocks plan approval unless the session transcript shows an `Agent`/`Task` call *after* the most recent write to a plan file under `~/.claude/plans/`. Project-level `<repo>/.claude/plans/` is deliberately excluded. Bypass by prepending `Agent feedback incorporated` to the plan body. Fail-closed on a missing or oversized (>50 MB) transcript, and on plan paths that don't `realpath` under `~/.claude/plans/`.
 
 ### PostToolUse — unmatched (every tool)
 
