@@ -71,6 +71,10 @@ export interface RunLoopOpts {
   maxToolCalls?: number;
   temperature?: number;
   timeoutMs?: number;
+  /** Raw response-byte ceiling per `chat()` call. Omitted → the client's
+   *  `DEFAULT_MAX_RESPONSE_BYTES`, which is sized for a whole JSON response
+   *  rather than a chat bubble (#1292). */
+  maxResponseBytes?: number;
   signal?: AbortSignal;
   isLicenseRestricted?: () => boolean;
   /** When set, every turn streams and this fires per assistant content delta
@@ -122,6 +126,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         tools,
         temperature: opts.temperature,
         timeoutMs: opts.timeoutMs,
+        maxResponseBytes: opts.maxResponseBytes,
         signal,
         onContentDelta: opts.onContentDelta,
       });

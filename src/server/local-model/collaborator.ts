@@ -41,6 +41,35 @@ const INLINE_CHAR_LIMIT = 8000;
 /** Coalesce streamed deltas: flush at most this often OR every FLUSH_CHARS chars. */
 const STREAM_FLUSH_MS = 120;
 const STREAM_FLUSH_CHARS = 80;
+
+/**
+ * Ceiling on a single streamed reply (#1292).
+ *
+ * Every flush re-`set`s the ENTIRE message value into the ctrl-room Y.Map, which
+ * Hocuspocus then broadcasts to every connected client — so a stream of length n
+ * costs O(n²) in Yjs encoding and WebSocket bytes. The only other ceiling is the
+ * per-response raw-byte cap, which is sized for a whole JSON response rather than
+ * a chat bubble; a local model in a repetition loop (a routine failure mode for
+ * quantized small models) reaches it with no attacker involved.
+ *
+ * 64 KiB is generous for a chat bubble. This cap is load-bearing beyond the
+ * quadratic blowup: it also bounds what lands in the persisted session file.
+ */
+const MAX_STREAMED_CHARS = 64 * 1024;
+
+/** Appended once when {@link MAX_STREAMED_CHARS} is hit, so the cut is visible. */
+const TRUNCATION_MARKER = "\n\n_[Reply truncated — the model exceeded the streaming limit.]_";
+
+/**
+ * Wire-level twin of {@link MAX_STREAMED_CHARS} (#1292).
+ *
+ * Deliberately looser than the char cap: a streaming response carries SSE
+ * framing and JSON envelope overhead around the content, and tool-call turns
+ * spend bytes on arguments that never reach the sink at all. 1 MiB leaves room
+ * for that while staying four orders of magnitude below the client's 16 MB
+ * default, which exists for whole-JSON reads rather than chat.
+ */
+const MAX_STREAMED_RESPONSE_BYTES = 1024 * 1024;
 /** Truncate selectedText before embedding in the model prompt. A large selection
  *  can't inflate token usage unboundedly; 500 chars captures any reasonable
  *  user-selected excerpt (a paragraph or two). */
@@ -128,6 +157,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     let buffer = "";
     let charsSinceFlush = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // Latch, not a counter: the marker is appended exactly once, and every
+    // subsequent delta is dropped rather than re-triggering the cap branch.
+    let truncated = false;
 
     const isOwner = () =>
       current?.token === ctx.token &&
@@ -161,8 +193,36 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
 
     return {
       push: (delta: string) => {
+        // Post-cap deltas are dropped outright: the marker is already committed
+        // and the run is aborting, so appending would only grow a buffer nobody
+        // will write.
+        if (truncated) return;
+
         buffer += delta;
         charsSinceFlush += delta.length;
+
+        if (buffer.length >= MAX_STREAMED_CHARS) {
+          // #1292. ORDER IS LOAD-BEARING — do not reorder these two calls.
+          // `write()` returns early on `!isOwner()`, and `isOwner()` includes
+          // `!ctx.abort.signal.aborted`, so aborting FIRST would permanently
+          // disable the only write path: the marker would never reach the
+          // Y.Map, and the user would see a silently truncated reply. The
+          // terminal path in `executeRun` cannot rescue it either — its
+          // `stillOwner()` carries the same abort clause.
+          //
+          // Both calls ride ONE deferred task so the ordering is guaranteed
+          // while preserving this file's nested-txn invariant (see the header:
+          // the sink flushes only from a timer, never on a delta stack).
+          truncated = true;
+          buffer = buffer.slice(0, MAX_STREAMED_CHARS) + TRUNCATION_MARKER;
+          cancelTimer();
+          timer = setTimeout(() => {
+            write();
+            ctx.abort.abort();
+          }, 0);
+          return;
+        }
+
         // Deferred always — a flush must never run on the onContentDelta stack.
         if (charsSinceFlush >= STREAM_FLUSH_CHARS) {
           cancelTimer();
@@ -172,6 +232,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         }
       },
       onTurnEnd: (info: { hadToolCalls: boolean }) => {
+        // Once truncated, the buffer holds the committed-or-committing marker.
+        // Dropping it here would cancel the pending cap flush and wipe the
+        // marker, which is the one write the user needs to see (#1292).
+        if (truncated) return;
         if (info.hadToolCalls) {
           // The turn's content was preamble/scaffolding — drop it so the next
           // turn's content replaces it (no "" write → no empty-bubble flip).
@@ -219,6 +283,12 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         config,
         task,
         includeFullText,
+        // #1292: the client default is 16 MB, sized for a whole JSON response.
+        // A chat reply is bounded by MAX_STREAMED_CHARS on the sink side; this
+        // is the wire-level twin, so a hostile or looping endpoint cannot make
+        // us buffer 16 MB before the sink ever sees it. Both are needed — the
+        // sink cap bounds the Y.Map write, this bounds the raw read.
+        maxResponseBytes: MAX_STREAMED_RESPONSE_BYTES,
         signal: abort.signal,
         onContentDelta: sink.push,
         onTurnEnd: sink.onTurnEnd,
