@@ -728,9 +728,16 @@ async function relaunchHere(
   // On the fallback-allowed path the folder is a preference, not a guarantee,
   // so the prompt says so rather than promising a destination the retry below
   // may override.
+  //
+  // Only the `cwdRequired` branch discloses the durable half, because it is the
+  // only caller that sends `persistCwd` — its click rewrites the integration's
+  // workingDirectory for every future launch, with no undo and no backup of the
+  // previous value. Interruption is stated unconditionally (the relaunch always
+  // SIGTERMs the running process); conversation replacement is stated
+  // conditionally, because a same-folder relaunch now resumes.
   const prompt = cwd
     ? cwdRequired
-      ? `Restart Claude in:\n${cwd}\n\nYour current task may be interrupted.`
+      ? `Restart Claude in:\n${cwd}\n\nYour current task will be interrupted, and this becomes Claude's working directory for future restarts. If the current conversation was started in another folder, it is replaced with a new one.`
       : `Restart Claude in:\n${cwd}\n\nIf that folder isn't usable, Claude restarts in its configured directory instead.\n\nYour current task may be interrupted.`
     : "Restart Claude in its configured working directory.\n\nYour current task may be interrupted.";
   if (!confirm(prompt)) return;
@@ -752,12 +759,22 @@ async function relaunchHere(
     // doc on an external drive, a network share, or in a since-deleted folder
     // rejects the same way. None of that should sink a recovery action whose
     // caller already said the cwd is optional, so re-send without it.
+    // `persistCwd` tracks `cwdRequired`, and that is the whole distinction:
+    // only the palette's "relaunch here" means "move Claude to this folder",
+    // so only it may rewrite the integration's workingDirectory. The chip's
+    // derived guess moves Claude for this spawn and nothing more — clicking a
+    // RECOVERY button with a stray note open must not repoint Claude forever.
     const rejected =
       cwd && !cwdRequired
         ? await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, { cwd }, labels, {
             retryOnCode: LAUNCHER_ERROR_PATH_REJECTED,
           })
-        : await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, cwd ? { cwd } : {}, labels);
+        : await postLauncherMutation(
+            d,
+            API_LAUNCHER_RELAUNCH,
+            cwd ? { cwd, persistCwd: true } : {},
+            labels,
+          );
     // Fresh nonce, not a replay: the server rotates it on every attempt,
     // including the rejected one. `postLauncherMutation` acquires its own.
     if (rejected !== null) {
