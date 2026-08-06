@@ -3348,10 +3348,13 @@ const shouldShowModelPicker = $derived(
     background: var(--tandem-surface-muted);
     border-radius: var(--tandem-r-pill);
     padding: var(--tandem-space-1) var(--tandem-space-3);
-    /* No `opacity` here. `--tandem-fg-faint` is tuned to sit just above the AA
-       floor, so compositing it at 0.6 pushed the *rendered* contrast back under
-       4.5:1 — the token's guarantee is about the colour, and opacity silently
-       spends it. The wrapper is `aria-hidden`, which exempts this from the
+    /* No `opacity` here. `--tandem-fg-faint` sits just above the AA floor by
+       construction — it is the lightest rung the 4.5:1 requirement permits — so
+       compositing it at 0.6 pushed the *rendered* contrast back under 4.5:1.
+       The token's guarantee is about the colour, and opacity silently spends
+       it. (This margin is thin on purpose and is the whole reason the
+       de-emphasis ladder is as compressed as it is: on a near-white surface,
+       AA for small text caps how light de-emphasised text can be.) The wrapper is `aria-hidden`, which exempts this from the
        accessibility tree but not from being visible text a sighted user has to
        read. De-emphasis comes from the faint token and the 2xs size instead. */
   }

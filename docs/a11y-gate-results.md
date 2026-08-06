@@ -148,6 +148,49 @@ annotation underlines.
   per-token in `docs/design-system-impl/token-audit.md`, as the protected-token
   gate requires.
 
+### Known cost of the ladder retune (open)
+
+Adversarial visual review confirmed a real loss: `fg-muted` and `fg-subtle` now
+sit 0.035 L apart in light/warm and are hard to tell apart on screen, so the
+ladder reads as two steps rather than three. In dark all three rungs
+(0.74 / 0.70 / 0.67) render as effectively one colour. Helper copy no longer
+recedes from the labels it annotates.
+
+This is mostly forced rather than chosen. On a near-white surface, AA 4.5:1 for
+small text caps how light de-emphasised text can be — the pre-gate ladder bought
+its visible spread with a bottom rung at 3.2:1 (light) / 2.9 (warm) / 4.0 (dark),
+i.e. by failing the criterion this gate exists to meet. There is no setting that
+restores the old spread *and* passes.
+
+There is real headroom, though, and it is a trade rather than a fix. Body
+`--tandem-fg` is 0.22 and `faint` is pinned near 0.50, so 0.28 of range is
+legal while the three rungs occupy 0.08 of it. Spreading evenly
+(≈0.34 / 0.42 / 0.50) restores a 0.16 span — the pre-gate magnitude, all three
+rungs AA — but only by darkening `muted` toward body text, which makes the
+*first* step of de-emphasis weaker even as the ladder as a whole becomes
+legible. Three distinguishable rungs versus one strongly-receding rung: an
+identity call, not a correctness one, and left open here rather than decided
+unilaterally.
+
+Second-order effect, also confirmed: `fg-faint` is not only a text token. It
+paints the EmptyState illustration strokes, the ActivityTray idle LED, and a
+CommandPalette icon stroke. Those are not text and are not governed by the AA
+floor, so darkening the token for legibility makes the empty-state illustration
+read firmer than the soft sketch it was designed as.
+
+### `--tandem-warning-fg` (open)
+
+Flipping it white → `#0f172a` takes the one surface that uses it (the `Private`
+pill in `NoteCard.svelte:33` — the token's **only** consumer) from 3.76:1 to
+4.75:1. Visual review's verdict: legible but muddier than the white it replaced,
+because dark theme pairs that same near-black with a genuinely light amber
+(`#fbbf24`) while light theme pairs it with a mid-dark ochre
+(`oklch(0.62 0.16 65)`). The change copied dark's decision without dark's
+precondition; the token that is arguably out of step is light's
+`--tandem-warning` fill, not its foreground. Left as-is because white fails AA
+outright and the fill is shared with borders, dots and the find-hop highlight —
+moving it is a wider change than this gate should make unreviewed.
+
 ### A deliberate non-assertion: `-border` against `-bg`
 
 An earlier revision asserted 3:1 there and **every** family failed. That was the
