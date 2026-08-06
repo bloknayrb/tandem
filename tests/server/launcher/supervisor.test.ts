@@ -13,6 +13,7 @@ import {
   buildClaudeArgs,
   createLineFramer,
   createSupervisor,
+  homeCwd,
   RESUME_CONFIRM_MS,
   resolveRouteCwd,
   resolveSafeCwd,
@@ -139,6 +140,47 @@ describe("sessionCwdMatches — a session is only resumable from its own directo
   it("still rejects genuinely different directories on win32", () => {
     // The case-fold must not degrade into "always matches on Windows".
     expect(sessionCwdMatches("C:\\a\\project", "C:\\b\\project", "win32")).toBe(false);
+  });
+});
+
+describe("homeCwd — the last-resort cwd is canonicalized like every other", () => {
+  // `plan.cwd` is written verbatim into `launcher-session.json` and then
+  // compared by `sessionCwdMatches`, whose contract is "both sides are
+  // realpath'd". A raw `os.homedir()` breaks that on any host where $HOME is
+  // reached through a symlink: the bare-restart spelling and the override
+  // spelling of the same folder compare unequal, discarding a live
+  // conversation — and oscillating, since a crash-restart and an explicit
+  // restart land on different spellings.
+  it.skipIf(process.platform === "win32")(
+    "resolves a symlinked $HOME to its canonical path",
+    () => {
+      const real = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "home-real-")));
+      const link = path.join(tmpDir, "home-link");
+      fs.symlinkSync(real, link, "dir");
+      const prev = process.env.HOME;
+      try {
+        // Node's os.homedir() prefers $HOME on POSIX.
+        process.env.HOME = link;
+        expect(homeCwd()).toBe(real);
+        expect(homeCwd()).not.toBe(link);
+      } finally {
+        if (prev === undefined) delete process.env.HOME;
+        else process.env.HOME = prev;
+        fs.rmSync(real, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("falls back to the raw home when it does not resolve to a directory", () => {
+    const missing = path.join(tmpDir, "does-not-exist");
+    const prev = process.env.HOME;
+    try {
+      process.env.HOME = missing;
+      expect(homeCwd()).toBe(missing);
+    } finally {
+      if (prev === undefined) delete process.env.HOME;
+      else process.env.HOME = prev;
+    }
   });
 });
 

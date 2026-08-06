@@ -169,8 +169,43 @@ const WAKE_LATCH_MAX_MS = 10 * 60_000;
 interface SpawnPlan {
   integration: ClaudeCodeIntegration;
   cwd: string;
+  /** Was `cwd` the caller's override, resolved and honored? False when no
+   * override was passed, and false when one was passed but did not resolve —
+   * in which case `cwd` is the configured directory or home, NOT the request.
+   * The only honest answer to "did the move happen?", produced by the function
+   * that decided it (`resolveCwd`) rather than reconstructed by a second
+   * resolution of the same string. */
+  cwdFromOverride: boolean;
   sessionId: string;
   resuming: boolean;
+}
+
+/** The claude-code entry the supervisor will actually launch. `apply: "skip"`
+ * means configured-but-disabled, so such an entry is not a launch candidate.
+ *
+ * Named and shared so the read (`readIntegration`) and the durable write
+ * (`persistWorkingDirectory`) cannot drift: a mismatch would persist into an
+ * entry the launcher never reads. `makeWorkingDirHandler` (api-routes.ts)
+ * deliberately does NOT use this — see `persistWorkingDirectory`. */
+function isLaunchableClaudeCode(i: IntegrationConfig): i is ClaudeCodeIntegration {
+  return i.kind === "claude-code" && i.apply !== "skip";
+}
+
+/** The last-resort working directory, canonicalized.
+ *
+ * `resolveCwd`'s other exit realpaths via `resolveSafeCwd`, and `plan.cwd` is
+ * written verbatim into `launcher-session.json` and then compared by
+ * `sessionCwdMatches`, whose contract is "both sides are realpath'd". A raw
+ * `os.homedir()` breaks exactly that invariant on any host where $HOME is
+ * reached through a symlink (enterprise NFS, a macOS data volume), so the
+ * bare-restart spelling and the override spelling of the same folder compare
+ * unequal — discarding a live conversation, and oscillating, because a
+ * crash-restart lands on one spelling and an explicit restart on the other.
+ *
+ * `?? os.homedir()` preserves today's behaviour for the pathological case
+ * where home itself does not resolve to a directory. */
+export function homeCwd(): string {
+  return resolveSafeCwd(os.homedir()) ?? os.homedir();
 }
 
 const SESSION_FILE_NAME = "launcher-session.json";
@@ -290,7 +325,16 @@ interface SavedSession {
    * but non-string value. The two are treated identically, deliberately: unlike
    * `sessionId` — which gets a UUID-shape gate because a tampered value flows
    * into `--resume` — a bad `cwd` can only cost one doomed resume, so the
-   * permissive branch is cheaper than a second log line. */
+   * permissive branch is cheaper than a second log line.
+   *
+   * That bound covers the shapes this branch can DETECT (absent, or
+   * present-but-not-a-string → `undefined` → treated as a match). A well-typed
+   * but *wrong* `cwd` — reachable because this file is not written atomically,
+   * so a kill mid-write can truncate it — costs the opposite and worse thing:
+   * a guaranteed mismatch, a fresh UUID, and this single-slot file overwritten,
+   * i.e. a discarded conversation with no doomed resume at all. Nothing here
+   * can tell that case from a real relocation, which is why the file should
+   * eventually be written atomically. */
   cwd?: string;
 }
 
@@ -491,9 +535,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function readIntegration(): Promise<ClaudeCodeIntegration | null> {
     const store = createIntegrationsStore(opts.integrationsBase);
     const file = await store.read();
-    const found = file.integrations.find(
-      (i): i is ClaudeCodeIntegration => i.kind === "claude-code" && i.apply !== "skip",
-    );
+    const found = file.integrations.find(isLaunchableClaudeCode);
     return found ?? null;
   }
 
@@ -564,7 +606,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    *
    * Without this, the first crash silently undoes the move: `scheduleRestart` →
    * `startInternal` → `buildPlan()` is called with NO override, so `resolveCwd`
-   * falls back through the integration to `os.homedir()` and Claude reappears in
+   * falls back through the integration to `homeCwd()` and Claude reappears in
    * the folder the user just moved it out of. Persisting is what makes "restart
    * Claude here" also mean "and stay here" — across restarts and across a Tandem
    * restart.
@@ -581,10 +623,17 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * raw user string, supports clearing to `null`, and 404s on a missing
    * integration; this one takes an already-resolved path and stays silent. It
    * also selects the integration with `readIntegration`'s predicate
-   * (`apply !== "skip"`) rather than the route's looser `kind === "claude-code"`,
-   * because the entry to update is the one the supervisor actually launches —
-   * both take the FIRST match, so they differ only when the first claude-code
-   * entry is skipped and a live one follows it.
+   * (`isLaunchableClaudeCode`, i.e. `apply !== "skip"`) rather than the route's
+   * looser `kind === "claude-code"`, because the entry to update is the one the
+   * supervisor actually launches — both take the FIRST match, so they differ
+   * only when the first claude-code entry is skipped and a live one follows it.
+   * When those two entries do differ, the Settings UI reads the route's entry
+   * while the launcher runs the supervisor's, so Settings can display a working
+   * directory the launcher ignores — and every Settings edit then writes
+   * somewhere the launcher never reads. Reconciling the two predicates is a
+   * Settings-route behaviour change (an entry whose only claude-code
+   * integration is `apply: "skip"` would start 404-ing) and is left deliberate
+   * here.
    *
    * Known gap: neither path holds a cross-module lock, so any concurrent
    * `integrations.json` writer landing between this read and write loses one of
@@ -599,9 +648,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     try {
       const store = createIntegrationsStore(opts.integrationsBase);
       const file = await store.read();
-      const idx = file.integrations.findIndex(
-        (i): i is ClaudeCodeIntegration => i.kind === "claude-code" && i.apply !== "skip",
-      );
+      const idx = file.integrations.findIndex(isLaunchableClaudeCode);
       if (idx === -1) {
         // Expected-impossible: `buildPlan` just found one. Reachable only if the
         // entry was removed or skipped between its read and ours (the wizard's
@@ -648,30 +695,63 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * needs a TOCTOU — a rename, an unmounted drive, an AV hold on
    * `realpathSync`) but silent, durable, and destructive.
    *
-   * Re-resolving here rather than comparing against `plan.cwd` keeps this honest
-   * if `resolveCwd`'s fallback order ever changes.
+   * That second question is answered by `resolveCwd` — the one function that
+   * decides it — and carried on `SpawnPlan.cwdFromOverride`, rather than being
+   * reconstructed here by resolving the same string a second time. Two
+   * independent `realpathSync` calls only have to AGREE for this to be correct,
+   * and the direction where the second one succeeds after the first failed is
+   * the worse one: it persists a folder the spawn is not running in. One
+   * resolution has no second answer to drift from — which also eliminates,
+   * rather than merely tolerating, a future change to `resolveCwd`'s fallback
+   * order. `plan.cwd` is therefore byte-identical to what the spawn runs in.
+   *
+   * Residual TOCTOU: a symlink swap between the route's `resolveRouteCwd`
+   * (which home-confines) and `buildPlan`'s `safeCwd` (which does not) lands
+   * the SPAWN outside home, and a `persistCwd` request then records that
+   * escaped path durably. Persisting `plan.cwd` does not close that — the
+   * durable write is still only as confined as the permissive resolver — it
+   * closes only the divergence between the persisted and the spawned value.
+   * Home-confining here would move an HTTP-boundary policy into a
+   * process-level API that has non-route callers.
    *
    * Note the write lands BEFORE `spawnOnce`, so a spawn that then throws leaves
    * the setting already moved. Deliberate: the user asked to move, and the next
    * restart should still honour it.
    */
   async function persistRequestedCwd(
+    plan: SpawnPlan,
     requested: string | undefined,
-    persistCwd: boolean,
+    persistCwd: boolean | undefined,
   ): Promise<void> {
     if (!persistCwd || requested === undefined) return;
-    const resolved = safeCwd(requested);
-    if (resolved === null) return; // request failed; persisting the fallback would clobber
-    await persistWorkingDirectory(resolved);
+    if (!plan.cwdFromOverride) {
+      // The request did not survive resolution (a rename, an unmounted share,
+      // an AV hold on `realpathSync` between the route's check and ours). The
+      // spawn is about to run somewhere else; saying so is the whole point —
+      // the user asked to move Claude permanently and it did not happen, and
+      // this was the only untraced branch in a change whose purpose is
+      // removing exactly that.
+      console.error(
+        `[Launcher] Requested working directory ${requested} could not be resolved — spawning in ${plan.cwd}, workingDirectory left unchanged`,
+      );
+      return;
+    }
+    await persistWorkingDirectory(plan.cwd);
   }
 
-  function resolveCwd(integration: ClaudeCodeIntegration, override?: string): string {
+  function resolveCwd(
+    integration: ClaudeCodeIntegration,
+    override?: string,
+  ): { cwd: string; fromOverride: boolean } {
     const candidate = override ?? (integration as { workingDirectory?: unknown }).workingDirectory;
     if (typeof candidate === "string") {
       const normalized = safeCwd(candidate);
-      if (normalized) return normalized;
+      // `override !== undefined`, not truthiness: this must report which INPUT
+      // was honored, and an empty-string override (rejected upstream by the
+      // routes, but not by this function) would read as "no override".
+      if (normalized) return { cwd: normalized, fromOverride: override !== undefined };
     }
-    return os.homedir();
+    return { cwd: homeCwd(), fromOverride: false };
   }
 
   function safeCwd(candidate: string): string | null {
@@ -716,7 +796,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const integration = await readIntegration();
     if (!integration) return null;
 
-    const cwd = resolveCwd(integration, cwdOverride);
+    const { cwd, fromOverride } = resolveCwd(integration, cwdOverride);
     const saved = readSavedSession();
 
     // The resume decision is made HERE, against the planned cwd, rather than at
@@ -737,7 +817,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       resuming = false;
     }
 
-    return { integration, cwd, sessionId, resuming };
+    return { integration, cwd, cwdFromOverride: fromOverride, sessionId, resuming };
   }
 
   async function spawnOnce(plan: SpawnPlan): Promise<void> {
@@ -1242,20 +1322,40 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   // Requiring one here is what made the empty state's safe recovery unreachable
   // while its session-destroying secondary kept working.
   async function relaunch(newCwd?: string, opts?: RelocateOpts): Promise<void> {
-    return withLock(async () => {
-      await stopInternal();
-      // Relaunch always means "user is actively asking" → clear breaker.
-      breakerTripped = false;
-      recentAttempts = [];
-      // stopInternal() raised the stop flag on the way in. Lower it before the
-      // new spawn, or the exit handler treats the *next* crash as a deliberate
-      // stop and silently declines to restart — the supervisor stays dead.
-      stopRequested = false;
-      const plan = await buildPlan(newCwd);
-      if (!plan) return;
-      await persistRequestedCwd(newCwd, opts?.persistCwd === true);
-      await spawnOnce(plan);
-    });
+    return withLock(() => respawn(newCwd, opts, { clearSession: false }));
+  }
+
+  /** The stop+respawn sequence both public entry points perform. They differ by
+   * exactly one statement — whether the saved session is dropped first — so the
+   * flag is the API and everything else is shared.
+   *
+   * Callers wrap this in `withLock`; it must NOT lock itself (it awaits
+   * `stopInternal`). Declared as a `function`, not a `const` arrow, because it
+   * is referenced above its own definition and by `startFresh` below — a
+   * `const` would be a TDZ error at the first user relaunch, not at typecheck.
+   *
+   * Statement order here is load-bearing and pinned by no single test:
+   * `clearSavedSession` must precede `buildPlan` (or `startFresh` resumes the
+   * session it was asked to drop), `stopRequested = false` must follow
+   * `stopInternal`, and the persist must precede `spawnOnce`. */
+  async function respawn(
+    cwdOverride: string | undefined,
+    opts: RelocateOpts | undefined,
+    { clearSession }: { clearSession: boolean },
+  ): Promise<void> {
+    await stopInternal();
+    if (clearSession) clearSavedSession();
+    // relaunch/startFresh always mean "user is actively asking" → clear breaker.
+    breakerTripped = false;
+    recentAttempts = [];
+    // stopInternal() raised the stop flag on the way in. Lower it before the
+    // new spawn, or the exit handler treats the *next* crash as a deliberate
+    // stop and silently declines to restart — the supervisor stays dead.
+    stopRequested = false;
+    const plan = await buildPlan(cwdOverride);
+    if (!plan) return;
+    await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
+    await spawnOnce(plan);
   }
 
   async function stopInternal(): Promise<void> {
@@ -1332,19 +1432,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   }
 
   async function startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void> {
-    return withLock(async () => {
-      await stopInternal();
-      clearSavedSession();
-      breakerTripped = false;
-      recentAttempts = [];
-      // See relaunch(): stopInternal() set stopRequested, and leaving it set
-      // would disarm the auto-restart for the whole life of the new spawn.
-      stopRequested = false;
-      const plan = await buildPlan(cwdOverride);
-      if (!plan) return;
-      await persistRequestedCwd(cwdOverride, opts?.persistCwd === true);
-      await spawnOnce(plan);
-    });
+    return withLock(() => respawn(cwdOverride, opts, { clearSession: true }));
   }
 
   function status(): SupervisorStatus {

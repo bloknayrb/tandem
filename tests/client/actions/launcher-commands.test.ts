@@ -211,6 +211,30 @@ describe("launcher-relaunch-here", () => {
     expect(body.persistCwd).toBeUndefined();
   });
 
+  it("discloses the durable half in the confirm — and only where it applies", async () => {
+    // The palette action is the only caller that sets persistCwd, so its click
+    // rewrites the integration's workingDirectory for every future launch,
+    // with no undo and no backup of the previous value. The confirm is the one
+    // place that can make that non-silent. The recovery chip must NOT make the
+    // same claim — it sends the same kind of derived cwd and persists nothing.
+    installFetchStub();
+    const confirmMock = globalThis.confirm as unknown as ReturnType<typeof vi.fn>;
+    await runAction("launcher-relaunch-here");
+    const palettePrompt = String(confirmMock.mock.calls[0]?.[0]);
+    expect(palettePrompt).toContain("future restarts");
+    expect(palettePrompt).toContain("interrupted");
+
+    confirmMock.mockClear();
+    // Drive the chip with the SAME derivable cwd, so the two prompts differ by
+    // the branch under test rather than by collapsing to the shared no-cwd
+    // string (which would make the negative assertion vacuous).
+    relaunchClaudeCode();
+    await vi.waitFor(() => expect(confirmMock.mock.calls.length).toBeGreaterThan(0));
+    const chipPrompt = String(confirmMock.mock.calls[0]?.[0]);
+    expect(chipPrompt).toContain("/home/user/project");
+    expect(chipPrompt).not.toContain("future restarts");
+  });
+
   it("does not POST when the launcher is unavailable", async () => {
     const fetchSpy = installFetchStub({ available: false });
     getAction("launcher-relaunch-here").run();

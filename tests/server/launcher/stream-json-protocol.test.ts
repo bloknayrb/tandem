@@ -21,7 +21,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TandemEvent } from "../../../src/server/events/types.js";
 import type { IntegrationsFile } from "../../../src/server/integrations/schema.js";
 import { createIntegrationsStore } from "../../../src/server/integrations/storage.js";
@@ -851,6 +851,33 @@ describe("launcher — relocating Claude to a different folder", () => {
     }
   }, 30_000);
 
+  it("startFresh() in the SAME folder still starts a new conversation", async () => {
+    // The one statement `startFresh` does not share with `relaunch` —
+    // `clearSavedSession()` — and it is only load-bearing in the case the
+    // previous test proves resumes. It must also run BEFORE `buildPlan`, or
+    // the plan reads the session it was asked to drop and resumes it. Nothing
+    // else pins that ordering, and a silent reorder is invisible in every
+    // cross-folder test because the cwd gate starts fresh there anyway.
+    await writeClaudeIntegration();
+    const sup = createSupervisor({ integrationsBase: tmpDir });
+    try {
+      await sup.startFresh(spawnDir);
+      const [first] = await spawnsInOrder(1);
+      const firstArg = sessionArg(first.claudeArgs);
+
+      await sup.startFresh(spawnDir);
+      const recs = await spawnsInOrder(2);
+      const second = recs.find((r) => r.pid !== first.pid);
+      if (!second) throw new Error("no second spawn record");
+
+      const secondArg = sessionArg(second.claudeArgs);
+      expect(secondArg.flag).toBe("--session-id");
+      expect(secondArg.id).not.toBe(firstArg.id);
+    } finally {
+      await sup.stop();
+    }
+  }, 30_000);
+
   it("records the RESOLVED cwd in the session file", async () => {
     // `writeSavedSession(plan.sessionId, plan.cwd)` must store the resolved
     // path, not the caller's raw string. Every other test passes an already
@@ -908,6 +935,35 @@ describe("launcher — relocating Claude to a different folder", () => {
         }
       }, 30_000);
     }
+
+    it("an unresolvable override is neither persisted nor silent", async () => {
+      // TOCTOU: the route home-confines and realpaths the request, then the
+      // folder is renamed / the share drops / AV holds `realpathSync` before
+      // `buildPlan` resolves it. The spawn falls back to home, so persisting
+      // the request would durably overwrite the user's project directory with
+      // a folder Claude is not running in.
+      //
+      // The `workingDirectory` assertion is a regression guard carried over
+      // from the pre-fix `resolved === null` early return; the console.error
+      // assertion is the new behaviour — this was the only untraced branch in
+      // a change whose stated purpose is removing exactly that.
+      await writeClaudeIntegration();
+      const gone = path.join(os.tmpdir(), `tandem-gone-${Date.now()}`);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const sup = createSupervisor({ integrationsBase: tmpDir });
+      try {
+        // The spawn itself fails (homedir has no stub) — irrelevant, the
+        // persist is awaited first.
+        await sup.relaunch(gone, { persistCwd: true });
+        expect((await readClaudeEntry())?.workingDirectory).toBe(spawnDir);
+        expect(
+          errSpy.mock.calls.some((c) => c.some((a) => typeof a === "string" && a.includes(gone))),
+        ).toBe(true);
+      } finally {
+        errSpy.mockRestore();
+        await sup.stop();
+      }
+    }, 30_000);
 
     it("a bare relaunch leaves an unset working directory unset", async () => {
       // Needs the key absent: with it set to spawnDir, a bare relaunch resolves

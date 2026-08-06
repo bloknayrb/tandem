@@ -728,9 +728,16 @@ async function relaunchHere(
   // On the fallback-allowed path the folder is a preference, not a guarantee,
   // so the prompt says so rather than promising a destination the retry below
   // may override.
+  //
+  // Only the `cwdRequired` branch discloses the durable half, because it is the
+  // only caller that sends `persistCwd` — its click rewrites the integration's
+  // workingDirectory for every future launch, with no undo and no backup of the
+  // previous value. Interruption is stated unconditionally (the relaunch always
+  // SIGTERMs the running process); conversation replacement is stated
+  // conditionally, because a same-folder relaunch now resumes.
   const prompt = cwd
     ? cwdRequired
-      ? `Restart Claude in:\n${cwd}\n\nYour current task may be interrupted.`
+      ? `Restart Claude in:\n${cwd}\n\nYour current task will be interrupted, and this becomes Claude's working directory for future restarts. If the current conversation was started in another folder, it is replaced with a new one.`
       : `Restart Claude in:\n${cwd}\n\nIf that folder isn't usable, Claude restarts in its configured directory instead.\n\nYour current task may be interrupted.`
     : "Restart Claude in its configured working directory.\n\nYour current task may be interrupted.";
   if (!confirm(prompt)) return;
