@@ -678,6 +678,21 @@ async function main() {
     } else if (launcherUnavailableReason !== "disabled-by-env") {
       await startLauncherSupervisor();
     }
+
+    // Repair a channel entry whose absolute Node path no longer exists (a
+    // removed nvm version, a relocated sidecar) — see `refreshChannelNodeBinary`
+    // for why write-time validation alone is not enough.
+    //
+    // Deliberately OUTSIDE the launcher branches above. Config maintenance has
+    // nothing to do with supervising a child process, and hanging it off the
+    // supervisor would skip it exactly for the user most likely to need it: the
+    // one running with `TANDEM_DISABLE_LAUNCHER=1` and hand-launching Claude
+    // Code. `tandem doctor` tells that user restarting Tandem repairs this, so
+    // it has to actually be true. Best-effort and un-awaited; the function
+    // yields before touching the filesystem so it never blocks startup.
+    void import("./integrations/apply.js").then(({ refreshAllChannelNodeBinaries }) =>
+      refreshAllChannelNodeBinaries(),
+    );
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {

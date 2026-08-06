@@ -111,6 +111,7 @@ import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
+import { addressedAiNotice } from "./status/addressed-ai-notice.js";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import {
@@ -520,43 +521,84 @@ function startFreshClaude(): void {
 }
 
 // #1018 loud failures: ChatPanel (chat send) and Toolbar ("Send to Claude"
-// comment) dispatch `tandem:addressed-ai` AFTER persisting. If AI isn't
-// actually connected (`chip` non-null: unconfigured/stopped, not Solo, not
-// booting), surface a notice that AFFIRMS the save and frames absence as
-// deferred delivery — the message/comment persists in the Y.Doc and is read
-// whenever an agent next connects. Never "failed/lost". `chip` is read
-// imperatively at event time (no reactive dependency, no loop). Notes/
-// highlights never dispatch this (ADR-027 — they're private, never sent to AI).
+// comment) dispatch `tandem:addressed-ai` AFTER persisting. Two DIFFERENT
+// silences get a notice here, and they are not the same problem:
+//
+//   1. No agent at all (`chip` non-null: unconfigured/stopped). The message
+//      persists in the Y.Doc and is read whenever an agent next connects.
+//   2. An agent IS attached but nothing is pushing to it — the hand-launched
+//      session. It can read the document; it just won't be TOLD, so the comment
+//      waits for the next `tandem_checkInbox`. This was previously silent: the
+//      handler returned as soon as a session existed, which is exactly the
+//      common case. "AI connected" is true and says nothing about delivery.
+//
+// Both AFFIRM the save and frame the gap as deferred delivery, never
+// "failed/lost". State is read imperatively at event time (no reactive
+// dependency, no loop). Notes/highlights never dispatch this (ADR-027 —
+// they're private, never sent to AI).
 $effect(() => {
   const onAddressedAi = async (e: Event) => {
     const via = (e as CustomEvent<{ via?: string }>).detail?.via;
-    if (aiReadiness.chip === null) return; // ready / booting / Solo — nothing to nudge
-    // The polled chip can be up to 8s stale: an agent whose MCP initialize
-    // landed after the last background poll still reads as absent, firing a
-    // false "no AI is connected" notice while the agent is live (#1083).
-    // Confirm with a fresh /health probe before alarming.
-    if (await aiReadiness.probeSession()) return;
-    const chip = aiReadiness.chip; // re-read — state may have settled while probing
-    if (chip === null) return;
+    const viaKey = via ?? "chat";
     const noun = via === "comment" ? "Comment" : "Message";
-    notifications.push(
-      {
-        id: `ai-not-ready-${via ?? "chat"}-${Date.now()}`,
-        type: "launcher",
-        severity: "warning",
-        message: `${noun} saved — no AI is connected yet. It'll be seen when AI connects.`,
-        dedupKey: `ai-not-ready-${via ?? "chat"}`,
-        timestamp: Date.now(),
-      },
-      {
-        // Driven by the shared exhaustive map, not a binary ternary: `chip`
-        // has three non-null members, and a `=== "connect"` test sent `setup`
-        // (Claude CLI not installed) down the restart branch — offering to
-        // restart a binary that isn't there.
-        label: AI_CTA[chip].label,
-        onClick: AI_CTA[chip].action === "restart" ? restartClaude : connectAi,
-      },
-    );
+    const solo = modeState.tandemMode === "solo";
+    // Solo short-circuits before the probe so those sends don't pay for a
+    // fetch whose answer `addressedAiNotice` would discard anyway.
+    if (solo) return;
+
+    // Fast path: the polled state already proves silence — an agent is attached
+    // (`chip === null`) and a consumer is confirmed. Staleness here can only
+    // ever SUPPRESS a notice, never manufacture one, and suppression is the
+    // direction #1083 does NOT care about. `=== true` is load-bearing: `null`
+    // (unknown or redacted) must still fall through and probe.
+    if (aiReadiness.chip === null && aiReadiness.pushConsumerAttached === true) return;
+
+    // ONE fresh /health read settles both branches. It re-confirms the session
+    // — the polled value can be up to 8s stale, and an agent whose MCP
+    // initialize landed after the last poll would otherwise get a false "no AI
+    // is connected" notice (#1083) — and refreshes the push signal in the same
+    // round trip.
+    const sessionLive = await aiReadiness.probeSession();
+    const notice = addressedAiNotice({
+      soloMode: solo,
+      sessionLive,
+      chip: aiReadiness.chip, // re-read — may have settled while probing
+      pushConsumerAttached: aiReadiness.pushConsumerAttached,
+    });
+    if (notice === null) return;
+
+    if (notice.kind === "no-agent") {
+      notifications.push(
+        {
+          id: `ai-not-ready-${viaKey}-${Date.now()}`,
+          type: "launcher",
+          severity: "warning",
+          message: `${noun} saved — no AI is connected yet. It'll be seen when AI connects.`,
+          dedupKey: `ai-not-ready-${viaKey}`,
+          timestamp: Date.now(),
+        },
+        {
+          // Driven by the shared exhaustive map, not a binary ternary: `chip`
+          // has three non-null members, and a `=== "connect"` test sent `setup`
+          // (Claude CLI not installed) down the restart branch — offering to
+          // restart a binary that isn't there.
+          label: AI_CTA[notice.chip].label,
+          onClick: AI_CTA[notice.chip].action === "restart" ? restartClaude : connectAi,
+        },
+      );
+      return;
+    }
+
+    // An agent is attached, so nothing is wrong — this is a latency
+    // expectation, not a failure, hence `info` rather than `warning` and no CTA.
+    notifications.push({
+      id: `ai-no-push-${viaKey}-${Date.now()}`,
+      type: "launcher",
+      severity: "info",
+      message: `${noun} saved. Claude will see it the next time it checks in.`,
+      dedupKey: `ai-no-push-${viaKey}`,
+      timestamp: Date.now(),
+    });
   };
   window.addEventListener("tandem:addressed-ai", onAddressedAi);
   return () => window.removeEventListener("tandem:addressed-ai", onAddressedAi);

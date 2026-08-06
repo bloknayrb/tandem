@@ -30,6 +30,7 @@ import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { parseLockfile } from "../server/annotations/lockfile.js";
+import { isRecordedNodeBinaryStale } from "../server/integrations/node-binary.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
@@ -615,9 +616,7 @@ function checkMcpJson(r: Recorder): void {
   // Check tandem-channel entry
   const channel = servers["tandem-channel"];
   if (!channel) {
-    r.warn(
-      ".mcp.json missing tandem-channel — Claude will use polling instead of push notifications",
-    );
+    r.warn(".mcp.json missing tandem-channel — no real-time push is possible");
   } else {
     const cmd = channel.command;
     const args = (channel.args || []).join(" ");
@@ -630,6 +629,9 @@ function checkMcpJson(r: Recorder): void {
     } else {
       r.pass(`.mcp.json tandem-channel → ${cmd} ${args}`);
     }
+    // Same stale-path check as the user-config branch — the condition is
+    // identical here and previously went unreported for project configs.
+    reportChannelCommand(r, channel, ".mcp.json");
 
     if (!channel.env?.TANDEM_URL) {
       r.warn(
@@ -678,12 +680,45 @@ function checkUserMcpConfig(r: Recorder): void {
   }
   if (!servers["tandem-channel"]) {
     r.warn(
-      "tandem-channel not registered in ~/.claude.json — Claude Code will poll instead of receiving real-time push",
+      "tandem-channel not registered in ~/.claude.json — no real-time push is possible",
       "Run: tandem setup --apply",
     );
   } else {
-    r.pass("tandem-channel registered in ~/.claude.json");
+    // Registration is NECESSARY but not SUFFICIENT, and saying otherwise is
+    // how this check misled people: the shim only delivers to a session
+    // launched with the channel flag. Sessions Tandem starts pass it; a
+    // session you start yourself does not. `evaluatePushPath` reports whether
+    // anything is actually consuming — this line must not pre-empt it.
+    r.pass(
+      "tandem-channel registered in ~/.claude.json (a hand-launched session also needs the flag)",
+    );
+    reportChannelCommand(r, servers["tandem-channel"], "~/.claude.json");
   }
+}
+
+/**
+ * Warn when the channel entry names a Node binary that is no longer there.
+ *
+ * Generated entries carry an absolute path (see `integrations/node-binary.ts`)
+ * because a bare `node` is unresolvable for some clients. The cost is that the
+ * path can go stale — a removed nvm version, a relocated sidecar — and a stale
+ * absolute path fails silently at spawn. The server repairs this at boot;
+ * surfacing it here explains a push path that is registered and still dead.
+ *
+ * The staleness rule itself is `isRecordedNodeBinaryStale`'s, not ours. Two
+ * copies would let the diagnosis drift from the repair, which is the worst
+ * split available: doctor warning about a path the server considers fine, or
+ * staying quiet about one the server rewrites on every boot.
+ */
+function reportChannelCommand(r: Recorder, entry: unknown, label: string): void {
+  if (entry === null || typeof entry !== "object") return;
+  const command = (entry as { command?: unknown }).command;
+  if (typeof command !== "string") return;
+  if (!isRecordedNodeBinaryStale(command)) return;
+  r.warn(
+    `${label} tandem-channel points at a Node binary that no longer exists: ${command}`,
+    "Restart Tandem (it repairs this at startup), or run: tandem setup --apply",
+  );
 }
 
 // ── Check: Claude CLI presence ──────────────────────────────────────

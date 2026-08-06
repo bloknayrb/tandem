@@ -142,7 +142,7 @@ In the desktop app, the **Relaunch Claude** button does this for you. Sessions T
 
 **One caveat `tandem doctor` cannot resolve for you.** If a consumer *is* attached, that proves events reach the shim — not that Claude sees them. A session started without the flag still runs a channel shim that receives every event and discards it, because whether the channel is honored is decided inside Claude Code and never reported back. If push looks attached and Claude still isn't reacting, start the session with the flag explicitly rather than assuming the config alone is enough.
 
-Related: [Channel shim fails to start](#channel-shim-fails-to-start), [`claude plugin install` fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https), [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version).
+Related: [Channel shim fails to start](#channel-shim-fails-to-start), [`claude plugin install` fails with "unsafe location"](#claude-plugin-install-fails-command-git-not-found-or-is-in-an-unsafe-location-current-directory), [`claude plugin install` fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https), [Plugin monitor exit 127](#plugin-monitor-reports-script-failed-exit-127-every-session), [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version).
 
 ## Channel shim fails to start
 
@@ -155,6 +155,49 @@ The `tandem-channel` entry spawns a subprocess. Most failures fall into two buck
   - `/api/channel-reply timed out after 5000ms` — reply path stalled.
 
   All three mean the server accepted the connection but stopped responding on that path. Restart Tandem; the shim reports the timeout instead of hanging silently.
+
+## `claude plugin install` fails: "Command 'git' not found or is in an unsafe location (current directory)"
+
+This message is misleading in the common case — you probably *do* have git.
+
+Claude Code resolves bare-name tools (`git`, `npm`, `npx`) through your PATH and then
+refuses any candidate whose resolved path sits **underneath your current working
+directory**. It's an anti-PATH-hijack check: it exists so a `git.exe` dropped into a
+project folder can't be picked up. But a per-user install puts git somewhere under your
+home directory — `%LOCALAPPDATA%\Programs\Git\cmd` on Windows, `~/.local` or a version
+manager's directory elsewhere — so launching `claude` from your home folder makes your own
+legitimate git look unsafe.
+
+**Fix — no admin rights needed.** Start Claude from any directory that isn't an ancestor of
+the tool's install path. A project folder is the normal choice, and Claude Code already
+recommends it for unrelated reasons:
+
+```bash
+cd ~/Documents/my-project
+claude
+```
+
+Then retry the install. The same guard applies to `npm` and `npx`, so if a plugin's
+commands fail with "not found" while you can run them yourself in the same shell, check
+where you launched Claude from before anything else.
+
+## Plugin monitor reports "script failed (exit 127)" every session
+
+Exit 127 is command-not-found. The published plugin's monitor runs
+`npx -y tandem-editor@<version> monitor`, so this fires when `npx` isn't resolvable from
+the plugin host — either it isn't on the PATH that Claude Code inherited (a GUI-launched
+client doesn't get your login shell's PATH), or it tripped the cwd guard above.
+
+Two things worth knowing:
+
+- **Nothing is lost.** This only disables *push*. Your edits, comments and chat still reach
+  Claude on its next `tandem_checkInbox`.
+- **It fires in every Claude Code session**, including ones unrelated to Tandem, because
+  plugin monitors are spawned per session regardless of what you're working on.
+
+Until it resolves, either fix `npx` resolution (launch from a project directory, or ensure
+Node is on the PATH the client inherits) or disable the plugin's monitor. Note the plugin
+also ships the Tandem skill, so removing the whole plugin costs you that too.
 
 ## `claude plugin install` fails to clone (SSH vs HTTPS)
 

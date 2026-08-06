@@ -94,7 +94,7 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     targets = targets.filter((t) => wanted.has(t.kind));
   }
 
-  let failures = 0;
+  let outcome: WriteOutcome = { failures: 0, shimRegisteredFor: [] };
   if (targets.length === 0) {
     console.error(
       "  No matching Claude installations detected.\n" +
@@ -107,13 +107,13 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     }
 
     console.error("\nWriting MCP configuration...");
-    failures = await writeTargets(targets, opts);
+    outcome = await writeTargets(targets, opts);
 
-    if (failures === targets.length) {
+    if (outcome.failures === targets.length) {
       console.error("\nSetup failed — could not write any configuration. Check file permissions.");
-    } else if (failures > 0) {
+    } else if (outcome.failures > 0) {
       console.error(
-        `\nSetup partially complete (${failures} target(s) failed). Start Tandem with: tandem`,
+        `\nSetup partially complete (${outcome.failures} target(s) failed). Start Tandem with: tandem`,
       );
     } else {
       console.error("\nSetup complete! Start Tandem with: tandem");
@@ -133,19 +133,29 @@ async function applySetup(opts: SetupOptions): Promise<void> {
     );
   }
 
-  if (targets.length > 0 && failures < targets.length) {
-    printPushStatus();
+  if (targets.length > 0 && outcome.failures < targets.length) {
+    printPushStatus(outcome.shimRegisteredFor);
   }
 
   // Non-zero exit only when we attempted writes and every one failed, so
   // `tandem setup --apply` stays scriptable (CI can branch on exit code).
-  if (targets.length > 0 && failures === targets.length) {
+  if (targets.length > 0 && outcome.failures === targets.length) {
     process.exit(1);
   }
 }
 
-async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<number> {
+interface WriteOutcome {
+  failures: number;
+  /** Targets that actually got a channel-shim entry written. `printPushStatus`
+   *  reports off THIS, not off a file-existence check — `shouldRegisterChannelShim`
+   *  returns false for every Claude Desktop target, so a run that registered no
+   *  shim anywhere was still announcing push as enabled. */
+  shimRegisteredFor: string[];
+}
+
+async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Promise<WriteOutcome> {
   let failures = 0;
+  const shimRegisteredFor: string[] = [];
   for (const t of targets) {
     // Default-on for Claude Code (channel shim is its push transport, #985);
     // `--with-channel-shim` is now an explicit override. The helper's
@@ -160,6 +170,9 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
     try {
       await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
+      // Recorded only on a SUCCESSFUL write — a target whose config failed to
+      // save has no shim, whatever we intended for it.
+      if (withChannelShim) shimRegisteredFor.push(t.label);
     } catch (err) {
       failures++;
       console.error(
@@ -167,33 +180,57 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
       );
     }
   }
-  return failures;
+  return { failures, shimRegisteredFor };
 }
 
-function printPushStatus(): void {
-  // Real-time push is delivered by the channel shim, registered by default
-  // above. The plugin also carries a monitor that activates on Claude Code
-  // 2.1.212+ interactive sessions and needs no flag (it was inactive on
-  // 2.1.143 — the historical Spike B / #985 NO-GO, since reversed). The two
-  // are independent push paths; the channel shim stays canonical by decision
-  // (2026-07-19), the monitor installable but not the default (both active in
-  // one session double-deliver), so the shim stays the default here.
-  const channelRegistered = validateChannelShimPrereq(CHANNEL_DIST);
+/**
+ * Report the push path honestly.
+ *
+ * This previously printed "Enabled — the channel shim is registered; Claude
+ * Code receives events in real time" whenever `dist/channel/index.js` existed
+ * on disk. Two separate things were wrong with that, and users hit both:
+ *
+ *   - It reported a FILE, not a WRITE. `shouldRegisterChannelShim` returns
+ *     false for every Claude Desktop target, so `setup --apply
+ *     --target=claude-desktop` claimed a shim it had never registered.
+ *   - Registration is not delivery. The shim only receives events in a session
+ *     launched with the channel flag. Sessions Tandem starts pass it
+ *     automatically; a session you start yourself does not — which is the
+ *     common case, and the one that made "Enabled" read as a lie.
+ */
+function printPushStatus(shimRegisteredFor: string[]): void {
   const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
   const devInstructions = existsSync(pluginManifest)
     ? `  For development, you can also load the package directly:\n\n` +
       `    claude --plugin-dir ${PACKAGE_ROOT}\n\n`
     : "";
 
+  let status: string;
+  if (shimRegisteredFor.length > 0) {
+    status =
+      `  \x1b[32mRegistered\x1b[0m for: ${shimRegisteredFor.join(", ")}\n` +
+      "  Sessions Tandem starts for you get real-time events automatically.\n" +
+      "  A session you start yourself needs the channel flag:\n\n" +
+      "    claude --dangerously-load-development-channels server:tandem-channel\n\n" +
+      "  Without it, your edits and comments still reach Claude — on its next\n" +
+      "  tandem_checkInbox rather than immediately.\n\n";
+  } else if (!validateChannelShimPrereq(CHANNEL_DIST)) {
+    status =
+      "  \x1b[33mUnavailable\x1b[0m — dist/channel/index.js not found; Claude will see your\n" +
+      "  work on its next tandem_checkInbox. Run 'npm run build' and re-run setup.\n\n";
+  } else {
+    // The Claude-Desktop-only case the old file check papered over.
+    status =
+      "  \x1b[33mNot registered\x1b[0m — no target in this run takes the channel shim.\n" +
+      "  Claude will see your work on its next tandem_checkInbox.\n\n";
+  }
+
   console.error(
     "\n\x1b[1mReal-time push notifications:\x1b[0m\n" +
-      (channelRegistered
-        ? "  \x1b[32mEnabled\x1b[0m — the channel shim is registered; Claude Code receives events in real time.\n" +
-          "  Relaunch any Claude Code session you started manually so it picks up the new server.\n\n"
-        : "  \x1b[33mUnavailable\x1b[0m — dist/channel/index.js not found; Claude Code will poll via tandem_checkInbox.\n" +
-          "  Run 'npm run build' and re-run setup to enable push.\n\n") +
+      status +
       "  A Tandem plugin is also published (skill + MCP + a real-time monitor that\n" +
-      "  activates on Claude Code 2.1.212+ and needs no --dangerously-... flag):\n\n" +
+      "  activates on Claude Code 2.1.212+ and needs no flag). Use one or the\n" +
+      "  other — both active in one session deliver every event twice:\n\n" +
       "    claude plugin marketplace add bloknayrb/tandem\n" +
       "    claude plugin install tandem@tandem-editor\n\n" +
       devInstructions,

@@ -3,26 +3,6 @@ import type { NextFunction, Request, Response } from "express";
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;
 
-/** Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM hash leaks. */
-function hasUncPrefix(p: string): boolean {
-  return p.startsWith("\\\\") || p.startsWith("//");
-}
-
-/** basename() on Linux doesn't treat `\` as a separator, so Windows-style paths
- *  like `C:\Program Files\node.exe` return the whole string. Split on both. */
-function crossBasename(p: string): string {
-  return p.split(/[/\\]/).pop() || "";
-}
-
-/** Validate that a nodeBinary path points to a Node.js binary, not an arbitrary executable. */
-const VALID_NODE_BASENAME_RE = /^node(-sidecar(-[a-z0-9_-]+)?)?(\.exe)?$/;
-export function isValidNodeBinary(nodeBinary: string): boolean {
-  if (!nodeBinary) return false;
-  if (nodeBinary.includes("..")) return false;
-  if (hasUncPrefix(nodeBinary)) return false;
-  return VALID_NODE_BASENAME_RE.test(crossBasename(nodeBinary));
-}
-
 /** Map error code to HTTP status. Exported for testing. */
 export function errorCodeToHttpStatus(code: string | undefined): number {
   switch (code) {

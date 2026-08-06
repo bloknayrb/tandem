@@ -35,6 +35,7 @@ import {
   open,
   readFile,
   rename,
+  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -47,6 +48,7 @@ import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
+import { isRecordedNodeBinaryStale, resolveNodeBinary } from "./node-binary.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -224,6 +226,11 @@ export interface BuildMcpEntriesOptions {
    *  channel shim stays canonical by decision (2026-07-19), the monitor
    *  installable but not the default. */
   withChannelShim?: boolean;
+  /** Override the Node binary the channel shim is spawned with. Omit in
+   *  production: the default resolves `process.execPath`, which is the Node
+   *  already running Tandem (the bundled sidecar in the desktop app). A bare
+   *  `"node"` was the old default and left the shim silently unstartable
+   *  wherever the client could not resolve it — see `node-binary.ts`. */
   nodeBinary?: string;
   /** Auth token to embed in HTTP entry headers and stdio shim env.
    *  When omitted (first-run before token provisioned), headers/env are omitted
@@ -266,7 +273,7 @@ export function buildMcpEntries(
       shimEnv.TANDEM_AUTH_TOKEN = opts.token;
     }
     entries["tandem-channel"] = {
-      command: opts.nodeBinary ?? "node",
+      command: opts.nodeBinary ?? resolveNodeBinary(),
       args: [channelPath],
       env: shimEnv,
     };
@@ -762,6 +769,75 @@ export type RemoveEntriesResult =
   | { status: "missing" }
   | { status: "skipped"; reason: "malformed-json" | "not-an-object" | "oversize" };
 
+/** Why a config could not be opened for a non-destructive mutation. Shared so
+ *  every such caller reports the same fixed reason strings. */
+export type ConfigReadRefusal =
+  | { status: "missing" }
+  | { status: "skipped"; reason: "malformed-json" | "not-an-object" | "oversize" };
+
+export type ConfigReadResult =
+  | ConfigReadRefusal
+  | { status: "ok"; root: Record<string, unknown>; servers: Record<string, unknown> | null };
+
+/**
+ * Open a client config for a NON-DESTRUCTIVE mutation.
+ *
+ * The single owner of the read-side rules that every such caller must obey,
+ * because this file holds other vendors' entries and bearer tokens:
+ *
+ * - **Never create it.** ENOENT is `missing`, not "start fresh" — that
+ *   distinction is what separates a repair from an overwrite. (`applyConfig`
+ *   deliberately DOES create, which is why it does not use this.)
+ * - **Never replace malformed JSON.** Refuse and leave it exactly as found.
+ * - **Cap the read** at `MAX_CONFIG_BYTES` before touching the contents.
+ * - **Strip a BOM**, which `JSON.parse` will not tolerate.
+ * - **Leak no parse detail.** V8 `SyntaxError` messages embed a snippet of the
+ *   source, so reasons are fixed strings and never carry the error.
+ *
+ * Extracted because three call sites had hand-copied this preamble and had
+ * already begun to diverge; a hardening change applied to two of three fails
+ * silently on someone's `~/.claude.json`. Async I/O so callers on the startup
+ * path do not block the event loop on a multi-megabyte config.
+ *
+ * `servers` is `null` when `mcpServers` is absent or not an object — callers
+ * treat that as "nothing to do", not as an error.
+ */
+export async function readConfigForMutation(configPath: string): Promise<ConfigReadResult> {
+  assertPathSafe(configPath);
+
+  let raw: string;
+  try {
+    const { size } = await stat(configPath);
+    if (size > MAX_CONFIG_BYTES) return { status: "skipped", reason: "oversize" };
+    raw = await readFile(configPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
+    throw err;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "skipped", reason: "malformed-json" };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { status: "skipped", reason: "not-an-object" };
+  }
+
+  const root = parsed as Record<string, unknown>;
+  const servers = root.mcpServers;
+  return {
+    status: "ok",
+    root,
+    servers:
+      servers === null || typeof servers !== "object" || Array.isArray(servers)
+        ? null
+        : (servers as Record<string, unknown>),
+  };
+}
+
 /**
  * Remove Tandem's `mcpServers` keys from a client config — the uninstall
  * counterpart of `applyConfig`, sharing the same gates (`assertPathSafe`,
@@ -781,42 +857,100 @@ export async function removeConfigEntries(
   configPath: string,
   keys: RemovableEntry[],
 ): Promise<RemoveEntriesResult> {
-  assertPathSafe(configPath);
+  const opened = await readConfigForMutation(configPath);
+  if (opened.status !== "ok") return opened;
+  if (opened.servers === null) return { status: "no-op" };
 
-  let raw: string;
-  try {
-    const { size } = statSync(configPath);
-    if (size > MAX_CONFIG_BYTES) return { status: "skipped", reason: "oversize" };
-    raw = readFileSync(configPath, "utf-8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
-    throw err;
-  }
-  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { status: "skipped", reason: "malformed-json" };
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { status: "skipped", reason: "not-an-object" };
-  }
-
-  const servers = (parsed as Record<string, unknown>).mcpServers;
-  if (servers === null || typeof servers !== "object" || Array.isArray(servers)) {
-    return { status: "no-op" };
-  }
-  const map = servers as Record<string, unknown>;
+  const map = opened.servers;
   const removed = keys.filter((key) => key in map);
   if (removed.length === 0) return { status: "no-op" };
   for (const key of removed) {
     delete map[key];
   }
 
-  await atomicWrite(JSON.stringify(parsed, null, 2) + "\n", configPath);
+  await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", configPath);
   return { status: "removed", removed };
+}
+
+export type RefreshNodeBinaryResult =
+  | ConfigReadRefusal
+  | { status: "no-op" }
+  | { status: "rewritten"; from: string; to: string };
+
+/**
+ * Repair a `tandem-channel` entry whose recorded Node path has gone stale.
+ *
+ * Writing an absolute Node path (see `node-binary.ts`) fixes a shim that could
+ * not be resolved — but it trades that for a path that can later stop existing:
+ * a deleted nvm/fnm version, a Tauri update that relocates the sidecar, macOS
+ * App Translocation, an AppImage's per-run mount. Write-time validation cannot
+ * see any of those; only a check at start can. Without this, the absolute-path
+ * change would swap one silent failure for a worse one, since a dead absolute
+ * path can never recover while a bare name might still resolve.
+ *
+ * Read-side rules (never create, never replace malformed JSON, no parse detail
+ * in a log) are `readConfigForMutation`'s; this function owns only the decision
+ * and the write. `deps` is a test seam; production wants the defaults.
+ */
+export async function refreshChannelNodeBinary(
+  configPath: string,
+  deps: { probe?: (p: string) => boolean | null; resolveBinary?: () => string } = {},
+): Promise<RefreshNodeBinaryResult> {
+  const resolveBinary = deps.resolveBinary ?? resolveNodeBinary;
+
+  const opened = await readConfigForMutation(configPath);
+  if (opened.status !== "ok") return opened;
+  if (opened.servers === null) return { status: "no-op" };
+
+  const entry = opened.servers["tandem-channel"];
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+    return { status: "no-op" };
+  }
+  const command = (entry as Record<string, unknown>).command;
+  if (typeof command !== "string") return { status: "no-op" };
+
+  if (!isRecordedNodeBinaryStale(command, deps.probe)) return { status: "no-op" };
+
+  const next = resolveBinary();
+  if (next === command) return { status: "no-op" };
+
+  (entry as Record<string, unknown>).command = next;
+  await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", configPath);
+  return { status: "rewritten", from: command, to: next };
+}
+
+/**
+ * Boot-time sweep over every detected client config.
+ *
+ * Deliberately NOT filtered to `claude-code` targets. `shouldRegisterChannelShim`
+ * only ever writes a shim for Claude Code, so filtering would be correct today —
+ * but it would be a second, independently-maintained copy of that rule, and the
+ * function is already total: a config with no `tandem-channel` key, or one whose
+ * command is the Desktop branch's bare `npx`, both fall out as `no-op`. Leaving
+ * it unfiltered also repairs an entry left behind by an older Tandem.
+ */
+export async function refreshAllChannelNodeBinaries(
+  opts: { homeOverride?: string } = {},
+): Promise<void> {
+  // Yield before any filesystem work. `void` alone would NOT defer this:
+  // it only defers what follows the first `await`, and `detectTargets` is
+  // synchronous (on Windows it readdirs %LOCALAPPDATA%\Packages), so the whole
+  // sweep would otherwise run inline on the caller's startup stack.
+  await Promise.resolve();
+  for (const target of detectTargets({ homeOverride: opts.homeOverride })) {
+    try {
+      const result = await refreshChannelNodeBinary(target.configPath);
+      if (result.status === "rewritten") {
+        console.error(
+          `[Tandem] Repaired stale channel Node path in ${target.label} (${result.from} → ${result.to}).`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[Tandem] Channel Node path refresh failed (non-fatal): ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
 }
 
 /**

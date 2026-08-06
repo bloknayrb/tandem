@@ -27,7 +27,7 @@
 
 import { readFile } from "node:fs/promises";
 
-import { isValidNodeBinary } from "../mcp/routes/_shared.js";
+import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 import { type DetectedTarget, type DetectOptions, detectTargets, type McpEntry } from "./apply.js";
 import { LoopbackUrl } from "./schema.js";
 
