@@ -185,8 +185,6 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run audit:dead-code` | Knip dead-code report. |
 | `npm run audit:origins` | Audits Y.Doc origin tagging (ADR-031) across `src/`. |
 | `npm run audit:ymap-keys` | Confirms Y.Map keys come from the `shared/constants.ts` constants. |
-| `npm run kg` | Knowledge-graph CLI (`neighbors`, `rules-for`, etc.). |
-| `npm run kg:lint` | Validates the knowledge graph for orphan nodes, broken edges. |
 
 ### Other
 
