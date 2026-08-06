@@ -3,8 +3,9 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { yUndoPluginKey } from "y-prosemirror";
 import { clickOutside } from "../../actions/clickOutside.svelte";
 import { createCoalescingTick } from "../../utils/coalescing-tick";
+import { ESCAPE_OWNER_ATTR } from "../../utils/escape-owner";
 import { focusMenuEntryPoint, handleMenuArrowKeys } from "../../utils/menuKeys";
-import { applyLink, getInitialLinkHref, withPreventDefault } from "./handlers.js";
+import { applyLink, getInitialLinkHref, onKeyActivate, withPreventDefault } from "./handlers.js";
 import LinkEditor from "./LinkEditor.svelte";
 import ToolbarButton from "./ToolbarButton.svelte";
 
@@ -185,16 +186,6 @@ const handleCodeBlock = $derived(
   withPreventDefault(() => editor?.chain().focus().toggleCodeBlock().run()),
 );
 
-// Keyboard activation: Enter/Space on a focused button fires `click` with
-// detail === 0. The mouse path uses `mousedown` so the editor selection
-// survives. Pair onMouseDown (mouse) with onClick={onKeyActivate(...)}
-// (keyboard, filtered on detail===0) so both routes work without double-firing.
-function onKeyActivate(handler: (e: MouseEvent) => void) {
-  return (e: MouseEvent) => {
-    if (e.detail === 0) handler(e);
-  };
-}
-
 function handleHeadingToggle(level: HeadingLevel) {
   return (e: MouseEvent) => {
     e.preventDefault();
@@ -295,9 +286,13 @@ function dismissLinkInput() {
     />
 
     <!-- Link (A8: stays in the inline-marks group, right after Code). -->
+    <!-- Claims Escape while open so Toolbar's capture-phase window listener
+         yields to this handler instead of dismissing the selection popup out
+         from under it (escape-owner.ts). -->
     <div
       use:clickOutside={dismissLinkInput}
       style="position: relative;"
+      {...(showLinkInput ? { [ESCAPE_OWNER_ATTR]: "" } : {})}
       onkeydown={(e) => {
         if (e.key === "Escape") dismissLinkInput();
       }}
@@ -335,9 +330,11 @@ function dismissLinkInput() {
     <div style="width: 1px; height: 16px; background: var(--tandem-border); margin: 0 2px;"></div>
 
     <!-- Heading dropdown (A8: leads the block group). -->
+    <!-- Claims Escape while open — see the link wrapper above. -->
     <div
       use:clickOutside={closeHeadingMenu}
       style="position: relative;"
+      {...(showHeadingMenu ? { [ESCAPE_OWNER_ATTR]: "" } : {})}
       onkeydown={(e) => {
         if (e.key === "Escape") closeHeadingMenu();
       }}

@@ -76,6 +76,46 @@ async function tokenValue(page: import("@playwright/test").Page, name: string): 
   );
 }
 
+/**
+ * Does this element actually receive clicks at its own centre? The load-bearing
+ * assertion for #1302: a clipped element still reports a non-empty box, so
+ * `toBeVisible()` passes on a popover the user can neither see nor click.
+ */
+async function ownsItsPixels(locator: import("@playwright/test").Locator): Promise<boolean> {
+  return locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && el.contains(hit);
+  });
+}
+
+/**
+ * The same property at all four corners of the passed element's owning dialog —
+ * for wide popovers where only an edge is clipped and a centre hit test passes.
+ * The dialog is resolved with `closest()` from the passed element rather than
+ * located independently: `LinkEditor` has three mount sites on one page (the
+ * persistent bar, the selection popup, the editor's context menu), so a bare
+ * `[role='dialog']` locator would be ambiguous.
+ */
+async function ownsItsCorners(locator: import("@playwright/test").Locator): Promise<boolean> {
+  return locator.evaluate((el) => {
+    const dialog = el.closest("[role='dialog']") as HTMLElement | null;
+    if (!dialog) return false;
+    const d = dialog.getBoundingClientRect();
+    const inset = 4;
+    const corners: Array<[number, number]> = [
+      [d.left + inset, d.top + inset],
+      [d.right - inset, d.top + inset],
+      [d.left + inset, d.bottom - inset],
+      [d.right - inset, d.bottom - inset],
+    ];
+    return corners.every(([x, y]) => {
+      const hit = document.elementFromPoint(x, y);
+      return !!hit && dialog.contains(hit);
+    });
+  });
+}
+
 test("heading dropdown in the persistent bar is visible and clickable", async ({ page }) => {
   await openFixture(page);
 
@@ -97,12 +137,7 @@ test("heading dropdown in the persistent bar is visible and clickable", async ({
 
   // The regression assertion: the menu item must actually own its own pixels.
   // Before the fix this resolved to the editor's scroll container.
-  const ownsItsPixels = await item.evaluate((el) => {
-    const r = el.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return !!hit && el.contains(hit);
-  });
-  expect(ownsItsPixels).toBe(true);
+  expect(await ownsItsPixels(item)).toBe(true);
 
   // And the menu must sit inside the viewport, not off the bottom/right edge.
   const inViewport = await menu.evaluate((el) => {
@@ -159,12 +194,7 @@ test("highlight color picker in the persistent bar is visible and clickable", as
   ]) {
     const control = page.locator(`[data-testid='${id}']`);
     await expect(control).toBeVisible();
-    const ownsItsPixels = await control.evaluate((el) => {
-      const r = el.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      return !!hit && el.contains(hit);
-    });
-    expect(ownsItsPixels, `${id} is not clickable`).toBe(true);
+    expect(await ownsItsPixels(control), `${id} is not clickable`).toBe(true);
   }
 
   // Deliberately NOT asserting that a highlight gets applied here.
@@ -199,23 +229,7 @@ test("link editor in the persistent bar is not clipped by the format track", asy
   // have to re-derive which ancestors actually clip this element — the very
   // logic under test — whereas a hit test reports what the user experiences and
   // stays correct however the fix is implemented.
-  const ownsItsCorners = await input.evaluate((el) => {
-    const dialog = el.closest("[role='dialog']") as HTMLElement | null;
-    if (!dialog) return false;
-    const d = dialog.getBoundingClientRect();
-    const inset = 4;
-    const corners: Array<[number, number]> = [
-      [d.left + inset, d.top + inset],
-      [d.right - inset, d.top + inset],
-      [d.left + inset, d.bottom - inset],
-      [d.right - inset, d.bottom - inset],
-    ];
-    return corners.every(([x, y]) => {
-      const hit = document.elementFromPoint(x, y);
-      return !!hit && dialog.contains(hit);
-    });
-  });
-  expect(ownsItsCorners).toBe(true);
+  expect(await ownsItsCorners(input)).toBe(true);
 
   // Escape must still dismiss it (the wrapper keydown handler).
   await page.keyboard.press("Escape");
@@ -269,7 +283,7 @@ test("format track truncates rather than wrapping, and never scrolls", async ({ 
   // every other test here would stay green if the bar started wrapping into two
   // rows or grew a scrollbar. `scrollLeft` is the one observable that actually
   // distinguishes `clip` from `hidden`: both truncate, only `hidden` scrolls.
-  const track = page.locator("[data-testid='formatting-bar'] > div").first();
+  const track = page.locator("[data-testid='formatting-bar-track']");
   const singleRowHeight = await track.evaluate((el) => el.getBoundingClientRect().height);
 
   await page.setViewportSize({ width: 640, height: 800 });

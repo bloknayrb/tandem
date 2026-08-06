@@ -1,5 +1,6 @@
 <script lang="ts">
 import { clickOutside } from "../actions/clickOutside.svelte";
+import { ESCAPE_OWNER_ATTR } from "../utils/escape-owner";
 import { focusMenuEntryPoint, handleMenuArrowKeys } from "../utils/menuKeys";
 
 interface Props {
@@ -97,6 +98,7 @@ function chooseSettings() {
   class:open={menuOpen}
   data-testid="decorations-menu"
   data-tauri-drag-region="false"
+  {...(menuOpen ? { [ESCAPE_OWNER_ATTR]: "" } : {})}
   use:clickOutside={closeMenu}
   onkeydown={handleKey}
 >

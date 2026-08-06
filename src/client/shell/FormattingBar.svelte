@@ -161,6 +161,7 @@ function handleHighlight(color: HighlightColor) {
          gains a genuinely narrow target. Requires Chrome 90 / Safari 16 /
          Firefox 81; the project already targets safari16.4. -->
     <div
+      data-testid="formatting-bar-track"
       style="display: flex; align-items: center; gap: 1px; overflow-x: clip; overflow-y: visible; min-width: 0;"
     >
       <FormattingToolbar {editor} />

@@ -17,6 +17,24 @@ export function withPreventDefault(command: () => void): (e: MouseEvent) => void
   };
 }
 
+/**
+ * Keyboard half of the toolbar handler pair. Enter/Space on a focused button
+ * fires `click` with `detail === 0`; the mouse path binds `mousedown` +
+ * `preventDefault()` (see `withPreventDefault`) so the editor selection
+ * survives. Pair `onMouseDown={h}` with `onClick={onKeyActivate(h)}` so both
+ * routes work without double-firing.
+ *
+ * The opposite case to `utils/keyboard-activate.ts`, which exists for NON-native
+ * interactive elements: a native `<button>` already synthesises the click, and
+ * the `detail === 0` filter is what stops that synthesised click re-running the
+ * mousedown handler.
+ */
+export function onKeyActivate(handler: (e: MouseEvent) => void): (e: MouseEvent) => void {
+  return (e: MouseEvent) => {
+    if (e.detail === 0) handler(e);
+  };
+}
+
 /** Current link's `href` attribute, or `""` if the cursor isn't on a link. */
 export function getInitialLinkHref(editor: TiptapEditor): string {
   const href = editor.getAttributes("link").href;
