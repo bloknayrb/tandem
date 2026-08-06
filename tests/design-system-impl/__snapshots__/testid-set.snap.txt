@@ -173,6 +173,7 @@ font-by-extension-{*}-{*}
 formatbar-hide-btn
 formatbar-source-toggle
 formatting-bar
+formatting-bar-wrap
 harness-acknowledge
 harness-banner-dismiss
 harness-banner-version

@@ -44,13 +44,36 @@ function handleColorPickerToggle(e: MouseEvent) {
   showColorPicker = !showColorPicker;
 }
 
+/**
+ * Keyboard activation. Enter/Space on a focused button fires `click` with
+ * `detail === 0`; the mouse path deliberately uses `mousedown` so the editor
+ * selection survives the toolbar interaction. Pairing them is the house pattern
+ * (`onKeyActivate` in FormattingToolbar) and both routes must exist here, not
+ * least because this control now publishes `aria-expanded` — without a keyboard
+ * path that state could never change for a keyboard user, which is a promise
+ * the markup cannot keep.
+ */
+function handleColorPickerKeyActivate(e: MouseEvent) {
+  if (e.detail === 0) handleColorPickerToggle(e);
+}
+
 function handleColorSelect(color: HighlightColor) {
   highlightColor = color;
   showColorPicker = false;
 }
 </script>
 
-<div class="highlight-picker-wrap">
+<!-- Escape dismisses, matching the heading menu and link editor in the same bar
+     (both wrap their trigger + popover in an Escape keydown handler). Without
+     it this was the only popover in the formatting bar a keyboard user could
+     open but not close. -->
+<div
+  class="highlight-picker-wrap"
+  onkeydown={(e) => {
+    if (e.key === "Escape") showColorPicker = false;
+  }}
+  role="presentation"
+>
   <ToolbarButton
     label="Highlight"
     testId="toolbar-highlight-btn"
@@ -66,6 +89,7 @@ function handleColorSelect(color: HighlightColor) {
     aria-haspopup="menu"
     aria-expanded={showColorPicker}
     onmousedown={handleColorPickerToggle}
+    onclick={handleColorPickerKeyActivate}
     title="Choose highlight color"
   >
     <span
@@ -74,13 +98,21 @@ function handleColorSelect(color: HighlightColor) {
     ></span>
   </button>
   {#if showColorPicker}
+    <!-- The trigger advertises `aria-haspopup="menu"`, so this has to actually
+         be one. Single-select level picker → `menuitemradio` + `aria-checked`,
+         mirroring the heading dropdown in FormattingToolbar, which has the
+         identical shape. -->
     <div
       bind:this={colorPickerEl}
       class="highlight-picker-popover"
+      role="menu"
+      aria-label="Highlight color"
     >
       {#each HIGHLIGHT_COLOR_OPTIONS as { value, label } (value)}
         <button
           type="button"
+          role="menuitemradio"
+          aria-checked={value === highlightColor}
           data-testid={`toolbar-highlight-color-${value}`}
           title={label}
           aria-label={label}
@@ -110,6 +142,7 @@ function handleColorSelect(color: HighlightColor) {
       {/each}
       <button
         type="button"
+        role="menuitem"
         data-testid="color-picker-close"
         title="Close"
         aria-label="Close color picker"
@@ -159,14 +192,18 @@ function handleColorSelect(color: HighlightColor) {
     border-radius: var(--tandem-r-1);
     border: 1px solid var(--tandem-border);
   }
-  /* Right-aligned, so it unfurls leftward into the track (#1302). This control
-     is the last item in the formatting bar's clipped track and its wrap ends
+  /* Right-aligned, so it unfurls leftward into the track (#1302). Single
+     consumer today (FormattingBar), and this alignment is chosen for that host's
+     geometry — a second mount site is a reason to re-check it, not to copy it.
+     There, this control is the last item in the clipped track and its wrap ends
      flush with the track's right edge, so a `left: 0` popover overhung the
-     horizontal clip by ~61px and took the pink swatch and the close button with
-     it — unclickable. Opening leftward keeps the whole popover inside the
-     clipped box. The horizontal clip is deliberate (it is what truncates the
-     toolbar on narrow windows); only the vertical axis was widened to `visible`
-     to let popovers escape downward. */
+     horizontal clip and lost its rightmost controls specifically: the pink
+     swatch and the close button were unclickable while yellow/green/blue were
+     fine. Opening leftward keeps the whole popover inside the clipped box, and
+     wins in the truncated case too (the wrap is what gets pushed past the edge,
+     so a right-aligned popover keeps more of itself visible, not less). The
+     horizontal clip is deliberate — it is what truncates the toolbar on narrow
+     windows; only the vertical axis was widened to `visible`. */
   .highlight-picker-popover {
     position: absolute;
     top: 100%;

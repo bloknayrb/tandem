@@ -49,7 +49,31 @@ async function openFixture(page: import("@playwright/test").Page) {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "sample.md") });
   await page.goto("/");
   await expect(page.locator(".tandem-editor")).toBeVisible({ timeout: 10_000 });
+  // Wait for CONTENT, not just the mount. `.tandem-editor` is the ProseMirror
+  // contenteditable and it mounts before the Y.Doc syncs over Hocuspocus, so
+  // `locator("p").first()` can otherwise resolve to an empty placeholder — the
+  // selection then covers nothing, `canHighlight` stays false, and the
+  // selection-gated controls never enable. Every other spec in this suite waits
+  // on text for the same reason.
+  await expect(page.locator(".tandem-editor")).toContainText("first paragraph", {
+    timeout: 10_000,
+  });
   await expect(page.locator("[data-testid='formatting-bar']")).toBeVisible({ timeout: 10_000 });
+}
+
+/** Computed z-index of the bar's fixed wrapper — the element the lift applies to. */
+async function wrapZIndex(page: import("@playwright/test").Page): Promise<string> {
+  return page
+    .locator("[data-testid='formatting-bar-wrap']")
+    .evaluate((el) => getComputedStyle(el).zIndex);
+}
+
+/** Resolve a design token to its numeric value so assertions never hardcode one. */
+async function tokenValue(page: import("@playwright/test").Page, name: string): Promise<string> {
+  return page.evaluate(
+    (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(),
+    name,
+  );
 }
 
 test("heading dropdown in the persistent bar is visible and clickable", async ({ page }) => {
@@ -89,16 +113,6 @@ test("heading dropdown in the persistent bar is visible and clickable", async ({
   });
   expect(inViewport).toBe(true);
 
-  // The bar must outrank the selection popup while a popover is open, or the
-  // menu paints behind it (#1024/#1036). The lift keys on `aria-expanded`, so
-  // it covers every popover in the bar rather than an enumerated list.
-  const lifted = await page.locator(".tandem-fmtbar-wrap").evaluate((el) => {
-    const z = getComputedStyle(el).zIndex;
-    const popupZ = getComputedStyle(document.documentElement).getPropertyValue("--tandem-z-modal");
-    return Number(z) > Number(popupZ.trim());
-  });
-  expect(lifted).toBe(true);
-
   // Clicking it applies the format — the end-to-end proof.
   await item.click();
   await expect(editor.locator("h2", { hasText: "first paragraph" })).toBeVisible({
@@ -112,7 +126,11 @@ test("highlight color picker in the persistent bar is visible and clickable", as
   const bar = page.locator("[data-testid='formatting-bar']");
   const editor = page.locator(".tandem-editor");
 
-  // The color toggle is disabled without a selection (canHighlight).
+  // The click is a prerequisite, not decoration: ProseMirror's DOMObserver
+  // ignores `selectionchange` unless the view owns focus, so without it
+  // `editor.state.selection` stays empty and the selection-gated controls never
+  // enable. Same pairing as accessibility.spec.ts and six other specs.
+  await editor.click();
   await editor.locator("p").first().selectText();
 
   const toggle = bar.locator("[data-testid='toolbar-highlight-color-toggle']");
@@ -150,10 +168,11 @@ test("highlight color picker in the persistent bar is visible and clickable", as
   }
 
   // Deliberately NOT asserting that a highlight gets applied here.
-  // toolbar-redesign.spec.ts documents that clicking the color toggle makes
-  // ProseMirror clear the text selection before the swatch panel renders, which
-  // puts the apply-a-color flow out of reach in headless CI regardless of
-  // `preventDefault`. That limitation is orthogonal to #1302: this bug is about
+  // toolbar-redesign.spec.ts documents the same ROOT CAUSE surfacing one step
+  // later — headless ProseMirror loses the selection around a synthesised click,
+  // which there costs the follow-up swatch click and here would cost the
+  // trigger's own mousedown. Either way the apply-a-color flow is out of reach
+  // in headless CI. That limitation is orthogonal to #1302: this bug is about
   // the popover's geometry, and the assertions above test exactly that. The
   // recolor behaviour itself is covered by tests/client/highlight-toggle.test.ts.
 });
@@ -164,20 +183,22 @@ test("link editor in the persistent bar is not clipped by the format track", asy
   const bar = page.locator("[data-testid='formatting-bar']");
   const editor = page.locator(".tandem-editor");
 
+  await editor.click();
   await editor.locator("p").first().selectText();
-  // Dispatched for the same reason as the color toggle above: the Link control
-  // is disabled without a selection, and headless loses the selection during
-  // Playwright's click synthesis.
-  await bar.getByRole("button", { name: "Link", exact: true }).dispatchEvent("mousedown");
+  // Dispatched for the same reason as the color toggle above. Precedent:
+  // accessibility.spec.ts drives this exact button the same way.
+  await bar
+    .getByRole("button", { name: "Link", exact: true })
+    .dispatchEvent("mousedown", { bubbles: true, cancelable: true });
 
   const input = bar.locator("[data-testid='toolbar-link-input']");
   await expect(input).toBeVisible();
 
-  // The dialog must own every one of its own corners. Hit-testing (rather than
-  // comparing rects against clipping ancestors) is what stays correct after the
-  // fix: a `position: fixed` popover legitimately extends past an ancestor's
-  // overflow box without being clipped by it, so a rect comparison would report
-  // a false failure while a hit test reports the truth the user experiences.
+  // The dialog must own every one of its own corners. Hit-testing beats
+  // comparing rects against clipping ancestors because a rect comparison would
+  // have to re-derive which ancestors actually clip this element — the very
+  // logic under test — whereas a hit test reports what the user experiences and
+  // stays correct however the fix is implemented.
   const ownsItsCorners = await input.evaluate((el) => {
     const dialog = el.closest("[role='dialog']") as HTMLElement | null;
     if (!dialog) return false;
@@ -199,4 +220,77 @@ test("link editor in the persistent bar is not clipped by the format track", asy
   // Escape must still dismiss it (the wrapper keydown handler).
   await page.keyboard.press("Escape");
   await expect(input).toBeHidden();
+});
+
+test("bar lifts above the selection popup only while a popover is open", async ({ page }) => {
+  await openFixture(page);
+
+  const bar = page.locator("[data-testid='formatting-bar']");
+  const editor = page.locator(".tandem-editor");
+
+  // Asserted as a PAIR. A rule that lifted unconditionally would satisfy a
+  // lift-only check while leaving the bar floating over unrelated chrome, so the
+  // closed state is as load-bearing as the open one.
+  const sticky = await tokenValue(page, "--tandem-z-sticky");
+  const toast = await tokenValue(page, "--tandem-z-toast");
+  const modal = await tokenValue(page, "--tandem-z-modal");
+  expect(Number(toast)).toBeGreaterThan(Number(modal));
+
+  await editor.locator("p").first().click();
+  expect(await wrapZIndex(page), "closed: bar must not outrank the popup").toBe(sticky);
+
+  await bar.getByRole("button", { name: "Heading", exact: true }).click();
+  await expect(page.getByRole("menu", { name: "Heading level" })).toBeVisible();
+  expect(await wrapZIndex(page), "heading menu open: bar must lift").toBe(toast);
+
+  // Dismissed by clicking away, not Escape. The trigger's mousedown calls
+  // preventDefault so the editor keeps focus and the ProseMirror selection
+  // survives — which also means the wrapper's Escape keydown never fires for a
+  // mouse-opened menu. clickOutside is the dismissal path that actually applies
+  // here, and releasing the lift on close is the half being asserted.
+  await editor.locator("p").first().click();
+  await expect(page.getByRole("menu", { name: "Heading level" })).toBeHidden();
+  expect(await wrapZIndex(page), "closed again: lift must release").toBe(sticky);
+
+  // The refactor's whole claim is that the lift keys on `aria-expanded` and so
+  // covers every popover the bar owns, not an enumerated list. Prove it on a
+  // second, independently-implemented one (Decorations lives OUTSIDE the clipped
+  // track, so it exercises a different DOM path to the same rule).
+  await bar.locator("[data-testid='decorations-menu-caret']").click();
+  await expect(page.locator("[data-testid='decorations-menu']")).toBeVisible();
+  expect(await wrapZIndex(page), "decorations menu open: bar must lift").toBe(toast);
+});
+
+test("format track truncates rather than wrapping, and never scrolls", async ({ page }) => {
+  await openFixture(page);
+
+  // The changed declaration is `overflow-x: clip` in place of `overflow: hidden`.
+  // Truncation is the property `hidden` was there for, so it needs its own net —
+  // every other test here would stay green if the bar started wrapping into two
+  // rows or grew a scrollbar. `scrollLeft` is the one observable that actually
+  // distinguishes `clip` from `hidden`: both truncate, only `hidden` scrolls.
+  const track = page.locator("[data-testid='formatting-bar'] > div").first();
+  const singleRowHeight = await track.evaluate((el) => el.getBoundingClientRect().height);
+
+  await page.setViewportSize({ width: 640, height: 800 });
+  await expect(page.locator("[data-testid='formatting-bar']")).toBeVisible();
+
+  const narrow = await track.evaluate((el) => {
+    const before = el.scrollLeft;
+    el.scrollLeft = 9999;
+    const scrolled = el.scrollLeft;
+    el.scrollLeft = before;
+    return {
+      truncated: el.scrollWidth > el.clientWidth + 1,
+      scrollable: scrolled > 0,
+      height: el.getBoundingClientRect().height,
+    };
+  });
+
+  expect(narrow.truncated, "track should overflow its box at 640px").toBe(true);
+  expect(narrow.scrollable, "clip must not create a scroll container").toBe(false);
+  expect(narrow.height, "track must truncate, not wrap to a second row").toBeCloseTo(
+    singleRowHeight,
+    0,
+  );
 });
