@@ -19,7 +19,7 @@
 
 ## Protected tokens (cannot change in this umbrella branch)
 
-Per the umbrella plan's Phase 0c, these tokens are load-bearing for shipped behavior (authorship decorations, audience-first model, WCAG audit) and any change requires a separate per-token re-audit committed in the same PR as the change. A vitest snapshot gate (see [token-protection.spec.ts](../../tests/design-system-impl/token-protection.spec.ts)) enforces this at CI time.
+Per the umbrella plan's Phase 0c, these tokens are load-bearing for shipped behavior (authorship decorations, audience-first model, WCAG audit) and any change requires a separate per-token re-audit committed in the same PR as the change. A vitest snapshot gate (see [token-protection.test.ts](../../tests/design-system-impl/token-protection.test.ts)) enforces this at CI time.
 
 - `--tandem-author-user`
 - `--tandem-author-claude`

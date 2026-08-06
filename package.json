@@ -64,6 +64,7 @@
     "dev:tauri": "node scripts/download-node-sidecar.mjs && node scripts/build-reaper.mjs && cargo tauri dev",
     "build:tauri": "node scripts/download-node-sidecar.mjs && node scripts/build-reaper.mjs && cargo tauri build",
     "check:tokens": "tsx scripts/check-semantic-tokens.ts",
+    "check:links": "node scripts/check-doc-links.mjs",
     "audit:dead-code": "knip",
     "audit:origins": "tsx scripts/audit-origins.ts",
     "audit:ymap-keys": "tsx scripts/audit-ymap-keys.ts",
