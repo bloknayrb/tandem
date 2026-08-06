@@ -697,7 +697,7 @@ Per Bryan's 2026-05-14 triage marks. Rows not listed here are Core (see "v1.0 Co
 
 These are intentional scope boundaries, not bugs:
 
-- .docx is review-only — use Word for final formatting/production
+- .docx round-trips but is lossy at the edges — the body and comments write back, but tracked changes and page headers/footers are not carried across (they are detected and reported, not preserved). Use Word for final formatting/production.
 - No formula support in tables
 - No .xlsx/.csv support (deferred to v2)
 - No drawing/freeform annotation (deferred to v2)

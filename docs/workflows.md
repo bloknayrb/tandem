@@ -133,7 +133,7 @@ Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\progress-report-feb.md" 
 → { documentId: "progress-report-f-1a2b3c", fileName: "progress-report-feb.md", ... }
 
 Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\invoice-feb.docx" })
-→ { documentId: "invoice-feb-d4e5f6", fileName: "invoice-feb.docx", readOnly: true, ... }
+→ { documentId: "invoice-feb-d4e5f6", fileName: "invoice-feb.docx", readOnly: false, ... }
 ```
 
 Bryan sees two tabs in the editor. Claude verifies both are open:
@@ -294,10 +294,10 @@ This lets Bryan control how aggressively Claude's output interrupts the editing 
 
 ```
 Claude: tandem_open({ filePath: "C:\\Users\\bkolb\\...\\contract-review.docx" })
-→ { documentId: "contract-review-x1y2z3", readOnly: true, format: "docx", ... }
+→ { documentId: "contract-review-x1y2z3", readOnly: false, format: "docx", ... }
 ```
 
-The .docx opens in review-only mode. Word comments (`<w:comment>` elements) are automatically extracted and imported as Tandem annotations with `author: "import"`. Bryan sees them in the SidePanel alongside any new annotations Claude adds.
+The .docx opens editable — edits are held in the session and written back to the original only on an explicit save, and auto-save skips `.docx` entirely. Word comments (`<w:comment>` elements) are automatically extracted and imported as Tandem annotations with `author: "import"`. Bryan sees them in the SidePanel alongside any new annotations Claude adds.
 
 ```
 Claude: tandem_getAnnotations({ author: "import" })

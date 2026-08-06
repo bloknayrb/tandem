@@ -782,12 +782,12 @@ Tauri v2 uses a capabilities model to grant permissions:
 
 ## Design Decisions
 
-See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-038), covering:
+See [docs/decisions.md](decisions.md) for the full list of Architecture Decision Records (ADR-001 through ADR-046), covering:
 
 - Tiptap over ProseMirror direct
 - Hocuspocus for Yjs WebSocket
 - MCP over REST for Claude integration
-- .docx review-only by default
+- .docx handling — review-only in ADR-004, editable with write-back since #576
 - Node-anchored ranges for overlays
 - console.error for server logs
 - Y.Map for annotations
