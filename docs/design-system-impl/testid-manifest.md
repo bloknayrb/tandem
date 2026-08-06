@@ -67,7 +67,9 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `title-bar`, `titlebar-brand-menu`, `titlebar-brand-menu-popover`,
   `titlebar-default-model`, `titlebar-update-available-dot`,
   `brand-menu-{settings,shortcuts,theme-{*}}`
-- `formatting-bar`,
+- `formatting-bar`, `formatting-bar-track` (#1302 — the control track that
+  carries the `overflow-x: clip / overflow-y: visible` axis split; the
+  truncation test targets it by testid rather than by DOM position),
   `toolbar-link-{input,submit,cancel}`,
   `toolbar-highlight-color-{toggle,{*}}`, `color-picker-close`,
   `formatbar-hide-btn` (1.11 — hides the optional bar; the popup mirrors its controls)

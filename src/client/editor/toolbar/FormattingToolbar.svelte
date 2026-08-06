@@ -61,8 +61,15 @@ $effect(() => {
 
 // The trigger sits outside the dropdown, so opening the menu leaves focus on
 // the button — and this trigger's mousedown handler preventDefaults, keeping
-// focus in the editor entirely. Either way an arrow press never reaches the
-// menu's handler unless focus is moved in explicitly.
+// focus in the editor entirely. Either way an arrow press would never reach the
+// menu's handler unless focus is moved in explicitly, which is what this does.
+//
+// Deliberately ungated on HOW the menu was opened: tests/e2e/keyboard-a11y.spec.ts
+// opens it with `.click()` and asserts focus lands on an item, explicitly
+// rejecting a pre-focus shortcut. One consequence, since this menu renders
+// inside the selection popup: a mouse-opened menu now holds focus inside the
+// popup's Escape-owner subtree, so Escape closes the menu first and the popup
+// second (src/client/utils/escape-owner.ts).
 $effect(() => {
   if (showHeadingMenu) focusMenuEntryPoint(headingMenuEl);
 });
