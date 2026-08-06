@@ -136,7 +136,7 @@ Claude's comments may carry a **replacement suggestion** (`suggestedText`) — a
 
 ### Note
 
-A private note to yourself. Notes are never sent to Claude — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide Claude should see it (imported Word comments arrive as notes too, and can be batch-promoted).
+A private note to yourself. Notes are never sent to Claude — it cannot read them through any MCP tool or event ([ADR-027](decisions.md#adr-027-annotation-system-redesign--audience-based-model)). Use them for personal reminders while you work. A note can later be **promoted** to a comment if you decide Claude should see it (imported Word comments arrive as notes too, and can be batch-promoted).
 
 ### Creating Annotations
 
@@ -170,7 +170,7 @@ Annotations can be reviewed without leaving the keyboard:
 | `Ctrl+Shift+Enter` | Dismiss the selected annotation (or the first pending one) |
 | `Escape` | Deselect the current annotation |
 
-You can also enable the **margin view** (Settings → Claude Code → "Margin annotation view") to see annotation cards beside the text they reference, in addition to the side panel list.
+You can also enable the **margin view** (Settings → AI Assistant → "Margin annotation view") to see annotation cards beside the text they reference, in addition to the side panel list.
 
 In margin view, cards that would be pushed away from their anchor text by their neighbours automatically shrink to a one-line summary — the Accept/Reject buttons stay available, so a shrunken card is still actionable. Click a card to expand it while it's selected, or click its chevron to keep it expanded even after you select something else. Cards also widen to use empty margin space when you collapse or narrow a side rail.
 
@@ -223,6 +223,22 @@ Claude's replies are rendered as Markdown in the chat panel. Claude can respond 
 
 An unread badge appears on the Chat tab when Claude replies while you're viewing the Annotations panel. Switch to Chat to clear it.
 
+## Settings
+
+Everything lives in one modal, opened with `Ctrl+,` or from the brand menu:
+
+| Tab | What's in it |
+|-----|--------------|
+| **Appearance** | Theme (light / dark / warm / system), which decorations are shown (authorship, comments, highlights, notes), raw-markdown view, uniform tab width, the optional formatting bar |
+| **Editor** | Smart typography (curly quotes, em dashes) and the spellcheck toggle — both opt-in |
+| **Network** | Connection details, start-at-login, Cowork enablement, and the advanced retry/delay controls |
+| **Accessibility** | Motion-reduction and related display preferences |
+| **Collaboration** | Solo/Tandem behavior and presence options |
+| **AI Assistant** | Working directory, the margin annotation view, the integration wizard, and Replay tutorial |
+| **Shortcuts** | Click-to-record remapping for every app-level shortcut, with per-row reset and a reset-all |
+| **License** | Activation and current license or trial status |
+| **About** | Version, Copy Diagnostics, and Open log folder |
+
 ## Keyboard Shortcuts
 
 Press `?` to open the in-app shortcuts reference at any time — it always reflects your effective bindings. Most app-level shortcuts are remappable in **Settings → Shortcuts** (click-to-record); the defaults are listed below.
@@ -237,7 +253,10 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Ctrl+S` | Save document |
 | `Ctrl+Shift+S` | Save As (e.g. promote a scratchpad to a file) |
 | `Ctrl+F` | Find / replace |
+| `Ctrl+G` | Find next match |
+| `Ctrl+Shift+G` | Find previous match |
 | `Alt+L` | Select containing block |
+| `Ctrl+Shift+E` | View / exit Markdown source |
 
 > **Note:** Undo/redo is not yet available in collaborative mode (tracked as a future enhancement).
 
@@ -267,6 +286,7 @@ Press `?` to open the in-app shortcuts reference at any time — it always refle
 | `Alt+Left` / `Alt+Right` | Reorder the focused tab |
 | `Alt+Shift+Left` / `Alt+Shift+Right` | Toggle left / right panel |
 | `Ctrl+Shift+M` | Toggle Solo / Tandem mode |
+| `Ctrl+Shift+J` | Focus chat |
 | `Ctrl+,` | Settings |
 | `Enter` | Send message (chat panel) |
 | `?` | Show/hide keyboard shortcuts |
@@ -291,7 +311,7 @@ Start Claude Code with the channel flag for instant push notifications:
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Chat messages, annotation accepts/dismisses, and text selections push to Claude in real time — no polling needed. The `--dangerously-load-development-channels` flag is required until Tandem is added to the official channel allowlist.
+Chat messages, annotation accepts/dismisses, and text selections push to Claude in real time — no polling needed. The `--dangerously-load-development-channels` flag is Claude Code's marker for unstable APIs, and it stays necessary while the Channels API is still experimental. The plugin monitor is the alternative that needs no flag — see [Real-Time Push](#real-time-push-recommended).
 
 ### Polling Fallback
 

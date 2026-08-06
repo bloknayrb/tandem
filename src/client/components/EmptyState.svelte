@@ -273,10 +273,13 @@ $effect(() => {
   }
 
   .empty-link {
-    /* Interactive text: --tandem-fg-muted (≥5.5:1 in all themes) rather than
-       the bundle's decorative --tandem-fg-faint, which fails WCAG AA 4.5:1
-       (3.2 light / 2.9 warm / 4.0 dark). A11y overrides bundle decoration for
-       a functional control; still clearly secondary to the inverted Retry pill. */
+    /* Interactive text: --tandem-fg-muted rather than the bundle's decorative
+       --tandem-fg-faint. The original reason was that faint FAILED WCAG AA
+       (3.2 light / 2.9 warm / 4.0 dark) — that is no longer true; the v1.0
+       accessibility gate retuned faint to clear 4.5:1 in every theme. Kept on
+       muted anyway, now for hierarchy rather than compliance: this is a
+       functional control and should read a step above the faintest tier, and
+       it stays clearly secondary to the inverted Retry pill either way. */
     font-family: var(--tandem-font-sans);
     font-size: 12.5px;
     color: var(--tandem-fg-muted);

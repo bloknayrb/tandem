@@ -5,27 +5,50 @@ Tandem is designed local-first. The server binds to `127.0.0.1` by default, docu
 ## Network posture
 
 - **Default bind:** `127.0.0.1`. The MCP HTTP endpoint and Hocuspocus WebSocket only accept connections from the local machine.
-- **LAN exposure (opt-in):** set `TANDEM_BIND_HOST=0.0.0.0` (or a specific interface) to expose Tandem on a LAN. Non-loopback requests require a Bearer token by default; Tandem auto-generates one on first run and stores it at `{APP_DATA_DIR}/tandem_auth_token` with mode `0o600`.
+- **LAN exposure (opt-in):** set `TANDEM_BIND_HOST=0.0.0.0` (or a specific interface) to expose Tandem on a LAN. Non-loopback requests require a Bearer token by default; Tandem auto-generates one on first run and stores it at `{APP_DATA_DIR}/auth-token` with mode `0o600`.
 - **Loopback detection is fail-closed.** Authentication middleware uses `req.socket.remoteAddress` exclusively — never the `Host` header — so DNS rebinding attacks cannot trick the server into treating a remote request as loopback. IPv6 variants (`::1`, `::ffff:127.0.0.1`) are normalized to `127.0.0.1`.
-- **Insecure LAN opt-in:** `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` disables the token requirement for non-loopback requests. Intended for trusted-network development only; never set it on a public network.
+- **Insecure LAN opt-in:** `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` lets the server bind to a non-loopback host when no auth token has been provisioned yet. Without it, that startup is refused outright (`bind-check.ts`). The name overstates what it does: it does **not** switch authentication off. `authMiddleware` (`src/server/auth/middleware.ts:161`) never reads the flag — it still requires a valid Bearer token from every non-loopback caller, and a token is always minted. What the flag genuinely relaxes is `assertLoopbackForMutation`, which is the *only* guard whose behaviour it changes (see below). Intended for trusted-network development; never set it on a public network.
 
 See [configuration.md](configuration.md#environment-variables) for the full environment-variable reference (ports, bind host, auth token, app-data paths).
 
 ## CORS allowlist
 
-The server accepts cross-origin requests from two origins only:
+The server accepts cross-origin requests from three origins only (`isLocalhostOrigin`, `src/server/mcp/api-routes.ts:96-105`):
 
-- `http://127.0.0.1:*` (any port)
-- `http://tauri.localhost` (the Tauri WebView's fixed origin)
+- `http(s)://127.0.0.1` with any port
+- `http(s)://tauri.localhost` — the Tauri WebView's origin on Windows and macOS
+- `tauri://localhost` — the Linux Tauri WebView's custom scheme, matched as an exact string rather than a `tauri://*` wildcard, since it cannot be forged by remote content
 
-Bare `http://localhost` was narrowed out in PR #637 because it bypassed DNS-rebinding hardening. Hocuspocus WebSocket origin validation uses the same allowlist.
+Bare `http://localhost` was narrowed out in PR #637 because it bypassed DNS-rebinding hardening.
+
+**Absence of the header is the denial — never `null` (#1291).** `Access-Control-Allow-Origin` is emitted *only* for an allowlisted origin. Writing `null` reads like a refusal and is the opposite of one: `null` is the origin serialization the Fetch spec assigns to *opaque* contexts, so a sandboxed, `data:` or `srcdoc` iframe on any public page sends `Origin: null`, the browser's CORS check matches it, and the response body becomes cross-origin readable. Absence has no matching semantics at all, so it denies every origin including opaque ones. `Vary: Origin` is set unconditionally, including on denied responses, because the response genuinely varies by origin and `/api` carries no `Cache-Control`.
+
+This reaches further than the JSON routes: the SSE handlers call `res.writeHead(200, {...})`, which Node *merges* with headers already set rather than replacing them, so `/api/events` inherits the same protection. If either stream is ever rewritten to a replacing header write, that coverage disappears silently.
+
+**The WebSocket does not use the same allowlist.** Hocuspocus origin validation (`src/server/yjs/provider.ts:91-104`) and the MCP server's `allowedHosts` (`src/server/mcp/server.ts:386`) are separate lists that permit overlapping but different sets — `allowedHosts` additionally accepts the bare hostname `localhost` and `[::1]`. Treat them as three surfaces to audit, not one.
 
 ## Auth tokens
 
 - **Generation:** 32 random bytes, base64url-encoded.
-- **Storage:** `{APP_DATA_DIR}/tandem_auth_token`, mode `0o600`, written atomically (temp file + rename).
+- **Storage:** `{APP_DATA_DIR}/auth-token`, mode `0o600`, written atomically (temp file + rename).
 - **Comparison:** both sides SHA-256-hashed, then compared with `crypto.timingSafeEqual` to prevent length-oracle attacks.
 - **Rotation:** `tandem rotate-token` generates a new token, posts it to `/api/rotate-token`, and updates MCP client configs. The old token remains valid for a 60-second grace window so connected clients can pick up the new value without a disconnect.
+
+## What actually guards a mutating route
+
+Mutating `/api` routes call `assertOriginAllowlisted` and then `assertLoopbackForMutation`. Read
+the pair honestly, because the names promise more than they deliver (#1293):
+
+- `assertOriginAllowlisted` reads the `Origin` header, which a non-browser client can forge
+  freely. It stops a *browser* on a page you visited; it stops nothing else.
+- `assertLoopbackForMutation` rejects only when `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` **and** the
+  peer is non-loopback. In the default configuration it is a **no-op**
+  (`src/server/integrations/api-routes.ts:279-289`).
+
+So neither is the real protection. **The real protection is the loopback bind plus Bearer auth
+for every non-loopback caller** — the two controls described above, which hold regardless of
+either assertion. The two `assert*` calls are defence in depth on top of that, and a route that
+has them is not thereby safe to expose. `docs/decisions.md` ADR-046 states the same posture.
 
 ## Privacy
 

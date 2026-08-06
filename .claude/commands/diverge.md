@@ -145,3 +145,36 @@ These were captured during the first-use validation (two runs against known-answ
 
 - **Isolation is leaky.** The "Do not read CLAUDE.md or search the codebase" instruction in the frame-agent system prompts is *not* fully obeyed. Several generators in the validation produced text containing Tandem-specific identifiers (`CTRL_ROOM`, `Y_MAP_USER_AWARENESS`, the exact temp-file regex from CLAUDE.md gotchas) — implying CLAUDE.md still bleeds into their context somehow. Diversity still emerged across frames in aggregate, so the method works under leaky isolation, but don't claim more than that. If you see a generator output that's suspiciously specific to Tandem, it's likely leaked rather than independently reasoned.
 - **Speedrunner is the lowest-yield frame.** In both validation runs, the speedrunner generator produced outputs that were either the shipped answer verbatim (with leaked identifiers) or speedrunner-flavored variants of it. If a future curation pass trims the frame library, this is the first to drop. Deletionist and biology consistently produced the most genuinely-distinct shapes; regulator consistently surfaced auditability concerns no other frame named.
+
+## Review gate — leaves a tracked trace, on purpose
+
+**Status: kept. Next review 2026-11-01.**
+
+The original gate ("delete if not invoked within 30 days", set 2026-05-28) was
+**evaluated wrongly on 2026-08-06** and this command was briefly deleted. It had in
+fact been invoked on day two — `9657de1` is first-use validation from two runs, and
+the limitations section above is its output — plus at least once more on 2026-07-20.
+The sweep that judged it searched tracked files for *references to* the command, which
+cannot answer "was it used": invocation writes to `.claude/plans/`, which `.gitignore:28`
+excludes. The criterion's own definition lives at `.claude/plans/diverge-workflow.md`,
+inside that same ignored directory, so the rule was as invisible as the evidence.
+
+The generalisable failure: **a kill criterion whose evidence lives in an ignored path
+cannot be checked by the sweep that will judge it**, and the elapsed date is what makes
+the question due, never the answer to it. Note the perverse incentive — the knowledge
+graph left 28 tracked files that made its disuse legible and was correctly retired,
+while `/diverge` was used more and left less trace. A gate read from tracked files
+systematically favours whichever artifact generates tracked clutter.
+
+**So this gate is now evaluable from tracked history.** When `/diverge` informs a piece
+of work, say so in the commit or PR body of that work — the phrase `via /diverge` is
+enough. At review time the question is answered by:
+
+```sh
+git log --since=<gate-set-date> --grep='via /diverge' --oneline
+```
+
+Retire it if that returns nothing across a full review period, or if "none of these —
+reframe" is chosen more than once. Do **not** retire it on the strength of an elapsed
+date alone, and do not conclude "unused" from a search that could only ever have found
+references rather than uses.

@@ -189,7 +189,7 @@ const kbdStyle =
           {#if conflictError && conflictError.id === id}
             <div
               data-testid={`shortcut-conflict-${id}`}
-              style="grid-column: 1 / -1; font-size: 11px; color: var(--tandem-error-fg);"
+              style="grid-column: 1 / -1; font-size: 11px; color: var(--tandem-error-fg-strong);"
             >
               {conflictError.message}
             </div>

@@ -1,6 +1,8 @@
-## Redesign Bundle
+# Redesign Bundle (historical)
 
-> **Superseded 2026-05-21.** The redesign bundle that previously lived here (the calm-v1 through calm-v5 React JSX corpus + `bundle.tar.gz`) has been replaced by the Svelte 5 **Tandem Design System** delivered through OpenDesign.
+> **Superseded 2026-05-21**, and archived 2026-08-06 once the umbrella branch had merged — which this file's own closing line asked for. The bundle that lived at `docs/redesign-bundle/` (the calm-v1 through calm-v5 React JSX corpus + `bundle.tar.gz`) was replaced by the Svelte 5 **Tandem Design System** delivered through OpenDesign, and the re-skin it fed landed in v0.13.5.
+>
+> Two of the "canonical sources" below are **not reachable from this repository**: the source zip is a path on one Windows machine, and the OpenDesign project needs an MCP server that is not part of this project's setup. They are recorded as provenance, not as places to go.
 
 ### Canonical sources
 

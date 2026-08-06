@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 /**
  * Tool-count drift guard.
  *
- * The active-tool count has now gone stale twice — 27→28 (`docs/audit-v3-docs.md` F5) and
+ * The active-tool count has now gone stale twice — 27→28 (`docs/archive/audit-v3-docs.md` F5) and
  * 28→29 — each time across nine or more documentation files, because the number was
  * embedded in a paragraph that several docs quote verbatim. R7 of that same audit proposed
  * the structural fix: state the count in ONE reference file and say "the MCP tools"

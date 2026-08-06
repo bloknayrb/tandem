@@ -216,8 +216,29 @@ $effect(() => {
   selectedIndex = 0;
 });
 
+// Remembered so a dismissal can hand focus back where it came from. Without
+// this, Escape left `document.activeElement` on `<body>`: the palette's input
+// is unmounted on close and nothing claims focus, so a keyboard user's next
+// Tab restarts from the top of the document rather than resuming where they
+// opened the palette.
+//
+// Only the DISMISS path restores. The heading and annotation branches of
+// `runResult` move focus deliberately and must not be undone. (The `action`
+// branch is the honest gap: an action that toggles a panel may not move focus
+// at all, and that path still ends on `<body>`. Restoring there would fight
+// the actions that DO move focus, so it needs per-action intent rather than a
+// blanket restore — not attempted here.)
+//
+// A plain `let`, not `$state`: nothing in the template reads it, so making it
+// reactive would buy nothing. NOTE for future edits — the capture below is
+// correct only because nothing in the palette autofocuses. If an `autofocus`
+// is ever added to the input, or the dialog itself is focused on mount, this
+// captures the palette's own node and restores focus into an unmounted element.
+let opener: HTMLElement | null = null;
+
 $effect(() => {
   if (open) {
+    opener = document.activeElement as HTMLElement | null;
     query = "";
     selectedIndex = 0;
     Promise.resolve().then(() => inputEl?.focus());
@@ -235,7 +256,7 @@ onMount(() => {
     if (e.key !== "Escape" || !open) return;
     e.preventDefault();
     e.stopPropagation();
-    close();
+    dismiss();
   };
   window.addEventListener("keydown", onEscape, { capture: true });
   return () => window.removeEventListener("keydown", onEscape, { capture: true });
@@ -265,7 +286,25 @@ function close() {
   onClose();
 }
 
+/**
+ * Close without running anything — Escape or a backdrop click. Returns focus to
+ * whatever had it when the palette opened.
+ */
+function dismiss() {
+  const target = opener;
+  opener = null;
+  close();
+  // After the close: the palette unmounts, and a `focus()` issued before that
+  // would be discarded when the removed input relinquishes focus to <body>.
+  Promise.resolve().then(() => {
+    if (target?.isConnected) target.focus();
+  });
+}
+
 function runResult(result: PaletteResult) {
+  // Drop the reference on the run path too — it is not restored from here, and
+  // holding it keeps a detached node alive until the next open.
+  opener = null;
   if (result.kind === "action") {
     close();
     void result.action.run();
@@ -304,12 +343,12 @@ function handleKeydown(e: KeyboardEvent) {
     if (result) runResult(result);
   } else if (e.key === "Escape") {
     e.preventDefault();
-    close();
+    dismiss();
   }
 }
 
 function handleBackdropClick(e: MouseEvent) {
-  if (e.target === e.currentTarget) close();
+  if (e.target === e.currentTarget) dismiss();
 }
 </script>
 
@@ -340,7 +379,7 @@ function handleBackdropClick(e: MouseEvent) {
       padding-top: 15vh;
     "
     onclick={handleBackdropClick}
-    onkeydown={(e) => { if (e.key === "Escape") close(); }}
+    onkeydown={(e) => { if (e.key === "Escape") dismiss(); }}
   >
     <div
       data-testid="command-palette"
