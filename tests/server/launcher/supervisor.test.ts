@@ -172,14 +172,19 @@ describe("homeCwd — the last-resort cwd is canonicalized like every other", ()
   );
 
   it("falls back to the raw home when it does not resolve to a directory", () => {
+    // The fallback branch is platform-independent, but the env var that steers
+    // os.homedir() is not: POSIX prefers $HOME, Windows reads %USERPROFILE%.
+    // Setting only HOME here made this pass on Ubuntu CI and fail on every
+    // Windows dev machine — where `.husky/pre-push` runs the same suite.
+    const homeVar = process.platform === "win32" ? "USERPROFILE" : "HOME";
     const missing = path.join(tmpDir, "does-not-exist");
-    const prev = process.env.HOME;
+    const prev = process.env[homeVar];
     try {
-      process.env.HOME = missing;
+      process.env[homeVar] = missing;
       expect(homeCwd()).toBe(missing);
     } finally {
-      if (prev === undefined) delete process.env.HOME;
-      else process.env.HOME = prev;
+      if (prev === undefined) delete process.env[homeVar];
+      else process.env[homeVar] = prev;
     }
   });
 });
