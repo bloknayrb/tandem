@@ -401,7 +401,7 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     inflight.relaunch = true;
     try {
       if (deps.relaunchHook) await deps.relaunchHook();
-      await sup.relaunch(cwd);
+      await sup.relaunch(cwd, { persistCwd: parsePersistCwd(body) });
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "relaunch failed");
@@ -409,6 +409,22 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
       inflight.relaunch = false;
     }
   };
+}
+
+/**
+ * Did the caller explicitly ask for this folder to STICK?
+ *
+ * Strict `=== true`, and absence means false. A cwd in the body is not evidence
+ * of intent: the recovery chip sends `dirname(activeDocumentPath)` whenever a
+ * tab is open, and durably repointing Claude off that guess is exactly the
+ * silent state change the launcher-relocate work exists to stop. Only the
+ * palette's explicit "relaunch here" sets the flag.
+ *
+ * Deliberately NOT a 400 on a non-boolean: this is an additive, optional field,
+ * and the safe reading of garbage is "the user did not ask to persist".
+ */
+function parsePersistCwd(body: Record<string, unknown>): boolean {
+  return body.persistCwd === true;
 }
 
 function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
@@ -433,7 +449,7 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
     inflight.startFresh = true;
     try {
       if (deps.startFreshHook) await deps.startFreshHook();
-      await sup.startFresh(cwd);
+      await sup.startFresh(cwd, { persistCwd: parsePersistCwd(body) });
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "start-fresh failed");

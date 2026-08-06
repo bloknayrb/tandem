@@ -123,12 +123,22 @@ describe("sessionCwdMatches — a session is only resumable from its own directo
     expect(sessionCwdMatches("/home/u/project/docs", "/home/u/project")).toBe(false);
   });
 
-  it.runIf(process.platform === "win32")("compares case-insensitively on win32", () => {
-    expect(sessionCwdMatches("C:\\Users\\U\\Project", "c:\\users\\u\\project")).toBe(true);
+  // Both branches run on every host. vitest runs on ubuntu-latest in CI, so a
+  // `runIf(platform === "win32")` guard would leave the case-insensitive
+  // compare — the branch that matters on the product's primary desktop
+  // platform — verified nowhere but a maintainer's laptop.
+  it("compares case-insensitively on win32", () => {
+    expect(sessionCwdMatches("C:\\Users\\U\\Project", "c:\\users\\u\\project", "win32")).toBe(true);
   });
 
-  it.runIf(process.platform !== "win32")("compares case-sensitively off win32", () => {
-    expect(sessionCwdMatches("/home/u/Project", "/home/u/project")).toBe(false);
+  it("compares case-sensitively off win32", () => {
+    expect(sessionCwdMatches("/home/u/Project", "/home/u/project", "linux")).toBe(false);
+    expect(sessionCwdMatches("/home/u/Project", "/home/u/project", "darwin")).toBe(false);
+  });
+
+  it("still rejects genuinely different directories on win32", () => {
+    // The case-fold must not degrade into "always matches on Windows".
+    expect(sessionCwdMatches("C:\\a\\project", "C:\\b\\project", "win32")).toBe(false);
   });
 });
 

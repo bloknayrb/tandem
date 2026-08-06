@@ -752,12 +752,22 @@ async function relaunchHere(
     // doc on an external drive, a network share, or in a since-deleted folder
     // rejects the same way. None of that should sink a recovery action whose
     // caller already said the cwd is optional, so re-send without it.
+    // `persistCwd` tracks `cwdRequired`, and that is the whole distinction:
+    // only the palette's "relaunch here" means "move Claude to this folder",
+    // so only it may rewrite the integration's workingDirectory. The chip's
+    // derived guess moves Claude for this spawn and nothing more — clicking a
+    // RECOVERY button with a stray note open must not repoint Claude forever.
     const rejected =
       cwd && !cwdRequired
         ? await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, { cwd }, labels, {
             retryOnCode: LAUNCHER_ERROR_PATH_REJECTED,
           })
-        : await postLauncherMutation(d, API_LAUNCHER_RELAUNCH, cwd ? { cwd } : {}, labels);
+        : await postLauncherMutation(
+            d,
+            API_LAUNCHER_RELAUNCH,
+            cwd ? { cwd, persistCwd: true } : {},
+            labels,
+          );
     // Fresh nonce, not a replay: the server rotates it on every attempt,
     // including the rejected one. `postLauncherMutation` acquires its own.
     if (rejected !== null) {
