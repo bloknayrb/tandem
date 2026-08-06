@@ -14,24 +14,13 @@ const HIGHLIGHT_COLOR_OPTIONS: Array<{ value: HighlightColor; label: string }> =
 interface Props {
   disabled?: boolean;
   onHighlight: (color: HighlightColor) => void;
-  /**
-   * Fired whenever the color sub-menu opens or closes. The host (FormattingBar)
-   * uses this to lift its fixed wrapper's stacking context above the selection
-   * popup while the sub-menu is open — otherwise the open sub-menu, trapped in
-   * the bar's lower stacking context, renders behind the selection pill (#1024).
-   */
-  onOpenChange?: (open: boolean) => void;
 }
 
-const { disabled = false, onHighlight, onOpenChange }: Props = $props();
+const { disabled = false, onHighlight }: Props = $props();
 
 let highlightColor = $state<HighlightColor>("yellow");
 let showColorPicker = $state(false);
 let colorPickerEl = $state<HTMLDivElement | null>(null);
-
-$effect(() => {
-  onOpenChange?.(showColorPicker);
-});
 
 $effect(() => {
   if (!showColorPicker) return;
@@ -74,6 +63,8 @@ function handleColorSelect(color: HighlightColor) {
     class="highlight-swatch-toggle"
     data-testid="toolbar-highlight-color-toggle"
     {disabled}
+    aria-haspopup="menu"
+    aria-expanded={showColorPicker}
     onmousedown={handleColorPickerToggle}
     title="Choose highlight color"
   >
@@ -168,10 +159,18 @@ function handleColorSelect(color: HighlightColor) {
     border-radius: var(--tandem-r-1);
     border: 1px solid var(--tandem-border);
   }
+  /* Right-aligned, so it unfurls leftward into the track (#1302). This control
+     is the last item in the formatting bar's clipped track and its wrap ends
+     flush with the track's right edge, so a `left: 0` popover overhung the
+     horizontal clip by ~61px and took the pink swatch and the close button with
+     it — unclickable. Opening leftward keeps the whole popover inside the
+     clipped box. The horizontal clip is deliberate (it is what truncates the
+     toolbar on narrow windows); only the vertical axis was widened to `visible`
+     to let popovers escape downward. */
   .highlight-picker-popover {
     position: absolute;
     top: 100%;
-    left: 0;
+    right: 0;
     margin-top: 8px;
     background: var(--tandem-surface);
     border: 1px solid var(--tandem-border);
@@ -190,7 +189,9 @@ function handleColorSelect(color: HighlightColor) {
   .highlight-picker-popover::after {
     content: "";
     position: absolute;
-    left: 12px;
+    /* Mirrors the popover's right alignment above so the caret still points at
+       the swatch toggle, which is the rightmost control in the wrap. */
+    right: 12px;
     border: 5px solid transparent;
   }
   .highlight-picker-popover::before {

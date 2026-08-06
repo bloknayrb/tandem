@@ -88,13 +88,6 @@ const canHighlight = $derived.by(() => {
   return !editor.state.selection.empty;
 });
 
-// #1024: the bar is a fixed wrapper that creates its own stacking context at
-// --tandem-z-sticky (below the selection popup at --tandem-z-modal). A dropdown
-// opened from the bar is trapped in that context, so it renders BEHIND the
-// selection pill. While the highlight color sub-menu is open, lift the wrapper
-// above the selection popup so the sub-menu paints fully clear of the pill.
-let highlightPickerOpen = $state(false);
-
 function handleHighlight(color: HighlightColor) {
   if (!editor || !ydoc || editor.isDestroyed) return;
   const { state } = editor;
@@ -126,26 +119,39 @@ function handleHighlight(color: HighlightColor) {
      drag-region might otherwise capture them. -->
 <div
   class="tandem-fmtbar-wrap"
-  style="position: fixed; top: var(--tandem-fmtbar-top, 52px); left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; z-index: {highlightPickerOpen ? 'var(--tandem-z-toast)' : 'var(--tandem-z-sticky)'};"
+  style="position: fixed; top: var(--tandem-fmtbar-top, 52px); left: 0; right: 0; display: flex; justify-content: center; pointer-events: none;"
 >
   <div
     data-testid="formatting-bar"
     class="tandem-floating-pill"
     style="display: inline-flex; align-items: center; padding: var(--tandem-space-1); user-select: none; pointer-events: auto; -webkit-app-region: no-drag; max-width: calc(100% - var(--tandem-space-6));"
   >
-    <!-- The format controls live in an overflow:hidden track so a narrow
-         window truncates buttons rather than wrapping. The Decorations split
-         button is intentionally OUTSIDE that track: it must never truncate,
-         and its dropdown (which drops below the pill) would otherwise be
-         clipped by the track's overflow:hidden. -->
-    <div style="display: flex; align-items: center; gap: 1px; overflow: hidden; min-width: 0;">
+    <!-- The format controls live in a clipped track so a narrow window
+         truncates buttons rather than wrapping. The Decorations split button is
+         intentionally OUTSIDE that track: it must never truncate.
+
+         The axis split is load-bearing (#1302). This was `overflow: hidden`,
+         which clips BOTH axes — and the heading menu, highlight color picker
+         and link editor are `position: absolute` popovers inside this track, so
+         they were clipped out of existence: the trigger fired and
+         `aria-expanded` flipped, but the menu painted below the clip edge and
+         `elementFromPoint` at a menu item resolved to the editor underneath.
+         `clip` rather than `hidden` because only `clip` may pair with
+         `visible`: per CSS Overflow 3, a `visible` paired with `hidden` computes
+         to `auto`, which would make this a scroll container and clip vertically
+         anyway, whereas `visible` paired with `clip` is preserved as specified.
+         Horizontal truncation is byte-for-byte what `hidden` gave us (verified:
+         same track width, no wrapping, buttons past the edge unhittable).
+         Creating no scroll container is a second win — a focused control inside
+         a scrollable track can be scrolled into view, displacing the whole row.
+         Requires Chrome 90 / Safari 16 / Firefox 81; the project already
+         targets safari16.4. -->
+    <div
+      style="display: flex; align-items: center; gap: 1px; overflow-x: clip; overflow-y: visible; min-width: 0;"
+    >
       <FormattingToolbar {editor} />
       <div class="fmtbar-divider"></div>
-      <HighlightColorPicker
-        disabled={!canHighlight}
-        onHighlight={handleHighlight}
-        onOpenChange={(open) => (highlightPickerOpen = open)}
-      />
+      <HighlightColorPicker disabled={!canHighlight} onHighlight={handleHighlight} />
     </div>
     {#if onUpdateDecorations}
       <div class="fmtbar-divider"></div>
@@ -196,6 +202,30 @@ function handleHighlight(color: HighlightColor) {
 </div>
 
 <style>
+  /* #1024/#1036: the bar is a fixed wrapper that creates its own stacking
+     context at --tandem-z-sticky, BELOW the selection popup at
+     --tandem-z-modal. A dropdown opened from the bar is trapped in that
+     context, so it would paint behind the selection pill. Lift the whole
+     wrapper while any popover inside it is open.
+
+     Keyed on `aria-expanded` rather than on per-popover props (#1302). Every
+     trigger in here already publishes that state for assistive tech — the
+     heading menu, link editor, highlight sub-menu and Decorations menu — so the
+     rule covers all four by construction. The previous version was wired to the
+     highlight sub-menu alone and silently did not cover the other three; an
+     enumerated list of popovers is exactly the thing that goes stale when the
+     fifth one is added. Must live here rather than in the inline style
+     attribute, which would outrank it. */
+  .tandem-fmtbar-wrap {
+    z-index: var(--tandem-z-sticky);
+  }
+  /* `:global()` inside `:has()` because the expanded state is set at runtime on
+     descendants owned by child components; Svelte's CSS pruner cannot prove the
+     match and would drop this rule as unused, which `svelte-check
+     --fail-on-warnings` turns into a build failure. */
+  .tandem-fmtbar-wrap:has(:global([aria-expanded="true"])) {
+    z-index: var(--tandem-z-toast);
+  }
   .fmtbar-divider {
     width: 1px;
     height: 16px;
