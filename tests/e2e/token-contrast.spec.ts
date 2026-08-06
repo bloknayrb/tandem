@@ -109,8 +109,30 @@ async function measure(page: Page, theme: string): Promise<Array<Pair & { ratio:
       }
 
       // The de-emphasis ladder against the surfaces it renders text on.
+      //
+      // The authorship tints are in this list because leaving them out is how
+      // a real failure shipped: annotation cards are painted with
+      // `--tandem-author-{user,claude}-bg`, and `.ach-time`
+      // (AnnotationCardHeader) renders `fg-faint` on top of one. In dark mode
+      // that measured 4.44:1 and the axe scan caught it — after the token's own
+      // comment had already claimed the ladder was AA "on the surfaces it
+      // renders text on (worst 4.58 on accent-bg)". That claim swept
+      // bg/surface/surface-sunk only. The authorship tints are in fact the
+      // WORST surface for every rung, so the stated worst case was not merely
+      // incomplete, it named the wrong surface.
+      //
+      // The lesson generalises past this one pair: a hand-written list of
+      // "surfaces text renders on" drifts the moment a component paints a new
+      // background, and a comment asserting a ratio cannot notice. Anything
+      // that becomes a card/row/banner fill belongs here.
       for (const tier of ["fg", "fg-muted", "fg-subtle", "fg-faint"]) {
-        for (const surface of ["bg", "surface", "surface-sunk"]) {
+        for (const surface of [
+          "bg",
+          "surface",
+          "surface-sunk",
+          "author-user-bg",
+          "author-claude-bg",
+        ]) {
           add(`${tier} on ${surface}`, `--tandem-${tier}`, `--tandem-${surface}`, 4.5);
         }
       }

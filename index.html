@@ -478,7 +478,7 @@
         --tandem-fg-muted: oklch(0.74 0.008 280);
         /* 0.70 keeps WCAG AA 4.5:1 against --tandem-surface-muted (0.25). */
         --tandem-fg-subtle: oklch(0.70 0.008 280);
-        --tandem-fg-faint: oklch(0.67 0.008 280); /* AA on the surfaces it renders text on (worst 4.58 on accent-bg). NOT AA against --tandem-info-bg (3.16:1) — no consumer pairs faint text with it today; do not introduce one without re-checking. Ladder stays monotonic: muted .74 > subtle .70 > faint .67. */
+        --tandem-fg-faint: oklch(0.68 0.008 280); /* AA on the surfaces it renders text on: worst is 4.61 on --tandem-author-claude-bg (#4d2419), NOT accent-bg. Raised .67 -> .68 because .ach-time (AnnotationCardHeader) renders faint text on an authorship-tinted card, which measured 4.44 and failed the dark-mode axe scan. The earlier "worst 4.58 on accent-bg" note was an incomplete enumeration — it swept bg/surface/surface-sunk and missed the authorship tints, which are in fact the worst surface for EVERY rung (muted 5.74, subtle 4.96, faint 4.61). tests/e2e/token-contrast.spec.ts now includes them so the claim is enforced rather than asserted. .675 would also pass but only by 0.001; .68 keeps a real margin and the ladder monotonic: muted .74 > subtle .70 > faint .68. NOT AA against --tandem-info-bg (3.16:1) — no consumer pairs faint text with it today; do not introduce one without re-checking. */
         --tandem-accent-h: 275deg;
         --tandem-accent: oklch(0.72 0.14 var(--tandem-accent-h));
         /* Lighter on hover — see the :root counterpart's rationale. */
