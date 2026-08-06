@@ -602,7 +602,8 @@ associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 
 **Soak gates:**
 - Observer soak: 6 docs open, rapid tab switching, Y.Doc swap (load + close), network drop + reconnect — zero leaks, zero broken observers; 1-hour session: 50+ annotations, 20+ tab opens/closes, 5+ network blips
-- Annotation upgrade soak: fresh install of v0.11.2, create 50 annotations across 6 docs, close, upgrade to v1.0 RC, reopen — zero loss, no migration error toasts; AR5 batch-promote tested end-to-end with .docx file containing legacy Word reviewer comments
+- ~~Annotation upgrade soak: fresh install of v0.11.2, create 50 annotations across 6 docs, close, upgrade to v1.0 RC, reopen — zero loss, no migration error toasts~~ **Dropped 2026-08-05 (Bryan).** v0.11.2 predates content-hash annotation identity (#313), annotation GC (#318), and the AR5/AR6 hardening pass — the migration paths this would exercise have since been rewritten, and nobody is upgrading from a build that old. The import half of the original bullet is a different concern and stands on its own below.
+- AR5 batch-promote tested end-to-end with a .docx file containing legacy Word reviewer comments
 - `.claude.json` shapes corpus (PR-4): empty, named-pipe transport, `tandem-channel` block, non-Tandem MCP servers, multiple workspace entries, concurrent Claude Desktop write, 5MB+ size
 
 **Security gate (added 2026-06-11):**
