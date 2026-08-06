@@ -419,8 +419,18 @@
         height: 14px;
         display: block;
       }
+      /* Selected-row badge. The accent tint is 10%, not 14%: the badge paints
+         --tandem-accent as BOLD 10px text on its own tint, so the pair is
+         governed by the 4.5:1 AA floor for small text, and 14% put warm at
+         4.45:1 (#515bc3 on #e1e1ec) — caught by this PR's new warm axe project,
+         which is why light+dark never reported it. At 10% the pair measures
+         ~4.67 warm / ~5.05 light. Raising the tint again re-breaks warm first;
+         warm is the binding theme here because its surface is the darkest of
+         the three light-ish surfaces. The selected state is still carried by
+         --tandem-accent-border and the row's own background, so the weaker
+         tint costs no affordance. */
       .tandem-slash-menu__item[aria-selected="true"] .tandem-slash-menu__icon {
-        background: color-mix(in srgb, var(--tandem-accent) 14%, var(--tandem-surface));
+        background: color-mix(in srgb, var(--tandem-accent) 10%, var(--tandem-surface));
         border-color: var(--tandem-accent-border);
         color: var(--tandem-accent);
       }
