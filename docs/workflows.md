@@ -22,7 +22,7 @@ Prefer a non-interactive setup (CI / dotfiles)? `tandem setup --apply` detects C
 Tandem Setup (--apply)
 
 Detecting Claude installations...
-  Found: Claude Code (~/.claude/mcp_settings.json)
+  Found: Claude Code (~/.claude.json)
 
 Writing MCP configuration...
   ✓ Claude Code
