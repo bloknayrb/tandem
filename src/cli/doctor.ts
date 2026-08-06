@@ -30,7 +30,7 @@ import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { parseLockfile } from "../server/annotations/lockfile.js";
-import { isRecordedNodeBinaryStale } from "../server/integrations/node-binary.js";
+import { isRecordedPathGone, probeNodeBinary } from "../server/integrations/node-binary.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
@@ -616,7 +616,9 @@ function checkMcpJson(r: Recorder): void {
   // Check tandem-channel entry
   const channel = servers["tandem-channel"];
   if (!channel) {
-    r.warn(".mcp.json missing tandem-channel — no real-time push is possible");
+    r.warn(
+      ".mcp.json has no tandem-channel entry — push here depends on the plugin monitor instead (see the push-path line below)",
+    );
   } else {
     const cmd = channel.command;
     const args = (channel.args || []).join(" ");
@@ -631,7 +633,13 @@ function checkMcpJson(r: Recorder): void {
     }
     // Same stale-path check as the user-config branch — the condition is
     // identical here and previously went unreported for project configs.
-    reportChannelCommand(r, channel, ".mcp.json");
+    reportChannelCommand(
+      r,
+      channel,
+      ".mcp.json",
+      "Edit .mcp.json and point tandem-channel at a Node binary that exists — this " +
+        "project-local file is not managed by Tandem's startup repair or `tandem setup --apply`.",
+    );
 
     if (!channel.env?.TANDEM_URL) {
       r.warn(
@@ -680,7 +688,7 @@ function checkUserMcpConfig(r: Recorder): void {
   }
   if (!servers["tandem-channel"]) {
     r.warn(
-      "tandem-channel not registered in ~/.claude.json — no real-time push is possible",
+      "tandem-channel not registered in ~/.claude.json — push depends on the plugin monitor instead (see the push-path line below)",
       "Run: tandem setup --apply",
     );
   } else {
@@ -692,7 +700,12 @@ function checkUserMcpConfig(r: Recorder): void {
     r.pass(
       "tandem-channel registered in ~/.claude.json (a hand-launched session also needs the flag)",
     );
-    reportChannelCommand(r, servers["tandem-channel"], "~/.claude.json");
+    reportChannelCommand(
+      r,
+      servers["tandem-channel"],
+      "~/.claude.json",
+      "Restart Tandem (it repairs this at startup), or run: tandem setup --apply",
+    );
   }
 }
 
@@ -705,20 +718,36 @@ function checkUserMcpConfig(r: Recorder): void {
  * absolute path fails silently at spawn. The server repairs this at boot;
  * surfacing it here explains a push path that is registered and still dead.
  *
- * The staleness rule itself is `isRecordedNodeBinaryStale`'s, not ours. Two
+ * The staleness rule itself is `isRecordedPathGone`'s, not ours. Two
  * copies would let the diagnosis drift from the repair, which is the worst
  * split available: doctor warning about a path the server considers fine, or
  * staying quiet about one the server rewrites on every boot.
+ *
+ * `fix` is per-call-site and NOT defaulted, because the two call sites have
+ * genuinely different remedies: `detectTargets` only ever returns
+ * `~/.claude.json` and the Desktop/MSIX configs, so neither the boot repair nor
+ * `tandem setup --apply` touches a project-local `.mcp.json`. Telling that user
+ * to restart Tandem would send them round a loop with no exit — the same shape
+ * of false promise this check exists to replace.
  */
-function reportChannelCommand(r: Recorder, entry: unknown, label: string): void {
+function reportChannelCommand(r: Recorder, entry: unknown, label: string, fix: string): void {
   if (entry === null || typeof entry !== "object") return;
   const command = (entry as { command?: unknown }).command;
-  if (typeof command !== "string") return;
-  if (!isRecordedNodeBinaryStale(command)) return;
-  r.warn(
-    `${label} tandem-channel points at a Node binary that no longer exists: ${command}`,
-    "Restart Tandem (it repairs this at startup), or run: tandem setup --apply",
-  );
+  if (typeof command !== "string" || command === "") return;
+  // Three-state on purpose: `false` means definitely gone, `null` means the
+  // probe could not run. The server declines to rewrite on `null` — but a path
+  // it cannot read is still a dead push path, and staying silent about it would
+  // leave the user with no output from any surface.
+  const probed = probeNodeBinary(command);
+  if (probed === null && /[/\\]/.test(command)) {
+    r.warn(
+      `${label} tandem-channel Node path could not be checked (permission denied, broken link, or unreachable share): ${command}`,
+      "Verify the path is readable — Tandem deliberately will not rewrite it on an unreadable probe.",
+    );
+    return;
+  }
+  if (!isRecordedPathGone(command)) return;
+  r.warn(`${label} tandem-channel points at a Node binary that no longer exists: ${command}`, fix);
 }
 
 // ── Check: Claude CLI presence ──────────────────────────────────────

@@ -2,21 +2,28 @@
  * Which Node binary the generated `tandem-channel` MCP entry should invoke.
  *
  * Historically the entry was written as a bare `"node"`, which the MCP client
- * resolves through PATH at spawn time. That fails in two distinct ways seen in
- * the field, both silent:
+ * resolves through PATH at spawn time. That fails in two ways, both silent —
+ * note they have different evidential standing:
  *
- *   1. **Node is not on the client's PATH at all.** Claude Code now installs as
- *      a native binary (no Node required), and a GUI-launched client does not
- *      inherit a login shell's PATH. The shim simply never starts, so the user
- *      has a configured channel that delivers nothing.
- *   2. **Node resolves somewhere the client refuses to run it.** Claude Code
- *      rejects a bare-name tool whose resolved path sits under the current
- *      working directory — an anti-PATH-hijack guard. A per-user Node install
- *      (`%APPDATA%\npm`, `~/.local`) plus a session started from the home
- *      directory trips it on the user's own legitimate Node.
+ *   1. **Node is not on the client's PATH at all.** OBSERVED: a macOS user's
+ *      channel shim never started because bare `node` did not resolve. Claude
+ *      Code now installs as a native binary (no Node required), and a
+ *      GUI-launched client does not inherit a login shell's PATH. The user has
+ *      a configured channel that delivers nothing.
+ *   2. **Node resolves somewhere the client refuses to run it.** INFERRED, not
+ *      observed for this entry. Claude Code rejects a bare-name tool whose
+ *      resolved path sits under the current working directory — an
+ *      anti-PATH-hijack guard, read out of `claude.exe` v2.1.223 and seen in
+ *      the field for `git` during `claude plugin install`, never for a
+ *      `tandem-channel` spawn. Whether an `mcpServers[].command` goes through
+ *      that same resolver is NOT established. A per-user Node install plus a
+ *      session started from the home directory would trip it.
  *
- * An absolute path fixes both: it needs no PATH lookup, and a command
- * containing a path separator skips the hijack guard entirely.
+ * An absolute path fixes (1) outright and (2) if it applies: it needs no PATH
+ * lookup, and — per the same v2.1.223 dispatch — a command containing a path
+ * separator returns before the guard runs. Both quotes and their bounds are in
+ * `docs/spikes/plugin-delivery.md`; they describe one vendor build and can go
+ * stale on any Claude Code release.
  *
  * `process.execPath` is the right source. It is the Node already running
  * Tandem, so it demonstrably exists and can run the shim — and in the desktop
@@ -29,7 +36,8 @@
  * The trade is a resolution failure for a staleness failure — a recorded
  * absolute path can outlive the binary (a deleted nvm version, a Tauri update,
  * macOS App Translocation, an AppImage remount). Write-time validation cannot
- * see that; `revalidateNodeBinary` is the boot-time counterpart that can.
+ * see that; `refreshChannelNodeBinary` in `./apply.ts` is the boot-time
+ * counterpart that can, gated by `isRecordedPathGone` below.
  */
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
@@ -62,7 +70,22 @@ export function resolveNodeBinary(candidate: string = process.execPath): string 
   const stripped = candidate.replace(WIN_EXTENDED_DRIVE_RE, "$1");
   // `resolve` normalizes away any `..`, which the validator rejects outright.
   const absolute = resolve(stripped);
-  return isValidNodeBinary(absolute) ? absolute : BARE_NODE;
+  if (isValidNodeBinary(absolute)) return absolute;
+
+  // Say so. Falling back silently would reintroduce the exact bug this module
+  // exists to fix: the entry would carry the bare name that failed in the
+  // field, the wizard's re-read would ACCEPT it (basename `node` validates),
+  // and `tandem doctor` skips bare names — so the user would see a green
+  // wizard, a passing doctor, and a channel that never starts, with nothing
+  // anywhere explaining why. Reachable in practice: a UNC path, a Debian-
+  // lineage `nodejs` basename, or a home directory containing `..`.
+  console.error(
+    `[Tandem] Cannot embed an absolute Node path in the channel entry: ` +
+      `"${absolute}" is not an accepted Node binary name. Falling back to "node", ` +
+      `which requires the MCP client to resolve it on PATH — if real-time push ` +
+      `never arrives, this is why. Run 'tandem doctor' for the push-path check.`,
+  );
+  return BARE_NODE;
 }
 
 /**
@@ -102,7 +125,7 @@ export function probeNodeBinary(path: string): boolean | null {
  *   - An unreadable path (`probe` → `null`). Never rewrite a user's config on
  *     the strength of a probe that could not run.
  */
-export function isRecordedNodeBinaryStale(
+export function isRecordedPathGone(
   command: string,
   probe: (p: string) => boolean | null = probeNodeBinary,
 ): boolean {

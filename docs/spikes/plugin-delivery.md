@@ -46,9 +46,12 @@ cwd is refused. Two consequences:
 - **Any command containing a path separator bypasses the guard entirely.** This is what
   makes the absolute-Node-path change below correct rather than incidental.
 
-The same guard applies to `npm`: the `npm` plugin-source branch failed with the identical
-"not found or is in an unsafe location" wording. So npm-sourcing does not escape the guard
-class — it only renames the tool that trips it.
+The `npm` plugin-source branch failed with the identical "not found or is in an unsafe
+location" wording. Suggestive, but the cause was **not isolated**: the probe's cwd is a
+tmpdir rather than the home directory the guard keys on, and that run had git directories
+stripped from PATH — a third explanation the recorded `gitDirsRemoved` field exists to rule
+out, and which this note did not use. Read it as "npm failed the same way", not as
+confirmation of the mechanism.
 
 ### F2 — A plugin CAN be installed with no usable git
 
@@ -101,18 +104,26 @@ directory one.
 | Load path | Session mode | Monitor fired? |
 |---|---|---|
 | `--plugin-dir` | `-p` print | **No** |
-| `--plugin-dir` | headless `stream-json` (launcher's exact flags) | **No** (confounded — see below) |
+| `--plugin-dir` | headless `stream-json` | **No** (confounded — see below) |
 | Marketplace install (`--scope local`) | `-p` print | **No** |
 | Marketplace install (`--scope local`) | headless `stream-json` | **No** |
+
+The stream-json rows use the launcher's exact flag **prefix** (`CLAUDE_STREAM_JSON_FLAGS`,
+imported so it cannot drift) — not its exact spawn. The real launcher additionally appends a
+`--session-id`/`--resume` flag and goes through the reaper with full inherited env; the probe
+does neither. For a question about monitor activation, parentage and env are plausibly not
+neutral.
 | Any | TTY-attached interactive | **not testable by this harness** |
 
-Every negative above comes from a session that demonstrably completed a turn (a `result`
-envelope or a `session_id` in stdout), so they are real nulls rather than sessions that
-never started.
+The two **print-mode** negatives completed a turn outright (a final `result` JSON), so those
+are real nulls. The two **stream-json** rows are weaker: the harness accepts either a
+`"type":"result"` envelope *or* a `session_id`, and in stream-json the `init` envelope
+carries `session_id` at turn *start* — so a run killed at the 90-second deadline scores as
+"ran" without having finished. Treat those two as bounded, not clean.
 
-The `--plugin-dir` headless cell is **confounded**: `--plugin-dir` is inert for monitors in
-every mode tested, so a null there cannot distinguish "monitors don't fire headless" from
-"the plugin never loaded". The marketplace-install rows are the ones that carry the weight.
+The `--plugin-dir` headless cell is additionally **confounded**: `--plugin-dir` is inert for
+monitors in every mode tested, so a null there cannot distinguish "monitors don't fire
+headless" from "the plugin never loaded". The marketplace-install rows carry the weight.
 
 **Consequence:** the launcher spawns with `CLAUDE_STREAM_JSON_FLAGS` (headless by
 construction), so a Tandem-launched session will never spawn a monitor. Monitor and
@@ -122,13 +133,27 @@ passes by hand — that pairing is unchanged and remains documented as "use one,
 
 ### F4 — What is NOT established
 
-Monitor activation in a TTY-attached interactive session was **not** re-verified here; this
-harness cannot produce one. The supporting evidence remains the v0.18.0 acceptance run
-(`CHANGELOG.md`, v0.18.0), which exercised a **github-marketplace install of the published
-npm package** on 2.1.212. Any design that changes the install path (directory source,
-locally staged root) changes a variable that install-path history in this repo shows to be
-decisive — see `plugin-monitor-viability-spike.md`, where a path source was rejected
-outright on 2.1.143.
+Five things, and the first three are easy to lose track of:
+
+1. **TTY-attached interactive activation** — not re-verified here; this harness cannot
+   produce a TTY. The supporting evidence remains the v0.18.0 acceptance run, recorded at
+   `CLAUDE.md`'s v0.18.0 entry as waking "an idle **manual** session" from the published
+   package on 2.1.212 via a **github-marketplace install**. "Manual" there contrasts with
+   *auto-launched*, not with *headless* — it is not itself a TTY claim.
+2. **`--plugin-dir` interactive** — never tested, in this run or any other. The negatives
+   below are all non-TTY.
+3. **The decompiled quotes in F1 and F2 are not verified by this harness at all.** The
+   probe invokes `claude` only for `--version` and `--help`; it never inspects the binary.
+   Those snippets were read by hand out of one build and are the weakest evidence here.
+4. **That the cwd guard applies to MCP `command` spawning.** F1's dispatch was read from
+   plugin-install tool resolution. Whether an `mcpServers[].command` goes through the same
+   resolver is unestablished, and the absolute-path change does not depend on it (failure
+   mode 1 is enough on its own).
+5. **Whether a *directory-source* install activates a monitor.** P1 shows a directory
+   source *installs*; nothing here shows its monitor *runs*. Install-path differences have
+   been decisive in this repo before — see `plugin-monitor-viability-spike.md`, where a
+   path source was rejected outright on 2.1.143 — so this is the probe any directory-source
+   design would need first.
 
 ## Field evidence (not from the probe)
 
@@ -165,4 +190,7 @@ TANDEM_PROBE_SKIP=p2,p3,p4 npx tsx scripts/spikes/probe-plugin-delivery.ts   # P
 P1 runs against an isolated `HOME` and never touches the real Claude Code config. P2/P3 use
 the real config but only pass `--plugin-dir`, which writes nothing. P4 installs at
 `--scope local` inside a temp directory that is deleted on exit, and uninstalls on the way
-out; `marketplace list` and a grep of `~/.claude/settings.json` were both clean afterwards.
+out on the happy path — those calls are not in a `try/finally`, so a mid-run failure or a
+SIGINT can leave a registered marketplace behind, and plugin CONTENT is cached under the
+real `~/.claude/plugins` either way. After this run `marketplace list` and a grep of
+`~/.claude/settings.json` were both clean.

@@ -160,7 +160,7 @@ The `tandem-channel` entry spawns a subprocess. Most failures fall into two buck
 
 This message is misleading in the common case — you probably *do* have git.
 
-Claude Code resolves bare-name tools (`git`, `npm`, `npx`) through your PATH and then
+Claude Code resolves bare-name tools through your PATH (confirmed for `git` and `npm`) and then
 refuses any candidate whose resolved path sits **underneath your current working
 directory**. It's an anti-PATH-hijack check: it exists so a `git.exe` dropped into a
 project folder can't be picked up. But a per-user install puts git somewhere under your
@@ -185,8 +185,10 @@ where you launched Claude from before anything else.
 
 Exit 127 is command-not-found. The published plugin's monitor runs
 `npx -y tandem-editor@<version> monitor`, so this fires when `npx` isn't resolvable from
-the plugin host — either it isn't on the PATH that Claude Code inherited (a GUI-launched
-client doesn't get your login shell's PATH), or it tripped the cwd guard above.
+the plugin host — most likely it isn't on the PATH Claude Code inherited (a GUI-launched
+client doesn't get your login shell's PATH). The cwd guard above is a suspected second
+cause, but that guard has only been confirmed for plugin-install tool resolution, not for
+monitor spawning.
 
 Two things worth knowing:
 
@@ -195,9 +197,10 @@ Two things worth knowing:
 - **It fires in every Claude Code session**, including ones unrelated to Tandem, because
   plugin monitors are spawned per session regardless of what you're working on.
 
-Until it resolves, either fix `npx` resolution (launch from a project directory, or ensure
-Node is on the PATH the client inherits) or disable the plugin's monitor. Note the plugin
-also ships the Tandem skill, so removing the whole plugin costs you that too.
+The actionable fix is to make `npx` resolvable: launch from a project directory, or ensure
+Node is on the PATH the client inherits. Claude Code exposes no per-monitor disable, so the
+only other lever is removing the plugin entirely (`claude plugin uninstall
+tandem@tandem-editor`) — which also removes the Tandem skill it ships.
 
 ## `claude plugin install` fails to clone (SSH vs HTTPS)
 

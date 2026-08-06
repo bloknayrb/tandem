@@ -1,8 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { refreshChannelNodeBinary } from "../../../src/server/integrations/apply.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  refreshAllChannelNodeBinaries,
+  refreshChannelNodeBinary,
+} from "../../../src/server/integrations/apply.js";
 
 /**
  * Boot-time repair of a stale `tandem-channel` Node path.
@@ -48,8 +51,17 @@ describe("refreshChannelNodeBinary", () => {
     return refreshChannelNodeBinary(configPath, {
       probe: () => false,
       resolveBinary: () => GOOD,
+      // Explicit and non-existent so this case does not depend on whether
+      // `dist/channel/index.js` happens to be built in the checkout: with no
+      // replacement script available, `args` must be left exactly as found.
+      channelScript: join(dir, "no-such-channel.js"),
     }).then((result) => {
-      expect(result).toEqual({ status: "rewritten", from: "/gone/v20/bin/node", to: GOOD });
+      expect(result).toEqual({
+        status: "rewritten",
+        from: "/gone/v20/bin/node",
+        to: GOOD,
+        scriptRefreshed: false,
+      });
       expect(read().mcpServers["tandem-channel"].command).toBe(GOOD);
       // Untouched siblings of the repaired key.
       expect(read().mcpServers["tandem-channel"].args).toEqual(["/x/channel.js"]);
@@ -146,6 +158,61 @@ describe("refreshChannelNodeBinary", () => {
     expect(result.status).toBe("rewritten");
   });
 
+  it("refuses to downgrade a dead absolute path to the bare name", async () => {
+    // Rewriting to `node` would not be a repair — that is the value documented
+    // as failing in the field — and it would BLIND the diagnostic, because bare
+    // names are exempt from the staleness check. Leaving the dead path visible
+    // is strictly better.
+    write({ mcpServers: { "tandem-channel": { command: "/gone/node" } } });
+    const result = await refreshChannelNodeBinary(configPath, {
+      probe: () => false,
+      resolveBinary: () => "node",
+    });
+    expect(result).toEqual({ status: "skipped", reason: "no-valid-replacement" });
+    expect(read().mcpServers["tandem-channel"].command).toBe("/gone/node");
+  });
+
+  it("refreshes the channel script path alongside the binary", async () => {
+    // `args[0]` is derived from the same PACKAGE_ROOT as the binary, so App
+    // Translocation / an AppImage remount / a Tauri update invalidate both at
+    // once. Repairing only `command` yields a working Node that dies on
+    // `Cannot find module` — and doctor, which inspects `command` alone, would
+    // call that healthy.
+    write({
+      mcpServers: {
+        "tandem-channel": { command: "/gone/node", args: ["/gone/dist/channel/index.js"] },
+      },
+    });
+    const result = await refreshChannelNodeBinary(configPath, {
+      probe: () => false,
+      resolveBinary: () => GOOD,
+      channelScript: configPath, // any path that exists
+    });
+    expect(result).toEqual({
+      status: "rewritten",
+      from: "/gone/node",
+      to: GOOD,
+      scriptRefreshed: true,
+    });
+    expect(read().mcpServers["tandem-channel"].args).toEqual([configPath]);
+  });
+
+  it("leaves a script path that still resolves alone", async () => {
+    write({
+      mcpServers: {
+        "tandem-channel": { command: "/gone/node", args: ["/live/dist/channel/index.js"] },
+      },
+    });
+    const result = await refreshChannelNodeBinary(configPath, {
+      // Binary gone, script present.
+      probe: (p) => (p === "/gone/node" ? false : true),
+      resolveBinary: () => GOOD,
+      channelScript: configPath,
+    });
+    expect(result).toMatchObject({ status: "rewritten", scriptRefreshed: false });
+    expect(read().mcpServers["tandem-channel"].args).toEqual(["/live/dist/channel/index.js"]);
+  });
+
   it("no-ops rather than rewriting to the same value", async () => {
     write({ mcpServers: { "tandem-channel": { command: GOOD } } });
     const result = await refreshChannelNodeBinary(configPath, {
@@ -153,5 +220,79 @@ describe("refreshChannelNodeBinary", () => {
       resolveBinary: () => GOOD,
     });
     expect(result).toEqual({ status: "no-op" });
+  });
+});
+
+/**
+ * The boot sweep.
+ *
+ * It is fired un-awaited from `server/index.ts`, where an escaping rejection
+ * reaches the `unhandledRejection` handler and `process.exit(1)`s the server.
+ * A best-effort config repair must never be able to do that, so "never
+ * rejects" is a behavioural requirement, not a style preference.
+ */
+describe("refreshAllChannelNodeBinaries", () => {
+  let home: string;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  const stderr = () => errSpy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-sweep-home-"));
+    // `detectTargets` includes Claude Code when either the config or ~/.claude
+    // exists; create the dir so the target is always detected.
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errSpy.mockRestore();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("resolves (never rejects) when a config is malformed, and says so", async () => {
+    // Silence here would be the wrong call: if `~/.claude.json` does not parse,
+    // EVERY MCP server the user has is broken and Tandem is the only process
+    // that just found out.
+    writeFileSync(join(home, ".claude.json"), "{ not json");
+
+    await expect(refreshAllChannelNodeBinaries({ homeOverride: home })).resolves.toBeUndefined();
+
+    const out = stderr();
+    expect(out).toContain("malformed-json");
+    expect(out).toContain("Claude Code"); // the target is named
+  });
+
+  it("resolves when there is no config at all", async () => {
+    await expect(refreshAllChannelNodeBinaries({ homeOverride: home })).resolves.toBeUndefined();
+    expect(stderr()).not.toContain("malformed-json");
+  });
+
+  it("repairs a stale entry and names the target it repaired", async () => {
+    const configPath = join(home, ".claude.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: { "tandem-channel": { command: join(home, "gone", "node") } },
+      }),
+    );
+
+    await refreshAllChannelNodeBinaries({ homeOverride: home });
+
+    const after = JSON.parse(readFileSync(configPath, "utf-8"));
+    expect(after.mcpServers["tandem-channel"].command).toBe(process.execPath);
+    const out = stderr();
+    expect(out).toContain("Repaired stale channel entry");
+    expect(out).toContain("Claude Code");
+  });
+
+  it("stays silent when there is nothing to repair", async () => {
+    writeFileSync(
+      join(home, ".claude.json"),
+      JSON.stringify({ mcpServers: { "tandem-channel": { command: process.execPath } } }),
+    );
+
+    await refreshAllChannelNodeBinaries({ homeOverride: home });
+
+    expect(stderr()).not.toContain("Repaired");
   });
 });

@@ -555,7 +555,7 @@ describe("createAiReadiness — push consumer", () => {
     const h = mount();
     await settle();
     expect(h.get().liveIndicator).toBe("connected");
-    expect(h.get().pushConsumerAttached).toBe(false);
+    expect(h.get().pushDelivery).toBe("none");
   });
 
   it("reports true when a consumer is attached", async () => {
@@ -565,7 +565,7 @@ describe("createAiReadiness — push consumer", () => {
     });
     const h = mount();
     await settle();
-    expect(h.get().pushConsumerAttached).toBe(true);
+    expect(h.get().pushDelivery).toBe("attached");
   });
 
   it("stays null when the loopback-only push field is absent", async () => {
@@ -578,7 +578,7 @@ describe("createAiReadiness — push consumer", () => {
     });
     const h = mount();
     await settle();
-    expect(h.get().pushConsumerAttached).toBeNull();
+    expect(h.get().pushDelivery).toBe("unknown");
   });
 
   it("keeps the prior count when a later /health read fails", async () => {
@@ -598,24 +598,43 @@ describe("createAiReadiness — push consumer", () => {
 
     const h = mount();
     await settle();
-    expect(h.get().pushConsumerAttached).toBe(true);
+    expect(h.get().pushDelivery).toBe("attached");
 
     fail = true;
     h.get().refresh();
     await settle();
-    expect(h.get().pushConsumerAttached).toBe(true);
+    expect(h.get().pushDelivery).toBe("attached");
   });
 
-  it("does not demote hasSession when only the push field is missing", async () => {
+  it("does not demote hasSession when a LATER body omits only the push field", async () => {
     // The two fields ride one fetch, so a partial body must not let one
     // signal's absence clobber the other's known value.
-    globalThis.fetch = routedFetch({
-      launcher: mkResponse({ available: true, running: false }),
-      health: mkResponse({ status: "ok", hasSession: true }),
-    });
+    //
+    // This must start from a state where the demotion would be VISIBLE. An
+    // earlier version of this test read a partial body on the first poll, so
+    // `hasSession` had no prior value to clobber — it passed even with the
+    // per-field guard removed, which mutation testing confirmed. Establish both
+    // signals first, THEN feed a body missing one of them.
+    let body: unknown = { status: "ok", hasSession: true, push: { subscribers: 0 } };
+    globalThis.fetch = (async (input: string) => {
+      const url = String(input);
+      if (url.includes(API_LAUNCHER_STATUS)) {
+        return mkResponse({ available: true, running: false }) as unknown as Response;
+      }
+      return mkResponse(body) as unknown as Response;
+    }) as unknown as typeof fetch;
+
     const h = mount();
     await settle();
+    expect(h.get().state).toBe("ready"); // promoted by hasSession
+    expect(h.get().pushDelivery).toBe("none");
+
+    // Now a body carrying ONLY the push field. `hasSession` must survive.
+    body = { status: "ok", push: { subscribers: 2 } };
+    h.get().refresh();
+    await settle();
+    expect(h.get().liveIndicator).toBe("connected");
     expect(h.get().state).toBe("ready");
-    expect(h.get().pushConsumerAttached).toBeNull();
+    expect(h.get().pushDelivery).toBe("attached");
   });
 });

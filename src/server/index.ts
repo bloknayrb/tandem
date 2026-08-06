@@ -662,6 +662,39 @@ async function main() {
     console.error("  Open your AI client (Claude by default) and ask it to review a document.");
     console.error("");
 
+    // Repair a channel entry whose recorded paths no longer exist (a removed
+    // nvm version, a relocated sidecar) — see `refreshChannelNodeBinary` for
+    // why write-time validation alone is not enough.
+    //
+    // Ordered BEFORE the launcher, not after: the supervisor spawns Claude Code
+    // with whatever the config currently says, so repairing afterwards would
+    // leave the session Tandem just started using the stale entry and fix it
+    // only for the next boot — while `tandem doctor` promises that restarting
+    // Tandem repairs it. Running first also keeps our read-modify-write of
+    // `~/.claude.json` out of the window where Claude Code is writing that same
+    // file at ITS startup; `atomicWrite` is a rename, not a compare-and-swap,
+    // so an interleaving would silently revert whatever it had just written.
+    //
+    // Outside the launcher branches for a second reason: config maintenance has
+    // nothing to do with supervising a child process, and hanging it off the
+    // supervisor would skip it exactly for the user most likely to need it —
+    // the one running `TANDEM_DISABLE_LAUNCHER=1` and hand-launching Claude.
+    //
+    // Read-only gate + belt-and-braces `.catch()` match the two boot sweeps
+    // above: another instance holds the store lock, and an escaping rejection
+    // would reach the unhandledRejection handler, which `process.exit(1)`s on
+    // anything it does not recognise. Best-effort config repair must never be
+    // able to take down the server.
+    if (!isStoreReadOnly()) {
+      void import("./integrations/apply.js")
+        .then(({ refreshAllChannelNodeBinaries }) => refreshAllChannelNodeBinaries())
+        .catch((err) =>
+          console.error(
+            `[Tandem] Channel entry refresh failed (non-fatal): ${err instanceof Error ? err.message : err}`,
+          ),
+        );
+    }
+
     // Auto-launcher: spawn Claude Code as a managed child via tandem-reaper.
     // HTTP mode only. Gated by integrations.json having a claude-code entry
     // with apply !== "skip". Kill switch: TANDEM_DISABLE_LAUNCHER=1 for
@@ -678,21 +711,6 @@ async function main() {
     } else if (launcherUnavailableReason !== "disabled-by-env") {
       await startLauncherSupervisor();
     }
-
-    // Repair a channel entry whose absolute Node path no longer exists (a
-    // removed nvm version, a relocated sidecar) — see `refreshChannelNodeBinary`
-    // for why write-time validation alone is not enough.
-    //
-    // Deliberately OUTSIDE the launcher branches above. Config maintenance has
-    // nothing to do with supervising a child process, and hanging it off the
-    // supervisor would skip it exactly for the user most likely to need it: the
-    // one running with `TANDEM_DISABLE_LAUNCHER=1` and hand-launching Claude
-    // Code. `tandem doctor` tells that user restarting Tandem repairs this, so
-    // it has to actually be true. Best-effort and un-awaited; the function
-    // yields before touching the filesystem so it never blocks startup.
-    void import("./integrations/apply.js").then(({ refreshAllChannelNodeBinaries }) =>
-      refreshAllChannelNodeBinaries(),
-    );
   } else {
     // Stdio mode: MCP must start before Hocuspocus to beat Claude Code's init timeout
     (async () => {

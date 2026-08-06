@@ -335,23 +335,38 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 
 **Update (2026-07-17):** Re-tested on Claude Code **2.1.212** — the monitor **does** activate interactively (via `--plugin-dir` and persistent installs), delivering an event to an idle session with no `--dangerously-...` flag. The 2.1.143 NO-GO above was version-specific, and its probes ran in `-p` print mode, where monitors never activate by design — so the NO-GO conflated two confounds. The monitor now ships **installable** via `npx -y tandem-editor@<version> monitor`: the manifest previously ran `node ${CLAUDE_PLUGIN_ROOT}/dist/monitor/index.js`, but `dist/` is gitignored so a github clone carried no binary, while npm ships `dist`. The channel shim **remains the registered default**; the monitor is an independent push path, and the canonical-transport choice (channel vs monitor) was **deferred** at the time (resolved 2026-07-19, below) pending a content-richness probe (does the plugin host surface the monitor's stdout body or a generic wake?) and a measured double-fire rate (both active in one session double-deliver, confirmed).
 
-**Correction (2026-08-06) — the 2026-07-17 update overstated what had been measured.** It
-claims the monitor activates "via `--plugin-dir` **and** persistent installs" and that
-double-delivery was "confirmed". PR #1201, which shipped that text, lists **both** of those
-as deferred and unrun ("gated on two cheap interactive probes … Not in this PR"), and
-`docs/roadmap.md` then marks the same probe resolved by the PR whose body defers it. What
-actually verified persistent-install activation was the **v0.18.0 acceptance run** one
-release later (see `CHANGELOG.md`, v0.18.0) — a github-marketplace install of the published
-npm package on 2.1.212, exercised interactively. Cite that, not #1201.
+**Correction (2026-08-06) — the 2026-07-17 update outran its evidence, in two different ways.**
+It asserts three things: that the monitor activates via `--plugin-dir`, that it activates via
+persistent installs, and that double-delivery was "confirmed". Those have different standing
+and need separating.
 
-The `--plugin-dir` half is now **falsified**: measured 2026-08-06 on 2.1.223, `--plugin-dir`
-does not activate `experimental.monitors[]` in any mode tested, and neither does a real
-marketplace install in `-p` print mode or under the launcher's headless `stream-json` flags.
-Monitors appear to require a TTY-attached interactive session. See
-`docs/spikes/plugin-delivery.md` for the harness, the raw results, and the one cell it could
-not test. Practical consequence for rationale (2) below: an auto-launched session is headless
-by construction, so it would never spawn a monitor — the double-delivery concern there does
-not arise, though it remains real for a hand-launched session that also passes the channel flag.
+- **The persistent-install half and the double-delivery claim were never measured for that
+  text.** PR #1201, which shipped it, lists exactly these two as deferred: *"gated on two
+  cheap interactive probes (P1 persistent-install activation, P2 combined-session
+  double-delivery) … Not in this PR."* `docs/roadmap.md` then marks both resolved **by the PR
+  whose own body defers them**. What did substantiate persistent-install activation is the
+  **v0.18.0 acceptance run** — recorded at `CLAUDE.md`'s v0.18.0 entry as waking "an idle
+  **manual** session" from the published package. Note that run shipped in the *same* release
+  as this ADR text, not a later one, so no user saw the unsupported version in isolation;
+  nothing in the repo connects the two. Cite the acceptance run, not #1201. Note also that
+  "manual" there contrasts with *auto-launched*, not with *headless* — it is not by itself a
+  claim about TTY attachment.
+- **The `--plugin-dir` half WAS asserted by #1201** (its body reports a B1 re-test), and is
+  now **unreproduced**: measured 2026-08-06 on 2.1.223, `--plugin-dir` did not activate
+  `experimental.monitors[]` in any mode tested, and neither did a real marketplace install in
+  `-p` print mode or under the launcher's headless `stream-json` flags. Deliberately
+  *unreproduced* and not *falsified*: every cell tested was non-TTY, one of them is confounded
+  (`--plugin-dir` headless cannot distinguish "inert headless" from "never loaded"), and the
+  2026-07-17 text itself stipulates print mode is a place monitors never fire. Those negatives
+  cannot refute an interactive claim. `--plugin-dir` **interactive** remains untested, and no
+  spike file, probe script or raw output survives from the 2026-07-17 re-test — only the prose
+  it produced. See `docs/spikes/plugin-delivery.md` for the harness and the cells it could and
+  could not reach.
+
+Practical consequence for rationale (2) below: an auto-launched session is headless by
+construction, so on current evidence it would never spawn a monitor — the double-delivery
+concern does not arise there, though it remains real for a hand-launched session that also
+passes the channel flag.
 
 **Update (2026-07-19) — canonical-transport decision RESOLVED: keep the channel.** The deferred choice is settled: the channel shim remains the canonical/default push transport; the plugin monitor stays an installable, no-flag alternative but is **not** made canonical, and the channel is **not** deprecated. Rationale: (1) the monitor is unidirectional (stdout-only), so the channel-only permission-prompt relay (`/api/channel-permission`) has no monitor equivalent — and the supervisor spawns `claude` with no TTY, so that relay is the only way a supervised session could surface a permission prompt; (2) auto-launched sessions already receive channel push, so a monitor there adds no new reach, only double-delivery; (3) making the plugin a global install would socialize the cost (a host-wide plugin-registry mutation for every user) without expanding the beneficiary set beyond manually-launched sessions. The monitor remains installable for that manual-CLI audience (#1201). See the Plugin Monitor section of `docs/architecture.md`.
 

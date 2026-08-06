@@ -180,6 +180,14 @@ export const AI_CTA: Record<
  */
 export type AiLiveIndicator = "connected" | "solo-paused" | null;
 
+/**
+ * Whether anything is delivering real-time events to the attached agent.
+ *   - `none`     — zero SSE consumers. The one sound negative; safe to act on.
+ *   - `attached` — at least one consumer, which does NOT prove delivery.
+ *   - `unknown`  — not yet polled, or the loopback-only field was redacted.
+ */
+export type PushDelivery = "none" | "attached" | "unknown";
+
 export interface AiReadiness {
   readonly state: AiReadinessState;
   /** The CTA to surface, with Solo-mode suppression already applied. */
@@ -195,18 +203,27 @@ export interface AiReadiness {
   readonly liveIndicator: AiLiveIndicator;
   /**
    * Whether any real-time push consumer (channel shim / plugin monitor) is
-   * attached — or `null` when unknown.
+   * attached.
    *
-   * ONLY `false` is actionable, and that asymmetry is the whole contract.
-   * `routes/health.ts:43-45` states it: `subscribers: 0` is a sound negative,
-   * but any positive count includes an attached-but-inert shim, so `true` here
-   * does NOT mean events reach a model. Use it to explain a delay, never to
-   * assert that push is working — do not build a "push is live" indicator on it.
+   * ONLY `"none"` is actionable, and that asymmetry is the whole contract. The
+   * `makeHealthHandler` docblock in `server/mcp/routes/health.ts` states it:
+   * `subscribers: 0` is a sound negative, but any positive count includes an
+   * attached-but-inert shim, so `"attached"` does NOT mean events reach a
+   * model. Use it to explain a delay, never to assert that push is working —
+   * do not build a "push is live" indicator on it.
+   *
+   * A named union rather than `boolean | null` deliberately. As a tri-state
+   * boolean, `if (!pushConsumerAttached)` compiled and read as "not attached"
+   * while firing on `null` — telling a working user their comment went
+   * nowhere, the exact alarm the health route forbids. Every member of a string
+   * union is truthy, so that mistake stops type-checking as intended. This is
+   * the same lesson `AI_CTA` above records: make the safe reading the only
+   * convenient one.
    *
    * This is the missing half of `liveIndicator`. That signal proves Claude
    * *can read* the document; this one says whether Claude will be *told* to.
    */
-  readonly pushConsumerAttached: boolean | null;
+  readonly pushDelivery: PushDelivery;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
   /**
@@ -284,10 +301,11 @@ export function createAiReadiness(deps: {
    *
    *  Both come off ONE fetch deliberately. They answer different questions
    *  (`hasSession` = an MCP transport completed initialize; `push.subscribers`
-   *  = an SSE consumer is attached) and `routes/health.ts:40-45` is explicit
-   *  that they are structurally disjoint — which is precisely why a user can
-   *  see "AI connected" while nothing they do reaches Claude. Reading them at
-   *  the same instant keeps the two halves of that story consistent. */
+   *  = an SSE consumer is attached) and the `makeHealthHandler` docblock in
+   *  `server/mcp/routes/health.ts` is explicit that they are structurally
+   *  disjoint — which is precisely why a user can see "AI connected" while
+   *  nothing they do reaches Claude. Reading them at the same instant keeps the
+   *  two halves of that story consistent. */
   async function fetchHealth(): Promise<{
     hasSession: boolean | null;
     pushAttached: boolean | null;
@@ -433,6 +451,9 @@ export function createAiReadiness(deps: {
   // live MCP transport and no consumer at all, which is the exact state this
   // exists to make legible. Folding it in would either blank a genuinely
   // connected indicator or claim push works from a signal that cannot prove it.
+  const pushDelivery = $derived<PushDelivery>(
+    pushAttached === null ? "unknown" : pushAttached ? "attached" : "none",
+  );
 
   return {
     get state() {
@@ -447,8 +468,8 @@ export function createAiReadiness(deps: {
     get liveIndicator() {
       return liveIndicator;
     },
-    get pushConsumerAttached() {
-      return pushAttached;
+    get pushDelivery() {
+      return pushDelivery;
     },
     refresh: () => poll(),
     probeSession,

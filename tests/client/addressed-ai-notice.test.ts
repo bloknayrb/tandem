@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AiChip } from "../../src/client/hooks/useAiReadiness.svelte";
+import type { AiChip, PushDelivery } from "../../src/client/hooks/useAiReadiness.svelte";
 import { addressedAiNotice } from "../../src/client/status/addressed-ai-notice.js";
 
 /**
@@ -17,7 +17,7 @@ const base = {
   // `AiChip` already includes `null`; annotating honestly (rather than `as
   // never`) keeps a future widening of that union a type error here.
   chip: null as AiChip,
-  pushConsumerAttached: null,
+  pushDelivery: "unknown" as PushDelivery,
 };
 
 describe("addressedAiNotice", () => {
@@ -51,7 +51,7 @@ describe("addressedAiNotice", () => {
           ...base,
           sessionLive: true,
           chip: null,
-          pushConsumerAttached: false,
+          pushDelivery: "none",
         }),
       ).toEqual({ kind: "no-push" });
     });
@@ -62,7 +62,7 @@ describe("addressedAiNotice", () => {
           ...base,
           sessionLive: true,
           chip: null,
-          pushConsumerAttached: true,
+          pushDelivery: "attached",
         }),
       ).toBeNull();
     });
@@ -76,7 +76,7 @@ describe("addressedAiNotice", () => {
           ...base,
           sessionLive: true,
           chip: null,
-          pushConsumerAttached: null,
+          pushDelivery: "unknown",
         }),
       ).toBeNull();
     });
@@ -89,7 +89,7 @@ describe("addressedAiNotice", () => {
           ...base,
           sessionLive: true,
           chip: "restart",
-          pushConsumerAttached: false,
+          pushDelivery: "none",
         }),
       ).toEqual({ kind: "no-push" });
     });
@@ -99,9 +99,15 @@ describe("addressedAiNotice", () => {
     // Solo outranks both branches — the user opted out of AI surfacing, so
     // either notice contradicts that intent.
     it.each([
-      ["no agent", { sessionLive: false, chip: "restart" as const, pushConsumerAttached: null }],
-      ["no consumer", { sessionLive: true, chip: null, pushConsumerAttached: false }],
-      ["everything healthy", { sessionLive: true, chip: null, pushConsumerAttached: true }],
+      [
+        "no agent",
+        { sessionLive: false, chip: "restart" as const, pushDelivery: "unknown" as PushDelivery },
+      ],
+      ["no consumer", { sessionLive: true, chip: null, pushDelivery: "none" as PushDelivery }],
+      [
+        "everything healthy",
+        { sessionLive: true, chip: null, pushDelivery: "attached" as PushDelivery },
+      ],
     ])("stays silent in Solo (%s)", (_label, rest) => {
       expect(addressedAiNotice({ ...base, ...rest, soloMode: true })).toBeNull();
     });

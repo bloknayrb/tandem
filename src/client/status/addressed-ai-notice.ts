@@ -1,4 +1,4 @@
-import type { AiChip } from "../hooks/useAiReadiness.svelte";
+import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
 
 /**
  * Which notice (if any) a `tandem:addressed-ai` event should raise.
@@ -35,19 +35,22 @@ import type { AiChip } from "../hooks/useAiReadiness.svelte";
  */
 export type AddressedAiNotice =
   | { kind: "no-agent"; chip: Exclude<AiChip, null> }
-  | { kind: "no-push" }
-  | null;
+  | { kind: "no-push" };
 
 export function addressedAiNotice(input: {
+  /** Must be re-read after any await — see the caller. */
   soloMode: boolean;
   /** Fresh `/health` confirmation that an MCP transport is open. */
   sessionLive: boolean;
   /** Re-read after the probe — readiness may have settled while it was in flight. */
   chip: AiChip;
-  /** `null` = unknown. Only `false` is actionable. */
-  pushConsumerAttached: boolean | null;
-}): AddressedAiNotice {
-  // Rule 1.
+  /** Only `"none"` is actionable; `"attached"` and `"unknown"` stay silent. */
+  pushDelivery: PushDelivery;
+}): AddressedAiNotice | null {
+  // Rule 1. Belt-and-braces: the production caller short-circuits on Solo
+  // before reaching here (to skip the probe), so this branch is defensive —
+  // it exists so the decision is total for any future caller rather than
+  // depending on every call site remembering.
   if (input.soloMode) return null;
 
   // Rule 2 — no agent attached.
@@ -58,5 +61,5 @@ export function addressedAiNotice(input: {
   }
 
   // Rule 3 — attached, but is anything delivering?
-  return input.pushConsumerAttached === false ? { kind: "no-push" } : null;
+  return input.pushDelivery === "none" ? { kind: "no-push" } : null;
 }

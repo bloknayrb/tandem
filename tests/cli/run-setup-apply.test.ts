@@ -30,6 +30,7 @@ import {
   type DetectedTarget,
   detectTargets,
   installSkill,
+  shouldRegisterChannelShim,
 } from "../../src/server/integrations/apply.js";
 
 const CLAUDE_CODE: DetectedTarget = {
@@ -52,6 +53,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
     vi.mocked(detectTargets).mockReset();
     vi.mocked(applyConfig).mockReset();
     vi.mocked(installSkill).mockReset().mockResolvedValue(undefined);
+    vi.mocked(shouldRegisterChannelShim).mockReset().mockReturnValue(false);
   });
   afterEach(() => {
     errSpy.mockRestore();
@@ -139,5 +141,81 @@ describe("runSetup({ apply: true }) orchestration", () => {
 
     expect(applyConfig).toHaveBeenCalledTimes(1);
     expect(applyConfig).toHaveBeenCalledWith(CLAUDE_CODE.configPath, expect.anything());
+  });
+
+  /**
+   * The push-status report.
+   *
+   * It used to print "Enabled" off `existsSync(CHANNEL_DIST)` — a FILE check,
+   * not a record of what was written. `shouldRegisterChannelShim` returns false
+   * for every Claude Desktop target, so `--target=claude-desktop` announced a
+   * shim it had never registered. These pin the report to the writes that
+   * actually happened; without them, reverting to the file check is silent.
+   */
+  describe("push status", () => {
+    const noExit = () =>
+      vi.spyOn(process, "exit").mockImplementation((() => {
+        throw new Error("process.exit called");
+      }) as never);
+    // The status line colourises the leading word, so an ANSI reset sits
+    // between "Registered" and " for:". Strip escapes rather than asserting
+    // around them, or these assertions break on any styling change.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI SGR escapes is the point
+    const plain = () => stderr().replace(/\x1b\[[0-9;]*m/g, "");
+
+    it("does not claim push when no target took a shim (the Desktop-only case)", async () => {
+      vi.mocked(shouldRegisterChannelShim).mockReturnValue(false);
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_DESKTOP]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(plain()).toContain("Not registered");
+      expect(plain()).not.toContain("Registered for:");
+      // The specific regression: the word that used to appear here.
+      expect(plain()).not.toMatch(/\bEnabled\b/);
+    });
+
+    it("names the targets that actually got a shim", async () => {
+      vi.mocked(shouldRegisterChannelShim).mockImplementation((kind) => kind === "claude-code");
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(applyConfig).mockResolvedValue(undefined);
+      noExit();
+
+      await runSetup({ apply: true });
+
+      expect(plain()).toContain("Registered for: Claude Code");
+      expect(plain()).not.toContain("Claude Desktop,");
+      // Registration is not delivery — a hand-launched session still needs the
+      // flag, and saying otherwise is the original sin this report is fixing.
+      expect(plain()).toContain("--dangerously-load-development-channels server:tandem-channel");
+    });
+
+    it("does not credit a target whose config write failed", async () => {
+      // `shimRegisteredFor.push` sits AFTER the awaited `applyConfig` for this
+      // reason: a target we intended to give a shim, but could not write, has
+      // no shim. Hoisting that line above the await would make this pass.
+      //
+      // Two targets, both eligible, one write failing — a single failing target
+      // would take the all-failed exit path and never reach the report at all.
+      vi.mocked(shouldRegisterChannelShim).mockReturnValue(true);
+      vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
+      vi.mocked(applyConfig)
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error("EACCES"));
+      noExit();
+
+      await runSetup({ apply: true });
+
+      // Scope to the status line — "Claude Desktop" legitimately appears
+      // elsewhere in the output (the "Found:" list, and its own ✗ failure line).
+      const line = plain()
+        .split("\n")
+        .find((l) => l.includes("Registered for:"));
+      expect(line).toBeDefined();
+      expect(line).toContain("Claude Code");
+      expect(line).not.toContain("Claude Desktop");
+    });
   });
 });

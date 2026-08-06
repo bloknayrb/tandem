@@ -41,16 +41,23 @@ describe("buildMcpEntries", () => {
   // never starts), and Node resolving under the session's cwd (Claude Code's
   // anti-PATH-hijack guard refuses it). Both are fixed by an absolute path, so
   // the default is now `process.execPath` — the Node already running Tandem,
-  // which is the bundled sidecar in the desktop app. Asserting the exact value
-  // would pin this suite to whatever runs it, so assert the properties that
-  // matter: absolute, and acceptable to the validator the wizard re-reads
-  // generated config through.
-  it("defaults tandem-channel to an absolute, validator-clean Node path", () => {
+  // which is the bundled sidecar in the desktop app.
+  //
+  // Pin the SOURCE, not just shape. `isAbsolute` + `isValidNodeBinary` are both
+  // satisfied by `resolveNodeBinary("node")`, which returns `<cwd>/node` — a
+  // path under the session's cwd, i.e. failure mode 2 exactly. A regression
+  // that degraded the default to a bare or relative name would have passed a
+  // properties-only assertion. `toBe(process.execPath)` pins where the value
+  // comes from without pinning a machine-specific literal, and `existsSync`
+  // pins the property that actually makes the shim start.
+  it("defaults tandem-channel to the running Node's absolute path", () => {
     const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
       withChannelShim: true,
     });
     const command = entries["tandem-channel"]?.command ?? "";
+    expect(command).toBe(process.execPath);
     expect(isAbsolute(command)).toBe(true);
+    expect(existsSync(command)).toBe(true);
     expect(isValidNodeBinary(command)).toBe(true);
     expect(entries["tandem-channel"]?.args).toEqual(["/abs/path/to/dist/channel/index.js"]);
   });

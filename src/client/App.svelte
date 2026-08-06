@@ -537,21 +537,27 @@ function startFreshClaude(): void {
 // dependency, no loop). Notes/highlights never dispatch this (ADR-027 —
 // they're private, never sent to AI).
 $effect(() => {
-  const onAddressedAi = async (e: Event) => {
+  // A function, not an inline comparison. After the early return below,
+  // TypeScript narrows `modeState.tandemMode` to `"tandem"` and keeps that
+  // narrowing across the `await` — so an inline re-read compiles to a
+  // provably-false comparison and TS rejects it. The mode genuinely can change
+  // while the probe is in flight; a call the compiler cannot narrow is what
+  // makes the re-read real rather than decorative.
+  const isSoloNow = (): boolean => modeState.tandemMode === "solo";
+  const handleAddressedAi = async (e: Event) => {
     const via = (e as CustomEvent<{ via?: string }>).detail?.via;
     const viaKey = via ?? "chat";
     const noun = via === "comment" ? "Comment" : "Message";
-    const solo = modeState.tandemMode === "solo";
     // Solo short-circuits before the probe so those sends don't pay for a
     // fetch whose answer `addressedAiNotice` would discard anyway.
-    if (solo) return;
+    if (isSoloNow()) return;
 
     // Fast path: the polled state already proves silence — an agent is attached
     // (`chip === null`) and a consumer is confirmed. Staleness here can only
     // ever SUPPRESS a notice, never manufacture one, and suppression is the
-    // direction #1083 does NOT care about. `=== true` is load-bearing: `null`
-    // (unknown or redacted) must still fall through and probe.
-    if (aiReadiness.chip === null && aiReadiness.pushConsumerAttached === true) return;
+    // direction #1083 does NOT care about. `=== "attached"` is load-bearing:
+    // `"unknown"` must still fall through and probe.
+    if (aiReadiness.chip === null && aiReadiness.pushDelivery === "attached") return;
 
     // ONE fresh /health read settles both branches. It re-confirms the session
     // — the polled value can be up to 8s stale, and an agent whose MCP
@@ -560,10 +566,13 @@ $effect(() => {
     // round trip.
     const sessionLive = await aiReadiness.probeSession();
     const notice = addressedAiNotice({
-      soloMode: solo,
+      // Re-read across the await, don't reuse the pre-probe capture: a user who
+      // switches to Solo while the probe is in flight would otherwise still get
+      // a notice. Every input here is re-read for the same reason.
+      soloMode: isSoloNow(),
       sessionLive,
-      chip: aiReadiness.chip, // re-read — may have settled while probing
-      pushConsumerAttached: aiReadiness.pushConsumerAttached,
+      chip: aiReadiness.chip,
+      pushDelivery: aiReadiness.pushDelivery,
     });
     if (notice === null) return;
 
@@ -599,6 +608,19 @@ $effect(() => {
       dedupKey: `ai-no-push-${viaKey}`,
       timestamp: Date.now(),
     });
+  };
+  // The DOM discards an async listener's promise, so a rejection would become
+  // an unhandled rejection AND silently skip the notice — the user's comment
+  // saved with nothing said, which is the failure this handler exists to fix.
+  // Nothing can reject today (`fetchHealth` catches both the fetch and the
+  // parse, `addressedAiNotice` is pure), but that safety is a cross-file
+  // coupling no type enforces. Log rather than pushing a further toast: at this
+  // point we genuinely do not know the delivery state, and inventing a message
+  // about it would be the same guessing the rest of this handler refuses to do.
+  const onAddressedAi = (e: Event) => {
+    void handleAddressedAi(e).catch((err) =>
+      console.error("[Tandem] addressed-ai notice failed:", err),
+    );
   };
   window.addEventListener("tandem:addressed-ai", onAddressedAi);
   return () => window.removeEventListener("tandem:addressed-ai", onAddressedAi);

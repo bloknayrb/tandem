@@ -3,7 +3,7 @@ import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BARE_NODE,
-  isRecordedNodeBinaryStale,
+  isRecordedPathGone,
   probeNodeBinary,
   resolveNodeBinary,
 } from "../../../src/server/integrations/node-binary.js";
@@ -68,40 +68,38 @@ describe("resolveNodeBinary", () => {
  * remount). Write-time validation cannot see that, so boot-time re-validation
  * is what keeps this a fix rather than a trade.
  */
-describe("isRecordedNodeBinaryStale", () => {
+describe("isRecordedPathGone", () => {
   const missing = () => false;
   const present = () => true;
 
   it("flags an absolute path that no longer exists", () => {
-    expect(isRecordedNodeBinaryStale("/home/u/.nvm/versions/node/v20/bin/node", missing)).toBe(
-      true,
-    );
+    expect(isRecordedPathGone("/home/u/.nvm/versions/node/v20/bin/node", missing)).toBe(true);
   });
 
   it("leaves an absolute path that still exists alone", () => {
-    expect(isRecordedNodeBinaryStale("/usr/local/bin/node", present)).toBe(false);
+    expect(isRecordedPathGone("/usr/local/bin/node", present)).toBe(false);
   });
 
   it("never flags a bare name", () => {
     // Whether `node` resolves is the client's lookup to perform at spawn time,
     // not ours to pre-judge — and rewriting it would undo a deliberate fallback.
-    expect(isRecordedNodeBinaryStale("node", missing)).toBe(false);
-    expect(isRecordedNodeBinaryStale("node.exe", missing)).toBe(false);
+    expect(isRecordedPathGone("node", missing)).toBe(false);
+    expect(isRecordedPathGone("node.exe", missing)).toBe(false);
   });
 
   it("recognises a Windows path as absolute", () => {
-    expect(isRecordedNodeBinaryStale("C:\\Program Files\\nodejs\\node.exe", missing)).toBe(true);
+    expect(isRecordedPathGone("C:\\Program Files\\nodejs\\node.exe", missing)).toBe(true);
   });
 
   it("treats an empty command as nothing to do", () => {
-    expect(isRecordedNodeBinaryStale("", missing)).toBe(false);
+    expect(isRecordedPathGone("", missing)).toBe(false);
   });
 
   it("reports NOT stale when the probe could not determine anything", () => {
     // The inverted-polarity case. Here a `false` makes the caller rewrite the
     // user's `~/.claude.json`, so an unreadable path (EACCES, ELOOP, a
     // disconnected share) must not be mistaken for an absent one.
-    expect(isRecordedNodeBinaryStale("/unreadable/bin/node", () => null)).toBe(false);
+    expect(isRecordedPathGone("/unreadable/bin/node", () => null)).toBe(false);
   });
 });
 
