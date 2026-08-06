@@ -574,7 +574,7 @@ function handleRailBackgroundClick(e: MouseEvent) {
         <div
           data-testid="store-readonly-reclaim-error"
           role="alert"
-          style="font-size: var(--tandem-text-2xs); color: var(--tandem-error-fg);"
+          style="font-size: var(--tandem-text-2xs); color: var(--tandem-error-fg-strong);"
         >
           {storeReclaimError}
         </div>

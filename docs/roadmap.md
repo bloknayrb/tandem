@@ -629,13 +629,13 @@ associations, orphaned-sidecar-after-quit, the AppImage — is still unobserved.
 - Grandfather licenses issued to known beta users
 - If any of these are not ready at code-complete: the date floats (per thesis); **the gate flag does NOT ship enabled**. A v1.0 demanding a license nobody can buy is a brick.
 
-**Accessibility:**
-- Windows Narrator full editor walkthrough
-- macOS VoiceOver full editor walkthrough
-- Forced-colors mode (Windows high-contrast)
-- axe-core scan zero CRITICAL findings
-- Keyboard-only navigation (Tab through all surfaces)
-- WCAG AA contrast verified across all status colors and themes (re-verify post-redesign)
+**Accessibility:** — results: [docs/a11y-gate-results.md](a11y-gate-results.md) (run 2026-08-05, 44 automated tests)
+- Windows Narrator full editor walkthrough — **unrun** (needs a human at a real OS; no automated substitute)
+- macOS VoiceOver full editor walkthrough — **unrun** (same)
+- Forced-colors mode (Windows high-contrast) — **pass** (`tests/e2e/forced-colors.spec.ts`; the 16 existing `@media (forced-colors: active)` blocks had never once been executed before this)
+- axe-core scan zero CRITICAL findings — **pass**, zero violations at any severity across 15 surfaces x 2 themes. Qualified: the scans exclude `[contenteditable]`/`.ProseMirror`, so this is a claim about the chrome, not the document; the excluded colours are measured directly in `tests/e2e/editor-contrast.spec.ts`
+- Keyboard-only navigation (Tab through all surfaces) — **pass** after fixes (`tests/e2e/keyboard-a11y.spec.ts`). Three `role="menu"` widgets had no arrow-key handling at all: correct markup, so axe could not see it, and reachable by Tab, so a Tab-only walk could not either
+- WCAG AA contrast verified across all status colors and themes (re-verify post-redesign) — **pass** after 14 fixes (`tests/e2e/token-contrast.spec.ts`, `tests/e2e/editor-contrast.spec.ts`). axe alone cannot answer this criterion: it only evaluates elements painted at scan time, so it reports green on error/toast/suggestion colours purely because nothing errored
 
 **Cleanup gates:**
 - Uninstaller strips all integration entries cleanly (Windows + macOS .app removal — no orphan `.claude.json` entries)

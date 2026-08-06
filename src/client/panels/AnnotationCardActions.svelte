@@ -223,7 +223,7 @@ onDestroy(clearUndoTimer);
   }
   .aca-undo-error {
     font-size: var(--tandem-text-xs);
-    color: var(--tandem-error-fg);
+    color: var(--tandem-error-fg-strong);
     margin-top: 2px;
   }
 </style>

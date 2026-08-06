@@ -211,3 +211,68 @@ The text-form audit above is paired with a swatch comparison HTML at [`preview/t
 
 - **Apply WCAG re-audit if a future PR wants to adopt bundle's hue 270° dark canon.** Production at hue 280° passed the audit; switching hue would need fresh contrast checks against every text-on-surface combination in the dark theme. Not in scope for this umbrella branch.
 - **Bundle's `--tandem-font-sans` ("Inter") vs production's ("SN Pro, Inter Tight"):** the bundle treats Inter as primary chrome font; production treats SN Pro as primary. If we want to reconsider, that's a single-purpose PR (chrome font swap with screenshot baselines), not part of this umbrella.
+
+---
+
+## Re-audit 2026-08-05 — de-emphasis ladder retuned for WCAG AA (v1.0 accessibility gate)
+
+Committed alongside a protected-token snapshot update, as the gate above requires.
+
+**Why.** The v1.0 accessibility gate expanded the axe suite from 2 surfaces to 15
+and it measured `--tandem-fg-faint` failing AA for text: **2.78:1** light,
+**3.20:1** dark, against a 4.5:1 requirement. `EmptyState.svelte` already carried
+a comment noting this token was under-contrast, so this was a known-but-unfixed
+defect rather than a new discovery.
+
+**The trap.** Darkening `faint` alone produced a **rank inversion**: at
+oklch(0.52) it became darker — more prominent — than `--tandem-fg-subtle` at
+oklch(0.54), inverting two rungs of a de-emphasis ladder. `AnnotationCardHeader`
+renders `muted`, `subtle` and `faint` adjacent in one header row, so the
+timestamp (least important) would have out-weighted the author name. axe cannot
+see this: it checks each pair against its background, never the tokens against
+each other. Caught by adversarial visual review, not by the audit.
+
+**Result (light and warm).** The whole ladder moved so it stays monotonic and
+every rung clears AA:
+
+| Token | Was | Now | Worst ratio (now) |
+|---|---|---|---|
+| `--tandem-fg-muted` | oklch(0.48 0.008 280) | oklch(0.42 0.008 280) | 6.65:1 |
+| `--tandem-fg-subtle` | oklch(0.54 0.008 280) | oklch(0.455 0.008 280) | 5.75:1 |
+| `--tandem-fg-faint` | oklch(0.64 0.005 280) | oklch(0.50 0.005 280) | 4.73:1 |
+
+Worst case is the minimum across every surface these render text on: `surface`,
+`surface-sunk`, `accent-bg`, and the warm theme's own `surface`/`surface-sunk`/`bg`
+— warm's `surface-sunk` (oklch 0.920) is the tightest and is what set the floor.
+Measured by painting each colour to a canvas and reading the pixel back, so the
+values are Chromium's, not a reimplementation of the oklch conversion.
+
+**Dark.** Only `faint` moved, 0.58 → **0.67** (4.58:1 worst, on `accent-bg`).
+Dark was already monotonic (muted 0.74 > subtle 0.70 > faint 0.67) and its
+`muted`/`subtle` remain at their audited values — the protected snapshot for dark
+is unchanged.
+
+**Known limit, recorded rather than papered over.** Dark `faint` does **not**
+clear AA against `--tandem-info-bg` (#0c4a6e): **3.16:1**. No consumer pairs
+faint text with that background today. Do not introduce one without re-checking;
+the token comment in `index.html` says so at the definition site.
+
+**Spacing is deliberately uneven.** A first attempt used 0.44/0.47/0.50 — equal
+0.03 steps. Adversarial visual review rejected it: the shipped ladder's steps were
+0.06 (muted->subtle) and 0.10 (subtle->faint), so equalising them cut the bottom
+step by 70% while the top lost only 50%. That matters because `subtle` and `faint`
+render skin-to-skin with no separator in `AnnotationCardHeader` ("Assistant 3m
+ago"), and flattening that pair is exactly where a lost tier shows.
+
+`faint` cannot move: 0.50 is the AA floor against warm's `surface-sunk`. So the
+range was bought by darkening the top of the ladder instead, giving steps of
+0.035 and 0.045 — narrower than shipped, but the same shape. Widening further
+would keep darkening `muted`, which has by far the largest fan-out; visual review
+found 0.44 already indistinguishable from 0.48 at body sizes, and there is a point
+past which "more contrast" becomes "heavier UI".
+
+The honest summary: AA leaves roughly 0.08 of oklch lightness below primary text
+on light backgrounds, and three de-emphasis tiers is what fits in it. A future
+pass wanting genuinely distinct tiers should reach for fewer tokens or a
+non-colour differentiator — not a lighter `faint`, which is what failed AA to
+begin with.

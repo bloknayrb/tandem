@@ -679,7 +679,7 @@ async function handleReplayTutorial(): Promise<void> {
           <div
             role="alert"
             data-testid="settings-modal-changelog-error"
-            style="font-size: 11px; color: var(--tandem-error-fg); padding: 0 var(--tandem-space-2);"
+            style="font-size: 11px; color: var(--tandem-error-fg-strong); padding: 0 var(--tandem-space-2);"
           >
             {changelogError}
           </div>
@@ -703,7 +703,7 @@ async function handleReplayTutorial(): Promise<void> {
             <div
               role="alert"
               data-testid="settings-modal-replay-error"
-              style="font-size: 11px; color: var(--tandem-error-fg); padding: 0 var(--tandem-space-2);"
+              style="font-size: 11px; color: var(--tandem-error-fg-strong); padding: 0 var(--tandem-space-2);"
             >
               {replayError}
             </div>
