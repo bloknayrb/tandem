@@ -148,7 +148,7 @@ annotation underlines.
   per-token in `docs/design-system-impl/token-audit.md`, as the protected-token
   gate requires.
 
-### Known cost of the ladder retune (open)
+### Known cost of the ladder retune — accepted 2026-08-05
 
 Adversarial visual review confirmed a real loss: `fg-muted` and `fg-subtle` now
 sit 0.035 L apart in light/warm and are hard to tell apart on screen, so the
@@ -168,9 +168,15 @@ legal while the three rungs occupy 0.08 of it. Spreading evenly
 (≈0.34 / 0.42 / 0.50) restores a 0.16 span — the pre-gate magnitude, all three
 rungs AA — but only by darkening `muted` toward body text, which makes the
 *first* step of de-emphasis weaker even as the ladder as a whole becomes
-legible. Three distinguishable rungs versus one strongly-receding rung: an
-identity call, not a correctness one, and left open here rather than decided
-unilaterally.
+legible. Three distinguishable rungs versus one strongly-receding rung.
+
+**Decision (Bryan, 2026-08-05): keep the shipped values.** The reasoning that
+settles it is that how far `muted` recedes from body text is what actually makes
+helper copy read as secondary — a legible three-rung ladder whose top rung has
+stopped receding buys nothing the interface uses. Two visible tiers with a
+strong first step beats three visible tiers with a weak one. Recorded as a known
+cost rather than a defect; revisit only if a surface appears that genuinely needs
+to distinguish `subtle` from `muted`.
 
 Second-order effect, also confirmed: `fg-faint` is not only a text token. It
 paints the EmptyState illustration strokes, the ActivityTray idle LED, and a
@@ -178,7 +184,7 @@ CommandPalette icon stroke. Those are not text and are not governed by the AA
 floor, so darkening the token for legibility makes the empty-state illustration
 read firmer than the soft sketch it was designed as.
 
-### `--tandem-warning-fg` (open)
+### `--tandem-warning-fg` — accepted 2026-08-05
 
 Flipping it white → `#0f172a` takes the one surface that uses it (the `Private`
 pill in `NoteCard.svelte:33` — the token's **only** consumer) from 3.76:1 to
@@ -187,9 +193,14 @@ because dark theme pairs that same near-black with a genuinely light amber
 (`#fbbf24`) while light theme pairs it with a mid-dark ochre
 (`oklch(0.62 0.16 65)`). The change copied dark's decision without dark's
 precondition; the token that is arguably out of step is light's
-`--tandem-warning` fill, not its foreground. Left as-is because white fails AA
-outright and the fill is shared with borders, dots and the find-hop highlight —
-moving it is a wider change than this gate should make unreviewed.
+`--tandem-warning` fill, not its foreground.
+
+**Decision (Bryan, 2026-08-05): keep the near-black foreground.** White fails AA
+outright, so reverting would turn this row into a pass-with-exception; and the
+fill is shared with borders, status dots and the find-hop highlight, so moving it
+is a wider change than an accessibility gate should make. The muddiness is real
+but contained to one small pill, and belongs to a later design pass on light
+theme's amber rather than to this branch.
 
 ### A deliberate non-assertion: `-border` against `-bg`
 
