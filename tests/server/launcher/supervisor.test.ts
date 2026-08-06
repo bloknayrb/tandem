@@ -16,6 +16,7 @@ import {
   RESUME_CONFIRM_MS,
   resolveRouteCwd,
   resolveSafeCwd,
+  sessionCwdMatches,
   shouldClearSession,
 } from "../../../src/server/launcher/supervisor.js";
 import {
@@ -96,6 +97,38 @@ describe("supervisor — session persistence", () => {
     // effect must have fired.
     expect(fs.existsSync(sessionFile)).toBe(false);
     await sup.stop();
+  });
+});
+
+describe("sessionCwdMatches — a session is only resumable from its own directory", () => {
+  it("treats a legacy session file (no recorded cwd) as a match", () => {
+    // Assuming a mismatch would discard a live conversation on upgrade for
+    // every user; assuming a match costs at most the one doomed resume that
+    // was the unconditional behaviour before this gate existed.
+    expect(sessionCwdMatches(undefined, "/home/u/project")).toBe(true);
+  });
+
+  it("matches an identical directory", () => {
+    expect(sessionCwdMatches("/home/u/project", "/home/u/project")).toBe(true);
+  });
+
+  it("rejects a different directory", () => {
+    // The case the whole gate exists for: `claude --resume <id>` here would
+    // exit 1 with "No conversation found with session ID".
+    expect(sessionCwdMatches("/home/u/project-a", "/home/u/project-b")).toBe(false);
+  });
+
+  it("rejects a parent or child of the saved directory", () => {
+    expect(sessionCwdMatches("/home/u/project", "/home/u/project/docs")).toBe(false);
+    expect(sessionCwdMatches("/home/u/project/docs", "/home/u/project")).toBe(false);
+  });
+
+  it.runIf(process.platform === "win32")("compares case-insensitively on win32", () => {
+    expect(sessionCwdMatches("C:\\Users\\U\\Project", "c:\\users\\u\\project")).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32")("compares case-sensitively off win32", () => {
+    expect(sessionCwdMatches("/home/u/Project", "/home/u/project")).toBe(false);
   });
 });
 
