@@ -107,13 +107,13 @@ directory one.
 | `--plugin-dir` | headless `stream-json` | **No** (confounded — see below) |
 | Marketplace install (`--scope local`) | `-p` print | **No** |
 | Marketplace install (`--scope local`) | headless `stream-json` | **No** |
+| Any | TTY-attached interactive | **not testable by this harness** |
 
 The stream-json rows use the launcher's exact flag **prefix** (`CLAUDE_STREAM_JSON_FLAGS`,
 imported so it cannot drift) — not its exact spawn. The real launcher additionally appends a
 `--session-id`/`--resume` flag and goes through the reaper with full inherited env; the probe
 does neither. For a question about monitor activation, parentage and env are plausibly not
 neutral.
-| Any | TTY-attached interactive | **not testable by this harness** |
 
 The two **print-mode** negatives completed a turn outright (a final `result` JSON), so those
 are real nulls. The two **stream-json** rows are weaker: the harness accepts either a
@@ -170,8 +170,13 @@ Two independent reports, both confirming the bare-command failure mode:
   ```
 
   Exit 127 is command-not-found — `plugin.json` declares `npx -y tandem-editor@<version>
-  monitor` and `npx` is not resolvable from the plugin host. This is live for anyone who
-  installed the published plugin, and it fires in sessions unrelated to Tandem.
+  monitor` and `npx` is not resolvable from the plugin host. Mechanism (read out of
+  `claude` v2.1.223): monitors are spawned with `shell: true` and an env the host builds,
+  so on POSIX that is a NON-LOGIN `/bin/sh -c` — no profile is sourced, and PATH is
+  whatever Claude Code itself started with. A GUI launch therefore has no Node. This is
+  live for anyone who installed the published plugin, and it fires in sessions unrelated to
+  Tandem. No static manifest string fixes it cross-platform: `sh -lc` would work on POSIX
+  and does not exist under the `cmd.exe` that `shell: true` resolves to on Windows.
 
 Together these are why the absolute-Node-path change (`src/server/integrations/node-binary.ts`)
 landed ahead of any plugin-delivery work: bare commands in generated config fail for at

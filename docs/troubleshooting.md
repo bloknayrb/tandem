@@ -185,10 +185,18 @@ where you launched Claude from before anything else.
 
 Exit 127 is command-not-found. The published plugin's monitor runs
 `npx -y tandem-editor@<version> monitor`, so this fires when `npx` isn't resolvable from
-the plugin host — most likely it isn't on the PATH Claude Code inherited (a GUI-launched
-client doesn't get your login shell's PATH). The cwd guard above is a suspected second
-cause, but that guard has only been confirmed for plugin-install tool resolution, not for
-monitor spawning.
+the plugin host.
+
+**Why it happens, and why it isn't about your shell.** Claude Code spawns a monitor through
+a shell with an environment it builds itself (`shell: true`, read out of `claude` v2.1.223).
+On macOS and Linux that is `/bin/sh -c` — **non-login and non-interactive**, so it never
+sources `~/.zshrc`, `~/.zprofile` or `~/.bashrc`. PATH comes entirely from the environment
+Claude Code itself was started with. Launch Claude from a terminal and it inherits your
+shell's PATH; launch it from Spotlight, the Dock, or another GUI surface and it inherits the
+OS default (on macOS, roughly `/usr/bin:/bin:/usr/sbin:/sbin`), which contains no Node.
+
+A useful tell: if `claude` itself lives somewhere like `~/.local/bin` and isn't on your PATH
+either, you are looking at the same cause.
 
 Two things worth knowing:
 
@@ -197,10 +205,23 @@ Two things worth knowing:
 - **It fires in every Claude Code session**, including ones unrelated to Tandem, because
   plugin monitors are spawned per session regardless of what you're working on.
 
-The actionable fix is to make `npx` resolvable: launch from a project directory, or ensure
-Node is on the PATH the client inherits. Claude Code exposes no per-monitor disable, so the
-only other lever is removing the plugin entirely (`claude plugin uninstall
-tandem@tandem-editor`) — which also removes the Tandem skill it ships.
+**Fixes, in order of preference:**
+
+1. **Start Claude Code from a terminal** rather than a GUI launcher. It then inherits the
+   PATH your shell already has, and `npx` resolves.
+2. **Put Node on the PATH Claude Code inherits.** On macOS that means the environment the
+   GUI launcher provides, not your shell profile — `launchctl setenv PATH …` or a Node
+   installed under `/usr/local/bin`.
+3. **Remove the plugin** (`claude plugin uninstall tandem@tandem-editor`). Claude Code
+   exposes no per-monitor disable, so this is the only way to stop the message — and it
+   also removes the Tandem skill the plugin ships. Note the plugin's MCP entries use `npx`
+   too, so on a machine where the monitor cannot start they are unlikely to be working
+   either.
+
+There is no fix Tandem can ship in the plugin manifest for this: the monitor command is one
+static string used on every platform, and a form that picks up a login shell's PATH
+(`sh -lc '…'`) does not exist on Windows, where the same `shell: true` resolves to
+`cmd.exe`.
 
 ## `claude plugin install` fails to clone (SSH vs HTTPS)
 

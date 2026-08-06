@@ -813,6 +813,105 @@ export function evaluateClaudeCli(
   };
 }
 
+/**
+ * Report the Tandem plugin when it is installed, and the two hazards that come
+ * with it.
+ *
+ * Both are live field reports, not hypotheticals:
+ *
+ * 1. **Every command the plugin declares is `npx`-based** — the two MCP servers
+ *    and the monitor. Claude Code spawns a monitor with `shell: true` and an
+ *    environment it builds itself, which on POSIX is a NON-LOGIN `/bin/sh -c`:
+ *    no profile is sourced, so PATH is whatever Claude Code itself started
+ *    with. A GUI-launched client therefore has no Node, the monitor exits 127,
+ *    and Claude Code reports it in EVERY session — including ones with nothing
+ *    to do with Tandem. Nothing in a static manifest can fix that
+ *    cross-platform, so naming it is the whole remedy available here.
+ * 2. **The plugin's MCP servers duplicate the ones setup writes.** Plugin
+ *    servers load additively under `plugin_<plugin>_<server>`, so a user with
+ *    both gets the `tandem_*` toolset twice.
+ *
+ * Deliberately reads the registry rather than shelling out to `claude plugin
+ * list`: this runs inside `tandem doctor` and a LAN-reachable status route,
+ * where spawning another program to answer a question a file already answers
+ * is the wrong trade. Absence of the file is not evidence — stay silent.
+ */
+export interface TandemPluginInput {
+  /** `enabledPlugins` from `~/.claude/settings.json`, or `null` when that file
+   *  is absent or unreadable — which is NOT evidence either way. */
+  enabledPlugins: Record<string, unknown> | null;
+  /** Whether `~/.claude.json` carries an `mcpServers.tandem` entry of its own. */
+  wizardTandemEntry: boolean;
+}
+
+export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
+  if (input.enabledPlugins === null) return [];
+  // `false` is a real and common value — a plugin the user deliberately
+  // disabled — so test the VALUE, not just key presence. A truthiness check
+  // would report a disabled plugin as installed.
+  const installed = Object.entries(input.enabledPlugins).some(
+    ([key, value]) => key.startsWith("tandem@") && value === true,
+  );
+  if (!installed) return [];
+
+  const out: EvalOutcome[] = [
+    {
+      status: "warn",
+      message: "The Tandem plugin is installed — its monitor and MCP servers all run via `npx`",
+      fix:
+        'If you see `Monitor "Tandem real-time document events…" script failed (exit 127)`, ' +
+        "Claude Code was started without Node on its PATH — it spawns monitors through a " +
+        "non-login shell, so a GUI launch never reads your shell profile. Start Claude from " +
+        "a terminal, or uninstall with `claude plugin uninstall tandem@tandem-editor`.",
+    },
+  ];
+
+  // Duplication warning only when the wizard's entry is ALSO present — a
+  // plugin-only user has nothing duplicated and needs no warning.
+  if (input.wizardTandemEntry) {
+    out.push({
+      status: "warn",
+      message:
+        "Both the Tandem plugin and a tandem MCP entry in ~/.claude.json are present — the tandem_* tools will appear twice",
+      fix:
+        "Plugin MCP servers load alongside your own, under a plugin_ prefix. Keep one: " +
+        "`claude plugin uninstall tandem@tandem-editor` leaves the Tandem-managed config in place.",
+    });
+  }
+  return out;
+}
+
+function checkTandemPlugin(r: Recorder): void {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (!home) return;
+
+  let enabledPlugins: Record<string, unknown> | null = null;
+  try {
+    const settings: { enabledPlugins?: Record<string, unknown> } = JSON.parse(
+      readFileSync(join(home, ".claude", "settings.json"), "utf-8"),
+    );
+    enabledPlugins = settings.enabledPlugins ?? {};
+  } catch {
+    // Absent or malformed. Absence is not evidence, and a parse failure is
+    // `checkUserMcpConfig`'s story to tell — this file carries permissions, so
+    // no detail escapes here either.
+  }
+
+  let wizardTandemEntry = false;
+  try {
+    const config: { mcpServers?: Record<string, unknown> } = JSON.parse(
+      readFileSync(join(home, ".claude.json"), "utf-8"),
+    );
+    wizardTandemEntry = config?.mcpServers?.tandem !== undefined;
+  } catch {
+    // Already reported by checkUserMcpConfig.
+  }
+
+  for (const outcome of evaluateTandemPlugin({ enabledPlugins, wizardTandemEntry })) {
+    recordEvaluation(r, outcome);
+  }
+}
+
 function checkClaudeCli(r: Recorder): void {
   const result = evaluateClaudeCli(detectClaudeCli(), isBareNameLaunchable());
   if (result.status === "pass") {
@@ -1531,6 +1630,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("mcp-json", () => checkMcpJson(r));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
   await r.check("claude-cli", () => checkClaudeCli(r));
+  await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("stale-global", () => checkStaleGlobal(r));
 
