@@ -11,6 +11,7 @@ import type { Response } from "express";
 import { describe, expect, it, vi } from "vitest";
 import {
   isLoopbackRequest,
+  isValidDocumentId,
   scrubOptionalPathForCaller,
   scrubPathForCaller,
   sendApiError,
@@ -104,5 +105,34 @@ describe("sendApiError — raw fs messages do not cross the network (#1294)", ()
     vi.spyOn(console, "warn").mockImplementation(() => {});
     sendApiError(res, fsError);
     expect(json.mock.calls[0]?.[0].message).not.toContain("alice");
+  });
+});
+
+describe("isValidDocumentId — shared shape check (#1295 L2)", () => {
+  it("accepts room-name ids and rejects traversal, separators and overlong input", () => {
+    expect(isValidDocumentId("abc-123_x.md")).toBe(true);
+
+    for (const bad of [
+      "",
+      "../etc/passwd",
+      "a/b",
+      "a\\b", // a real backslash — the Windows separator, not an escape
+      "a b",
+      "a:b",
+      "x".repeat(257),
+      undefined,
+      null,
+      42,
+      {},
+    ]) {
+      expect(isValidDocumentId(bad)).toBe(false);
+    }
+  });
+
+  it("is a SHAPE check only — a well-formed id is not proof the document is open", () => {
+    // Documented explicitly because the destructive restore route relies on it:
+    // callers must still call hasDoc(). A guard that conflated the two would
+    // make "valid id" read as "safe target".
+    expect(isValidDocumentId("not-currently-open")).toBe(true);
   });
 });

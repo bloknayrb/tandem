@@ -76,6 +76,29 @@ export interface PeerRequest {
   socket?: { remoteAddress?: string | undefined };
 }
 
+/**
+ * Shape check for a caller-supplied documentId, before it reaches the registry.
+ *
+ * Bounded length + room-name character class. Extracted here (#1295 L2) so the
+ * destructive backup-restore route validates identically to `document/reload`
+ * rather than re-deriving it — a second copy is how the scrub convention in
+ * this file drifted in the first place.
+ *
+ * This is a SHAPE check only. Callers must still confirm the document is open
+ * (`hasDoc`) before acting: a well-formed id for a closed document is not a
+ * valid target.
+ */
+const MAX_DOCUMENT_ID_LENGTH = 256;
+const DOCUMENT_ID_RE = /^[A-Za-z0-9._-]+$/;
+export function isValidDocumentId(id: unknown): id is string {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= MAX_DOCUMENT_ID_LENGTH &&
+    DOCUMENT_ID_RE.test(id)
+  );
+}
+
 /** Map error code to HTTP status. Exported for testing. */
 export function errorCodeToHttpStatus(code: string | undefined): number {
   switch (code) {

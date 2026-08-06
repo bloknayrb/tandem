@@ -14,6 +14,7 @@ import path from "node:path";
 
 import type { Request, Response } from "express";
 import { API_BACKUPS_RESTORE } from "../../../shared/api-paths.js";
+import { hasDoc } from "../../documents/registry.js";
 import { listDocBackups } from "../../file-io/doc-backup.js";
 import {
   assertLoopbackForMutation,
@@ -22,7 +23,7 @@ import {
 import { resolveAppDataDir } from "../../platform.js";
 import { getCurrentDoc } from "../document-service.js";
 import { restoreDocumentFromBackup } from "../file-opener.js";
-import { scrubPathForCaller, sendApiError } from "./_shared.js";
+import { isValidDocumentId, scrubPathForCaller, sendApiError } from "./_shared.js";
 
 export async function handleListBackups(req: Request, res: Response): Promise<void> {
   const raw = req.query.documentId;
@@ -66,7 +67,35 @@ export async function handleRestoreBackup(req: Request, res: Response): Promise<
   // docBackupSnapshotPath also validates against SNAPSHOT_TAIL_RE as a second
   // layer, but basename here is the CodeQL-visible sanitizer.
   const safeBackup = path.basename(backup);
-  const docState = getCurrentDoc();
+
+  // #1295 L2: the target used to come from global state — `getCurrentDoc()` with
+  // no argument — while the list twin already accepted `documentId` from the
+  // query. A client could therefore list snapshots for doc A and have the
+  // restore land on doc B if the active document changed in between (another
+  // window, an MCP tandem_open, or the scratchpad CSRF above). It failed closed
+  // only INCIDENTALLY: the snapshot name resolves against B's path hash, so a
+  // mismatch yielded FILE_NOT_FOUND rather than writing A's bytes over B. That
+  // safety came from the directory layout, not from any check here — the same
+  // hazard handleResolveExternalConflict was fixed for in #1238.
+  //
+  // The client already sends this field; only the server ignored it. Kept
+  // OPTIONAL so an omitting caller keeps the previous behaviour. Because this
+  // is a destructive route now taking attacker-influenceable input, it mirrors
+  // document-reload.ts's FULL shape check — length and character class — before
+  // the registry lookup, not just the existence check.
+  const { documentId } = (req.body ?? {}) as Record<string, unknown>;
+  if (documentId !== undefined) {
+    if (!isValidDocumentId(documentId)) {
+      res.status(400).json({ error: "BAD_REQUEST", message: "documentId is invalid." });
+      return;
+    }
+    if (!hasDoc(documentId)) {
+      res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
+      return;
+    }
+  }
+
+  const docState = getCurrentDoc(typeof documentId === "string" ? documentId : undefined);
   if (!docState) {
     res.status(404).json({ error: "NOT_FOUND", message: "Document is not open." });
     return;

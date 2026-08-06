@@ -11,6 +11,20 @@ const openScratchpad = vi.hoisted(() =>
 vi.mock("../../src/server/mcp/file-opener.js", () => ({ openScratchpad }));
 
 import { handleScratchpad } from "../../src/server/mcp/routes/scratchpad";
+import { TAURI_HOSTNAME } from "../../src/shared/constants.js";
+
+/**
+ * Since #1295 L1 this route gates on origin + loopback like every sibling
+ * mutator, so a request double must carry both. The bare `{ body }` doubles
+ * these tests used before modelled a caller that cannot exist.
+ */
+function reqDouble(body: unknown, over: { origin?: string; remoteAddress?: string } = {}): Request {
+  return {
+    body,
+    headers: { origin: over.origin ?? `http://${TAURI_HOSTNAME}` },
+    socket: { remoteAddress: over.remoteAddress ?? "127.0.0.1" },
+  } as unknown as Request;
+}
 
 function responseDouble(): {
   response: Response;
@@ -30,7 +44,7 @@ describe("POST /api/scratchpad input", () => {
 
   it("passes validated inline Markdown to the seeded scratchpad", async () => {
     const { response, json } = responseDouble();
-    await handleScratchpad({ body: { content: "# Export\n\nbody" } } as Request, response);
+    await handleScratchpad(reqDouble({ content: "# Export\n\nbody" }), response);
     expect(openScratchpad).toHaveBeenCalledWith("# Export\n\nbody");
     expect(json).toHaveBeenCalledWith({ data: expect.objectContaining({ documentId: "scratch" }) });
   });
@@ -42,9 +56,46 @@ describe("POST /api/scratchpad input", () => {
       { content: "x".repeat(1024 * 1024 + 1) },
     ]) {
       const { response, status } = responseDouble();
-      await handleScratchpad({ body } as Request, response);
+      await handleScratchpad(reqDouble(body), response);
       expect(status).toHaveBeenCalledWith(body.content === 42 || "path" in body ? 400 : 413);
     }
     expect(openScratchpad).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/scratchpad gates (#1295 L1)", () => {
+  beforeEach(() => openScratchpad.mockClear());
+
+  it("rejects a cross-origin drive-by before opening anything", async () => {
+    // The concrete attack: any page the user visits issues a SIMPLE request
+    // (text/plain ⇒ no preflight), the socket is loopback so auth is bypassed,
+    // and express.json leaves req.body undefined — which this handler
+    // explicitly permits. openScratchpad would then call setActiveDocId,
+    // silently flipping the server's active document, which becomes the
+    // implicit target of any later documentId-less MCP call.
+    const { response, status } = responseDouble();
+    await handleScratchpad(reqDouble(undefined, { origin: "https://evil.example" }), response);
+    expect(status).toHaveBeenCalledWith(403);
+    expect(openScratchpad).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request with no Origin at all", async () => {
+    // Unlike /api/shutdown, which deliberately permits an absent Origin for the
+    // Tauri shell's reqwest client, every caller of this route is a browser
+    // fetch (App.svelte and actions/builtin.svelte.ts) and always sends one.
+    const { response, status } = responseDouble();
+    const req = { body: undefined, headers: {}, socket: { remoteAddress: "127.0.0.1" } };
+    await handleScratchpad(req as unknown as Request, response);
+    expect(status).toHaveBeenCalledWith(403);
+    expect(openScratchpad).not.toHaveBeenCalled();
+  });
+
+  it("still opens a blank scratchpad for the real local caller", async () => {
+    // Positive control on the same sample: the assertions above would also pass
+    // against a handler that rejected everything, which is not the fix.
+    const { response, json } = responseDouble();
+    await handleScratchpad(reqDouble(undefined), response);
+    expect(openScratchpad).toHaveBeenCalledTimes(1);
+    expect(json).toHaveBeenCalledWith({ data: expect.objectContaining({ documentId: "scratch" }) });
   });
 });

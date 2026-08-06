@@ -29,7 +29,7 @@ import {
   generateReplyId,
 } from "../../shared/utils.js";
 import { relaySanitizationEvent } from "../annotations/migration-log.js";
-import { nextRev } from "../annotations/schema.js";
+import { nextRev, REPLY_TEXT_MAX } from "../annotations/schema.js";
 import { exportAnnotations } from "../file-io/docx.js";
 import { atomicWrite } from "../file-io/index.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
@@ -156,6 +156,29 @@ export function addReplyToAnnotation(
    */
   agentIdentity?: AgentIdentity,
 ): { ok: true; replyId: string } | { ok: false; error: string; code?: string } {
+  // #1295 L3: reject over-long replies HERE, at the model layer, rather than at
+  // one caller. There are three production callers (the MCP tandem_annotationReply
+  // tool via document-store, the /api/annotation-reply route, and the local-model
+  // reply tool) and none bounded the text, while the DURABLE schema caps it at
+  // REPLY_TEXT_MAX and normalizeReply safeParses per record. So an over-long
+  // reply was accepted into the live Y.Doc, rendered in the UI, and then
+  // silently dropped on the next load with only a stderr line as evidence.
+  // Turning that into a structured error is the whole fix.
+  //
+  // Reusing REPLY_TEXT_MAX is a deliberate choice, not an oversight: its own
+  // docstring calls it a generous LOAD-time ceiling, sized so it can never drop
+  // a legitimate existing reply, which is a different job from a write-time
+  // limit. One constant is still right — a lower write bound would let the two
+  // drift, and the failure mode being fixed is precisely that a value accepted
+  // at write is rejected at load. They must be the same number.
+  if (text.length > REPLY_TEXT_MAX) {
+    return {
+      ok: false,
+      error: `Reply text exceeds the ${REPLY_TEXT_MAX}-character limit`,
+      code: "INVALID_ARGUMENT",
+    };
+  }
+
   const raw = annotationsMap.get(annotationId) as Annotation | undefined;
   if (!raw) return { ok: false, error: `Annotation ${annotationId} not found`, code: "NOT_FOUND" };
 
