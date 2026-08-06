@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A web page can no longer read Tandem's local data through your browser (#1291).** Tandem's server answers only your own machine, and it told browsers so by replying with `Access-Control-Allow-Origin: null` to anything it didn't recognise. That reads like a refusal and is the opposite of one: `null` is the name browsers give to a page with no origin of its own — most commonly a sandboxed frame — so any website could embed such a frame, have it ask Tandem for data, and be handed the answer. Both of the other defences legitimately allowed the request through: it really was addressed to `127.0.0.1`, and it really did come from your own computer, which is how Tandem decides a caller is trusted. What was exposed was reading, not writing: your licence name, email and licence id, the absolute paths of your documents, and whether an AI session was attached. Nobody could edit a document or change a setting this way. Tandem now stays silent unless it recognises the caller, which denies every unrecognised origin including that one. The live-updates stream was reachable the same way and is covered by the same fix.
+
 ## [0.20.1] - 2026-08-05
 
 ### Fixed
