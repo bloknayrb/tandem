@@ -208,6 +208,38 @@ describe("bundled CSS: writing the standard property alone is still the safe adv
   });
 });
 
+describe("bundled CSS: the #1302 formatting-bar declarations survive minification", () => {
+  it("preserves the :has() z-lift selector", () => {
+    // FormattingBar.svelte's wrap lift keys on `:has([aria-expanded="true"])`,
+    // and that rule DOES live in a component <style> block, so it really does
+    // ship through lightningcss. A future Vite/lightningcss bump that rewrites
+    // or drops it re-buries every formatting-bar popover behind the selection
+    // popup — and no E2E test would catch it, because Playwright drives
+    // `npm run dev`, which never minifies.
+    const out = minify('.w:has([aria-expanded="true"]){z-index:9}');
+    expect(out).toContain(":has(");
+    expect(out).toContain("aria-expanded");
+  });
+
+  it("keeps overflow-x: clip / overflow-y: visible as a clip+visible pair", () => {
+    // Forward-looking cover, stated plainly: today these two declarations live
+    // in FormattingBar's inline `style=` attribute and therefore never reach
+    // lightningcss at all. This exists so that moving them into the <style>
+    // block — the tidy-up CLAUDE.md's two-pipeline guidance invites — does not
+    // have to re-litigate the axis split.
+    //
+    // The invariant is the axis split, not the syntax: folding the two longhands
+    // into the shorthand is benign and either form passes. Folding EITHER axis
+    // to `hidden`/`auto` is not — a scrollable value on one axis silently
+    // computes the other's `visible` to `auto` (CSS Overflow 3), which re-clips
+    // the popovers.
+    const out = minify(".p{overflow-x:clip;overflow-y:visible}");
+    expect(out).toMatch(/overflow:\s*clip visible|overflow-x:\s*clip/);
+    expect(out).not.toContain("hidden");
+    expect(out).not.toContain("auto");
+  });
+});
+
 /** Every `.svelte` `<style>` / `.css` file whose CSS the build routes through lightningcss. */
 function bundledCssFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {

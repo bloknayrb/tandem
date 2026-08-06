@@ -18,6 +18,7 @@ import { ENTER_POPUP_MS, motionOff, popupEnter, registerFlySource } from "../../
 import { pmPosToFlatOffset } from "../../positions";
 import DecorationsMenu from "../../shell/DecorationsMenu.svelte";
 import { onOutsideEvent } from "../../utils/dismiss-outside";
+import { escapeIsClaimed } from "../../utils/escape-owner";
 import {
   type AnnotationComposerIntent,
   defaultAnnotationIntent,
@@ -600,6 +601,12 @@ $effect(() => {
   // here would let Escape both close the popup AND clear the active annotation.
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key !== "Escape") return;
+    // Yield to a nested popover that has claimed Escape (see escape-owner.ts).
+    // This listener is capture-phase at `window`, so without this it preempts
+    // the formatting bar's own dismissals: a keyboard user with the colour
+    // picker open got the POPUP dismissed on the first Escape and had to press
+    // it twice (#1302 review).
+    if (escapeIsClaimed(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
     dismissPopup();
