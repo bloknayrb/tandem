@@ -924,5 +924,5 @@ The flagless alternative to the channel shim, run as `tandem monitor` by the plu
 
 - `.claude/settings.json` -- Hook wiring: PreToolUse (block) and PostToolUse (warn) matchers
 - `.claude/hooks/` -- 19 shell scripts plus one `.mjs` helper, enforcing Critical Rules, type-checking, formatting, test running, and the workflow nudges. Inventory and semantics: [`.claude/hooks/README.md`](../.claude/hooks/README.md)
-- `.claude/agents/` -- 4 specialized reviewer agents (annotation-model, svelte-migration, crdt, security)
+- `.claude/agents/` -- 11 agents: 4 specialized reviewers (annotation-model, svelte-migration, crdt, security) plus the 7 frame generators and critic used by `/diverge`
 - `.claude/skills/` -- Project-local skills: changelog, dev-server, e2e, e2e-debug, release, screenshots

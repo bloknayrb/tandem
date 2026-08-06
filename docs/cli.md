@@ -177,6 +177,7 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run lint` | ESLint across the repo. |
 | `npm run format` | Biome auto-format. |
 | `npm run check:tokens` | Scans `src/client/` for raw hex / rgba violations of the semantic-token system. |
+| `npm run check:links` | Resolves every relative Markdown link and `#anchor` in the repo. Run it before and after moving any doc — a moved file with a dangling inbound link is worse than one left where it was. |
 
 ### Audits
 
@@ -185,8 +186,6 @@ These commands are available when running Tandem from a source checkout (`git cl
 | `npm run audit:dead-code` | Knip dead-code report. |
 | `npm run audit:origins` | Audits Y.Doc origin tagging (ADR-031) across `src/`. |
 | `npm run audit:ymap-keys` | Confirms Y.Map keys come from the `shared/constants.ts` constants. |
-| `npm run kg` | Knowledge-graph CLI (`neighbors`, `rules-for`, etc.). |
-| `npm run kg:lint` | Validates the knowledge graph for orphan nodes, broken edges. |
 
 ### Other
 

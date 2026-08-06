@@ -6,7 +6,7 @@
 `.claude/plans/brainstorm-and-investigate-whether-elegant-scott.md` Phase 0, and
 that plan's Phase 0 probe description (see "Reconciling with the plan" below)
 **Related:** [per-client-identity-spec.md](per-client-identity-spec.md) §3.1,
-[ADR-045](../decisions.md#adr-045), [ADR-012](../decisions.md#adr-012)
+[ADR-045](../decisions.md#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id), [ADR-012](../decisions.md#adr-012-streamable-http-transport-replacing-stdio)
 
 > **Amended 2026-07-30 — MCP revision `2026-07-28` invalidates this spike's measurement point and half its candidates.** [SEP-2567](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2567) removes protocol-level sessions and the `Mcp-Session-Id` header; [SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575) removes the `initialize` handshake. Nothing is broken today — the newest published SDK (1.30.0, the version `package-lock.json` pins) still exports `LATEST_PROTOCOL_VERSION = '2025-11-25'` — but **this document is still marked "probe not yet run," so it is forward guidance, and parts of it are now wrong.** Read it with these corrections:
 >
