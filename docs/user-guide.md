@@ -311,7 +311,7 @@ Start Claude Code with the channel flag for instant push notifications:
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Chat messages, annotation accepts/dismisses, and text selections push to Claude in real time — no polling needed. The `--dangerously-load-development-channels` flag is required until Tandem is added to the official channel allowlist.
+Chat messages, annotation accepts/dismisses, and text selections push to Claude in real time — no polling needed. The `--dangerously-load-development-channels` flag is Claude Code's marker for unstable APIs, and it stays necessary while the Channels API is still experimental. The plugin monitor is the alternative that needs no flag — see [Real-Time Push](#real-time-push-recommended).
 
 ### Polling Fallback
 
