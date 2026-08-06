@@ -16,8 +16,12 @@
  *
  * Flat prose would exercise almost none of the pipeline whose cost we are
  * measuring. The document carries headings (outline panel + heading-collapse),
- * nested lists, tables, fenced code, inline marks, and internal links, because
- * those are the node and mark types the decoration pipeline actually walks.
+ * FLAT bullet and ordered lists, tables, fenced code, inline marks (bold,
+ * italic, inline code) and internal links, because those are the node and mark
+ * types the decoration pipeline actually walks.
+ *
+ * Read that list as exhaustive, not as a claim of coverage — see "Deliberately
+ * excluded" below for what it does NOT contain.
  *
  * ## Why it emits annotations too
  *
@@ -40,6 +44,19 @@
  * Inline images (#153). An image-heavy document measures image decode, not the
  * editor. Whether image density degrades scroll is a real question and a
  * separate fixture -- not this one.
+ *
+ * NESTED lists, blockquotes, task lists, footnotes and reference links (#981).
+ * None of these are emitted. Adding them is a fixture-DESIGN change, not a
+ * tweak: it moves the document the recorded numbers are compared against, and
+ * it interacts with the single-line paragraph filter below (multi-line blocks
+ * are excluded from seed candidates for a reason found by running the gate).
+ * Worth its own PR; until then nobody should read coverage into this fixture
+ * that it does not have.
+ *
+ * ONE annotation shape. Every seed becomes a pending `comment` authored by
+ * Claude, so the load is homogeneous: one type, one author, one status. All of
+ * them are RIGHT-margin annotations, which means the left margin track
+ * presence-collapses to `off` and exactly one of the two tracks is measured.
  *
  * Usage:
  *   node scripts/fixtures/make-perf-doc.mjs [--seed N] [--words N]
@@ -165,6 +182,15 @@ function parseArgs(argv) {
   for (const key of ["seed", "words", "annotations"]) {
     if (!Number.isFinite(out[key])) throw new Error(`--${key} must be a number`);
   }
+  // The annotation seed path is derived by REPLACING a `.md` suffix. With any
+  // other extension that replace is a no-op and the second write silently
+  // overwrites the markdown with JSON.
+  if (!out.out.endsWith(".md")) {
+    throw new Error(
+      `--out must end in .md — the annotation seed path is derived by replacing that suffix ` +
+        `(got ${out.out})`,
+    );
+  }
   return out;
 }
 
@@ -287,7 +313,7 @@ function build({ seed, words: targetWords, annotations: annotationCount }) {
   const plainDoc = toPlainText(markdown);
   const occurrences = (haystack, needle) => haystack.split(needle).length - 1;
 
-  const seeds = [];
+  const quotes = [];
   const seen = new Set();
   // Spread annotations evenly across the document so the margin stack is loaded
   // along its whole length, not bunched where the first ones happened to land.
@@ -313,11 +339,24 @@ function build({ seed, words: targetWords, annotations: annotationCount }) {
     }
     if (!quote) break; // document genuinely has no unclaimed targets left
     seen.add(quote);
-    seeds.push({
-      quote,
-      text: `Perf fixture annotation ${seeds.length + 1}.`,
-    });
+    quotes.push(quote);
   }
+
+  // Emit in ascending DOCUMENT-POSITION order, and make that a real invariant
+  // rather than an accident of the seed.
+  //
+  // The probe above wraps modulo `paragraphs.length`, so a late slot whose
+  // ideal paragraph (and every paragraph after it) is unusable can wrap around
+  // to the front of the document — which would make the emission order
+  // non-monotonic for some seeds. The harness treats the LAST seed as the
+  // DEEPEST target (it measures create/accept there, because anchoring cost
+  // scales with position), so sorting here is what lets it do that safely.
+  // Sorting also keeps the numbering in `text` monotonic with position, which
+  // is why the label is assigned after the sort, not before.
+  const seeds = quotes
+    .map((quote) => ({ quote, at: plainDoc.indexOf(quote) }))
+    .sort((a, b) => a.at - b.at)
+    .map(({ quote }, i) => ({ quote, text: `Perf fixture annotation ${i + 1}.` }));
 
   return { markdown, seeds, sections: sectionIndex, words: countWords(markdown) };
 }
@@ -330,9 +369,13 @@ async function main() {
   await writeFile(args.out, markdown, "utf8");
 
   const seedPath = args.out.replace(/\.md$/, ".annotations.json");
+  // `requested` travels with the seed so the harness can pin the load it is
+  // measuring against, rather than inferring it from however many seeds a
+  // hand-run generator happened to emit.
   await writeFile(
     seedPath,
-    JSON.stringify({ seed: args.seed, annotations: seeds }, null, 2) + "\n",
+    JSON.stringify({ seed: args.seed, requested: args.annotations, annotations: seeds }, null, 2) +
+      "\n",
     "utf8",
   );
 
@@ -343,11 +386,17 @@ async function main() {
   console.log(`  sections      ${sections}`);
   console.log(`  annotations   ${seeds.length} -> ${seedPath}`);
 
+  // A short fixture is a FAILURE, not a warning. The margin load is the whole
+  // premise of the gate; a run against 37 annotations is not a run against 50,
+  // and a warning on stdout is not something a harness can act on. Exiting
+  // non-zero propagates through globalSetup's `execFileSync`.
   if (seeds.length < args.annotations) {
-    console.warn(
-      `  WARNING: requested ${args.annotations} annotations, emitted ${seeds.length}. ` +
-        `Duplicate or too-short quote targets were skipped.`,
+    console.error(
+      `  ERROR: requested ${args.annotations} annotations, emitted ${seeds.length}. ` +
+        `Duplicate or too-short quote targets were skipped — the document is too small ` +
+        `or too repetitive to carry the requested load.`,
     );
+    process.exitCode = 1;
   }
 }
 

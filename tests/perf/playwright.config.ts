@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,20 +43,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
 /**
- * Isolated app-data dir, wiped in globalSetup.
+ * Isolated app-data dir, wiped by `perf-server.mjs` at every server START.
  *
  * Lives in the OS temp dir, NOT under the repo. Inside the working tree on
- * Windows, the server's own doc-backup writes and the setup wipe both hit
- * EPERM — the same reason the E2E harness keeps its app-data outside the repo.
+ * Windows, the server's own doc-backup writes and the wipe both hit EPERM —
+ * the same reason the E2E harness keeps its app-data outside the repo.
  *
- * The wipe is a correctness requirement, not hygiene. The fixture is
- * byte-identical across runs (seeded) while its path changes per run — exactly
- * the two preconditions for content-hash rename-recovery (#313/#318) to
- * resurrect the previous run's orphaned annotation envelopes into this one.
- * `scripts/e2e-server.mjs` avoids this by wiping at every server start; this
- * harness runs its own server and so does not inherit that.
+ * The wipe is a correctness requirement, not hygiene, and its timing is the
+ * whole point. `src/server/index.ts` restores the previous session during
+ * startup (`restoreCtrlSession()` / `restoreOpenDocuments()`), so anything on
+ * disk at boot is rehydrated into the run: the prior run's open tabs and its
+ * durable annotation envelopes. Server start is the only moment that precedes
+ * that, which is why the wipe lives in the launcher and NOT in globalSetup —
+ * Playwright starts every webServer before it runs globalSetup (see
+ * global-setup.ts for the receipt).
+ *
+ * A stable, inspectable path is deliberate over an `mkdtemp` per run: the
+ * gate's output is a recorded measurement, and being able to look at the
+ * app-data a recorded run actually used is worth more than never issuing a
+ * delete. The launcher's hard-coded basename guard is the safety boundary.
  */
 const PERF_APP_DATA_DIR = path.join(os.tmpdir(), "tandem-perf-data");
+const PERF_SERVER_LAUNCHER = path.join(__dirname, "perf-server.mjs");
 
 /** Deliberately not 5173 — a running `npm run dev` must not be silently reused. */
 const PREVIEW_PORT = 4318;
@@ -64,9 +72,8 @@ const PREVIEW_PORT = 4318;
 const CLIENT_DIST = path.join(REPO_ROOT, "dist", "client", "index.html");
 const SERVER_DIST = path.join(REPO_ROOT, "dist", "server", "index.js");
 
-// Fail loudly and early rather than measuring a stale or missing build. A perf
-// gate that silently measured the wrong artifact is worse than one that refuses
-// to run.
+// A MISSING build is fatal: there is nothing to measure. A perf gate that
+// silently measured the wrong artifact is worse than one that refuses to run.
 for (const [label, p] of [
   ["client", CLIENT_DIST],
   ["server", SERVER_DIST],
@@ -77,6 +84,45 @@ for (const [label, p] of [
         `Run \`npm run perf:gate\`, which builds before measuring.`,
     );
   }
+}
+
+/** Newest mtime under a directory tree, skipping node_modules and dot-dirs. */
+function newestMtimeMs(dir: string): number {
+  let newest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) newest = Math.max(newest, newestMtimeMs(full));
+    else if (entry.isFile()) newest = Math.max(newest, statSync(full).mtimeMs);
+  }
+  return newest;
+}
+
+// Provenance, printed unconditionally: a recorded run should carry the
+// timestamp of the artifact it measured, so the table in
+// docs/perf-gate-results.md can be audited after the fact. `console.error`
+// keeps it off stdout, where the Playwright reporter lives.
+const clientBuiltAt = statSync(CLIENT_DIST).mtimeMs;
+const serverBuiltAt = statSync(SERVER_DIST).mtimeMs;
+console.error(
+  `[perf-gate] dist/client built ${new Date(clientBuiltAt).toISOString()}, ` +
+    `dist/server built ${new Date(serverBuiltAt).toISOString()}`,
+);
+
+// STALENESS is a warning, not a throw. It is a real hazard — `npm run perf:gate`
+// builds first, but the config is also directly runnable with
+// `playwright test --config=…`, which is exactly how someone iterating skips a
+// two-minute rebuild. It is NOT reliable enough to block on: a formatter hook,
+// or a fresh `git worktree`/checkout, restamps every file under `src/` without
+// changing a byte of what would be built. So: say it loudly, measure anyway,
+// and let the operator decide.
+const srcNewest = newestMtimeMs(path.join(REPO_ROOT, "src"));
+if (srcNewest > Math.min(clientBuiltAt, serverBuiltAt)) {
+  console.error(
+    `[perf-gate] WARNING: a file under src/ (mtime ${new Date(srcNewest).toISOString()}) is ` +
+      `newer than the dist artifacts above — this run may measure a stale build. ` +
+      `Run \`npm run perf:gate\` to rebuild first.`,
+  );
 }
 
 export default defineConfig({
@@ -93,12 +139,27 @@ export default defineConfig({
   // Generous relative to the 3s/500ms/100ms THRESHOLDS: those bound the
   // measured operation, this bounds the whole spec, which also opens a
   // 22,500-word document, seeds 50 annotations and scrolls the full length.
-  timeout: 240_000,
+  // Headroom over the 240s this started at, because the spec now mounts the
+  // margin pipeline: run 1 already spent ~8.2s inside the accept step with the
+  // margin OFF, and a spec-level timeout prints NOTHING (every number is
+  // reported at the end), so an under-sized budget turns a slow result into no
+  // result at all.
+  timeout: 420_000,
   // No retries. A retry would silently report a second, warmer run's numbers.
   retries: 0,
   use: {
     baseURL: `http://127.0.0.1:${PREVIEW_PORT}`,
     headless: true,
+    // Pinned, because margin mode is WIDTH-derived and the spec now depends on
+    // landing in `full`. `marginModeThresholds` (editor-stage.svelte.ts) gives
+    // `t1 = narrowThresholdPx(rails) = 2*272 + rails + 480`; with the right
+    // rail at its default 300px (PANEL_DEFAULT_WIDTH, src/client/panel-layout.ts:5)
+    // that is 1324. Playwright's unpinned 1280 default would land in `narrow`,
+    // which renders `clamped` cards with NO action row — the accept button
+    // would be display:none and the measured click would hang rather than
+    // report. 1600 clears t1 with far more headroom than the 32px hysteresis
+    // band.
+    viewport: { width: 1600, height: 900 },
   },
   webServer: [
     {
@@ -113,7 +174,10 @@ export default defineConfig({
       cwd: REPO_ROOT,
     },
     {
-      command: `node ${JSON.stringify(SERVER_DIST)}`,
+      // Through the launcher, which wipes PERF_APP_DATA_DIR immediately before
+      // spawning the server — the only moment that precedes session restore.
+      // See PERF_APP_DATA_DIR above and tests/perf/perf-server.mjs.
+      command: `node ${JSON.stringify(PERF_SERVER_LAUNCHER)} ${JSON.stringify(SERVER_DIST)}`,
       url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/health`,
       reuseExistingServer: false,
       timeout: 120_000,
@@ -128,4 +192,9 @@ export default defineConfig({
   ],
 });
 
-export { PERF_APP_DATA_DIR, PREVIEW_PORT };
+// NOTE: this env block intentionally mirrors the root playwright.config.ts
+// server webServer entry. If that one gains a variable the server needs to
+// boot correctly, this one needs it too — there is no shared surface by
+// design (see "Why a separate config" above), so the coupling is manual.
+
+export { PREVIEW_PORT };
