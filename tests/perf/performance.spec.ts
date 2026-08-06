@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 import { CURRENT_SCHEMA_VERSION } from "../../src/client/hooks/useTandemSettings";
+import { MARGIN_TRACK_GEOMETRY } from "../../src/client/layout/editor-stage.svelte";
 import { TANDEM_SETTINGS_KEY } from "../../src/shared/constants";
 import { McpTestClient } from "../e2e/helpers";
 
@@ -166,18 +167,36 @@ test.describe("v1.0 performance gate", () => {
       // Margin view is opt-in and defaults to false
       // (useTandemSettings.ts `DEFAULTS.marginView`), so a fresh Playwright
       // context measures the side panel and nothing else — the exact defect
-      // that made run 1's headline attribution wrong. Only `marginView` is
-      // overridden: rail visibility and widths stay at their shipping
-      // defaults, so this remains a configuration a user can actually be in.
+      // that made run 1's headline attribution wrong. Rail visibility and
+      // widths stay at their shipping defaults, so this remains a
+      // configuration a user can actually be in.
       // `schemaVersion` must be present or the migration chain rewrites the
       // blob from v1.
+      //
+      // `primaryTab` must be present TOO, and it is not redundant. A written
+      // blob does NOT inherit `DEFAULTS` for its absent keys: `loadSettings`
+      // routes it through `normalizeKnownFields`, which clamps field by field,
+      // and `primaryTab` is the one field in that function whose absent-key
+      // branch does not land on `DEFAULTS` —
+      // `parsed.primaryTab === "annotations" ? "annotations" : "chat"` reads a
+      // MISSING key as `"chat"`, the opposite of `DEFAULTS.primaryTab`. (Real
+      // users never hit this: `saveSettings` writes every key, and a blob-less
+      // first run returns `DEFAULTS` without going through the validator. It
+      // bites only a partial blob like this one.) Landing on Chat leaves the
+      // Annotations panel `display: none` — PanelSlot toggles visibility with
+      // CSS, so its cards stay in the DOM at zero size — and every rail-scoped
+      // assertion below would fail on an element that is present and correct.
       await page.addInitScript(
         ([key, blob]) => {
           window.localStorage.setItem(key, blob);
         },
         [
           TANDEM_SETTINGS_KEY,
-          JSON.stringify({ schemaVersion: CURRENT_SCHEMA_VERSION, marginView: true }),
+          JSON.stringify({
+            schemaVersion: CURRENT_SCHEMA_VERSION,
+            marginView: true,
+            primaryTab: "annotations",
+          }),
         ] as const,
       );
 
@@ -297,12 +316,41 @@ test.describe("v1.0 performance gate", () => {
       expect(created, "not every seed annotation was created").toBe(loadSeeds.length);
 
       // NOW the margin column can exist — presence-collapse is satisfied.
+      //
+      // Checked as ATTACHED + WIDE, never `toBeVisible`. The column element is
+      // a pure positioning context: `position: absolute; top: 0` with every
+      // bubble inside it also absolutely positioned, so it has NO in-flow
+      // content and its border box measures 243 x 0 even in a fully-rendered
+      // `full`-mode margin carrying a full card stack (measured, not inferred).
+      // Playwright treats an empty bounding box as hidden, so `toBeVisible` on
+      // THIS element is unsatisfiable in every configuration — it fails
+      // identically whether the margin renders perfectly or not at all, which
+      // makes it useless as the premise check it was written to be.
+      //
+      // The width assertion carries that intent instead, and it is not vacuous:
+      // it pins the width ladder at `full`. Rails = 300 (right rail
+      // default-visible at PANEL_DEFAULT_WIDTH, left default-hidden), so
+      // `marginModeThresholds(300).t1 = 2*272 + 300 + 480 = 1324` and the
+      // pinned 1600 viewport lands in `full` with 276px of headroom over the
+      // 32px hysteresis band. `full` is the only mode whose column reaches 240
+      // (`narrow` 160, `stub` 28), and `narrow` renders `clamped` cards with no
+      // action row — which would hang the measured accept click below. A future
+      // geometry or viewport change that drops the ladder a rung fails HERE,
+      // with the reason, instead of 100 lines later as an opaque timeout.
       const margin = page.getByTestId("margin-column-right");
       await expect(
         margin,
         "margin column did not mount — the seeded load is not being rendered by " +
           "the pipeline this gate exists to measure",
-      ).toBeVisible({ timeout: 60_000 });
+      ).toBeAttached({ timeout: 60_000 });
+      const marginWidth = (await margin.boundingBox())?.width ?? 0;
+      expect(
+        marginWidth,
+        `margin column is ${marginWidth}px wide — the width ladder is not in \`full\` ` +
+          `(narrow=160, stub=28), so the cards this gate measures are not the ones it ` +
+          `records. Check the viewport in playwright.config.ts against ` +
+          `marginModeThresholds(railsWidthPx).t1.`,
+      ).toBeGreaterThanOrEqual(MARGIN_TRACK_GEOMETRY.full.column);
 
       // Wait for the margin load to actually RENDER before measuring anything
       // against it. Seeding over MCP only guarantees the server-side writes
@@ -318,6 +366,15 @@ test.describe("v1.0 performance gate", () => {
           timeout: 60_000,
         })
         .toBeGreaterThanOrEqual(Math.floor(created * 0.9));
+
+      // ...and that a card is actually PAINTED, not merely in the DOM. This is
+      // the visibility check the column-level `toBeVisible` above was reaching
+      // for: unlike the zero-height column, a bubble is a real box (measured
+      // 243 x 168), so `toBeVisible` here is a claim that can fail.
+      await expect(
+        page.locator('[data-testid^="margin-bubble-"]').first(),
+        "margin bubbles are in the DOM but none is rendered with a visible box",
+      ).toBeVisible({ timeout: 60_000 });
 
       // Now the measured one, deep in the document — anchoring cost scales with
       // position, so annotating paragraph 1 would flatter the number. The

@@ -21,6 +21,7 @@ comparison knows what changed:
 | Premise | Value | Where it is set |
 |---|---|---|
 | Margin view | **forced ON** (default is off) | seeded into `tandem:settings` by the spec |
+| Right rail tab | **Annotations**, seeded explicitly as `primaryTab` — see below | seeded into `tandem:settings` by the spec |
 | Right rail | shipped default, 300px (`PANEL_DEFAULT_WIDTH`) | not overridden |
 | Viewport | **1600 × 900** | `use.viewport` in `tests/perf/playwright.config.ts` |
 | Annotation load | `DEFAULT_ANNOTATIONS` = **50** pending comments: 49 seeded + 1 measured | `scripts/fixtures/make-perf-doc.mjs`, pinned by `EXPECTED_ANNOTATION_COUNT` in the spec |
@@ -35,11 +36,37 @@ render `narrow` → `clamped` cards, which have no action row at all. Margin vie
 is forced on because it is opt-in and off by default — see run 1 for what
 happens otherwise.
 
+`primaryTab` is seeded explicitly and is **not** redundant with the shipped
+default. A hand-written settings blob does not inherit `DEFAULTS` for the keys
+it omits: `loadSettings` clamps it field by field through
+`normalizeKnownFields`, and `primaryTab` is the single field there whose
+absent-key branch does not land on `DEFAULTS` — it reads a missing key as
+`"chat"`, the opposite of `DEFAULTS.primaryTab`. (No user is affected:
+`saveSettings` writes every key, and a first run with no blob at all returns
+`DEFAULTS` without entering the validator. Only a partial blob like the spec's
+hits it.) Left unset, the rail opens on Chat, the Annotations panel is
+`display: none` — `PanelSlot` toggles with CSS, so its cards stay in the DOM at
+zero size — and every rail-scoped measurement below fails against an element
+that is present and correct.
+
 Condition 1 (open-to-interactive) is still measured with the margin column
 **not** mounted, and cannot be otherwise: margin sides presence-collapse, so
 with zero annotations in the freshly-opened document the column is absent from
 the DOM regardless of the setting. The spec asserts that rather than assuming
 it.
+
+The premise that the margin *is* mounted for conditions 2–3 is asserted as
+**attached, with a column at least 240px wide** — deliberately not
+`toBeVisible`. The column element is a pure positioning context (`position:
+absolute; top: 0`, with every bubble inside it absolutely positioned too), so
+it has no in-flow content and its border box measures 243 × 0 even with a full
+card stack rendering correctly beside it. Playwright reads an empty bounding
+box as hidden, so `toBeVisible` on that element fails identically whether the
+margin renders or not — a check that cannot pass is not a premise check. The
+width bound is what carries the meaning: 240 is `MARGIN_TRACK_GEOMETRY.full`,
+and `narrow` (160) or `stub` (28) would fail it, so the assertion pins the
+width ladder at the rung the recorded numbers assume. Painted-ness is asserted
+separately, on a margin *bubble*, which is a real 243 × 168 box.
 
 ---
 
@@ -165,3 +192,33 @@ The v1.0 performance gate therefore remains **open**.
 Re-recording requires the same Windows 11 workstation run 1 used — comparing a
 new machine against a superseded run would confound two changes at once. Until
 that run exists, this document records a harness, not a result.
+
+### Harness verification — 2026-08-06, Linux container — NOT a recorded run
+
+The fixed harness was exercised end to end on a headless Linux container to
+confirm it produces every number rather than dying at a premise check. **These
+figures are not run 2 and are not a baseline**: different machine, different
+class of machine (a container, not a workstation), so they are comparable to
+nothing in this document. They are recorded only because "the harness now runs"
+is a claim that should carry its evidence, and because one of them is a FAIL
+that a future run on the real hardware should expect to see again.
+
+Two consecutive runs, same build:
+
+| Condition | Threshold | Run A | Run B | Verdict |
+|---|---|---|---|---|
+| open-to-interactive | < 3000ms | 1147ms | 1027ms | PASS |
+| annotation create | < 500ms | 93ms | 142ms | PASS |
+| annotation accept (total) | < 500ms | **917ms** | **837ms** | **FAIL** |
+| worst frame gap during full scroll | < 100ms | 33.4ms | 33.3ms | PASS |
+
+Accept splits as `click-dispatch 531ms / settle 386ms` (A) and
+`463ms / 374ms` (B) — 1324 frames of scroll, 0 long tasks ≥50ms, full 79,297px
+travelled in both.
+
+The accept failure is a real measurement, not a harness artifact, and the
+thresholds were left alone. Note what has changed since run 1: with the margin
+pipeline now actually mounted, time-to-clickable is ~0.5s rather than ~7.9s, so
+this is not the same magnitude of defect #1288 recorded — but it is still over
+budget, and now both halves of the split contribute. Whether it reproduces on
+the Windows workstation is exactly what run 2 has to establish.
