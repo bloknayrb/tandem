@@ -33,7 +33,14 @@ export interface LoopMetrics {
   replyFailures: number;
   blockedByLicense: number;
   wallMs: number;
-  exit: "clean" | "max_turns" | "max_tool_calls" | "aborted" | "error";
+  /**
+   * `timeout` is deliberately NOT folded into `max_turns` (#1295 L6). The
+   * collaborator branches on `max_turns` to tell the user the model "reached
+   * its step limit" — true for a turn-budget exit, a lie for a wall-clock one,
+   * and it points them at raising `maxTurns` for what is actually a stalling
+   * endpoint. It would also contradict `turns`, which stays below the budget.
+   */
+  exit: "clean" | "max_turns" | "max_tool_calls" | "timeout" | "aborted" | "error";
   errorMessage?: string;
 }
 
@@ -59,6 +66,35 @@ export interface LoopResult {
   messages: ChatMessage[];
 }
 
+/**
+ * Aggregate wall-clock ceiling for one run (#1295 L6).
+ *
+ * Five minutes: comfortably above a slow-but-working local model answering a
+ * multi-turn task, and far below the ~36 minutes a stalling endpoint could hold
+ * by dribbling a byte before each of 12 per-turn timeouts.
+ */
+const DEFAULT_RUN_DEADLINE_MS = 5 * 60_000;
+
+/** Mirrors `DEFAULT_TIMEOUT_MS` in the client — only used to compute the clamp
+ *  below, so the client stays the single authority on the value it applies. */
+const CLIENT_DEFAULT_TIMEOUT_MS = 180_000;
+
+/**
+ * Per-turn timeout, clamped to whatever remains of the run deadline (#1295 L6).
+ * Never returns 0 or negative: the loop's top-of-iteration deadline check is
+ * what stops the run, and handing `chat()` a non-positive timeout would abort
+ * instantly and surface as a confusing transport error instead.
+ */
+function turnTimeoutMs(
+  configured: number | undefined,
+  started: number,
+  deadlineMs: number,
+): number {
+  const perTurn = configured ?? CLIENT_DEFAULT_TIMEOUT_MS;
+  const remaining = deadlineMs - (Date.now() - started);
+  return Math.max(1, Math.min(perTurn, remaining));
+}
+
 export interface RunLoopOpts {
   ydoc: Y.Doc;
   config: LocalModelConfig;
@@ -75,6 +111,10 @@ export interface RunLoopOpts {
    *  `DEFAULT_MAX_RESPONSE_BYTES`, which is sized for a whole JSON response
    *  rather than a chat bubble (#1292). */
   maxResponseBytes?: number;
+  /** Aggregate wall-clock ceiling for the whole run (#1295 L6). Defaults to
+   *  {@link DEFAULT_RUN_DEADLINE_MS}. `timeoutMs` bounds one turn; this bounds
+   *  all of them together. */
+  runDeadlineMs?: number;
   signal?: AbortSignal;
   isLicenseRestricted?: () => boolean;
   /** When set, every turn streams and this fires per assistant content delta
@@ -91,6 +131,7 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
   const { ydoc, config, tools, systemPrompt, userPrompt, signal } = opts;
   const maxTurns = opts.maxTurns ?? 12;
   const maxToolCalls = opts.maxToolCalls ?? 20;
+  const runDeadlineMs = opts.runDeadlineMs ?? DEFAULT_RUN_DEADLINE_MS;
 
   const messages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
@@ -119,13 +160,24 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         metrics.exit = "aborted";
         break;
       }
+      // #1295 L6: `timeoutMs` bounds a single turn, so 12 turns of a stalling
+      // endpoint that dribbles one byte before each timeout holds a run for
+      // ~36 minutes. This is the aggregate ceiling.
+      if (Date.now() - started >= runDeadlineMs) {
+        metrics.exit = "timeout";
+        break;
+      }
       metrics.turns += 1;
       const res = await chat({
         config,
         messages,
         tools,
         temperature: opts.temperature,
-        timeoutMs: opts.timeoutMs,
+        // Clamp the per-turn timeout to what is left of the run budget, so the
+        // deadline can't be overshot by a whole turn. Checking only at the top
+        // of the loop would let a turn that starts one millisecond inside the
+        // budget run the full `timeoutMs` past it.
+        timeoutMs: turnTimeoutMs(opts.timeoutMs, started, runDeadlineMs),
         maxResponseBytes: opts.maxResponseBytes,
         signal,
         onContentDelta: opts.onContentDelta,

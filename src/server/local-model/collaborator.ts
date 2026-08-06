@@ -315,6 +315,20 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
             documentId: req.docName,
             timestamp: Date.now(),
           });
+        } else if (exit === "timeout") {
+          // Deliberately its own branch, not folded into the budget message
+          // above (#1295 L6). A wall-clock exit happens with turns to spare, so
+          // "reached its step limit" would be false and would send the user to
+          // raise maxTurns for what is really a slow or stalling endpoint.
+          sink.flushFinal();
+          pushNotification({
+            id: generateMessageId(),
+            type: "general-error",
+            severity: "warning",
+            message: "The local model stopped before finishing (it ran out of time).",
+            documentId: req.docName,
+            timestamp: Date.now(),
+          });
         } else if (exit === "error") {
           console.error(
             `[local-model] run error (exit=${exit}): ${result.metrics.errorMessage ?? "unknown"}`,

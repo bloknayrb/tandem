@@ -179,3 +179,61 @@ describe("runLoop — abort", () => {
     expect(r.metrics.errorMessage).toMatch(/connection refused/);
   });
 });
+
+describe("runLoop — aggregate wall-clock deadline (#1295 L6)", () => {
+  it("stops on the run deadline with its own exit reason, not max_turns", async () => {
+    stubFetch(() => v1ToolCall("get_outline")); // never terminates on its own
+    const r = await runLoop(base({ runDeadlineMs: 1, maxTurns: 99, maxToolCalls: 99 }));
+
+    // The distinction is the whole point of the fix. The collaborator branches
+    // on `max_turns` to tell the user the model "reached its step limit" — a
+    // lie for a wall-clock exit, and it sends them to raise maxTurns for what
+    // is really a stalling endpoint.
+    expect(r.metrics.exit).toBe("timeout");
+    expect(r.metrics.exit).not.toBe("max_turns");
+
+    // And it must be self-consistent: a timeout exit reports turns BELOW the
+    // budget, which is exactly why reusing "max_turns" would corrupt the metric.
+    expect(r.metrics.turns).toBeLessThan(99);
+  });
+
+  it("does not fire when the run finishes inside the budget", async () => {
+    // Positive control on the same sample: without this, the assertion above
+    // would also pass against an implementation that always exits "timeout".
+    stubFetch(() => v1Text("done"));
+    const r = await runLoop(base({ runDeadlineMs: 60_000 }));
+    expect(r.metrics.exit).toBe("clean");
+    expect(r.finalContent).toBe("done");
+  });
+
+  it("clamps the per-turn timeout to the remaining budget", async () => {
+    // A deadline checked only at the top of the loop lets a turn that starts one
+    // millisecond inside the budget run the full per-turn timeout past it.
+    // The stub must HONOUR the abort signal. A stub that merely sleeps and then
+    // resolves is testing itself, not the clamp — the first draft of this test
+    // did exactly that and passed against an unclamped timeout.
+    let abortedAfterMs: number | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            const t0 = Date.now();
+            const signal = init.signal as AbortSignal | undefined;
+            signal?.addEventListener("abort", () => {
+              abortedAfterMs = Date.now() - t0;
+              reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+            });
+            // Never resolves on its own: only the timeout can end this turn.
+          }),
+      ),
+    );
+
+    await runLoop(base({ runDeadlineMs: 50, timeoutMs: 600_000, maxTurns: 1 }));
+
+    // Unclamped, the turn would have been governed by the 600s per-turn timeout
+    // and this test would hang rather than abort in tens of milliseconds.
+    expect(abortedAfterMs).toBeDefined();
+    expect(abortedAfterMs).toBeLessThan(5_000);
+  });
+});
