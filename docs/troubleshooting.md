@@ -10,12 +10,20 @@ If you're running from a source checkout, `npm run doctor` checks the most commo
 - `node_modules/` present
 - `.mcp.json` valid (both `tandem` and `tandem-channel` entries)
 - `~/.claude.json` MCP registration (when present)
+- **Claude Code is installed *and startable*** — on Windows these are different questions, and an `npm install -g` install passes the first while failing the second (see [below](#tandem-cant-start-claude-on-windows-but-claude-works-in-a-terminal))
+- No stale global `tandem-editor` shadowing the version you meant to run
 - Ports `3478` (Hocuspocus WebSocket) and `3479` (MCP HTTP) listening
 - `/health` endpoint responds
 - `/api/events` SSE endpoint responds with `text/event-stream`
 - Annotation store readable; schema version, corruption state, lock status
 
-For desktop-app installs, use **Settings → About → Copy Diagnostics** to run the same checks in-app, minus the two source-checkout-only items (`node_modules/`, `.mcp.json`) — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
+Three more run only in a source checkout: whether `npm install` is stale against
+`package-lock.json`, whether an orphaned Vite process is holding a port, and — if `package.json`
+can't be read — a warning that the other two were skipped rather than passed. The last two
+checks (`/health`, SSE) are conditional: they run only once the port probe finds the server up,
+so a report that stops early is reporting a down server, not a passing one.
+
+For desktop-app installs, use **Settings → About → Copy Diagnostics** to run the same checks in-app, minus those five source-checkout-only items — see [Sharing diagnostics](#sharing-diagnostics). Or `curl http://127.0.0.1:3479/health` — a `{"status":"ok",...}` response means the server is up.
 
 ## Windows SmartScreen warning
 
@@ -80,7 +88,7 @@ that fails on load). Only the first routes you to the setup wizard.
 That check looks for a `claude` on the PATH Tandem itself started with, so it can be wrong in two
 ways. If you installed Claude Code under a different name, use **Restart Claude anyway** on the
 empty-state screen, or run **Relaunch Claude in this folder** from the command palette
-(`Ctrl/Cmd+K`). If you installed it *after* opening Tandem, restart Tandem — a running process
+(`Ctrl+Shift+P`). If you installed it *after* opening Tandem, restart Tandem — a running process
 cannot see a PATH change made after it launched.
 
 If Claude keeps stopping with a healthy install, the CTA says "Restart Claude Code" instead, and
@@ -259,7 +267,7 @@ If you ever see what looks like a normal log line on stdout, that's a bug — fi
 When [filing an issue](https://github.com/bloknayrb/tandem/issues), attach a diagnostics report:
 
 - **In the app:** **Settings → About → Copy Diagnostics** puts a plain-text report on the clipboard — version, platform, and the result of every health check (ports, `/health`, SSE, annotation store). The endpoint behind it only answers loopback callers.
-- **From a terminal:** `tandem doctor` prints the same checks (plus two dev-repo-only checks the button omits); `tandem doctor --json` emits a machine-readable report.
+- **From a terminal:** `tandem doctor` prints the same checks (plus the five source-checkout-only ones the button omits); `tandem doctor --json` emits a machine-readable report.
 
 > **Privacy note:** the copied text contains local absolute paths (which include your username) and process IDs. Skim it before pasting into a public issue. It never contains auth tokens or document content.
 
