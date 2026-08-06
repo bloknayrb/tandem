@@ -274,7 +274,7 @@ When `TANDEM_BIND_HOST=0.0.0.0`, every non-loopback request needs a valid Bearer
 Check that:
 
 1. Your client is sending `Authorization: Bearer <token>`.
-2. The token matches the value in `{APP_DATA_DIR}/tandem_auth_token`.
+2. The token matches the value in `{APP_DATA_DIR}/auth-token`.
 3. You haven't rotated the token without updating the client config — `tandem rotate-token` updates Claude's configs automatically but won't touch other MCP clients.
 
 For trusted networks during development, `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` disables the token requirement. See [security.md](security.md) for the full model.
