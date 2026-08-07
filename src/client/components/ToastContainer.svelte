@@ -169,8 +169,15 @@ let { toasts, onDismiss }: Props = $props();
     color: var(--tandem-fg);
     padding-top: 2px;
   }
+  /* Same defect as the tray row it feeds (#1269), and the same fix — a toast and
+     its activity row render the identical `message` string, so a path that
+     overflows one overflows the other. `min-width: 0` permits the shrink but
+     supplies no break opportunity, and a Windows path is a single unbroken word.
+     Here the card does not clip, so the text ran out past the rounded border
+     instead of being sheared. See the fuller note in ActivityTray.svelte. */
   .toast-card .msg {
     min-width: 0;
+    overflow-wrap: anywhere;
   }
   /* Inline action button (#1018) — e.g. "Connect AI" on a no-AI-connected
      toast. Compact, accent-tinted, doesn't compete with the message. */
