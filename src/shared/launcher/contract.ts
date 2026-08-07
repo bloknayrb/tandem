@@ -213,6 +213,34 @@ export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
   "--verbose",
 ];
 
+/**
+ * Told to BOTH supervisor turns, not just the bootstrap one.
+ *
+ * A launcher-spawned session already has a wake path: the supervisor writes a
+ * turn on its stdin. If it also armed a `Monitor` watch on the event stream it
+ * would be woken twice for every annotation — once by the turn, once by the
+ * notification — and the two would race, with the second arriving mid-turn.
+ *
+ * The clause has to be on the WAKE prompt as well as the initial one, and that
+ * is the whole point of extracting it. `SUPERVISOR_INITIAL_PROMPT` is
+ * documented fresh-spawns-only, so a RESUMED session never receives it — and a
+ * resumed session is exactly one that has been running long enough to have read
+ * the skill and considered arming. Putting this only on the bootstrap turn
+ * would leave the population most likely to self-arm as the one population
+ * never told not to.
+ *
+ * Repeating it on every wake is deliberate, and is NOT the "skimmable noise"
+ * failure the advisory design rejects. That objection was about a trailing
+ * block on 100% of tool calls — 30–120 per session. Wakes are user-driven and
+ * coalesce while a turn is in flight, so there are few of them; the cost is a
+ * couple of dozen tokens each. Against that, a standing constraint stated once
+ * at spawn is lost the first time a long-running session compacts, which is
+ * precisely when it has been running long enough to reconsider arming.
+ */
+export const SUPERVISOR_NO_ARM_CLAUSE =
+  "Tandem is already waking you directly, so do NOT arm a Monitor watch on " +
+  "Tandem's event stream in this session — it would double every wake.";
+
 /** The bootstrap turn the supervisor writes immediately on a fresh spawn.
  *
  * Written on spawn, NOT after the CLI's `init` line: under these flags the CLI
@@ -223,7 +251,8 @@ export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
  * re-sending would inject a duplicate turn into the conversation. */
 export const SUPERVISOR_INITIAL_PROMPT =
   "A document has been opened in Tandem for review. " +
-  "Call tandem_checkInbox to see what needs attention, then begin reviewing.";
+  "Call tandem_checkInbox to see what needs attention, then begin reviewing. " +
+  SUPERVISOR_NO_ARM_CLAUSE;
 
 /** The turn the supervisor writes when Tandem activity should wake an idle
  * session.
@@ -236,8 +265,7 @@ export const SUPERVISOR_INITIAL_PROMPT =
  * the last word even if the queue's Solo gate were ever wrong. A content-free
  * nudge is also what makes coalescing trivial: N events collapse to one turn
  * instead of a concatenation that grows without bound. */
-export const SUPERVISOR_WAKE_PROMPT =
-  "Activity in Tandem needs your attention. Call tandem_checkInbox.";
+export const SUPERVISOR_WAKE_PROMPT = `Activity in Tandem needs your attention. Call tandem_checkInbox. ${SUPERVISOR_NO_ARM_CLAUSE}`;
 
 /** One `stream-json` user turn as the Claude CLI accepts it on stdin. */
 export interface StreamJsonUserTurn {
