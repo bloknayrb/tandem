@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -195,19 +197,24 @@ describe("the assumption the gate rests on", () => {
    * That is a lockfile fact, not a design property. Nothing else in this suite would notice.
    */
   it("resolves exactly one jszip for both Tandem and mammoth", async () => {
-    const ours = await import("jszip/package.json", { with: { type: "json" } });
-    const theirs = await import("mammoth/node_modules/jszip/package.json", {
-      with: { type: "json" },
-    }).then(
-      (m) => m.default.version as string,
-      () => undefined, // no nested copy — this is the state we want
+    // Asked of the FILESYSTEM, not the module resolver. The first draft did
+    // `import("mammoth/node_modules/jszip/package.json").then(v => v, () => undefined)`, which
+    // resolves only because mammoth's package.json happens to have no `exports` field today. Add
+    // one — the near-universal direction of travel — and the specifier becomes
+    // ERR_PACKAGE_PATH_NOT_EXPORTED, the rejection handler swallows it, and the assertion passes
+    // while reporting a lockfile fact that no longer holds. A guard whose failure mode is
+    // indistinguishable from success is not a guard. `existsSync` cannot be talked out of an answer.
+    const nested = fileURLToPath(
+      new URL("../../node_modules/mammoth/node_modules/jszip", import.meta.url),
     );
 
     expect(
-      theirs,
+      existsSync(nested),
       "mammoth has denested its own jszip; the size gate and mammoth may no longer parse the " +
         "archive identically. Re-verify the gate before relaxing this test.",
-    ).toBeUndefined();
+    ).toBe(false);
+
+    const ours = await import("jszip/package.json", { with: { type: "json" } });
     expect(ours.default.version).toMatch(/^3\./);
   });
 });
