@@ -77,11 +77,23 @@ export function attachScrollPill(
   let disposed = false;
   let rafId = 0;
 
-  /** Everything a scroll cannot change. Invalidated by resize and mutation. */
+  /**
+   * The expensive reads: a rect and an `offsetHeight`. Invalidated by resize
+   * and child mutation only.
+   *
+   * `scrollHeight`/`clientHeight` are deliberately NOT cached here. They are
+   * single property reads — `scrollFade` already takes them per scroll event on
+   * this very element, so caching them saves nothing measurable — and caching
+   * them created a real hole: a `.docx` stage is `display: contents` when
+   * margins are off, so it generates no box, the ResizeObserver never fires for
+   * it, and its content growth is invisible. The cached extent stayed at the
+   * cold-open value, `thumbMetrics` kept returning null, and a long document
+   * got no thumb at all while the native bar was already hidden. Reading the
+   * live extent each frame makes the pill correct for any container shape
+   * rather than for the shapes we remembered to observe.
+   */
   let statics: {
     trackRect: DOMRect;
-    scrollHeight: number;
-    clientHeight: number;
     spacer: number;
   } | null = null;
   let metrics: ThumbMetrics | null = null;
@@ -133,8 +145,6 @@ export function attachScrollPill(
     spacerEl = scroller.querySelector<HTMLElement>(SPACER_SELECTOR);
     statics = {
       trackRect: track.getBoundingClientRect(),
-      scrollHeight: scroller.scrollHeight,
-      clientHeight: scroller.clientHeight,
       spacer: spacerEl?.offsetHeight ?? 0,
     };
   }
@@ -148,8 +158,8 @@ export function attachScrollPill(
     const wasPaintable = metrics !== null;
     metrics = thumbMetrics({
       scrollTop: scroller.scrollTop,
-      scrollHeight: statics.scrollHeight,
-      clientHeight: statics.clientHeight,
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight,
       trackHeight: statics.trackRect.height,
       trailingSpacerPx: statics.spacer,
     });
@@ -254,7 +264,7 @@ export function attachScrollPill(
   }
 
   function onPointerMove(e: PointerEvent): void {
-    if (drag) {
+    if (drag && e.pointerId === drag.pointerId) {
       moveDrag(e);
       return;
     }
@@ -288,8 +298,11 @@ export function attachScrollPill(
   }
 
   function onPointerUpAnywhere(e: PointerEvent): void {
+    // Only the pointer that started the scrub may end it. On a touch-capable
+    // machine a stray finger's `pointerup` would otherwise drop a mouse drag
+    // that is still held down.
     if (drag) {
-      endDrag();
+      if (e.pointerId === drag.pointerId) endDrag();
       return;
     }
     if (e.pointerType !== "mouse" && e.pointerType !== "pen") markPointerAway();
@@ -298,7 +311,9 @@ export function attachScrollPill(
   // ---- drag --------------------------------------------------------------
 
   function moveDrag(e: PointerEvent): void {
-    if (!drag) return;
+    // Same reasoning as `onPointerUpAnywhere`: a second pointer's coordinates
+    // would jump `scrollTop` out from under the pointer actually scrubbing.
+    if (!drag || e.pointerId !== drag.pointerId) return;
     // Keep the cache fresh even though `composeOpacity` pins to 1 while
     // dragging: on release the pin drops and the very next paint measures
     // distance from this coordinate. Left stale at the pointerdown position, a
@@ -321,6 +336,29 @@ export function attachScrollPill(
     e.preventDefault();
   }
 
+  /**
+   * Forward a wheel over the thumb to the document.
+   *
+   * The thumb is a SIBLING of the scroller, so its scroll-chain parent is
+   * `.editor-column-wrap` and then `#root`, which `index.html` pins to
+   * `overflow: hidden`. Without this the wheel goes nowhere: park the cursor in
+   * the right-edge band and the first notch scrolls, which arms the flash,
+   * which lights the thumb and gives it `pointer-events: auto` — and every
+   * notch after that is dead until the flash decays. A real scrollbar scrolls
+   * its container; this makes the pill behave the same.
+   *
+   * Skipped mid-drag: `blockWheel` owns the wheel then, deliberately.
+   */
+  function forwardWheel(e: WheelEvent): void {
+    if (drag) return;
+    e.preventDefault();
+    // deltaMode is px (0), lines (1), or pages (2) — the latter two show up on
+    // Firefox and some mice, and treating them as px would barely move.
+    const lineHeight = 16;
+    const scale = e.deltaMode === 1 ? lineHeight : e.deltaMode === 2 ? scroller.clientHeight : 1;
+    scroller.scrollTop += e.deltaY * scale;
+  }
+
   function endDrag(): void {
     if (!drag) return;
     const { pointerId } = drag;
@@ -339,11 +377,19 @@ export function attachScrollPill(
     if (e.button !== 0 || drag) return;
     if (!statics) measureStatic();
     if (!statics || !metrics) return;
-    // Keeps the grab off ProseMirror's selection and off the scroller's
-    // file-drop handlers, and suppresses the compat mousedown that would
-    // otherwise start a text selection.
+    // Suppresses the compat mousedown, which would otherwise start a text
+    // selection and blur the editor mid-scrub.
+    //
+    // Deliberately NOT `stopPropagation()`: the thumb is a sibling of the
+    // scroller, not a descendant, so nothing on the way up to `document` wants
+    // this event — and stopping it there only hid the pointerdown from
+    // document-level dismissal handlers such as SettingsModal's.
+    //
+    // Known, accepted: `preventDefault` also suppresses the compat mousedown
+    // that `clickOutside` listens for, so an open dropdown stays open while you
+    // scrub. Preserving editor focus and the caret is worth more than closing a
+    // menu that the next real click closes anyway.
     e.preventDefault();
-    e.stopPropagation();
 
     drag = {
       pointerId: e.pointerId,
@@ -352,8 +398,8 @@ export function attachScrollPill(
       startScrollTop: scroller.scrollTop,
       trackHeight: statics.trackRect.height,
       thumbHeight: metrics.height,
-      scrollHeight: statics.scrollHeight,
-      clientHeight: statics.clientHeight,
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight,
       trailingSpacerPx: statics.spacer,
     };
 
@@ -399,6 +445,8 @@ export function attachScrollPill(
     // 1 and spinning the rAF loop for the rest of the session.
     [thumb, "lostpointercapture", endDrag as EventListener],
     [thumb, "pointerdown", onThumbPointerDown as EventListener],
+    // Non-passive: this one exists to `preventDefault` and re-dispatch.
+    [thumb, "wheel", forwardWheel as EventListener, { passive: false }],
   ];
   for (const [target, type, handler, opts] of listeners) {
     target.addEventListener(type, handler, opts);
@@ -414,9 +462,10 @@ export function attachScrollPill(
    * direct child rather than a hardcoded list covers the banners too and keeps
    * the pill from depending on any other component's selectors.
    *
-   * Not covered, and nothing observer-based can cover it: a child with
-   * `display: contents` (the docx stage with margins off) generates no box, so
-   * its growth is invisible here. Scroll and resize still correct the thumb.
+   * A child with `display: contents` (the docx stage with margins off)
+   * generates no box, so the observer never fires for it — which is exactly why
+   * the scroll extent is read live per frame rather than cached here. This
+   * observer only needs to catch changes to the TRACK rect and the spacer.
    */
   function retarget(): void {
     if (disposed || !ro) return;

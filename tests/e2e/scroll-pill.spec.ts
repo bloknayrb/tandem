@@ -209,6 +209,67 @@ test("scrolling flashes the thumb even with the cursor far away", async ({ page 
   await expect.poll(async () => thumbOpacity(page), { timeout: 5_000 }).toBeLessThan(0.05);
 });
 
+test("wheeling over the thumb still scrolls the document", async ({ page }) => {
+  // Regression: the thumb is a SIBLING of the scroller, so its scroll chain
+  // runs to `#root`, which is `overflow: hidden`. Once the thumb was lit it
+  // took `pointer-events: auto` and swallowed the wheel entirely — park the
+  // cursor in the right-edge band and the first notch scrolled, arming the
+  // flash, which lit the thumb and killed every notch after it.
+  await openTall(page);
+  const thumb = thumbOf(page);
+  const scroller = scrollerOf(page);
+
+  const box = await thumb.boundingBox();
+  expect(box).not.toBeNull();
+  const x = (box?.x ?? 0) + (box?.width ?? 0) / 2;
+  const y = (box?.y ?? 0) + (box?.height ?? 0) / 2;
+
+  // Park ON the thumb so it is fully lit and hit-testable — the broken state.
+  await page.mouse.move(x, y);
+  await expect.poll(async () => thumbOpacity(page)).toBeGreaterThan(0.9);
+  await expect
+    .poll(async () => thumb.evaluate((el) => getComputedStyle(el).pointerEvents))
+    .toBe("auto");
+
+  const before = await scroller.evaluate((el) => el.scrollTop);
+  await page.mouse.wheel(0, 400);
+  await expect.poll(async () => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(before);
+
+  // And repeatedly — the original bug only bit from the second notch on.
+  const mid = await scroller.evaluate((el) => el.scrollTop);
+  await page.mouse.wheel(0, 400);
+  await expect.poll(async () => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(mid);
+});
+
+test("picks up content that arrives after mount", async ({ page }) => {
+  // Regression: `scrollHeight` was cached and refreshed only by the observers.
+  // A `display: contents` stage (docx with margins off) generates no box, so
+  // the ResizeObserver never fired for it and the cached extent stayed at its
+  // cold-open value — no thumb ever appeared, with the native bar already
+  // hidden. Appending content exercises the same path for any container shape.
+  await openTall(page);
+  const scroller = scrollerOf(page);
+  const thumb = thumbOf(page);
+
+  const startHeight = await thumb.evaluate((el) => el.getBoundingClientRect().height);
+  const startExtent = await scroller.evaluate((el) => el.scrollHeight);
+
+  await mcp.callTool("tandem_appendContent", {
+    content: `\n\n${Array.from({ length: 120 }, (_, i) => `Appended paragraph ${i}.`).join("\n\n")}`,
+  });
+
+  // The document really did grow…
+  await expect
+    .poll(async () => scroller.evaluate((el) => el.scrollHeight), { timeout: 10_000 })
+    .toBeGreaterThan(startExtent);
+  // …and the thumb shrank to match, rather than freezing at its mount-time size.
+  await expect
+    .poll(async () => thumb.evaluate((el) => el.getBoundingClientRect().height), {
+      timeout: 10_000,
+    })
+    .toBeLessThan(startHeight);
+});
+
 test("setting off hides the pill AND restores the native scrollbar", async ({ page }) => {
   // The regression this guards: `scroll-fade.css` hides the native bar on this
   // element, so a pill-off state that did not restore it would leave the editor

@@ -5,7 +5,7 @@
  * Replaces the native scrollbar, which `scroll-fade.css` hides on this element.
  * The thumb has no track behind it and its opacity is a function of how close
  * the cursor is; it is grabbable to scrub. See `scroll-pill.ts` for the math and
- * `scroll-pill.css` for who owns the native bar.
+ * `scroll-fade.css` for who owns the native bar.
  *
  * MOUNT POINT — must be a SIBLING of `.editor-scroll`, inside
  * `.editor-column-wrap`, never a child of the scroller. Two reasons, both
@@ -103,12 +103,12 @@ $effect(() => {
        status bar is LEFT-anchored and truncates well outboard of here, so no
        clearance reservation is needed. */
     bottom: var(--tandem-space-3);
-    /* INVARIANT: `right + width` must stay under `--tandem-space-5 + 2px` (the
-       scroller's padding + border band) so the pill never enters the stage box
-       and never overlaps text at a collapsed gutter. Holds at every density:
-       6+12=18 < 18 compact, 8+12=20 < 26 cozy, 12+12=24 < 34 spacious. Token-
-       derived on purpose — a hardcoded px would silently break if the density
-       scale is retuned. */
+    /* INVARIANT: `right + width` must not EXCEED `--tandem-space-5 + 2px` (the
+       scroller's padding + border band), so the pill never enters the stage box
+       and never overlaps text at a collapsed gutter. Holds at every density —
+       compact 6+12=18 abuts the 18px band exactly, cozy 8+12=20 < 26, spacious
+       12+12=24 < 34. Token-derived on purpose: a hardcoded px would silently
+       break if the density scale is retuned. */
     right: var(--tandem-space-2);
     width: 12px;
     /* Load-bearing. The track is a full-height invisible strip over the
