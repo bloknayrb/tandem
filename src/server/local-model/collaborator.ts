@@ -78,9 +78,14 @@ const TRUNCATION_MARKER = "\n\n_[Reply truncated — the model exceeded the stre
  * v1 stream needs to deliver 64 KiB of content, restoring the intended order:
  * the sink cap is the primary bound (it is what shows the user a marker), this
  * is the backstop. Still four times below the client's 16 MB default, which
- * exists for whole-JSON reads rather than chat — and when a sink is attached the
- * sink's cap-abort kills the stream first anyway, so the raised ceiling is not a
- * raised memory exposure.
+ * exists for whole-JSON reads rather than chat.
+ *
+ * What the raise actually costs is `readStream`'s line buffer, and the sink
+ * cannot help there: the case that cap was added for is a newline-less flood,
+ * where no frame ever completes, so no delta is ever emitted and the sink's
+ * cap-abort can never fire. This constant is the only bound on that buffer.
+ * 4 MiB of transient decode buffer against a loopback endpoint is the price of
+ * making the sink's marker reachable at all.
  *
  * It cannot be ordered for EVERY stream: a degenerate one-char-token stream runs
  * ~260 B per content char and still trips this cap first. That path exits

@@ -272,7 +272,6 @@ describe("runLoop — aggregate wall-clock deadline (#1295 L6)", () => {
     const r = await runLoop(base({ runDeadlineMs: 50, timeoutMs: 600_000, maxTurns: 99 }));
 
     expect(r.metrics.exit).toBe("timeout");
-    expect(r.metrics.exit).not.toBe("aborted");
     expect(r.metrics.errorMessage).toBeUndefined();
   });
 

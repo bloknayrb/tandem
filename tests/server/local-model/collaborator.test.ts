@@ -674,7 +674,7 @@ describe("collaborator — failure + robustness", () => {
           // Under STREAM_FLUSH_CHARS (80), so nothing has been committed yet:
           // this content exists ONLY in the sink buffer when the fault lands.
           opts.onContentDelta?.("The answer is ");
-          return errorResult("local model response exceeded 1048576-byte cap");
+          return errorResult("local model response exceeded 4194304-byte cap");
         },
       }),
     );
