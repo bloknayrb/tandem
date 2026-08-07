@@ -24,6 +24,7 @@ import {
   LAUNCHER_ERROR_PATH_REJECTED,
   type LauncherStatus,
 } from "../../shared/launcher/contract.js";
+import { clearDriftNudgeOptOut, driftNudgeOptedOut } from "../status/cwdDriftDismiss.svelte.js";
 import { resolveDefaultDirectory } from "../utils/default-directory.js";
 import { API_BASE } from "../utils/fileUpload.js";
 import { addRecentFile, loadRecentFiles, saveRecentFiles } from "../utils/recentFiles.js";
@@ -41,6 +42,21 @@ interface ActionDeps {
   getActiveDocumentPath: () => string | null;
   /** Push a transient toast notification (info/warning/error). */
   notify: (severity: "info" | "warning" | "error", message: string) => void;
+  /**
+   * Re-poll launcher-derived state after an action that moves or restarts
+   * Claude (#1282).
+   *
+   * Called by every exported launcher action here, rather than left to callers.
+   * It used to be the callers' job and they did not all do it: `App.svelte`
+   * wrapped the status-pill and empty-state paths, while the command palette
+   * invoked the same relaunch directly and never re-probed. The #1282 drift probe
+   * re-arms on the document path and an explicit refresh, neither of which a
+   * relaunch changes — so after a palette relaunch the amber pill went on naming
+   * the folder Claude had just left, indefinitely, which is precisely what that
+   * refresh exists to prevent. Owning it here makes "every launcher action
+   * re-probes" true by construction instead of by everyone remembering.
+   */
+  afterLauncherAction: () => void;
   /** Open the Settings modal (the single consolidated settings surface). */
   openSettings: () => void;
   toggleSoloMode: () => void;
@@ -578,7 +594,16 @@ async function fetchLauncherNonce(): Promise<FetchResult<string>> {
   return { ok: true, value: body.nonce };
 }
 
-function deriveCwdFromDocPath(docPath: string | null): string | null {
+/**
+ * The folder a "relaunch here" would target, from a document path.
+ *
+ * Exported so the #1282 drift preview asks about the SAME folder the relaunch
+ * would use. A second dirname implementation on the query side is how you get a
+ * nudge that offers a folder the action then declines to use — the split
+ * between a client derivation and a server check being the defect #1282 itself
+ * was filed for.
+ */
+export function deriveCwdFromDocPath(docPath: string | null): string | null {
   if (!docPath) return null;
   // Reject upload:// and other non-filesystem URIs before they reach the API.
   if (/^[a-z]+:\/\//.test(docPath)) return null;
@@ -798,11 +823,34 @@ async function relaunchHere(
  * are not all gated on having a tab, and one of them can only ever run without.
  */
 export function relaunchClaudeCode(): void {
-  guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d, { cwdRequired: false }));
+  guardedRun("launcher-relaunch-here", (d) => {
+    void relaunchHere(d, { cwdRequired: false });
+    d.afterLauncherAction();
+  });
+}
+
+/**
+ * Move Claude to the active document's folder — the palette's "Relaunch Claude
+ * in this folder", exported so the #1282 drift nudge runs the *same* code rather
+ * than a second copy of it.
+ *
+ * Distinct from `relaunchClaudeCode` in the one way that matters: this is the
+ * caller that means "here", so it is the caller that persists the folder. The
+ * drift nudge names a specific folder and offers to move Claude into it, which
+ * is that intent exactly — a chip that recovers a crashed Claude is not.
+ */
+export function relaunchClaudeHere(): void {
+  guardedRun("launcher-relaunch-here", (d) => {
+    void relaunchHere(d, { cwdRequired: true });
+    d.afterLauncherAction();
+  });
 }
 
 export function startFreshClaudeCode(): void {
-  guardedRun("launcher-start-fresh", (d) => void startFreshConversation(d));
+  guardedRun("launcher-start-fresh", (d) => {
+    void startFreshConversation(d);
+    d.afterLauncherAction();
+  });
 }
 
 async function startFreshConversation(d: ActionDeps): Promise<void> {
@@ -1170,7 +1218,7 @@ const BUILTINS: Action[] = [
     label: "Relaunch Claude in this folder",
     group: "claude",
     run() {
-      guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d, { cwdRequired: true }));
+      relaunchClaudeHere();
     },
   },
   {
@@ -1178,7 +1226,37 @@ const BUILTINS: Action[] = [
     label: "Start fresh Claude conversation",
     group: "claude",
     run() {
-      guardedRun("launcher-start-fresh", (d) => void startFreshConversation(d));
+      // Delegates rather than calling `startFreshConversation` directly, for the
+      // same reason `launcher-relaunch-here` does: the exported function is where
+      // `afterLauncherAction` lives, and a palette entry that reached past it
+      // would silently be the one launcher action that never re-probes.
+      startFreshClaudeCode();
+    },
+  },
+  {
+    // The only way back from the drift nudge's "Don't show this again" (#1282).
+    // Without it that button is a one-way door whose sole exit is editing
+    // localStorage by hand — and `driftNudgeOptedOut` was written for a Settings
+    // row that does not exist yet. Unconditional in the palette (the registry is
+    // static) and honest when there was nothing to undo.
+    id: "launcher-cwd-nudge-enable",
+    label: "Show working-folder reminders again",
+    group: "claude",
+    run() {
+      guardedRun("launcher-cwd-nudge-enable", (d) => {
+        if (!driftNudgeOptedOut()) {
+          d.notify("info", "Working-folder reminders are already on.");
+          return;
+        }
+        if (clearDriftNudgeOptOut()) {
+          d.notify("info", "Working-folder reminders are back on.");
+          return;
+        }
+        d.notify(
+          "warning",
+          "Working-folder reminders are on for this session — this browser wouldn't let Tandem clear the saved preference, so they'll be off again next launch.",
+        );
+      });
     },
   },
   // Reveal-in-OS-file-manager only makes sense in the desktop app, which can

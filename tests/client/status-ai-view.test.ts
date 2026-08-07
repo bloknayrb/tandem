@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aiIndicatorView } from "../../src/client/status/status-ai-view.js";
+import { aiIndicatorView, cwdDriftPill } from "../../src/client/status/status-ai-view.js";
 
 /**
  * Spec for the consolidated status-pill AI indicator. Each `it` is one row of
@@ -89,5 +89,73 @@ describe("aiIndicatorView", () => {
   it("a disconnected indicator never advertises canAnimate", () => {
     // Only live-session states may pulse; "not connected" must stay steady.
     expect(aiIndicatorView("unconfigured", null, false)?.canAnimate).toBe(false);
+  });
+});
+
+/**
+ * The working-folder drift qualifier (#1282).
+ *
+ * The two cases worth pinning are structural, not cosmetic: the pill must
+ * survive the state where `aiIndicatorView` renders nothing (or it is dead code
+ * in exactly the situation it exists for), and it must yield to a CTA rather
+ * than sit beside one.
+ */
+describe("cwdDriftPill", () => {
+  const DRIFT = {
+    suggestedCwd: "~/projects/alpha",
+    claudeCwd: "~/notes",
+    label: "alpha",
+    claudeLabel: "notes",
+  };
+
+  it("renders in the state where the AI indicator renders nothing", () => {
+    // `state === "ready"` with no live session is the auto-launched desktop
+    // startup window: the launcher IS running (so it has a folder to be wrong
+    // about) but no agent has connected. `aiIndicatorView` returns null there,
+    // so anything nested inside `{#if aiView}` would never appear — which is why
+    // this is a sibling.
+    expect(aiIndicatorView("ready", null, false)).toBeNull();
+    expect(cwdDriftPill(DRIFT, null)).not.toBeNull();
+  });
+
+  it("renders alongside a connected session", () => {
+    expect(cwdDriftPill(DRIFT, null)?.label).toBe("Claude in notes");
+  });
+
+  it("yields to a CTA rather than sitting next to one", () => {
+    // `aiChip` is non-null only for `unconfigured`/`stopped`, which mean the
+    // supervised launcher is NOT running — and the server reports drift only
+    // when it is. They can overlap only transiently, when Claude dies between a
+    // drift probe and the next readiness poll, and a stale folder note beside a
+    // live "Restart Claude Code" is the two-conflicting-CTAs shape of #1268.
+    for (const chip of ["connect", "setup", "restart"] as const) {
+      expect(cwdDriftPill(DRIFT, chip)).toBeNull();
+    }
+  });
+
+  it("says nothing when there is no drift", () => {
+    expect(cwdDriftPill(null, null)).toBeNull();
+  });
+
+  it("names the consequence rather than a connection state", () => {
+    // "AI · other folder" reads as connectivity and leaves the user with no idea
+    // what is degraded. The document syncs fine and Claude can still edit it;
+    // what it cannot see is everything around the document.
+    const pill = cwdDriftPill(DRIFT, null);
+    expect(pill?.title).toContain("CLAUDE.md");
+    expect(pill?.title).toContain("git history");
+    expect(pill?.title).toContain("read and edit this document");
+  });
+
+  it("carries both full paths in the aria-label, not only the title", () => {
+    // `title` is unreachable by keyboard, touch and assistive tech, so the label
+    // is the only place a screen-reader user learns which folders are meant.
+    const pill = cwdDriftPill(DRIFT, null);
+    expect(pill?.ariaLabel).toContain(DRIFT.claudeCwd);
+    expect(pill?.ariaLabel).toContain(DRIFT.suggestedCwd);
+  });
+
+  it("names the destination folder in the action row", () => {
+    expect(cwdDriftPill(DRIFT, null)?.actionLabel).toBe("Restart Claude in alpha…");
   });
 });

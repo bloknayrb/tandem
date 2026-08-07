@@ -93,6 +93,12 @@ cowork-vethernet-cidr
 cowork-workspace-report-{*}-{*}
 cowork-workspace-row-{*}-{*}
 cowork-workspace-table
+cwd-drift
+cwd-drift-dismiss
+cwd-drift-harness
+cwd-drift-opt-out
+cwd-drift-pill
+cwd-drift-relaunch
 decorations-menu
 decorations-menu-caret
 decorations-mute-toggle

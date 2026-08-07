@@ -139,6 +139,52 @@ export interface LauncherWorkingDirectoryBody {
   workingDirectory: string | null;
 }
 
+/**
+ * `POST /api/launcher/cwd-preview` body (#1282).
+ *
+ * `cwd` is the folder a relaunch WOULD target — the client's own
+ * `deriveCwdFromDocPath(activeDocumentPath)`, i.e. the exact value the relaunch
+ * request would carry. Sending the derived folder rather than the document path
+ * is deliberate: the preview and the action then share ONE derivation, so they
+ * can never disagree about *which* folder while agreeing about the answer. The
+ * #1282 post-mortem is precisely that the client's derivation and the server's
+ * rejection were each tested alone and never together.
+ */
+export interface LauncherCwdPreviewBody {
+  cwd: string;
+}
+
+/**
+ * `POST /api/launcher/cwd-preview` response (#1282).
+ *
+ * A single collapsed `{ drifted: false }` branch carries every "don't nudge"
+ * case — launcher not running, path unresolvable, outside home, over-length,
+ * same folder, Tandem's own bundled documents. The client must not be able to
+ * tell those apart: each would be a second predicate for it to re-derive, and
+ * the ones that leak (a path exists / does not exist under home) are exactly the
+ * probe an off-loopback caller would want. The route is loopback-only anyway;
+ * this is the belt.
+ *
+ * Every path is display-only and `~`-substituted. The client never needs the
+ * raw path back — it derived the folder in the first place, and the relaunch
+ * action re-derives it the same way.
+ */
+export type LauncherCwdPreview =
+  | { drifted: false }
+  | {
+      drifted: true;
+      /** Where a relaunch would put Claude, `~`-substituted. */
+      suggestedCwd: string;
+      /** Where Claude is now, `~`-substituted. */
+      claudeCwd: string;
+      /** Shortest trailing path segments that distinguish `suggestedCwd` from
+       * `claudeCwd`. The client cannot compute this: `basename` collides on
+       * `src`/`docs` and on two worktrees of one repository. */
+      label: string;
+      /** The same distinguishing suffix for `claudeCwd`. */
+      claudeLabel: string;
+    };
+
 // --- Error codes ----------------------------------------------------------
 
 export const LAUNCHER_ERROR_INVALID_BODY = "INVALID_BODY";

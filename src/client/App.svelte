@@ -10,7 +10,9 @@ import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
 import {
   createScratchpad,
+  deriveCwdFromDocPath,
   relaunchClaudeCode,
+  relaunchClaudeHere,
   SCRATCHPAD_EMPTY_STATE_DEBOUNCE_MS,
   saveStore,
   shouldAutoOpenScratchpad,
@@ -63,6 +65,7 @@ import { matchShortcut, type ShortcutContext, type ShortcutId } from "./hooks/us
 import { createChatState } from "./hooks/useChatState.svelte";
 import { createClosedTabStack } from "./hooks/useClosedTabStack.svelte";
 import { createConnectionBanner } from "./hooks/useConnectionBanner.svelte";
+import { createCwdDrift } from "./hooks/useCwdDrift.svelte";
 import { createDensity } from "./hooks/useDensity.svelte";
 import { createDragResize } from "./hooks/useDragResize.svelte";
 import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
@@ -111,7 +114,14 @@ import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
+import {
+  dismissDrift,
+  driftDismissed,
+  noteDriftSeen,
+  optOutOfDriftNudge,
+} from "./status/cwdDriftDismiss.svelte";
 import StatusBar from "./status/StatusBar.svelte";
+import { cwdDriftPill } from "./status/status-ai-view";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import {
   tabIdsToCloseLeft,
@@ -462,6 +472,118 @@ const aiReadiness = createAiReadiness({
   soloMode: () => modeState.tandemMode === "solo",
 });
 
+// #1282 working-folder drift. Fed the SAME derivation the relaunch action uses,
+// so the question asked and the action offered can never be about different
+// folders. `deriveCwdFromDocPath` is the ONLY screen here on purpose — it
+// rejects `upload://` (and anything else matching `scheme://`), and this is the
+// one feature whose whole thesis is that the query side owns no predicate of its
+// own. An `isUploadPath` check alongside it would be exactly that: a second
+// copy, free to answer differently after either one is edited.
+// Memoized to a STRING, not recomputed from `yjsSync.tabs` inside the hook's
+// effect. `handleDocumentList` reassigns the whole tabs array on every
+// `openDocuments` broadcast, most of which change nothing about the active tab;
+// subscribing the effect to the array would abort the in-flight probe and
+// restart the 1.5s settle timer on each one. `$derived`'s value equality absorbs
+// the no-ops.
+const driftCwd = $derived(
+  deriveCwdFromDocPath(yjsSync.tabs.find((t) => t.id === yjsSync.activeTabId)?.filePath ?? null),
+);
+const cwdDrift = createCwdDrift(() => driftCwd);
+
+/**
+ * The drift the status bar may actually show: the server's verdict, minus the
+ * suppression the user asked for, minus the states where the pill is suppressed
+ * anyway.
+ *
+ * `cwdDriftPill` is called HERE and the result passed down, rather than computed
+ * inside `StatusBar`, because two things need the same answer: the pill, and the
+ * one-time explainer below whose copy points at that pill. Deriving the
+ * explainer from `visibleCwdDrift` instead left its precondition strictly weaker
+ * than the pill's render condition — during the window where `aiChip` is a stale
+ * "restart", the explainer fired, spent the once-per-install token, and directed
+ * the user to an amber chip that `cwdDriftPill` had suppressed. That is
+ * lesson 90's shape exactly, and the irony was that both files' comments argue
+ * the suppression logic must live in one place.
+ *
+ * User-facing suppression (per-pair dismissal, session backstop, opt-out) stays
+ * in `cwdDriftDismiss`; the stale-CTA gate stays in `cwdDriftPill`. Each answers
+ * in one place; this composes them once.
+ */
+const visibleCwdDrift = $derived.by(() => {
+  const d = cwdDrift.drift;
+  if (d === null) return null;
+  return driftDismissed(d.claudeCwd, d.suggestedCwd) ? null : d;
+});
+const cwdDriftView = $derived(cwdDriftPill(visibleCwdDrift, aiReadiness.chip));
+
+/** All three drift notices share the launcher channel and envelope; only the
+ * severity and the words differ. */
+function pushDriftNotice(severity: "info" | "warning", message: string): void {
+  notifications.push({
+    id: generateNotificationId(),
+    type: "launcher",
+    severity,
+    message,
+    timestamp: Date.now(),
+  });
+}
+
+// One-time explainer, on the first drift this install ever SHOWS. An amber chip
+// in the status bar cannot introduce a concept ("Claude Code scopes what it can
+// read to one folder") that the user has never encountered; after the first row
+// it is a reminder and the chip is enough on its own.
+//
+// Gated on `cwdDriftView`, the same value the pill renders from — the copy ends
+// by pointing at that chip, so firing when the chip is suppressed would spend
+// the once-per-install token on a notice about something not on screen.
+$effect(() => {
+  if (cwdDriftView === null || visibleCwdDrift === null || !noteDriftSeen()) return;
+  pushDriftNotice(
+    "info",
+    `Claude is running in ${visibleCwdDrift.claudeCwd}. Claude Code reads a project's ` +
+      "CLAUDE.md, .claude/ settings and git history from the folder it was started " +
+      "in, so it can edit this document without seeing anything around it. The amber " +
+      "folder chip in the status bar offers to move it.",
+  );
+});
+
+/** The pill's action row. `relaunchClaudeHere` re-probes on its own (via the
+ * injected `afterLauncherAction`), so both this and the palette command recover
+ * the same way. */
+function relaunchInDriftFolder(): void {
+  relaunchClaudeHere();
+}
+
+function dismissDriftNudge(): void {
+  const d = cwdDrift.drift;
+  if (d === null) return;
+  if (!dismissDrift(d.claudeCwd, d.suggestedCwd)) return;
+  // The session backstop just tripped. Going quiet without saying so would
+  // leave "Claude is in the right folder now" and "Tandem stopped mentioning
+  // it" looking identical, which are opposite facts.
+  pushDriftNotice(
+    "info",
+    "I'll stop mentioning Claude's working folder for the rest of this session. " +
+      "“Relaunch Claude in this folder” is still in the command palette.",
+  );
+}
+
+function optOutOfDriftNudgePermanently(): void {
+  // A failed write degrades the promise to what it can actually keep — this
+  // session — and says so, rather than claiming a durable opt-out it hasn't got.
+  if (optOutOfDriftNudge()) {
+    pushDriftNotice(
+      "info",
+      "Working-folder reminders are off. “Relaunch Claude in this folder” is still in the command palette.",
+    );
+    return;
+  }
+  pushDriftNotice(
+    "warning",
+    "Working-folder reminders are off for this session — this browser wouldn't let Tandem save the preference, so they'll be back next launch.",
+  );
+}
+
 // Boot-race guard for the first-run wizard. The hook's boot fetch fires once at
 // construction with no retry; in the desktop app the WebView loads immediately
 // while the sidecar is still spawning (no `visible:false`, sidecar started on a
@@ -502,12 +624,20 @@ function connectAi(): void {
 function refreshAiReadinessAfterLauncherAction(): void {
   setTimeout(() => aiReadiness.refresh(), 2_000);
   setTimeout(() => aiReadiness.refresh(), 5_000);
+  // #1282: the launcher's cwd is not reactive state on this side — it lives
+  // behind a loopback-only status field the drift route reads server-side. So a
+  // relaunch that MOVES Claude changes nothing the drift effect is watching (the
+  // document path is the same document), and the pill would keep naming the
+  // folder Claude just left. Re-probe on the same staggered schedule.
+  setTimeout(() => cwdDrift.refresh(), 2_000);
+  setTimeout(() => cwdDrift.refresh(), 5_000);
 }
 
-/** Restarts the stopped Claude Code process (the "Restart Claude Code" CTA). */
+/** Restarts the stopped Claude Code process (the "Restart Claude Code" CTA).
+ * The re-probe is the action's own (`afterLauncherAction`), not this wrapper's —
+ * it used to live here, which is how the palette entry point came to lack it. */
 function restartClaude(): void {
   relaunchClaudeCode();
-  refreshAiReadinessAfterLauncherAction();
 }
 
 /** Drops Claude's saved conversation and restarts fresh (the EmptyState
@@ -516,7 +646,6 @@ function restartClaude(): void {
  *  doc comment on `EmptyState`'s Props. */
 function startFreshClaude(): void {
   startFreshClaudeCode();
-  refreshAiReadinessAfterLauncherAction();
 }
 
 // #1018 loud failures: ChatPanel (chat send) and Toolbar ("Send to Claude"
@@ -820,6 +949,7 @@ wireActionDeps({
       timestamp: Date.now(),
     });
   },
+  afterLauncherAction: refreshAiReadinessAfterLauncherAction,
   openSettings: openSettingsModalWithAck,
   toggleSoloMode: () =>
     modeState.setTandemMode(modeState.tandemMode === "solo" ? "tandem" : "solo"),
@@ -2470,6 +2600,10 @@ const shouldShowModelPicker = $derived(
       lastSaveOk={saveStore.lastSaveOk}
       {editor}
       {heldCount}
+      {cwdDriftView}
+      onRelaunchInFolder={relaunchInDriftFolder}
+      onDismissDrift={dismissDriftNudge}
+      onOptOutDrift={optOutOfDriftNudgePermanently}
     />
 
     <SettingsModal
