@@ -16,6 +16,8 @@ import issuanceWorker, {
   type IssuanceDeps,
   type KvNamespace,
   LICENSE_VERSION,
+  licenseEmailText,
+  supportEmailProblem,
 } from "../../infra/license-issuance-worker/src/worker.js";
 import {
   handleUpdateRequest,
@@ -936,6 +938,7 @@ describe("default fetch wiring (env → deps)", () => {
       TANDEM_PRIVATE_KEY: pem,
       RESEND_API_KEY: "re_test",
       RESEND_FROM: "Tandem <noreply@example.com>",
+      SUPPORT_EMAIL: "support@tandem.test",
       LICENSE_KV: makeKv(),
       LEDGER_KV: makeKv(),
       ...overrides,
@@ -1127,6 +1130,131 @@ describe("default fetch wiring (env → deps)", () => {
       good as never,
     );
     expect(res2.status).toBe(200);
+  });
+
+  // --- SUPPORT_EMAIL fail-closed guard (#1289) ------------------------------
+  // Two silent failures used to be reachable from `[vars]` alone: an unset
+  // value dropped the support block from the email AND the `reply_to` header,
+  // so a buyer whose activation failed replied into a noreply; and the shipped
+  // placeholder went out on the wire and printed in the body of a mail sent to
+  // someone who had just paid.
+
+  it("a placeholder SUPPORT_EMAIL → 503 before anything is minted or emailed", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    // The literal value shipped in infra/license-issuance-worker/wrangler.toml.
+    const env = makeEnv({ SUPPORT_EMAIL: "REPLACE_WITH_SUPPORT_INBOX" });
+    const res = await issuanceWorker.fetch(
+      makeRequest(paidBody("ord_se"), { id: "evt_se", ts: nowTs() }),
+      env as never,
+    );
+    expect(res.status).toBe(503);
+    // Fails BEFORE any durable write, so Polar's re-delivery fulfils the event
+    // unchanged once the var is fixed — no orphan license, no half-written order.
+    expect(env.LEDGER_KV.map.size).toBe(0);
+    expect(env.LICENSE_KV.map.size).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("an unset SUPPORT_EMAIL → 503, not a license email with no reply channel", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv({ SUPPORT_EMAIL: undefined });
+    const res = await issuanceWorker.fetch(
+      makeRequest(paidBody("ord_se2"), { id: "evt_se2", ts: nowTs() }),
+      env as never,
+    );
+    expect(res.status).toBe(503);
+    expect(env.LEDGER_KV.map.size).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("the guard's stage is distinguishable from the signing key's", async () => {
+    // Both fail closed with an identical 503, so the log stage is the only
+    // thing telling an operator whether to re-put a secret or edit a [vars]
+    // line. Collapsing them into `config` would make the 503 undiagnosable.
+    const logs: unknown[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
+      logs.push(JSON.parse(line));
+    });
+    try {
+      await issuanceWorker.fetch(
+        makeRequest(paidBody("ord_se3"), { id: "evt_se3", ts: nowTs() }),
+        makeEnv({ SUPPORT_EMAIL: "  " }) as never,
+      );
+      await issuanceWorker.fetch(
+        makeRequest(paidBody("ord_se4"), { id: "evt_se4", ts: nowTs() }),
+        makeEnv({ TANDEM_PRIVATE_KEY: "garbage-not-a-pem" }) as never,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(logs.map((e) => (e as { stage?: string }).stage)).toEqual([
+      "config-support-email",
+      "config",
+    ]);
+  });
+
+  it("a configured SUPPORT_EMAIL reaches both reply_to and the email body", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"id":"em_2"}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = makeEnv();
+    await issuanceWorker.fetch(
+      makeRequest(paidBody("ord_se5"), { id: "evt_se5", ts: nowTs() }),
+      env as never,
+    );
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(init.body as string);
+    expect(sent.reply_to).toBe("support@tandem.test");
+    expect(sent.text as string).toContain("support@tandem.test");
+  });
+
+  it("supportEmailProblem names the misconfiguration it found", () => {
+    // Placeholder cases are the strings this repo actually ships (wrangler.toml
+    // line 27, and the `noreply@yourdomain.com` RESEND_FROM example above it) —
+    // not an invented list.
+    expect(supportEmailProblem(undefined)).toBe("unset");
+    expect(supportEmailProblem("")).toBe("unset");
+    expect(supportEmailProblem("   \t ")).toBe("unset");
+    expect(supportEmailProblem("REPLACE_WITH_SUPPORT_INBOX")).toBe("placeholder");
+    expect(supportEmailProblem("replace_with_support_inbox")).toBe("placeholder");
+    // A placeholder that IS address-shaped — the case a bare `@` check misses.
+    expect(supportEmailProblem("support@yourdomain.com")).toBe("placeholder");
+    expect(supportEmailProblem("Support <REPLACE_WITH_SUPPORT_INBOX>")).toBe("placeholder");
+    expect(supportEmailProblem("support")).toBe("malformed");
+    expect(supportEmailProblem("@tandem.ink")).toBe("malformed");
+    expect(supportEmailProblem("support@")).toBe("malformed");
+    expect(supportEmailProblem("support@tandem")).toBe("malformed"); // dotless domain
+    expect(supportEmailProblem("sup port@tandem.ink")).toBe("malformed");
+    // Valid, including the display-name form RESEND_FROM's own example uses —
+    // an operator copying that shape across must not take issuance down.
+    expect(supportEmailProblem("support@tandem.ink")).toBeNull();
+    expect(supportEmailProblem("  support@tandem.ink  ")).toBeNull();
+    expect(supportEmailProblem("Tandem Support <support@tandem.ink>")).toBeNull();
+  });
+
+  it("rejects an address too long to render inside the body's 72-column ceiling", () => {
+    // Not a style rule. The address prints on its own line under a two-space
+    // indent, directly beneath the wrapped base64 key. Push that line past 72
+    // and an MTA re-encodes the body as quoted-printable, whose soft line break
+    // truncates the key — the buyer's activation then fails with a valid
+    // support address in the mail that broke it. The guard is the only thing
+    // standing between `[vars]` and that line, so the bound belongs here.
+    const longButValid =
+      "Tandem Support (include your order id) <support@tandem-collab.example.com>";
+    expect(longButValid.length).toBeGreaterThan(72 - 2);
+    expect(supportEmailProblem(longButValid)).toBe("too-long");
+
+    // Positive control on the same sample: the longest ACCEPTED value must
+    // actually fit. Asserting only the rejection would pass with the ceiling
+    // set to any number at all.
+    const atCeiling = `${"a".repeat(70 - "@tandem.ink".length)}@tandem.ink`;
+    expect(atCeiling).toHaveLength(72 - 2);
+    expect(supportEmailProblem(atCeiling)).toBeNull();
+    for (const line of licenseEmailText("Ada", "QUJD", atCeiling).split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(72);
+    }
+    expect(supportEmailProblem(`a${atCeiling}`)).toBe("too-long");
   });
 
   it("unconfigured Resend → retryable 500, not a silent drop", async () => {

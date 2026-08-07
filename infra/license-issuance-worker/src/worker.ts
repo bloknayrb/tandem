@@ -112,8 +112,19 @@ export type ResultKind =
 /** Non-PII failure stage attached to error logs. Cloudflare's log stream is
  * operator-only (not attacker-visible), so tagging the failing stage — and the
  * upstream HTTP status for email — costs no security and makes a launch-day
- * Resend misconfiguration debuggable. */
-export type FailStage = "config" | "email" | "blob-size" | "ledger" | "unexpected";
+ * Resend misconfiguration debuggable.
+ *
+ * `config` is the signing key; `config-support-email` is SUPPORT_EMAIL. They
+ * are separate values on purpose — both fail closed with an identical 503, so
+ * the stage is the only thing that tells an operator whether to re-put a secret
+ * or edit a `[vars]` line. */
+export type FailStage =
+  | "config"
+  | "config-support-email"
+  | "email"
+  | "blob-size"
+  | "ledger"
+  | "unexpected";
 
 interface Failure {
   stage: FailStage;
@@ -605,8 +616,10 @@ interface WorkerEnv {
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
   /** Monitored inbox used as the license email's `reply_to` and named in its
-   *  body. Keep in sync with TANDEM_SUPPORT_EMAIL in src/shared/constants.ts. */
-  SUPPORT_EMAIL?: string;
+   *  body. Keep in sync with TANDEM_SUPPORT_EMAIL in src/shared/constants.ts.
+   *  REQUIRED: validated at the top of every request (see `supportEmailProblem`)
+   *  and a bad value fails the Worker closed rather than emailing a buyer. */
+  SUPPORT_EMAIL: string;
   TANDEM_ISSUANCE_ENV?: string; // "sandbox" | "production" (default production)
   LICENSE_KV: KvNamespace; // SAME namespace the update Worker reads
   LEDGER_KV: KvNamespace; // issuance-owned; holds PII
@@ -680,6 +693,58 @@ export function licenseAttachment(blob: string): { content: string; filename: st
   return { content: btoa(blob), filename: "tandem.license" };
 }
 
+/** What is wrong with `SUPPORT_EMAIL`, or `null` if nothing is. All of them fail
+ *  the Worker closed; they are named separately because the operator-visible
+ *  symptom differs (an unset value silently omits the support block from a paid
+ *  customer's email, a placeholder prints `REPLACE_WITH_SUPPORT_INBOX` to them
+ *  instead, a too-long one is a perfectly good address that would truncate the
+ *  license key it is sent with). */
+export type SupportEmailProblem = "unset" | "placeholder" | "malformed" | "too-long";
+
+/** Placeholder shapes that actually occur here, not an invented list: the
+ *  deploy template ships `SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"`, and the
+ *  comment three lines above it offers `noreply@yourdomain.com` as the
+ *  RESEND_FROM example — the two strings an operator can plausibly leave behind
+ *  or half-edit. Matched against the raw value, so a display-name wrapper can't
+ *  smuggle one past. */
+const SUPPORT_EMAIL_PLACEHOLDER = /replace_with|yourdomain/i;
+
+/** Longest value that still renders inside the body's line ceiling: the address
+ *  gets its own line under a two-space indent, and `wrapBlob`'s 72 is the width
+ *  below which no line invites an MTA to re-encode. Bounding it here is what
+ *  giving it its own line was reaching for — that only caps the *sentence*, and
+ *  a 70+ character value (the display-name form permitted below is exactly the
+ *  long shape) pushes the rendered line back over 72, at which point QP's soft
+ *  break silently truncates the base64 license key printed above it. A valid
+ *  address is worth refusing when sending it is what breaks activation. */
+const MAX_SUPPORT_EMAIL_LEN = 70;
+
+/**
+ * Validate the operator-configured support inbox.
+ *
+ * Deliberately NOT an RFC 5322 parser. It rejects the shapes a misconfiguration
+ * actually produces — unset, whitespace, a leftover placeholder, a value with no
+ * `@`, an empty local or domain part, embedded whitespace, a dotless domain, one
+ * too long to wrap — and accepts everything else. The proof that the mailbox
+ * exists and is read is the runbook's end-to-end send test; a stricter regex
+ * here would only add ways to fail a valid address closed, which for this Worker
+ * means refusing sales.
+ *
+ * A `Name <addr@example.com>` wrapper is accepted because `RESEND_FROM`'s
+ * documented example uses exactly that form, so an operator copying its shape
+ * across is a likely and legitimate configuration — not a defect to 503 on.
+ */
+export function supportEmailProblem(raw: string | undefined | null): SupportEmailProblem | null {
+  const value = (raw ?? "").trim();
+  if (value === "") return "unset";
+  if (SUPPORT_EMAIL_PLACEHOLDER.test(value)) return "placeholder";
+  const wrapped = /^[^<>]*<([^<>]*)>$/.exec(value);
+  const address = (wrapped ? wrapped[1] : value).trim();
+  if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(address)) return "malformed";
+  if (value.length > MAX_SUPPORT_EMAIL_LEN) return "too-long";
+  return null;
+}
+
 async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: string) {
   // Not configured counts as a delivery failure so the event stays retryable
   // (the handler's 500 path logs it) rather than silently dropping a paid
@@ -698,8 +763,10 @@ async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: str
         // A buyer whose activation fails needs somewhere to write that isn't the
         // public issue tracker — the natural instinct is to paste the key, and
         // the key carries their own name and email. `RESEND_FROM` is a noreply
-        // address, so without this there is no inbound channel at all.
-        ...(env.SUPPORT_EMAIL ? { reply_to: env.SUPPORT_EMAIL } : {}),
+        // address, so without this there is no inbound channel at all. It used
+        // to be conditional, which made a missing var invisible; the fetch
+        // handler now validates it up front, so it is unconditional here.
+        reply_to: env.SUPPORT_EMAIL,
         subject: "Your Tandem license",
         text: licenseEmailText(name, blob, env.SUPPORT_EMAIL),
         attachments: [licenseAttachment(blob)],
@@ -724,7 +791,7 @@ async function sendViaResend(env: WorkerEnv, to: string, name: string, blob: str
  * silently truncates a base64 license key. `name` is the unavoidable exception
  * (it is the customer's actual name); everything we author is ASCII.
  */
-export function licenseEmailText(name: string, blob: string, supportEmail?: string): string {
+export function licenseEmailText(name: string, blob: string, supportEmail: string): string {
   return [
     `Hi ${name},`,
     "",
@@ -746,17 +813,13 @@ export function licenseEmailText(name: string, blob: string, supportEmail?: stri
     "",
     "Please don't post the key publicly - it contains your name and email",
     "address.",
-    ...(supportEmail
-      ? [
-          "",
-          "If activation gives you any trouble, just reply here, or write to:",
-          // Its own line: the address is operator-configured and interpolating
-          // it mid-sentence made this line's length unbounded (85 chars with a
-          // short address, and the whole point of the 72 ceiling is that no
-          // line invites an MTA to re-encode).
-          `  ${supportEmail}`,
-        ]
-      : []),
+    "",
+    "If activation gives you any trouble, just reply here, or write to:",
+    // Its own line: the address is operator-configured and interpolating it
+    // mid-sentence made this line's length unbounded (85 chars with a short
+    // address, and the whole point of the 72 ceiling is that no line invites an
+    // MTA to re-encode).
+    `  ${supportEmail}`,
     "",
     "-- The Tandem team",
   ].join("\n");
@@ -910,6 +973,31 @@ export default {
       }
     }
     const { signBytes } = signerCache;
+
+    // Same fail-closed treatment as the signing key, and for the same reason: a
+    // bad SUPPORT_EMAIL is not detectable from a successful-looking response.
+    //
+    // WHY HERE and not at the point of use in `sendViaResend`: by the time the
+    // email is composed the license has already been minted, the entitlement
+    // written to LICENSE_KV and the order recorded in the ledger. A point-of-use
+    // refusal would leave an issued-but-undeliverable license behind and a 500
+    // retry loop that can never succeed, and it would only fire for buyers —
+    // i.e. after a bad deploy has already cost a sale. Checking before any
+    // webhook processing means nothing durable is written, Polar simply
+    // re-delivers, and the untouched event is fulfilled once the var is fixed.
+    //
+    // The three problem kinds share one stage: they name the same `[vars]` line
+    // and the operator reads the value to tell them apart. What the stage must
+    // distinguish is this from the signing key's `config` — different fix.
+    if (supportEmailProblem(env.SUPPORT_EMAIL) !== null) {
+      log({
+        result: "error",
+        ts: Math.floor(Date.now() / 1000),
+        stage: "config-support-email",
+      });
+      return jsonResponse(503);
+    }
+
     const grandfatherSet = grandfatherSetOf(env.GRANDFATHER_EMAILS ?? "");
 
     return handleIssuance(request, {
