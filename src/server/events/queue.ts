@@ -20,6 +20,7 @@ import {
 } from "../documents/dirty.js";
 import { readModeState } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
+import { isUnansweredAsk, noteExternalConsumersGone, recordWakeForward } from "./delivery-state.js";
 import {
   clearFileSyncContext,
   resetForTesting as fileSyncResetForTesting,
@@ -276,6 +277,29 @@ function pushEvent(event: TandemEvent): void {
   // difference between correct and correct-by-accident.
   const forwardExternally = shouldForwardExternally(event);
 
+  // The delivery-state join's push half. Each conjunct is load-bearing and none
+  // is redundant with the tracking above:
+  //
+  //  - `forwardExternally` — a Solo-held event reaches no external consumer, so
+  //    recording it would start a wait clock for something never handed out.
+  //  - a non-empty external set — with nothing attached, "no poll followed"
+  //    means nobody was listening, not that Claude is ignoring the user. That
+  //    case is `subscribers === 0`'s to report, and it is the sound negative;
+  //    claiming it here would turn a true "nothing is attached" into a false
+  //    "your message was delivered and sat unread".
+  //  - `isUnansweredAsk` — NOT `isWakeWorthy`. Narrower on both ends: it drops
+  //    `document:*` tab churn, and it drops the accept/dismiss status flips,
+  //    which are the user acknowledging Claude's work rather than asking for
+  //    anything. See that predicate's docblock for why the two must stay apart.
+  //
+  // This runs BEFORE the fan-out loop, so it records "handed to the fan-out",
+  // not "written to a consumer" — the supervisor's `sendTurn` can still return
+  // false on an unwritable stdin. `noteExternalConsumersGone` in `unsubscribe`
+  // is what stops that becoming a permanent lie.
+  if (forwardExternally && externalSubscribers.size > 0 && isUnansweredAsk(event)) {
+    recordWakeForward(now);
+  }
+
   for (const cb of subscribers) {
     // In-process subscribers (the local-model collaborator) are NOT gated: they
     // rely on `document:closed` / `document:switched` to abort in-flight runs,
@@ -345,6 +369,12 @@ export function subscribe(cb: EventCallback, kind: SubscriberKind): void {
 export function unsubscribe(cb: EventCallback): void {
   subscribers.delete(cb);
   externalSubscribers.delete(cb);
+  // The delivery join's push-half conjunct ("something was attached") is checked
+  // at push time and would otherwise never be checked again. A shim whose host
+  // exits, or a launcher child that crashes, would leave an outstanding forward
+  // pending forever — and `/health` would report `subscribers: 0` next to
+  // `state: "awaiting-poll"` with `waitingMs` climbing for days.
+  if (externalSubscribers.size === 0) noteExternalConsumersGone();
 }
 
 /**

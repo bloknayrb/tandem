@@ -13,6 +13,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  getDeliveryState,
+  recordWakeForward,
+  resetDeliveryStateForTests,
+} from "../../src/server/events/delivery-state.js";
 import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -951,5 +956,53 @@ describe("MCP tool integration — tandem_edit empty-doc guidance (#979)", () =>
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("EMPTY_DOCUMENT");
     expect(parsed.message).toContain("tandem_appendContent");
+  });
+});
+
+/**
+ * The delivery-state join's pull half (Track B-1).
+ *
+ * Driven through the real McpServer rather than by calling the recorder
+ * directly, because the fact under test is a property of WHERE the call sits in
+ * `tandem_checkInbox`'s body — a unit test of `recordInboxPoll` would pass with
+ * the call deleted from the tool entirely.
+ */
+describe("checkInbox stamps the pull path", () => {
+  beforeEach(resetDeliveryStateForTests);
+  afterEach(resetDeliveryStateForTests);
+
+  it("records a poll when the tool dispatches", async () => {
+    setupDoc("inbox-poll-doc", "Hello world");
+    expect(getDeliveryState().pollCount).toBe(0);
+
+    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+
+    const state = getDeliveryState();
+    expect(state.pollCount).toBe(1);
+    expect(state.lastPollAt).not.toBeNull();
+  });
+
+  it("records a poll even when no document is open", async () => {
+    // The ordering decision, pinned. `recordInboxPoll` sits ABOVE the
+    // `noDocumentError` guard because the fact being recorded is "a model
+    // reached for the inbox" — the only signal here written by a model rather
+    // than by a transport — and that is equally true when the poll lands on a
+    // closed document. Below the guard, the pull path would read as dead during
+    // exactly the window a user is most likely to be told that it is.
+    setActiveDocId(null);
+
+    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+
+    expect(getDeliveryState().pollCount).toBe(1);
+  });
+
+  it("clears an outstanding forward, closing the join", async () => {
+    setupDoc("inbox-join-doc", "Hello world");
+    recordWakeForward(1_000);
+    expect(getDeliveryState(1_500).state).toBe("awaiting-poll");
+
+    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+
+    expect(getDeliveryState().state).toBe("polled");
   });
 });
