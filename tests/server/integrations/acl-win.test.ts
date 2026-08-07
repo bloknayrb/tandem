@@ -60,6 +60,33 @@ describe.skipIf(!WIN_ONLY)("acl-win — Windows DACL hardening", () => {
     });
   }
 
+  // #1299: doc-backup ACLs a ROOT directory whose per-path subdirs already
+  // exist. This walks the full lifecycle the bug produced — poison, observe
+  // EPERM, repair — with real icacls, because the doc-backup unit suite mocks
+  // this module and therefore cannot see any of it. The repair phase is also
+  // what makes the tree deletable again in afterEach.
+  it("grant on a directory: non-inheritable strips an existing child's DACL, inheritable repairs it", async () => {
+    const root = path.join(tmpDir, "doc-backups");
+    const child = path.join(root, "abc123hash");
+    const snapshot = path.join(child, "welcome-20260805-160342-45f01c92.md");
+    fs.mkdirSync(child, { recursive: true });
+    // Baseline: a plain inherited-ACE child is writable.
+    fs.writeFileSync(snapshot, "original bytes");
+    fs.rmSync(snapshot);
+
+    // Poison: the default grant applies to `root` alone, so breaking
+    // inheritance leaves `child` with an EMPTY DACL — deny-all, owner included.
+    await setRestrictiveAcl(root);
+    expect(() => fs.writeFileSync(snapshot, "original bytes", { flag: "wx" })).toThrow(/EPERM/);
+
+    // Repair: an inheritable grant propagates down to the existing child.
+    await setRestrictiveAcl(root, { inheritable: true });
+    expect(() => fs.writeFileSync(snapshot, "original bytes", { flag: "wx" })).not.toThrow();
+    expect(fs.readFileSync(snapshot, "utf8")).toBe("original bytes");
+    // Hardening is not traded away for the fix.
+    await expect(assertNoBroadAce(root)).resolves.toBeUndefined();
+  });
+
   it("setRestrictiveAcl throws when icacls cannot act on the path", async () => {
     // Non-existent path → icacls exits non-zero. setRestrictiveAcl must
     // wrap the error with the path in the message for forensics.
