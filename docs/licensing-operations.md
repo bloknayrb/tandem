@@ -326,9 +326,13 @@ tracker, where they will paste a key carrying their own name and email), and
 
 `SUPPORT_EMAIL` is **required and enforced**: the Worker rejects every request
 with 503 and `stage: "config-support-email"` while the value is unset, still the
-`REPLACE_WITH_…` placeholder, or not address-shaped. That is deliberate — the
-alternative was emitting a license email with no support address at all, or with
-the placeholder printed in it, to a customer who has already paid. A 503 makes
+`REPLACE_WITH_…` placeholder, not address-shaped, or longer than 70 characters.
+That is deliberate — the alternative was emitting a license email with no support
+address at all, or with the placeholder printed in it, to a customer who has
+already paid. The length bound is not cosmetic: the address prints on its own
+line beneath the base64 key, and a line over 72 characters invites an MTA to
+re-encode the body as quoted-printable, whose soft line break truncates that key.
+A `Name <addr>` display name is allowed but counts toward the 70. A 503 makes
 Polar re-deliver, so the event is fulfilled unchanged once the var is fixed.
 Note that the check is per-request, not a deploy-time gate: nothing alerts on
 it, so a fix is only prompted by Polar's delivery log (§5b).

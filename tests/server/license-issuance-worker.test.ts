@@ -16,6 +16,7 @@ import issuanceWorker, {
   type IssuanceDeps,
   type KvNamespace,
   LICENSE_VERSION,
+  licenseEmailText,
   supportEmailProblem,
 } from "../../infra/license-issuance-worker/src/worker.js";
 import {
@@ -1230,6 +1231,30 @@ describe("default fetch wiring (env → deps)", () => {
     expect(supportEmailProblem("support@tandem.ink")).toBeNull();
     expect(supportEmailProblem("  support@tandem.ink  ")).toBeNull();
     expect(supportEmailProblem("Tandem Support <support@tandem.ink>")).toBeNull();
+  });
+
+  it("rejects an address too long to render inside the body's 72-column ceiling", () => {
+    // Not a style rule. The address prints on its own line under a two-space
+    // indent, directly beneath the wrapped base64 key. Push that line past 72
+    // and an MTA re-encodes the body as quoted-printable, whose soft line break
+    // truncates the key — the buyer's activation then fails with a valid
+    // support address in the mail that broke it. The guard is the only thing
+    // standing between `[vars]` and that line, so the bound belongs here.
+    const longButValid =
+      "Tandem Support (include your order id) <support@tandem-collab.example.com>";
+    expect(longButValid.length).toBeGreaterThan(72 - 2);
+    expect(supportEmailProblem(longButValid)).toBe("too-long");
+
+    // Positive control on the same sample: the longest ACCEPTED value must
+    // actually fit. Asserting only the rejection would pass with the ceiling
+    // set to any number at all.
+    const atCeiling = `${"a".repeat(70 - "@tandem.ink".length)}@tandem.ink`;
+    expect(atCeiling).toHaveLength(72 - 2);
+    expect(supportEmailProblem(atCeiling)).toBeNull();
+    for (const line of licenseEmailText("Ada", "QUJD", atCeiling).split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(72);
+    }
+    expect(supportEmailProblem(`a${atCeiling}`)).toBe("too-long");
   });
 
   it("unconfigured Resend → retryable 500, not a silent drop", async () => {

@@ -693,12 +693,13 @@ export function licenseAttachment(blob: string): { content: string; filename: st
   return { content: btoa(blob), filename: "tandem.license" };
 }
 
-/** What is wrong with `SUPPORT_EMAIL`, or `null` if nothing is. All three fail
+/** What is wrong with `SUPPORT_EMAIL`, or `null` if nothing is. All of them fail
  *  the Worker closed; they are named separately because the operator-visible
  *  symptom differs (an unset value silently omits the support block from a paid
  *  customer's email, a placeholder prints `REPLACE_WITH_SUPPORT_INBOX` to them
- *  instead). */
-export type SupportEmailProblem = "unset" | "placeholder" | "malformed";
+ *  instead, a too-long one is a perfectly good address that would truncate the
+ *  license key it is sent with). */
+export type SupportEmailProblem = "unset" | "placeholder" | "malformed" | "too-long";
 
 /** Placeholder shapes that actually occur here, not an invented list: the
  *  deploy template ships `SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"`, and the
@@ -708,15 +709,26 @@ export type SupportEmailProblem = "unset" | "placeholder" | "malformed";
  *  smuggle one past. */
 const SUPPORT_EMAIL_PLACEHOLDER = /replace_with|yourdomain/i;
 
+/** Longest value that still renders inside the body's line ceiling: the address
+ *  gets its own line under a two-space indent, and `wrapBlob`'s 72 is the width
+ *  below which no line invites an MTA to re-encode. Bounding it here is what
+ *  giving it its own line was reaching for — that only caps the *sentence*, and
+ *  a 70+ character value (the display-name form permitted below is exactly the
+ *  long shape) pushes the rendered line back over 72, at which point QP's soft
+ *  break silently truncates the base64 license key printed above it. A valid
+ *  address is worth refusing when sending it is what breaks activation. */
+const MAX_SUPPORT_EMAIL_LEN = 70;
+
 /**
  * Validate the operator-configured support inbox.
  *
  * Deliberately NOT an RFC 5322 parser. It rejects the shapes a misconfiguration
  * actually produces — unset, whitespace, a leftover placeholder, a value with no
- * `@`, an empty local or domain part, embedded whitespace, a dotless domain —
- * and accepts everything else. The proof that the mailbox exists and is read is
- * the runbook's end-to-end send test; a stricter regex here would only add ways
- * to fail a valid address closed, which for this Worker means refusing sales.
+ * `@`, an empty local or domain part, embedded whitespace, a dotless domain, one
+ * too long to wrap — and accepts everything else. The proof that the mailbox
+ * exists and is read is the runbook's end-to-end send test; a stricter regex
+ * here would only add ways to fail a valid address closed, which for this Worker
+ * means refusing sales.
  *
  * A `Name <addr@example.com>` wrapper is accepted because `RESEND_FROM`'s
  * documented example uses exactly that form, so an operator copying its shape
@@ -729,6 +741,7 @@ export function supportEmailProblem(raw: string | undefined | null): SupportEmai
   const wrapped = /^[^<>]*<([^<>]*)>$/.exec(value);
   const address = (wrapped ? wrapped[1] : value).trim();
   if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(address)) return "malformed";
+  if (value.length > MAX_SUPPORT_EMAIL_LEN) return "too-long";
   return null;
 }
 
