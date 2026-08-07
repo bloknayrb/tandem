@@ -4,7 +4,7 @@ Tandem lets you work on documents with an AI — by default Claude, but any MCP-
 
 ## Getting Started
 
-> Follow the tutorial in the bottom-left corner to learn the basics. You can dismiss it at any time. For a full walkthrough of all features, see the [User Guide](../docs/user-guide.md).
+> Follow the tutorial in the bottom-left corner to learn the basics. You can dismiss it at any time. For a full walkthrough of all features, see the [User Guide](https://github.com/bloknayrb/tandem/blob/master/docs/user-guide.md) (opens in your browser).
 
 Open Claude Code from any directory — your Tandem tools are already configured. Both you and your AI can see and edit this document at the same time. Your AI's cursor appears as a soft blue highlight on the paragraph being read, and a typing indicator shows when it's writing.
 

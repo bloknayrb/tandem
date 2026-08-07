@@ -93,7 +93,7 @@ Windows 10 version 22H2 or Windows 11. macOS 12 (Monterey) or later. Linux with 
 
 Pick the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest). Windows, macOS, and Linux builds are available.
 
-The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.txt`, `.html`, or `.docx` file opens it directly in Tandem.
+The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.markdown`, `.txt`, `.html`, or `.docx` file opens it directly in Tandem.
 
 ### Connect your AI
 
@@ -119,7 +119,7 @@ Without the flag nothing breaks and nothing is lost: your messages and comments 
 
 ### What you get
 
-- Multiple documents open in tabs, with `.md`, `.txt`, `.html`, and `.docx` support (Word files are editable; the original is only written when you explicitly save).
+- Multiple documents open in tabs, with `.md`, `.markdown`, `.txt`, `.html`, and `.docx` support (Word files are editable; the original is only written when you explicitly save).
 - A scratchpad (`Ctrl+N`) for drafts you do not want to save to disk.
 - A command palette (`Ctrl+Shift+P`) with fuzzy search, ranked by how well each result matches.
 - Find and replace, including across all open tabs.

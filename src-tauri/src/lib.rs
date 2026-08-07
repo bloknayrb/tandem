@@ -95,9 +95,18 @@ const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 const COWORK_HEAL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// File extensions Tandem can open via OS file association. Keep aligned with
-/// `SUPPORTED_EXTENSIONS` in `src/server/mcp/file-opener.ts` — server-side is
-/// the authority; this list is defense-in-depth to reject obviously-wrong argv
-/// before issuing an HTTP request.
+/// `SUPPORTED_EXTENSIONS` in `src/shared/constants.ts` (re-exported through
+/// `src/server/mcp/file-opener.ts`) — server-side is the authority; this list is
+/// defense-in-depth to reject obviously-wrong argv before issuing an HTTP
+/// request.
+///
+/// "Keep aligned" was the whole instruction and it still drifted (#1306):
+/// `markdown` sat in this list and in `tauri.conf.json` while the server
+/// rejected it, and the failure is silent — `maybeOpenStartupFile` swallows the
+/// open error and falls through to `welcome.md`. The alignment is now pinned by
+/// `tests/build/file-association-alignment.test.ts`, which parses this literal
+/// out of the source, so renaming or reshaping the constant fails that test
+/// rather than silently stopping the check.
 pub(crate) const SUPPORTED_FILE_ASSOC_EXTS: &[&str] =
     &["md", "markdown", "txt", "html", "docx"];
 

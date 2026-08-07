@@ -117,7 +117,7 @@ tandem_open({ filePath: "C:\\Users\\bkolb\\Documents\\progress-report-feb.md" })
 ```
 
 **Notes:**
-- Supported formats: `.md`, `.txt`, `.html`, `.docx`. All open editable; `.docx` is written back only on an explicit save (auto-save skips it).
+- Supported formats: `.md`, `.markdown`, `.txt`, `.html`, `.htm`, `.docx`. All open editable; `.docx` is written back only on an explicit save (auto-save skips it). `.markdown` and `.htm` are aliases — `detectFormat` folds them into `md` and `html`, and the file keeps its own extension on save.
 - Editor opens automatically in the Tauri WebView (desktop) or at `http://127.0.0.1:5173` (development) on the first call.
 - Opening a file that's already open switches to its tab (returns `alreadyOpen: true`).
 - **Auto-reload:** Open documents are automatically reloaded when the file changes on disk (e.g., Claude's Edit tool, `git pull`). Annotations are preserved. A toast notification appears in the editor.

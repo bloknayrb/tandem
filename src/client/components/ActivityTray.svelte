@@ -698,9 +698,24 @@ onDestroy(() => {
     line-height: 1.4;
     color: var(--tandem-fg);
   }
+  /* `min-width: 0` lets this flex item shrink below its min-content width, but on
+     its own that only permits the SHRINK — it grants the text no place to break.
+     Activity messages routinely end in a filesystem path
+     ("Claude restarting in C:\Users\…\com.tandem.editor\sample"), which is one
+     unbroken word: no space, and `\` is not a break opportunity. So the line
+     rendered at its full min-content width and spilled out of the row, where the
+     shell's `overflow: clip` sheared it mid-character (#1269).
+
+     `anywhere` rather than `break-word` because the two differ exactly where it
+     matters here: `anywhere` also shrinks the min-content contribution, so the
+     row can never demand more width than the 340px shell has, while `break-word`
+     leaves the intrinsic size at the unbroken word and only relocates the
+     overflow. Standard property alone — lightningcss owns any prefixing (see the
+     two-pipeline rule in CLAUDE.md). */
   .toast-row .msg {
     font-weight: 500;
     min-width: 0;
+    overflow-wrap: anywhere;
   }
   .toast-row .action {
     margin-top: 6px;

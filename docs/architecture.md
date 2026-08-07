@@ -245,7 +245,7 @@ On server startup, `listSessionFilePaths()` scans the session directory and `res
 
 ### OS File-Association Open
 
-When the Tauri desktop app is launched via the OS file-association handler (double-clicking a `.md` / `.txt` / `.html` / `.docx` file in Finder, Explorer, or a Linux file manager), the file path reaches the editor via three platform-specific routes:
+When the Tauri desktop app is launched via the OS file-association handler (double-clicking a `.md` / `.markdown` / `.txt` / `.html` / `.docx` file in Finder, Explorer, or a Linux file manager), the file path reaches the editor via three platform-specific routes:
 
 ```
 Cold start, Windows / Linux:
