@@ -48,11 +48,27 @@ export interface PushSupportNote {
  * Deliberately kind-agnostic: it is rendered inside a result row that already
  * names the target, and it must stay correct if a second kind ever joins
  * `"none"`. It states only the sound half of `TargetPushSupport` — that nothing
- * will notify — and reframes the consequence as deferred, not lost, matching
- * the `no-push` send notice in `status/addressed-ai-notice.ts`.
+ * will notify — and reframes the consequence as deferred, not lost.
+ *
+ * Two words in it are load-bearing, and the first draft got both wrong.
+ *
+ * "Tandem can't notify this one", not "no real-time updates for this app": the
+ * sentence is read INSIDE Tandem, where "this app" is at least as likely to
+ * parse as Tandem itself. Naming the actor fixes the referent without naming a
+ * kind, so the row's own label still supplies which target.
+ *
+ * "the next time it CHECKS IN", not "the next time you prompt it". Delivery is
+ * the AI's action, not the user's: Claude sees a comment when it calls
+ * `tandem_checkInbox`, which a given turn may simply not do. Promising it lands
+ * on the next prompt is a delivery guarantee of exactly the kind
+ * `targetPushSupport`'s docblock forbids — the same sin as reading
+ * `subscribers > 0` as "push works", pointed the other way. This is now the
+ * verbatim tail of `CONNECTED_NO_PUSH` in `status/status-ai-view.ts` and of the
+ * `no-push` send notice, which is what "matches the sibling copy" was always
+ * supposed to mean.
  */
 const NO_PUSH_TRANSPORT: PushSupportNote = {
-  text: "No real-time updates for this app — it sees your comments and messages the next time you prompt it, not as they happen.",
+  text: "Tandem can't notify this one in real time — it'll see your comments and messages the next time it checks in, not as they happen.",
 };
 
 /**
@@ -69,6 +85,15 @@ const NO_PUSH_TRANSPORT: PushSupportNote = {
  * gone) also return `null`: absence of knowledge is not a negative. That is the
  * same asymmetry `PushDelivery`'s `"unknown"` encodes.
  *
+ * The guard EXCLUDES the kinds `targetPushSupport` cannot speak for rather than
+ * listing the ones it can. Those are the same two sets today, but only the
+ * exclusion form stays honest: `IntegrationConfig["kind"]` minus `"other-mcp"`
+ * IS `DetectedTarget["kind"]`, so a future detected kind reaches the predicate
+ * automatically. An allow-list would have silenced it — quietly reinstating the
+ * very "we knew and didn't say" bug this function exists to fix, and the
+ * predicate-pinned test above would not have caught it, since a kind absent
+ * from the list is also absent from the loop.
+ *
  * #1299: this fact was decided at wizard time and never spoken. The reporter
  * connected Claude Desktop, saw "AI connected", sent two messages, and was
  * ignored — because for that client push does not fail, it does not exist.
@@ -76,6 +101,6 @@ const NO_PUSH_TRANSPORT: PushSupportNote = {
 export function pushSupportNote(
   kind: IntegrationConfig["kind"] | undefined,
 ): PushSupportNote | null {
-  if (kind !== "claude-code" && kind !== "claude-desktop") return null;
+  if (kind === undefined || kind === "other-mcp") return null;
   return targetPushSupport(kind) === "none" ? NO_PUSH_TRANSPORT : null;
 }

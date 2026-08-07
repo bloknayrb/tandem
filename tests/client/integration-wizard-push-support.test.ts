@@ -154,7 +154,7 @@ describe("IntegrationWizardModal — per-target push support (#1299)", () => {
     await tick();
     const line = q(container, "integration-wizard-push-support-claude-desktop-1");
     expect(line).toBeTruthy();
-    expect(line?.textContent ?? "").toMatch(/no real-time updates/i);
+    expect(line?.textContent ?? "").toMatch(/can't notify this one in real time/i);
     expect(line?.getAttribute("data-push-support")).toBe("none");
   });
 
