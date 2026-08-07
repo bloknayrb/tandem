@@ -600,11 +600,18 @@ $effect(() => {
 
     // An agent is attached, so nothing is wrong — this is a latency
     // expectation, not a failure, hence `info` rather than `warning` and no CTA.
+    //
+    // The copy names the contradiction on purpose. The status pill says "AI
+    // connected" (truthfully — Claude CAN read the document), so a bare "it'll
+    // be seen later" reads as a non-sequitur: the user has just been told the
+    // AI is right there. Saying "connected, but not being notified" is the
+    // whole point of the notice; without it we report a delay and leave the
+    // user to reconcile it with the indicator themselves.
     notifications.push({
       id: `ai-no-push-${viaKey}-${Date.now()}`,
       type: "launcher",
       severity: "info",
-      message: `${noun} saved. Claude will see it the next time it checks in.`,
+      message: `${noun} saved. Claude is connected but isn't being notified in real time, so it'll see this the next time it checks in.`,
       dedupKey: `ai-no-push-${viaKey}`,
       timestamp: Date.now(),
     });
@@ -2524,6 +2531,7 @@ const shouldShowModelPicker = $derived(
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
       soloMode={modeState.tandemMode === "solo"}
+      pushDelivery={aiReadiness.pushDelivery}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
       saving={saveStore.saving}

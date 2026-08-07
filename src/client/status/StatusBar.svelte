@@ -2,7 +2,12 @@
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { onDestroy, untrack } from "svelte";
 import { createAgentLabel } from "../hooks/useAgentLabel.svelte";
-import type { AiChip, AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
+import type {
+  AiChip,
+  AiLiveIndicator,
+  AiReadinessState,
+  PushDelivery,
+} from "../hooks/useAiReadiness.svelte";
 import { AI_CTA } from "../hooks/useAiReadiness.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
@@ -38,6 +43,9 @@ interface Props {
   onRestartClaude?: () => void;
   /** Solo mode — suppresses the "AI not connected" nag when no AI is connected. */
   soloMode: boolean;
+  /** Whether anything is delivering real-time events. Only `"none"` changes the
+   *  indicator, and only its hover text — see `CONNECTED_NO_PUSH`. */
+  pushDelivery?: PushDelivery;
   /**
    * #651: name of the MCP tool Claude is currently executing on the active
    * document, or null when idle. Surfaces a generic "Claude is editing…"
@@ -80,6 +88,7 @@ let {
   onConnectAi,
   onRestartClaude,
   soloMode,
+  pushDelivery = "unknown",
   claudeWorkingTool = null,
   readOnly,
   saving = false,
@@ -203,7 +212,7 @@ const labelColor = $derived(
 // Consolidated AI-connection indicator (replaces the old titlebar pill + the
 // former "Assistant · idle" segment). The view is a pure mapping — MUST be
 // `$derived` so it recomputes as the reactive props flip connected→solo→down.
-const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode));
+const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode, pushDelivery));
 
 /**
  * The AI indicator's actionable content — title, aria-label, and onclick —
