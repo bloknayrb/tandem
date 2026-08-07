@@ -240,6 +240,15 @@ card stack — is refuted twice, on independent evidence:
    The crowding pass has no motion input at all, so a flag that only disables
    transitions cannot change its cost. It changes this one by a factor of four.
 
+   Note the limit of this experiment. `reduceMotion` is a GLOBAL kill switch: it
+   zeroes every transition in `cardMotion.ts`, the `cardFlyToMargin` entrance on
+   the margin bubble, the annotation ping, and every
+   `@media (prefers-reduced-motion)` rule via the `tandem-reduce-motion` body
+   class. That makes it conclusive against `resolveCrowding` — which it cannot
+   reach — and conclusive that the remaining cost is motion. It does NOT
+   apportion that cost among individual transitions. `AnnotationCard`'s
+   `lifecycleMotion` prop is the narrower knob and was not used.
+
 ### What the accept measurement actually spends
 
 The button is not blocked, starved, or overlaid. An in-page sampler run across
@@ -251,9 +260,11 @@ Clicking after that idle costs **203ms**, against 460–534ms for the same click
 issued immediately after the create. The difference is not contention; it is the
 app still finishing its entrance.
 
-Both halves land on the card's own lifecycle motion
+Both halves are motion, and the card's own lifecycle transitions
 (`src/client/panels/cardMotion.ts`, wired at `SidePanel.svelte`'s
-`lifecycleMotion={true}`):
+`lifecycleMotion={true}`) are the leading candidate for each. Read the two
+bullets below as candidates, not as findings — the durations fit, but only the
+click half fits cleanly:
 
 - **`cardEnter` (A4, `ENTER_MS = 260`)** runs on the freshly created card. It
   animates `height: 0 → h` under `overflow: clip`, plus a `translateY`, so for
@@ -262,17 +273,31 @@ Both halves land on the card's own lifecycle motion
   that entrance. This also explains run 1's `click({ force: true })` probe
   dispatching instantly and the accept then never taking effect: a forced click
   computes its point from a box that is still moving.
-- **`cardExit` (A1, `EXIT_MS = 260`)** runs on accept. Svelte keeps an outroing
-  block's content mounted for the duration, so the accept control — whose
-  disappearance is the spec's definition of "reflected" — stays in the DOM for
-  the whole outro. Motion off drops the settle from 147–419ms to **6ms**.
+- **`cardExit` (A1, `EXIT_MS = 260`)** runs on accept. Motion off drops the
+  settle from 147–419ms to **6ms**, so the settle is motion — but the specific
+  attribution to `cardExit` is NOT established, and one of the three recorded
+  samples contradicts it. The proposed mechanism is that Svelte keeps an
+  outroing block's content mounted for the duration, so the accept control —
+  whose disappearance is the spec's definition of "reflected" — survives the
+  whole outro. That mechanism has a floor of `EXIT_MS = 260ms`, and sample B
+  settled in **147ms**. A 260ms outro cannot produce a 147ms settle, so either
+  the rail control is leaving before the outro finishes (the margin bubble
+  carries no `out:` transition at all and drops its control on the status flip,
+  and `toHaveCount` counts both surfaces) or the outro is not what is being
+  waited on. Do not build on this bullet: it needs a `lifecycleMotion`-only
+  toggle and a DOM-level observation of when each of the two controls actually
+  unmounts. The click half is on firmer ground — 460–534ms minus the measured
+  ~170–200ms floor lands on `ENTER_MS = 260` — but it is the same class of
+  arithmetic-fit argument and deserves the same direct check.
 
 What remains after both is ~170–200ms of fixed cost present even against a fully
 settled page: selector resolution, scroll-into-view and actionability
 round-trips over CDP. That is the floor this harness can measure, not app cost.
 
-**This is therefore a scoping question, not an optimization target.** Roughly
-520ms of a 500ms budget is deliberate #798 motion, and no human experiences it
+**This is therefore a scoping question, not an optimization target.** The
+`reduceMotion` delta puts ~510–710ms of the total in deliberate #798 motion —
+that figure comes straight from the measurement and does not depend on which
+transitions above turn out to be the ones — and no human experiences it
 as an eight-second wait — they experience a card that animates in over a quarter
 of a second. There are three ways out and none of them should be chosen by
 whoever is holding the profiler: measure the annotation's status flip rather
@@ -295,6 +320,14 @@ Two things are worth saying and nothing more:
   followed a build. Machine contention is not ruled out.
 - The Linux container verification below measured 33ms on the same code. Either
   the platforms genuinely differ here, or one of the two environments is noise.
+- These numbers are already **stale against the scroll path they measure**.
+  Master gained ~950 lines of scroll-path code after `13b0300` — the proximity-
+  faded scroll pill and its controller (`src/client/editor/scroll-pill*`,
+  merged in #1323 on 2026-08-07), plus a wheel-handling fix and keyboard
+  scrolling for read-only documents. Condition 3 is "worst frame gap during a
+  scripted top-to-bottom scroll". Re-measure on current master BEFORE profiling;
+  a mechanism derived from the numbers above would be derived from code that no
+  longer runs the scroll.
 
 Nobody should read a cause into these numbers yet. They need their own profile,
 on a quiet machine, before an issue describes a mechanism.
