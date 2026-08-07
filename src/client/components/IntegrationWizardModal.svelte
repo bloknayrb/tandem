@@ -478,7 +478,6 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
       class="iw-push-support"
       data-testid="integration-wizard-push-support-{id}"
       data-push-support="none"
-      aria-label={note.ariaLabel}
     >
       {note.text}
     </span>

@@ -30,11 +30,18 @@ export function computeDoneHeaderState(
   return claudeConnected ? "connected" : "waiting";
 }
 
-/** Copy for a client Tandem structurally cannot notify. */
+/**
+ * Copy for a client Tandem structurally cannot notify.
+ *
+ * `text` only — no `ariaLabel` sibling, unlike `AI_CTA` and `AiIndicatorView`.
+ * Those describe a terse control ("AI connected", a button) whose visible text
+ * under-specifies it; this is a full sentence rendered as plain body text in a
+ * `<span>`, so the accessible name IS the text. Adding an `aria-label` would
+ * also be ARIA-prohibited on a generic element and can suppress the content it
+ * was meant to clarify.
+ */
 export interface PushSupportNote {
   text: string;
-  /** Screen-reader form — the visible line leans on the row's target label. */
-  ariaLabel: string;
 }
 
 /**
@@ -46,8 +53,6 @@ export interface PushSupportNote {
  */
 const NO_PUSH_TRANSPORT: PushSupportNote = {
   text: "No real-time updates for this app — it sees your comments and messages the next time you prompt it, not as they happen.",
-  ariaLabel:
-    "Tandem cannot notify this app in real time. It sees your comments and messages the next time you prompt it.",
 };
 
 /**
