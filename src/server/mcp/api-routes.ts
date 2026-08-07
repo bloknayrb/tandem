@@ -89,9 +89,16 @@ function escapeRegExp(s: string): string {
 /**
  * Check if an Origin header is an allowed local URL. Exported for testing.
  *
- * Narrowed in #477 PR 2: only `127.0.0.1` and `tauri.localhost` are accepted; the
- * bare `localhost` hostname is rejected to align with the browser-distribution
- * deprecation and remove a DNS-resolution attack surface.
+ * Narrowed in #477 PR 2: of the *hostname* forms only `127.0.0.1` and
+ * `tauri.localhost` are accepted; the bare `localhost` hostname is rejected to
+ * align with the browser-distribution deprecation and remove a DNS-resolution
+ * attack surface.
+ *
+ * This regex is not the whole allowlist — `isLocalhostOrigin` below also accepts
+ * `TAURI_LINUX_ORIGIN` (`tauri://localhost`) via a separate exact-string branch.
+ * Saying "only 127.0.0.1 and tauri.localhost are accepted" here read as a claim
+ * about the accepted set and stopped being true when that branch was added
+ * (#1307).
  */
 export const LOCALHOST_ORIGIN_RE = new RegExp(
   `^https?://(127\\.0\\.0\\.1|${escapeRegExp(TAURI_HOSTNAME)})(:\\d+)?$`,
