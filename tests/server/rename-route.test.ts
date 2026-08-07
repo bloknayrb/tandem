@@ -30,10 +30,18 @@ function mockRes(): Response & { _status: number; _json: unknown } {
 // Include an allowlisted Origin so the assertOriginAllowlisted gate passes
 // in direct-handler unit tests. The Origin gate itself is exercised by the
 // integration tests below (they use a real Express server).
-const reqWith = (body: unknown) =>
+// `socket.remoteAddress` matters since #1294: the response's path fields are
+// basenamed for non-loopback callers, and an absent address fails CLOSED (is
+// treated as remote). These direct-handler tests model the local UI, which is
+// the only caller that gets full paths.
+// Since #1293 it also decides whether the handler runs at all — the loopback
+// gate is unconditional now, so a double with no socket models a caller that
+// cannot exist and gets a 403 before reaching the code under test.
+const reqWith = (body: unknown, remoteAddress = "127.0.0.1") =>
   ({
     body,
     headers: { origin: `http://${TAURI_HOSTNAME}` },
+    socket: { remoteAddress },
   }) as unknown as Request;
 
 beforeEach(() => renameDocument.mockReset());
