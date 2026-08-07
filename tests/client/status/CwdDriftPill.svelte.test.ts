@@ -12,11 +12,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import StatusBar from "../../../src/client/status/StatusBar.svelte";
 
-const DRIFT = {
-  suggestedCwd: "~/projects/alpha",
-  claudeCwd: "~/notes",
-  label: "alpha",
-  claudeLabel: "notes",
+const PILL = {
+  label: "Claude in notes",
+  title: "Claude is running in ~/notes, not ~/projects/alpha.",
+  ariaLabel:
+    "Working folder mismatch. Claude is running in ~/notes, not ~/projects/alpha. " +
+    "It can't see that folder's CLAUDE.md.",
+  explanation:
+    "Claude is running in ~/notes, not ~/projects/alpha. It can't see that folder's CLAUDE.md.",
+  actionLabel: "Restart Claude in alpha…",
 };
 
 const baseProps = {
@@ -34,7 +38,7 @@ const baseProps = {
 afterEach(() => cleanup());
 
 function mount(over: Record<string, unknown> = {}) {
-  return render(StatusBar, { props: { ...baseProps, cwdDrift: DRIFT, ...over } });
+  return render(StatusBar, { props: { ...baseProps, cwdDriftView: PILL, ...over } });
 }
 
 describe("drift pill placement", () => {
@@ -53,13 +57,11 @@ describe("drift pill placement", () => {
     expect(getByTestId("cwd-drift-pill")).toBeTruthy();
   });
 
-  it("stays hidden while an AI CTA is showing", () => {
-    const { queryByTestId } = mount({ aiState: "stopped" as const, aiChip: "restart" as const });
-    expect(queryByTestId("cwd-drift-pill")).toBeNull();
-  });
-
-  it("renders nothing when the caller passes no drift", () => {
-    const { queryByTestId } = mount({ cwdDrift: null });
+  it("renders nothing when the caller passes no pill", () => {
+    // The stale-CTA gate now lives in `cwdDriftPill` and is composed by App, so
+    // that suppression is pinned in `status-ai-view.test.ts`. What StatusBar owes
+    // is only that it renders exactly what it is handed.
+    const { queryByTestId } = mount({ cwdDriftView: null });
     expect(queryByTestId("cwd-drift-pill")).toBeNull();
   });
 });
@@ -109,6 +111,38 @@ describe("drift pill affordances", () => {
       expect(queryByTestId(testid), `${testid} left the menu open`).toBeNull();
       cleanup();
     }
+  });
+
+  it("hands focus to the status bar for the rows that unmount it", async () => {
+    // `DecorationsMenu`, whose close-guard this copies, has a trigger that
+    // survives every action. Dismiss and opt-out unmount this component AND its
+    // trigger, so restoring focus there drops a keyboard user on <body>.
+    for (const testid of ["cwd-drift-dismiss", "cwd-drift-opt-out"] as const) {
+      const { getByTestId, container } = mount();
+      await fireEvent.click(getByTestId("cwd-drift-pill"));
+      await fireEvent.click(getByTestId(testid));
+      const statusRoot = container.querySelector("[data-status-focus-root]");
+      expect(statusRoot, testid).not.toBeNull();
+      expect(document.activeElement, `${testid} stranded focus`).toBe(statusRoot);
+      cleanup();
+    }
+  });
+
+  it("keeps focus on the trigger for the row that leaves it mounted", async () => {
+    const { getByTestId } = mount();
+    await fireEvent.click(getByTestId("cwd-drift-pill"));
+    await fireEvent.click(getByTestId("cwd-drift-relaunch"));
+    expect(document.activeElement).toBe(getByTestId("cwd-drift-pill"));
+  });
+
+  it("closes on an outside click", async () => {
+    // `clickOutside` fires on mousedown — the case Escape cannot reach, and the
+    // reason `closeMenu`'s focus guard is conditional at all.
+    const { getByTestId, queryByTestId } = mount();
+    await fireEvent.click(getByTestId("cwd-drift-pill"));
+    expect(queryByTestId("cwd-drift-dismiss")).not.toBeNull();
+    await fireEvent.mouseDown(document.body);
+    expect(queryByTestId("cwd-drift-dismiss")).toBeNull();
   });
 
   it("closes on Escape without running anything", async () => {

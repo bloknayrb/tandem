@@ -35,6 +35,10 @@ import {
   samePath,
 } from "../../../src/server/launcher/supervisor.js";
 
+/** Build a Windows-shaped path without writing backslash escapes inline. */
+const BACKSLASH = String.fromCharCode(92);
+const WIN = (parts: string[]): string => parts.join(BACKSLASH);
+
 let home: string;
 let projA: string;
 let projB: string;
@@ -73,23 +77,27 @@ describe("distinguishingLabel", () => {
     // The case `basename` gets wrong: two `src` directories in two projects.
     // A basename label would name both folders "src", which is not a shorter
     // answer — it is the wrong one.
-    expect(distinguishingLabel("/home/u/alpha/src", "/home/u/beta/src", "linux")).toBe(
-      path.join("alpha", "src"),
-    );
+    expect(distinguishingLabel("/home/u/alpha/src", "/home/u/beta/src", "linux")).toBe("alpha/src");
   });
 
   it("distinguishes two worktrees of one repository", () => {
     expect(
       distinguishingLabel("/home/u/wt/feature/tandem", "/home/u/wt/main/tandem", "linux"),
-    ).toBe(path.join("feature", "tandem"));
+    ).toBe("feature/tandem");
   });
 
-  it("elides once the divergence is deeper than the cap", () => {
-    const a = "/home/u/a/one/two/three/four";
-    const b = "/home/u/b/one/two/three/four";
-    const label = distinguishingLabel(a, b, "linux");
-    expect(label.startsWith("…")).toBe(true);
-    expect(label.endsWith(path.join("two", "three", "four"))).toBe(true);
+  it("elides the MIDDLE, keeping the segment that actually differs", () => {
+    // Eliding the front would return the last three segments — which are
+    // identical in both paths by definition, so both folders would come back
+    // named the same thing. That is the exact failure this function exists to
+    // prevent, reintroduced by its own fallback.
+    const a = "/home/u/alpha/one/two/three/four";
+    const b = "/home/u/beta/one/two/three/four";
+    const la = distinguishingLabel(a, b, "linux");
+    const lb = distinguishingLabel(b, a, "linux");
+    expect(la).toBe("alpha/…/four");
+    expect(lb).toBe("beta/…/four");
+    expect(la).not.toBe(lb);
   });
 
   it("falls back to the last segment when one path is a suffix of the other", () => {
@@ -99,24 +107,43 @@ describe("distinguishingLabel", () => {
   it("folds case on win32 and not elsewhere", () => {
     // Same directory, differently cased. On Windows these must be treated as
     // equal — so the divergence is found one level up, not at the leaf.
-    expect(distinguishingLabel("C:\\U\\Alpha\\Src", "C:\\U\\beta\\src", "win32")).toBe(
-      path.join("Alpha", "Src"),
-    );
+    expect(
+      distinguishingLabel(
+        WIN(["C:", "U", "Alpha", "Src"]),
+        WIN(["C:", "U", "beta", "src"]),
+        "win32",
+      ),
+    ).toBe(WIN(["Alpha", "Src"]));
     expect(distinguishingLabel("/u/alpha/Src", "/u/beta/src", "linux")).toBe("Src");
   });
 
   it("splits on both separators regardless of host platform", () => {
     // A Windows path reaching a Linux CI host: splitting on `path.sep` alone
     // would yield one enormous segment and a useless label.
-    expect(distinguishingLabel("C:\\u\\alpha", "C:\\u\\beta", "linux")).toBe("alpha");
+    expect(distinguishingLabel(WIN(["C:", "u", "alpha"]), WIN(["C:", "u", "beta"]), "linux")).toBe(
+      "alpha",
+    );
+  });
+
+  it("joins with the SEAM's separator, not the host's", () => {
+    // Every other expectation in this block is built with `path.join`, i.e. with
+    // the same host primitive the implementation uses — so on a Linux CI host an
+    // implementation that hardcoded "/" would satisfy all of them. These two pin
+    // the separator against the platform argument instead.
+    expect(
+      distinguishingLabel(
+        WIN(["C:", "u", "alpha", "src"]),
+        WIN(["C:", "u", "beta", "src"]),
+        "win32",
+      ),
+    ).toBe(WIN(["alpha", "src"]));
+    expect(distinguishingLabel("/u/alpha/src", "/u/beta/src", "linux")).toBe("alpha/src");
   });
 });
 
 describe("tildeAbbreviate", () => {
   it("replaces the home prefix", () => {
-    expect(tildeAbbreviate("/home/u/projects/alpha", "/home/u", "linux")).toBe(
-      `~${path.sep}${path.join("projects", "alpha")}`,
-    );
+    expect(tildeAbbreviate("/home/u/projects/alpha", "/home/u", "linux")).toBe("~/projects/alpha");
   });
 
   it("renders home itself as ~ rather than exposing the account name", () => {
@@ -130,6 +157,21 @@ describe("tildeAbbreviate", () => {
   it("does not treat a sibling with a shared prefix as inside home", () => {
     // `/home/user2` starts with the string `/home/user` but is not under it.
     expect(tildeAbbreviate("/home/user2/x", "/home/user", "linux")).toBe("/home/user2/x");
+  });
+
+  it("works on Windows-shaped paths, on any host", () => {
+    // This is the function whose stated job is keeping a real full name out of
+    // screenshots on the one platform where the account name usually IS the
+    // person's full name — so it has to be exercised with a Windows path, and a
+    // platform enum alone could not do that while `path.relative` came from the
+    // host.
+    const winHome = WIN(["C:", "Users", "Ada Lovelace"]);
+    expect(tildeAbbreviate(WIN([winHome, "projects"]), winHome, "win32")).toBe(
+      WIN(["~", "projects"]),
+    );
+    expect(tildeAbbreviate(winHome, winHome, "win32")).toBe("~");
+    // Case-insensitively the same directory on Windows.
+    expect(tildeAbbreviate(winHome.toUpperCase(), winHome, "win32")).toBe("~");
   });
 });
 
@@ -263,6 +305,43 @@ describe("previewCwdDrift", () => {
     for (const field of [out.suggestedCwd, out.claudeCwd, out.label, out.claudeLabel]) {
       expect(field).not.toContain(home);
     }
+  });
+
+  it("never leaks the account name when Claude is in home — the DEFAULT case", async () => {
+    // The launcher's fallback cwd IS home (`resolveCwd` → `homeCwd()`, taken
+    // whenever no `workingDirectory` is configured), so this is what a fresh
+    // install with any document open produces. Labels used to be computed from
+    // the RAW paths, and `distinguishingLabel` of a home path against a subfolder
+    // returns home's basename — which on every platform is the account name. The
+    // pill read "Claude in bryan.kolbeck". The full-path assertion above did not
+    // catch it, because only the basename escaped.
+    //
+    // The fixture's home basename is literally "home", so assert on a directory
+    // named like a real account instead.
+    const account = path.join(path.dirname(home), "ada.lovelace");
+    const project = path.join(account, "projects", "api");
+    fs.mkdirSync(project, { recursive: true });
+    const out = await previewCwdDrift({
+      candidate: project,
+      claudeCwd: account,
+      bundledDocDirs: [],
+      homeOverride: account,
+    });
+    expect(out.drifted).toBe(true);
+    if (!out.drifted) return;
+    expect(out.claudeLabel).toBe("~");
+    for (const field of [out.suggestedCwd, out.claudeCwd, out.label, out.claudeLabel]) {
+      expect(field, field).not.toContain("ada.lovelace");
+    }
+  });
+
+  it("keeps sibling folders distinguishable after abbreviation", async () => {
+    // The fix for the leak above rewrites the label inputs, so pin that it did
+    // not flatten the case the labels exist for.
+    const out = await previewCwdDrift(base({ candidate: sharedSrcA, claudeCwd: sharedSrcB }));
+    expect(out.drifted).toBe(true);
+    if (!out.drifted) return;
+    expect(out.label).not.toBe(out.claudeLabel);
   });
 });
 

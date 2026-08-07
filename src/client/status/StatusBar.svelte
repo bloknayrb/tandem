@@ -9,7 +9,6 @@ import type {
   PushDelivery,
 } from "../hooks/useAiReadiness.svelte";
 import { AI_CTA } from "../hooks/useAiReadiness.svelte";
-import type { CwdDrift } from "../hooks/useCwdDrift.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
@@ -18,7 +17,7 @@ import {
   type AiIndicatorTone,
   type AiIndicatorView,
   aiIndicatorView,
-  cwdDriftPill,
+  type CwdDriftPill as CwdDriftPillView,
 } from "./status-ai-view";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
@@ -81,13 +80,16 @@ interface Props {
    */
   heldCount?: number;
   /**
-   * #1282: the server's working-folder drift verdict for the active document,
-   * with the user's own suppression (per-pair dismissal / session backstop /
-   * permanent opt-out) ALREADY applied by the caller. `null` means "say
-   * nothing" — this component never re-derives whether a drift is worth
-   * mentioning, it only renders the answer.
+   * #1282: the fully-resolved working-folder drift pill, or `null` for "say
+   * nothing". Every gate — the server's verdict, the user's suppression, and the
+   * stale-CTA check — is applied by the caller.
+   *
+   * The composed VIEW is passed rather than the raw drift because App needs the
+   * same answer for the one-time explainer, whose copy points at this pill.
+   * Computing it in both places is how the explainer's precondition drifted
+   * weaker than the pill's render condition in the first place.
    */
-  cwdDrift?: CwdDrift | null;
+  cwdDriftView?: CwdDriftPillView | null;
   /** Open the "restart Claude in this folder" flow (which confirms first). */
   onRelaunchInFolder?: () => void;
   /** Hide this (Claude's folder, target folder) pair for the session. */
@@ -116,7 +118,7 @@ let {
   lastSaveOk = false,
   editor,
   heldCount = 0,
-  cwdDrift = null,
+  cwdDriftView = null,
   onRelaunchInFolder,
   onDismissDrift,
   onOptOutDrift,
@@ -239,9 +241,8 @@ const labelColor = $derived(
 // `$derived` so it recomputes as the reactive props flip connected→solo→down.
 const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode, pushDelivery));
 
-// #1282. A sibling of the AI indicator rather than part of it, and mutually
-// exclusive with the CTA below by construction — see `cwdDriftPill`.
-const driftView = $derived(cwdDriftPill(cwdDrift, aiChip));
+// #1282. A sibling of the AI indicator rather than part of it — see
+// `cwdDriftPill` for why, and why it is composed by the caller rather than here.
 
 /**
  * The AI indicator's actionable content — title, aria-label, and onclick —
@@ -356,6 +357,8 @@ function cycleWordMode() {
      labelled already; it needs no landmark of its own. -->
 <div
   class="tandem-floating-pill tandem-status-pill"
+  data-status-focus-root
+  tabindex="-1"
   style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 6px var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"
 >
   <!-- Left: document/sync fields, faint until the pill is hovered/focused.
@@ -475,9 +478,9 @@ function cycleWordMode() {
   <!-- #1282 working-folder drift. Deliberately NOT nested inside `{#if aiView}`:
        `aiIndicatorView` returns null for "launcher running, no MCP session yet",
        which is exactly the auto-launched startup window this nudge exists for. -->
-  {#if driftView}
+  {#if cwdDriftView}
     <CwdDriftPill
-      pill={driftView}
+      pill={cwdDriftView}
       onRelaunch={() => onRelaunchInFolder?.()}
       onDismiss={() => onDismissDrift?.()}
       onOptOut={() => onOptOutDrift?.()}

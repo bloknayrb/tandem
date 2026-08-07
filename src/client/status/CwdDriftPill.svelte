@@ -10,10 +10,12 @@ import type { CwdDriftPill } from "./status-ai-view";
  * The pill is a menu trigger, not a one-click action, for two reasons:
  *
  *   - **The dismiss affordance has to be a real control.** A bare inline `×`
- *     lands at ~10-12px, which fails WCAG 2.2 SC 2.5.8 (24×24 minimum target)
- *     and would be the only sub-24px control in a status bar where
- *     `.status-ai-indicator` already carries `min-height: 24px`. Three full-size
- *     menu rows clear it with room to spare.
+ *     lands at ~10-12px, which fails WCAG 2.2 SC 2.5.8 (24×24 minimum target) in
+ *     a status bar where `.status-ai-indicator` already carries
+ *     `min-height: 24px`. Three full-size menu rows clear it with room to spare.
+ *     (The word-count button is also under 24px, but it is inline text that
+ *     plausibly qualifies for SC 2.5.8's inline exception; a standalone glyph
+ *     does not.)
  *   - **The menu is where the explanation fits.** A ten-pixel chip cannot teach
  *     a concept the user has never met — that Claude Code scopes what it can
  *     read to one directory — and the menu heading can.
@@ -38,6 +40,7 @@ let { pill, onRelaunch, onDismiss, onOptOut }: Props = $props();
 let menuOpen = $state(false);
 let triggerBtn = $state<HTMLButtonElement | null>(null);
 let menuEl = $state<HTMLDivElement | null>(null);
+let wrapEl = $state<HTMLDivElement | null>(null);
 
 $effect(() => {
   if (menuOpen) focusMenuEntryPoint(menuEl);
@@ -63,11 +66,30 @@ function handleKey(e: KeyboardEvent): void {
   }
 }
 
-/** Close BEFORE running the handler: `onRelaunch` opens a modal confirm, and a
- * menu still painted behind it reads as an unrelated stuck overlay. The other
- * two unmount this component outright, where closing first keeps focus from
- * stranding on a removed node. */
-function choose(run: () => void): void {
+/**
+ * Run a menu row's handler, having first put focus somewhere that will still
+ * exist afterwards.
+ *
+ * `unmounts` is the whole reason this takes a flag. `DecorationsMenu`, whose
+ * close-guard this component copies, has a trigger that survives every action —
+ * so restoring focus to it is right there and wrong here. Dismiss and
+ * "don't show again" both flip suppression state that nulls the pill's own view,
+ * unmounting this component AND `triggerBtn` with it: focus restored to the
+ * trigger lands on a node removed microseconds later, and a keyboard user is
+ * dumped on `<body>`. Hand focus to the status bar instead, which outlives us.
+ *
+ * `onRelaunch` keeps the trigger: it opens a modal confirm and leaves the pill
+ * mounted, which is the case the copied guard was written for.
+ */
+function choose(run: () => void, { unmounts = false }: { unmounts?: boolean } = {}): void {
+  if (unmounts) {
+    // Read the fallback BEFORE closing — `wrapEl` is still attached here.
+    const fallback = wrapEl?.closest<HTMLElement>("[data-status-focus-root]") ?? null;
+    menuOpen = false;
+    fallback?.focus();
+    run();
+    return;
+  }
   closeMenu();
   run();
 }
@@ -75,6 +97,7 @@ function choose(run: () => void): void {
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
+  bind:this={wrapEl}
   class="drift-wrap"
   data-testid="cwd-drift"
   use:clickOutside={closeMenu}
@@ -119,7 +142,7 @@ function choose(run: () => void): void {
         class="mi"
         data-testid="cwd-drift-dismiss"
         role="menuitem"
-        onclick={() => choose(onDismiss)}
+        onclick={() => choose(onDismiss, { unmounts: true })}
       >
         Not now
       </button>
@@ -129,7 +152,7 @@ function choose(run: () => void): void {
         class="mi link"
         data-testid="cwd-drift-opt-out"
         role="menuitem"
-        onclick={() => choose(onOptOut)}
+        onclick={() => choose(onOptOut, { unmounts: true })}
       >
         Don’t show this again
       </button>

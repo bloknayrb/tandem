@@ -269,6 +269,85 @@ describe("createCwdDrift", () => {
     expect(r.calls()).toBe(1);
   });
 
+  it("rejects a drifted:true answer with missing fields", async () => {
+    // The one path where a bad answer becomes a confident false statement rather
+    // than silence: undefined fields would render "Claude is running in
+    // undefined" AND poison the dismissal key, so dismissing that nonsense pair
+    // suppresses every real drift afterwards.
+    const r = recorder([ok({ drifted: true, suggestedCwd: "~/a" })]);
+    const h = mount({ cwd: "/home/u/a", fetchFn: r.fetchFn });
+    await settle();
+    expect(h.get().drift).toBeNull();
+  });
+
+  it("rejects a drifted:true answer with non-string fields", async () => {
+    const r = recorder([
+      ok({ drifted: true, suggestedCwd: "~/a", claudeCwd: "~/b", label: 7, claudeLabel: "b" }),
+    ]);
+    const h = mount({ cwd: "/home/u/a", fetchFn: r.fetchFn });
+    await settle();
+    expect(h.get().drift).toBeNull();
+  });
+
+  it("does not blank the pill when a superseding probe aborts the current one", async () => {
+    // A real `fetch` REJECTS on abort, and the effect cleanup aborts on every
+    // re-run — so guarding the failure paths on `mounted` alone blanks the chip
+    // on every tab switch and on both `refresh()` calls fired after a launcher
+    // action. The stub used elsewhere in this file never rejects on abort, which
+    // is exactly why it could not catch this.
+    let call = 0;
+    const abortingFetch = (async (_url: string, init?: RequestInit) => {
+      call += 1;
+      if (call === 1) return ok(DRIFTED) as unknown as Response;
+      // Second and later probes hang until aborted, then reject like the real thing.
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }) as unknown as typeof fetch;
+
+    const h = mount({ cwd: "/home/u/a", fetchFn: abortingFetch });
+    await settle();
+    expect(h.get().drift, "seed probe should have answered").not.toBeNull();
+
+    // Probe 2 goes in flight...
+    h.get().refresh();
+    await vi.advanceTimersByTimeAsync(SETTLE + 1);
+    // ...and is superseded, which aborts it and drives its rejection.
+    h.get().refresh();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+
+    expect(h.get().drift, "an aborted probe cleared a live answer").not.toBeNull();
+  });
+
+  it("does not let a slow superseded NON-OK response clear a fresher answer", async () => {
+    // The abort case above drives the `catch`; this drives the `!res.ok` branch,
+    // which an abort never reaches. Same failure either way: a probe the user has
+    // already moved past returns 403 late and blanks the answer on screen.
+    let releaseFirst: ((v: Response) => void) | null = null;
+    let call = 0;
+    const fetchFn = (async () => {
+      call += 1;
+      if (call === 1) {
+        return new Promise<Response>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return ok(DRIFTED) as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const h = mount({ cwd: "/home/u/first", fetchFn });
+    await vi.advanceTimersByTimeAsync(SETTLE + 1);
+    // Supersede it; probe 2 answers with a real drift.
+    await h.rerender({ cwd: "/home/u/second" });
+    await settle();
+    expect(h.get().drift, "second probe should have answered").not.toBeNull();
+
+    // Probe 1 only now resolves — with a rejection the server sent late.
+    releaseFirst?.({ ok: false, status: 403, json: async () => ({}) } as unknown as Response);
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(h.get().drift, "a superseded non-OK response cleared a live answer").not.toBeNull();
+  });
+
   it("writes nothing after unmount", async () => {
     let release: ((v: unknown) => void) | null = null;
     const r = recorder([

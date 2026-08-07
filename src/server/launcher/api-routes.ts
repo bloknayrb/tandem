@@ -20,9 +20,12 @@
  *   - `POST /cwd-preview` — body `{ cwd }`. Read-only drift verdict (#1282);
  *     loopback-only, no nonce. See `makeCwdPreviewHandler`.
  *
- * The supervisor singleton is bridged via `() => Supervisor | null`. Routes
- * return 503 + `NOT_AVAILABLE` when the getter returns null (stdio mode,
- * disabled-by-env, or no claude-code integration).
+ * The supervisor singleton is bridged via `() => Supervisor | null`. The
+ * MUTATING routes return 503 + `NOT_AVAILABLE` when the getter returns null
+ * (stdio mode, disabled-by-env, or no claude-code integration). The two
+ * read-only ones do not: `GET /status` answers `{ available: false }`, and
+ * `POST /cwd-preview` answers `{ drifted: false }` — for both, "there is no
+ * launcher" is a fact worth reporting rather than an error.
  */
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -174,6 +177,9 @@ export interface LauncherRoutesDeps {
   relaunchHook?: () => Promise<void>;
   startFreshHook?: () => Promise<void>;
   workingDirHook?: () => Promise<void>;
+  /** Same seam for the preview route: holds a probe in-flight so concurrent
+   * requests exercise the shed path. Fires INSIDE the counted region. */
+  cwdPreviewHook?: () => Promise<void>;
 }
 
 export function registerLauncherRoutes(app: Express, mw: Handler, deps: LauncherRoutesDeps): void {
@@ -665,7 +671,23 @@ function makeCwdPreviewHandler(deps: LauncherRoutesDeps): Handler {
       return;
     }
 
+    // Shed load rather than queue it. This is the only launcher route doing
+    // unbounded filesystem work, and the hazard is the same one the async
+    // resolvers were written for, one level down: `fsp.realpath` keeps the event
+    // loop free but holds a libuv THREADPOOL slot (default 4) for the full SMB
+    // timeout, and it takes no AbortSignal — so an aborted request keeps its
+    // thread. Four concurrent probes against a hung mapped drive would starve
+    // the pool that atomic saves, session writes and the annotation writer share,
+    // and the symptom would be saves hanging with nothing pointing here.
+    // Shedding costs nothing: every failure on this route is already "no drift".
+    if (cwdPreviewInFlight >= MAX_CONCURRENT_CWD_PREVIEWS) {
+      res.json({ drifted: false } satisfies LauncherCwdPreview);
+      return;
+    }
+    cwdPreviewInFlight += 1;
+
     try {
+      if (deps.cwdPreviewHook) await deps.cwdPreviewHook();
       const preview = await previewCwdDrift({
         candidate: pre.cwd,
         claudeCwd: runningCwd(deps.getSupervisor()),
@@ -679,21 +701,46 @@ function makeCwdPreviewHandler(deps: LauncherRoutesDeps): Handler {
       // suppressing the whole feature.
       console.error("[Launcher routes] cwd-preview failed:", err);
       res.json({ drifted: false } satisfies LauncherCwdPreview);
+    } finally {
+      cwdPreviewInFlight -= 1;
     }
   };
 }
 
-/** Where the supervised Claude is running right now, or `null` when nothing is
- * (no supervisor, stopped, or `status()` threw — which it should never do, but a
- * drift verdict is a suggestion, and "no drift" is the safe one). */
+/**
+ * Concurrency cap for the drift preview. Small on purpose: the client issues at
+ * most one probe per settled tab switch, so anything above a couple in flight is
+ * either a burst of very fast switching or a caller that is not the UI.
+ */
+const MAX_CONCURRENT_CWD_PREVIEWS = 3;
+let cwdPreviewInFlight = 0;
+
+/** Test-only reset of the preview concurrency counter. */
+export function _resetCwdPreviewInFlightForTests(): void {
+  if (process.env.VITEST !== "true") {
+    throw new Error("_resetCwdPreviewInFlightForTests is test-only");
+  }
+  cwdPreviewInFlight = 0;
+}
+
+/**
+ * Where the supervised Claude is running right now, or `null` when nothing is.
+ *
+ * Deliberately does NOT catch a throwing `status()`. It is called inside the
+ * handler's `try`, which already answers with the identical `{ drifted: false }`
+ * — and logs. A local catch here would change exactly one thing: it would delete
+ * the only diagnostic this route has, for the failure it is least prepared for.
+ * "Should never throw" is the reason to log it, not the reason to swallow it.
+ *
+ * Contrast `landedCwd`, which lets `status()` throw through to `sendUnexpected`
+ * and a 500. Same call, opposite contracts: there the caller asked to *change*
+ * something and deserves an error; here it asked a question a failed check can
+ * still answer.
+ */
 function runningCwd(sup: Supervisor | null): string | null {
   if (sup === null) return null;
-  try {
-    const st = sup.status();
-    return st.running ? st.cwd : null;
-  } catch {
-    return null;
-  }
+  const st = sup.status();
+  return st.running ? st.cwd : null;
 }
 
 /** Cap on the error detail surfaced over the wire. These routes are loopback +
