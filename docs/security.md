@@ -36,8 +36,9 @@ This reaches further than the JSON routes: the SSE handlers call `res.writeHead(
 
 ## What actually guards a mutating route
 
-Mutating `/api` routes call `assertOriginAllowlisted` and then `assertLoopbackForMutation`. Read
-the pair honestly, because the names promise more than they deliver (#1293):
+*Most* mutating `/api` routes call `assertOriginAllowlisted` and then `assertLoopbackForMutation` —
+but not all of them do, and the exceptions are enumerated below. Read the pair honestly, because
+the names promise more than they deliver (#1293):
 
 - `assertOriginAllowlisted` reads the `Origin` header, which a non-browser client can forge
   freely. It stops a *browser* on a page you visited; it stops nothing else.
@@ -47,9 +48,15 @@ the pair honestly, because the names promise more than they deliver (#1293):
   and the genuinely exposed configuration was the token-authenticated LAN bind that
   `bind-check.ts` permits whenever a token exists.
 
-  It governs the routes that **call** it. `open`, `save` (save-as), `convert` and `upload` take a
-  caller-supplied filesystem path and call neither gate — see #1320. "Mutating routes are
-  loopback-only" is not a statement about all of `/api`.
+  It governs the routes that **call** it, and **ten** mutating routes registered in
+  `src/server/mcp/api-routes.ts` call neither gate. Four of them take a caller-supplied
+  filesystem path — `open`, `save` (save-as), `convert`, `upload` — which makes them the
+  higher-blast-radius subset and the one #1320 tracks. The other six are `close`, `scratchpad`
+  (#1318 is adding its gate), `apply-changes`, `annotation-reply`, `remove-annotation` and
+  `rotate-token`; a token-holding LAN peer can still reach those. Separately, `/api/channel/*`
+  and `DELETE /api/chat` are ungated **deliberately**, because the channel shim and monitor are
+  documented to run against a non-loopback `TANDEM_URL` (Cowork) and gating them would break that
+  transport. "Mutating routes are loopback-only" is not a statement about all of `/api`.
 
 **The primary protection is the loopback bind plus Bearer auth for every non-loopback caller** —
 the two controls described above, which hold regardless of either assertion. `assertOriginAllowlisted`
