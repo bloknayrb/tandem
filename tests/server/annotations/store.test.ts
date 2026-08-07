@@ -409,6 +409,30 @@ describe("reclaimStoreLock", () => {
     await releaseStoreLock();
   });
 
+  it("keeps the app-data path out of an unreadable-lock message (#1294)", async () => {
+    // The route surfaces this message verbatim in a 409 body, and its
+    // `assertLoopbackForMutation` does not actually stop a LAN caller in the
+    // default config — so the raw fs message would ship the app-data layout.
+    await enterReadOnly(String(process.pid));
+    await fs.unlink(lockPath());
+    await fs.mkdir(lockPath()); // readFile on a directory → EISDIR, not ENOENT
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await reclaimStoreLock(vi.fn());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Asserted as an EXACT string, not as `not.toContain(<path>)`. Node's
+      // EISDIR message happens to omit the path, so an absence assertion here
+      // passes against the unfixed code too — it would be a broken instrument
+      // (verified: it did). Pinning the format is what actually holds, because
+      // the format structurally cannot carry a path; the errno — the only part
+      // a user can act on — is still in it.
+      expect(result.message).toBe("Could not read the lock file (EISDIR).");
+    }
+    expect(isStoreReadOnly()).toBe(true);
+    await fs.rmdir(lockPath());
+  });
+
   it("reclaims when the live PID belongs to a clearly non-Tandem process (PID reuse)", async () => {
     await enterReadOnly(String(process.pid));
 

@@ -305,7 +305,14 @@ async function doReclaim(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
-      return { ok: false, message: `Could not read the lock file: ${(err as Error).message}` };
+      // #1294: `message` is surfaced verbatim in POST /api/store/reclaim-lock's
+      // 409 body, and a raw fs message embeds the app-data path Node was
+      // reading. That route's `assertLoopbackForMutation` does NOT close this —
+      // the gate only fires when TANDEM_ALLOW_UNAUTHENTICATED_LAN=1, so a
+      // token-holding LAN caller reaches the handler in the default config. The
+      // errno is the only part a user can act on; the full detail is on stderr.
+      console.warn("[Tandem] reclaim: could not read the lock file:", err);
+      return { ok: false, message: `Could not read the lock file (${code ?? "unknown error"}).` };
     }
     // Lock vanished — fall through to a plain acquire.
   }
