@@ -22,6 +22,7 @@ import { motionOff } from "../panels/cardMotion.js";
 import {
   clampThumbTop,
   composeOpacity,
+  FLASH_HOLD_MS,
   flashOpacity,
   HIT_TEST_MIN_OPACITY,
   proximityOpacity,
@@ -42,8 +43,11 @@ export interface ScrollPillOptions {
   /**
    * The in-app reduce-motion setting. OR-ed with the OS preference via
    * `motionOff`, since a JS-driven pulse escapes the CSS media query.
-   * Suppresses the post-scroll flash only — the proximity fade is how the
-   * control works, not an embellishment.
+   *
+   * Changes the scroll flash from an eased decay to a hold-then-cut step. It
+   * does NOT remove the flash: with the native bar hidden, the flash is the
+   * only scroll feedback a user gets when the cursor is away from the gutter,
+   * so suppressing it would leave this cohort with nothing.
    */
   reduceMotion: boolean;
 }
@@ -81,7 +85,7 @@ export function attachScrollPill(
     spacer: number;
   } | null = null;
   let metrics: ThumbMetrics | null = null;
-  /** Resolved in `retarget`, so the hot path never queries for it. */
+  /** Re-resolved by `measureStatic`, so the per-frame path never queries. */
   let spacerEl: HTMLElement | null = null;
 
   /**
@@ -122,6 +126,11 @@ export function attachScrollPill(
   /** The only layout-reading function. */
   function measureStatic(): void {
     if (!scroller.isConnected) return;
+    // Resolved here rather than only in `retarget()`: if the observers fail to
+    // construct, `retarget()` never runs, and a permanently-null spacer would
+    // silently reinstate the "70vh of blank space counts as document length"
+    // bug this whole correction exists to prevent.
+    spacerEl = scroller.querySelector<HTMLElement>(SPACER_SELECTOR);
     statics = {
       trackRect: track.getBoundingClientRect(),
       scrollHeight: scroller.scrollHeight,
@@ -136,6 +145,7 @@ export function attachScrollPill(
       metrics = null;
       return;
     }
+    const wasPaintable = metrics !== null;
     metrics = thumbMetrics({
       scrollTop: scroller.scrollTop,
       scrollHeight: statics.scrollHeight,
@@ -143,6 +153,11 @@ export function attachScrollPill(
       trackHeight: statics.trackRect.height,
       trailingSpacerPx: statics.spacer,
     });
+    // Re-arm the announce flash the first time there is actually a thumb to
+    // show. Arming it only at attach loses the pulse entirely on any cold load
+    // slower than the flash budget, because Tiptap has not rendered yet and
+    // there is nothing to paint — and nothing would re-arm it afterwards.
+    if (!wasPaintable && metrics && !drag) flashStart = performance.now();
   }
 
   function thumbRect(): Rect | null {
@@ -167,7 +182,14 @@ export function attachScrollPill(
 
     const rect = thumbRect();
     const distance = pointer && rect ? rectDistance(pointer.x, pointer.y, rect) : Infinity;
-    const flash = reduceMotion ? 0 : flashOpacity(performance.now() - flashStart);
+    // Reduce-motion drops the easing, NOT the information: a step function
+    // holds the pill at full strength for the same window and then cuts.
+    // Suppressing the flash entirely would leave a reduce-motion user with no
+    // scroll feedback at all — the native bar is hidden whenever the pill is on
+    // — which is the very complaint the pill answers, reintroduced for the one
+    // cohort least able to work around it.
+    const elapsed = performance.now() - flashStart;
+    const flash = reduceMotion ? (elapsed <= FLASH_HOLD_MS ? 1 : 0) : flashOpacity(elapsed);
     const opacity = composeOpacity({
       proximity: proximityOpacity(distance),
       flash,
@@ -243,7 +265,13 @@ export function attachScrollPill(
     // Nothing is painted on a document that does not overflow, so skip both the
     // ancestor walk and the frame. This is the common case for short notes, and
     // without it every mouse move anywhere in the app schedules a no-op frame.
-    if (!metrics) return;
+    // Clear rather than keep: a cached coordinate can only go stale while the
+    // thumb is gone, and a stale near-thumb value would flash the pill fully
+    // lit the moment the document grows back.
+    if (!metrics) {
+      pointer = null;
+      return;
+    }
     pointer =
       wrap && e.target instanceof Node && wrap.contains(e.target)
         ? { x: e.clientX, y: e.clientY }
@@ -271,6 +299,11 @@ export function attachScrollPill(
 
   function moveDrag(e: PointerEvent): void {
     if (!drag) return;
+    // Keep the cache fresh even though `composeOpacity` pins to 1 while
+    // dragging: on release the pin drops and the very next paint measures
+    // distance from this coordinate. Left stale at the pointerdown position, a
+    // long scrub ends with the pill vanishing under the user's own cursor.
+    pointer = { x: e.clientX, y: e.clientY };
     const top = clampThumbTop(e.clientY - drag.grabDy - drag.trackTop, drag);
     // Render from the frozen geometry so the thumb stays glued to the cursor
     // even if the document's length changes underneath the drag.
@@ -298,7 +331,7 @@ export function attachScrollPill(
       // Capture can already be gone (pointer left, element detached).
     }
     document.body.classList.remove(DRAGGING_CLASS);
-    scroller.removeEventListener("wheel", blockWheel);
+    window.removeEventListener("wheel", blockWheel);
     invalidate();
   }
 
@@ -330,7 +363,11 @@ export function attachScrollPill(
       // Non-fatal: the window-level move/up listeners drive the drag anyway.
     }
     document.body.classList.add(DRAGGING_CLASS);
-    scroller.addEventListener("wheel", blockWheel, { passive: false });
+    // On `window`, not the scroller: during a drag the cursor sits over the
+    // thumb, which is a SIBLING of the scroller, and `wheel` is not a pointer
+    // event — so pointer capture does not retarget it and a scroller-scoped
+    // listener would never fire.
+    window.addEventListener("wheel", blockWheel, { passive: false });
     schedule();
   }
 
@@ -386,7 +423,6 @@ export function attachScrollPill(
     ro.disconnect();
     ro.observe(scroller);
     for (const child of scroller.children) ro.observe(child);
-    spacerEl = scroller.querySelector<HTMLElement>(SPACER_SELECTOR);
     invalidate();
   }
 

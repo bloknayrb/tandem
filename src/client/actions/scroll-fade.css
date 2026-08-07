@@ -22,7 +22,11 @@
 
    `.tandem-scroll-pill-surface` opts a surface OUT of this gate entirely, in
    both directions — see the pair of rules below. Only the editor scroller
-   carries it, so every other fade surface is unaffected. */
+   carries it, and only when it is the surface actually being scrolled: in
+   source view the textarea is its own scroller with its own bar, and
+   `.editor-scroll` reports phantom overflow of its own padding, so it drops the
+   class and falls back to this gate rather than restoring a dead native bar
+   alongside the textarea's real one. */
 @supports (mask-image: linear-gradient(#000, #000)) or
   (-webkit-mask-image: linear-gradient(#000, #000)) {
   .tandem-scroll-fade-y:not(.tandem-scroll-pill-surface),

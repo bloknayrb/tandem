@@ -223,10 +223,11 @@ export interface TandemSettings {
   uniformTabWidth: boolean;
   /**
    * Show the editor's custom scroll pill — a proximity-faded thumb overlaying
-   * the document scroll area's right edge. `true` (default) renders it; `false`
-   * leaves the editor with no scroll affordance at all, since
-   * `scroll-fade.css` already hides the native scrollbar on that element.
-   * Display-only.
+   * the document scroll area's right edge. `true` (default) renders it and
+   * hides the native scrollbar; `false` falls back to the native bar, which
+   * `scroll-fade.css` opts this surface out of its scrollbar-hiding gate to
+   * allow. Both halves matter: without the fallback, "off" would mean no scroll
+   * affordance at all. Display-only.
    */
   scrollPill: boolean;
   /**

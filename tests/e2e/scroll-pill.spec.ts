@@ -132,6 +132,49 @@ test("dragging the thumb scrubs the document", async ({ page }) => {
     .toBe(false);
 });
 
+test("thumb stays lit under the cursor after a drag is released", async ({ page }) => {
+  // Regression: the drag path pins opacity to 1 while dragging, so the pointer
+  // cache was left at the pointerdown coordinate. On release the pin dropped
+  // and distance was measured from where the drag STARTED — several hundred px
+  // away — so the pill vanished with the cursor sitting directly on it.
+  await openTall(page);
+  const thumb = thumbOf(page);
+
+  const box = await thumb.boundingBox();
+  expect(box).not.toBeNull();
+  const x = (box?.x ?? 0) + (box?.width ?? 0) / 2;
+  const startY = (box?.y ?? 0) + (box?.height ?? 0) / 2;
+
+  await page.mouse.move(x, startY);
+  await page.mouse.down();
+  await page.mouse.move(x, startY + 400, { steps: 12 });
+  await page.mouse.up();
+
+  // Wait past the post-release scroll flash — it lights the pill for ~1.1s
+  // regardless of the pointer cache, and would mask the bug entirely. What is
+  // under test is the state AFTER the flash: the cursor has not moved since
+  // release and is still sitting on the thumb, so proximity alone must hold it
+  // lit. With a stale cache the pill goes dark here.
+  await page.waitForTimeout(1400);
+  expect(await thumbOpacity(page)).toBeGreaterThan(0.9);
+});
+
+test("reduce motion keeps the scroll indicator, without the fade ramp", async ({ page }) => {
+  // Regression: suppressing the flash under reduce-motion left this cohort with
+  // no scroll feedback at all, since the native bar is hidden while the pill is
+  // on. Reduce-motion drops the easing, not the information.
+  await seedSettings(page, { reduceMotion: true });
+  await openTall(page);
+
+  await page.mouse.move(40, 400);
+  await scrollerOf(page).evaluate((el) => {
+    el.scrollTop = 500;
+  });
+  await expect.poll(async () => thumbOpacity(page)).toBeGreaterThan(0.9);
+  // Still self-terminating — the step function cuts at the hold boundary.
+  await expect.poll(async () => thumbOpacity(page), { timeout: 5_000 }).toBeLessThan(0.05);
+});
+
 test("opacity falls off with cursor distance and recovers on approach", async ({ page }) => {
   await openTall(page);
   const thumb = thumbOf(page);

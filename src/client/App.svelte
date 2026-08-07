@@ -2730,8 +2730,9 @@ const shouldShowModelPicker = $derived(
     <div
       bind:this={editorScrollEl}
       data-testid="editor-scroll-container"
-      class="editor-scroll tandem-scroll-fade-y tandem-scroll-pill-surface"
+      class="editor-scroll tandem-scroll-fade-y"
       class:hide-raw-md={!settingsState.settings.showRawMarkdown}
+      class:tandem-scroll-pill-surface={!inSourceView}
       class:tandem-scroll-pill-host={scrollPillEnabled}
       use:scrollFade={"y"}
       role="main"
