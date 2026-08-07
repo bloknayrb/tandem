@@ -7,6 +7,13 @@
 
 // --- Channel / event stream (SSE + push-back) -------------------------------
 export const API_EVENTS = "/api/events";
+/**
+ * WebSocket only — a protocol upgrade, not an Express route. Registered on the
+ * http.Server's `upgrade` event (`events/wake-socket.ts`), so it is NOT behind
+ * `apiMiddleware` and carries its own guard. See that module's docblock: CORS
+ * does not apply to a WS handshake, so the Origin check has to be a rejection.
+ */
+export const API_WAKE = "/api/wake";
 export const API_NOTIFY_STREAM = "/api/notify-stream";
 export const API_CHANNEL_AWARENESS = "/api/channel-awareness";
 export const API_CHANNEL_ERROR = "/api/channel-error";

@@ -1,9 +1,11 @@
 /**
- * Shared banner styles for ConnectionBanner.svelte and UpdaterBanner.svelte.
+ * Shared styles for the `tandem-banner*` surfaces. Six consumers today:
+ * ConnectionBanner, ExternalConflictBanner, FidelityReportBanner,
+ * ReviewOnlyBanner, UpdaterBanner, WakeStallBanner.
  *
  * Imported from each component's <script> block (not <style>), which makes
- * these rules global and unscoped — that's intentional, since both surfaces
- * share the `tandem-banner*` BEM-style class namespace by design.
+ * these rules global and unscoped — that's intentional, since every surface
+ * shares the `tandem-banner*` BEM-style class namespace by design.
  *
  * The `:not(:disabled)` qualifier on the CTA hover rule + the explicit
  * `:disabled` block are kept so UpdaterBanner's "Installing…" state still

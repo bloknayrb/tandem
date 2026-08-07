@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 5
+version: 6
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
   document editing, or iterating on text collaboratively. Provides workflow
@@ -77,8 +77,26 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 - Check `tandem_getActivity()` before annotating near the user's cursor. If `isTyping` is true, wait for typing to stop before annotating that area.
 - Use `tandem_status({ text: "..." })` to show what you're working on — the user sees it in the editor status bar.
-- **Call `tandem_checkInbox` every 2-3 tool calls**, not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and there is no signal that tells you it's off — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll.
+- **Call `tandem_checkInbox` every 2-3 tool calls**, not just at the end of a task. You cannot tell from your side whether real-time push is reaching you — the channel is often not connected, and Tandem can only tell you when *nothing at all* is subscribed, not whether the thing that is subscribed reaches you — so steady polling is the reliable path, always. It's cheap: repeat polls de-duplicate against what you've already been shown, so frequent calls don't double-report. An item that also went out as a real-time push carries `alreadyPushed: true` and still appears — the server can't confirm a push reached you, so it shows you everything rather than risk dropping it. See "User comments" above before acting on a flagged item twice. When in doubt, poll.
 - Reply to chat messages with `tandem_reply`, not annotations.
+
+## Getting Woken While Idle
+
+Polling is the reliable path and stays the authority on what you see. But between your turns nothing polls, so a comment the user leaves while you sit idle waits until your next turn — which may never come.
+
+If your host offers a `Monitor` tool, you can arm a watch on Tandem's wake stream so idle time doesn't swallow the user's messages. **Arm it at most once per session**, and only if Tandem's tool output has told you nothing is subscribed:
+
+```
+Monitor({ ws: { url: "ws://127.0.0.1:3479/api/wake" }, persistent: true })
+```
+
+Three things to know before you do:
+
+- **Do not arm one if Tandem launched you.** A launcher-spawned session is already woken directly on its input, and the wake turn says so explicitly. A second watch double-wakes every message.
+- **A wake tells you *that* something happened, never *what*.** Frames carry an id, a type and a timestamp — no message text, by design. Always call `tandem_checkInbox` to find out what actually arrived. Answering from the notification is how the same item gets replied to twice: the inbox never marks it seen, so it comes back.
+- **Wakes are best-effort and can be dropped.** A burst of activity is rate-limited by the host, so some notifications never arrive even though every event reached the server. This is exactly why the point above matters — the inbox has all of them; the wake stream may not. Keep polling every 2-3 tool calls regardless.
+
+If `ws` is unavailable, the equivalent stream is `GET http://127.0.0.1:3479/api/events?filter=wake`, which is payload-free in the same way. It needs a shell with `curl` — fine on macOS and Linux, absent on a stock Windows install.
 
 ## .docx Review Workflow
 
