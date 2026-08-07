@@ -257,11 +257,14 @@ test("bar lifts above the selection popup only while a popover is open", async (
   await expect(page.getByRole("menu", { name: "Heading level" })).toBeVisible();
   expect(await wrapZIndex(page), "heading menu open: bar must lift").toBe(toast);
 
-  // Dismissed by clicking away, not Escape. The trigger's mousedown calls
-  // preventDefault so the editor keeps focus and the ProseMirror selection
-  // survives — which also means the wrapper's Escape keydown never fires for a
-  // mouse-opened menu. clickOutside is the dismissal path that actually applies
-  // here, and releasing the lift on close is the half being asserted.
+  // Dismissed by clicking away, not Escape — clickOutside is the dismissal path
+  // being asserted here, and releasing the lift on close is the half that
+  // matters. (The trigger's mousedown calls preventDefault so the ProseMirror
+  // selection survives. That used to mean the wrapper's Escape keydown never
+  // fired for a mouse-opened menu; it no longer does — #1303 added a focus-in
+  // effect that moves focus into the menu however it was opened, so Escape now
+  // reaches the wrapper on the mouse path too. See the two-press test at the
+  // bottom of this file.)
   await editor.locator("p").first().click();
   await expect(page.getByRole("menu", { name: "Heading level" })).toBeHidden();
   expect(await wrapZIndex(page), "closed again: lift must release").toBe(sticky);
@@ -307,4 +310,57 @@ test("format track truncates rather than wrapping, and never scrolls", async ({ 
     singleRowHeight,
     0,
   );
+});
+
+/**
+ * Escape ownership across the two variants — the case nothing covered.
+ *
+ * `escape-owner.ts` lets a nested popover claim Escape so the selection popup's
+ * capture-phase window listener yields to it. That claim is scoped to the
+ * event's ORIGIN, and it was written when a mouse-opened popover left focus in
+ * the editor, so the mouse path was expected to fall through to the popup.
+ *
+ * #1303 changed that: it added focus-in `$effect`s to the heading and
+ * decorations menus that are ungated on how the menu was opened, and the
+ * FormattingToolbar renders inside the selection popup too. So a MOUSE-opened
+ * menu now holds focus inside the claiming subtree, and Escape closes the menu
+ * first and the popup second.
+ *
+ * That two-press sequence is the intended shape for a popover that owns Escape
+ * while open — but it arrived from another PR, no test asserted it, and the
+ * obvious "fix" (gating the focus effects on keyboard-initiated opens) would
+ * break `keyboard-a11y.spec.ts`, which opens each menu with `.click()` and
+ * asserts focus lands on an item. Pinning it here so the next person to touch
+ * either side finds out from a test rather than from the behaviour.
+ */
+test("Escape on a mouse-opened popup menu closes the menu first, the popup second", async ({
+  page,
+}) => {
+  await openFixture(page);
+
+  const editor = page.locator(".tandem-editor");
+  await editor.locator("p").first().selectText();
+
+  const popup = page.getByRole("toolbar", { name: "Selection tools" });
+  await expect(popup).toBeVisible();
+
+  // Mouse path specifically — the path the original scoping expected to fall
+  // through to the popup.
+  await popup.getByRole("button", { name: "Heading", exact: true }).click();
+
+  const menu = page.getByRole("menu", { name: "Heading level" });
+  await expect(menu).toBeVisible();
+
+  // The claim is what makes the first Escape land on the menu. Assert it
+  // directly: without it this test would still pass for the wrong reason if
+  // the popup simply stopped closing on Escape.
+  await expect(page.locator("[data-tandem-escape-owner]")).toHaveCount(1);
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(popup, "first Escape must not reach the selection popup").toBeVisible();
+  await expect(page.locator("[data-tandem-escape-owner]")).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(popup, "second Escape dismisses the popup").toBeHidden();
 });

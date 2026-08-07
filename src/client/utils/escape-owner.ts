@@ -11,11 +11,23 @@
  * the Escape originated inside that subtree.
  *
  * Scoped to the event's origin on purpose: a popover only claims Escape while
- * focus is actually inside it. A mouse-opened popover leaves focus in the editor
- * (its trigger calls `preventDefault()` on mousedown), and there Escape still
- * dismisses the selection popup first — the behaviour that ships today, and the
- * behaviour `tests/e2e/formatting-bar-popovers.spec.ts` relies on when it
- * dismisses a mouse-opened heading menu by clicking away.
+ * focus is actually inside it.
+ *
+ * NOTE — this scoping no longer distinguishes the mouse path. It was written
+ * when a mouse-opened popover left focus in the editor (its trigger calls
+ * `preventDefault()` on mousedown), so Escape still dismissed the selection
+ * popup on the first press. #1303 then added focus-in `$effect`s to the heading
+ * and decorations menus that are ungated on how the menu was opened, and both
+ * menus render INSIDE the selection popup — so a mouse-opened menu now puts
+ * focus inside this subtree too, and Escape closes the menu first, the popup
+ * second. That is the intended shape for a nested popover that owns Escape
+ * while open; it is recorded here because the two-press sequence is a
+ * user-visible change that arrived from another PR, not from this one. Pinned
+ * by `tests/e2e/formatting-bar-popovers.spec.ts`.
+ *
+ * Do NOT "fix" it by gating those effects on keyboard-initiated opens:
+ * `tests/e2e/keyboard-a11y.spec.ts` opens each menu with `.click()` and asserts
+ * focus lands on an item, explicitly rejecting a pre-focus shortcut.
  *
  * Claimants today are the four popovers the persistent formatting bar owns: the
  * highlight colour picker (`HighlightColorPicker.svelte`), the link editor and
