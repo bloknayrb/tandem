@@ -30,12 +30,35 @@ function makeMockReq(remoteAddress: string | undefined) {
   return { socket: { remoteAddress } };
 }
 
+const DELIVERY = {
+  pollCount: 7,
+  forwardCount: 4,
+  state: "polled" as const,
+  latencyMs: 9_000,
+  waitingMs: null,
+  sincePollMs: 1_200,
+};
+
+const seenCounts: number[] = [];
 const DEPS = {
   version: "0.0.0-test",
   hasSession: () => true,
   getSubscriberCount: () => 3,
   getPushLiveness: () => ({ lastEventAt: 1_700_000_000_000, eventCount: 42 }),
+  getDeliveryState: (externalConsumerCount: number) => {
+    seenCounts.push(externalConsumerCount);
+    return DELIVERY;
+  },
 };
+
+/**
+ * The public field set, enumerated. Every OTHER key the handler can emit is
+ * gated, so asserting equality here catches a new gated field hoisted out of
+ * the `isLoopback` block — which naming the gated fields one by one cannot,
+ * since a test that lists `hasSession` and `push` stays green forever no matter
+ * what is added beside them.
+ */
+const PUBLIC_KEYS = ["status", "transport", "version"];
 
 function callWith(remoteAddress: string | undefined): Record<string, unknown> {
   const res = makeMockRes();
@@ -55,7 +78,7 @@ describe("GET /health — loopback gate", () => {
     }
   });
 
-  it("includes hasSession and push for a loopback caller", () => {
+  it("includes hasSession, push and delivery for a loopback caller", () => {
     const body = callWith("127.0.0.1");
     expect(body.hasSession).toBe(true);
     expect(body.push).toEqual({
@@ -63,20 +86,19 @@ describe("GET /health — loopback gate", () => {
       lastEventAt: 1_700_000_000_000,
       eventCount: 42,
     });
+    expect(body.delivery).toEqual(DELIVERY);
   });
 
-  // The assertion the old source scan could not make. Both fields are
-  // session-presence signals; neither may reach a LAN caller.
-  it("omits BOTH hasSession and push for a non-loopback caller", () => {
-    const body = callWith("192.168.1.100");
-    expect("hasSession" in body).toBe(false);
-    expect("push" in body).toBe(false);
+  // The assertion the old source scan could not make, in the form that also
+  // covers fields nobody has written yet. `delivery` is the case that motivated
+  // widening it: its counters trace when a human's messages arrive and whether
+  // anyone answers, so it is the most sensitive field on the route, not the least.
+  it("emits ONLY the public fields to a non-loopback caller", () => {
+    expect(Object.keys(callWith("192.168.1.100")).sort()).toEqual(PUBLIC_KEYS);
   });
 
   it("fails closed when the socket has no remote address", () => {
-    const body = callWith(undefined);
-    expect("hasSession" in body).toBe(false);
-    expect("push" in body).toBe(false);
+    expect(Object.keys(callWith(undefined)).sort()).toEqual(PUBLIC_KEYS);
   });
 
   // A document id is not opaque — docIdFromPath is `<basename-slug>-<hash>`, so
@@ -86,5 +108,38 @@ describe("GET /health — loopback gate", () => {
     const body = callWith("127.0.0.1");
     const push = body.push as Record<string, unknown>;
     expect(Object.keys(push).sort()).toEqual(["eventCount", "lastEventAt", "subscribers"]);
+  });
+
+  // Same rule for the join, and it needs saying separately: `delivery` is
+  // derived from real user messages, so the tempting next field is "what was
+  // waiting" — a document id, an annotation id, a text snippet. Counters and
+  // timestamps only.
+  it("exposes only counters and timestamps in the delivery payload", () => {
+    const delivery = callWith("127.0.0.1").delivery as Record<string, unknown>;
+    for (const [key, value] of Object.entries(delivery)) {
+      expect(
+        value === null || typeof value === "number" || typeof value === "string",
+        `delivery.${key} must be a scalar, got ${typeof value}`,
+      ).toBe(true);
+    }
+    expect(Object.keys(delivery).sort()).toEqual([
+      "forwardCount",
+      "latencyMs",
+      "pollCount",
+      "sincePollMs",
+      "state",
+      "waitingMs",
+    ]);
+  });
+
+  // The contradiction this route could otherwise emit: `push.subscribers: 0`
+  // beside `delivery.state: "awaiting-poll"` with waitingMs climbing for days.
+  // Both must come from ONE read of the count, so they cannot disagree within a
+  // single response.
+  it("feeds the SAME subscriber count into push and into the join", () => {
+    seenCounts.length = 0;
+    const body = callWith("127.0.0.1");
+    const push = body.push as Record<string, unknown>;
+    expect(seenCounts).toEqual([push.subscribers]);
   });
 });
