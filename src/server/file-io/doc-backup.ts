@@ -346,11 +346,23 @@ export async function snapshotBeforeFirstWrite(
     // content (prose, not tokens), so unlike integrations/backup.ts an ACL
     // failure keeps the backup — an existing backup beats no backup. The ACL
     // spawns icacls/whoami, so apply it once per run, not once per path.
+    //
+    // `inheritable` is load-bearing, not cosmetic. The ACL lands on the ROOT
+    // while the snapshot is written to a per-path SUBDIR that the `mkdir`
+    // below may have just created. A non-inheritable grant plus
+    // `/inheritance:r` strips that subdir's DACL to EMPTY, and every write
+    // into it then fails EPERM — permanently, because nothing ever re-ACLs a
+    // subdir and the once-per-run `aclEnsured` latch stops the root ACL from
+    // being retried either (#1299). It bit the first path snapshotted per
+    // install, which on a fresh install is always the auto-opened
+    // `welcome.md`. The inheritable grant also REPAIRS subdirs already
+    // poisoned by the old behaviour — re-running icacls propagates the new
+    // inheritable ACE down to them.
     await fs.mkdir(subdir, { recursive: true, mode: 0o700 });
     if (process.platform === "win32" && !aclEnsured) {
       aclEnsured = true;
       try {
-        await setRestrictiveAcl(root);
+        await setRestrictiveAcl(root, { inheritable: true });
       } catch (aclErr) {
         console.error("[DocBackup] Restrictive ACL on backup root failed (continuing):", aclErr);
       }
