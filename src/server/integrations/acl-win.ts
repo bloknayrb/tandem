@@ -25,6 +25,9 @@
  *   `:r` on both flags, inherited ACEs from the parent dir survive and
  *   `/grant` adds the user as an additional principal instead of
  *   replacing the ACL.
+ * - On a DIRECTORY that already has children, the default
+ *   (non-inheritable) grant is destructive — pass `{ inheritable: true }`.
+ *   See `setRestrictiveAcl`'s docblock for the mechanism.
  * - The tempfile self-verify (`assertNoBroadAce` at the end of
  *   `setRestrictiveAcl`) is load-bearing — icacls is documented to exit
  *   0 on partial failure (silent no-op). The SDDL re-read is the only
@@ -135,9 +138,28 @@ async function getCurrentUserSid(): Promise<string> {
  * documented to exit 0 even when "Failed processing N files" — the SDDL
  * read is the only trustworthy signal that the DACL is actually correct.
  *
+ * `inheritable` adds the `(OI)(CI)` object/container-inherit flags to the
+ * grant, and is REQUIRED when `path` is a directory whose children already
+ * exist. The default (flagless) grant applies to the directory object
+ * alone, and combined with `/inheritance:r` it is actively destructive:
+ * breaking inheritance on the parent makes Windows recompute the inherited
+ * ACEs of every existing child, and a non-inheritable parent ACE
+ * contributes none. A child that had only inherited ACEs — i.e. any
+ * directory Node's `mkdir` just created — is left with an **empty DACL**,
+ * which denies everyone including its owner. Writing into it then fails
+ * `EPERM`, permanently, because nothing re-ACLs the child (#1299). Newly
+ * created children are unaffected either way: with no inheritable ACE to
+ * inherit they fall back to the process token's default DACL.
+ *
+ * Files take no children, so token-file callers correctly leave this off —
+ * `(OI)(CI)` on a leaf is meaningless.
+ *
  * @throws if any step (SID resolve, icacls, verify) fails.
  */
-export async function setRestrictiveAcl(path: string): Promise<void> {
+export async function setRestrictiveAcl(
+  path: string,
+  opts: { inheritable?: boolean } = {},
+): Promise<void> {
   if (process.platform !== "win32") return;
 
   const sid = await getCurrentUserSid();
@@ -150,9 +172,16 @@ export async function setRestrictiveAcl(path: string): Promise<void> {
   //                    accumulate over repeated runs).
   //   *<SID>:F       — grant Full Control by SID. The `*` prefix tells
   //                    icacls to interpret the principal as a raw SID
-  //                    rather than a name to look up.
+  //                    rather than a name to look up. `(OI)(CI)` prefixes
+  //                    the rights when `inheritable` — see the docblock.
+  const rights = opts.inheritable ? "(OI)(CI)F" : "F";
   try {
-    await execFileAsync(systemBin("icacls.exe"), [path, "/inheritance:r", "/grant:r", `*${sid}:F`]);
+    await execFileAsync(systemBin("icacls.exe"), [
+      path,
+      "/inheritance:r",
+      "/grant:r",
+      `*${sid}:${rights}`,
+    ]);
   } catch (err) {
     throw new Error(`setRestrictiveAcl: icacls failed on ${path}: ${(err as Error).message}`, {
       cause: err,

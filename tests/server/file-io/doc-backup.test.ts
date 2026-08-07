@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   _resetDocBackupGateForTests,
+  describeSnapshotFailure,
   docBackupsRoot,
   MAX_DOC_BACKUPS,
   sanitizeBackupStem,
@@ -161,10 +162,19 @@ describe("doc-backup", () => {
       const first = await snapshotBeforeFirstWrite(docPath, { appDataDir, documentId: "doc-1" });
       expect(first).toBe("failed");
       expect(pushNotificationMock).toHaveBeenCalledTimes(1);
-      expect(pushNotificationMock.mock.calls[0][0]).toMatchObject({
-        documentId: "doc-1",
-        severity: "warning",
-      });
+      const notification = pushNotificationMock.mock.calls[0][0];
+      expect(notification).toMatchObject({ documentId: "doc-1", severity: "warning" });
+
+      // #1299: the toast is a user-facing surface, so it names the document by
+      // BASENAME and carries nothing else from the error. Node fs errors
+      // serialize as `EPERM: operation not permitted, open '<abs path>'` —
+      // pasting that in put a stack-trace-shaped string and the user's home
+      // directory on screen. The errno survives as structured data instead.
+      expect(notification.message).toContain("thesis.md");
+      expect(notification.message).not.toMatch(/\bE[A-Z]{2,}\b/);
+      expect(notification.message).not.toContain(appDataDir);
+      expect(notification.message).not.toContain(root);
+      expect(notification.errorCode).toMatch(/^E[A-Z]+$/);
 
       // A second failure on the same path retries but does NOT re-notify —
       // the 60s autosave loop would otherwise toast every minute.
@@ -189,6 +199,35 @@ describe("doc-backup", () => {
 
       expect(outcome).toBe("written");
       expect(allSnapshots()[0].content).toBe("the victim's irreplaceable notes\n");
+    });
+  });
+
+  describe("describeSnapshotFailure", () => {
+    it.each([
+      { code: "EPERM", match: /permission/i, why: "the #1299 report's own errno" },
+      { code: "EACCES", match: /permission/i, why: "POSIX twin of EPERM" },
+      { code: "ENOSPC", match: /disk space/i, why: "actionable: free space" },
+      { code: "EROFS", match: /read-only/i, why: "actionable: wrong volume" },
+      { code: "EBUSY", match: /locked by another program/i, why: "actionable: close it" },
+    ])("maps $code to an actionable clause ($why)", ({ code, match }) => {
+      expect(describeSnapshotFailure(Object.assign(new Error("boom"), { code }))).toMatch(match);
+    });
+
+    it("contributes no clause for an unmapped or non-errno failure", () => {
+      // A guessed cause is worse than none — the errno still rides on the
+      // notification's `errorCode` and the full error is on stderr.
+      expect(describeSnapshotFailure(new Error("something odd"))).toBe("");
+      expect(describeSnapshotFailure(undefined)).toBe("");
+    });
+
+    it("never returns the raw error message", () => {
+      const err = Object.assign(
+        new Error("EPERM: operation not permitted, open 'C:\\Users\\Akapl\\AppData\\Local\\x.md'"),
+        { code: "EPERM" },
+      );
+      const described = describeSnapshotFailure(err);
+      expect(described).not.toContain("EPERM");
+      expect(described).not.toContain("C:\\Users");
     });
   });
 

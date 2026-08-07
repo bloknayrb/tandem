@@ -140,6 +140,34 @@ export function snapshotFilename(filePath: string, now: Date = new Date()): stri
   return `${stem}-${formatTimestamp(now)}-${uuid8}${safeExt ? `.${safeExt}` : ""}`;
 }
 
+/**
+ * Create the doc-backups root and apply its restrictive Windows DACL, at most
+ * once per server run.
+ *
+ * Best-effort by design: snapshots hold user document content (prose, not
+ * tokens), so unlike `integrations/backup.ts` an ACL failure keeps the backup
+ * — an existing backup beats no backup. `setRestrictiveAcl` spawns
+ * icacls/whoami, hence the once-per-run latch rather than once-per-path.
+ *
+ * `inheritable` is load-bearing, not cosmetic: the ACL lands on the ROOT while
+ * snapshots are written into per-path SUBDIRs, and the default grant strips
+ * those subdirs to an EMPTY, deny-everyone DACL (#1299 — full mechanism in
+ * `setRestrictiveAcl`'s docblock). It bit the first path snapshotted per
+ * install, which on a fresh install is always the auto-opened `welcome.md`.
+ * The inheritable grant also REPAIRS subdirs already poisoned by the old
+ * behaviour — re-running icacls propagates the new ACE down to them.
+ */
+async function ensureBackupRootHardened(root: string): Promise<void> {
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32" || aclEnsured) return;
+  aclEnsured = true;
+  try {
+    await setRestrictiveAcl(root, { inheritable: true });
+  } catch (aclErr) {
+    console.error("[DocBackup] Restrictive ACL on backup root failed (continuing):", aclErr);
+  }
+}
+
 /** List snapshot filenames in a per-path subdir, newest first. */
 async function listSnapshots(dir: string): Promise<string[]> {
   let entries: string[];
@@ -259,6 +287,40 @@ export function docBackupSnapshotPath(
   return path.join(docBackupsRoot(appDataDir), docHash(filePath), name);
 }
 
+/**
+ * Human cause clause for a snapshot failure, keyed on errno. Deliberately
+ * NOT the raw `err.message`: Node's fs errors serialize as
+ * `EPERM: operation not permitted, open 'C:\\Users\\<name>\\AppData\\...'`,
+ * which is stack-trace-shaped in a toast, leaks the user's account name and
+ * an internal implementation path they have no reason to see, and tells them
+ * nothing they can act on (#1299).
+ *
+ * Unmapped codes contribute no clause rather than a guess — the errno still
+ * travels on the notification's `errorCode`, and the full error object is on
+ * stderr for diagnostics.
+ */
+export function describeSnapshotFailure(err: unknown): string {
+  switch ((err as NodeJS.ErrnoException | undefined)?.code) {
+    case "EPERM":
+    case "EACCES":
+      return "Tandem does not have permission to write to its backup folder — antivirus or folder-permission software may be blocking it.";
+    case "ENOSPC":
+      return "There is no free disk space for the backup.";
+    case "EROFS":
+      return "The backup location is read-only.";
+    case "EBUSY":
+    case "ETXTBSY":
+      return "The document is locked by another program.";
+    case "EMFILE":
+    case "ENFILE":
+      return "Too many files are open on this system.";
+    case "ENAMETOOLONG":
+      return "The backup file path is too long for this filesystem.";
+    default:
+      return "";
+  }
+}
+
 export type SnapshotOutcome =
   | "written"
   | "skipped-already-this-run"
@@ -308,6 +370,15 @@ export async function snapshotBeforeFirstWrite(
     const root = docBackupsRoot(opts.appDataDir);
     const subdir = path.join(root, pathKey);
 
+    // Position is load-bearing: harden BEFORE anything READS the tree, not
+    // merely before the write. A poisoned subdir's empty DACL denies `readdir`
+    // (`EPERM … scandir`) exactly as it denies `open`, so with hardening any
+    // later than this `listSnapshots` below rethrows and the repair is never
+    // reached — leaving the one document the bug always claims permanently
+    // broken. This line is what makes the inheritable grant an actual repair
+    // rather than a fix for fresh installs only.
+    await ensureBackupRootHardened(root);
+
     // Byte-identical skip: nothing changed on disk since the newest snapshot
     // (typical across restarts with no external edits). ENOENT mid-read (e.g.
     // a peer instance pruning concurrently) means "no prior snapshot" —
@@ -356,19 +427,10 @@ export async function snapshotBeforeFirstWrite(
       return "skipped-size-cap";
     }
 
-    // 0o700/0o600 + best-effort Windows ACL: snapshots hold user document
-    // content (prose, not tokens), so unlike integrations/backup.ts an ACL
-    // failure keeps the backup — an existing backup beats no backup. The ACL
-    // spawns icacls/whoami, so apply it once per run, not once per path.
+    // 0o700 mode on the per-path subdir. Windows ignores it; the root's
+    // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
+    // directory there, and it is already in force by the time we get here.
     await fs.mkdir(subdir, { recursive: true, mode: 0o700 });
-    if (process.platform === "win32" && !aclEnsured) {
-      aclEnsured = true;
-      try {
-        await setRestrictiveAcl(root);
-      } catch (aclErr) {
-        console.error("[DocBackup] Restrictive ACL on backup root failed (continuing):", aclErr);
-      }
-    }
 
     // `wx` exclusive-create: a pre-planted symlink or colliding name fails the
     // open instead of following it. UUID suffix makes the path unpredictable.
@@ -411,17 +473,25 @@ export async function snapshotBeforeFirstWrite(
     // Gate stays unset — the next save retries. The console line fires on
     // every retry; the user-facing notification only once per path until a
     // snapshot succeeds (a 60s autosave would otherwise re-toast each minute).
-    const msg = err instanceof Error ? err.message : String(err);
     console.error("[DocBackup] Snapshot failed for %s (save proceeds):", filePath, err);
     if (!failureNotifiedPaths.has(pathKey)) {
       failureNotifiedPaths.add(pathKey);
+      // Worth telling the user about even though the save itself is fine: a
+      // silently-absent safety net is worse than a noisy one, because the
+      // whole point of snapshots is that you find out you needed one later.
+      // But the sentence must not claim the save succeeded — this runs
+      // BEFORE the write, which can still fail and raise its own toast.
+      const cause = describeSnapshotFailure(err);
       pushNotification({
         id: generateNotificationId(),
         type: "general-error",
         severity: "warning",
-        message: `Could not back up ${path.basename(filePath)} before saving: ${msg}`,
+        message:
+          `Couldn't store a backup copy of "${path.basename(filePath)}". ` +
+          `Saving is unaffected.${cause ? ` ${cause}` : ""}`,
         documentId: opts.documentId,
         dedupKey: `doc-backup:${pathKey}`,
+        errorCode: (err as NodeJS.ErrnoException | undefined)?.code,
         timestamp: Date.now(),
       });
     }
