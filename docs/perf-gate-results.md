@@ -183,15 +183,154 @@ checklist; it would characterise Chromium on a Mac.
 
 ---
 
-## Run 2 — pending
+## Run 2 — 2026-08-07 — Windows 11 workstation
 
-The harness changed materially (see "Harness configuration" above), so run 1's
-numbers are not a baseline and there is currently **no valid recorded run**.
-The v1.0 performance gate therefore remains **open**.
+| | |
+|---|---|
+| Commit | `13b0300` (master), measured from a worktree |
+| Machine | Windows 11 Pro 26200, developer workstation — the same one run 1 used |
+| Build | production (`vite build` + `tsup`), served via `vite preview` |
+| Fixture seed | `20260805` — 22,608 words, ~50.2 pages, 38 sections |
+| Annotation load | 50 pending comments: 49 seeded + 1 measured, all 50 verified anchored |
+| Margin pipeline | **mounted** (`marginView` forced on, column asserted ≥240px / `full`) |
 
-Re-recording requires the same Windows 11 workstation run 1 used — comparing a
-new machine against a superseded run would confound two changes at once. Until
-that run exists, this document records a harness, not a result.
+Three clean samples. No row is an average; each column is one run.
+
+| Condition | Threshold | A | B | C | Verdict |
+|---|---|---|---|---|---|
+| open-to-interactive | < 3000ms | 1325ms | 1634ms | 1017ms | PASS |
+| annotation create | < 500ms | 145ms | 130ms | 39ms | PASS |
+| annotation accept — *click-dispatch* | — | 460ms | 534ms | 485ms | — |
+| annotation accept — *post-click settle* | — | 419ms | 147ms | 396ms | — |
+| annotation accept — **total** | < 500ms | **879ms** | **681ms** | **881ms** | **FAIL** |
+| worst frame gap during full scroll | < 100ms | **2483ms** | **2550ms** | **317ms** | **FAIL** |
+
+Condition 1 and the create half of condition 2 pass with room. The accept half
+of condition 2 and condition 3 fail. Read each failure with the section it gets
+below — they are unrelated, and only one of them is understood.
+
+### #1288 does not reproduce, and its proposed mechanism is refuted
+
+Run 1 recorded `click-dispatch 7851ms`, and #1288 was filed on that number. On
+this harness, on the same workstation, the same measurement is **460–534ms in
+every sample taken** — including one at a fifth of the annotation load. Run 1's
+instrument no longer exists, and two of its four defects bear directly on this
+figure: the margin pipeline never mounted, and the app-data wipe landed under an
+already-restored server, so the load the 7851ms was measured against is not a
+number anyone knows. Nothing in `src/client/` between the two runs plausibly
+moves an eight-second wait. The honest reading is that 8s was an artifact of the
+superseded harness, not a regression that has since been fixed.
+
+The issue's suspected area — `marginPressure.resolveCrowding` and the margin
+card stack — is refuted twice, on independent evidence:
+
+1. **It does not scale with annotation count.** The issue asked for exactly this
+   check. Measured in one browser session so machine state is held constant: at
+   5 pending annotations the accept splits `click-dispatch 511ms / settle 394ms`,
+   statistically the same as the 49-annotation reading beside it. A cost that is
+   flat from 5 to 49 is not the cost of simulating a card stack.
+2. **It vanishes under `reduceMotion`, which `resolveCrowding` never reads.**
+   Same spec, same load, one settings key changed:
+
+   | | click-dispatch | settle | total |
+   |---|---|---|---|
+   | shipped default | 460–534ms | 147–419ms | 681–881ms — FAIL |
+   | `reduceMotion: true` | **169ms** | **6ms** | **175ms** — PASS |
+
+   The crowding pass has no motion input at all, so a flag that only disables
+   transitions cannot change its cost. It changes this one by a factor of four.
+
+   Note the limit of this experiment. `reduceMotion` is a GLOBAL kill switch: it
+   zeroes every transition in `cardMotion.ts`, the `cardFlyToMargin` entrance on
+   the margin bubble, the annotation ping, and every
+   `@media (prefers-reduced-motion)` rule via the `tandem-reduce-motion` body
+   class. That makes it conclusive against `resolveCrowding` — which it cannot
+   reach — and conclusive that the remaining cost is motion. It does NOT
+   apportion that cost among individual transitions. `AnnotationCard`'s
+   `lifecycleMotion` prop is the narrower knob and was not used.
+
+### What the accept measurement actually spends
+
+The button is not blocked, starved, or overlaid. An in-page sampler run across
+the click window — rAF gaps, `getBoundingClientRect` per frame,
+`elementFromPoint` at the button's centre, mutation counts, long tasks — found
+the page essentially at rest: **0 long tasks** and 3 DOM mutations over a 12s
+idle window, worst rAF gap 17–33ms, the button's box moving twice by 1px.
+Clicking after that idle costs **203ms**, against 460–534ms for the same click
+issued immediately after the create. The difference is not contention; it is the
+app still finishing its entrance.
+
+Both halves are motion, and the card's own lifecycle transitions
+(`src/client/panels/cardMotion.ts`, wired at `SidePanel.svelte`'s
+`lifecycleMotion={true}`) are the leading candidate for each. Read the two
+bullets below as candidates, not as findings — the durations fit, but only the
+click half fits cleanly:
+
+- **`cardEnter` (A4, `ENTER_MS = 260`)** runs on the freshly created card. It
+  animates `height: 0 → h` under `overflow: clip`, plus a `translateY`, so for
+  260ms the accept control inside it is neither stably positioned nor painted
+  where a hit-test would find it. Playwright's actionability wait is measuring
+  that entrance. This also explains run 1's `click({ force: true })` probe
+  dispatching instantly and the accept then never taking effect: a forced click
+  computes its point from a box that is still moving.
+- **`cardExit` (A1, `EXIT_MS = 260`)** runs on accept. Motion off drops the
+  settle from 147–419ms to **6ms**, so the settle is motion — but the specific
+  attribution to `cardExit` is NOT established, and one of the three recorded
+  samples contradicts it. The proposed mechanism is that Svelte keeps an
+  outroing block's content mounted for the duration, so the accept control —
+  whose disappearance is the spec's definition of "reflected" — survives the
+  whole outro. That mechanism has a floor of `EXIT_MS = 260ms`, and sample B
+  settled in **147ms**. A 260ms outro cannot produce a 147ms settle, so either
+  the rail control is leaving before the outro finishes (the margin bubble
+  carries no `out:` transition at all and drops its control on the status flip,
+  and `toHaveCount` counts both surfaces) or the outro is not what is being
+  waited on. Do not build on this bullet: it needs a `lifecycleMotion`-only
+  toggle and a DOM-level observation of when each of the two controls actually
+  unmounts. The click half is on firmer ground — 460–534ms minus the measured
+  ~170–200ms floor lands on `ENTER_MS = 260` — but it is the same class of
+  arithmetic-fit argument and deserves the same direct check.
+
+What remains after both is ~170–200ms of fixed cost present even against a fully
+settled page: selector resolution, scroll-into-view and actionability
+round-trips over CDP. That is the floor this harness can measure, not app cost.
+
+**This is therefore a scoping question, not an optimization target.** The
+`reduceMotion` delta puts ~510–710ms of the total in deliberate #798 motion —
+that figure comes straight from the measurement and does not depend on which
+transitions above turn out to be the ones — and no human experiences it
+as an eight-second wait — they experience a card that animates in over a quarter
+of a second. There are three ways out and none of them should be chosen by
+whoever is holding the profiler: measure the annotation's status flip rather
+than the control's disappearance (drops the outro, keeps the intro honest);
+state the threshold as covering motion and raise it; or decide the motion on
+this path costs more than it is worth. The first two are gate-wording changes
+and belong to the roadmap; the third is a design decision.
+
+### Condition 3 fails on Windows and is NOT characterised
+
+Worst frame gap during the scripted scroll: **2483 / 2550 / 317ms** across the
+three samples, with a further 66.6ms and 250.0ms from two instrumented runs. The
+worst long task in each run tracks the worst gap almost exactly (2470 / 2535 /
+305ms), so this is main-thread script — not compositor, not raster.
+
+Two things are worth saying and nothing more:
+
+- It is **not stable**. The spread is a factor of 38 across five runs on one
+  machine, and the two worst readings came from the two runs that immediately
+  followed a build. Machine contention is not ruled out.
+- The Linux container verification below measured 33ms on the same code. Either
+  the platforms genuinely differ here, or one of the two environments is noise.
+- These numbers are already **stale against the scroll path they measure**.
+  Master gained ~950 lines of scroll-path code after `13b0300` — the proximity-
+  faded scroll pill and its controller (`src/client/editor/scroll-pill*`,
+  merged in #1323 on 2026-08-07), plus a wheel-handling fix and keyboard
+  scrolling for read-only documents. Condition 3 is "worst frame gap during a
+  scripted top-to-bottom scroll". Re-measure on current master BEFORE profiling;
+  a mechanism derived from the numbers above would be derived from code that no
+  longer runs the scroll.
+
+Nobody should read a cause into these numbers yet. They need their own profile,
+on a quiet machine, before an issue describes a mechanism.
 
 ### Harness verification — 2026-08-06, Linux container — NOT a recorded run
 
