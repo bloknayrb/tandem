@@ -515,6 +515,27 @@ describe("buildClaudeArgs — CLI argument vector (#1267)", () => {
     expect(buildClaudeArgs({ sessionId: SESSION, resuming: false })).not.toContain("--injected");
     expect([...CLAUDE_STREAM_JSON_FLAGS]).not.toContain("--injected");
   });
+
+  it("never carries the dev-channels flag — it is inert under -p (#1266)", () => {
+    // This is the only assertion in the suite that would fail if the flag came
+    // back. Every other one here slices by CLAUDE_STREAM_JSON_FLAGS.length, so
+    // they are green with it present *and* absent; the doc comment on the const
+    // is prose, and prose is not a guard.
+    //
+    // Why it must stay gone: Claude Code parses the flag only inside an
+    // `if (!isNonInteractiveSession)` branch, and `-p` is that mode — so it
+    // registers nothing. Independently, #1266 measured that no turn results
+    // under these flags even when the shim does receive the frame, which is why
+    // the supervisor wakes the child over stdin instead.
+    //
+    // The flag remains correct for a hand-launched interactive session. This
+    // pin is about the launcher's argv only.
+    expect([...CLAUDE_STREAM_JSON_FLAGS]).not.toContain("--dangerously-load-development-channels");
+    expect([...CLAUDE_STREAM_JSON_FLAGS]).not.toContain("server:tandem-channel");
+    expect(buildClaudeArgs({ sessionId: SESSION, resuming: false })).not.toContain(
+      "--dangerously-load-development-channels",
+    );
+  });
 });
 
 describe("serializeUserTurn — stdin envelope (#1267)", () => {

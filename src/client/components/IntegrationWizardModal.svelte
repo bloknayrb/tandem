@@ -849,11 +849,13 @@ const doneHeaderState = $derived(
                 data-push-mode={wizard.channelRegistered ? "push" : "polling"}
               >
                 {#if wizard.channelRegistered}
-                  Real-time updates are set up for sessions Tandem starts for you. A session you
-                  start yourself needs either the
-                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag or
-                  the Tandem plugin, which needs no flag — use one, not both. Without either, Claude
-                  only sees your comments and messages when it checks its inbox.
+                  The channel shim is registered. Sessions Tandem starts for you are woken directly
+                  and need nothing further. A session you start yourself does: either install the
+                  Tandem plugin, which needs no flag but only finds Node when you launch
+                  <code class="iw-code-inline">claude</code> from a terminal, or pass the
+                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag —
+                  use one, not both. Without either, Claude sees your comments and messages when it
+                  checks its inbox.
                 {:else}
                   Polling mode — Claude checks for your changes periodically rather than getting
                   them pushed in real time.

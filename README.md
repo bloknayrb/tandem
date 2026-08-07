@@ -107,13 +107,17 @@ You do not have to configure any of this by hand. Tandem opens a setup wizard th
 
 Prefer a different AI? Any MCP-capable client can connect to the same endpoint — see the [compatibility table](#the-mcp-integration-policy) for what is supported and what is untested, and [Cowork](#cowork) for connecting Claude Desktop on Windows.
 
-**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you — including the desktop app's **Relaunch Claude** button — get both. A session you start yourself by typing `claude` gets only the first, unless you start it like this:
+**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you — including the desktop app's **Relaunch Claude** button — get both, and need no setup from you. A session you start yourself by typing `claude` gets only the first until you add one of two things.
+
+The simplest is to install the Tandem plugin, which needs no flag — see [Channel push and real-time updates](#channel-push-and-real-time-updates) below. Start `claude` from a terminal window if you do: the plugin's monitor uses whatever program path that shell has, and a Claude Code started from a desktop icon may not have one it can use.
+
+The other way is to start the session like this:
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Installing the Tandem plugin is the other way to get it, and needs no flag — see [Channel push and real-time updates](#channel-push-and-real-time-updates) below. Use one or the other, not both: each delivers independently, so a session running both receives every event twice.
+Use one or the other, not both: each delivers independently, so a session running both receives every event twice.
 
 Without the flag nothing breaks and nothing is lost: your messages and comments are saved, and Claude sees them the next time it checks its inbox. But it will not react on its own, which reads as Claude ignoring you. If that is what you are seeing, [this troubleshooting entry](docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) walks through it, and **Settings → About → Copy Diagnostics** (or `tandem doctor`, on npm installs) reports whether anything is listening. More detail in [Channel push and real-time updates](#channel-push-and-real-time-updates).
 
@@ -250,16 +254,20 @@ Tandem's MCP tools span six capability areas. Full reference: [docs/mcp-tools.md
 
 Real-time push delivers events (selections, annotation actions, chat messages) to the AI client over Server-Sent Events the moment they happen, so the AI does not have to poll. There are two transports.
 
-**The channel shim** is the default and the one Tandem tests against ([ADR-028](docs/decisions.md)). Sessions the desktop app launches for you already have it. To wire it up yourself:
+Neither is needed for a session Tandem launches for you. Those are woken directly by Tandem and do not use either transport — both of the options below are about sessions you start by hand.
+
+**The plugin monitor** needs no flag, which makes it the easier of the two. Installing the plugin (above) registers it, and every `claude` you start afterwards wakes on document changes. Two conditions: it requires **Claude Code 2.1.212 or newer** — on older versions the install still succeeds and the monitor simply never runs, with nothing to tell you so — and you should start `claude` from a terminal, because the monitor runs with whatever program path that session was given and a desktop-icon launch may not include Node. If the monitor reports `exit 127` every session, that is this.
+
+**The channel shim** is what `tandem setup` registers by default, and the transport Tandem tests against ([ADR-028](docs/decisions.md)). Registering it is not enough on its own — the session also has to be started with the flag:
 
 ```bash
 tandem setup --apply --with-channel-shim                   # persistent setup
-claude --dangerously-load-development-channels server:tandem-channel   # one-off
+claude --dangerously-load-development-channels server:tandem-channel   # every session
 ```
 
-The `--dangerously-load-development-channels` flag is Claude Code's marker for unstable APIs; it becomes unnecessary when the Channels API stabilizes.
+The flag is Claude Code's marker for unstable APIs. It works only in an interactive session, and it is required rather than optional: `tandem-channel` is a plain MCP server, and Claude Code's channel allowlist covers only plugins, so there is no list Tandem could join that would remove the need for it.
 
-**The plugin monitor** is the alternative for sessions you start by hand, and it needs no flag. Installing the plugin (above) registers it, and every `claude` you start afterwards wakes on document changes. It requires **Claude Code 2.1.212 or newer** — on older versions the install still succeeds and the monitor simply never runs, with nothing to tell you so, which is why the version matters. Do not enable both: each transport delivers independently, so a session running the plugin *and* the channel flag receives every event twice.
+Do not enable both: each transport delivers independently, so a session running the plugin *and* the channel flag receives every event twice.
 
 Note that Solo mode suppresses annotation events on both transports by design — chat still comes through. If you are testing push and only chat arrives, check the mode toggle before debugging the transport.
 

@@ -345,13 +345,31 @@ The bootstrap turn is likewise written **on spawn**, not on the CLI's `init` lin
 
 ### Activation
 
-The channel shim is registered **by default** for the Claude Code target by every setup path (`tandem setup --apply` and the in-app wizard) — #985. On the desktop bundle the wizard's apply path uses the channel-shim path injected into the sidecar via `TANDEM_CHANNEL_DIST` on spawn (resolved from the resource dir by `src-tauri/src/lib.rs`), since the server's own package-root derivation resolves outside the bundle. Claude Code must additionally be started with the `--dangerously-load-development-channels` flag to activate real-time push (the desktop auto-launcher passes it automatically; hand-started "bring-your-own" sessions need it explicitly):
+The channel shim is registered **by default** for the Claude Code target by every setup path (`tandem setup --apply` and the in-app wizard) — #985. On the desktop bundle the wizard's apply path uses the channel-shim path injected into the sidecar via `TANDEM_CHANNEL_DIST` on spawn (resolved from the resource dir by `src-tauri/src/lib.rs`), since the server's own package-root derivation resolves outside the bundle.
+
+**Registration is not activation.** Registering the shim gets the subprocess spawned; whether Claude Code then *honors* the channel is decided separately, inside Claude Code, and is never reported back. Activation requires a **hand-started interactive session** launched with the dev-channels flag:
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-**Requirements:** Claude Code v2.1.80+, `claude.ai` login (not API key — channels require OAuth authentication). The `--dangerously-load-development-channels` flag both activates and loads the channel — no separate `--channels` flag is needed. This flag is required because `tandem-channel` is not yet on the official channel allowlist; it is safe to use with known, trusted channel servers like Tandem. Without it, Claude Code does not start the channel shim, and Claude learns about user actions only when it polls `tandem_checkInbox` — later, but never lost.
+**Auto-launched sessions do not use this path at all** and never did — the launcher spawns with `-p`, where the flag is not parsed, and #1266 measured that no turn results even when the shim receives the frame. They are woken by the supervisor writing a turn onto the child's stdin (see [Auto-Launcher](#auto-launcher) above). The launcher stopped emitting the flag in 2026-08; `src/shared/launcher/contract.ts` records why.
+
+**Requirements:** Claude Code v2.1.80+, `claude.ai` login (not API key — channels require OAuth authentication). The dev-channels flag both activates and loads the channel — no separate `--channels` flag is needed, and passing one would not help: a `server:` entry is rejected at the gate regardless of any allowlist (see below). Without activation, Claude learns about user actions only when it polls `tandem_checkInbox` — later, but never lost.
+
+**The activation gate**, read statically from Claude Code 2.1.223 on one account. Each step must pass:
+
+| Step | Rejects when |
+|---|---|
+| Capability | the session declares no `claude/channel` capability |
+| Protocol era | the negotiated protocol predates channels |
+| Provider | the auth provider is not `firstParty` (API-key and third-party logins fail here) |
+| Feature availability | the remotely-served feature flag is off for the account |
+| Org policy | policy blocks channels |
+| Session registration | the channel was never registered for the session |
+| Entry kind | **`plugin:` entries** must match a marketplace, then appear on the allowlist. **`server:` entries are rejected unconditionally unless `dev`** — and `dev` is set only on the interactive onboarding path |
+
+Two consequences follow, and both are load-bearing. `tandem-channel` is a `server:` entry, so **there is no allowlist listing it could ever obtain** — the allowlist is keyed on `plugin@marketplace`. And because the availability step is a remotely-served, per-account, disk-cached payload, this table describes one account at one moment, not a permanent fact.
 
 ### Event Flow
 
@@ -398,7 +416,9 @@ The shim coexists with the HTTP MCP server — Claude Code connects to both simu
 
 ### Permission Relay
 
-When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server. The browser can display permission prompts and submit verdicts via `POST /api/channel-permission-verdict`.
+When Claude Code asks for tool approval, it sends `notifications/claude/channel/permission_request` to the shim. The shim forwards the request to `POST /api/channel-permission` on the Tandem server.
+
+**The return leg does not exist — this relay is a stub, not a working feature.** Nothing in `src/client/` reads `pendingPermissions`, so no prompt is ever displayed; `permission_request` is registered as an MCP *notification* handler, and notifications cannot be answered; and `POST /api/channel-permission-verdict` deletes the pending entry and logs the verdict, which therefore never reaches Claude Code. The code says as much in place (*"SSE push to browser is a follow-up"*) — the capability was declared ahead of an implementation that never landed. It is described as shipped API in `docs/mcp-tools.md`, which is wrong and tracked for correction. This matters beyond the feature itself: it was rationale (1) for keeping the channel canonical, and [ADR-047](decisions.md#adr-047-claude-code-push-transport-activation) §3 voids it on these grounds.
 
 ## Plugin Monitor
 
@@ -409,6 +429,8 @@ The plugin monitor (`src/monitor/index.ts`) is a shipped, installable alternativ
 ### Role
 
 `main()` connects to `GET /api/events` (the same SSE endpoint used by the channel shim), decodes incoming events via `formatEventContent()`, and writes one notification line per event to stdout. Claude Code routes each stdout line to the user as a plugin notification — no polling, no `--dangerously-load-development-channels` flag required.
+
+**The flagless property has a precondition.** Monitors are spawned `spawn(cmd, [], { shell: true })`, and `shell: true` on POSIX is a *non-login* `/bin/sh -c` — no profile is sourced, so the monitor inherits whatever PATH Claude Code itself started with. A terminal launch works; a GUI launch often has no Node and the monitor dies `exit 127` every session. There is no manifest-level fix: the monitor command is one static string for every platform, and `sh -lc '…'` has no equivalent under the `cmd.exe` that `shell: true` resolves to on Windows. See `docs/spikes/plugin-delivery.md`.
 
 ### Startup
 

@@ -693,10 +693,12 @@ function checkUserMcpConfig(r: Recorder): void {
     );
   } else {
     // Registration is NECESSARY but not SUFFICIENT, and saying otherwise is
-    // how this check misled people: the shim only delivers to a session
-    // launched with the channel flag. Sessions Tandem starts pass it; a
-    // session you start yourself does not. `evaluatePushPath` reports whether
-    // anything is actually consuming — this line must not pre-empt it.
+    // how this check misled people: the shim only delivers to an interactive
+    // session launched with the channel flag. Sessions Tandem starts do NOT
+    // pass it (it is inert under `-p` — #1266, ADR-047); they are woken over
+    // the supervisor's stdin and do not depend on this entry at all.
+    // `evaluatePushPath` reports whether anything is actually consuming — this
+    // line must not pre-empt it.
     r.pass(
       "tandem-channel registered in ~/.claude.json (a hand-launched session also needs the flag)",
     );
@@ -1230,11 +1232,14 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
         "No real-time push consumer attached — Claude is not notified when you comment " +
         "or send a chat message, and only sees them when it polls its inbox",
       fix:
-        "Either start Claude Code with `--dangerously-load-development-channels " +
-        "server:tandem-channel` (the desktop app's Relaunch Claude button does this), " +
-        "or install the Tandem plugin, which registers a monitor needing no flag " +
-        "(`claude plugin list` to check). Use one or the other, not both — each " +
-        "delivers independently, so running both means every event arrives twice.",
+        "This affects sessions you start yourself; sessions Tandem launches are " +
+        "woken directly and do not use this path. Either install the Tandem plugin, " +
+        "which registers a monitor needing no flag (`claude plugin list` to check) — " +
+        "start `claude` from a terminal if you do, since the monitor inherits that " +
+        "shell's PATH and cannot find Node without it — or start Claude Code with " +
+        "`--dangerously-load-development-channels server:tandem-channel`. Use one or " +
+        "the other, not both — each delivers independently, so running both means " +
+        "every event arrives twice.",
       data,
     };
   }

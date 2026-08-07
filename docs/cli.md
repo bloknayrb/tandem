@@ -84,7 +84,9 @@ Not intended for direct user invocation — the `tandem-channel` MCP entry (writ
 
 ### `tandem monitor`
 
-Runs the Tandem plugin monitor: subscribes to `/api/events` and streams event lines to stdout for Claude Code to surface as notifications. This is the flagless alternative to the channel shim — it needs no `--dangerously-load-development-channels`, but it requires **Claude Code 2.1.212 or newer**. On older versions the plugin installs fine and the monitor simply never runs, with nothing to say so.
+Runs the Tandem plugin monitor: subscribes to `/api/events` and streams event lines to stdout for Claude Code to surface as notifications. This is the flagless alternative to the channel shim — it needs no `--dangerously-load-development-channels` — under two conditions. It requires **Claude Code 2.1.212 or newer** (on older versions the plugin installs fine and the monitor simply never runs, with nothing to say so), and it must be able to resolve Node from the PATH Claude Code itself was started with: monitors are spawned through a non-login shell, so a GUI-launched Claude Code often cannot run it and reports `exit 127` every session. Start `claude` from a terminal.
+
+Neither this nor the channel shim is involved in a session Tandem auto-launches; those are woken over the supervisor's stdin ([ADR-047](decisions.md#adr-047-claude-code-push-transport-activation)).
 
 ```bash
 tandem monitor
