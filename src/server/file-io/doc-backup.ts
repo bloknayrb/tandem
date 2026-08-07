@@ -136,6 +136,34 @@ export function snapshotFilename(filePath: string, now: Date = new Date()): stri
   return `${stem}-${formatTimestamp(now)}-${uuid8}${safeExt ? `.${safeExt}` : ""}`;
 }
 
+/**
+ * Create the doc-backups root and apply its restrictive Windows DACL, at most
+ * once per server run.
+ *
+ * Best-effort by design: snapshots hold user document content (prose, not
+ * tokens), so unlike `integrations/backup.ts` an ACL failure keeps the backup
+ * — an existing backup beats no backup. `setRestrictiveAcl` spawns
+ * icacls/whoami, hence the once-per-run latch rather than once-per-path.
+ *
+ * `inheritable` is load-bearing, not cosmetic: the ACL lands on the ROOT while
+ * snapshots are written into per-path SUBDIRs, and the default grant strips
+ * those subdirs to an EMPTY, deny-everyone DACL (#1299 — full mechanism in
+ * `setRestrictiveAcl`'s docblock). It bit the first path snapshotted per
+ * install, which on a fresh install is always the auto-opened `welcome.md`.
+ * The inheritable grant also REPAIRS subdirs already poisoned by the old
+ * behaviour — re-running icacls propagates the new ACE down to them.
+ */
+async function ensureBackupRootHardened(root: string): Promise<void> {
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32" || aclEnsured) return;
+  aclEnsured = true;
+  try {
+    await setRestrictiveAcl(root, { inheritable: true });
+  } catch (aclErr) {
+    console.error("[DocBackup] Restrictive ACL on backup root failed (continuing):", aclErr);
+  }
+}
+
 /** List snapshot filenames in a per-path subdir, newest first. */
 async function listSnapshots(dir: string): Promise<string[]> {
   let entries: string[];
@@ -338,6 +366,15 @@ export async function snapshotBeforeFirstWrite(
     const root = docBackupsRoot(opts.appDataDir);
     const subdir = path.join(root, pathKey);
 
+    // Position is load-bearing: harden BEFORE anything READS the tree, not
+    // merely before the write. A poisoned subdir's empty DACL denies `readdir`
+    // (`EPERM … scandir`) exactly as it denies `open`, so with hardening any
+    // later than this `listSnapshots` below rethrows and the repair is never
+    // reached — leaving the one document the bug always claims permanently
+    // broken. This line is what makes the inheritable grant an actual repair
+    // rather than a fix for fresh installs only.
+    await ensureBackupRootHardened(root);
+
     // Byte-identical skip: nothing changed on disk since the newest snapshot
     // (typical across restarts with no external edits). ENOENT mid-read (e.g.
     // a peer instance pruning concurrently) means "no prior snapshot" —
@@ -376,31 +413,10 @@ export async function snapshotBeforeFirstWrite(
       return "skipped-size-cap";
     }
 
-    // 0o700/0o600 + best-effort Windows ACL: snapshots hold user document
-    // content (prose, not tokens), so unlike integrations/backup.ts an ACL
-    // failure keeps the backup — an existing backup beats no backup. The ACL
-    // spawns icacls/whoami, so apply it once per run, not once per path.
-    //
-    // `inheritable` is load-bearing, not cosmetic. The ACL lands on the ROOT
-    // while the snapshot is written to a per-path SUBDIR that the `mkdir`
-    // below may have just created. A non-inheritable grant plus
-    // `/inheritance:r` strips that subdir's DACL to EMPTY, and every write
-    // into it then fails EPERM — permanently, because nothing ever re-ACLs a
-    // subdir and the once-per-run `aclEnsured` latch stops the root ACL from
-    // being retried either (#1299). It bit the first path snapshotted per
-    // install, which on a fresh install is always the auto-opened
-    // `welcome.md`. The inheritable grant also REPAIRS subdirs already
-    // poisoned by the old behaviour — re-running icacls propagates the new
-    // inheritable ACE down to them.
+    // 0o700 mode on the per-path subdir. Windows ignores it; the root's
+    // inheritable DACL (see `ensureBackupRootHardened`) is what covers this
+    // directory there, and it is already in force by the time we get here.
     await fs.mkdir(subdir, { recursive: true, mode: 0o700 });
-    if (process.platform === "win32" && !aclEnsured) {
-      aclEnsured = true;
-      try {
-        await setRestrictiveAcl(root, { inheritable: true });
-      } catch (aclErr) {
-        console.error("[DocBackup] Restrictive ACL on backup root failed (continuing):", aclErr);
-      }
-    }
 
     // `wx` exclusive-create: a pre-planted symlink or colliding name fails the
     // open instead of following it. UUID suffix makes the path unpredictable.
