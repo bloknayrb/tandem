@@ -21,6 +21,7 @@ annotation-sort-toggle
 annotations-tab
 appearance-formatting-bar
 appearance-rail-hover-reveal
+appearance-scroll-pill
 appearance-show-raw-markdown
 appearance-system-light-warm
 appearance-uniform-tab-width
@@ -115,6 +116,8 @@ editor-font-{*}-btn
 editor-measure-{*}
 editor-root
 editor-scroll-container
+editor-scroll-pill
+editor-scroll-pill-thumb
 editor-smart-typography
 editor-spellcheck-toggle
 editor-stage

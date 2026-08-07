@@ -1,4 +1,8 @@
-import type { AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
+import type {
+  AiLiveIndicator,
+  AiReadinessState,
+  PushDelivery,
+} from "../hooks/useAiReadiness.svelte";
 
 /**
  * Consolidated AI-status indicator for the status pill (replaces the old
@@ -51,13 +55,36 @@ const CONNECTED: AiIndicatorView = {
   dataState: "connected",
   canAnimate: true,
   // Scoped to what `liveIndicator` actually proves: an MCP session exists, so
-  // Claude can READ the document when it asks. Whether Claude is notified the
-  // moment you comment is the separate push path, which this indicator has no
-  // signal for — see docs/troubleshooting.md. The previous copy ("receiving your
-  // work" / "it can see your … comments") asserted exactly that missing half, and
-  // was false for the pull-only session this release exists to make legible.
+  // Claude can READ the document when it asks. The previous copy ("receiving
+  // your work" / "it can see your … comments") asserted the delivery half too,
+  // and was false for the pull-only session this indicator has to describe.
   title: "Claude is connected and can read your document",
   ariaLabel: "Claude is connected and can read your document",
+};
+
+/**
+ * Connected, but demonstrably nothing is delivering events.
+ *
+ * Same label and tone as `CONNECTED` on purpose. The pill is not lying — Claude
+ * really is attached — and recolouring it would read as a fault when nothing is
+ * broken. What changes is the hover text, which previously said nothing at all
+ * about delivery and so left "AI connected" to be read as "AI is watching".
+ * That silence is what makes a delayed comment feel like a bug: the user is
+ * told the AI is right there, then sees nothing happen.
+ *
+ * Only rendered on a CONFIRMED zero — `pushDelivery === "none"`. An unknown or
+ * positive count keeps the plain `CONNECTED` copy, because a positive count
+ * includes an attached-but-inert consumer and cannot prove delivery either way.
+ */
+const CONNECTED_NO_PUSH: AiIndicatorView = {
+  label: "AI connected",
+  tone: "connected",
+  dataState: "connected",
+  canAnimate: true,
+  title:
+    "Claude is connected and can read your document, but nothing is notifying it in real time — it'll see your comments and messages the next time it checks in",
+  ariaLabel:
+    "Claude is connected and can read your document, but is not notified in real time. It will see your comments the next time it checks in.",
 };
 
 const SOLO_PAUSED: AiIndicatorView = {
@@ -87,9 +114,15 @@ export function aiIndicatorView(
   state: AiReadinessState,
   liveIndicator: AiLiveIndicator,
   soloMode: boolean,
+  pushDelivery: PushDelivery = "unknown",
 ): AiIndicatorView | null {
   // Rule 1: a proven-connected session outranks everything (incl. booting).
-  if (liveIndicator === "connected") return CONNECTED;
+  if (liveIndicator === "connected") {
+    return pushDelivery === "none" ? CONNECTED_NO_PUSH : CONNECTED;
+  }
+  // Solo already tells the user their edits are withheld, which is a stronger
+  // and more relevant statement than "nothing is delivering them" — so the
+  // push state is deliberately not folded in here.
   if (liveIndicator === "solo-paused") return SOLO_PAUSED;
 
   // liveIndicator === null below (no MCP session open).

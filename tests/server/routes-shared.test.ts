@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidNodeBinary } from "../../src/server/mcp/routes/_shared.js";
+import { isValidNodeBinary } from "../../src/shared/integrations/node-binary-name.js";
 
 // `isValidNodeBinary` outlived the /api/setup route (deleted in #477 PR
 // 3c-ii-c) — it's still used by src/server/integrations/existing-config.ts to

@@ -257,9 +257,27 @@ function buildNativeBody(
   };
 }
 
-/** Trim trailing slashes so `${base}/v1/...` doesn't double up. */
-function baseUrl(endpoint: string): string {
-  return endpoint.replace(/\/+$/, "");
+/**
+ * Build the request base from the VALIDATED URL, never the raw endpoint string.
+ *
+ * #1295 L5: trimming trailing slashes off the raw string leaves any query or
+ * fragment attached, so `http://127.0.0.1:11434#f` became
+ * `http://127.0.0.1:11434#f/v1/chat/completions`, which `fetch` re-parses as
+ * path `/`. Not an SSRF — the authority is fixed before any `?` or `#`, so it
+ * still connects to loopback — but the request silently goes to the wrong path
+ * and fails in the generic "non-JSON response" bucket. Reassembling from
+ * `origin` + `pathname` drops both components structurally.
+ *
+ * #1295 L4: `localhost` passes validation by literal string match, and `fetch`
+ * would then resolve it independently — validate-by-name-then-connect-by-name
+ * is precisely the shape that rebinds. Substituting the address here makes the
+ * checked value and the connected value the same thing, so the loopback
+ * guarantee rests on an address rather than on RFC 6761 goodwill.
+ */
+function baseUrl(validated: URL): string {
+  const url = new URL(validated);
+  if (url.hostname.toLowerCase() === "localhost") url.hostname = "127.0.0.1";
+  return url.origin + url.pathname.replace(/\/+$/, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +516,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   const validated = validateEndpoint(config.endpoint);
   if (!validated.ok) throw new Error(`invalid local-model endpoint (${validated.code})`);
 
-  const base = baseUrl(config.endpoint);
+  const base = baseUrl(validated.url);
   const started = Date.now();
   const transport: LocalModelTransport = config.transport;
 

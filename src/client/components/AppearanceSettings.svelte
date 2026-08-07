@@ -494,3 +494,26 @@ for (const row of FONT_FORMAT_ROWS) {
     filename — short names take less room, long ones grow until they hit a cap.
   </div>
 </div>
+
+<!-- Scroll pill -->
+<div>
+  <label
+    data-testid="appearance-scroll-pill"
+    style="display: flex; align-items: center; gap: var(--tandem-space-2); cursor: pointer; font-size: var(--tandem-text-sm); color: var(--tandem-fg); min-height: var(--tandem-space-5);"
+  >
+    <input
+      type="checkbox"
+      checked={settings.scrollPill}
+      disabled={readOnly}
+      onchange={(e) => onUpdate({ scrollPill: (e.target as HTMLInputElement).checked })}
+      style="accent-color: var(--tandem-accent); {disabledControlStyle(readOnly)}"
+    />
+    <span>Scroll pill</span>
+  </label>
+  <div style="font-size: var(--tandem-text-2xs); color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);">
+    Show a slim scroll thumb at the document's right edge that brightens as your
+    cursor approaches it and fades away as you move off. Drag it to scrub through
+    long documents. When off, the editor uses your system's standard scrollbar
+    instead.
+  </div>
+</div>

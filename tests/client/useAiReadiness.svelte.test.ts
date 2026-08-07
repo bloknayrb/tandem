@@ -511,3 +511,130 @@ describe("AI_CTA", () => {
     expect(AI_CTA.restart.action).toBe("restart");
   });
 });
+
+/**
+ * `pushConsumerAttached` — the delivery half of the story.
+ *
+ * `liveIndicator` proves Claude CAN READ the document; this proves whether
+ * anything will TELL it. They are structurally disjoint (routes/health.ts:40-45),
+ * which is why a hand-launched session shows "AI connected" while a comment
+ * reaches nobody until the next `tandem_checkInbox`.
+ *
+ * The asymmetry is the contract: only `false` is sound. `subscribers: 0` really
+ * does mean no consumer, but any positive count includes an attached-but-inert
+ * shim — so `true` must never be read as "push works".
+ */
+describe("createAiReadiness — push consumer", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const RUNNING = {
+    available: true,
+    running: true,
+    reaperPid: 1,
+    cwd: "/tmp",
+    sessionId: "<set>",
+    resuming: false,
+  };
+
+  it("reports false when a session is live but no consumer is attached", async () => {
+    // The case this whole change exists for: an agent is attached and readable,
+    // and nothing is pushing to it.
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse(RUNNING),
+      health: mkResponse({ status: "ok", hasSession: true, push: { subscribers: 0 } }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().liveIndicator).toBe("connected");
+    expect(h.get().pushDelivery).toBe("none");
+  });
+
+  it("reports true when a consumer is attached", async () => {
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse(RUNNING),
+      health: mkResponse({ status: "ok", hasSession: true, push: { subscribers: 2 } }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().pushDelivery).toBe("attached");
+  });
+
+  it("stays null when the loopback-only push field is absent", async () => {
+    // A redacted (non-loopback) body must read as UNKNOWN, not as "no consumer"
+    // — otherwise a LAN viewer would be told delivery is broken on the strength
+    // of a field they were never allowed to see.
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse(RUNNING),
+      health: mkResponse({ status: "ok" }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().pushDelivery).toBe("unknown");
+  });
+
+  it("keeps the prior count when a later /health read fails", async () => {
+    // Same fail-safe as `hasSession`: a blip must not manufacture a scary
+    // "nothing is delivering" state for a session that was fine a second ago.
+    let fail = false;
+    globalThis.fetch = (async (input: string) => {
+      const url = String(input);
+      if (url.includes(API_LAUNCHER_STATUS)) return mkResponse(RUNNING) as unknown as Response;
+      if (fail) throw new Error("network blip");
+      return mkResponse({
+        status: "ok",
+        hasSession: true,
+        push: { subscribers: 3 },
+      }) as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const h = mount();
+    await settle();
+    expect(h.get().pushDelivery).toBe("attached");
+
+    fail = true;
+    h.get().refresh();
+    await settle();
+    expect(h.get().pushDelivery).toBe("attached");
+  });
+
+  it("does not demote hasSession when a LATER body omits only the push field", async () => {
+    // The two fields ride one fetch, so a partial body must not let one
+    // signal's absence clobber the other's known value.
+    //
+    // This must start from a state where the demotion would be VISIBLE. An
+    // earlier version of this test read a partial body on the first poll, so
+    // `hasSession` had no prior value to clobber — it passed even with the
+    // per-field guard removed, which mutation testing confirmed. Establish both
+    // signals first, THEN feed a body missing one of them.
+    let body: unknown = { status: "ok", hasSession: true, push: { subscribers: 0 } };
+    globalThis.fetch = (async (input: string) => {
+      const url = String(input);
+      if (url.includes(API_LAUNCHER_STATUS)) {
+        return mkResponse({ available: true, running: false }) as unknown as Response;
+      }
+      return mkResponse(body) as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready"); // promoted by hasSession
+    expect(h.get().pushDelivery).toBe("none");
+
+    // Now a body carrying ONLY the push field. `hasSession` must survive.
+    body = { status: "ok", push: { subscribers: 2 } };
+    h.get().refresh();
+    await settle();
+    expect(h.get().liveIndicator).toBe("connected");
+    expect(h.get().state).toBe("ready");
+    expect(h.get().pushDelivery).toBe("attached");
+  });
+});

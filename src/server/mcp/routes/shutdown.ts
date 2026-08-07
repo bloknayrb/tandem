@@ -31,9 +31,12 @@ export interface ShutdownRouteDeps {
 export function makeShutdownHandler(deps: ShutdownRouteDeps): Handler {
   let invoked = false;
   return (req: Request, res: Response): void => {
-    // 1. Unconditional loopback gate — deliberately STRICTER than
-    // assertLoopbackForMutation (which only activates under
-    // TANDEM_ALLOW_UNAUTHENTICATED_LAN=1). A process-kill endpoint must never
+    // 1. Unconditional loopback gate. This was deliberately stricter than
+    // assertLoopbackForMutation until #1293 made that one unconditional too;
+    // the two now agree, and this route was the reference for that fix. It
+    // stays hand-rolled because its origin check must permit an ABSENT Origin
+    // (the Tauri shell's reqwest client sends none), which
+    // assertOriginAllowlisted rejects. A process-kill endpoint must never
     // be reachable from the network, even by a caller holding a valid Bearer
     // token on a TANDEM_BIND_HOST LAN bind: remote shutdown is a DoS
     // primitive the LAN opt-in did not consent to, and the only legitimate

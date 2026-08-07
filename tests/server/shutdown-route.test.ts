@@ -6,8 +6,10 @@
  * - loopback POST without an Origin header (the Tauri shell's reqwest client)
  *   → 202, injected shutdown fn invoked after the response is delivered;
  * - Origin allowlisting (present-but-foreign Origin → 403 before invocation);
- * - the unconditional loopback gate (non-loopback remote → 403, even though
- *   assertLoopbackForMutation would not fire outside LAN-unauth mode);
+ * - the hand-rolled unconditional loopback check (non-loopback remote → 403).
+ *   It stays hand-rolled because this route must accept an *absent* Origin,
+ *   which assertOriginAllowlisted rejects; since #1293 the loopback half is
+ *   behaviourally identical to assertLoopbackForMutation;
  * - 202-then-shutdown ordering (shutdown deferred to the response "close");
  * - one-shot semantics on double-POST.
  *

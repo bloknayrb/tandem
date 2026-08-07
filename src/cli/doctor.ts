@@ -30,6 +30,7 @@ import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { parseLockfile } from "../server/annotations/lockfile.js";
+import { isRecordedPathGone, probeNodeBinary } from "../server/integrations/node-binary.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
@@ -616,7 +617,7 @@ function checkMcpJson(r: Recorder): void {
   const channel = servers["tandem-channel"];
   if (!channel) {
     r.warn(
-      ".mcp.json missing tandem-channel — Claude will use polling instead of push notifications",
+      ".mcp.json has no tandem-channel entry — push here depends on the plugin monitor instead (see the push-path line below)",
     );
   } else {
     const cmd = channel.command;
@@ -630,6 +631,15 @@ function checkMcpJson(r: Recorder): void {
     } else {
       r.pass(`.mcp.json tandem-channel → ${cmd} ${args}`);
     }
+    // Same stale-path check as the user-config branch — the condition is
+    // identical here and previously went unreported for project configs.
+    reportChannelCommand(
+      r,
+      channel,
+      ".mcp.json",
+      "Edit .mcp.json and point tandem-channel at a Node binary that exists — this " +
+        "project-local file is not managed by Tandem's startup repair or `tandem setup --apply`.",
+    );
 
     if (!channel.env?.TANDEM_URL) {
       r.warn(
@@ -678,12 +688,66 @@ function checkUserMcpConfig(r: Recorder): void {
   }
   if (!servers["tandem-channel"]) {
     r.warn(
-      "tandem-channel not registered in ~/.claude.json — Claude Code will poll instead of receiving real-time push",
+      "tandem-channel not registered in ~/.claude.json — push depends on the plugin monitor instead (see the push-path line below)",
       "Run: tandem setup --apply",
     );
   } else {
-    r.pass("tandem-channel registered in ~/.claude.json");
+    // Registration is NECESSARY but not SUFFICIENT, and saying otherwise is
+    // how this check misled people: the shim only delivers to a session
+    // launched with the channel flag. Sessions Tandem starts pass it; a
+    // session you start yourself does not. `evaluatePushPath` reports whether
+    // anything is actually consuming — this line must not pre-empt it.
+    r.pass(
+      "tandem-channel registered in ~/.claude.json (a hand-launched session also needs the flag)",
+    );
+    reportChannelCommand(
+      r,
+      servers["tandem-channel"],
+      "~/.claude.json",
+      "Restart Tandem (it repairs this at startup), or run: tandem setup --apply",
+    );
   }
+}
+
+/**
+ * Warn when the channel entry names a Node binary that is no longer there.
+ *
+ * Generated entries carry an absolute path (see `integrations/node-binary.ts`)
+ * because a bare `node` is unresolvable for some clients. The cost is that the
+ * path can go stale — a removed nvm version, a relocated sidecar — and a stale
+ * absolute path fails silently at spawn. The server repairs this at boot;
+ * surfacing it here explains a push path that is registered and still dead.
+ *
+ * The staleness rule itself is `isRecordedPathGone`'s, not ours. Two
+ * copies would let the diagnosis drift from the repair, which is the worst
+ * split available: doctor warning about a path the server considers fine, or
+ * staying quiet about one the server rewrites on every boot.
+ *
+ * `fix` is per-call-site and NOT defaulted, because the two call sites have
+ * genuinely different remedies: `detectTargets` only ever returns
+ * `~/.claude.json` and the Desktop/MSIX configs, so neither the boot repair nor
+ * `tandem setup --apply` touches a project-local `.mcp.json`. Telling that user
+ * to restart Tandem would send them round a loop with no exit — the same shape
+ * of false promise this check exists to replace.
+ */
+function reportChannelCommand(r: Recorder, entry: unknown, label: string, fix: string): void {
+  if (entry === null || typeof entry !== "object") return;
+  const command = (entry as { command?: unknown }).command;
+  if (typeof command !== "string" || command === "") return;
+  // Three-state on purpose: `false` means definitely gone, `null` means the
+  // probe could not run. The server declines to rewrite on `null` — but a path
+  // it cannot read is still a dead push path, and staying silent about it would
+  // leave the user with no output from any surface.
+  const probed = probeNodeBinary(command);
+  if (probed === null && /[/\\]/.test(command)) {
+    r.warn(
+      `${label} tandem-channel Node path could not be checked (permission denied, broken link, or unreachable share): ${command}`,
+      "Verify the path is readable — Tandem deliberately will not rewrite it on an unreadable probe.",
+    );
+    return;
+  }
+  if (!isRecordedPathGone(command)) return;
+  r.warn(`${label} tandem-channel points at a Node binary that no longer exists: ${command}`, fix);
 }
 
 // ── Check: Claude CLI presence ──────────────────────────────────────
@@ -747,6 +811,105 @@ export function evaluateClaudeCli(
     message: "Claude Code CLI not found — Tandem's AI collaboration needs an MCP client",
     fix: "Install Claude Code from https://claude.com/claude-code (or connect another MCP client)",
   };
+}
+
+/**
+ * Report the Tandem plugin when it is installed, and the two hazards that come
+ * with it.
+ *
+ * Both are live field reports, not hypotheticals:
+ *
+ * 1. **Every command the plugin declares is `npx`-based** — the two MCP servers
+ *    and the monitor. Claude Code spawns a monitor with `shell: true` and an
+ *    environment it builds itself, which on POSIX is a NON-LOGIN `/bin/sh -c`:
+ *    no profile is sourced, so PATH is whatever Claude Code itself started
+ *    with. A GUI-launched client therefore has no Node, the monitor exits 127,
+ *    and Claude Code reports it in EVERY session — including ones with nothing
+ *    to do with Tandem. Nothing in a static manifest can fix that
+ *    cross-platform, so naming it is the whole remedy available here.
+ * 2. **The plugin's MCP servers duplicate the ones setup writes.** Plugin
+ *    servers load additively under `plugin_<plugin>_<server>`, so a user with
+ *    both gets the `tandem_*` toolset twice.
+ *
+ * Deliberately reads the registry rather than shelling out to `claude plugin
+ * list`: this runs inside `tandem doctor` and a LAN-reachable status route,
+ * where spawning another program to answer a question a file already answers
+ * is the wrong trade. Absence of the file is not evidence — stay silent.
+ */
+export interface TandemPluginInput {
+  /** `enabledPlugins` from `~/.claude/settings.json`, or `null` when that file
+   *  is absent or unreadable — which is NOT evidence either way. */
+  enabledPlugins: Record<string, unknown> | null;
+  /** Whether `~/.claude.json` carries an `mcpServers.tandem` entry of its own. */
+  wizardTandemEntry: boolean;
+}
+
+export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
+  if (input.enabledPlugins === null) return [];
+  // `false` is a real and common value — a plugin the user deliberately
+  // disabled — so test the VALUE, not just key presence. A truthiness check
+  // would report a disabled plugin as installed.
+  const installed = Object.entries(input.enabledPlugins).some(
+    ([key, value]) => key.startsWith("tandem@") && value === true,
+  );
+  if (!installed) return [];
+
+  const out: EvalOutcome[] = [
+    {
+      status: "warn",
+      message: "The Tandem plugin is installed — its monitor and MCP servers all run via `npx`",
+      fix:
+        'If you see `Monitor "Tandem real-time document events…" script failed (exit 127)`, ' +
+        "Claude Code was started without Node on its PATH — it spawns monitors through a " +
+        "non-login shell, so a GUI launch never reads your shell profile. Start Claude from " +
+        "a terminal, or uninstall with `claude plugin uninstall tandem@tandem-editor`.",
+    },
+  ];
+
+  // Duplication warning only when the wizard's entry is ALSO present — a
+  // plugin-only user has nothing duplicated and needs no warning.
+  if (input.wizardTandemEntry) {
+    out.push({
+      status: "warn",
+      message:
+        "Both the Tandem plugin and a tandem MCP entry in ~/.claude.json are present — the tandem_* tools will appear twice",
+      fix:
+        "Plugin MCP servers load alongside your own, under a plugin_ prefix. Keep one: " +
+        "`claude plugin uninstall tandem@tandem-editor` leaves the Tandem-managed config in place.",
+    });
+  }
+  return out;
+}
+
+function checkTandemPlugin(r: Recorder): void {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (!home) return;
+
+  let enabledPlugins: Record<string, unknown> | null = null;
+  try {
+    const settings: { enabledPlugins?: Record<string, unknown> } = JSON.parse(
+      readFileSync(join(home, ".claude", "settings.json"), "utf-8"),
+    );
+    enabledPlugins = settings.enabledPlugins ?? {};
+  } catch {
+    // Absent or malformed. Absence is not evidence, and a parse failure is
+    // `checkUserMcpConfig`'s story to tell — this file carries permissions, so
+    // no detail escapes here either.
+  }
+
+  let wizardTandemEntry = false;
+  try {
+    const config: { mcpServers?: Record<string, unknown> } = JSON.parse(
+      readFileSync(join(home, ".claude.json"), "utf-8"),
+    );
+    wizardTandemEntry = config?.mcpServers?.tandem !== undefined;
+  } catch {
+    // Already reported by checkUserMcpConfig.
+  }
+
+  for (const outcome of evaluateTandemPlugin({ enabledPlugins, wizardTandemEntry })) {
+    recordEvaluation(r, outcome);
+  }
 }
 
 function checkClaudeCli(r: Recorder): void {
@@ -1467,6 +1630,7 @@ export async function runDoctor(opts: RunDoctorOptions = {}): Promise<DoctorRepo
   await r.check("mcp-json", () => checkMcpJson(r));
   await r.check("user-mcp-config", () => checkUserMcpConfig(r));
   await r.check("claude-cli", () => checkClaudeCli(r));
+  await r.check("tandem-plugin", () => checkTandemPlugin(r));
   await r.check("annotation-store", () => checkAnnotationStore(r));
   await r.check("stale-global", () => checkStaleGlobal(r));
 

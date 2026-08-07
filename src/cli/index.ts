@@ -132,7 +132,14 @@ try {
     await runSetup({
       apply: args.includes("--apply"),
       force: args.includes("--force"),
-      withChannelShim: args.includes("--with-channel-shim"),
+      // `undefined` when the flag is absent, NOT `false`. This option is an
+      // override, and `shouldRegisterChannelShim` short-circuits on
+      // `override !== undefined` — so passing a bare `args.includes(...)` made
+      // every plain `tandem setup --apply` an explicit opt-OUT, silently
+      // registering no channel shim for Claude Code and defeating the
+      // documented default-on behaviour. There is no `--no-channel-shim`, so
+      // absent must mean "no opinion".
+      withChannelShim: args.includes("--with-channel-shim") || undefined,
       targets,
     });
   } else if (args[0] === "mcp-stdio") {

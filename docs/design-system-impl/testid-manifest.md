@@ -64,6 +64,12 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `editor-root` — top-level editor mount point
 - `editor-stage` — Phase 3.5 grid-stage container (content track + per-side
   margin tracks); the margin-annotation positioning layer (`marginLayerEl`)
+- `editor-scroll-pill`, `editor-scroll-pill-thumb` — the proximity-faded scroll
+  thumb overlaying the scroller's right edge. The track is always mounted and
+  `pointer-events: none`; only the thumb is interactive, and only while its
+  opacity clears `HIT_TEST_MIN_OPACITY`. Gated on the `scrollPill` setting and
+  hidden in source view, so an E2E selector must assert on the thumb's
+  `display`, not merely on the track's presence
 - `title-bar`, `titlebar-brand-menu`, `titlebar-brand-menu-popover`,
   `titlebar-default-model`, `titlebar-update-available-dot`,
   `brand-menu-{settings,shortcuts,theme-{*}}`
@@ -192,7 +198,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
   `text-size-{*}-btn`, `accent-hue-slider`, `editor-font-{*}-btn`,
   `density-{*}-btn`, `reduce-motion-toggle`, `appearance-formatting-bar` (1.11),
-  `appearance-uniform-tab-width`
+  `appearance-uniform-tab-width`, `appearance-scroll-pill`
 - Decorations mirror group (1.13): `appearance-show-{authorship,comments,highlights,notes}`
   (interpolated via `{testid}`, so not in the testid-set snapshot; tracked here).
   Replaces the single `annotation-decorations-toggle` (#596 per-type split).

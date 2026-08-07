@@ -7,7 +7,7 @@ Tandem is designed local-first. The server binds to `127.0.0.1` by default, docu
 - **Default bind:** `127.0.0.1`. The MCP HTTP endpoint and Hocuspocus WebSocket only accept connections from the local machine.
 - **LAN exposure (opt-in):** set `TANDEM_BIND_HOST=0.0.0.0` (or a specific interface) to expose Tandem on a LAN. Non-loopback requests require a Bearer token by default; Tandem auto-generates one on first run and stores it at `{APP_DATA_DIR}/auth-token` with mode `0o600`.
 - **Loopback detection is fail-closed.** Authentication middleware uses `req.socket.remoteAddress` exclusively — never the `Host` header — so DNS rebinding attacks cannot trick the server into treating a remote request as loopback. IPv6 variants (`::1`, `::ffff:127.0.0.1`) are normalized to `127.0.0.1`.
-- **Insecure LAN opt-in:** `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` lets the server bind to a non-loopback host when no auth token has been provisioned yet. Without it, that startup is refused outright (`bind-check.ts`). The name overstates what it does: it does **not** switch authentication off. `authMiddleware` (`src/server/auth/middleware.ts:161`) never reads the flag — it still requires a valid Bearer token from every non-loopback caller, and a token is always minted. What the flag genuinely relaxes is `assertLoopbackForMutation`, which is the *only* guard whose behaviour it changes (see below). Intended for trusted-network development; never set it on a public network.
+- **Insecure LAN opt-in:** `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` lets the server bind to a non-loopback host when no auth token has been provisioned yet. Without it, that startup is refused outright (`bind-check.ts`). The name overstates what it does: it does **not** switch authentication off. `authMiddleware` (`src/server/auth/middleware.ts:161`) never reads the flag — it still requires a valid Bearer token from every non-loopback caller, and a token is always minted. Since #1293 the flag relaxes **no guard at all** — it changes exactly one thing, whether the bind is permitted without a provisioned token. (It previously relaxed `assertLoopbackForMutation`, in the inverted direction described below.) Intended for trusted-network development; never set it on a public network.
 
 See [configuration.md](configuration.md#environment-variables) for the full environment-variable reference (ports, bind host, auth token, app-data paths).
 
@@ -36,18 +36,32 @@ This reaches further than the JSON routes: the SSE handlers call `res.writeHead(
 
 ## What actually guards a mutating route
 
-Mutating `/api` routes call `assertOriginAllowlisted` and then `assertLoopbackForMutation`. Read
-the pair honestly, because the names promise more than they deliver (#1293):
+*Most* mutating `/api` routes call `assertOriginAllowlisted` and then `assertLoopbackForMutation` —
+but not all of them do, and the exceptions are enumerated below. Read the pair honestly, because
+the names promise more than they deliver (#1293):
 
 - `assertOriginAllowlisted` reads the `Origin` header, which a non-browser client can forge
   freely. It stops a *browser* on a page you visited; it stops nothing else.
-- `assertLoopbackForMutation` rejects only when `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` **and** the
-  peer is non-loopback. In the default configuration it is a **no-op**
-  (`src/server/integrations/api-routes.ts:279-289`).
+- `assertLoopbackForMutation` rejects **every** non-loopback peer, in every configuration (#1293).
+  Until then it rejected only when `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` — the stricter posture
+  applied only in the *more permissive* configuration, so it was a no-op in every shipped build,
+  and the genuinely exposed configuration was the token-authenticated LAN bind that
+  `bind-check.ts` permits whenever a token exists.
 
-So neither is the real protection. **The real protection is the loopback bind plus Bearer auth
-for every non-loopback caller** — the two controls described above, which hold regardless of
-either assertion. The two `assert*` calls are defence in depth on top of that, and a route that
+  It governs the routes that **call** it, and **ten** mutating routes registered in
+  `src/server/mcp/api-routes.ts` call neither gate. Four of them take a caller-supplied
+  filesystem path — `open`, `save` (save-as), `convert`, `upload` — which makes them the
+  higher-blast-radius subset and the one #1320 tracks. The other six are `close`, `scratchpad`
+  (#1318 is adding its gate), `apply-changes`, `annotation-reply`, `remove-annotation` and
+  `rotate-token`; a token-holding LAN peer can still reach those. Separately, `/api/channel/*`
+  and `DELETE /api/chat` are ungated **deliberately**, because the channel shim and monitor are
+  documented to run against a non-loopback `TANDEM_URL` (Cowork) and gating them would break that
+  transport. "Mutating routes are loopback-only" is not a statement about all of `/api`.
+
+**The primary protection is the loopback bind plus Bearer auth for every non-loopback caller** —
+the two controls described above, which hold regardless of either assertion. `assertOriginAllowlisted`
+is defence in depth on top of that; `assertLoopbackForMutation` now covers the one case neither
+control does — a caller who holds a valid token but is not on this machine. A route that
 has them is not thereby safe to expose. `docs/decisions.md` ADR-046 states the same posture.
 
 ## Privacy
