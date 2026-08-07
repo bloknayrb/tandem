@@ -744,6 +744,7 @@ describe("loadSettings — migration chain", () => {
       smartTypography: true, // A4 — non-default (default false)
       spellcheck: false, // A5 — non-default (default true)
       uniformTabWidth: false, // non-default (default true)
+      scrollPill: false, // non-default (default true)
     };
     writeRaw(userBlob);
     const s = loadSettings();
@@ -776,6 +777,7 @@ describe("loadSettings — migration chain", () => {
     expect(s.smartTypography).toBe(true);
     expect(s.spellcheck).toBe(false);
     expect(s.uniformTabWidth).toBe(false);
+    expect(s.scrollPill).toBe(false);
   });
 
   it("#941: per-type decoration flags + marginView survive a full v9→current migration", () => {
@@ -954,6 +956,49 @@ describe("loadSettings — migration chain", () => {
       const s = loadSettings();
       expect(s.schemaVersion, `start v${v}`).toBe(CURRENT_SCHEMA_VERSION);
       expect(s.uniformTabWidth, `uniformTabWidth dropped starting at v${v}`).toBe(false);
+    }
+  });
+
+  // v18→v19: introduce `scrollPill` (default TRUE). Pure version bump — an
+  // existing user upgrading gains the scroll affordance without opting in,
+  // which matters more than usual here because `scroll-fade.css` already hides
+  // the native scrollbar on the editor, so the pre-v19 state is "no scrollbar".
+  it("v18→v19: scrollPill defaults true when absent", () => {
+    writeRaw({ schemaVersion: 18, theme: "dark" });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    // Catches wiring the field with the default-FALSE normalize idiom
+    // (`parsed.x === true`) while DEFAULTS claims true — the failure mode where
+    // the shipped default silently never applies.
+    expect(s.scrollPill).toBe(true);
+    expect(s.theme).toBe("dark");
+    expect(s._readOnly).toBeUndefined();
+  });
+
+  it.each([
+    { why: "explicit scrollPill=false survives the bump", val: false, expected: false },
+    { why: "explicit scrollPill=true survives the bump", val: true, expected: true },
+  ])("v18→v19: scrollPill=$val — $why", ({ val, expected }) => {
+    writeRaw({ schemaVersion: 18, scrollPill: val });
+    const s = loadSettings();
+    expect(s.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(s.scrollPill).toBe(expected);
+  });
+
+  it("forward-compat (v99) sanitizes scrollPill to a boolean", () => {
+    writeRaw({ schemaVersion: 99, scrollPill: "nope" });
+    const s = loadSettings();
+    expect(s._readOnly).toBe(true);
+    expect(s.scrollPill).toBe(true);
+  });
+
+  it("scrollPill=false is preserved across EVERY in-range schemaVersion bump", () => {
+    for (let v = 2; v < CURRENT_SCHEMA_VERSION; v++) {
+      store.clear();
+      writeRaw({ schemaVersion: v, scrollPill: false });
+      const s = loadSettings();
+      expect(s.schemaVersion, `start v${v}`).toBe(CURRENT_SCHEMA_VERSION);
+      expect(s.scrollPill, `scrollPill dropped starting at v${v}`).toBe(false);
     }
   });
 

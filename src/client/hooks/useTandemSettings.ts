@@ -222,6 +222,15 @@ export interface TandemSettings {
    */
   uniformTabWidth: boolean;
   /**
+   * Show the editor's custom scroll pill — a proximity-faded thumb overlaying
+   * the document scroll area's right edge. `true` (default) renders it and
+   * hides the native scrollbar; `false` falls back to the native bar, which
+   * `scroll-fade.css` opts this surface out of its scrollbar-hiding gate to
+   * allow. Both halves matter: without the fallback, "off" would mean no scroll
+   * affordance at all. Display-only.
+   */
+  scrollPill: boolean;
+  /**
    * **DO NOT** set this from product code. Internal marker stamped by
    * `loadSettings` when the on-disk `schemaVersion` is newer than this
    * client knows how to migrate. `createTandemSettings` short-circuits
@@ -247,7 +256,7 @@ function prefersReducedMotion(): boolean {
 const DEFAULTS: TandemSettings = {
   leftPanelVisible: false,
   rightPanelVisible: true,
-  schemaVersion: 18,
+  schemaVersion: 19,
   primaryTab: "annotations",
   panelOrder: "chat-editor-annotations",
   editorMeasure: "comfortable",
@@ -283,6 +292,7 @@ const DEFAULTS: TandemSettings = {
   smartTypography: false,
   spellcheck: true,
   uniformTabWidth: true,
+  scrollPill: true,
 };
 
 /** Max length of an opaque keychain ref (matches server-side `REF_MAX_LENGTH`). */
@@ -488,8 +498,13 @@ function parseFontByExtension(raw: unknown): Partial<Record<string, EditorFont>>
  *   an explicit override); `normalizeKnownFields` defaults a missing field to
  *   `true`, preserving the uniform strip existing users already see when the
  *   strip is crowded, and preserves an explicit `false`.
+ * v18→v19: introduce `scrollPill: true` (the editor's proximity-faded scroll
+ *   thumb). Pure version bump — do NOT set the field here (that would clobber
+ *   an explicit override); `normalizeKnownFields` defaults a missing field to
+ *   `true` so upgrading users gain the affordance without opting in, and
+ *   preserves an explicit `false`.
  */
-export const CURRENT_SCHEMA_VERSION = 18;
+export const CURRENT_SCHEMA_VERSION = 19;
 
 /**
  * Validate + clamp every known field on a parsed settings blob.
@@ -607,6 +622,7 @@ function normalizeKnownFields(parsed: Record<string, unknown>): TandemSettings {
     // Default-TRUE idiom (like `spellcheck` above, unlike `smartTypography`):
     // an absent key must load as `true`, or the shipped default never applies.
     uniformTabWidth: parsed.uniformTabWidth === false ? false : DEFAULTS.uniformTabWidth,
+    scrollPill: parsed.scrollPill === false ? false : DEFAULTS.scrollPill,
   };
 }
 
@@ -817,6 +833,12 @@ export function loadSettings(): TandemSettings {
         // the field here (that would clobber an explicit override).
         // normalizeKnownFields defaults a missing value to true.
         parsed = { ...parsed, schemaVersion: 18 };
+      }
+      if (parsed.schemaVersion === 18) {
+        // v18→v19: introduce `scrollPill`. Pure version bump — do NOT set the
+        // field here (that would clobber an explicit override).
+        // normalizeKnownFields defaults a missing value to true.
+        parsed = { ...parsed, schemaVersion: 19 };
       }
       // Forward-compat: an on-disk version newer than what we can migrate
       // is loaded defensively and never written back. `_readOnly: true`
