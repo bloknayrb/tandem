@@ -221,8 +221,8 @@ Every entry here is **sequential** — it becomes actionable only after the name
 
 **One count reconciliation:** 17 wave + 25 brief = 42; 1249 and 1252 are counted in the brief bucket (they park only *after* brief-438 is answered), so primary-parked is 4 (1199, 1123, 1134, 1142) and the totals are 17 + 25 + 4 = **46**. The 47th is **#1302**, in the fixed-by-open-PR state — precisely the state the correction block at the top of this document was written to introduce. Explicit full enumeration of all 47 in issue order, one state each:
 
-316·B 317·B 321·B 438·B 552·B 630·B 798·B 832·B 892·B 916·B 928·B 964·B 989·B 992·B 994·B 995·B 997·B 1045·B 1118·W3 1123·P 1134·P 1142·P 1197·B 1199·P 1213·B→W3 1249·B 1252·B 1253·B→W4b 1262·B 1263·B 1269·W2 1270·W2 1287·B→W5 1288·W4b 1289·W2 1292·W1 1293·W1 1294·W1 1295·W1 1298·W4a 1299·W4a 1300·W4a **1302·PR#1304** 1306·W2 1307·W1 1308·B 1310·W1
+316·B 317·B 321·B 438·B 552·B 630·B 798·B 832·B 892·B 916·B 928·B 964·B 989·B 992·B 994·B 995·B 997·B 1045·B 1118·W3 1123·P 1134·P 1142·P 1197·B 1199·P 1213·B→W3 1249·B 1252·B 1253·B→W4b 1262·B 1263·B 1269·W2 1270·W2 1287·B 1288·W4b 1289·W2 1292·W1 1293·W1 1294·W1 1295·W1 1298·W4a 1299·W4a 1300·W4a **1302·PR#1304** 1306·W2 1307·W1 1308·B 1310·W1
 
-= 47. B=25, W=17 (1213 and 1253 counted here as their eventual wave; 1287 stays in B, like every other expected-Wave-5 item), P=4, PR=1. No issue unassigned, no non-sequential double-state.
+= 47. B=25, W=17 (a `→W` arrow means the issue is counted as its eventual wave; Wave 5 is not a scheduled wave here, so all seven brief→Wave-5 issues carry a bare `B`), P=4, PR=1. No issue unassigned, no non-sequential double-state.
 
 **Correction note.** Synthesis originally reported W=19 with #1302 in Wave 2. The invariant it enforced — "exactly one primary state" — was sound; the state *vocabulary* was incomplete. It had no "fixed by an open PR" state, so an issue with a merge-queued fix could only be expressed as unfixed work. That is the failure mode worth carrying forward: an exhaustive-looking partition can still be exhaustive over the wrong set of states.
