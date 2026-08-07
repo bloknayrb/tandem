@@ -116,10 +116,10 @@ Derived from callsites Stage A and Stage B actually cited. `file → [issues]`. 
 | `src/shared/sse-consumer.ts` | #1213 (`:472-479`) | W3 only. |
 | `src/server/file-io/*.ts` | **#1310 only** | Confirms 1-A can run parallel to 1-B. |
 | `src-tauri/src/lib.rs` | #1306 (`extract_file_arg`), #630 (items 4-7, `:591`/`:611`/`:656`), #552 (`:2651` `setup_overlay_titlebar`), #1118 | **Four-way.** #630 and #552 are parked/briefed, #1118 is W3-B. **#1306 (W2-B) and #1118 (W3-B) must not run in parallel** — different waves, so fine as sequenced, but do not compress W2 and W3. |
-| `src/client/shell/FormattingBar.svelte` + `editor/toolbar/*` | **#1302 only**, via open PR #1304 | Not a wave branch. Note #1304 also edits `CLAUDE.md`'s testid list (adding `formatting-bar-wrap`) and currently **conflicts** with master's `e74a49a` restructure — additive resolution. |
+| `src/client/shell/FormattingBar.svelte` + `editor/toolbar/*` | **#1302 only**, via open PR #1304 | Not a wave branch. #1304 also regenerates `tests/design-system-impl/__snapshots__/testid-set.snap.txt`, adding `formatting-bar-track` and `formatting-bar-wrap`. It touches **no** `CLAUDE.md` — the merge (`13b0300`) lists 12 files and none is `CLAUDE.md`, which carries no testid list of its own (it points at `docs/design-system-impl/testid-manifest.md`). No conflict with `e74a49a`. |
 | `src/client/components/SettingsModal.svelte` / `AppearanceSettings.svelte` | #1262, #994, #992 | All three are Wave-5 post-decision; **one branch** when they land. |
-| `src/client/components/StatusBar.svelte`, `status-ai-view.ts` | #1287 | Wave 5, isolated. |
-| `src/client/components/PeekStrip.svelte` | #832 | Wave 5, isolated. |
+| `src/client/status/StatusBar.svelte`, `src/client/status/status-ai-view.ts` | #1287 | Wave 5, isolated. |
+| `src/client/panels/PeekStrip.svelte` | #832 | Wave 5, isolated. |
 | `docs/roadmap.md`, `docs/decisions.md` | #1199, #438, #1263, #321, #316, #798, #1252 | Docs-only; serialize the doc PRs or expect trivial conflicts. Not a code-branch constraint. |
 
 E2E remains a **global mutex** (workers:1, fixed ports, shared app-data dir wiped at server start): #1302, #995, #994, #1288 all want E2E. Only one branch may run E2E at a time regardless of wave.
