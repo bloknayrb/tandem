@@ -93,7 +93,7 @@ Windows 10 version 22H2 or Windows 11. macOS 12 (Monterey) or later. Linux with 
 
 Pick the installer for your platform from the [latest release](https://github.com/bloknayrb/tandem/releases/latest). Windows, macOS, and Linux builds are available.
 
-The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.txt`, `.html`, or `.docx` file opens it directly in Tandem.
+The desktop app bundles the editor, the server it talks to, and storage for the connection token. Updates land automatically. Double-clicking a `.md`, `.markdown`, `.txt`, `.html`, or `.docx` file opens it directly in Tandem.
 
 ### Connect your AI
 

@@ -1,0 +1,71 @@
+/**
+ * Alignment pin for the three lists that decide whether a double-clicked file
+ * actually opens (#1306).
+ *
+ * A file association is a promise made by the OS on Tandem's behalf: once
+ * `tauri.conf.json` registers an extension, Explorer/Finder offer Tandem as a
+ * handler and a double-click launches it. Three independent lists then have to
+ * agree, or the app launches and refuses the very file it was launched for:
+ *
+ *   1. `bundle.fileAssociations[].ext` in `src-tauri/tauri.conf.json` — what the
+ *      OS is told Tandem handles.
+ *   2. `SUPPORTED_FILE_ASSOC_EXTS` in `src-tauri/src/lib.rs` — the shell's
+ *      defense-in-depth argv filter, before it exports `TANDEM_OPEN_FILE`.
+ *   3. `SUPPORTED_EXTENSIONS` in `src/shared/constants.ts` — the server, which
+ *      is the authority; `resolveAndValidatePath` throws UNSUPPORTED_FORMAT.
+ *
+ * The failure this pins is silent by construction. `maybeOpenStartupFile`
+ * deliberately swallows an open failure (a broken `TANDEM_OPEN_FILE` must not
+ * abort startup) and falls through to the `welcome.md` fallback — so the user
+ * sees Tandem open with the wrong document and no error, and only stderr says
+ * why. Nothing else in the tree compares these lists, so drift ships.
+ *
+ * Direction matters: registered-but-unsupported is the bug. The reverse
+ * (`.htm` is server-supported but deliberately not OS-registered, since
+ * `.html` alone is the association) is a legitimate product choice and is NOT
+ * asserted here.
+ */
+
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { SUPPORTED_EXTENSIONS } from "../../src/shared/constants.js";
+
+const repoRoot = path.resolve(__dirname, "../..");
+
+function registeredAssociationExts(): string[] {
+  const raw = readFileSync(path.join(repoRoot, "src-tauri/tauri.conf.json"), "utf-8");
+  const conf = JSON.parse(raw) as {
+    bundle?: { fileAssociations?: Array<{ ext?: string[] }> };
+  };
+  const assoc = conf.bundle?.fileAssociations ?? [];
+  expect(assoc.length).toBeGreaterThan(0); // positive control: we really parsed it
+  return [...new Set(assoc.flatMap((a) => a.ext ?? []))].map((e) => e.toLowerCase());
+}
+
+function rustAssocExts(): string[] {
+  const src = readFileSync(path.join(repoRoot, "src-tauri/src/lib.rs"), "utf-8");
+  const m = src.match(/SUPPORTED_FILE_ASSOC_EXTS:\s*&\[&str\]\s*=\s*&\[([^\]]*)\]/);
+  expect(m, "SUPPORTED_FILE_ASSOC_EXTS literal not found in lib.rs").toBeTruthy();
+  return [...(m as RegExpMatchArray)[1].matchAll(/"([^"]+)"/g)].map((x) => x[1].toLowerCase());
+}
+
+describe("OS file associations align with the server's accepted extensions", () => {
+  it("every extension tauri.conf.json registers is accepted by the server", () => {
+    const registered = registeredAssociationExts();
+    const unsupported = registered.filter((ext) => !SUPPORTED_EXTENSIONS.has(`.${ext}`));
+    expect(unsupported).toEqual([]);
+  });
+
+  it("every extension tauri.conf.json registers passes the Rust argv filter", () => {
+    const registered = registeredAssociationExts();
+    const rust = new Set(rustAssocExts());
+    const rejected = registered.filter((ext) => !rust.has(ext));
+    expect(rejected).toEqual([]);
+  });
+
+  it("the Rust argv filter never admits an extension the server will reject", () => {
+    const overpermissive = rustAssocExts().filter((ext) => !SUPPORTED_EXTENSIONS.has(`.${ext}`));
+    expect(overpermissive).toEqual([]);
+  });
+});

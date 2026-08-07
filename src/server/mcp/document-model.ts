@@ -14,6 +14,11 @@ export function detectFormat(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   switch (ext) {
     case ".md":
+    // `.markdown` is the long-form spelling, registered as an OS file
+    // association alongside `.md`. It MUST fold to "md" here — the default
+    // branch below is the plaintext fallback, which would render the syntax
+    // literally and save back through `extractText` (#1306).
+    case ".markdown":
       return "md";
     case ".txt":
       return "txt";

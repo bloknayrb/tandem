@@ -66,8 +66,25 @@ export const TANDEM_SUPPORT_EMAIL = "support@tandem.ink";
  */
 export const BYO_MODELS_ENABLED = false;
 
-/** File extensions the server accepts for opening. */
-export const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".html", ".htm", ".docx"]);
+/**
+ * File extensions the server accepts for opening.
+ *
+ * This set is the authority, and `src-tauri/tauri.conf.json`'s
+ * `bundle.fileAssociations` is a PROMISE made against it: once an extension is
+ * registered there, the OS offers Tandem as a handler and a double-click
+ * launches the app with that path. An extension registered but missing here
+ * fails silently — `maybeOpenStartupFile` swallows the open error by design and
+ * falls through to `welcome.md`, so the user gets Tandem showing the wrong
+ * document with no visible error (#1306). `tests/build/file-association-alignment.test.ts`
+ * pins the two lists together.
+ *
+ * `.markdown` and `.htm` are aliases, not distinct formats — `detectFormat`
+ * folds them into `md` and `html`. Adding an alias here without adding it to
+ * `detectFormat` is worse than omitting it: the file would open, route to the
+ * PLAINTEXT adapter, render its syntax literally, and then auto-save back
+ * through `extractText` instead of `saveMarkdown`, rewriting the user's file.
+ */
+export const SUPPORTED_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".html", ".htm", ".docx"]);
 
 /**
  * Inline marks the `.docx` import path (`docx-html.ts#htmlToYDoc`) can emit onto
