@@ -27,10 +27,17 @@ export function isValidNodeBinary(nodeBinary: string): boolean {
 /**
  * Strip an absolute path to a basename for non-loopback callers (#1294).
  *
- * The project already had this convention — `GET /api/backups`, `GET /api/sessions`
- * and `GET /api/info` each implemented it by hand — and four surfaces missed it,
- * which is what made it one missing convention rather than four bugs. It lives
+ * The project already had this convention — `GET /api/backups` and
+ * `GET /api/sessions` each implemented it by hand — and several surfaces missed
+ * it, which is what made it one missing convention rather than N bugs. It lives
  * here so the next route inherits it instead of re-deciding it.
+ *
+ * `GET /api/info` is a deliberate exception, NOT an example: it returns
+ * `changelogPath` / `workflowsPath` / `welcomePath` absolute to every
+ * authenticated caller, because the remote browser client feeds them straight
+ * back to `/api/open` and a basename would not resolve. See the note in
+ * `routes/info.ts`. Do not read this helper's existence as a claim that every
+ * path-bearing route is scrubbed.
  *
  * An absolute path discloses the username and the home-directory / install
  * layout: reconnaissance for a targeted path attack. Loopback callers get the
@@ -138,8 +145,8 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
   }
 }
 
-/** Map a Node/custom error code to a JSON-body error label. */
-function errorCodeToLabel(code: string): string {
+/** Map a Node/custom error code to a JSON-body error label. Exported for testing. */
+export function errorCodeToLabel(code: string): string {
   switch (code) {
     case "ENOENT":
     case "FILE_NOT_FOUND":
@@ -212,11 +219,42 @@ export function sendApiError(res: Response, err: unknown): void {
   res.status(status).json({ error: label, message: msg });
 }
 
-/** Path-free replacements for {@link sendApiError}'s detail, keyed by label. */
-const GENERIC_ERROR_MESSAGE: Record<string, string> = {
-  FILE_NOT_FOUND: "The requested file was not found.",
+/**
+ * Path-free replacements for {@link sendApiError}'s detail, keyed by LABEL —
+ * i.e. by what `errorCodeToLabel` returns, not by the incoming error code.
+ *
+ * The distinction is load-bearing and was got wrong once: the original entry was
+ * keyed `FILE_NOT_FOUND`, which `errorCodeToLabel` never emits (it folds ENOENT
+ * / FILE_NOT_FOUND / NO_DOCUMENT / NOT_FOUND into `NOT_FOUND`), so the most
+ * common 404 fell through to the catch-all. Every label the mapper can return
+ * needs an entry here or it silently degrades to "The operation failed.";
+ * `path-scrub.test.ts` asserts that exhaustively.
+ */
+export const GENERIC_ERROR_MESSAGE: Record<string, string> = {
+  NOT_FOUND: "The requested file was not found.",
+  INVALID_PATH: "The path is not valid.",
+  BAD_REQUEST: "The request was not valid.",
+  READ_ONLY: "The document is read-only.",
+  RELOAD_IN_PROGRESS: "A reload is already in progress.",
+  EXTERNAL_CONFLICT: "The file was modified outside Tandem.",
+  ANNOTATION_RESOLVED: "The annotation is already resolved.",
   FILE_TOO_LARGE: "The file is too large.",
   FILE_LOCKED: "File is locked by another program.",
   PERMISSION_DENIED: "Permission denied.",
   INTERNAL: "The operation failed.",
 };
+
+/** Labels {@link errorCodeToLabel} can return. Exported for the exhaustiveness test. */
+export const ERROR_LABELS = [
+  "NOT_FOUND",
+  "INVALID_PATH",
+  "BAD_REQUEST",
+  "ANNOTATION_RESOLVED",
+  "READ_ONLY",
+  "RELOAD_IN_PROGRESS",
+  "EXTERNAL_CONFLICT",
+  "FILE_TOO_LARGE",
+  "FILE_LOCKED",
+  "PERMISSION_DENIED",
+  "INTERNAL",
+] as const;

@@ -10,6 +10,9 @@
 import type { Response } from "express";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ERROR_LABELS,
+  errorCodeToLabel,
+  GENERIC_ERROR_MESSAGE,
   isLoopbackRequest,
   isValidDocumentId,
   scrubOptionalPathForCaller,
@@ -105,6 +108,58 @@ describe("sendApiError — raw fs messages do not cross the network (#1294)", ()
     vi.spyOn(console, "warn").mockImplementation(() => {});
     sendApiError(res, fsError);
     expect(json.mock.calls[0]?.[0].message).not.toContain("alice");
+  });
+
+  it("gives a 404 its own copy rather than the catch-all", () => {
+    // The map was keyed on the ERROR CODE `FILE_NOT_FOUND`, which
+    // errorCodeToLabel never emits — it folds every not-found code into the
+    // LABEL `NOT_FOUND`. So the most common 404 silently fell through to
+    // "The operation failed." while a message written for it sat unreachable.
+    const { res, json } = mockRes("192.168.1.50");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    sendApiError(res, fsError);
+    expect(json.mock.calls[0]?.[0].message).toBe("The requested file was not found.");
+  });
+});
+
+describe("GENERIC_ERROR_MESSAGE is keyed on labels, exhaustively", () => {
+  it("has an entry for every label errorCodeToLabel can return", () => {
+    // Guards the whole class the FILE_NOT_FOUND key was one instance of: a
+    // label with no entry degrades silently to the catch-all, and no test
+    // asserting on a single code would notice.
+    for (const label of ERROR_LABELS) {
+      expect(GENERIC_ERROR_MESSAGE[label], `missing generic message for ${label}`).toBeDefined();
+    }
+  });
+
+  it("declares every label the mapper actually produces", () => {
+    // The inverse direction: ERROR_LABELS is hand-maintained, so drive it from
+    // the mapper rather than trusting the list. Codes taken from the two
+    // switches in _shared.ts plus an unmapped one for the default arm.
+    const codes = [
+      "ENOENT",
+      "FILE_NOT_FOUND",
+      "NO_DOCUMENT",
+      "NOT_FOUND",
+      "INVALID_PATH",
+      "UNSUPPORTED_FORMAT",
+      "NO_SUGGESTIONS",
+      "INVALID_ARGUMENT",
+      "ANNOTATION_RESOLVED",
+      "READ_ONLY",
+      "RELOAD_IN_PROGRESS",
+      "EXTERNAL_CONFLICT",
+      "FILE_TOO_LARGE",
+      "EBUSY",
+      "EPERM",
+      "EACCES",
+      "BACKUP_FAILED",
+      "SOMETHING_UNMAPPED",
+      "",
+    ];
+    for (const code of codes) {
+      expect(ERROR_LABELS).toContain(errorCodeToLabel(code));
+    }
   });
 });
 
