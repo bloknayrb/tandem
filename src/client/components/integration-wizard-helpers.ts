@@ -6,6 +6,8 @@
  * consumes this is a thin wrapper.
  */
 
+import { type IntegrationConfig, targetPushSupport } from "../../shared/integrations/contract.js";
+
 export type DoneHeaderState = "connected" | "waiting" | "partial";
 
 /**
@@ -26,4 +28,49 @@ export function computeDoneHeaderState(
 ): DoneHeaderState {
   if (anyApplyErrors) return "partial";
   return claudeConnected ? "connected" : "waiting";
+}
+
+/** Copy for a client Tandem structurally cannot notify. */
+export interface PushSupportNote {
+  text: string;
+  /** Screen-reader form — the visible line leans on the row's target label. */
+  ariaLabel: string;
+}
+
+/**
+ * Deliberately kind-agnostic: it is rendered inside a result row that already
+ * names the target, and it must stay correct if a second kind ever joins
+ * `"none"`. It states only the sound half of `TargetPushSupport` — that nothing
+ * will notify — and reframes the consequence as deferred, not lost, matching
+ * the `no-push` send notice in `status/addressed-ai-notice.ts`.
+ */
+const NO_PUSH_TRANSPORT: PushSupportNote = {
+  text: "No real-time updates for this app — it sees your comments and messages the next time you prompt it, not as they happen.",
+  ariaLabel:
+    "Tandem cannot notify this app in real time. It sees your comments and messages the next time you prompt it.",
+};
+
+/**
+ * The Done screen's per-target delivery line, or `null` to say nothing.
+ *
+ * Only the confirmed-`"none"` case renders. `"possible"` stays SILENT rather
+ * than rendering an affirmative counterpart — a transport existing in the
+ * config is not delivery (`connection-honesty-findings.md` A5/A7), and the
+ * wizard already has a separate, correctly-hedged push-mode block for the
+ * Claude Code side. Adding "real-time updates are on" here would be exactly the
+ * guarantee `targetPushSupport`'s docblock forbids.
+ *
+ * Unknown / unapplicable kinds (`other-mcp`, or a row whose picked entry has
+ * gone) also return `null`: absence of knowledge is not a negative. That is the
+ * same asymmetry `PushDelivery`'s `"unknown"` encodes.
+ *
+ * #1299: this fact was decided at wizard time and never spoken. The reporter
+ * connected Claude Desktop, saw "AI connected", sent two messages, and was
+ * ignored — because for that client push does not fail, it does not exist.
+ */
+export function pushSupportNote(
+  kind: IntegrationConfig["kind"] | undefined,
+): PushSupportNote | null {
+  if (kind !== "claude-code" && kind !== "claude-desktop") return null;
+  return targetPushSupport(kind) === "none" ? NO_PUSH_TRANSPORT : null;
 }

@@ -48,7 +48,11 @@ import {
   type ReachabilityTarget,
 } from "../hooks/useReachabilityCheck.svelte.js";
 import IntegrationTargetCard from "./IntegrationTargetCard.svelte";
-import { computeDoneHeaderState } from "./integration-wizard-helpers.js";
+import {
+  computeDoneHeaderState,
+  type PushSupportNote,
+  pushSupportNote,
+} from "./integration-wizard-helpers.js";
 
 interface Props {
   open: boolean;
@@ -376,6 +380,13 @@ const anyApplyErrors = $derived(wizard.applyResults.some((r) => r.status === "er
 const doneHeaderState = $derived(
   computeDoneHeaderState(anyApplyErrors, reachability.claudeConnected),
 );
+
+/** Per-row delivery truth, joined the same way `resultLabel` joins the label.
+ *  Static (a fact of the target kind), so unlike `reachabilityLine` it needs no
+ *  probe and cannot be wrong about a running system. */
+function pushSupportNoteFor(id: string): PushSupportNote | null {
+  return pushSupportNote(wizard.picked.find((p) => p.id === id)?.config.kind);
+}
 </script>
 
 {#snippet warningIcon(cls?: string)}
@@ -453,6 +464,23 @@ const doneHeaderState = $derived(
       {:else}
         Tandem starts when Claude Desktop opens
       {/if}
+    </span>
+  {/if}
+{/snippet}
+
+<!-- Renders ONLY on a structural "nothing can notify this client" (today:
+     Claude Desktop). There is deliberately no affirmative counterpart — see
+     `pushSupportNote`. -->
+{#snippet pushSupportLine(id: string)}
+  {@const note = pushSupportNoteFor(id)}
+  {#if note}
+    <span
+      class="iw-push-support"
+      data-testid="integration-wizard-push-support-{id}"
+      data-push-support="none"
+      aria-label={note.ariaLabel}
+    >
+      {note.text}
     </span>
   {/if}
 {/snippet}
@@ -802,6 +830,7 @@ const doneHeaderState = $derived(
                       {#if result.status === "applied"}
                         <span class="iw-result-detail">Connected</span>
                         {@render reachabilityLine(result.id)}
+                        {@render pushSupportLine(result.id)}
                       {:else if result.status === "skipped"}
                         <span class="iw-result-detail">
                           Left unchanged (already set up, or couldn't be safely edited)
@@ -1504,6 +1533,15 @@ const doneHeaderState = $derived(
   }
   .iw-reachability-unreachable {
     color: var(--tandem-warning-fg-strong);
+  }
+
+  /* Muted, not `warning`. Nothing is broken or misconfigured — this is how the
+     client works — and colouring it as a fault would say the opposite of the
+     "Connected" line directly above it. Matches the neutral tone of the
+     `no-push` send notice, which is `info` for the same reason. */
+  .iw-push-support {
+    font-size: var(--tandem-text-xs);
+    color: var(--tandem-fg-muted);
   }
 
   /* Transient "Verifying…" banner above the result rows. */
