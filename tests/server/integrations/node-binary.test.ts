@@ -1,7 +1,8 @@
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  _resetNodeBinaryCacheForTests,
   BARE_NODE,
   isRecordedPathGone,
   probeNodeBinary,
@@ -74,6 +75,40 @@ describe("resolveNodeBinary", () => {
     // same rule, and a fix that only handled backslashes would look correct.
     expect(resolveNodeBinary("//server/share/node.exe")).toBe(BARE_NODE);
   });
+
+  it("resolves the default candidate once, and warns once", () => {
+    // One cause deserves one warning. `buildMcpEntries` resolves per entry and
+    // three separate callers loop over every detected target, so an unmemoized
+    // resolution printed the four-line fallback warning once per target per
+    // operation — twice for `tandem setup --apply` on a box with Claude Code
+    // plus Desktop, and again on every boot sweep. The value is process-
+    // constant, so the repetition carried no information.
+    const original = process.execPath;
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A Python basename fails `isValidNodeBinary`, which is what routes this
+    // through `fallBackToBareNode` — the only branch that logs.
+    Object.defineProperty(process, "execPath", { value: "/usr/bin/python", configurable: true });
+    _resetNodeBinaryCacheForTests();
+    try {
+      expect(resolveNodeBinary()).toBe(BARE_NODE);
+      expect(resolveNodeBinary()).toBe(BARE_NODE);
+      expect(resolveNodeBinary()).toBe(BARE_NODE);
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      // An explicit candidate is the test seam and always recomputes — the
+      // memo must not swallow a warning a caller asked for by name.
+      expect(resolveNodeBinary("/usr/bin/ruby")).toBe(BARE_NODE);
+      expect(resolveNodeBinary("/usr/bin/ruby")).toBe(BARE_NODE);
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      Object.defineProperty(process, "execPath", { value: original, configurable: true });
+      // Mandatory, not tidiness: the memo is keyed on "was this the default",
+      // so leaving it set would serve `/usr/bin/python`'s BARE_NODE to every
+      // later caller asking about the real execPath.
+      _resetNodeBinaryCacheForTests();
+      spy.mockRestore();
+    }
+  });
 });
 
 /**
@@ -103,6 +138,22 @@ describe("isRecordedPathGone", () => {
 
   it("recognises a Windows path as absolute", () => {
     expect(isRecordedPathGone("C:\\Program Files\\nodejs\\node.exe", missing)).toBe(true);
+    // Both flavours, on whichever host runs the suite. The value comes out of a
+    // config file, not from this process, and CI reads Windows-shaped fixtures
+    // on Linux — `path.isAbsolute` alone would call the above relative there.
+    expect(isRecordedPathGone("\\\\server\\share\\node.exe", missing)).toBe(true);
+    expect(isRecordedPathGone("/usr/local/bin/node", missing)).toBe(true);
+  });
+
+  it("never flags a RELATIVE path, however many separators it has", () => {
+    // The guard used to be "contains a separator", which resolves these against
+    // whatever cwd the caller happens to have — `tandem doctor` runs wherever
+    // it was invoked, `/api/diagnostics` runs in the server's cwd — while the
+    // path is really relative to the SPAWNING CLIENT's directory. A valid
+    // project-local entry would be reported gone and, server-side, rewritten.
+    expect(isRecordedPathGone("./node_modules/.bin/node", missing)).toBe(false);
+    expect(isRecordedPathGone("bin/node", missing)).toBe(false);
+    expect(isRecordedPathGone("..\\node\\node.exe", missing)).toBe(false);
   });
 
   it("treats an empty command as nothing to do", () => {

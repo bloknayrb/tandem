@@ -332,12 +332,21 @@ export interface AiReadiness {
    * live. Callers about to alarm on `chip !== null` should confirm with this
    * probe first.
    *
-   * Returns `true` only when a fresh `/health` read confirms an open MCP
-   * transport. On fetch failure or a redacted body (no `hasSession` field) it
-   * returns the last-known polled value — mirroring the poll's "keep prior
-   * value on a blip" fail-safe in both directions.
+   * `sessionLive` is `true` only when a fresh `/health` read confirms an open
+   * MCP transport. On fetch failure or a redacted body (no `hasSession` field)
+   * it falls back to the last-known polled value — mirroring the poll's "keep
+   * prior value on a blip" fail-safe in both directions.
+   *
+   * `answered` reports whether THIS read reached our server, and it is separate
+   * from `sessionLive` because the fallback above silently launders a stale
+   * `true` into what reads like a fresh confirmation. That is the same collapse
+   * `HealthRead` exists to prevent, one layer up: a caller that only sees the
+   * boolean cannot tell "a live session, just confirmed" from "no idea, here is
+   * what we thought 8 seconds ago". Callers making an AFFIRMATIVE connectivity
+   * claim must check it; `serverUnreachable` is no substitute, because probe
+   * reads deliberately do not accrue strikes and so cannot set it.
    */
-  probeSession: () => Promise<boolean>;
+  probeSession: () => Promise<{ answered: boolean; sessionLive: boolean }>;
 }
 
 const POLL_MS = 8_000;
@@ -400,7 +409,18 @@ export function createAiReadiness(deps: {
    *
    * So it now clears to `null` after the same two consecutive dead reads, which
    * lands on "booting" — "we do not know" — rather than on a fabricated
-   * launcher state. Note the asymmetry with `/health`: a non-OK or unparseable
+   * launcher state.
+   *
+   * "Two reads" is not "~16s" here, and the difference is deliberate rather than
+   * overlooked. `refreshAiReadinessAfterLauncherAction` fires two extra polls at
+   * 2s and 5s after a restart action, so a dead API demotes in seconds on that
+   * path. There is no `fromPoll` equivalent because there is nothing to exempt —
+   * every launcher read IS a poll, one per generation, and a burst issued
+   * precisely to observe a state change should be allowed to observe it. The
+   * outcome is "booting" during a restart the user just asked for, which is
+   * both accurate and unalarming.
+   *
+   * Note the asymmetry with `/health`: a non-OK or unparseable
    * response is NOT a strike here, because unlike `makeHealthHandler` the
    * launcher route genuinely can fail (`requireSupervisor` 503s while the
    * launcher is deferred), so on THIS route those really are the server
@@ -511,9 +531,13 @@ export function createAiReadiness(deps: {
    *  most recently issued read — last-issued-wins, so a slow older response
    *  can never clobber a fresher one (e.g. a poll that sampled "no session"
    *  just before the agent's initialize, resolving after the probe that saw
-   *  it). A dropped write is recovered by the next interval poll. Returns the
-   *  fetched value either way so callers can act on their own read. */
-  async function readHasSession(fromPoll: boolean): Promise<boolean | null> {
+   *  it). A dropped write is recovered by the next interval poll. Returns both
+   *  the fetched value and whether the read answered at all, so callers can act
+   *  on their own read WITHOUT having to treat "no session" and "no answer" as
+   *  the same thing — `hasSession: null` alone cannot tell them apart. */
+  async function readHasSession(
+    fromPoll: boolean,
+  ): Promise<{ answered: boolean; hasSession: boolean | null }> {
     const mine = ++healthSeq;
     const fresh = await fetchHealth();
 
@@ -551,8 +575,11 @@ export function createAiReadiness(deps: {
       console.warn(`[aiReadiness] /health did not answer: ${fresh.why}`);
     }
 
-    const value = fresh.answered ? fresh.hasSession : null;
-    if (mine !== healthSeq || destroyed) return value;
+    const out = {
+      answered: fresh.answered,
+      hasSession: fresh.answered ? fresh.hasSession : null,
+    };
+    if (mine !== healthSeq || destroyed) return out;
 
     if (fresh.answered) {
       serverUnreachable = false;
@@ -570,16 +597,17 @@ export function createAiReadiness(deps: {
       // confident lie for another.
       pushAttached = null;
     }
-    return value;
+    return out;
   }
 
   /** See `AiReadiness.probeSession`. Issues a fresh `/health` read (which also
    *  folds into polled state, clearing the titlebar chip immediately instead
    *  of waiting out the poll interval) and answers with the freshest data it
-   *  has — falling back to the last-known polled value when the read fails. */
-  async function probeSession(): Promise<boolean> {
+   *  has — falling back to the last-known polled value when the read fails, and
+   *  saying which of the two happened. */
+  async function probeSession(): Promise<{ answered: boolean; sessionLive: boolean }> {
     const fresh = await readHasSession(false);
-    return fresh ?? mcpSessionActive;
+    return { answered: fresh.answered, sessionLive: fresh.hasSession ?? mcpSessionActive };
   }
 
   function poll(): void {
