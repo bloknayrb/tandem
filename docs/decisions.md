@@ -1119,3 +1119,50 @@ This ADR records a choice that was already load-bearing in shipped code but had 
 - **What was declined, with its price**, so this is not re-litigated as a small change: per-document chat is multi-PR — per-room chat maps, a `chatSeen` baseline migration for every existing user (there is no per-room baseline to migrate *from*), a home for `documentId`-less messages, and re-deciding `Clear Chat`'s scope. None of that is exotic; all of it is real, and none of it buys back something #1264 did not already deliver.
 
 **Reopen condition:** a concrete workflow where the global thread actively loses information — most plausibly many-document sessions where attribution labels stop being enough to find a past exchange. Volume alone is not the trigger; search over the global thread is the cheaper answer to that.
+
+---
+
+## ADR-047: The Self-Armed Wake — `ws` Transport, No Arbitration, Payload-Free Frames
+
+**Status:** Accepted (2026-08-07). Settles the two conflicts Track D-2 of the push-delivery plan deliberately left open. Gated on P-A2, which **passed** — see [docs/spikes/monitor-self-arm-probe.md](spikes/monitor-self-arm-probe.md).
+
+**Context:** A Claude Code session can arm its own watch with the host's `Monitor` tool and be woken while idle — no plugin, no marketplace, no `npx`, no channel flag, so it routes around every install failure observed in the field. P-A2 then confirmed a *persistent* watch survives: five browser-origin events delivered over 16m30s through the real SSE pipeline, still alive at the end. Two design conflicts were left unresolved on purpose, because the probe results were what decided them. This ADR records both answers and the measurements behind them.
+
+### Decision 1 — take the `ws` source, and drop session-bound arbitration entirely
+
+The conflict as stated: `ws` is pure JSON config with no shell, therefore no `${CLAUDE_CODE_SESSION_ID}` expansion, therefore no session id — and the arbitration rule was "unbound consumers are never arbitrated," so `ws` makes arbitration a no-op. Take the shell instead and the placeholder hazard returns: an unexpanded `${…}` passes `SESSION_ID_RE` (`cli-runtime.ts:107`) and arrives looking valid while being *identical across every session*, which is worse than no identity at all.
+
+**P4 removes the choice.** The proven `curl … | grep --line-buffered` fallback succeeded on win32 **only because git-bash is installed** — `curl` resolved to `/mingw64/bin/curl` under `MINGW64_NT`. Neither binary exists on a stock Windows install, and `Monitor`'s `command` runs in that same shell. The plan filed this as a caveat; it is a blocker. `ws` is **required**, not preferred.
+
+That would be a real loss if arbitration were load-bearing. It is not — **it duplicates a gate that already exists one layer down, and has for as long as `checkInbox` has existed:**
+
+- `surfacedIds` (`mcp/awareness.ts:55`) is a **module-level** map. Process-global, keyed by `documentId:itemId` — *not* by MCP session and *not* by Claude session. The first `tandem_checkInbox` to see an annotation records it; a second session's poll does not see it again.
+- Chat is stronger still: `checkInbox` sets `read: true` on each message *as it collects it*, inside the same pass.
+
+So two concurrent sessions racing to answer the same item are already arbitrated — by the inbox ledger, for every transport, with no session identity anywhere in the mechanism. A self-armed wake does not change this. N sessions wake, N call `checkInbox`, one gets the item and the rest get an empty inbox. The cost of the extra wakes is tokens, not correctness.
+
+This also retires the "session-bound tier" idea for good rather than merely deferring it. It was already refused as **unreachable** (`buildMcpEntries` writes a direct-HTTP entry with no session header for exactly the hand-launched population this work exists for), as **unsound** (a bound-but-inert consumer is indistinguishable from a live one, so suppressing the remedy equals asserting delivery), and as a **silent-lockout primitive** (session ids are filenames in `~/.claude/projects/`). Choosing `ws` now makes it impossible as well as unwise, which is a better place to stand.
+
+### Decision 2 — wake frames carry no payload; `?filter=wake` **strips**, it does not merely narrow
+
+Confirmed by measurement, not inference: every notification in the P-A2 run carried the full message body — `"payload":{"messageId":"msg_…","text":"probe event 3 of 5",…}`. The plan noted `?filter=wake` narrows event *types* and does not strip payloads. It must now do both.
+
+Three reasons, in ascending order of force:
+
+1. **Defense in depth for Solo.** A frame with no content cannot leak content. A future regression in `shouldForwardExternally` would then cost timing, not the user's words.
+
+2. **Duplicate replies, mechanically.** A model that answers from the notification payload never calls `checkInbox`, so the item is never marked surfaced — and is re-reported on the next wake. Note this is **coupled to Decision 1**: dropping arbitration is only safe *because* the wake carries nothing to answer from. The ledger arbitrates only if somebody actually polls, and a payload-carrying wake is precisely the thing that stops them polling. The two decisions hold each other up; changing either alone reopens the other.
+
+3. **Wakes are lossy — MEASURED, and this is the decisive one.** The burst case (25 chat sends in ~6s) did *not* stop the watch; it rate-limited, emitting `[1 events suppressed — output rate too high]` and `[6 events suppressed — …]`. All **25/25** reached the SSE socket, and at least **7** never became notifications. The data was never lost — the pull path saw all 25 — but the wake was. A model answering from the payload answers from a view it cannot know is incomplete, and has no way to discover the gap. This is the same conclusion #1266 reached for the supervisor's stdin wake, now reached independently by a second push path from a live measurement.
+
+**Frame shape: `id`, `type`, `timestamp`. Nothing else.** Specifically **not** `documentId` — `docIdFromPath` builds it as `<basename-slug>-<hash>`, so it is a filename in all but name; `events/push-liveness.ts`'s docblock refuses to retain one for exactly this reason, and the wake path must not reintroduce what that module deliberately dropped. `id` stays because `Last-Event-ID` resumption needs it. `type` stays because "annotation versus chat" is the one bit that helps a model pick its next tool while telling it nothing the pull path would have withheld.
+
+### Consequences
+
+- **Two push paths, one contract.** The supervisor's stdin wake (#1266) and the self-armed wake now agree: payload-free, pull-path-authoritative. Track D-2 asked for either a strip or a justification for divergence; this is the strip.
+- **Net-new server work: a WS wake endpoint on :3479.** Hocuspocus owns :3478 and speaks the Y.js protocol, so it cannot carry this. The endpoint subscribes as `"external"` — it is a consumer outside this process, so it must sit behind the queue's Solo gate exactly as the SSE consumers do.
+- **`?filter=wake` on `/api/events` stays**, as the documented Unix fallback: `curl` and `grep` *are* stock on macOS and Linux, so the shell path is fully portable there. It is Windows that forces `ws`, not every platform.
+- **`isWakeWorthy` is now shared** (`events/wake-scope.ts`) rather than private to the supervisor. Three consumers must agree on the answer — the stdin wake, the delivery-state join, and this filter — and a drifted second copy would not fail loudly, it would quietly report the wrong story.
+- **Not decided here:** whether the arm command lives in the MCP `instructions` field. Tandem's main server sends none today (only `src/channel/run.ts:58` does), and whether Claude Code surfaces that field to the model is **UNVERIFIED** — it could not be probed because nothing sends one. `SKILL.md` is the fallback home and needs no new mechanism.
+
+**Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) (why neither session id is a usable key), ADR-027 (the Solo/privacy contract the strip reinforces), #1266 (the supervisor's payload-free wake), `docs/spikes/monitor-self-arm-probe.md` (P-A2, P4, and the burst measurement).
