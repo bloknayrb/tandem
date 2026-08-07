@@ -380,14 +380,20 @@ function scrubExistingInstalls(req: PeerRequest, installs: ExistingMcpInstall[])
  * Basename `command` and every `args` element of a surfaced MCP entry.
  *
  * `url` is deliberately left alone: it is a loopback http URL by construction
- * and carries no filesystem layout. `env`/`headers` are already gone by the
- * time this runs (`extractEntry`), but the spread would carry them if a future
- * reader stopped stripping them — hence the explicit field list rather than a
- * spread-and-override.
+ * and carries no filesystem layout.
+ *
+ * Rebuilt from an explicit field list rather than `{...entry, command, args}`,
+ * because `entry` is not a validated `McpEntry` — `extractEntry` casts whatever
+ * `mcpServers.<name>` held in the user's config file, minus `env`/`headers`. A
+ * spread therefore re-exports every key that file happened to carry (a
+ * hand-added `cwd` is an absolute path, and `env`/`headers` would come back the
+ * day `extractEntry` stops stripping them). An allowlist cannot regress that
+ * way; the four keys below are the whole of what any consumer reads.
  */
 function scrubMcpEntry(req: PeerRequest, entry: McpEntry): McpEntry {
   return {
-    ...entry,
+    ...(entry.type === undefined ? {} : { type: entry.type }),
+    ...(entry.url === undefined ? {} : { url: entry.url }),
     ...(typeof entry.command === "string"
       ? { command: scrubPathForCaller(req, entry.command) }
       : {}),

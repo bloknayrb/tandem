@@ -237,6 +237,33 @@ describe("integrations API routes", () => {
       expect(res.body.installs[0].tandemValidation.status).toBe("invalid-args");
     });
 
+    it("does not re-export config keys the entry type does not declare", async () => {
+      // `extractEntry` CASTS an arbitrary `mcpServers.<name>` object to McpEntry
+      // after stripping env/headers only, so a hand-edited config can carry any
+      // key at all — and `cwd` is an absolute path by nature. The scrub rebuilds
+      // from an allowlist precisely so a key nobody anticipated cannot ride out.
+      const app = makeAppWithRemoteAddress(
+        {
+          ...deps,
+          readExisting: async () => [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: HOME_CONFIG },
+              status: "ok",
+              tandemEntry: {
+                command: NODE_BIN,
+                args: [CHANNEL_JS],
+                cwd: "/home/alice/projects/acquisition",
+              },
+            } as unknown as ExistingMcpInstall,
+          ],
+        },
+        "192.168.1.50",
+      );
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      expect(JSON.stringify(res.body)).not.toContain("alice");
+      expect(res.body.installs[0].tandemEntry).toEqual({ command: "node", args: ["index.js"] });
+    });
+
     it("still returns the real entry paths to a loopback caller", async () => {
       // Positive control on the same sample: without it the absence assertions
       // above also pass against a handler that dropped the entries entirely.
