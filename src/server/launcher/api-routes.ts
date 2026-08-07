@@ -473,11 +473,14 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
  * would be an HTTP **bypass of `TANDEM_DISABLE_LAUNCHER=1`** — a kill switch
  * that today cannot be defeated remotely at all.
  *
- * Guard posture is the same as `relaunch`, deliberately. Note that
- * `assertLoopbackForMutation` only rejects when
- * `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`; in the default configuration it is a
- * no-op, and `assertOriginAllowlisted` reads a forgeable header. The real
- * protection is the loopback bind plus Bearer auth for non-loopback callers.
+ * Guard posture is the same as `relaunch`, deliberately. This comment used to
+ * be the only honest description of the gate in the codebase — it recorded that
+ * `assertLoopbackForMutation` was a no-op in the default configuration. #1293
+ * fixed the code instead, so it now rejects every non-loopback caller in every
+ * configuration. `assertOriginAllowlisted` still reads a forgeable header and is
+ * a CSRF control, not an authorization one; the loopback bind plus Bearer auth
+ * remains the primary protection, with the loopback gate covering the one case
+ * neither does — a token-holder who is not on this machine.
  */
 function makeStartHandler(deps: LauncherRoutesDeps): Handler {
   return async (req: Request, res: Response) => {

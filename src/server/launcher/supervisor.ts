@@ -640,9 +640,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
    * the two updates — not just a Settings save, but the wizard's whole-array
    * `POST /api/integrations`, `applyConfig`, and `tandem setup --apply`, which
    * are likelier collisions. Narrow because the surfaces are single-user and
-   * separately inflight-guarded (NOT because they are loopback —
-   * `assertLoopbackForMutation` is a no-op outside the unauthenticated-LAN
-   * opt-in). Fixing it properly belongs in the store, not here.
+   * separately inflight-guarded (NOT because they are loopback — since #1293
+   * `assertLoopbackForMutation` does gate unconditionally, but a loopback
+   * boundary bounds *who* can race, not whether two local writes interleave).
+   * Fixing it properly belongs in the store, not here.
    */
   async function persistWorkingDirectory(cwd: string): Promise<void> {
     try {
