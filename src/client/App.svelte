@@ -48,6 +48,7 @@ import { annotationPluginKey } from "./editor/extensions/annotation";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
+import ScrollPill from "./editor/ScrollPill.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
@@ -1790,6 +1791,25 @@ const isReadOnly = $derived(activeTab?.readOnly === true);
 const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+/**
+ * Pre-narrowed to a plain boolean so `ScrollPill`'s effect subscribes to THIS
+ * derived (which equality-checks its own value) rather than to `activeTab`,
+ * whose identity churns whenever the tab array updates for unrelated reasons —
+ * that would rebuild every listener and drop any drag in flight.
+ *
+ * Excluded in source view: `SourceView`'s textarea is its own scroller with its
+ * own native bar, so a second affordance 5px outboard of it is noise. The
+ * exclusion is also working around a defect it did not cause —
+ * `.source-view-container`'s `height: 100%` resolves against the scroller's
+ * CONTENT box, so `.editor-scroll` reports phantom overflow of exactly its own
+ * padding for the whole session (which also leaves `scroll-fade`'s mask on a
+ * surface that never scrolls). Fixing that height resolution would let this
+ * term go away; until then the pill declines rather than scrubbing ~100px of
+ * nothing.
+ */
+const scrollPillEnabled = $derived(
+  settingsState.settings.scrollPill && !!activeTab && !inSourceView,
+);
 const chatVisible = $derived(
   activeRailTab === "chat" &&
     (effectiveRightVisible || railFloat.right || railFloatClosing.right || chatReveal),
@@ -2710,8 +2730,9 @@ const shouldShowModelPicker = $derived(
     <div
       bind:this={editorScrollEl}
       data-testid="editor-scroll-container"
-      class="editor-scroll tandem-scroll-fade-y"
+      class="editor-scroll tandem-scroll-fade-y tandem-scroll-pill-surface"
       class:hide-raw-md={!settingsState.settings.showRawMarkdown}
+      class:tandem-scroll-pill-host={scrollPillEnabled}
       use:scrollFade={"y"}
       role="main"
       aria-label="Document editor"
@@ -2943,12 +2964,23 @@ const shouldShowModelPicker = $derived(
          Hidden when there's no active document so the EmptyState scene
          isn't dragged down by phantom space. -->
     {#if activeTab}
-      <div class="editor-end-marker" aria-hidden="true">
+      <!-- `data-scroll-spacer` is a contract, not decoration: the scroll pill
+           subtracts this block's height so 70vh of blank scroll room doesn't
+           read as document length. Deleting the attribute puts a pill on every
+           file; see `contentExtent` in `editor/scroll-pill.ts`. -->
+      <div class="editor-end-marker" data-scroll-spacer aria-hidden="true">
         <span class="editor-end-pill">End of document</span>
       </div>
     {/if}
     {/if}
     </div>
+    <!-- Scroll pill: sibling of the scroll container, never a child — see the
+         mount-point note in `ScrollPill.svelte`. -->
+    <ScrollPill
+      scrollEl={editorScrollEl}
+      enabled={scrollPillEnabled}
+      reduceMotion={settingsState.settings.reduceMotion}
+    />
     <!-- Find/Replace bar: sibling of the scroll container so it floats top-right
          of the editor column without scrolling with the document. The `{#if open}`
          gate lives inside the component. -->
