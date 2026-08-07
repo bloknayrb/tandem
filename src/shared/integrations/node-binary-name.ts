@@ -18,14 +18,14 @@
  * Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM
  * hash leaks.
  *
- * Exported because UNC-ness is a property of the path as **written**, not as
- * resolved, so callers that normalize before validating have to ask this
- * question first. On POSIX, `path.resolve("\\\\server\\share\\node.exe")` treats
- * the input as a relative name and prepends cwd — erasing the leading `\\` this
- * predicate keys on and leaving a basename (`node.exe`) that validates. The
- * guard then passes something it was written to reject.
+ * Deliberately private, and deliberately weaker than
+ * `server/file-io/windows-path-safety.ts#rejectUnsafeWindowsPrefix` — which
+ * also covers the `\\?\` and `\\.\` device-namespace forms and is what server
+ * callers should use. This copy exists only because this module is in
+ * `src/shared/` and must not import from `src/server/`; it is the last line of
+ * a basename allowlist, not the security boundary.
  */
-export function hasUncPrefix(p: string): boolean {
+function hasUncPrefix(p: string): boolean {
   return p.startsWith("\\\\") || p.startsWith("//");
 }
 

@@ -41,7 +41,8 @@
  */
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { hasUncPrefix, isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
+import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
+import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 
 /** The pre-existing behaviour, and the fallback whenever an absolute path
  *  cannot be produced or would not validate. Never emit something the
@@ -67,16 +68,31 @@ const WIN_EXTENDED_DRIVE_RE = /^\\\\\?\\([A-Za-z]:)/;
  */
 export function resolveNodeBinary(candidate: string = process.execPath): string {
   if (!candidate) return BARE_NODE;
+  // Strip the extended-length DRIVE prefix first: `process.execPath` can
+  // legitimately return `\\?\C:\…` on Windows, and the check below rejects
+  // `\\?\` outright. The UNC form (`\\?\UNC\…`) is deliberately not stripped,
+  // so it still reaches that check.
   const stripped = candidate.replace(WIN_EXTENDED_DRIVE_RE, "$1");
-  // Ask about UNC BEFORE resolving, because `resolve` is platform-dependent
-  // here and the guard is not. On Windows it preserves the leading `\\`; on
-  // POSIX it treats `\\server\share\node.exe` as a relative name and prepends
-  // cwd, which erases the prefix and leaves a basename that validates. Checking
-  // after would make the NTLM-leak rejection fire only on the one platform
-  // where a UNC path is least surprising.
-  const absolute = hasUncPrefix(stripped) ? stripped : resolve(stripped);
-  if (isValidNodeBinary(absolute)) return absolute;
 
+  // Check raw AND resolved — the idiom `document-service.ts`, `convert.ts` and
+  // `annotations.ts` already use, and both halves are load-bearing:
+  //
+  //   raw      catches the POSIX mangling. `resolve` is platform-dependent
+  //            where this guard is not: on Windows it preserves a leading
+  //            `\\`, but on POSIX it treats `\\server\share\node.exe` as a
+  //            RELATIVE name and prepends cwd, erasing the prefix and leaving
+  //            a basename that validates.
+  //   resolved catches a `..` traversal that lands on a UNC target.
+  //
+  // Checking only one trades one blind spot for the other.
+  if (rejectUnsafeWindowsPrefix(stripped) !== null) return fallBackToBareNode(stripped);
+  const absolute = resolve(stripped);
+  if (rejectUnsafeWindowsPrefix(absolute) !== null) return fallBackToBareNode(absolute);
+  if (isValidNodeBinary(absolute)) return absolute;
+  return fallBackToBareNode(absolute);
+}
+
+function fallBackToBareNode(rejected: string): string {
   // Say so. Falling back silently would reintroduce the exact bug this module
   // exists to fix: the entry would carry the bare name that failed in the
   // field, the wizard's re-read would ACCEPT it (basename `node` validates),
@@ -86,7 +102,7 @@ export function resolveNodeBinary(candidate: string = process.execPath): string 
   // lineage `nodejs` basename, or a home directory containing `..`.
   console.error(
     `[Tandem] Cannot embed an absolute Node path in the channel entry: ` +
-      `"${absolute}" is not an accepted Node binary name. Falling back to "node", ` +
+      `"${rejected}" is not an accepted Node binary name. Falling back to "node", ` +
       `which requires the MCP client to resolve it on PATH — if real-time push ` +
       `never arrives, this is why. Run 'tandem doctor' for the push-path check.`,
   );
