@@ -71,19 +71,30 @@ $effect(() => {
 // falls to <body> when the focused item unmounts. The editor is the right
 // destination: the trigger deliberately keeps focus there on the mouse path.
 //
-// Guarded restore. `editor.commands.focus()` is not a bare `.focus()` — it
-// restores the ProseMirror selection and can scroll the document to it — so an
-// outside mousedown (clickOutside fires on mousedown, before the browser's own
-// focus transfer) must NOT yank focus into the editor when the user was heading
-// somewhere else. Restore only when focus is still inside the menu, or has
-// already fallen to <body> because the focused item unmounted.
+// Guarded restore: an outside mousedown (clickOutside fires on mousedown,
+// before the browser's own focus transfer) must NOT yank focus into the editor
+// when the user was heading somewhere else. Restore only when focus is still
+// inside the menu, or has already fallen to <body> because the focused item
+// unmounted.
+//
+// `view.focus()`, NOT `commands.focus()` (#1313). Tiptap's focus COMMAND
+// schedules the real `view.focus()` inside a requestAnimationFrame
+// (`delayedFocus` — a React workaround), while Svelte unmounts the menu on the
+// microtask flush, which lands first. So the guard passed, the restore was
+// issued, and focus still fell to <body>: the focused item was torn out before
+// the deferred focus arrived. That frame is not free — a throttled or hidden tab
+// never runs the callback and the restore is simply lost. ProseMirror's own
+// `view.focus()` is synchronous, so focus leaves the menu item BEFORE it
+// unmounts and there is no drop to recover from. It also cannot scroll the
+// document the way the command's selection restoration can, which makes the
+// outside-mousedown branch strictly safer than it was.
 function closeHeadingMenu() {
   const ours =
     (!!headingMenuEl && headingMenuEl.contains(document.activeElement)) ||
     document.activeElement === document.body ||
     document.activeElement === null;
   showHeadingMenu = false;
-  if (ours) editor?.commands.focus();
+  if (ours) editor?.view.focus();
 }
 
 function findActiveHeading(ed: TiptapEditor): HeadingLevel | null {
