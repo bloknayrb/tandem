@@ -7,7 +7,7 @@ import {
   assertOriginAllowlisted,
 } from "../../integrations/api-routes.js";
 import { reloadDocumentFromMarkdown } from "../file-opener.js";
-import { sendApiError } from "./_shared.js";
+import { isValidDocumentId, sendApiError } from "./_shared.js";
 
 /**
  * 1 MB cap on the inline `markdown` field. `mdParser.parse` is synchronous and
@@ -15,8 +15,6 @@ import { sendApiError } from "./_shared.js";
  * for an inline reload argument — this mirrors `tandem_appendContent`'s cap.
  */
 const MAX_RELOAD_MARKDOWN_BYTES = 1_000_000;
-const MAX_DOCUMENT_ID_LENGTH = 256;
-const DOCUMENT_ID_RE = /^[A-Za-z0-9._-]+$/;
 
 /**
  * POST /api/document/reload — replace a document's content from a user-supplied
@@ -35,12 +33,7 @@ export async function handleReloadFromMarkdown(req: Request, res: Response): Pro
   if (assertOriginAllowlisted(req, res, API_DOCUMENT_RELOAD)) return;
   if (assertLoopbackForMutation(req, res)) return;
   const { documentId, markdown } = (req.body ?? {}) as Record<string, unknown>;
-  if (
-    typeof documentId !== "string" ||
-    documentId.length === 0 ||
-    documentId.length > MAX_DOCUMENT_ID_LENGTH ||
-    !DOCUMENT_ID_RE.test(documentId)
-  ) {
+  if (!isValidDocumentId(documentId)) {
     res.status(400).json({ error: "BAD_REQUEST", message: "documentId is invalid." });
     return;
   }

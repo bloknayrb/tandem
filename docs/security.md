@@ -48,12 +48,12 @@ the names promise more than they deliver (#1293):
   and the genuinely exposed configuration was the token-authenticated LAN bind that
   `bind-check.ts` permits whenever a token exists.
 
-  It governs the routes that **call** it, and **ten** mutating routes registered in
+  It governs the routes that **call** it, and **nine** mutating routes registered in
   `src/server/mcp/api-routes.ts` call neither gate. Four of them take a caller-supplied
   filesystem path — `open`, `save` (save-as), `convert`, `upload` — which makes them the
-  higher-blast-radius subset and the one #1320 tracks. The other six are `close`, `scratchpad`
-  (#1318 is adding its gate), `apply-changes`, `annotation-reply`, `remove-annotation` and
-  `rotate-token`; a token-holding LAN peer can still reach those. Separately, `/api/channel/*`
+  higher-blast-radius subset and the one #1320 tracks. The other five are `close`,
+  `apply-changes`, `annotation-reply`, `remove-annotation` and `rotate-token`; a token-holding
+  LAN peer can still reach those. (`scratchpad` was the tenth until #1318 gated it.) Separately, `/api/channel/*`
   and `DELETE /api/chat` are ungated **deliberately**, because the channel shim and monitor are
   documented to run against a non-loopback `TANDEM_URL` (Cowork) and gating them would break that
   transport. "Mutating routes are loopback-only" is not a statement about all of `/api`.

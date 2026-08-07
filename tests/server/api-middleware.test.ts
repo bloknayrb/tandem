@@ -290,10 +290,15 @@ describe("createApiMiddleware — CORS headers (#1291)", () => {
 // ---------------------------------------------------------------------------
 
 describe("sendApiError with a decompressed-size refusal", () => {
-  function capture(err: unknown) {
+  // `remoteAddress` is load-bearing since #1294: `sendApiError` reads the peer off `res.req` and
+  // fails CLOSED, so a double that omits it is treated as a LAN caller and gets the generic copy —
+  // which is not what the local UI receives, and would silently weaken every message assertion
+  // below into a test of the scrub instead of the refusal. Default models the local UI.
+  function capture(err: unknown, remoteAddress = "127.0.0.1") {
     let status = 0;
     let body: unknown;
     const res = {
+      req: { socket: { remoteAddress } },
       status(code: number) {
         status = code;
         return this;
@@ -330,6 +335,20 @@ describe("sendApiError with a decompressed-size refusal", () => {
     expect(status).toBe(413);
     expect(body.error).toBe("FILE_TOO_LARGE");
     expect(body.message).toContain("expands past");
+  });
+
+  it("gives a non-loopback caller the generic copy, still as a 413 (#1294)", () => {
+    // The refusal message carries no path, so this is the scrub being uniform rather than a leak
+    // being closed — and uniformity is the point: a message allowlisted case-by-case is how the
+    // convention drifted before. What must survive for every caller is the actionable part: a 413
+    // with the FILE_TOO_LARGE label, so a client can tell a refused file from a server fault.
+    const { status, body } = capture(
+      new DocxTooLargeError("A part of this .docx expands past…", 3),
+      "192.168.1.50",
+    );
+    expect(status).toBe(413);
+    expect(body.error).toBe("FILE_TOO_LARGE");
+    expect(body.message).not.toContain("expands past");
   });
 
   it("does not log it as an unhandled server error", () => {

@@ -14,6 +14,8 @@
  * hand-edited config naming an arbitrary executable.
  */
 
+import { crossBasename } from "../cross-basename.js";
+
 /**
  * Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM
  * hash leaks.
@@ -27,12 +29,6 @@
  */
 function hasUncPrefix(p: string): boolean {
   return p.startsWith("\\\\") || p.startsWith("//");
-}
-
-/** basename() on Linux doesn't treat `\` as a separator, so Windows-style paths
- *  like `C:\Program Files\node.exe` return the whole string. Split on both. */
-function crossBasename(p: string): string {
-  return p.split(/[/\\]/).pop() || "";
 }
 
 /** `node-sidecar-<triple>` is the desktop app's bundled Node — accepted so the

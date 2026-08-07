@@ -76,7 +76,12 @@ import {
 } from "../../shared/integrations/contract.js";
 import { isLoopback } from "../auth/middleware.js";
 import { isLocalhostOrigin } from "../mcp/api-routes.js";
-import type { Handler } from "../mcp/routes/_shared.js";
+import {
+  type Handler,
+  isLoopbackRequest,
+  type PeerRequest,
+  scrubPathForCaller,
+} from "../mcp/routes/_shared.js";
 import {
   type ApplyOps,
   applyConfig,
@@ -86,11 +91,17 @@ import {
   detectTargets,
   installSkill,
   isBareNameLaunchable,
+  type McpEntry,
   PathRejectedError,
   type RemovableEntry,
   shouldRegisterChannelShim,
 } from "./apply.js";
-import { hasExistingTandemEntry, type readExistingTandemEntries } from "./existing-config.js";
+import {
+  type EntryValidation,
+  type ExistingMcpInstall,
+  hasExistingTandemEntry,
+  type readExistingTandemEntries,
+} from "./existing-config.js";
 import {
   ClaudeInstallError,
   installClaudeCli,
@@ -332,11 +343,99 @@ export function assertOriginAllowlisted(
   return false;
 }
 
+/**
+ * Scrub the two GET responses below for non-loopback callers (#1294).
+ *
+ * Both routes are ungated — no origin check, no loopback check — deliberately,
+ * so the wizard can read them; that makes them the widest-reaching disclosure
+ * of the four surfaces in #1294. `readOneTarget` has no request context at all
+ * and neither handler used to keep one, which is exactly how the existing
+ * basename convention was missed here.
+ *
+ * `errorMessage` is replaced wholesale rather than pattern-scrubbed: it is a
+ * raw `readFile` failure, and Node's formatting embeds the path it was reading.
+ * `status` already carries the actionable signal, so the enum loses nothing a
+ * caller can act on.
+ *
+ * `configPath` is not the only path here. The surfaced `tandemEntry` /
+ * `channelEntry` are what Tandem itself wrote — `{ command: <absolute node
+ * binary>, args: [<absolute dist/channel/index.js>] }` (apply.ts
+ * `buildMcpEntries`) — so leaving them raw discloses the username and the whole
+ * install layout on exactly the route this scrub exists for. `extractEntry`
+ * strips only `env`/`headers`; it is a secrets filter, not a path filter.
+ * Validation `reason` strings embed the same paths (`JSON.stringify(args)`,
+ * `got '<command>'`), so they are replaced by status-derived copy the way
+ * `errorMessage` is — `status` is the field the wizard actually branches on.
+ */
+function scrubExistingInstalls(req: PeerRequest, installs: ExistingMcpInstall[]) {
+  if (isLoopbackRequest(req)) return installs;
+  return installs.map((install) => ({
+    ...install,
+    target: { ...install.target, configPath: scrubPathForCaller(req, install.target.configPath) },
+    ...(install.tandemEntry === undefined
+      ? {}
+      : { tandemEntry: scrubMcpEntry(req, install.tandemEntry) }),
+    ...(install.channelEntry === undefined
+      ? {}
+      : { channelEntry: scrubMcpEntry(req, install.channelEntry) }),
+    ...(install.tandemValidation === undefined
+      ? {}
+      : { tandemValidation: scrubValidation(install.tandemValidation) }),
+    ...(install.channelValidation === undefined
+      ? {}
+      : { channelValidation: scrubValidation(install.channelValidation) }),
+    ...(install.errorMessage === undefined
+      ? {}
+      : { errorMessage: "Could not read the configuration file." }),
+  }));
+}
+
+/**
+ * Basename `command` and every `args` element of a surfaced MCP entry.
+ *
+ * `url` is deliberately left alone: it is a loopback http URL by construction
+ * and carries no filesystem layout.
+ *
+ * Rebuilt from an explicit field list rather than `{...entry, command, args}`,
+ * because `entry` is not a validated `McpEntry` — `extractEntry` casts whatever
+ * `mcpServers.<name>` held in the user's config file, minus `env`/`headers`. A
+ * spread therefore re-exports every key that file happened to carry (a
+ * hand-added `cwd` is an absolute path, and `env`/`headers` would come back the
+ * day `extractEntry` stops stripping them). An allowlist cannot regress that
+ * way; the four keys below are the whole of what any consumer reads.
+ */
+function scrubMcpEntry(req: PeerRequest, entry: McpEntry): McpEntry {
+  return {
+    ...(entry.type === undefined ? {} : { type: entry.type }),
+    ...(entry.url === undefined ? {} : { url: entry.url }),
+    ...(typeof entry.command === "string"
+      ? { command: scrubPathForCaller(req, entry.command) }
+      : {}),
+    ...(Array.isArray(entry.args)
+      ? { args: entry.args.map((a) => (typeof a === "string" ? scrubPathForCaller(req, a) : a)) }
+      : {}),
+  };
+}
+
+/** Path-free replacement for an {@link EntryValidation} reason. */
+function scrubValidation(v: EntryValidation): EntryValidation {
+  if (v.reason === undefined) return v;
+  return { status: v.status, reason: VALIDATION_REASON[v.status] };
+}
+
+const VALIDATION_REASON: Record<EntryValidation["status"], string> = {
+  valid: "Entry matches the expected shape.",
+  "invalid-shape": "Entry does not match the expected shape.",
+  "invalid-url": "Entry url is not a loopback http URL.",
+  "invalid-command": "Entry command is not the expected launcher.",
+  "invalid-args": "Entry arguments do not match the expected shape.",
+};
+
 function makeGetExistingHandler(deps: IntegrationsRoutesDeps): Handler {
-  return async (_req: Request, res: Response) => {
+  return async (req: Request, res: Response) => {
     try {
       const installs = await deps.readExisting();
-      res.json({ installs });
+      res.json({ installs: scrubExistingInstalls(req, installs) });
     } catch (err) {
       sendInternal(res, err, "Failed to read existing integration entries");
     }
@@ -344,10 +443,29 @@ function makeGetExistingHandler(deps: IntegrationsRoutesDeps): Handler {
 }
 
 function makeGetIntegrationsHandler(deps: IntegrationsRoutesDeps): Handler {
-  return async (_req: Request, res: Response) => {
+  return async (req: Request, res: Response) => {
     try {
       const file = await deps.store.read();
-      res.json(file);
+      // #1294 names this route alongside /existing. Every claude-code and
+      // claude-desktop entry carries `configPath` (and optionally
+      // `workingDirectory`) as an AbsolutePath, and this handler returned the
+      // stored file verbatim through a discarded `_req`.
+      if (isLoopbackRequest(req)) {
+        res.json(file);
+        return;
+      }
+      res.json({
+        ...file,
+        integrations: file.integrations.map((entry) => ({
+          ...entry,
+          ...("configPath" in entry && typeof entry.configPath === "string"
+            ? { configPath: scrubPathForCaller(req, entry.configPath) }
+            : {}),
+          ...("workingDirectory" in entry && typeof entry.workingDirectory === "string"
+            ? { workingDirectory: scrubPathForCaller(req, entry.workingDirectory) }
+            : {}),
+        })),
+      });
     } catch (err) {
       sendInternal(res, err, "Failed to read integrations file");
     }

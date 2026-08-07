@@ -91,6 +91,31 @@ describe("handleRename — success + error mapping", () => {
     });
   });
 
+  // #1294 originally asserted here that a LAN caller got BASENAMED paths back
+  // (a 200 whose body carried `a.md` rather than `/home/alice/d/a.md`). #1293
+  // then made `assertLoopbackForMutation` unconditional, so that caller now
+  // never reaches the handler body at all — it is refused outright.
+  //
+  // The refusal is the stronger guarantee, so it is what this file asserts. The
+  // scrub calls inside `rename.ts` are retained as defence-in-depth for the day
+  // the gate is relaxed, and are covered on their own in
+  // `tests/server/routes/path-scrub.test.ts` — which is where they must stay
+  // covered, because nothing reachable through this route can exercise them.
+  it("refuses a non-loopback caller outright, before renaming anything (#1293)", async () => {
+    renameDocument.mockResolvedValue({
+      status: "renamed",
+      oldPath: "/home/alice/d/a.md",
+      newPath: "/home/alice/d/b.md",
+      fileName: "b.md",
+    });
+    const res = mockRes();
+    await handleRename(reqWith({ documentId: "d1", newName: "b.md" }, "192.168.1.50"), res);
+    expect(res._status).toBe(403);
+    expect(renameDocument).not.toHaveBeenCalled();
+    // The refusal itself must not disclose what it declined to touch.
+    expect(JSON.stringify(res._json)).not.toContain("alice");
+  });
+
   it.each([
     { code: "NOT_FOUND", status: 404 },
     { code: "READ_ONLY", status: 403 },
@@ -107,6 +132,43 @@ describe("handleRename — success + error mapping", () => {
     await handleRename(reqWith({ documentId: "d1", newName: "b.md" }), res);
     expect(res._status).toBe(status);
     expect(res._json).toEqual({ error: code, message: "nope" });
+  });
+
+  // The error-branch twins of the case above. `renameDocument`'s `reason` can
+  // carry an absolute path (`Refusing to operate on symlinked path: <abs>`, or
+  // a raw `EXDEV`/`EPERM` errno message naming both paths), and #1294 scrubbed
+  // it for remote callers. Post-#1293 that branch is likewise unreachable from
+  // the wire: the gate answers first, and the reason is never composed at all.
+  //
+  // Asserted as a pair — the error path is the one where a "return early on
+  // rejection" refactor is most likely to slip a raw fs message out — with a
+  // `not.toCalled` companion, since an absence-of-substring assertion alone
+  // would also pass against a handler that had simply stopped responding.
+  it.each([
+    ["Refusing to operate on symlinked path: /home/alice/notes", "PATH_REJECTED"],
+    ["EXDEV: cross-device link not permitted, rename '/home/alice/a.md' -> '/mnt/v/b.md'", "EXDEV"],
+  ])("never composes a path-bearing error for a non-loopback caller (%s)", async (reason, code) => {
+    renameDocument.mockResolvedValue({ status: "error", errorCode: code, reason });
+    const res = mockRes();
+    await handleRename(reqWith({ documentId: "d1", newName: "b.md" }, "192.168.1.50"), res);
+    expect(res._status).toBe(403);
+    expect(renameDocument).not.toHaveBeenCalled();
+    expect(JSON.stringify(res._json)).not.toContain("alice");
+    expect(JSON.stringify(res._json)).not.toContain("/mnt/v");
+  });
+
+  it("still gives a loopback caller the real reason", async () => {
+    // Positive control on the same sample — without it the two assertions above
+    // pass against a change that blanked the message for everyone, which would
+    // be a regression for the local rename UI rather than a fix.
+    renameDocument.mockResolvedValue({
+      status: "error",
+      errorCode: "PATH_REJECTED",
+      reason: "Refusing to operate on symlinked path: /home/alice/notes",
+    });
+    const res = mockRes();
+    await handleRename(reqWith({ documentId: "d1", newName: "b.md" }, "127.0.0.1"), res);
+    expect((res._json as { message: string }).message).toContain("/home/alice/notes");
   });
 });
 
