@@ -63,13 +63,30 @@ const TRUNCATION_MARKER = "\n\n_[Reply truncated — the model exceeded the stre
 /**
  * Wire-level twin of {@link MAX_STREAMED_CHARS} (#1292).
  *
- * Deliberately looser than the char cap: a streaming response carries SSE
- * framing and JSON envelope overhead around the content, and tool-call turns
- * spend bytes on arguments that never reach the sink at all. 1 MiB leaves room
- * for that while staying four orders of magnitude below the client's 16 MB
- * default, which exists for whole-JSON reads rather than chat.
+ * The two caps must be compared in CONTENT chars, not in bytes, and doing that
+ * inverts the naive reading: per-frame framing overhead means a streamed byte
+ * budget buys far fewer content chars than its size suggests. Measured against
+ * realistic frames carrying a 5-char token:
+ *
+ *   v1 SSE (id, object, created, model, system_fingerprint, choices[0].delta,
+ *   logprobs, finish_reason)  ~264 B/frame  ->  ~53 B per content char
+ *   Ollama-native NDJSON      ~132 B/frame  ->  ~26 B per content char
+ *
+ * At 1 MiB that admitted only ~20k (v1) / ~40k (native) content chars — both
+ * BELOW the 64 KiB sink cap, so the wire cap always tripped first and the sink's
+ * truncation marker was unreachable in production. 4 MiB clears the ~3.3 MiB a
+ * v1 stream needs to deliver 64 KiB of content, restoring the intended order:
+ * the sink cap is the primary bound (it is what shows the user a marker), this
+ * is the backstop. Still four times below the client's 16 MB default, which
+ * exists for whole-JSON reads rather than chat — and when a sink is attached the
+ * sink's cap-abort kills the stream first anyway, so the raised ceiling is not a
+ * raised memory exposure.
+ *
+ * It cannot be ordered for EVERY stream: a degenerate one-char-token stream runs
+ * ~260 B per content char and still trips this cap first. That path exits
+ * `error`, which is why `executeRun`'s error branch also flushes the sink.
  */
-const MAX_STREAMED_RESPONSE_BYTES = 1024 * 1024;
+const MAX_STREAMED_RESPONSE_BYTES = 4 * 1024 * 1024;
 /** Truncate selectedText before embedding in the model prompt. A large selection
  *  can't inflate token usage unboundedly; 500 chars captures any reasonable
  *  user-selected excerpt (a paragraph or two). */
@@ -330,6 +347,15 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
             timestamp: Date.now(),
           });
         } else if (exit === "error") {
+          // Commit what did arrive before the fault (#1292). The runaway case
+          // this cap exists for — a quantized model in a repetition loop —
+          // trips the WIRE cap inside readStream, which throws, so the run
+          // lands here rather than on the sink's own truncation path. Without
+          // this flush the user is left with a bubble frozen at the last 80-char
+          // flush boundary and only a generic notification to explain it.
+          // no-ops on an empty buffer, so a fault before any content still
+          // mints nothing.
+          sink.flushFinal();
           console.error(
             `[local-model] run error (exit=${exit}): ${result.metrics.errorMessage ?? "unknown"}`,
           );

@@ -652,9 +652,43 @@ describe("collaborator — failure + robustness", () => {
     collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-err" }));
     await drain(collab);
-    // No chat reply on error; the raw error stays on stderr only.
+    // Nothing was streamed, so the error branch's flush has nothing to commit
+    // and mints no empty bubble; the raw error stays on stderr only.
     expect(chatMessages()).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("commits the streamed partial when the run exits 'error' (#1292)", async () => {
+    // The runaway case this PR exists for — a quantized model in a repetition
+    // loop — trips the WIRE cap inside readStream, which throws, so the run
+    // lands on the `error` branch and NOT on the sink's own truncation path.
+    // That branch used to notify without flushing, so everything received since
+    // the last 80-char flush boundary was dropped and the bubble stayed frozen
+    // mid-sentence.
+    setupDoc("doc-err-partial", "Body");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          // Under STREAM_FLUSH_CHARS (80), so nothing has been committed yet:
+          // this content exists ONLY in the sink buffer when the fault lands.
+          opts.onContentDelta?.("The answer is ");
+          return errorResult("local model response exceeded 1048576-byte cap");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-err-partial" }));
+    await drain(collab);
+
+    const msgs = chatMessages();
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toBe("The answer is ");
+    // The notification is still required — the partial alone doesn't say why.
+    const notes = getBuffer().filter((n) => n.documentId === "doc-err-partial");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].message).toMatch(/too large/);
     errorSpy.mockRestore();
   });
 
