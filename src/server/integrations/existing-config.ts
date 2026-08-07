@@ -246,6 +246,12 @@ function extractEntry(mcp: Record<string, unknown>, name: string): McpEntry | un
   // 3c's wizard consumer MUST re-validate shape before trusting any field —
   // the cast here is "yes, this is something we extracted from mcpServers,"
   // not "this is a valid McpEntry."
+  //
+  // This is a SECRETS filter, not a PATH filter. `command` and `args` survive
+  // and are absolute (apply.ts writes the node binary and dist/channel/index.js
+  // that way), so the HTTP layer must basename them for non-loopback callers —
+  // `scrubExistingInstalls` in integrations/api-routes.ts does that (#1294).
+  // Do not read this strip as "the entry is safe to serialize."
   const { env: _env, headers: _headers, ...safe } = raw as Record<string, unknown>;
   return safe as McpEntry;
 }

@@ -94,11 +94,13 @@ import {
   detectTargets,
   installSkill,
   isBareNameLaunchable,
+  type McpEntry,
   PathRejectedError,
   type RemovableEntry,
   shouldRegisterChannelShim,
 } from "./apply.js";
 import {
+  type EntryValidation,
   type ExistingMcpInstall,
   hasExistingTandemEntry,
   type readExistingTandemEntries,
@@ -340,17 +342,74 @@ export function assertOriginAllowlisted(
  * raw `readFile` failure, and Node's formatting embeds the path it was reading.
  * `status` already carries the actionable signal, so the enum loses nothing a
  * caller can act on.
+ *
+ * `configPath` is not the only path here. The surfaced `tandemEntry` /
+ * `channelEntry` are what Tandem itself wrote — `{ command: <absolute node
+ * binary>, args: [<absolute dist/channel/index.js>] }` (apply.ts
+ * `buildMcpEntries`) — so leaving them raw discloses the username and the whole
+ * install layout on exactly the route this scrub exists for. `extractEntry`
+ * strips only `env`/`headers`; it is a secrets filter, not a path filter.
+ * Validation `reason` strings embed the same paths (`JSON.stringify(args)`,
+ * `got '<command>'`), so they are replaced by status-derived copy the way
+ * `errorMessage` is — `status` is the field the wizard actually branches on.
  */
 function scrubExistingInstalls(req: PeerRequest, installs: ExistingMcpInstall[]) {
   if (isLoopbackRequest(req)) return installs;
   return installs.map((install) => ({
     ...install,
     target: { ...install.target, configPath: scrubPathForCaller(req, install.target.configPath) },
+    ...(install.tandemEntry === undefined
+      ? {}
+      : { tandemEntry: scrubMcpEntry(req, install.tandemEntry) }),
+    ...(install.channelEntry === undefined
+      ? {}
+      : { channelEntry: scrubMcpEntry(req, install.channelEntry) }),
+    ...(install.tandemValidation === undefined
+      ? {}
+      : { tandemValidation: scrubValidation(install.tandemValidation) }),
+    ...(install.channelValidation === undefined
+      ? {}
+      : { channelValidation: scrubValidation(install.channelValidation) }),
     ...(install.errorMessage === undefined
       ? {}
       : { errorMessage: "Could not read the configuration file." }),
   }));
 }
+
+/**
+ * Basename `command` and every `args` element of a surfaced MCP entry.
+ *
+ * `url` is deliberately left alone: it is a loopback http URL by construction
+ * and carries no filesystem layout. `env`/`headers` are already gone by the
+ * time this runs (`extractEntry`), but the spread would carry them if a future
+ * reader stopped stripping them — hence the explicit field list rather than a
+ * spread-and-override.
+ */
+function scrubMcpEntry(req: PeerRequest, entry: McpEntry): McpEntry {
+  return {
+    ...entry,
+    ...(typeof entry.command === "string"
+      ? { command: scrubPathForCaller(req, entry.command) }
+      : {}),
+    ...(Array.isArray(entry.args)
+      ? { args: entry.args.map((a) => (typeof a === "string" ? scrubPathForCaller(req, a) : a)) }
+      : {}),
+  };
+}
+
+/** Path-free replacement for an {@link EntryValidation} reason. */
+function scrubValidation(v: EntryValidation): EntryValidation {
+  if (v.reason === undefined) return v;
+  return { status: v.status, reason: VALIDATION_REASON[v.status] };
+}
+
+const VALIDATION_REASON: Record<EntryValidation["status"], string> = {
+  valid: "Entry matches the expected shape.",
+  "invalid-shape": "Entry does not match the expected shape.",
+  "invalid-url": "Entry url is not a loopback http URL.",
+  "invalid-command": "Entry command is not the expected launcher.",
+  "invalid-args": "Entry arguments do not match the expected shape.",
+};
 
 function makeGetExistingHandler(deps: IntegrationsRoutesDeps): Handler {
   return async (req: Request, res: Response) => {

@@ -194,6 +194,59 @@ describe("integrations API routes", () => {
       };
     }
 
+    // The install Tandem itself writes: apply.ts's buildMcpEntries stores an
+    // absolute node binary and an absolute dist/channel/index.js. The fixture
+    // above carries NO entries, which is exactly why its assertion passed while
+    // `tandemEntry` / `channelEntry` still went out raw.
+    const NODE_BIN = "/home/alice/.nvm/versions/node/v22.11.0/bin/node";
+    const CHANNEL_JS =
+      "/home/alice/.npm-global/lib/node_modules/tandem-editor/dist/channel/index.js";
+
+    function depsWithEntries(): IntegrationsRoutesDeps {
+      return {
+        ...deps,
+        readExisting: async () =>
+          [
+            {
+              target: { kind: "claude-code", label: "Claude Code", configPath: HOME_CONFIG },
+              status: "ok",
+              tandemEntry: { command: NODE_BIN, args: [CHANNEL_JS] },
+              tandemValidation: {
+                status: "invalid-args",
+                reason: `npx args must be [...]; got ${JSON.stringify([CHANNEL_JS])}`,
+              },
+              channelEntry: { command: NODE_BIN, args: [CHANNEL_JS] },
+              channelValidation: { status: "valid" },
+            },
+          ] satisfies ExistingMcpInstall[],
+      };
+    }
+
+    it("basenames the surfaced MCP entries' command/args for a LAN caller", async () => {
+      const app = makeAppWithRemoteAddress(depsWithEntries(), "192.168.1.50");
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      const body = JSON.stringify(res.body);
+
+      expect(res.status).toBe(200);
+      expect(body).not.toContain("alice");
+      expect(body).not.toContain(NODE_BIN);
+      expect(body).not.toContain(CHANNEL_JS);
+      expect(body).not.toContain("dist/channel");
+      // The shape the wizard branches on survives, basenamed.
+      expect(res.body.installs[0].channelEntry).toEqual({ command: "node", args: ["index.js"] });
+      expect(res.body.installs[0].tandemValidation.status).toBe("invalid-args");
+    });
+
+    it("still returns the real entry paths to a loopback caller", async () => {
+      // Positive control on the same sample: without it the absence assertions
+      // above also pass against a handler that dropped the entries entirely.
+      const app = makeAppWithRemoteAddress(depsWithEntries(), "127.0.0.1");
+      const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
+      const body = JSON.stringify(res.body);
+      expect(body).toContain(NODE_BIN);
+      expect(body).toContain(CHANNEL_JS);
+    });
+
     it(`basenames configPath and drops the raw error for a LAN caller on ${API_INTEGRATIONS_EXISTING}`, async () => {
       const app = makeAppWithRemoteAddress(depsWithPaths(), "192.168.1.50");
       const res = await request(app, "GET", API_INTEGRATIONS_EXISTING);
