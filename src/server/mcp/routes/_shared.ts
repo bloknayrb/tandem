@@ -1,28 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
+import { crossBasename } from "../../../shared/cross-basename.js";
 import { isLoopback } from "../../auth/middleware.js";
 
 /** Express middleware/handler function type (Express 5 compatible). */
 export type Handler = (req: Request, res: Response, next: NextFunction) => void;
-
-/** Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM hash leaks. */
-function hasUncPrefix(p: string): boolean {
-  return p.startsWith("\\\\") || p.startsWith("//");
-}
-
-/** basename() on Linux doesn't treat `\` as a separator, so Windows-style paths
- *  like `C:\Program Files\node.exe` return the whole string. Split on both. */
-function crossBasename(p: string): string {
-  return p.split(/[/\\]/).pop() || "";
-}
-
-/** Validate that a nodeBinary path points to a Node.js binary, not an arbitrary executable. */
-const VALID_NODE_BASENAME_RE = /^node(-sidecar(-[a-z0-9_-]+)?)?(\.exe)?$/;
-export function isValidNodeBinary(nodeBinary: string): boolean {
-  if (!nodeBinary) return false;
-  if (nodeBinary.includes("..")) return false;
-  if (hasUncPrefix(nodeBinary)) return false;
-  return VALID_NODE_BASENAME_RE.test(crossBasename(nodeBinary));
-}
 
 /**
  * Strip an absolute path to a basename for non-loopback callers (#1294).
@@ -131,7 +112,12 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "RELOAD_IN_PROGRESS":
     case "EXTERNAL_CONFLICT":
       return 409;
+    // DOCX_TOO_LARGE (#1310) is the decompressed-size sibling of FILE_TOO_LARGE's compressed cap.
+    // Without this case it falls through to 500, which makes sendApiError log
+    // "[Tandem] Unhandled API error:" with a stack — reporting a policy refusal of hostile input as
+    // a Tandem crash, in the one artefact (Copy Diagnostics) a user would send us about it.
     case "FILE_TOO_LARGE":
+    case "DOCX_TOO_LARGE":
       return 413;
     case "EBUSY":
     case "EPERM":
@@ -175,7 +161,12 @@ export function errorCodeToLabel(code: string): string {
       return "RELOAD_IN_PROGRESS";
     case "EXTERNAL_CONFLICT":
       return "EXTERNAL_CONFLICT";
+    // Deliberately the SAME label as the compressed-size cap rather than a new one: both are
+    // "this file is too big to open", the distinction between them is in `message`, and a novel
+    // label would be an unrecognized string to every existing client while changing nothing a
+    // caller can act on differently.
     case "FILE_TOO_LARGE":
+    case "DOCX_TOO_LARGE":
       return "FILE_TOO_LARGE";
     case "EBUSY":
     case "EPERM":

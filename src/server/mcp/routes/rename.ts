@@ -17,6 +17,13 @@ import { errorCodeToHttpStatus, isLoopbackRequest, scrubOptionalPathForCaller } 
  * NOTE there. The fallback covers the `fs.rename` errno codes (EXDEV, EPERM,
  * EACCES, …) that reach this branch unmapped and whose Node messages embed both
  * absolute paths.
+ *
+ * Since #1293 made `assertLoopbackForMutation` unconditional, no non-loopback
+ * caller reaches this map — the gate answers first. It is retained as
+ * defence-in-depth, deliberately, for the day that gate is relaxed or this
+ * handler grows a second entry point. Do not delete it as dead code without
+ * also deleting the scrub it pairs with; the route-level tests assert the gate,
+ * and the scrub helpers are covered in `tests/server/routes/path-scrub.test.ts`.
  */
 const RENAME_GENERIC_MESSAGE: Record<string, string> = {
   NOT_FOUND: "The document is not open.",

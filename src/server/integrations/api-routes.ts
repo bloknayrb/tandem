@@ -28,7 +28,7 @@
  * **Apply endpoint security gates** (all enforced before any FS write):
  * - Origin allowlist (CSRF mitigation against same-origin drive-by).
  * - Confirmation nonce — issued by GET /first-run-needed and POST /integrations.
- * - LAN auth fail-closed even with `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`.
+ * - Loopback-only, in every configuration (#1293) — the flag does not relax it.
  * - Concurrency mutex (429 on overlap).
  * - `homeOverride` body field asserted-absent.
  *
@@ -45,10 +45,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { Express, Request, Response } from "express";
-import {
-  TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV,
-  TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV,
-} from "../../shared/constants.js";
+import { TANDEM_DISABLE_FIRST_RUN_WIZARD_ENV } from "../../shared/constants.js";
 import {
   API_INTEGRATIONS,
   API_INTEGRATIONS_APPLY,
@@ -266,17 +263,32 @@ export function registerIntegrationsRoutes(
 }
 
 /**
- * Defense-in-depth: even with `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`,
- * the mutating integration routes fail closed for non-loopback callers.
- * These routes either touch files outside Tandem's data dir
- * (`/api/integrations/apply`) or stage payloads a loopback user could
- * later trigger (`POST /api/integrations`, secrets POST/DELETE) — both
- * trade-offs the LAN-unauth opt-in did not consent to.
+ * Mutating routes fail closed for non-loopback callers, in every configuration.
  *
- * Read-only routes (`GET /api/integrations`, `GET .../existing`,
- * `GET .../first-run-needed`) remain reachable from LAN under the
- * opt-in, on the basis that the user explicitly accepted exposing
- * Tandem's read surface to the network.
+ * Until #1293 this check was conditional on `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`,
+ * which inverted it: the stricter posture applied only in the *more permissive*
+ * configuration, and the gate was dead code in every shipped build. The exposed
+ * configuration was never the flag — it was `TANDEM_BIND_HOST=<lan>` **with** a
+ * token, which `bind-check.ts:74` permits and which left this function returning
+ * `false` unconditionally. A token-holding LAN peer reached every mutator.
+ *
+ * What this is and is not:
+ *
+ * - It is **not** the protection. The loopback bind plus Bearer auth is; see
+ *   CLAUDE.md's Security section. `assertOriginAllowlisted`, its usual partner,
+ *   reads a forgeable header and is a CSRF control, not an authorization one.
+ * - It **is** the layer that stops a caller who holds the token but is not on
+ *   this machine — the one case the other two do not cover.
+ *
+ * The cost of making it unconditional is nil for the shipped client: `API_BASE`
+ * is a hardcoded `http://127.0.0.1:3479` (`src/client/utils/fileUpload.ts`), so
+ * a browser served from a LAN address resolves it to the *viewer's* machine and
+ * has never been able to reach `/api` remotely. If remote `/api` access ever
+ * becomes a goal, that constant is the thing to change first, deliberately.
+ *
+ * Scope: this governs the routes that call it. Four mutating routes take a
+ * caller-supplied filesystem path and call neither gate — see #1320. Do not read
+ * this function as "`/api` is loopback-only."
  */
 export function assertLoopbackForMutation(
   req: Request,
@@ -287,14 +299,16 @@ export function assertLoopbackForMutation(
   // env var they've never heard of.
   friendlyMessage?: string,
 ): boolean {
-  const allowUnauthLan = process.env[TANDEM_ALLOW_UNAUTHENTICATED_LAN_ENV] === "1";
-  if (allowUnauthLan && !isLoopback(req.socket.remoteAddress)) {
+  if (!isLoopback(req.socket.remoteAddress)) {
     res.status(403).json({
       error: "FORBIDDEN",
       code: ERROR_CODE_BAD_ORIGIN,
       message:
         friendlyMessage ??
-        "Mutating integration routes are loopback-only; TANDEM_ALLOW_UNAUTHENTICATED_LAN does not relax this surface",
+        // Deliberately no longer names TANDEM_ALLOW_UNAUTHENTICATED_LAN. The flag
+        // is not part of this decision any more, and naming it invited the reader
+        // to think setting or clearing it would change the outcome.
+        "This route is loopback-only: it must be called from the computer running Tandem. Holding an auth token is not sufficient.",
     });
     return true;
   }
@@ -621,7 +635,7 @@ function validateApplyBody(
  * Writes the persisted entries (filtered by `ids`) to Claude's config.
  * Security gates run before any FS access:
  *   - Origin allowlist (CSRF).
- *   - LAN unauth fail-closed (even with `TANDEM_ALLOW_UNAUTHENTICATED_LAN`).
+ *   - Loopback-only, in every configuration (#1293).
  *   - `homeOverride` forbidden in body (validated in `validateApplyBody`).
  *   - Constant-time confirmation-nonce comparison.
  *   - Concurrency mutex (in-flight check → 429).

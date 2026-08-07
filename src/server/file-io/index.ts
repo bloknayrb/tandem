@@ -27,6 +27,7 @@ import {
   scanFailureLines,
   structuralLossLines,
 } from "./docx-lost-features.js";
+import { assertDocxWithinSizeLimits } from "./docx-size-gate.js";
 import { loadMarkdown, saveMarkdown } from "./markdown.js";
 import type { FormatAdapter, LoadIssue, Prepared } from "./types.js";
 
@@ -100,6 +101,20 @@ const plaintextAdapter: FormatAdapter = {
 const docxAdapter: FormatAdapter = {
   async parse(content, options): Promise<Prepared> {
     const buffer = content as Buffer;
+
+    // #1310: refuse an over-expanding archive BEFORE any reader sees the buffer.
+    //
+    // This has to sit ahead of the fan-out rather than inside the readers, because the first entry
+    // below is mammoth, which loads its own zip and reads more parts than the other three combined.
+    // Nothing added to our own `.async("text")` call sites can reach it. Throwing here also means a
+    // reader added later inherits the guard instead of having to remember it.
+    //
+    // Deliberately a throw rather than a `LoadIssue`: every issue kind below describes a document
+    // that DID import with something lost, and the fidelity-report banner reads them that way.
+    // "We refused to open this" is not a fidelity loss, and dressing it as one would render a
+    // banner about a document that isn't on screen.
+    await assertDocxWithinSizeLimits(buffer);
+
     const issues: LoadIssue[] = [];
     let commentsFailed = false;
     const [loaded, comments, notes, lost] = await Promise.all([

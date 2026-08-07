@@ -7,9 +7,16 @@
  * gated decision). This mirrors the hardened `LoopbackUrl` precedent in
  * `integrations/schema.ts`, extended (D2, Bryan 2026-06-19) to also accept
  * `localhost` and `[::1]` for Ollama/LM-Studio UX — by STRING match against an
- * explicit set, never DNS resolution. Not resolving is the anti-rebinding
- * property: a poisoned `localhost`→public-IP can't widen the allowlist because
- * we compare the literal hostname the URL parser produced, not a resolved IP.
+ * explicit set, never DNS resolution.
+ *
+ * What actually protects the two IP literals is that there is nothing to
+ * resolve. Declining to resolve is NOT itself the anti-rebinding property
+ * (#1295 L4): comparing a literal name and then letting `fetch` resolve that
+ * same name is validate-by-name-then-connect-by-name, which is the shape that
+ * rebinds. `localhost` was the one entry exposed to it. The client closes that
+ * gap by substituting `127.0.0.1` for a validated `localhost` before issuing
+ * the request (see `baseUrl` in `ollama-client.ts`), so the checked value and
+ * the connected value are the same address.
  */
 
 import type { AgentIdentity } from "../../shared/types.js";

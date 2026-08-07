@@ -48,6 +48,7 @@ import { annotationPluginKey } from "./editor/extensions/annotation";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
+import ScrollPill from "./editor/ScrollPill.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
@@ -111,6 +112,7 @@ import { useAnnotationReview } from "./panels/useAnnotationReview.svelte";
 import { pmSelectionToFlat } from "./positions";
 import FormattingBar from "./shell/FormattingBar.svelte";
 import TitleBar from "./shell/TitleBar.svelte";
+import { addressedAiNotice } from "./status/addressed-ai-notice.js";
 import StatusBar from "./status/StatusBar.svelte";
 import DocumentTabs from "./tabs/DocumentTabs.svelte";
 import {
@@ -520,42 +522,112 @@ function startFreshClaude(): void {
 }
 
 // #1018 loud failures: ChatPanel (chat send) and Toolbar ("Send to Claude"
-// comment) dispatch `tandem:addressed-ai` AFTER persisting. If AI isn't
-// actually connected (`chip` non-null: unconfigured/stopped, not Solo, not
-// booting), surface a notice that AFFIRMS the save and frames absence as
-// deferred delivery — the message/comment persists in the Y.Doc and is read
-// whenever an agent next connects. Never "failed/lost". `chip` is read
-// imperatively at event time (no reactive dependency, no loop). Notes/
-// highlights never dispatch this (ADR-027 — they're private, never sent to AI).
+// comment) dispatch `tandem:addressed-ai` AFTER persisting. Two DIFFERENT
+// silences get a notice here, and they are not the same problem:
+//
+//   1. No agent at all (`chip` non-null: unconfigured/stopped). The message
+//      persists in the Y.Doc and is read whenever an agent next connects.
+//   2. An agent IS attached but nothing is pushing to it — the hand-launched
+//      session. It can read the document; it just won't be TOLD, so the comment
+//      waits for the next `tandem_checkInbox`. This was previously silent: the
+//      handler returned as soon as a session existed, which is exactly the
+//      common case. "AI connected" is true and says nothing about delivery.
+//
+// Both AFFIRM the save and frame the gap as deferred delivery, never
+// "failed/lost". State is read imperatively at event time (no reactive
+// dependency, no loop). Notes/highlights never dispatch this (ADR-027 —
+// they're private, never sent to AI).
 $effect(() => {
-  const onAddressedAi = async (e: Event) => {
+  // A function, not an inline comparison. After the early return below,
+  // TypeScript narrows `modeState.tandemMode` to `"tandem"` and keeps that
+  // narrowing across the `await` — so an inline re-read compiles to a
+  // provably-false comparison and TS rejects it. The mode genuinely can change
+  // while the probe is in flight; a call the compiler cannot narrow is what
+  // makes the re-read real rather than decorative.
+  const isSoloNow = (): boolean => modeState.tandemMode === "solo";
+  const handleAddressedAi = async (e: Event) => {
     const via = (e as CustomEvent<{ via?: string }>).detail?.via;
-    if (aiReadiness.chip === null) return; // ready / booting / Solo — nothing to nudge
-    // The polled chip can be up to 8s stale: an agent whose MCP initialize
-    // landed after the last background poll still reads as absent, firing a
-    // false "no AI is connected" notice while the agent is live (#1083).
-    // Confirm with a fresh /health probe before alarming.
-    if (await aiReadiness.probeSession()) return;
-    const chip = aiReadiness.chip; // re-read — state may have settled while probing
-    if (chip === null) return;
+    const viaKey = via ?? "chat";
     const noun = via === "comment" ? "Comment" : "Message";
-    notifications.push(
-      {
-        id: `ai-not-ready-${via ?? "chat"}-${Date.now()}`,
-        type: "launcher",
-        severity: "warning",
-        message: `${noun} saved — no AI is connected yet. It'll be seen when AI connects.`,
-        dedupKey: `ai-not-ready-${via ?? "chat"}`,
-        timestamp: Date.now(),
-      },
-      {
-        // Driven by the shared exhaustive map, not a binary ternary: `chip`
-        // has three non-null members, and a `=== "connect"` test sent `setup`
-        // (Claude CLI not installed) down the restart branch — offering to
-        // restart a binary that isn't there.
-        label: AI_CTA[chip].label,
-        onClick: AI_CTA[chip].action === "restart" ? restartClaude : connectAi,
-      },
+    // Solo short-circuits before the probe so those sends don't pay for a
+    // fetch whose answer `addressedAiNotice` would discard anyway.
+    if (isSoloNow()) return;
+
+    // Fast path: the polled state already proves silence — an agent is attached
+    // (`chip === null`) and a consumer is confirmed. Staleness here can only
+    // ever SUPPRESS a notice, never manufacture one, and suppression is the
+    // direction #1083 does NOT care about. `=== "attached"` is load-bearing:
+    // `"unknown"` must still fall through and probe.
+    if (aiReadiness.chip === null && aiReadiness.pushDelivery === "attached") return;
+
+    // ONE fresh /health read settles both branches. It re-confirms the session
+    // — the polled value can be up to 8s stale, and an agent whose MCP
+    // initialize landed after the last poll would otherwise get a false "no AI
+    // is connected" notice (#1083) — and refreshes the push signal in the same
+    // round trip.
+    const sessionLive = await aiReadiness.probeSession();
+    const notice = addressedAiNotice({
+      // Re-read across the await, don't reuse the pre-probe capture: a user who
+      // switches to Solo while the probe is in flight would otherwise still get
+      // a notice. Every input here is re-read for the same reason.
+      soloMode: isSoloNow(),
+      sessionLive,
+      chip: aiReadiness.chip,
+      pushDelivery: aiReadiness.pushDelivery,
+    });
+    if (notice === null) return;
+
+    if (notice.kind === "no-agent") {
+      notifications.push(
+        {
+          id: `ai-not-ready-${viaKey}-${Date.now()}`,
+          type: "launcher",
+          severity: "warning",
+          message: `${noun} saved — no AI is connected yet. It'll be seen when AI connects.`,
+          dedupKey: `ai-not-ready-${viaKey}`,
+          timestamp: Date.now(),
+        },
+        {
+          // Driven by the shared exhaustive map, not a binary ternary: `chip`
+          // has three non-null members, and a `=== "connect"` test sent `setup`
+          // (Claude CLI not installed) down the restart branch — offering to
+          // restart a binary that isn't there.
+          label: AI_CTA[notice.chip].label,
+          onClick: AI_CTA[notice.chip].action === "restart" ? restartClaude : connectAi,
+        },
+      );
+      return;
+    }
+
+    // An agent is attached, so nothing is wrong — this is a latency
+    // expectation, not a failure, hence `info` rather than `warning` and no CTA.
+    //
+    // The copy names the contradiction on purpose. The status pill says "AI
+    // connected" (truthfully — Claude CAN read the document), so a bare "it'll
+    // be seen later" reads as a non-sequitur: the user has just been told the
+    // AI is right there. Saying "connected, but not being notified" is the
+    // whole point of the notice; without it we report a delay and leave the
+    // user to reconcile it with the indicator themselves.
+    notifications.push({
+      id: `ai-no-push-${viaKey}-${Date.now()}`,
+      type: "launcher",
+      severity: "info",
+      message: `${noun} saved. Claude is connected but isn't being notified in real time, so it'll see this the next time it checks in.`,
+      dedupKey: `ai-no-push-${viaKey}`,
+      timestamp: Date.now(),
+    });
+  };
+  // The DOM discards an async listener's promise, so a rejection would become
+  // an unhandled rejection AND silently skip the notice — the user's comment
+  // saved with nothing said, which is the failure this handler exists to fix.
+  // Nothing can reject today (`fetchHealth` catches both the fetch and the
+  // parse, `addressedAiNotice` is pure), but that safety is a cross-file
+  // coupling no type enforces. Log rather than pushing a further toast: at this
+  // point we genuinely do not know the delivery state, and inventing a message
+  // about it would be the same guessing the rest of this handler refuses to do.
+  const onAddressedAi = (e: Event) => {
+    void handleAddressedAi(e).catch((err) =>
+      console.error("[Tandem] addressed-ai notice failed:", err),
     );
   };
   window.addEventListener("tandem:addressed-ai", onAddressedAi);
@@ -1790,6 +1862,47 @@ const isReadOnly = $derived(activeTab?.readOnly === true);
 const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+/**
+ * Tab stop on the scroll container, but ONLY when nothing else in it can take
+ * focus and scroll it.
+ *
+ * An editable document is reachable already: ProseMirror's contenteditable is
+ * focusable and arrow/Page keys move the caret, which scrolls. A READ-ONLY
+ * document has neither — `editable: false` is not tabbable — and Chrome and
+ * Firefox paper over that by making overflow scrollers implicitly focusable,
+ * while **WebKit does not**. WebKit is the desktop app's WebView, so on macOS a
+ * read-only document (the changelog after an update, a `.docx` in review-only,
+ * anything behind the license wall) had no keyboard scroll path at all. Now
+ * that the scroll pill hides the native scrollbar, it also has no visible one
+ * until the mouse comes near — so this is the whole keyboard story for that
+ * case, not a nicety.
+ *
+ * Deliberately NOT unconditional: a tab stop on every document would spend the
+ * tab-traversal budget that `App.svelte` already declines to spend on the
+ * edge-collapse strips, and would buy nothing where the editor is focusable.
+ * Source view is excluded for the same reason — its textarea is focusable and
+ * scrolls itself.
+ */
+const editorScrollTabIndex = $derived(editorReadOnly && !inSourceView ? 0 : undefined);
+/**
+ * Pre-narrowed to a plain boolean so `ScrollPill`'s effect subscribes to THIS
+ * derived (which equality-checks its own value) rather than to `activeTab`,
+ * whose identity churns whenever the tab array updates for unrelated reasons —
+ * that would rebuild every listener and drop any drag in flight.
+ *
+ * Excluded in source view: `SourceView`'s textarea is its own scroller with its
+ * own native bar, so a second affordance 5px outboard of it is noise. The
+ * exclusion is also working around a defect it did not cause —
+ * `.source-view-container`'s `height: 100%` resolves against the scroller's
+ * CONTENT box, so `.editor-scroll` reports phantom overflow of exactly its own
+ * padding for the whole session (which also leaves `scroll-fade`'s mask on a
+ * surface that never scrolls). Fixing that height resolution would let this
+ * term go away; until then the pill declines rather than scrubbing ~100px of
+ * nothing.
+ */
+const scrollPillEnabled = $derived(
+  settingsState.settings.scrollPill && !!activeTab && !inSourceView,
+);
 const chatVisible = $derived(
   activeRailTab === "chat" &&
     (effectiveRightVisible || railFloat.right || railFloatClosing.right || chatReveal),
@@ -2464,6 +2577,7 @@ const shouldShowModelPicker = $derived(
       onConnectAi={connectAi}
       onRestartClaude={restartClaude}
       soloMode={modeState.tandemMode === "solo"}
+      pushDelivery={aiReadiness.pushDelivery}
       claudeWorkingTool={yjsSync.claudeWorking?.tool ?? null}
       readOnly={isReadOnly}
       saving={saveStore.saving}
@@ -2707,11 +2821,19 @@ const shouldShowModelPicker = $derived(
          invisibly, because the audit scoped itself to `#root`, where page-level
          landmark rules do not apply. Exactly one editor column, so exactly one
          `main`. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <!-- The warning is right in general and wrong here: a scroll container with
+         no focusable content is the documented exception (it is what axe's
+         `scrollable-region-focusable` asks for), and the value is `undefined`
+         whenever the editor IS focusable. See `editorScrollTabIndex`. -->
     <div
       bind:this={editorScrollEl}
       data-testid="editor-scroll-container"
+      tabindex={editorScrollTabIndex}
       class="editor-scroll tandem-scroll-fade-y"
       class:hide-raw-md={!settingsState.settings.showRawMarkdown}
+      class:tandem-scroll-pill-surface={!inSourceView}
+      class:tandem-scroll-pill-host={scrollPillEnabled}
       use:scrollFade={"y"}
       role="main"
       aria-label="Document editor"
@@ -2943,12 +3065,23 @@ const shouldShowModelPicker = $derived(
          Hidden when there's no active document so the EmptyState scene
          isn't dragged down by phantom space. -->
     {#if activeTab}
-      <div class="editor-end-marker" aria-hidden="true">
+      <!-- `data-scroll-spacer` is a contract, not decoration: the scroll pill
+           subtracts this block's height so 70vh of blank scroll room doesn't
+           read as document length. Deleting the attribute puts a pill on every
+           file; see `contentExtent` in `editor/scroll-pill.ts`. -->
+      <div class="editor-end-marker" data-scroll-spacer aria-hidden="true">
         <span class="editor-end-pill">End of document</span>
       </div>
     {/if}
     {/if}
     </div>
+    <!-- Scroll pill: sibling of the scroll container, never a child — see the
+         mount-point note in `ScrollPill.svelte`. -->
+    <ScrollPill
+      scrollEl={editorScrollEl}
+      enabled={scrollPillEnabled}
+      reduceMotion={settingsState.settings.reduceMotion}
+    />
     <!-- Find/Replace bar: sibling of the scroll container so it floats top-right
          of the editor column without scrolling with the document. The `{#if open}`
          gate lives inside the component. -->
@@ -3289,6 +3422,16 @@ const shouldShowModelPicker = $derived(
     align-items: center;
     justify-content: center;
     font-weight: 700;
+  }
+
+  /* Only reachable when `editorScrollTabIndex` is 0 (a read-only document, see
+     its doc comment). `:focus-visible` rather than `:focus` so a mouse click
+     anywhere in the document doesn't ring the whole editor. Inset by the 2px
+     transparent border the scroller already carries for its file-drop state, so
+     the ring sits inside the column instead of over the rail seam. */
+  .editor-scroll:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -2px;
   }
 
   .editor-column-wrap {

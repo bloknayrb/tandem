@@ -10,6 +10,7 @@ import {
   evaluateOrphanedVite,
   evaluatePushPath,
   evaluateStaleGlobal,
+  evaluateTandemPlugin,
   globalTandemEditorVersion,
   isTandemEditorRepo,
   probeTandemEditorRepo,
@@ -1305,5 +1306,81 @@ describe("evaluatePushPath", () => {
     const out = evaluatePushPath({ subscribers: "three", eventCount: null });
     expect(out?.status).toBe("warn"); // unparseable count falls back to 0 = nothing attached
     expect(out?.data).toMatchObject({ subscribers: 0, eventCount: 0 });
+  });
+});
+
+/**
+ * The Tandem plugin check.
+ *
+ * Two live field hazards, both reported by the same macOS tester: the plugin's
+ * monitor exits 127 in EVERY Claude Code session when Node is not on the PATH
+ * the client inherits, and the plugin's MCP servers duplicate the ones setup
+ * writes. Nothing in a published static manifest can fix either, so naming
+ * them is the whole remedy available.
+ */
+describe("evaluateTandemPlugin", () => {
+  it("says nothing when settings could not be read", () => {
+    // Absence is not evidence. A missing or malformed settings file must not
+    // be reported as "no plugin".
+    expect(evaluateTandemPlugin({ enabledPlugins: null, wizardTandemEntry: true })).toEqual([]);
+  });
+
+  it("says nothing when no Tandem plugin is enabled", () => {
+    expect(
+      evaluateTandemPlugin({
+        enabledPlugins: { "other@market": true },
+        wizardTandemEntry: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("does NOT report a deliberately disabled plugin as installed", () => {
+    // `false` is common — 20 of 31 entries on the dev machine this was written
+    // on. A truthiness check here would nag a user who already opted out.
+    expect(
+      evaluateTandemPlugin({
+        enabledPlugins: { "tandem@tandem-editor": false },
+        wizardTandemEntry: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("warns about the npx dependency when the plugin is enabled", () => {
+    const out = evaluateTandemPlugin({
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].status).toBe("warn");
+    expect(out[0].message).toContain("npx");
+    expect(out[0].fix).toContain("exit 127");
+    // Names the actual mechanism, not just the symptom.
+    expect(out[0].fix).toContain("non-login shell");
+  });
+
+  it("adds the duplication warning only when a wizard entry also exists", () => {
+    const both = evaluateTandemPlugin({
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: true,
+    });
+    expect(both).toHaveLength(2);
+    expect(both[1].message).toContain("twice");
+
+    // A plugin-only user has nothing duplicated — one warning, not two.
+    const pluginOnly = evaluateTandemPlugin({
+      enabledPlugins: { "tandem@tandem-editor": true },
+      wizardTandemEntry: false,
+    });
+    expect(pluginOnly).toHaveLength(1);
+  });
+
+  it("matches any marketplace the plugin was installed from", () => {
+    // The install identity is `tandem@<marketplace>`, and a locally-registered
+    // marketplace would carry a different name than the published one.
+    const out = evaluateTandemPlugin({
+      enabledPlugins: { "tandem@some-local-marketplace": true },
+      wizardTandemEntry: false,
+    });
+    expect(out).toHaveLength(1);
   });
 });

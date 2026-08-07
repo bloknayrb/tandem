@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSetup } from "../../src/cli/setup.js";
 // These helpers moved to src/server/integrations/apply.ts in #477 PR 3c-ii-a;
@@ -24,6 +24,7 @@ import {
   validateChannelShimPrereq,
 } from "../../src/server/integrations/apply.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
+import { isValidNodeBinary } from "../../src/shared/integrations/node-binary-name.js";
 
 describe("buildMcpEntries", () => {
   it("returns only the tandem HTTP entry by default (plugin handles channel)", () => {
@@ -35,11 +36,29 @@ describe("buildMcpEntries", () => {
     expect(entries["tandem-channel"]).toBeUndefined();
   });
 
-  it("includes tandem-channel when withChannelShim: true (legacy opt-in)", () => {
+  // The default was a bare `"node"` until it was found failing in the field two
+  // different ways, both silent: Node absent from the client's PATH (the shim
+  // never starts), and Node resolving under the session's cwd (Claude Code's
+  // anti-PATH-hijack guard refuses it). Both are fixed by an absolute path, so
+  // the default is now `process.execPath` — the Node already running Tandem,
+  // which is the bundled sidecar in the desktop app.
+  //
+  // Pin the SOURCE, not just shape. `isAbsolute` + `isValidNodeBinary` are both
+  // satisfied by `resolveNodeBinary("node")`, which returns `<cwd>/node` — a
+  // path under the session's cwd, i.e. failure mode 2 exactly. A regression
+  // that degraded the default to a bare or relative name would have passed a
+  // properties-only assertion. `toBe(process.execPath)` pins where the value
+  // comes from without pinning a machine-specific literal, and `existsSync`
+  // pins the property that actually makes the shim start.
+  it("defaults tandem-channel to the running Node's absolute path", () => {
     const entries = buildMcpEntries("/abs/path/to/dist/channel/index.js", {
       withChannelShim: true,
     });
-    expect(entries["tandem-channel"]?.command).toBe("node");
+    const command = entries["tandem-channel"]?.command ?? "";
+    expect(command).toBe(process.execPath);
+    expect(isAbsolute(command)).toBe(true);
+    expect(existsSync(command)).toBe(true);
+    expect(isValidNodeBinary(command)).toBe(true);
     expect(entries["tandem-channel"]?.args).toEqual(["/abs/path/to/dist/channel/index.js"]);
   });
 

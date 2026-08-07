@@ -59,9 +59,10 @@ import { makeShutdownHandler, type ShutdownRouteDeps } from "./routes/shutdown.j
 import { handleStoreReclaimLock } from "./routes/store-reclaim.js";
 import { handleUpload } from "./routes/upload.js";
 
+export { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 export type { Handler } from "./routes/_shared.js";
 // Re-export shared utilities that tests and other modules import from here
-export { errorCodeToHttpStatus, isValidNodeBinary } from "./routes/_shared.js";
+export { errorCodeToHttpStatus } from "./routes/_shared.js";
 
 /**
  * Check if a Host header value is allowed (127.0.0.1 + tauri.localhost + optional extra hosts).
@@ -89,9 +90,16 @@ function escapeRegExp(s: string): string {
 /**
  * Check if an Origin header is an allowed local URL. Exported for testing.
  *
- * Narrowed in #477 PR 2: only `127.0.0.1` and `tauri.localhost` are accepted; the
- * bare `localhost` hostname is rejected to align with the browser-distribution
- * deprecation and remove a DNS-resolution attack surface.
+ * Narrowed in #477 PR 2: of the *hostname* forms only `127.0.0.1` and
+ * `tauri.localhost` are accepted; the bare `localhost` hostname is rejected to
+ * align with the browser-distribution deprecation and remove a DNS-resolution
+ * attack surface.
+ *
+ * This regex is not the whole allowlist — `isLocalhostOrigin` below also accepts
+ * `TAURI_LINUX_ORIGIN` (`tauri://localhost`) via a separate exact-string branch.
+ * Saying "only 127.0.0.1 and tauri.localhost are accepted" here read as a claim
+ * about the accepted set and stopped being true when that branch was added
+ * (#1307).
  */
 export const LOCALHOST_ORIGIN_RE = new RegExp(
   `^https?://(127\\.0\\.0\\.1|${escapeRegExp(TAURI_HOSTNAME)})(:\\d+)?$`,

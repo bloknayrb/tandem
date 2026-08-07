@@ -35,6 +35,7 @@ import {
   open,
   readFile,
   rename,
+  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -47,6 +48,7 @@ import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
+import { BARE_NODE, isRecordedPathGone, resolveNodeBinary } from "./node-binary.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -220,10 +222,16 @@ export interface BuildMcpEntriesOptions {
   /** Include the stdio channel shim. This raw option defaults to false, but
    *  `shouldIncludeChannelShim` turns it ON by default for the Claude Code
    *  target — the shim is the default push transport. The plugin monitor is an
-   *  independent push path (activates on Claude Code 2.1.212+, no flag); the
+   *  independent push path (activates on Claude Code 2.1.212+ interactive sessions
+   *  when persistently installed, no flag); the
    *  channel shim stays canonical by decision (2026-07-19), the monitor
    *  installable but not the default. */
   withChannelShim?: boolean;
+  /** Override the Node binary the channel shim is spawned with. Omit in
+   *  production: the default resolves `process.execPath`, which is the Node
+   *  already running Tandem (the bundled sidecar in the desktop app). A bare
+   *  `"node"` was the old default and left the shim silently unstartable
+   *  wherever the client could not resolve it — see `node-binary.ts`. */
   nodeBinary?: string;
   /** Auth token to embed in HTTP entry headers and stdio shim env.
    *  When omitted (first-run before token provisioned), headers/env are omitted
@@ -266,7 +274,7 @@ export function buildMcpEntries(
       shimEnv.TANDEM_AUTH_TOKEN = opts.token;
     }
     entries["tandem-channel"] = {
-      command: opts.nodeBinary ?? "node",
+      command: opts.nodeBinary ?? resolveNodeBinary(),
       args: [channelPath],
       env: shimEnv,
     };
@@ -757,10 +765,88 @@ export async function applyConfig(configPath: string, ops: ApplyOps): Promise<vo
 }
 
 export type RemoveEntriesResult =
+  | ConfigReadRefusal
   | { status: "removed"; removed: RemovableEntry[] }
-  | { status: "no-op" }
+  | { status: "no-op" };
+
+/** Why a config could not be opened for a non-destructive mutation. Shared so
+ *  every such caller reports the same fixed reason strings. */
+export type ConfigReadRefusal =
   | { status: "missing" }
   | { status: "skipped"; reason: "malformed-json" | "not-an-object" | "oversize" };
+
+export type ConfigReadResult =
+  | ConfigReadRefusal
+  /** Opened fine, but there is no `mcpServers` object to act on — absent, or
+   *  present as a non-object. Both mean "nothing to do" for every mutation
+   *  path, so this is an arm rather than a nullable field: it keeps callers to
+   *  a single `status !== "ok"` pass-through and makes "ok but no servers"
+   *  unrepresentable. */
+  | { status: "no-op" }
+  | { status: "ok"; root: Record<string, unknown>; servers: Record<string, unknown> };
+
+/**
+ * Open a client config for a NON-DESTRUCTIVE mutation.
+ *
+ * The single owner of the read-side rules that every such caller must obey,
+ * because this file holds other vendors' entries and bearer tokens:
+ *
+ * - **Never create it.** ENOENT is `missing`, not "start fresh" — that
+ *   distinction is what separates a repair from an overwrite. (`applyConfig`
+ *   deliberately DOES create, which is why it does not use this.)
+ * - **Never replace malformed JSON.** Refuse and leave it exactly as found.
+ * - **Cap the read** at `MAX_CONFIG_BYTES` before touching the contents.
+ * - **Strip a BOM**, which `JSON.parse` will not tolerate.
+ * - **Leak no parse detail.** V8 `SyntaxError` messages embed a snippet of the
+ *   source, so reasons are fixed strings and never carry the error.
+ *
+ * Extracted because this preamble had been hand-copied and had already begun to
+ * diverge; a hardening change applied to one copy and not the other fails
+ * silently on someone's `~/.claude.json`. Two callers use it today
+ * (`removeConfigEntries`, `refreshChannelNodeBinary`); `applyConfig` keeps its
+ * own variant deliberately because it CREATES the file, and
+ * `existing-config.ts` has a third, looser read this did not absorb. Async I/O so callers on the startup
+ * path do not block the event loop on a multi-megabyte config.
+ *
+ * `servers` is `null` when `mcpServers` is absent or not an object — callers
+ * treat that as "nothing to do", not as an error.
+ */
+export async function readConfigForMutation(configPath: string): Promise<ConfigReadResult> {
+  assertPathSafe(configPath);
+
+  let raw: string;
+  try {
+    const { size } = await stat(configPath);
+    if (size > MAX_CONFIG_BYTES) return { status: "skipped", reason: "oversize" };
+    raw = await readFile(configPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
+    throw err;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "skipped", reason: "malformed-json" };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { status: "skipped", reason: "not-an-object" };
+  }
+
+  const root = parsed as Record<string, unknown>;
+  const servers = root.mcpServers;
+  if (servers === null || typeof servers !== "object" || Array.isArray(servers)) {
+    return { status: "no-op" };
+  }
+  // NOTE: `servers` is an interior pointer INTO `root`, not a copy. Callers
+  // mutate through it and then serialize `root` — do not introduce a defensive
+  // clone or a normalizing pass here without updating them, or every caller
+  // will silently write back an unmodified config while still reporting
+  // success.
+  return { status: "ok", root, servers: servers as Record<string, unknown> };
+}
 
 /**
  * Remove Tandem's `mcpServers` keys from a client config — the uninstall
@@ -781,42 +867,160 @@ export async function removeConfigEntries(
   configPath: string,
   keys: RemovableEntry[],
 ): Promise<RemoveEntriesResult> {
-  assertPathSafe(configPath);
+  const opened = await readConfigForMutation(configPath);
+  if (opened.status !== "ok") return opened;
 
-  let raw: string;
-  try {
-    const { size } = statSync(configPath);
-    if (size > MAX_CONFIG_BYTES) return { status: "skipped", reason: "oversize" };
-    raw = readFileSync(configPath, "utf-8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
-    throw err;
-  }
-  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { status: "skipped", reason: "malformed-json" };
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { status: "skipped", reason: "not-an-object" };
-  }
-
-  const servers = (parsed as Record<string, unknown>).mcpServers;
-  if (servers === null || typeof servers !== "object" || Array.isArray(servers)) {
-    return { status: "no-op" };
-  }
-  const map = servers as Record<string, unknown>;
+  const map = opened.servers;
   const removed = keys.filter((key) => key in map);
   if (removed.length === 0) return { status: "no-op" };
   for (const key of removed) {
     delete map[key];
   }
 
-  await atomicWrite(JSON.stringify(parsed, null, 2) + "\n", configPath);
+  await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", configPath);
   return { status: "removed", removed };
+}
+
+export type RefreshNodeBinaryResult =
+  | ConfigReadRefusal
+  | { status: "no-op" }
+  /** The recorded binary is gone and we have no better value to put there —
+   *  see the `BARE_NODE` refusal in `refreshChannelNodeBinary`. */
+  | { status: "skipped"; reason: "no-valid-replacement" }
+  | { status: "rewritten"; from: string; to: string; scriptRefreshed: boolean };
+
+/**
+ * Repair a `tandem-channel` entry whose recorded Node path has gone stale.
+ *
+ * Writing an absolute Node path (see `node-binary.ts`) fixes a shim that could
+ * not be resolved — but it trades that for a path that can later stop existing:
+ * a deleted nvm/fnm version, a Tauri update that relocates the sidecar, macOS
+ * App Translocation, an AppImage's per-run mount. Write-time validation cannot
+ * see any of those; only a check at start can. Without this, the absolute-path
+ * change would swap one silent failure for a worse one, since a dead absolute
+ * path can never recover while a bare name might still resolve.
+ *
+ * Read-side rules (never create, never replace malformed JSON, no parse detail
+ * in a log) are `readConfigForMutation`'s; this function owns only the decision
+ * and the write. `deps` is a test seam; production wants the defaults.
+ */
+export async function refreshChannelNodeBinary(
+  configPath: string,
+  deps: {
+    probe?: (p: string) => boolean | null;
+    resolveBinary?: () => string;
+    /** Absolute path to the channel bundle. Defaults to `CHANNEL_DIST`. */
+    channelScript?: string;
+  } = {},
+): Promise<RefreshNodeBinaryResult> {
+  const resolveBinary = deps.resolveBinary ?? resolveNodeBinary;
+  const channelScript = deps.channelScript ?? CHANNEL_DIST;
+
+  const opened = await readConfigForMutation(configPath);
+  if (opened.status !== "ok") return opened;
+
+  const entry = opened.servers["tandem-channel"];
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+    return { status: "no-op" };
+  }
+  const record = entry as Record<string, unknown>;
+  const command = record.command;
+  if (typeof command !== "string") return { status: "no-op" };
+
+  if (!isRecordedPathGone(command, deps.probe)) return { status: "no-op" };
+
+  const next = resolveBinary();
+  if (next === command) return { status: "no-op" };
+  // Refuse to "repair" a dead absolute path into the bare name. That is not a
+  // fix — `node-binary.ts` documents the bare name as the thing that failed in
+  // the field — and it is actively worse for diagnosis: `isRecordedPathGone`
+  // exempts bare names, so `tandem doctor` would go permanently quiet about an
+  // entry that is still broken. Leaving the dead path in place keeps it visible.
+  if (next === BARE_NODE) return { status: "skipped", reason: "no-valid-replacement" };
+
+  // The script path goes stale in LOCKSTEP with the binary. `args[0]` is
+  // `CHANNEL_DIST`, derived from `PACKAGE_ROOT`/`__dirname`, so every cause
+  // listed above — App Translocation's per-launch UUID, an AppImage's per-run
+  // mount, a Tauri update — invalidates both at once. Repairing only `command`
+  // yields a working Node that dies on `Cannot find module`, and doctor (which
+  // inspects `command` alone) would call that healthy.
+  let scriptRefreshed = false;
+  const args = record.args;
+  if (Array.isArray(args) && typeof args[0] === "string" && args[0] !== channelScript) {
+    if (isRecordedPathGone(args[0], deps.probe) && existsSync(channelScript)) {
+      args[0] = channelScript;
+      scriptRefreshed = true;
+    }
+  }
+
+  record.command = next;
+  await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", configPath);
+  return { status: "rewritten", from: command, to: next, scriptRefreshed };
+}
+
+/**
+ * Boot-time sweep over every detected client config.
+ *
+ * Deliberately NOT filtered to `claude-code` targets. `shouldRegisterChannelShim`
+ * only ever writes a shim for Claude Code, so filtering would be correct today —
+ * but it would be a second, independently-maintained copy of that rule, and the
+ * function is already total: a config with no `tandem-channel` key, or one whose
+ * command is the Desktop branch's bare `npx`, both fall out as `no-op`. Leaving
+ * it unfiltered also repairs an entry left behind by an older Tandem.
+ */
+export async function refreshAllChannelNodeBinaries(
+  opts: { homeOverride?: string } = {},
+): Promise<void> {
+  // Yield before any filesystem work. `void` alone would NOT defer this:
+  // it only defers what follows the first `await`, and `detectTargets` is
+  // synchronous (on Windows it readdirs %LOCALAPPDATA%\Packages), so the whole
+  // sweep would otherwise run inline on the caller's startup stack.
+  await Promise.resolve();
+
+  // `detectTargets` is inside the try: it stats and realpaths OS roots and can
+  // throw (an unresolvable home, an EPERM on a redirected profile). Leaving it
+  // outside would break this function's own best-effort contract and hand a
+  // rejection to the caller.
+  let targets: DetectedTarget[];
+  try {
+    targets = detectTargets({ homeOverride: opts.homeOverride });
+  } catch (err) {
+    console.error(
+      `[Tandem] Could not enumerate client configs for channel-entry refresh (non-fatal): ${err instanceof Error ? err.message : err}`,
+    );
+    return;
+  }
+
+  for (const target of targets) {
+    try {
+      const result = await refreshChannelNodeBinary(target.configPath);
+      if (result.status === "rewritten") {
+        console.error(
+          `[Tandem] Repaired stale channel entry in ${target.label} (${result.from} → ${result.to}` +
+            `${result.scriptRefreshed ? ", channel script path also refreshed" : ""}).`,
+        );
+      } else if (result.status === "skipped") {
+        // Every refusal was previously silent. `malformed-json` in particular
+        // deserves to be loud: `~/.claude.json` is the whole MCP registry, so
+        // if it does not parse then EVERY server the user has is broken — and
+        // Tandem is the only process that just found out. The reasons are
+        // fixed enum strings precisely so they are safe to log (parse-error
+        // text would embed a source snippet from a file holding bearer tokens).
+        console.error(
+          `[Tandem] Left the channel entry in ${target.label} untouched (${result.reason}). ` +
+            "Run 'tandem doctor' for the push-path check.",
+        );
+      }
+    } catch (err) {
+      // Include the target — a Windows box can have Claude Code plus several
+      // Desktop/MSIX configs, and an anonymous one-liner does not say which
+      // failed. This is also where `assertPathSafe`'s rejection lands, i.e.
+      // "someone symlinked this config", which is worth naming.
+      console.error(
+        `[Tandem] Channel entry refresh failed for ${target.label} (${target.configPath}, non-fatal): ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
 }
 
 /**
@@ -985,7 +1189,8 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
  * Single source of truth for "should this target get the stdio channel shim?".
  *
  * The channel shim is Claude Code's default real-time push transport. The
- * plugin also carries a monitor that activates on Claude Code 2.1.212+ and
+ * plugin also carries a monitor that activates on Claude Code 2.1.212+ interactive
+ * sessions when persistently installed, and
  * needs no flag — an independent push path (it was inactive on 2.1.143, the
  * historical Spike B / #985 NO-GO, since reversed). The channel shim stays
  * canonical by decision (2026-07-19, ADR-028) — the monitor is installable but

@@ -91,3 +91,56 @@ describe("aiIndicatorView", () => {
     expect(aiIndicatorView("unconfigured", null, false)?.canAnimate).toBe(false);
   });
 });
+
+/**
+ * The connected-but-not-notified variant.
+ *
+ * The pill saying a bare "AI connected" is what makes a delayed comment read as
+ * a bug: the user is told the AI is right there, then watches nothing happen.
+ * The pill is not wrong — Claude really is attached and really can read the
+ * document — so the fix is in what the hover text ADMITS, not in the label or
+ * the colour.
+ */
+describe("aiIndicatorView — push delivery", () => {
+  it("names the delivery gap when nothing is attached", () => {
+    const view = aiIndicatorView("ready", "connected", false, "none");
+    expect(view?.title).toContain("nothing is notifying it in real time");
+    expect(view?.ariaLabel).toContain("not notified in real time");
+  });
+
+  it("keeps the label and tone identical — this is not a fault state", () => {
+    const plain = aiIndicatorView("ready", "connected", false, "attached");
+    const noPush = aiIndicatorView("ready", "connected", false, "none");
+    expect(noPush?.label).toBe(plain?.label);
+    expect(noPush?.tone).toBe(plain?.tone);
+    expect(noPush?.dataState).toBe(plain?.dataState);
+    expect(noPush?.canAnimate).toBe(plain?.canAnimate);
+  });
+
+  it("stays quiet about delivery when a consumer IS attached", () => {
+    // A positive count includes an attached-but-inert consumer, so it cannot
+    // prove delivery — but it is also not evidence of a gap, so say nothing.
+    const view = aiIndicatorView("ready", "connected", false, "attached");
+    expect(view?.title).not.toContain("nothing is notifying");
+  });
+
+  it("stays quiet when the push state is unknown", () => {
+    // Redacted or not yet polled. Claiming a gap here would alarm a working
+    // user on the strength of a field we never read.
+    const view = aiIndicatorView("ready", "connected", false, "unknown");
+    expect(view?.title).not.toContain("nothing is notifying");
+  });
+
+  it("defaults to quiet when no push state is passed at all", () => {
+    const view = aiIndicatorView("ready", "connected", false);
+    expect(view?.title).not.toContain("nothing is notifying");
+  });
+
+  it("does not fold the delivery gap into Solo", () => {
+    // Solo already says the AI won't see edits, which is stronger and more
+    // relevant than "nothing is delivering them".
+    const view = aiIndicatorView("ready", "solo-paused", true, "none");
+    expect(view?.dataState).toBe("solo-paused");
+    expect(view?.title).toContain("Solo mode");
+  });
+});
