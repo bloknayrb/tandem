@@ -40,7 +40,7 @@
  * counterpart that can, gated by `isRecordedPathGone` below.
  */
 import { statSync } from "node:fs";
-import { resolve } from "node:path";
+import { posix as posixPath, resolve, win32 as win32Path } from "node:path";
 import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 
@@ -67,6 +67,32 @@ const WIN_EXTENDED_DRIVE_RE = /^\\\\\?\\([A-Za-z]:)/;
  * default.
  */
 export function resolveNodeBinary(candidate: string = process.execPath): string {
+  // Memoized for the DEFAULT candidate only. `process.execPath` cannot change
+  // mid-process (this module already relies on that), while the callers loop:
+  // `buildMcpEntries` resolves once per entry, and `writeTargets` /
+  // `applyConfigWithToken` / `refreshAllChannelNodeBinaries` each loop over
+  // every detected target. Without this, a host whose execPath fails
+  // validation — a Debian `nodejs` basename, a home directory containing `..` —
+  // prints `fallBackToBareNode`'s four-line warning once per target per
+  // operation, and again on every boot sweep. One cause deserves one warning.
+  //
+  // An explicit candidate always recomputes: it is the test seam, and tests
+  // assert on that warning firing per call.
+  const isDefault = candidate === process.execPath;
+  if (isDefault && defaultResolution !== undefined) return defaultResolution;
+  const resolved = resolveNodeBinaryUncached(candidate);
+  if (isDefault) defaultResolution = resolved;
+  return resolved;
+}
+
+let defaultResolution: string | undefined;
+
+/** Test seam: drop the memoized default so a suite can vary `process.execPath`. */
+export function _resetNodeBinaryCacheForTests(): void {
+  defaultResolution = undefined;
+}
+
+function resolveNodeBinaryUncached(candidate: string): string {
   if (!candidate) return BARE_NODE;
   // Strip the extended-length DRIVE prefix first: `process.execPath` can
   // legitimately return `\\?\C:\…` on Windows, and the check below rejects
@@ -139,18 +165,44 @@ export function probeNodeBinary(path: string): boolean | null {
  * `true` means the recorded value is an absolute path that definitely no longer
  * resolves to a file — the staleness case above — and should be rewritten.
  *
- * Two cases deliberately report NOT stale:
+ * Three cases deliberately report NOT stale:
  *   - A bare name. Whether it resolves is the client's lookup to perform at
  *     spawn time, not ours to second-guess, and rewriting it would undo a
  *     deliberate fallback.
+ *   - A RELATIVE path. It resolves against the spawning client's working
+ *     directory, which is not ours — so probing it here answers a different
+ *     question than the one that matters. This used to test only "contains a
+ *     separator", which let `./node_modules/.bin/node` (idiomatic in a
+ *     project-scoped `.mcp.json`) be `stat`ed against whatever cwd the caller
+ *     happened to have: `tandem doctor` runs wherever it was invoked, and
+ *     `/api/diagnostics` runs in the server's cwd. A valid entry would be
+ *     reported gone and, on the server side, rewritten.
  *   - An unreadable path (`probe` → `null`). Never rewrite a user's config on
  *     the strength of a probe that could not run.
+ *
+ * Absoluteness is tested against BOTH path flavours, not the host's. The value
+ * comes out of a config file, and CI reads Windows-shaped fixtures on Linux —
+ * `path.isAbsolute` alone would call `C:\...\node.exe` relative there.
  */
 export function isRecordedPathGone(
   command: string,
   probe: (p: string) => boolean | null = probeNodeBinary,
 ): boolean {
-  if (!command) return false;
-  if (!/[/\\]/.test(command)) return false; // bare name
+  if (!isRecordedPathAbsolute(command)) return false;
   return probe(command) === false;
+}
+
+/**
+ * Is this recorded command a path we are entitled to probe?
+ *
+ * Exported so callers can answer the cheap half — "is a `stat` even meaningful
+ * here" — WITHOUT performing one, and without restating the rule. `tandem
+ * doctor` needs exactly that: it wants the probe's three-state result for its
+ * own reporting, so it cannot just call `isRecordedPathGone` and re-derive.
+ * Sharing this predicate is what keeps the diagnosis and the repair from
+ * drifting apart.
+ */
+export function isRecordedPathAbsolute(command: string): boolean {
+  if (!command) return false;
+  return win32Path.isAbsolute(command) || posixPath.isAbsolute(command);
 }

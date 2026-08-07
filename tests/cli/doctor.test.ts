@@ -1345,13 +1345,18 @@ describe("evaluateTandemPlugin", () => {
     ).toEqual([]);
   });
 
-  it("warns about the npx dependency when the plugin is enabled", () => {
+  it("notes the npx dependency when the plugin is enabled, without warning", () => {
     const out = evaluateTandemPlugin({
       enabledPlugins: { "tandem@tandem-editor": true },
       wizardTandemEntry: false,
     });
     expect(out).toHaveLength(1);
-    expect(out[0].status).toBe("warn");
+    // `pass`, not `warn`. Registry presence is not evidence the monitor failed
+    // — with Node on PATH it starts fine — and `printPushStatus` actively
+    // recommends installing this plugin. A permanent warning for following our
+    // own advice is a report the user can never clean, so the mechanism lives
+    // in `fix` while the status stays honest about what we observed.
+    expect(out[0].status).toBe("pass");
     expect(out[0].message).toContain("npx");
     expect(out[0].fix).toContain("exit 127");
     // Names the actual mechanism, not just the symptom.
@@ -1382,5 +1387,21 @@ describe("evaluateTandemPlugin", () => {
       wizardTandemEntry: false,
     });
     expect(out).toHaveLength(1);
+  });
+
+  it("names the marketplace it actually found in the uninstall command", () => {
+    // Detection is marketplace-agnostic but the remedy used to hardcode
+    // `tandem@tandem-editor`, so a user who registered a local marketplace —
+    // the no-git path `docs/spikes/plugin-delivery.md` recommends — was handed
+    // a command that errors. Both outcomes carry an uninstall string.
+    const out = evaluateTandemPlugin({
+      enabledPlugins: { "tandem@some-local-marketplace": true },
+      wizardTandemEntry: true,
+    });
+    expect(out).toHaveLength(2);
+    for (const outcome of out) {
+      expect(outcome.fix).toContain("claude plugin uninstall tandem@some-local-marketplace");
+      expect(outcome.fix).not.toContain("tandem@tandem-editor");
+    }
   });
 });

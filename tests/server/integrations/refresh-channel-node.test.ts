@@ -197,6 +197,37 @@ describe("refreshChannelNodeBinary", () => {
     expect(read().mcpServers["tandem-channel"].args).toEqual([configPath]);
   });
 
+  it("repairs a stale script path even when the Node binary is fine", async () => {
+    // This was unreachable: the script block sat behind an early return on a
+    // healthy `command`, justified by a docblock claiming the two go stale in
+    // lockstep. They don't — `command` is `process.execPath`, `args[0]` derives
+    // from `PACKAGE_ROOT`. A global npm reinstall to a new prefix, or a `dist/`
+    // rebuilt under a relocated root, moves the script and leaves Node exactly
+    // where it was. The entry then spawns a working Node that dies on `Cannot
+    // find module`, and doctor — which inspects `command` alone — calls it
+    // healthy.
+    write({
+      mcpServers: {
+        "tandem-channel": { command: GOOD, args: ["/gone/dist/channel/index.js"] },
+      },
+    });
+    const result = await refreshChannelNodeBinary(configPath, {
+      probe: (p) => p !== "/gone/dist/channel/index.js",
+      resolveBinary: () => GOOD,
+      channelScript: configPath,
+    });
+    // `from`/`to` are null: nothing about the BINARY changed, and reporting the
+    // unchanged command as a rewrite would misname what was repaired.
+    expect(result).toEqual({
+      status: "rewritten",
+      from: null,
+      to: null,
+      scriptRefreshed: true,
+    });
+    expect(read().mcpServers["tandem-channel"].args).toEqual([configPath]);
+    expect(read().mcpServers["tandem-channel"].command).toBe(GOOD);
+  });
+
   it("leaves a script path that still resolves alone", async () => {
     write({
       mcpServers: {

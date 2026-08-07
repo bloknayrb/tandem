@@ -241,6 +241,18 @@ function extractEntry(mcp: Record<string, unknown>, name: string): McpEntry | un
   // scrubbed shape because validateTandemEntry / validateChannelEntry only
   // read command, args, url — never env/headers.
   //
+  // SECRETS ONLY — this is not a path scrub, and do not read it as one. The
+  // surviving `command` used to be the literal `"node"`; since the absolute-
+  // path change it embeds the OS username and Node manager/version
+  // (`/home/alice/.nvm/versions/node/v22.3.0/bin/node`). That is a widening,
+  // not a new class: `args[0]` already carried the package root, and
+  // `ExistingMcpInstall.target.configPath` puts an absolute home-relative path
+  // on the same response for every install. If the LAN read opt-in should stop
+  // disclosing local paths, the fix belongs at the route (basename-strip for
+  // non-loopback, as `GET /api/sessions` and `GET /api/backups` already do, or
+  // a loopback gate) — scrubbing `command` here alone would look like a fix
+  // while leaving the larger disclosure untouched.
+  //
   // The object-shape guard rejects primitives and null, but does not validate
   // the McpEntry field types (e.g. a `command: null` would pass through). PR
   // 3c's wizard consumer MUST re-validate shape before trusting any field —

@@ -685,8 +685,16 @@ async function main() {
     // would reach the unhandledRejection handler, which `process.exit(1)`s on
     // anything it does not recognise. Best-effort config repair must never be
     // able to take down the server.
+    // AWAITED, not fire-and-forget. `void` would defeat both guarantees above:
+    // the dynamic import defers to a microtask and the sweep itself yields
+    // before its first `stat`, so control would return here and the launcher
+    // would spawn Claude Code against the config we are mid-repair of — which
+    // is both halves of the failure at once (the session reads the stale entry,
+    // AND our rename lands inside Claude Code's own startup write window). The
+    // cost is bounded: a handful of `stat`s over detected config files, after
+    // the server is already listening.
     if (!isStoreReadOnly()) {
-      void import("./integrations/apply.js")
+      await import("./integrations/apply.js")
         .then(({ refreshAllChannelNodeBinaries }) => refreshAllChannelNodeBinaries())
         .catch((err) =>
           console.error(
