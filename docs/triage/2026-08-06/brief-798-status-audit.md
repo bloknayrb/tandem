@@ -12,7 +12,7 @@ below was verified on `origin/master` with `git merge-base --is-ancestor`. The m
 status" column records the *pre-Phase-4* state (ADD = motion did not exist yet), so it is the scope
 list, not the progress list — the progress evidence is the commits and the code.
 
-The DoD checklist at `motion.md:345-356` is **stale**: four of its seven boxes are unchecked, and the
+The DoD checklist at `motion.md:347-356` is **stale**: six of its eight boxes are unchecked, and the
 work behind three of them demonstrably shipped. Do not read it as status.
 
 ## Scene table
