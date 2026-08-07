@@ -33,6 +33,8 @@ import {
   API_LAUNCHER_STATUS,
 } from "../../../src/shared/api-paths.js";
 
+const afterLauncherAction = vi.fn();
+
 const STATUS_URL = `${API_BASE}${API_LAUNCHER_STATUS}`;
 const NONCE_URL = `${API_BASE}${API_LAUNCHER_NONCE}`;
 const RELAUNCH_URL = `${API_BASE}${API_LAUNCHER_RELAUNCH}`;
@@ -140,6 +142,9 @@ function wireDeps(activeDocumentPath: string | null): void {
     getActiveTabId: () => (activeDocumentPath ? "doc-1" : null),
     getActiveDocumentPath: () => activeDocumentPath,
     notify,
+    // #1282: both relaunch entry points must re-probe launcher-derived state.
+    // Captured so `relaunchClaudeHere`'s call can be asserted.
+    afterLauncherAction,
     openSettings: vi.fn(),
     toggleSoloMode: vi.fn(),
     openFindBar: vi.fn(),
@@ -318,6 +323,26 @@ describe("AI-chip relaunch vs. palette relaunch", () => {
     expect(post).toBeDefined();
     const body = JSON.parse(post![1]?.body as string);
     expect(body.cwd).toBe("/home/user/project");
+  });
+
+  it("EVERY launcher action re-probes launcher state", async () => {
+    // This used to be the callers' job and they did not all do it: App wrapped
+    // the status-pill and empty-state paths, while the palette invoked the same
+    // relaunch directly and never re-probed. The #1282 drift probe re-arms on the
+    // document path and an explicit refresh, neither of which a relaunch changes
+    // — so after a palette relaunch the amber pill went on naming the folder
+    // Claude had just left, indefinitely.
+    wireDeps("/home/user/project/notes.md");
+    for (const [label, run] of [
+      ["palette relaunch-here", () => getActionsMap().get("launcher-relaunch-here")?.run()],
+      ["palette start-fresh", () => getActionsMap().get("launcher-start-fresh")?.run()],
+      ["recovery chip", relaunchClaudeCode],
+    ] as const) {
+      afterLauncherAction.mockClear();
+      const fetchSpy = installFetchStub();
+      await drive(run as () => void, fetchSpy);
+      expect(afterLauncherAction, label).toHaveBeenCalled();
+    }
   });
 
   it("the palette command still refuses with no document open", async () => {

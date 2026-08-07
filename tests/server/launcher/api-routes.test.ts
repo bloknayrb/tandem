@@ -14,6 +14,7 @@ import express, { type Express } from "express";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  _resetCwdPreviewInFlightForTests,
   _resetInflightForTests,
   _resetLauncherGateForTests,
   type LauncherRoutesDeps,
@@ -140,6 +141,7 @@ const baseDeps = (
 beforeEach(() => {
   _resetLauncherGateForTests();
   _resetInflightForTests();
+  _resetCwdPreviewInFlightForTests();
 });
 
 afterEach(() => {
@@ -979,6 +981,69 @@ describe("POST /api/launcher/cwd-preview (#1282)", () => {
       expect(body.drifted).toBe(true);
       expect(body.label).toBe("alpha");
     } finally {
+      cleanup();
+    }
+  });
+
+  it("abbreviates against the REAL home directory on the shipping surface", async () => {
+    // The route passes no `homeOverride`, so production always takes the
+    // `os.homedir()` branch — which no unit test observes, because they all
+    // supply the seam. This is the whole privacy claim, asserted on the surface
+    // that actually ships it.
+    const { dir, other, cleanup } = underRealHome();
+    try {
+      const sup = makeFakeSupervisor({ running: true, cwd: other });
+      const { app } = makeApp(baseDeps(sup));
+      const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      const body = res.body as { drifted: boolean; suggestedCwd: string; claudeCwd: string };
+      expect(body.drifted).toBe(true);
+      expect(body.suggestedCwd.startsWith("~")).toBe(true);
+      expect(body.claudeCwd.startsWith("~")).toBe(true);
+      expect(body.suggestedCwd).not.toContain(os.homedir());
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("sheds concurrent probes rather than queueing filesystem work", async () => {
+    // `fsp.realpath` frees the event loop but holds a libuv threadpool slot for
+    // the full timeout on a hung mapped drive, and takes no AbortSignal — so
+    // unbounded concurrency here starves the pool that atomic saves and the
+    // annotation writer share, and the symptom is saves hanging with nothing
+    // pointing back at this route. Shedding costs nothing: every failure here is
+    // already "no drift".
+    const { dir, other, cleanup } = underRealHome();
+    let release: (() => void) | null = null;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let entered = 0;
+    try {
+      const sup = makeFakeSupervisor({ running: true, cwd: other });
+      const { app } = makeApp({
+        ...baseDeps(sup),
+        cwdPreviewHook: async () => {
+          entered += 1;
+          await held;
+        },
+      });
+      const inFlight = Array.from({ length: 8 }, () =>
+        request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir }),
+      );
+      // Give every request time to reach the gate before releasing anything.
+      await new Promise((r) => setTimeout(r, 150));
+      expect(
+        entered,
+        "more probes entered the counted region than the cap allows",
+      ).toBeLessThanOrEqual(3);
+      release?.();
+      const results = await Promise.all(inFlight);
+      for (const r of results) expect(r.status).toBe(200);
+      // The cap releases: a later request still gets a real answer.
+      const after = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      expect((after.body as { drifted: boolean }).drifted).toBe(true);
+    } finally {
+      release?.();
       cleanup();
     }
   });

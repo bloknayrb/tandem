@@ -42,6 +42,22 @@ function segments(p: string): string[] {
 }
 
 /**
+ * The path flavour to render in, chosen by the `platform` seam rather than by
+ * the host.
+ *
+ * Keying on the host would make `platform` a HALF-seam: it would select the
+ * case-fold while `path.sep` and `path.relative` still came from wherever the
+ * test happened to run. Every expectation would then be written with the same
+ * host primitive the implementation uses, so an implementation that hardcoded
+ * "/" would pass on Linux CI — and `tildeAbbreviate`, whose whole job is keeping
+ * a real full name out of screenshots on Windows, could not be exercised with a
+ * Windows-shaped path at all.
+ */
+function flavour(platform: NodeJS.Platform): typeof path.posix {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+/**
  * The fewest trailing segments of `target` that distinguish it from `other`.
  *
  * The client cannot compute this, which is the whole reason it is returned over
@@ -50,15 +66,21 @@ function segments(p: string): string[] {
  * where the basenames are identical and only the parent differs. A label that
  * names both folders the same thing is not a smaller label, it is a wrong one.
  *
- * Falls back to an elided suffix when the paths only diverge deeper than
- * `MAX_LABEL_SEGMENTS`, and to the plain last segment when one path is a suffix
- * of the other (nothing distinguishes them at any depth).
+ * When the divergence is deeper than `MAX_LABEL_SEGMENTS` the label elides the
+ * MIDDLE — `alpha…z`, not `…x/y/z`. Eliding the front would drop the only
+ * segment that differs, so both folders would come back named `…/x/y/z`: the
+ * exact "names both folders the same thing" failure this function exists to
+ * avoid, reintroduced by the fallback.
+ *
+ * Falls back to the plain last segment when one path is a trailing sub-path of
+ * the other (nothing distinguishes them at any depth).
  */
 export function distinguishingLabel(
   target: string,
   other: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
+  const sep = flavour(platform).sep;
   const a = segments(target);
   const b = segments(other);
   if (a.length === 0) return target; // filesystem root — nothing to name
@@ -67,8 +89,9 @@ export function distinguishingLabel(
     const aTail = a.slice(-k);
     const bTail = b.slice(-k);
     if (samePath(aTail.join("/"), bTail.join("/"), platform)) continue;
-    if (k <= MAX_LABEL_SEGMENTS) return aTail.join(path.sep);
-    return `…${path.sep}${a.slice(-MAX_LABEL_SEGMENTS).join(path.sep)}`;
+    if (k <= MAX_LABEL_SEGMENTS) return aTail.join(sep);
+    // Keep the diverging segment AND the leaf; elide what's between them.
+    return `${aTail[0]}${sep}…${sep}${a[a.length - 1]}`;
   }
   // One is a trailing sub-path of the other (or they are equal, which the
   // caller has already excluded). Nothing distinguishes them by suffix, so name
@@ -93,10 +116,11 @@ export function tildeAbbreviate(
   home: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
+  const fp = flavour(platform);
   if (samePath(p, home, platform)) return "~";
-  const rel = path.relative(home, p);
-  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return p;
-  return `~${path.sep}${rel}`;
+  const rel = fp.relative(home, p);
+  if (rel === "" || rel.startsWith("..") || fp.isAbsolute(rel)) return p;
+  return `~${fp.sep}${rel}`;
 }
 
 export interface CwdPreviewDeps {
@@ -118,15 +142,48 @@ export interface CwdPreviewDeps {
    * every Windows first run and every upgrade would greet the user by suggesting
    * they restart Claude inside Tandem's install directory.
    *
-   * Matched EXACTLY, not as a prefix. In a development checkout these resolve to
-   * the repository root, and suppressing a whole tree there would silence the
-   * nudge for anyone using Tandem to work on Tandem.
+   * Matched EXACTLY, not as a prefix. In a development checkout `CHANGELOG.md`
+   * resolves to the repository ROOT (`welcome.md` to `<repo>/sample`), and
+   * prefix-matching that root would silence the nudge for anyone using Tandem to
+   * work on Tandem.
    */
   bundledDocDirs: readonly string[];
   /** Test seam, mirroring `resolveRouteCwd`'s. Production leaves it unset. */
   homeOverride?: string;
   /** Test seam so both case-fold branches run on a single-platform CI host. */
   platform?: NodeJS.Platform;
+}
+
+/**
+ * One-shot report of an unresolvable home directory.
+ *
+ * This is the failure that turns the whole feature off for one machine, and it
+ * is the one the route's `catch` cannot see. `resolveRouteCwdAsync` home-confines
+ * by realpath'ing `os.homedir()`; when THAT throws it returns null for every
+ * candidate, so `previewCwdDrift` returns `{ drifted: false }` normally, forever,
+ * having thrown nothing. Reachable via an unmounted roaming profile, a redirected
+ * Windows home on a disconnected share, or `HOME` pointing at a deleted
+ * directory.
+ *
+ * Latched at module scope: the condition is machine-level, not per-candidate, so
+ * one line is the whole signal. Costs one extra `realpath` per process, on a
+ * path that has already failed.
+ */
+let homeFailureReported = false;
+async function noteIfHomeUnresolvable(homeOverride: string | undefined): Promise<void> {
+  if (homeFailureReported) return;
+  const home = homeOverride ?? os.homedir();
+  if ((await resolveSafeCwdAsync(home)) !== null) return;
+  homeFailureReported = true;
+  console.error(
+    `[Launcher] Home directory ${home} does not resolve — the working-folder nudge is ` +
+      "disabled for this session (every candidate folder will be rejected).",
+  );
+}
+
+/** Test-only reset of the one-shot home-failure latch. */
+export function _resetHomeFailureLatchForTests(): void {
+  homeFailureReported = false;
 }
 
 /**
@@ -146,14 +203,20 @@ export async function previewCwdDrift(deps: CwdPreviewDeps): Promise<LauncherCwd
   const suggested = await resolveRouteCwdAsync(deps.candidate, {
     homeOverride: deps.homeOverride,
   });
-  if (suggested === null) return noDrift;
+  if (suggested === null) {
+    await noteIfHomeUnresolvable(deps.homeOverride);
+    return noDrift;
+  }
 
-  // Normalize Claude's side too. `resolveCwd`'s default branch can hand back a
-  // raw, un-realpath'd `os.homedir()`, while the candidate above is always
-  // realpath'd — where home contains a symlink or a junction the two differ as
-  // strings for one directory, which would render a permanent nudge pointing at
-  // the folder Claude is already sitting in. Falling back to the raw value keeps
-  // a since-deleted cwd comparable rather than silently reporting "no drift".
+  // Normalize Claude's side too, so both sides of the comparison are canonical.
+  //
+  // `resolveCwd` already realpaths both its branches — `homeCwd()` is
+  // `resolveSafeCwd(os.homedir()) ?? os.homedir()` — so a merely symlinked home
+  // is NOT the case this guards; realpath is exactly what resolves that. What is
+  // left is `homeCwd()`'s own fallback (home unresolvable at spawn time, raw
+  // string kept) and a cwd that reached the supervisor from a hand-edited
+  // `integrations.json`. Falling back to the raw value keeps a since-deleted cwd
+  // comparable rather than silently reporting "no drift".
   const claude = (await resolveSafeCwdAsync(deps.claudeCwd)) ?? deps.claudeCwd;
 
   if (samePath(suggested, claude, platform)) return noDrift;
@@ -170,11 +233,26 @@ export async function previewCwdDrift(deps: CwdPreviewDeps): Promise<LauncherCwd
   const homeRaw = deps.homeOverride ?? os.homedir();
   const home = (await resolveSafeCwdAsync(homeRaw)) ?? homeRaw;
 
+  const suggestedCwd = tildeAbbreviate(suggested, home, platform);
+  const claudeCwd = tildeAbbreviate(claude, home, platform);
+
+  // Labels come from the ABBREVIATED paths, not the raw ones. Otherwise the
+  // account name lands in the status pill in the default configuration: the
+  // launcher's fallback cwd IS home (`resolveCwd` → `homeCwd()`, taken whenever
+  // no `workingDirectory` is configured), and `distinguishingLabel` of a home
+  // path against a subfolder returns home's basename — so a fresh install with a
+  // document open anywhere renders "Claude in bryan.kolbeck". Abbreviating
+  // first makes that same case read "Claude in ~", and changes nothing else:
+  // paths outside home abbreviate to themselves, and two sibling worktrees still
+  // yield `alpha/src` and `beta/src`.
+  //
+  // This is precisely the harm `tildeAbbreviate` was written for, arriving
+  // through the one field it was not applied to.
   return {
     drifted: true,
-    suggestedCwd: tildeAbbreviate(suggested, home, platform),
-    claudeCwd: tildeAbbreviate(claude, home, platform),
-    label: distinguishingLabel(suggested, claude, platform),
-    claudeLabel: distinguishingLabel(claude, suggested, platform),
+    suggestedCwd,
+    claudeCwd,
+    label: distinguishingLabel(suggestedCwd, claudeCwd, platform),
+    claudeLabel: distinguishingLabel(claudeCwd, suggestedCwd, platform),
   };
 }

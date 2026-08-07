@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
@@ -103,6 +103,41 @@ export function findRepoFile(startDir: string, relPath: string): string | undefi
 export function findChangelogPath(startDir: string): string | undefined {
   return findRepoFile(startDir, "CHANGELOG.md");
 }
+/**
+ * Directories holding Tandem's own auto-opened documents, for the #1282 drift
+ * preview's exclusion list. Canonicalized, because the candidate it is compared
+ * against always is — an un-realpath'd entry silently fails to match wherever
+ * the install path involves a junction or a Windows 8.3 short name.
+ *
+ * Warns when it resolves to nothing. Three `undefined`-tolerant seams sit
+ * between `findRepoFile` and the consumer (`string | undefined` constants, an
+ * optional dep, a `?? []` default), and the failure they would let through is
+ * user-visible and specific: `welcome.md` opens on first run and `CHANGELOG.md`
+ * after every upgrade, both from inside the app bundle, which on Windows lives
+ * under `%LOCALAPPDATA%` — i.e. inside home, passing every other check. So a
+ * silently empty list means every desktop user's first run opens with a
+ * suggestion to move Claude into Tandem's install directory.
+ */
+function resolveBundledDocDirs(): string[] {
+  const dirs = [CHANGELOG_PATH, WELCOME_PATH]
+    .filter((p): p is string => p !== undefined)
+    .map((p) => {
+      const dir = dirname(p);
+      try {
+        return realpathSync(dir);
+      } catch {
+        return dir;
+      }
+    });
+  if (dirs.length === 0) {
+    console.error(
+      "[Tandem] Could not locate CHANGELOG.md or sample/welcome.md — the working-folder " +
+        "nudge may suggest restarting Claude inside Tandem's own install directory.",
+    );
+  }
+  return dirs;
+}
+
 const CHANGELOG_PATH: string | undefined = findRepoFile(__dirname, "CHANGELOG.md");
 const WORKFLOWS_PATH: string | undefined = findRepoFile(__dirname, "docs/workflows.md");
 // Exposed via /api/info so the "Replay tutorial" affordance can reopen the
@@ -592,9 +627,7 @@ export async function startMcpServerHttp(
       // preview applies. Without this list the two states every desktop user
       // passes through would each open with a suggestion to move Claude into
       // Tandem's install directory.
-      bundledDocDirs: [CHANGELOG_PATH, WELCOME_PATH]
-        .filter((p): p is string => p !== undefined)
-        .map((p) => dirname(p)),
+      bundledDocDirs: resolveBundledDocDirs(),
     });
   }
 

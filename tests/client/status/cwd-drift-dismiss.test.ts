@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   _resetDriftDismissForTests,
+  clearDriftNudgeOptOut,
   dismissDrift,
   driftDismissed,
   driftNudgeOptedOut,
@@ -127,19 +128,38 @@ describe("permanent opt-out", () => {
     }
   });
 
+  it("survives a restart", () => {
+    // Layer 3's entire promise. `_resetDriftDismissForTests({ keepStorage: true })`
+    // re-runs `loadOptOut()` exactly as a page load does — a plain
+    // `optedOut = false` assignment would skip the only code path that reads the
+    // persisted value, leaving "across restarts" asserted nowhere.
+    optOutOfDriftNudge();
+    _resetDriftDismissForTests({ keepStorage: true });
+    expect(driftNudgeOptedOut()).toBe(true);
+    expect(driftDismissed(CLAUDE, TARGET)).toBe(true);
+  });
+
   it("treats an unreadable preference as not-opted-out", () => {
     // Failing the other way would silently disable the feature for anyone whose
-    // browser blocks storage reads. Seed the persisted opt-out FIRST so a
-    // working `getItem` really would answer "opted out" — otherwise this passes
-    // on the default and proves nothing.
-    localStorage.setItem("tandem:cwd-drift-opt-out", "1");
+    // browser blocks storage reads. Seeded first AND read back through the real
+    // `loadOptOut`, so a working `getItem` genuinely would answer "opted out".
+    optOutOfDriftNudge();
     const spy = denyStorage("getItem");
     try {
-      _resetDriftDismissForTests();
-      expect(driftDismissed(CLAUDE, TARGET)).toBe(false);
+      _resetDriftDismissForTests({ keepStorage: true });
+      expect(driftNudgeOptedOut()).toBe(false);
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("can be turned back on, and the reversal survives a restart", () => {
+    // "Don't show this again" must not be a one-way door whose only exit is
+    // editing localStorage by hand.
+    optOutOfDriftNudge();
+    expect(clearDriftNudgeOptOut()).toBe(true);
+    _resetDriftDismissForTests({ keepStorage: true });
+    expect(driftNudgeOptedOut()).toBe(false);
   });
 });
 
@@ -152,18 +172,31 @@ describe("one-time explainer", () => {
 
   it("stays claimed across a fresh session when storage persists it", () => {
     expect(noteDriftSeen()).toBe(true);
-    // Simulate a reload: module session state resets, localStorage does not.
-    // `_resetDriftDismissForTests` clears both, so re-set the persisted half.
-    localStorage.setItem("tandem:cwd-drift-seen", "1");
+    // A real reload: session state resets, localStorage does not. Resetting the
+    // session flag is the point — without it the second call short-circuits on
+    // that flag and never reads storage at all, so `SEEN_KEY` (the only reason
+    // this is persisted rather than session-scoped) goes untested.
+    _resetDriftDismissForTests({ keepStorage: true });
     expect(noteDriftSeen()).toBe(false);
   });
 
-  it("degrades to once-per-session when storage is unavailable", () => {
-    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("denied");
-    });
+  it("does not claim what it cannot record", () => {
+    // Returning true here would look like "degrade to once per session", but the
+    // degradation compounds: the same unwritable store cannot hold the opt-out
+    // either, so a storage-disabled browser would replay this four-sentence
+    // notice every launch, forever — including to someone who clicked "don't
+    // show this again". The pill's menu still carries the whole explanation.
+    const spy = denyStorage("getItem");
     try {
-      expect(noteDriftSeen()).toBe(true);
+      expect(noteDriftSeen()).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not claim it when the write fails either", () => {
+    const spy = denyStorage("setItem");
+    try {
       expect(noteDriftSeen()).toBe(false);
     } finally {
       spy.mockRestore();
