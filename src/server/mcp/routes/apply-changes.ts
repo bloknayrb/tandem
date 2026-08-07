@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { applyChangesCore } from "../docx-apply.js";
-import { sendApiError } from "./_shared.js";
+import { scrubPathForCaller, sendApiError } from "./_shared.js";
 
 export async function handleApplyChanges(req: Request, res: Response): Promise<void> {
   const { documentId, author, backupPath } = (req.body ?? {}) as Record<string, unknown>;
@@ -23,7 +23,12 @@ export async function handleApplyChanges(req: Request, res: Response): Promise<v
       author as string | undefined,
       backupPath as string | undefined,
     );
-    res.json({ data: result });
+    // #1294: when `backupPath` is omitted (the client always omits it),
+    // applyChangesCore derives it from the open document's own directory, so
+    // the response returns an absolute path the caller never supplied. The
+    // client only renders it as "Backup saved to: …", which a basename still
+    // satisfies.
+    res.json({ data: { ...result, backupPath: scrubPathForCaller(req, result.backupPath) } });
   } catch (err: unknown) {
     sendApiError(res, err);
   }

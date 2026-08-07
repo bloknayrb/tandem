@@ -6,7 +6,7 @@ import {
   saveDocumentToDisk,
   serializeDocument,
 } from "../document-service.js";
-import { sendApiError } from "./_shared.js";
+import { isLoopbackRequest, sendApiError } from "./_shared.js";
 
 /**
  * POST /api/save — multi-mode handler.
@@ -115,6 +115,16 @@ export async function handleSave(req: Request, res: Response): Promise<void> {
       // routes to a skipped `saveDocumentToDisk` share this helper so neither
       // can drift out of sync with the other again.
       await persistSkippedSaveSession(targetId);
+    }
+    // #1294: this branch reports failure in a 200 body rather than through
+    // sendApiError, so the scrub there does not reach it. `reason` is the raw
+    // write error (`EACCES: permission denied, open '<abs path>'`) for a
+    // document the caller identified only by documentId — same disclosure, a
+    // different envelope. Branches 2 and 3 are exempt: their paths are the
+    // caller's own `targetPath`.
+    if (result.status === "error" && !isLoopbackRequest(req)) {
+      res.json({ data: { ...result, reason: "The save failed." } });
+      return;
     }
     res.json({ data: result });
   } catch (err: unknown) {
