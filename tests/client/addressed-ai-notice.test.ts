@@ -3,16 +3,22 @@ import type { AiChip, PushDelivery } from "../../src/client/hooks/useAiReadiness
 import { addressedAiNotice } from "../../src/client/status/addressed-ai-notice.js";
 
 /**
- * The decision behind the two `tandem:addressed-ai` notices.
+ * The decision behind the three `tandem:addressed-ai` notices.
  *
  * The case that motivates the whole module is `no-push`: an agent IS attached
  * (so the old handler returned silently) but nothing delivers to it, so the
  * user's comment waits for the next `tandem_checkInbox` with no feedback at all.
  * "AI connected" is true and says nothing about delivery.
+ *
+ * `offline` was added later, and for the opposite reason: it is the case that
+ * produced NO notice at all. With the server gone `chip` is null (state is
+ * `booting`), so the agent-absence branch fell into its own null-chip hole and
+ * returned silently — a send into a dead server said nothing.
  */
 
 const base = {
   soloMode: false,
+  serverUnreachable: false,
   sessionLive: false,
   // `AiChip` already includes `null`; annotating honestly (rather than `as
   // never`) keeps a future widening of that union a type error here.
@@ -21,6 +27,51 @@ const base = {
 };
 
 describe("addressedAiNotice", () => {
+  describe("server unreachable", () => {
+    it("reports the server, not the AI, and does so through the null-chip hole", () => {
+      // The exact production shape: server gone → `connected()` false → state
+      // `booting` → `chip` null → `sessionLive` false. Every AI-shaped branch
+      // reads this as "no agent" and the null-chip guard then silences it.
+      expect(
+        addressedAiNotice({ ...base, serverUnreachable: true, sessionLive: false, chip: null }),
+      ).toEqual({ kind: "offline" });
+    });
+
+    it("outranks the agent-absence notice even when a chip is available", () => {
+      // Ordering is the whole point. `sessionLive` is false when the server is
+      // gone, but only as a CONSEQUENCE — reporting "no AI is connected, it'll
+      // be seen when one connects" would be a second false promise, and this
+      // time about a message that may not survive the reconnect at all.
+      expect(
+        addressedAiNotice({
+          ...base,
+          serverUnreachable: true,
+          sessionLive: false,
+          chip: "restart",
+        }),
+      ).toEqual({ kind: "offline" });
+    });
+
+    it("outranks the delivery notice too", () => {
+      // Belt-and-braces: `sessionLive` cannot really be true with the server
+      // gone, but the rule must not depend on that being impossible.
+      expect(
+        addressedAiNotice({
+          ...base,
+          serverUnreachable: true,
+          sessionLive: true,
+          pushDelivery: "none",
+        }),
+      ).toEqual({ kind: "offline" });
+    });
+
+    it("stays silent in Solo — the user opted out of all of this", () => {
+      expect(
+        addressedAiNotice({ ...base, soloMode: true, serverUnreachable: true, chip: "restart" }),
+      ).toBeNull();
+    });
+  });
+
   describe("no agent attached", () => {
     it("raises the agent-absence notice carrying the chip to render", () => {
       expect(addressedAiNotice({ ...base, sessionLive: false, chip: "restart" })).toEqual({

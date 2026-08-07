@@ -106,6 +106,19 @@ function whenAlive(isDead: () => boolean, alive: () => FetchResponse): () => Fet
   };
 }
 
+/** What a demotion looks like from outside, now that BOTH readers have floors.
+ *  `state` is no longer the discriminator: with the whole server gone the
+ *  launcher's floor clears `status` to null too, so `state` is "booting" —
+ *  "we do not know" — rather than "stopped", which would assert the specific
+ *  claim that Claude is configured and not running. These three are the
+ *  health-reader's own observables. */
+function expectDemoted(h: { get(): AiReadiness }): void {
+  expect(h.get().state).toBe("booting");
+  expect(h.get().liveIndicator).toBeNull();
+  expect(h.get().pushDelivery).toBe("unknown");
+  expect(h.get().serverUnreachable).toBe(true);
+}
+
 /** Mount the harness; `onReady` fires in an $effect after mount, so the handle
  *  is captured in a holder and read (via `.get()`) after `settle()`. */
 function mount(
@@ -348,10 +361,9 @@ describe("createAiReadiness", () => {
 
     h.get().refresh();
     await settle();
-    expect(h.get().state).toBe("stopped");
-    // `unknown`, never `none` — see the hook. A server we cannot reach says
-    // nothing about how many consumers are attached to it.
-    expect(h.get().pushDelivery).toBe("unknown");
+    // `pushDelivery` is `unknown`, never `none` — see the hook. A server we
+    // cannot reach says nothing about how many consumers are attached to it.
+    expectDemoted(h);
   });
 
   it("a success between two dead reads resets the count", async () => {
@@ -473,7 +485,7 @@ describe("createAiReadiness", () => {
     await settle();
     h.get().refresh();
     await settle();
-    expect(h.get().state).toBe("stopped");
+    expectDemoted(h);
 
     // The seam to the send path: `App.svelte` routes on this return value, and
     // `false` is what selects the "saved while no AI was connected" notice over
@@ -510,9 +522,15 @@ describe("createAiReadiness", () => {
     h.get().refresh();
     await settle();
 
-    expect(h.get().state).toBe("ready"); // launcher's retained value — correct
-    expect(h.get().liveIndicator).toBeNull(); // …but the pill stops claiming it
+    // Both floors have now engaged, so `state` is "booting" rather than the
+    // launcher's retained "ready". The point of the test is the pill: under a
+    // RUNNING launcher a regression that latched `liveIndicator` — or re-derived
+    // it off `state`, which the hook forbids — would survive every assertion
+    // that goes through `state`, because the launcher's own last-known value
+    // says "ready" right up until its floor engages.
+    expect(h.get().liveIndicator).toBeNull();
     expect(h.get().pushDelivery).toBe("unknown");
+    expect(h.get().serverUnreachable).toBe(true);
   });
 
   it("re-promotes when the server comes back, at full patience", async () => {
@@ -530,12 +548,13 @@ describe("createAiReadiness", () => {
     await settle();
     h.get().refresh();
     await settle();
-    expect(h.get().state).toBe("stopped");
+    expectDemoted(h);
 
     dead = false;
     h.get().refresh();
     await settle();
     expect(h.get().state).toBe("ready");
+    expect(h.get().serverUnreachable).toBe(false);
 
     // The half that bites: recovery must reset the count to ZERO, not merely
     // re-promote. If it only re-promoted, the next single blip would demote at
@@ -584,7 +603,7 @@ describe("createAiReadiness", () => {
       // would still pass — as a duplicate of the plain two-dead-reads case.
       if (i === 0) expect(h.get().state).toBe("ready");
     }
-    expect(h.get().state).toBe("stopped");
+    expectDemoted(h);
   });
 
   it("absent hasSession (non-loopback shape) does not promote and is treated as unknown", async () => {
@@ -777,6 +796,41 @@ describe("createAiReadiness", () => {
     await settle();
     expect(h.get().state).toBe("ready");
     expect(h.get().chip).toBeNull();
+  });
+
+  it("stops presenting a launcher state read from a server that stopped answering", async () => {
+    // The launcher reader's own floor, exercised in isolation — only the
+    // launcher route dies, `/health` keeps answering. That is deliberately NOT
+    // the "dead server" fixture: this floor exists precisely for the case the
+    // dead-server coupling does NOT cover, where the HTTP API degrades while
+    // the Hocuspocus socket survives and `deps.connected()` therefore never
+    // falls. Until this floor existed, `status` was retained through every
+    // subsequent failure forever once one read had succeeded.
+    let launcherDead = false;
+    globalThis.fetch = routedFetch({
+      launcher: whenAlive(() => launcherDead, RUNNING_LAUNCHER),
+      health: () => mkResponse({ status: "ok", hasSession: false }),
+    });
+
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready"); // launcher says Claude is up
+
+    launcherDead = true;
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready"); // one strike — prior value still held
+
+    h.get().refresh();
+    await settle();
+    // "booting" = we do not know, chip suppressed. NOT "stopped", which would
+    // assert the specific claim that Claude is configured and not running —
+    // a claim nothing supports once the route reporting it went silent.
+    expect(h.get().state).toBe("booting");
+    expect(h.get().chip).toBeNull();
+    // …and the health reader is untouched: it kept answering, so nothing about
+    // the SERVER being gone is claimed. The two floors are independent.
+    expect(h.get().serverUnreachable).toBe(false);
   });
 
   it("a launcher body that isn't a LauncherStatus never settles the status", async () => {

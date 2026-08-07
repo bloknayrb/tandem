@@ -570,11 +570,33 @@ $effect(() => {
       // switches to Solo while the probe is in flight would otherwise still get
       // a notice. Every input here is re-read for the same reason.
       soloMode: isSoloNow(),
+      serverUnreachable: aiReadiness.serverUnreachable,
       sessionLive,
       chip: aiReadiness.chip,
       pushDelivery: aiReadiness.pushDelivery,
     });
     if (notice === null) return;
+
+    if (notice.kind === "offline") {
+      // The server is gone, so this is not an AI problem and must not be
+      // dressed as one. It is also the only branch here where the message may
+      // not survive: `chatState.send` writes to a LOCAL Y.Doc with nowhere to
+      // sync, and if the server returns on a new generation the stale-tab gate
+      // tears down every doc and rebuilds from empty ones — the write is
+      // dropped. So no "it'll be seen when one connects" promise, and no CTA:
+      // neither the wizard nor a Claude restart addresses a dead Tandem server,
+      // and offering one would repeat the #1268 mistake of pointing a user at a
+      // remedy for a different problem.
+      notifications.push({
+        id: `ai-offline-${viaKey}-${Date.now()}`,
+        type: "launcher",
+        severity: "warning",
+        message: `${noun} saved locally, but Tandem couldn't reach its server, so it wasn't delivered. If the server restarted, send it again.`,
+        dedupKey: `ai-offline-${viaKey}`,
+        timestamp: Date.now(),
+      });
+      return;
+    }
 
     if (notice.kind === "no-agent") {
       notifications.push(

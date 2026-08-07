@@ -65,8 +65,16 @@
  * why the count sits above the staleness guard and why only increments are
  * poll-gated.
  *
- * Its sibling `pollLauncherStatus` has NO such floor, and that is a known gap
- * rather than a settled design: see the comment on it.
+ * `pollLauncherStatus` has the same floor, off the same `makeStrikeCounter`,
+ * clearing `status` to null (→ "booting", i.e. "we do not know") rather than to
+ * a fabricated launcher state. Its strike rule is deliberately narrower: unlike
+ * `makeHealthHandler`, the launcher route genuinely can fail, so a non-OK there
+ * really is the server answering.
+ *
+ * `serverUnreachable` is the one signal that distinguishes "no AI is attached to
+ * a working server" from "the server is gone". Downstream those need opposite
+ * messages, and before it existed they were indistinguishable — see the field's
+ * doc on `AiReadiness`.
  */
 import { onDestroy } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
@@ -117,11 +125,36 @@ type HealthRead =
  *  behaviour, which was to keep claiming it indefinitely. */
 const DEAD_READS_BEFORE_DEMOTING = 2;
 
-/** Per-read bound on `/health`. Shorter than `POLL_MS` so a wedged server
+/** Per-read bound on both polls. Shorter than `POLL_MS` so a wedged server
  *  accrues one strike per interval rather than queueing reads behind one
- *  another. See the note at the `fetch` call for why an unbounded read is the
- *  same floorless fail-safe this module exists to remove. */
-const HEALTH_TIMEOUT_MS = 5_000;
+ *  another. See the note at the `/health` fetch for why an unbounded read is
+ *  the same floorless fail-safe this module exists to remove. */
+const READ_TIMEOUT_MS = 5_000;
+
+/**
+ * "Has this reader gone quiet for long enough to stop believing its last
+ * answer?" — one mechanism, two readers.
+ *
+ * A factory rather than two hand-rolled counters because the rule is one rule
+ * and it is easy to get subtly different in two places: reset on ANY answer,
+ * count only reads that are allowed to (the `/health` reader excludes its
+ * out-of-band probes), and report the threshold crossing rather than exposing
+ * the number. `record` returns whether the caller should now stop trusting its
+ * retained value.
+ */
+function makeStrikeCounter(limit: number) {
+  let strikes = 0;
+  return {
+    record(answered: boolean, counts = true): boolean {
+      if (answered) {
+        strikes = 0;
+        return false;
+      }
+      if (counts) strikes++;
+      return strikes >= limit;
+    },
+  };
+}
 
 export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
 
@@ -274,6 +307,20 @@ export interface AiReadiness {
    * *can read* the document; this one says whether Claude will be *told* to.
    */
   readonly pushDelivery: PushDelivery;
+  /**
+   * Has `/health` gone quiet for a full strike run?
+   *
+   * The question is about the SERVER, not the AI, and the two were previously
+   * indistinguishable downstream: both surfaced as "no session". They call for
+   * opposite messages. "No AI is attached to a server that is fine" means the
+   * message waits. "The server is gone" means the message is sitting in a local
+   * Y.Doc with nowhere to sync — and if the server returns on a new generation,
+   * the stale-tab gate rebuilds from empty Y.Docs and it is dropped.
+   *
+   * Deliberately keyed on the same two-strike run as the demotion, not on a
+   * single failed read, so a blip cannot raise an alarm about data loss.
+   */
+  readonly serverUnreachable: boolean;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
   /**
@@ -307,6 +354,14 @@ export function createAiReadiness(deps: {
   // Whether `/health` reported any SSE consumer. `null` = not yet known or
   // redacted, which is NOT the same as "none".
   let pushAttached = $state<boolean | null>(null);
+  // Has `/health` gone quiet for a full strike run — i.e. is the SERVER gone,
+  // as distinct from an AI not being attached to a server that is fine? The
+  // send path needs the difference: with the server down, a chat message is
+  // written to a local Y.Doc that has nowhere to sync, and if the server comes
+  // back on a new generation the stale-tab gate rebuilds from empty Y.Docs and
+  // the message is dropped. Telling that user "it'll be seen when an AI
+  // connects" is a second false promise in place of the one just removed.
+  let serverUnreachable = $state(false);
   // Have we ever read launcher status successfully? Distinguishes "still
   // booting" from a genuine `available: false`, so the chip never flashes
   // during cold start. `/health` is not gated on this: readiness derives
@@ -326,35 +381,46 @@ export function createAiReadiness(deps: {
   // older response resolving late can never overwrite a fresher one.
   let healthSeq = 0;
   let destroyed = false;
-  /** Not `$state` — nothing renders it; it exists to gate the writes that do. */
-  let deadReads = 0;
+  /** Not `$state` — nothing renders these; they gate the writes that do. */
+  const healthStrikes = makeStrikeCounter(DEAD_READS_BEFORE_DEMOTING);
+  const launcherStrikes = makeStrikeCounter(DEAD_READS_BEFORE_DEMOTING);
 
   /**
-   * KNOWN GAP: this fail-safe still has no floor, unlike `readHasSession`.
-   * Once one read has succeeded, `status` is retained through every subsequent
-   * failure forever — the shape the `/health` reader was just fixed for.
+   * The launcher half of the same floor.
    *
-   * What keeps it from being user-visible today is NOT the `!settledOnce ||
-   * status === null` half of the booting gate (that masks only a launcher route
-   * which never once succeeded). It is `deps.connected()`: :3478 and :3479 are
-   * bound by the same process, so when it dies the Hocuspocus socket drops,
-   * `state` falls to "booting" and the pill renders nothing. That coupling is
-   * incidental. Nothing in this file enforces it, and the first failure that
-   * takes the HTTP API down while the WebSocket survives turns this into the
-   * live defect. Give it the `deadReads` treatment then — clearing `status` to
-   * null (→ "booting"), not to a fabricated launcher state.
+   * This retained `status` through every failure forever once a single read had
+   * succeeded — the identical shape the `/health` reader was fixed for, and it
+   * was NOT masked by the way the comment here used to claim. The
+   * `!settledOnce || status === null` half of the booting gate only covers a
+   * route that never once succeeded. What actually hid it was `deps.connected()`:
+   * :3478 and :3479 are bound by the same process, so the Hocuspocus socket
+   * drops when it dies. That is an incidental coupling of two ports to one
+   * process — nothing here enforces it, and any failure that takes the HTTP API
+   * down while the WebSocket survives makes it live.
+   *
+   * So it now clears to `null` after the same two consecutive dead reads, which
+   * lands on "booting" — "we do not know" — rather than on a fabricated
+   * launcher state. Note the asymmetry with `/health`: a non-OK or unparseable
+   * response is NOT a strike here, because unlike `makeHealthHandler` the
+   * launcher route genuinely can fail (`requireSupervisor` 503s while the
+   * launcher is deferred), so on THIS route those really are the server
+   * answering.
    */
   async function pollLauncherStatus(mine: number): Promise<void> {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`, {
-        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(READ_TIMEOUT_MS),
       });
     } catch {
-      return; // network blip — keep prior status (fail-safe)
+      // Nothing answered. Strike — and once the run is long enough, stop
+      // presenting a launcher state read from a server that is gone.
+      if (launcherStrikes.record(false) && mine === gen && !destroyed) status = null;
+      return;
     }
+    launcherStrikes.record(true);
     if (mine !== gen) return;
-    if (!res.ok) return; // transient server error — keep prior status
+    if (!res.ok) return; // real server error (e.g. 503 deferred) — keep prior status
     let body: unknown;
     try {
       body = await res.json();
@@ -399,7 +465,7 @@ export function createAiReadiness(deps: {
       // `POLL_MS` so a hung server accrues one strike per interval instead of
       // queueing reads behind each other.
       res = await fetch(`${API_BASE}${API_HEALTH}`, {
-        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(READ_TIMEOUT_MS),
       });
     } catch {
       return { answered: false, why: "request failed or timed out" };
@@ -477,10 +543,8 @@ export function createAiReadiness(deps: {
     //
     // `fromPoll` is required, not defaulted: a future call site that forgets it
     // should not silently opt out of the count.
-    if (fresh.answered) {
-      deadReads = 0;
-    } else {
-      if (fromPoll) deadReads++;
+    const runIsLongEnough = healthStrikes.record(fresh.answered, fromPoll);
+    if (!fresh.answered) {
       // The only trace a stuck pill leaves. Otherwise two opposite causes —
       // "the server sent me HTML" and "the server hung up mid-sentence" —
       // arrive here indistinguishable and silent.
@@ -491,11 +555,13 @@ export function createAiReadiness(deps: {
     if (mine !== healthSeq || destroyed) return value;
 
     if (fresh.answered) {
+      serverUnreachable = false;
       // Each field is written only when known, so a redacted or partial body
       // can never demote one signal on the strength of the other's absence.
       if (fresh.hasSession !== null) mcpSessionActive = fresh.hasSession;
       if (fresh.pushAttached !== null) pushAttached = fresh.pushAttached;
-    } else if (deadReads >= DEAD_READS_BEFORE_DEMOTING) {
+    } else if (runIsLongEnough) {
+      serverUnreachable = true;
       mcpSessionActive = false;
       // NOT `false`. A server we cannot reach tells us nothing about how many
       // consumers are attached to it, and `pushAttached === false` is a load-
@@ -623,6 +689,9 @@ export function createAiReadiness(deps: {
     },
     get pushDelivery() {
       return pushDelivery;
+    },
+    get serverUnreachable() {
+      return serverUnreachable;
     },
     refresh: () => poll(),
     probeSession,
