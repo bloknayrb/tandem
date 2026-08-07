@@ -146,6 +146,62 @@ export interface EntryValidation {
   reason?: string;
 }
 
+/**
+ * Whether Tandem has ANY real-time push transport for a client kind — a static
+ * fact of the target, known before anything runs.
+ *
+ * A two-member string union rather than a boolean, and the asymmetry between
+ * the members is the whole contract. It mirrors `PushDelivery`
+ * (`client/hooks/useAiReadiness.svelte.ts`) and the rule stated in
+ * `server/mcp/routes/health.ts`: only the negative half is sound.
+ *
+ *   - `"none"`     — structurally nothing can notify this client. Sound; safe
+ *                    to say out loud to a user.
+ *   - `"possible"` — a transport EXISTS for this client. It does NOT mean push
+ *                    works: the channel shim registers by default for Claude
+ *                    Code and then silently discards every notification unless
+ *                    the host negotiated `claude/channel`
+ *                    (`docs/spikes/connection-honesty-findings.md` A5/A7).
+ *                    Never render this as a promise.
+ *
+ * Never widen it to a boolean. `if (!support)` would compile, read as "no
+ * push", and fire on any future third member; every string is truthy, so that
+ * mistake stops type-checking instead. Same lesson `AI_CTA` and `PushDelivery`
+ * record.
+ */
+export type TargetPushSupport = "none" | "possible";
+
+/**
+ * The single source of truth for "can Tandem notify this client at all?".
+ *
+ * `shouldRegisterChannelShim` (`server/integrations/apply.ts`) gates on this,
+ * and the wizard's Done screen renders off it, so the config Tandem writes and
+ * the sentence it shows the user cannot drift apart. Before this existed the
+ * fact was a bare `targetKind === "claude-desktop"` inside a server function
+ * the UI could not see — which is why a Claude Desktop user was told nothing
+ * and discovered it by being ignored (#1299).
+ *
+ * Claude Desktop is the stdio path: `buildMcpEntries` emits an `npx … mcp-stdio`
+ * bridge and `shouldRegisterChannelShim` hard-refuses the `tandem-channel`
+ * entry, so there is no shim; the supervisor's stdin wake needs a Claude Code
+ * child it spawned; and the plugin monitor rides Claude Code's plugin host.
+ *
+ * SCOPE, deliberately narrow: this is a claim about the MCP client config the
+ * wizard writes for this target, not a claim about the whole machine. The
+ * Cowork sub-view of that same wizard writes Cowork's own plugin registry
+ * (`src-tauri/src/cowork_installer.rs`), and while it installs only the
+ * `mcp-stdio` server into `installed_plugins.json` — no channel entry, no
+ * monitor — it does add `tandem@tandem` to `enabledPlugins` alongside a
+ * marketplace pointing at this repo, whose `.claude-plugin/plugin.json` DOES
+ * declare both. Whether a Cowork guest ever resolves and activates those is
+ * unverified: ADR-028's Sub-task D gate is still open. If it is ever confirmed,
+ * this predicate needs a Cowork-aware third state — not a quiet flip to
+ * `"possible"`, which would re-hide the fact rather than correct it.
+ */
+export function targetPushSupport(kind: DetectedTarget["kind"]): TargetPushSupport {
+  return kind === "claude-desktop" ? "none" : "possible";
+}
+
 export interface ExistingMcpInstall {
   target: DetectedTarget;
   status: ExistingConfigReadStatus;

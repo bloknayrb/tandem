@@ -462,6 +462,26 @@ population:
 - Configs written before default-on, and Claude Desktop targets (which never get
   a shim — `apply.ts` returns `false` for them).
 
+  **Closed 2026-08-07 for the Claude Desktop half (#1299).** That row was the
+  reporter's actual configuration, and the reason it deserved its own fix rather
+  than riding on the runtime notice: for `claude-desktop` push is not absent by
+  accident, it is absent *by decision, at wizard time*, before any of the runtime
+  signals above exist. A decision already made is not something to detect later.
+
+  The predicate moved from a bare `targetKind === "claude-desktop"` inside
+  `shouldRegisterChannelShim` to `targetPushSupport` in
+  `shared/integrations/contract.ts`, so the gate that WITHHOLDS the transport and
+  the sentence that EXPLAINS it read the same fact. The wizard's Done screen
+  renders a per-row line off it (`integration-wizard-push-support-{id}`).
+
+  Two constraints from this document are load-bearing in that copy. It renders
+  only on `"none"` — the sound half (A4/A5) — with no affirmative counterpart,
+  because `"possible"` means a transport exists and A7 is precisely the case
+  where one exists and delivers nothing. And it is **per row**, not a banner: in
+  a mixed selection `whatsNext` is not `stdio-only`, so the screen-level
+  push-mode block renders its Claude Code copy, and a Desktop user reading a
+  banner would take reassurance meant for the other client.
+
   A "wizard opt-out" was listed here in an earlier revision and is **withdrawn**:
   the wizard path passes no override at all, and the only override plumbed
   (`cli/setup.ts`, `apply.ts`) comes from `--with-channel-shim`, which resolves
