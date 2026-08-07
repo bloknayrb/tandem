@@ -19,7 +19,8 @@
  *      about clients on that revision — see #1249 before treating a `false`
  *      here as "no agent". Note this hook is NOT promotion-only with respect
  *      to it: `readHasSession` writes any non-null value, so a confident
- *      `false` demotes both `state` and `liveIndicator`.
+ *      `false` demotes both `state` and `liveIndicator` — as does a sustained
+ *      inability to reach the server at all (see the fail-safe note below).
  *
  * An active MCP session means AI works regardless of launcher state, so it
  * promotes readiness to `ready` and suppresses both the restart CTA and the
@@ -49,11 +50,19 @@
  * chosen to work without AI surfacing, so a persistent "Connect AI" nag would
  * contradict that intent.
  *
- * Fail-safe: a transient fetch failure (network blip, non-OK) keeps the PRIOR
- * value rather than clobbering to a scarier state — mirroring
- * `useFirstRunNeeded`'s "don't assert a scary state on a hiccup" discipline.
- * This applies to both the launcher status and `hasSession`, so a momentary
- * `/health` blip never flips a connected agent's chip back on.
+ * Fail-safe, and its limit: a transient `/health` failure keeps the PRIOR value
+ * rather than clobbering to a scarier state — mirroring `useFirstRunNeeded`'s
+ * "don't assert a scary state on a hiccup" discipline. But "transient" used to
+ * mean *every* way a read could fail to produce an answer, including the server
+ * not being there at all, and a fail-safe with no floor is just a lie with good
+ * manners: the pill went on reporting "AI connected" indefinitely against a
+ * process that had exited, next to the disconnection banner saying otherwise.
+ *
+ * So the failure modes are now discriminated (see `fetchHealth`) and only one
+ * of them demotes: two consecutive `dead` reads **from the poll path**. A
+ * non-OK status or an unparseable body is the server ANSWERING, which resets
+ * the count rather than feeding it; `probeSession`'s out-of-band reads never
+ * feed it at all, or a user typing at a dead server would demote early.
  */
 import { onDestroy } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
@@ -72,6 +81,21 @@ interface HealthResponse {
   hasSession?: boolean;
   push?: { subscribers?: number };
 }
+
+/** Outcome of one `/health` read. The only distinction that matters is whether
+ *  something answered: a non-OK status, an unparseable body and a redacted
+ *  loopback field are all "we learned nothing, but the server is there", which
+ *  is the same shape and must never demote. */
+type HealthRead =
+  | { alive: true; hasSession: boolean | null; pushAttached: boolean | null }
+  | { alive: false };
+
+/** Consecutive dead POLL reads before we stop believing in the session.
+ *  Two, not one: a single dropped request is common and must not flap the
+ *  pill. At `POLL_MS` = 8s that is ~16s of a stale claim, which is well inside
+ *  the window where a user could act on it — and far better than the previous
+ *  behaviour, which was to keep claiming it indefinitely. */
+const DEAD_READS_BEFORE_DEMOTING = 2;
 
 export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
 
@@ -276,6 +300,8 @@ export function createAiReadiness(deps: {
   // older response resolving late can never overwrite a fresher one.
   let healthSeq = 0;
   let destroyed = false;
+  /** Not `$state` — nothing renders it; it exists to gate the writes that do. */
+  let deadReads = 0;
 
   async function pollLauncherStatus(mine: number): Promise<void> {
     let res: Response;
@@ -294,10 +320,14 @@ export function createAiReadiness(deps: {
     }
   }
 
-  /** One `/health` read, yielding both loopback-only signals. Each field is
-   *  independently `null` for "unknown" (network blip, non-OK, malformed body,
-   *  or the field absent because the caller wasn't loopback) — callers keep
-   *  their prior value rather than demote.
+  /** One `/health` read, separating "nothing answered" from "answered, but
+   *  told us nothing".
+   *
+   *  Those used to collapse into one `null`-everything result, and the collapse
+   *  was a lie the user could see: a fetch that threw because the server was
+   *  gone was treated exactly like a good response with the loopback-only
+   *  fields redacted, so the pill went on asserting "AI connected" next to the
+   *  disconnection banner. Only the throw is evidence of absence.
    *
    *  Both come off ONE fetch deliberately. They answer different questions
    *  (`hasSession` = an MCP transport completed initialize; `push.subscribers`
@@ -306,32 +336,28 @@ export function createAiReadiness(deps: {
    *  disjoint — which is precisely why a user can see "AI connected" while
    *  nothing they do reaches Claude. Reading them at the same instant keeps the
    *  two halves of that story consistent. */
-  async function fetchHealth(): Promise<{
-    hasSession: boolean | null;
-    pushAttached: boolean | null;
-  }> {
-    // A fresh literal per return, not one shared object — callers receive this
-    // by reference.
-    const unknown = () => ({ hasSession: null, pushAttached: null });
+  async function fetchHealth(): Promise<HealthRead> {
+    const answeredNothing = { alive: true, hasSession: null, pushAttached: null } as const;
     let res: Response;
     try {
       res = await fetch(`${API_BASE}${API_HEALTH}`);
     } catch {
-      return unknown(); // network blip
+      return { alive: false }; // nothing answered — the server may be gone
     }
-    if (!res.ok) return unknown(); // transient server error
+    if (!res.ok) return answeredNothing;
     try {
       const body = (await res.json()) as HealthResponse;
       // Only trust each field when present (loopback). Absence is "unknown",
       // not "no session" / "no consumer". The count collapses to a boolean
-      // here because nothing needs the number — and `> 0` is the only reading
-      // of it that `routes/health.ts` vouches for.
+      // because nothing needs the number, and `> 0` is the only reading of it
+      // that `routes/health.ts` vouches for.
       return {
+        alive: true,
         hasSession: typeof body.hasSession === "boolean" ? body.hasSession : null,
         pushAttached: typeof body.push?.subscribers === "number" ? body.push.subscribers > 0 : null,
       };
     } catch {
-      return unknown(); // malformed body
+      return answeredNothing; // malformed body — still an answer
     }
   }
 
@@ -342,16 +368,43 @@ export function createAiReadiness(deps: {
    *  just before the agent's initialize, resolving after the probe that saw
    *  it). A dropped write is recovered by the next interval poll. Returns the
    *  fetched value either way so callers can act on their own read. */
-  async function readHasSession(): Promise<boolean | null> {
+  async function readHasSession(fromPoll: boolean): Promise<boolean | null> {
     const mine = ++healthSeq;
     const fresh = await fetchHealth();
-    if (mine === healthSeq && !destroyed) {
+
+    // Strike accounting happens BEFORE the staleness guard, deliberately.
+    //
+    // That guard orders `$state` writes so a slow older response cannot clobber
+    // a fresher one. Whether the server answered is not a question about
+    // ordering, and counting inside the guard made every superseded poll read
+    // vanish — while `probeSession` bumps `healthSeq` on every chat send and
+    // every comment. A user typing at a dead server would therefore postpone
+    // demotion indefinitely: the exact inverse of the hazard `fromPoll` exists
+    // to prevent.
+    //
+    // `fromPoll` is required, not defaulted: a future call site that forgets it
+    // should not silently opt out of the count.
+    if (fresh.alive) deadReads = 0;
+    else if (fromPoll) deadReads++;
+
+    const value = fresh.alive ? fresh.hasSession : null;
+    if (mine !== healthSeq || destroyed) return value;
+
+    if (fresh.alive) {
       // Each field is written only when known, so a redacted or partial body
       // can never demote one signal on the strength of the other's absence.
       if (fresh.hasSession !== null) mcpSessionActive = fresh.hasSession;
       if (fresh.pushAttached !== null) pushAttached = fresh.pushAttached;
+    } else if (deadReads >= DEAD_READS_BEFORE_DEMOTING) {
+      mcpSessionActive = false;
+      // NOT `false`. A server we cannot reach tells us nothing about how many
+      // consumers are attached to it, and `pushAttached === false` is a load-
+      // bearing claim: it is the confirmed zero that drives the "nothing is
+      // notifying Claude" copy. Asserting it from a failed read would swap one
+      // confident lie for another.
+      pushAttached = null;
     }
-    return fresh.hasSession;
+    return value;
   }
 
   /** See `AiReadiness.probeSession`. Issues a fresh `/health` read (which also
@@ -359,14 +412,14 @@ export function createAiReadiness(deps: {
    *  of waiting out the poll interval) and answers with the freshest data it
    *  has — falling back to the last-known polled value when the read fails. */
   async function probeSession(): Promise<boolean> {
-    const fresh = await readHasSession();
+    const fresh = await readHasSession(false);
     return fresh ?? mcpSessionActive;
   }
 
   function poll(): void {
     const mine = ++gen;
     void pollLauncherStatus(mine);
-    void readHasSession();
+    void readHasSession(true);
   }
 
   poll();

@@ -200,16 +200,22 @@ export async function launchStandalone({
     throw new Error("Standalone startup aborted while waiting for backend readiness");
   }
 
-  console.error(`[standalone] Backend ready at ${baseUrl}; starting monitor`);
-  const monitorEnv = { ...env, TANDEM_URL: baseUrl };
-  const monitor = spawnImpl(binCommand("tsx"), ["src/monitor/index.ts"], {
-    env: monitorEnv,
-    cwd: process.cwd(),
-  });
-  children.push(monitor);
-  attachUnexpectedExit(monitor, "monitor", children, shutdownState);
+  // The monitor is deliberately NOT spawned here.
+  //
+  // It subscribes to `/api/events` as an `"external"` consumer with no Claude
+  // behind it, so it permanently held `subscribers >= 1` in every dev session.
+  // That is a live instance of the inert-consumer problem: `subscribers === 0`
+  // is the only sound negative the server has, so a standing fake consumer
+  // silently suppressed every feature keyed on it — the "nothing is notifying
+  // Claude" notice, the status-pill delivery caveat, and `tandem doctor`'s push
+  // check — for exactly the people building and verifying those features.
+  //
+  // Run `npx tsx src/monitor/index.ts` by hand when you are actually testing
+  // the monitor. Do not restore this: an always-on consumer is not a neutral
+  // default, it is a mask.
+  console.error(`[standalone] Backend ready at ${baseUrl}`);
 
-  return { baseUrl, client, server, monitor };
+  return { baseUrl, client, server };
 }
 
 export async function main() {

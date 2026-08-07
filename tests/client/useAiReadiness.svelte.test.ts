@@ -23,7 +23,7 @@
  * (which gives a reactivity scope but no component lifecycle for `onDestroy`).
  */
 
-import { render } from "@testing-library/svelte";
+import { cleanup, render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiChip, AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
@@ -41,19 +41,27 @@ function mkResponse(body: unknown, ok = true, status = 200): FetchResponse {
   return { ok, status, json: async () => body };
 }
 
+/** A route is a fixed response, an error to throw, or a thunk re-evaluated on
+ *  every call — the last is what lets one stub change behaviour mid-test
+ *  without rebuilding it. */
+type Route = FetchResponse | Error | (() => FetchResponse);
+
 /** Route the stub by URL so the launcher + health polls get distinct bodies. */
-function routedFetch(routes: {
-  launcher?: FetchResponse | Error;
-  health?: FetchResponse | Error;
-}): typeof fetch {
+function routedFetch(routes: { launcher?: Route; health?: Route }): typeof fetch {
   return (async (input: string) => {
     const url = String(input);
     const pick = url.includes(API_LAUNCHER_STATUS) ? routes.launcher : routes.health;
     if (pick === undefined) throw new Error(`no stub for ${url}`);
     if (pick instanceof Error) throw pick;
+    if (typeof pick === "function") return pick() as unknown as Response;
     return pick as unknown as Response;
   }) as unknown as typeof fetch;
 }
+
+/** The launcher fixture every demotion test shares: configured, not running —
+ *  so readiness turns entirely on the MCP session, which is what those tests
+ *  are about. */
+const STOPPED_LAUNCHER = () => mkResponse({ available: true, running: false });
 
 /** Mount the harness; `onReady` fires in an $effect after mount, so the handle
  *  is captured in a holder and read (via `.get()`) after `settle()`. */
@@ -87,6 +95,13 @@ describe("createAiReadiness", () => {
   });
 
   afterEach(() => {
+    // Unmount first, THEN restore fetch. This project sets no `globals: true`
+    // and no setup file, so `@testing-library/svelte`'s auto-cleanup never
+    // registers — without this every mounted harness leaks a component whose
+    // `onDestroy` never runs and whose 8s poll keeps firing for the rest of the
+    // worker's life, against the restored REAL fetch (`API_BASE` is absolute,
+    // so those are live requests to 127.0.0.1:3479) and into later tests' stubs.
+    cleanup();
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
@@ -255,6 +270,167 @@ describe("createAiReadiness", () => {
     await settle();
     expect(h.get().state).toBe("ready");
     expect(h.get().chip).toBeNull();
+  });
+
+  /**
+   * The test above is the fail-safe; these are the defect (B1). They exist
+   * because the blip tests each perform exactly ONE failed read, so they pass
+   * before and after the fix — they pin the tolerance being kept, not the bug.
+   *
+   * A dead server fails BOTH endpoints, so these fixtures kill both. They still
+   * discriminate: the launcher's last good body said `running: false`, and a
+   * dead launcher read keeps that prior value, so readiness turns entirely on
+   * whether the MCP session is still believed in.
+   */
+  it("demotes after two consecutive dead poll reads", async () => {
+    let dead = false;
+    const dieIfDead = (alive: () => FetchResponse) => (): FetchResponse => {
+      if (dead) throw new Error("server gone");
+      return alive();
+    };
+    globalThis.fetch = routedFetch({
+      launcher: dieIfDead(STOPPED_LAUNCHER),
+      health: dieIfDead(() =>
+        mkResponse({ status: "ok", hasSession: true, push: { subscribers: 2 } }),
+      ),
+    });
+
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready");
+    expect(h.get().pushDelivery).toBe("attached");
+
+    dead = true;
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready"); // one strike — still tolerated
+
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("stopped");
+    // `unknown`, never `none` — see the hook. A server we cannot reach says
+    // nothing about how many consumers are attached to it.
+    expect(h.get().pushDelivery).toBe("unknown");
+  });
+
+  it("a success between two dead reads resets the count", async () => {
+    let mode: "ok" | "dead" = "ok";
+    globalThis.fetch = routedFetch({
+      launcher: STOPPED_LAUNCHER,
+      health: () => {
+        if (mode === "dead") throw new Error("server gone");
+        return mkResponse({ status: "ok", hasSession: true });
+      },
+    });
+
+    const h = mount();
+    await settle();
+
+    for (const step of ["dead", "ok", "dead"] as const) {
+      mode = step;
+      h.get().refresh();
+      await settle();
+    }
+    // Two dead reads total, but not consecutive — the contract is a run, not a tally.
+    expect(h.get().state).toBe("ready");
+  });
+
+  it("never demotes on a non-OK response, however many times it repeats", async () => {
+    // A 500 is the server ANSWERING, so it resets the counter rather than
+    // feeding it — the entire reason "nothing answered" is kept apart from
+    // "answered, but told us nothing".
+    let mode: "ok" | "500" | "dead" = "ok";
+    globalThis.fetch = routedFetch({
+      launcher: STOPPED_LAUNCHER,
+      health: () => {
+        if (mode === "dead") throw new Error("server gone");
+        if (mode === "500") return mkResponse({}, false, 500);
+        return mkResponse({ status: "ok", hasSession: true });
+      },
+    });
+
+    const h = mount();
+    await settle();
+    mode = "500";
+    for (let i = 0; i < 4; i++) {
+      h.get().refresh();
+      await settle();
+    }
+    expect(h.get().state).toBe("ready");
+
+    // The assertion that actually bites. Four non-OK reads must leave the
+    // counter at ZERO, not merely fail to demote on their own — otherwise they
+    // prime it and the next single dead read demotes at half the intended
+    // patience. An earlier version stopped at the line above and passed even
+    // when a non-OK read incremented the counter, because incrementing alone
+    // never trips the threshold.
+    mode = "dead";
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready");
+  });
+
+  it("probeSession failures do not count toward demotion", async () => {
+    // `probeSession` runs on every chat send and comment, so counting its reads
+    // would let user activity demote well inside the intended two intervals.
+    let dead = false;
+    globalThis.fetch = routedFetch({
+      launcher: STOPPED_LAUNCHER,
+      health: () => {
+        if (dead) throw new Error("server gone");
+        return mkResponse({ status: "ok", hasSession: true });
+      },
+    });
+
+    const h = mount();
+    await settle();
+
+    dead = true;
+    for (let i = 0; i < 5; i++) {
+      await h.get().probeSession();
+      await settle();
+    }
+    expect(h.get().state).toBe("ready");
+
+    // …and the poll path still demotes on its own two, unaffected by the probes.
+    h.get().refresh();
+    await settle();
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("stopped");
+  });
+
+  it("still demotes when every poll read is superseded by a concurrent probe", async () => {
+    // The inverse bug, and the one the other tests structurally cannot see.
+    //
+    // Strikes are counted BEFORE the staleness guard. That guard orders
+    // `$state` writes so a slow older response cannot clobber a fresher one —
+    // it says nothing about whether the server answered. Counting inside it
+    // meant every superseded poll read vanished, and `probeSession` bumps
+    // `healthSeq` on every chat send and every comment, so a user typing at a
+    // dead server postponed demotion for as long as they kept typing.
+    //
+    // Reproducing it needs a probe IN FLIGHT while a poll's read is pending.
+    // `settle()` drains everything, so no other test in this file ever
+    // interleaves the two, and the regression passes all of them.
+    globalThis.fetch = routedFetch({
+      launcher: STOPPED_LAUNCHER,
+      health: mkResponse({ status: "ok", hasSession: true }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready");
+
+    globalThis.fetch = routedFetch({
+      launcher: new Error("server gone"),
+      health: new Error("server gone"),
+    });
+    for (let i = 0; i < 2; i++) {
+      h.get().refresh(); // poll read starts…
+      void h.get().probeSession(); // …and is superseded before it resolves
+      await settle();
+    }
+    expect(h.get().state).toBe("stopped");
   });
 
   it("absent hasSession (non-loopback shape) does not promote and is treated as unknown", async () => {
@@ -532,6 +708,13 @@ describe("createAiReadiness — push consumer", () => {
   });
 
   afterEach(() => {
+    // Unmount first, THEN restore fetch. This project sets no `globals: true`
+    // and no setup file, so `@testing-library/svelte`'s auto-cleanup never
+    // registers — without this every mounted harness leaks a component whose
+    // `onDestroy` never runs and whose 8s poll keeps firing for the rest of the
+    // worker's life, against the restored REAL fetch (`API_BASE` is absolute,
+    // so those are live requests to 127.0.0.1:3479) and into later tests' stubs.
+    cleanup();
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });

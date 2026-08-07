@@ -79,7 +79,7 @@ describe("dev standalone runner", () => {
     vi.restoreAllMocks();
   });
 
-  it("waits for /health and /api/events before starting the monitor", async () => {
+  it("waits for /health and /api/events before reporting the backend ready", async () => {
     let healthHits = 0;
     const server = createServer((req, res) => {
       if (!req.url) {
@@ -129,7 +129,7 @@ describe("dev standalone runner", () => {
     );
   });
 
-  it("does not start the monitor until the backend probe resolves", async () => {
+  it("never spawns the monitor, before or after the backend probe resolves", async () => {
     const spawnCalls: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
     const ready = createDeferred<void>();
     const fakeSpawn = (
@@ -156,9 +156,12 @@ describe("dev standalone runner", () => {
 
     ready.resolve();
     const runtime = await launchPromise;
-    expect(spawnCalls).toHaveLength(3);
-    expect(spawnCalls[2]?.command).toMatch(/^tsx(\.cmd)?$/);
-    expect(spawnCalls[2]?.args).toEqual(["src/monitor/index.ts"]);
-    expect(runtime.monitor).toBeDefined();
+
+    // Pins the REMOVAL, not the ordering: this used to be `toHaveLength(3)`
+    // with `src/monitor/index.ts` third. Why it went is in the comment at the
+    // old spawn site in `scripts/dev-standalone.mjs`.
+    expect(spawnCalls).toHaveLength(2);
+    expect(spawnCalls.some((c) => c.args.includes("src/monitor/index.ts"))).toBe(false);
+    expect(runtime).not.toHaveProperty("monitor");
   });
 });

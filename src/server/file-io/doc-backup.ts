@@ -329,8 +329,12 @@ export async function snapshotBeforeFirstWrite(
           id: generateNotificationId(),
           type: "general-error",
           severity: "warning",
+          // Past tense: `sizeCapNotified` latches for the process, but the cap
+          // is re-checked per snapshot and 30-day pruning can clear it — so a
+          // present-tense "backups are paused" outlives the pause it names.
+          // See `TandemNotification.severity`.
           message:
-            "Document backups paused: the backup folder exceeds its size limit. " +
+            "A document backup was skipped: the backup folder had reached its size limit. " +
             "Older backups are removed automatically after 30 days.",
           dedupKey: "doc-backup:size-cap",
           timestamp: Date.now(),

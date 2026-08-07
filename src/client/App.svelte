@@ -582,7 +582,9 @@ $effect(() => {
           id: `ai-not-ready-${viaKey}-${Date.now()}`,
           type: "launcher",
           severity: "warning",
-          message: `${noun} saved — no AI is connected yet. It'll be seen when AI connects.`,
+          // Past tense on the observation because `warning` never expires —
+          // see the tense rule on `TandemNotification.severity`.
+          message: `${noun} saved while no AI was connected. It'll be seen when one connects.`,
           dedupKey: `ai-not-ready-${viaKey}`,
           timestamp: Date.now(),
         },
@@ -2088,8 +2090,11 @@ const review = useAnnotationReview({
       id: `suggestion-apply-failed-${ann.id}`,
       type: "annotation-error",
       severity: "warning",
+      // "was left pending", not "is still pending" — the annotation can be
+      // accepted or dismissed later while this `warning` stays in the tray.
+      // See `TandemNotification.severity`.
       message:
-        "Couldn't apply the suggestion — the text has changed. The annotation is still pending.",
+        "Couldn't apply the suggestion — the text has changed. The annotation was left pending.",
       dedupKey: `suggestion-apply-failed:${ann.id}`,
       timestamp: Date.now(),
     }),
