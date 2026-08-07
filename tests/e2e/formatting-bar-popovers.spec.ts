@@ -364,3 +364,69 @@ test("Escape on a mouse-opened popup menu closes the menu first, the popup secon
   await page.keyboard.press("Escape");
   await expect(popup, "second Escape dismisses the popup").toBeHidden();
 });
+
+/**
+ * Geometry net: the fixed formatting-bar pill must never paint over the
+ * top-of-shell banner stack.
+ *
+ * The bar is `position: fixed; top: var(--tandem-fmtbar-top)` while the four
+ * banners (server-restart strip, updater, connection, license) sit in NORMAL
+ * FLOW between the TitleBar and the editor row. Because both are horizontally
+ * centred, the pill used to land squarely on the banner's message text and CTA.
+ * The fix measures the stack's bottom edge into `--tandem-banner-stack-bottom`,
+ * which the token folds in as `max(52px, bottom)`.
+ *
+ * Why a probe element rather than a real banner: every one of the four is
+ * unreachable from a stock E2E run (license dark, updater Tauri-gated,
+ * connection needs a forced disconnect plus a >=5s floor, serverRestarted
+ * false), so H is always 0 here and a "real banner" test would assert nothing.
+ * Injecting into `banner-stack` exercises the actual mechanism — the
+ * ResizeObserver, the token composition and the pill's response — in one frame.
+ */
+test("formatting bar clears the top-of-shell banner stack", async ({ page }) => {
+  await openFixture(page);
+
+  const bar = page.locator("[data-testid='formatting-bar']");
+  const stack = page.locator("[data-testid='banner-stack']");
+  await expect(stack).toHaveCount(1);
+
+  // Resting state: no banners, so the stack reports 0 and the pill sits at the
+  // bare 52px baseline.
+  expect(await tokenValue(page, "--tandem-banner-stack-bottom")).toBe("0px");
+  const restingTop = (await bar.boundingBox())!.y;
+
+  // Inject a probe of a known height and let the observer publish it.
+  const PROBE = 40;
+  await page.evaluate((h) => {
+    const el = document.createElement("div");
+    el.id = "banner-probe";
+    el.style.height = `${h}px`;
+    el.style.background = "red";
+    document.querySelector("[data-testid='banner-stack']")!.appendChild(el);
+  }, PROBE);
+
+  await expect
+    .poll(() => tokenValue(page, "--tandem-banner-stack-bottom"), { timeout: 5_000 })
+    .not.toBe("0px");
+
+  // The load-bearing assertion: the pill is strictly below the banner box, not
+  // merely "moved". A box-vs-box comparison is what the user actually sees.
+  const probeBox = (await page.locator("#banner-probe").boundingBox())!;
+  const barBox = (await bar.boundingBox())!;
+  expect(
+    barBox.y,
+    "formatting bar must sit below the banner stack, not over it",
+  ).toBeGreaterThanOrEqual(probeBox.y + probeBox.height);
+  // Deliberately NOT `restingTop + PROBE`: the pill rests tucked 4px under the
+  // 56px TitleBar, so a height-based offset lands short of the banner's bottom.
+  // The contract is "flush with the stack's bottom edge", nothing else.
+  expect(Math.round(barBox.y)).toBe(Math.round(probeBox.y + probeBox.height));
+
+  // And it returns when the banner goes away — the reset path is as much a part
+  // of the contract as the offset, and it runs through the observer, not destroy().
+  await page.evaluate(() => document.getElementById("banner-probe")!.remove());
+  await expect
+    .poll(() => tokenValue(page, "--tandem-banner-stack-bottom"), { timeout: 5_000 })
+    .toBe("0px");
+  expect(Math.round((await bar.boundingBox())!.y)).toBe(Math.round(restingTop));
+});

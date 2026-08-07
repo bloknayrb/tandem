@@ -110,7 +110,35 @@ function handleHighlight(color: HighlightColor) {
      pill centered horizontally over the document area at
      top: var(--tandem-fmtbar-top). Anchored via `position: fixed` (not
      absolute) so it stays viewport-aligned across containing-block changes
-     in W4. Drag-region is intentionally NOT set on the wrap: the TitleBar
+     in W4.
+
+     That `fixed` is also why this bar carries a correction nothing else needs.
+     The top-of-shell banners (server-restart strip, updater, connection,
+     license) sit in NORMAL FLOW between the TitleBar and the editor row, so
+     they displace everything below them — but not this pill, which left the
+     flow. It used to paint straight over their message text and CTAs. The fix
+     lives in the token, not here: --tandem-fmtbar-top is
+     `max(52px, var(--tandem-banner-stack-bottom))`, and App.svelte measures the
+     stack's bottom edge into that variable (0 when no banner is showing).
+
+     It is the stack's BOTTOM, not its height, precisely because this pill rests
+     at y=52 while the TitleBar is 56px tall — the pill tucks 4px UNDER the
+     titlebar, so "52 + banner height" lands 4px short and still clips the
+     banner. Anchoring to the bottom edge needs no titlebar constant at all.
+
+     Read the contract in index.html before touching any of the other clearance
+     vars — re-applying this offset to .editor-scroll, the ScrollPill or
+     --tandem-rail-top-clearance double-counts, because those frames already
+     moved with the banners.
+
+     Deliberately NO `transition` on `top`. Only .tandem-banner animates (a
+     180ms slide-in); the server-restart strip and LicenseBanner paint at full
+     height instantly, so a transition would manufacture a window where the pill
+     slides ACROSS an already-painted banner — re-creating the bug for two of the
+     four cases. The banner keyframes animate transform/opacity only, so the
+     border box is final at frame 0 and the measurement never races them.
+
+     Drag-region is intentionally NOT set on the wrap: the TitleBar
      already provides the window drag-region above it, and combining
      -webkit-app-region: drag with pointer-events: none is unreliable in
      WebView2 (Tauri-on-Windows) — clicks land on the editor underneath
