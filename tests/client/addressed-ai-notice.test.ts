@@ -19,6 +19,10 @@ import { addressedAiNotice } from "../../src/client/status/addressed-ai-notice.j
 const base = {
   soloMode: false,
   serverUnreachable: false,
+  // The healthy default: the probe reached our server. Cases that exercise the
+  // unanswered path set it explicitly, so every other test keeps reading as a
+  // statement about the branch it names.
+  probeAnswered: true,
   sessionLive: false,
   // `AiChip` already includes `null`; annotating honestly (rather than `as
   // never`) keeps a future widening of that union a type error here.
@@ -143,6 +147,60 @@ describe("addressedAiNotice", () => {
           pushDelivery: "none",
         }),
       ).toEqual({ kind: "no-push" });
+    });
+  });
+
+  describe("an unanswered probe", () => {
+    // The gap: a hand-launched session never takes the caller's fast path, so
+    // every send probes. If the server has just died that probe fails,
+    // `probeSession` falls back to the last polled `true`, and probe reads
+    // deliberately do not accrue strikes — so `serverUnreachable` is still
+    // false and the offline branch cannot catch it. Before this rule the user
+    // was told "Claude is connected but isn't being notified" on the strength
+    // of a read that had failed a millisecond earlier.
+    it("suppresses no-push, because that is the branch asserting connectivity", () => {
+      const inputs = {
+        ...base,
+        sessionLive: true, // stale — the fallback, not a confirmation
+        chip: null,
+        pushDelivery: "none" as PushDelivery,
+      };
+      // The control: with the same inputs and an answered probe, it fires.
+      expect(addressedAiNotice(inputs)).toEqual({ kind: "no-push" });
+      expect(addressedAiNotice({ ...inputs, probeAnswered: false })).toBeNull();
+    });
+
+    it("does NOT suppress no-agent — that branch rests on the launcher route", () => {
+      // `chip` comes from `/api/launcher/status`, which carries its own
+      // independent strike floor. An unrelated route blipping is no reason to
+      // withhold a notice this one supports, and the copy it produces ("saved
+      // while no AI was connected") stays true regardless.
+      expect(
+        addressedAiNotice({
+          ...base,
+          probeAnswered: false,
+          sessionLive: false,
+          chip: "restart",
+          pushDelivery: "unknown",
+        }),
+      ).toEqual({ kind: "no-agent", chip: "restart" });
+    });
+
+    it("does NOT suppress offline — a met strike floor outranks a single read", () => {
+      // `serverUnreachable` is only set after a full run of dead POLLS, which
+      // is strictly stronger evidence than the one failed probe that got us
+      // here. Ordering this gate above rule 2 would discard the stronger signal
+      // for the weaker one.
+      expect(
+        addressedAiNotice({
+          ...base,
+          probeAnswered: false,
+          serverUnreachable: true,
+          sessionLive: true,
+          chip: null,
+          pushDelivery: "none",
+        }),
+      ).toEqual({ kind: "offline" });
     });
   });
 

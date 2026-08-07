@@ -39,7 +39,10 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *   3. A live session decides which of the remaining branches applies. Without
  *      one, only the agent-absence notice can be correct; with one, only the
  *      delivery notice can be.
- *   4. `no-push` fires ONLY on a confirmed zero. `routes/health.ts:43-45` is
+ *   5. An affirmative claim needs a read that answered. `sessionLive` launders
+ *      a stale value into a fresh-looking `true` when the probe fails, and
+ *      `no-push` is the only branch that asserts connectivity off it.
+ *   6. `no-push` fires ONLY on a confirmed zero. `routes/health.ts:43-45` is
  *      explicit that `subscribers: 0` is a sound negative while any positive
  *      count includes an attached-but-inert shim — so `true` and `null` (field
  *      absent, redacted, or not yet read) must both stay silent. Guessing here
@@ -59,6 +62,14 @@ export function addressedAiNotice(input: {
    * so a blip cannot raise an alarm about data loss.
    */
   serverUnreachable: boolean;
+  /**
+   * Did the probe's `/health` read reach our server at all?
+   *
+   * Separate from `sessionLive` because that value falls back to the last
+   * polled result when the read fails, so a stale `true` is indistinguishable
+   * from a fresh one at this boundary. Only rule 5 consults it — see there.
+   */
+  probeAnswered: boolean;
   /** Fresh `/health` confirmation that an MCP transport is open. */
   sessionLive: boolean;
   /** Re-read after the probe — readiness may have settled while it was in flight. */
@@ -84,6 +95,33 @@ export function addressedAiNotice(input: {
     return input.chip === null ? null : { kind: "no-agent", chip: input.chip };
   }
 
-  // Rule 4 — attached, but is anything delivering?
+  // Rule 5 — `no-push` is the ONLY branch here that makes an affirmative
+  // connectivity claim ("Claude is connected but isn't being notified"). It is
+  // therefore the only one that must not be built on a stale `sessionLive`.
+  //
+  // The gap this closes: a hand-launched session never takes the caller's fast
+  // path, so every send probes. If the server has just died, that probe fails,
+  // `probeSession` falls back to the last polled `true`, and probe reads do not
+  // accrue strikes — so `serverUnreachable` is still false and rule 2 above
+  // cannot catch it. The user was told Claude was connected on the strength of
+  // a read that had failed a millisecond earlier, for a message written into a
+  // local Y.Doc with nowhere to sync.
+  //
+  // Silence, not `offline`: one failed read is not evidence the server is gone
+  // (that is exactly what the strike floor exists to establish), and the HTTP
+  // API going quiet does not imply the Hocuspocus socket did — so "it wasn't
+  // delivered" would be its own false claim. We genuinely do not know, and the
+  // residual cost is bounded and visible: if the server really is gone, the
+  // next two polls set `serverUnreachable` within ~16s and the pill stops
+  // claiming a session. No notice fires retroactively for THIS message, which
+  // is a real gap, not a fixed one.
+  //
+  // Rules 3-4 are deliberately NOT gated on this. Their evidence is `chip`,
+  // derived from the launcher route, which has its own independent floor — an
+  // unrelated route blipping is no reason to suppress a notice that route
+  // supports.
+  if (!input.probeAnswered) return null;
+
+  // Rule 6 — attached, but is anything delivering?
   return input.pushDelivery === "none" ? { kind: "no-push" } : null;
 }

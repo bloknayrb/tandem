@@ -565,14 +565,15 @@ $effect(() => {
     // initialize landed after the last poll would otherwise get a false "no AI
     // is connected" notice (#1083) — and refreshes the push signal in the same
     // round trip.
-    const sessionLive = await aiReadiness.probeSession();
+    const probe = await aiReadiness.probeSession();
     const notice = addressedAiNotice({
       // Re-read across the await, don't reuse the pre-probe capture: a user who
       // switches to Solo while the probe is in flight would otherwise still get
       // a notice. Every input here is re-read for the same reason.
       soloMode: isSoloNow(),
       serverUnreachable: aiReadiness.serverUnreachable,
-      sessionLive,
+      probeAnswered: probe.answered,
+      sessionLive: probe.sessionLive,
       chip: aiReadiness.chip,
       pushDelivery: aiReadiness.pushDelivery,
     });

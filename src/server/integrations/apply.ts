@@ -887,7 +887,9 @@ export type RefreshNodeBinaryResult =
   /** The recorded binary is gone and we have no better value to put there —
    *  see the `BARE_NODE` refusal in `refreshChannelNodeBinary`. */
   | { status: "skipped"; reason: "no-valid-replacement" }
-  | { status: "rewritten"; from: string; to: string; scriptRefreshed: boolean };
+  /** `from`/`to` are null when only the SCRIPT path needed repair — the two are
+   *  checked independently, so either can move without the other. */
+  | { status: "rewritten"; from: string | null; to: string | null; scriptRefreshed: boolean };
 
 /**
  * Repair a `tandem-channel` entry whose recorded Node path has gone stale.
@@ -927,23 +929,19 @@ export async function refreshChannelNodeBinary(
   const command = record.command;
   if (typeof command !== "string") return { status: "no-op" };
 
-  if (!isRecordedPathGone(command, deps.probe)) return { status: "no-op" };
-
-  const next = resolveBinary();
-  if (next === command) return { status: "no-op" };
-  // Refuse to "repair" a dead absolute path into the bare name. That is not a
-  // fix — `node-binary.ts` documents the bare name as the thing that failed in
-  // the field — and it is actively worse for diagnosis: `isRecordedPathGone`
-  // exempts bare names, so `tandem doctor` would go permanently quiet about an
-  // entry that is still broken. Leaving the dead path in place keeps it visible.
-  if (next === BARE_NODE) return { status: "skipped", reason: "no-valid-replacement" };
-
-  // The script path goes stale in LOCKSTEP with the binary. `args[0]` is
-  // `CHANNEL_DIST`, derived from `PACKAGE_ROOT`/`__dirname`, so every cause
-  // listed above — App Translocation's per-launch UUID, an AppImage's per-run
-  // mount, a Tauri update — invalidates both at once. Repairing only `command`
-  // yields a working Node that dies on `Cannot find module`, and doctor (which
-  // inspects `command` alone) would call that healthy.
+  // The script path is checked INDEPENDENTLY of the binary, and first.
+  //
+  // This block used to sit after an early `return` on a healthy `command`, so
+  // it could only ever run when the binary was ALSO stale. The docblock
+  // justified that by asserting the two go stale in lockstep — but nothing
+  // enforces it and their roots are different: `command` is `process.execPath`,
+  // `args[0]` is `CHANNEL_DIST`, derived from `PACKAGE_ROOT`/`__dirname`. A
+  // global npm reinstall to a new prefix, or a rebuilt `dist/` under a
+  // relocated package root, moves the script while Node stays exactly where it
+  // was. The entry then spawns a working Node that dies on `Cannot find
+  // module`, and `tandem doctor` — which inspects `command` alone — calls it
+  // healthy. (Tauri updates and App Translocation really do move both; that
+  // case was never the problem.)
   let scriptRefreshed = false;
   const args = record.args;
   if (Array.isArray(args) && typeof args[0] === "string" && args[0] !== channelScript) {
@@ -953,9 +951,33 @@ export async function refreshChannelNodeBinary(
     }
   }
 
-  record.command = next;
+  let commandRewrite: { from: string; to: string } | null = null;
+  let noValidReplacement = false;
+  if (isRecordedPathGone(command, deps.probe)) {
+    const next = resolveBinary();
+    // Refuse to "repair" a dead absolute path into the bare name. That is not a
+    // fix — `node-binary.ts` documents the bare name as the thing that failed in
+    // the field — and it is actively worse for diagnosis: `isRecordedPathGone`
+    // exempts bare names, so `tandem doctor` would go permanently quiet about an
+    // entry that is still broken. Leaving the dead path in place keeps it visible.
+    if (next === BARE_NODE) noValidReplacement = true;
+    else if (next !== command) commandRewrite = { from: command, to: next };
+  }
+
+  if (commandRewrite === null && !scriptRefreshed) {
+    return noValidReplacement
+      ? { status: "skipped", reason: "no-valid-replacement" }
+      : { status: "no-op" };
+  }
+
+  if (commandRewrite !== null) record.command = commandRewrite.to;
   await atomicWrite(JSON.stringify(opened.root, null, 2) + "\n", configPath);
-  return { status: "rewritten", from: command, to: next, scriptRefreshed };
+  return {
+    status: "rewritten",
+    from: commandRewrite?.from ?? null,
+    to: commandRewrite?.to ?? null,
+    scriptRefreshed,
+  };
 }
 
 /**
@@ -995,10 +1017,15 @@ export async function refreshAllChannelNodeBinaries(
     try {
       const result = await refreshChannelNodeBinary(target.configPath);
       if (result.status === "rewritten") {
-        console.error(
-          `[Tandem] Repaired stale channel entry in ${target.label} (${result.from} → ${result.to}` +
-            `${result.scriptRefreshed ? ", channel script path also refreshed" : ""}).`,
-        );
+        // Name what actually moved. The binary and the script are repaired
+        // independently, so `from`/`to` are null on a script-only fix — logging
+        // them unconditionally would print "null → null" for a real repair.
+        const what =
+          result.from === null
+            ? "channel script path refreshed"
+            : `${result.from} → ${result.to}` +
+              (result.scriptRefreshed ? ", channel script path also refreshed" : "");
+        console.error(`[Tandem] Repaired stale channel entry in ${target.label} (${what}).`);
       } else if (result.status === "skipped") {
         // Every refusal was previously silent. `malformed-json` in particular
         // deserves to be loud: `~/.claude.json` is the whole MCP registry, so

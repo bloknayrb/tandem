@@ -491,7 +491,7 @@ describe("createAiReadiness", () => {
     // `false` is what selects the "saved while no AI was connected" notice over
     // the delivery-delay one. That routing is the user-visible payoff of the
     // whole demotion, and it is the only assertion here that reaches it.
-    await expect(h.get().probeSession()).resolves.toBe(false);
+    await expect(h.get().probeSession()).resolves.toEqual({ answered: false, sessionLive: false });
   });
 
   it("drops the connected indicator when the server dies under a running launcher", async () => {
@@ -652,7 +652,7 @@ describe("createAiReadiness", () => {
     expect(h.get().state).toBe("unconfigured");
     expect(h.get().chip).toBe("connect");
 
-    await expect(h.get().probeSession()).resolves.toBe(true);
+    await expect(h.get().probeSession()).resolves.toEqual({ answered: true, sessionLive: true });
     await tick();
     // The fresh read also folds into polled state — chip clears immediately.
     expect(h.get().state).toBe("ready");
@@ -668,7 +668,7 @@ describe("createAiReadiness", () => {
     await settle();
     expect(h.get().chip).toBe("restart");
 
-    await expect(h.get().probeSession()).resolves.toBe(false);
+    await expect(h.get().probeSession()).resolves.toEqual({ answered: true, sessionLive: false });
     await tick();
     expect(h.get().chip).toBe("restart");
   });
@@ -693,8 +693,16 @@ describe("createAiReadiness", () => {
     await settle();
     expect(h.get().state).toBe("ready");
 
-    await expect(h.get().probeSession()).resolves.toBe(true);
+    // `sessionLive: true` is the FALLBACK, not a confirmation — and `answered:
+    // false` is the only thing that says so. This pair is the whole reason the
+    // return type is a record: a caller seeing the boolean alone cannot tell a
+    // just-confirmed session from an 8-second-old guess, which is how a dead
+    // server got a "Claude is connected" toast. `addressed-ai-notice.test.ts`
+    // pins the consuming half.
+    await expect(h.get().probeSession()).resolves.toEqual({ answered: false, sessionLive: true });
     expect(h.get().state).toBe("ready");
+    // And the fallback must not have been laundered into polled state either.
+    expect(h.get().serverUnreachable).toBe(false); // one blip is not a dead server
   });
 
   it("probeSession treats a redacted body (no hasSession) as unknown and keeps last-known false", async () => {
@@ -715,7 +723,7 @@ describe("createAiReadiness", () => {
     await settle();
     expect(h.get().chip).toBe("restart");
 
-    await expect(h.get().probeSession()).resolves.toBe(false);
+    await expect(h.get().probeSession()).resolves.toEqual({ answered: true, sessionLive: false });
     await tick();
     expect(h.get().chip).toBe("restart");
   });
@@ -744,7 +752,7 @@ describe("createAiReadiness", () => {
     await settle(); // launcher settled; health read 1 still in flight
     expect(h.get().state).toBe("stopped");
 
-    await expect(h.get().probeSession()).resolves.toBe(true);
+    await expect(h.get().probeSession()).resolves.toEqual({ answered: true, sessionLive: true });
     await tick();
     expect(h.get().state).toBe("ready");
 
@@ -785,7 +793,7 @@ describe("createAiReadiness", () => {
     await settle();
 
     // Probe read 3 is issued last and answers: a live session, freshest word.
-    await expect(h.get().probeSession()).resolves.toBe(true);
+    await expect(h.get().probeSession()).resolves.toEqual({ answered: true, sessionLive: true });
     await tick();
     expect(h.get().state).toBe("ready");
 
