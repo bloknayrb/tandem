@@ -183,6 +183,26 @@ export const LAUNCHER_CWD_MAX_LENGTH = 1024;
  * Lives here (not in `supervisor.ts`) because the spawn path and the stub-CLI
  * test harness must agree on it byte-for-byte; a drift between them would make
  * the harness green while the shipped launcher spoke a different protocol.
+ *
+ * **No `--dangerously-load-development-channels server:tandem-channel` here, and
+ * do not re-add it.** It was carried on this vector until 2026-08-07 and never
+ * did anything, for two independent reasons:
+ *
+ *   1. Claude Code parses the dev-channels flag only on the interactive path —
+ *      the parse sits inside an `if (!isNonInteractiveSession)` branch (read
+ *      statically from 2.1.223). `-p` above *is* that non-interactive mode, so
+ *      the flag is dropped before it can register anything.
+ *   2. Independently of the parse, #1266 measured the end-to-end behaviour
+ *      against a real binary (`docs/spikes/channel-push-stream-json.md`): under
+ *      these exact flags the shim loads and receives the frame, but the session
+ *      never takes a turn. That is why `supervisor.ts` subscribes to the event
+ *      queue in-process and writes wake turns onto the child's stdin instead.
+ *
+ * Deleting it removes nothing a supervised session was using. It stays correct
+ * for a *hand-launched* interactive session, where it is the only mechanism
+ * that works — see `docs/troubleshooting.md`. A regression pin in
+ * `tests/server/launcher/supervisor.test.ts` guards this, because every other
+ * assertion here slices by `.length` and so is green with or without it.
  */
 export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
   "-p",
@@ -191,8 +211,6 @@ export const CLAUDE_STREAM_JSON_FLAGS: readonly string[] = [
   "--output-format",
   "stream-json",
   "--verbose",
-  "--dangerously-load-development-channels",
-  "server:tandem-channel",
 ];
 
 /** The bootstrap turn the supervisor writes immediately on a fresh spawn.

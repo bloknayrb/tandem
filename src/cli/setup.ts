@@ -193,10 +193,16 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
  *   - It reported a FILE, not a WRITE. `shouldRegisterChannelShim` returns
  *     false for every Claude Desktop target, so `setup --apply
  *     --target=claude-desktop` claimed a shim it had never registered.
- *   - Registration is not delivery. The shim only receives events in a session
- *     launched with the channel flag. Sessions Tandem starts pass it
- *     automatically; a session you start yourself does not — which is the
- *     common case, and the one that made "Enabled" read as a lie.
+ *   - Registration is not delivery. The shim only *delivers* into a session
+ *     that activated the channel, which needs the dev-channels flag and an
+ *     interactive session — which is what made "Enabled" read as a lie.
+ *
+ * A third thing was wrong and outlived the first fix: this used to add that
+ * "sessions Tandem starts pass it automatically." They do not, and never did.
+ * The flag is parsed only on Claude Code's interactive path, and the launcher
+ * spawns with `-p`; #1266 measured the same outcome end to end. Sessions Tandem
+ * starts are woken over the supervisor's stdin instead, so they need nothing
+ * from this report. See `src/shared/launcher/contract.ts`.
  */
 function printPushStatus(shimRegisteredFor: string[]): void {
   const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
@@ -213,11 +219,12 @@ function printPushStatus(shimRegisteredFor: string[]): void {
   if (shimRegisteredFor.length > 0) {
     status =
       `  \x1b[32mRegistered\x1b[0m for: ${shimRegisteredFor.join(", ")}\n` +
-      "  Sessions Tandem starts for you get real-time events automatically.\n" +
-      "  A session you start yourself needs the channel flag:\n\n" +
+      "  Registered is not delivering. To receive events, a session you start\n" +
+      "  yourself needs the channel flag:\n\n" +
       "    claude --dangerously-load-development-channels server:tandem-channel\n\n" +
       "  Without it, your edits and comments still reach Claude — on its next\n" +
-      "  tandem_checkInbox rather than immediately.\n\n";
+      "  tandem_checkInbox rather than immediately. Sessions Tandem launches for\n" +
+      "  you are woken directly and need neither the flag nor this shim.\n\n";
   } else if (!validateChannelShimPrereq(CHANNEL_DIST)) {
     status =
       "  \x1b[33mUnavailable\x1b[0m — dist/channel/index.js not found; Claude will see your\n" +

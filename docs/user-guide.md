@@ -305,13 +305,17 @@ Claude can check the connection with `tandem_status`, which reports open documen
 
 ### Real-Time Push (Recommended)
 
-Start Claude Code with the channel flag for instant push notifications:
+Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup; a session you start yourself needs one of two things.
+
+The easier is the **Tandem plugin**, which needs no flag — install it once and every `claude` you start afterwards picks it up. Start `claude` from a terminal, since its monitor uses that session's program path to find Node.
+
+The other is the **channel flag**, on every session:
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Chat messages, annotation accepts/dismisses, and text selections push to Claude in real time — no polling needed. The `--dangerously-load-development-channels` flag is Claude Code's marker for unstable APIs, and it stays necessary while the Channels API is still experimental. The plugin monitor is the alternative that needs no flag — see [Real-Time Push](#real-time-push-recommended).
+Use one or the other, not both, or every event arrives twice. The flag is Claude Code's marker for unstable APIs; it stays necessary for this transport regardless of how the Channels API matures, because the allowlist that would make it optional covers plugins only and `tandem-channel` is a plain MCP server. It also has no effect outside an interactive session.
 
 ### Polling Fallback
 
