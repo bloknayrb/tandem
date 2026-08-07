@@ -123,6 +123,52 @@ describe("handleRename — success + error mapping", () => {
     expect(res._status).toBe(status);
     expect(res._json).toEqual({ error: code, message: "nope" });
   });
+
+  it("does not leak the symlink-rejection path to a non-loopback caller (#1294)", async () => {
+    // assertPathSafe throws `Refusing to operate on symlinked path: <abs>` and
+    // renameDocument returns it as `reason`. The success branch was scrubbed;
+    // this branch echoed it verbatim.
+    renameDocument.mockResolvedValue({
+      status: "error",
+      errorCode: "PATH_REJECTED",
+      reason: "Refusing to operate on symlinked path: /home/alice/notes",
+    });
+    const res = mockRes();
+    await handleRename(reqWith({ documentId: "d1", newName: "b.md" }, "192.168.1.50"), res);
+    expect(res._status).toBe(400);
+    expect(JSON.stringify(res._json)).not.toContain("alice");
+    expect(JSON.stringify(res._json)).not.toContain("/home");
+    // The structured code — the part a caller can act on — survives.
+    expect((res._json as { error: string }).error).toBe("PATH_REJECTED");
+  });
+
+  it("does not leak an unmapped fs.rename errno message either", async () => {
+    // EXDEV/EPERM reach this branch with no entry in the generic map; the
+    // fallback must still be path-free, not the raw Node message.
+    renameDocument.mockResolvedValue({
+      status: "error",
+      errorCode: "EXDEV",
+      reason: "EXDEV: cross-device link not permitted, rename '/home/alice/a.md' -> '/mnt/v/b.md'",
+    });
+    const res = mockRes();
+    await handleRename(reqWith({ documentId: "d1", newName: "b.md" }, "192.168.1.50"), res);
+    expect(JSON.stringify(res._json)).not.toContain("alice");
+    expect(JSON.stringify(res._json)).not.toContain("/mnt/v");
+  });
+
+  it("still gives a loopback caller the real reason", async () => {
+    // Positive control on the same sample — without it the two assertions above
+    // pass against a change that blanked the message for everyone, which would
+    // be a regression for the local rename UI rather than a fix.
+    renameDocument.mockResolvedValue({
+      status: "error",
+      errorCode: "PATH_REJECTED",
+      reason: "Refusing to operate on symlinked path: /home/alice/notes",
+    });
+    const res = mockRes();
+    await handleRename(reqWith({ documentId: "d1", newName: "b.md" }, "127.0.0.1"), res);
+    expect((res._json as { message: string }).message).toContain("/home/alice/notes");
+  });
 });
 
 describe("handleRename — boundary sanitization (CodeQL path-injection barrier)", () => {
