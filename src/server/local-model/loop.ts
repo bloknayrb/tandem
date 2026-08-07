@@ -39,6 +39,10 @@ export interface LoopMetrics {
    * its step limit" — true for a turn-budget exit, a lie for a wall-clock one,
    * and it points them at raising `maxTurns` for what is actually a stalling
    * endpoint. It would also contradict `turns`, which stays below the budget.
+   *
+   * `timeout` covers BOTH wall-clock expiries: the run-budget clamp and a plain
+   * per-turn `timeoutMs`. Neither is caller-initiated, and `aborted` is silent
+   * by design, so bucketing either one there tells the user nothing at all.
    */
   exit: "clean" | "max_turns" | "max_tool_calls" | "timeout" | "aborted" | "error";
   errorMessage?: string;
@@ -70,8 +74,13 @@ export interface LoopResult {
  * Aggregate wall-clock ceiling for one run (#1295 L6).
  *
  * Five minutes: comfortably above a slow-but-working local model answering a
- * multi-turn task, and far below the ~36 minutes a stalling endpoint could hold
- * by dribbling a byte before each of 12 per-turn timeouts.
+ * multi-turn task, and far below the ~36 minutes (12 turns x 180 s) a slow
+ * endpoint could hold by answering each turn just inside its per-turn timeout.
+ *
+ * Note the shape carefully: a turn that actually HITS `timeoutMs` throws and
+ * ends the whole run at the first timeout, so the long hold is built from turns
+ * that COMPLETE late, not from turns that time out. `timeoutMs` cannot bound it
+ * because it only ever bounds one turn.
  */
 const DEFAULT_RUN_DEADLINE_MS = 5 * 60_000;
 
@@ -160,9 +169,11 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
         metrics.exit = "aborted";
         break;
       }
-      // #1295 L6: `timeoutMs` bounds a single turn, so 12 turns of a stalling
-      // endpoint that dribbles one byte before each timeout holds a run for
-      // ~36 minutes. This is the aggregate ceiling.
+      // #1295 L6: `timeoutMs` bounds a single turn, so 12 turns that each
+      // complete just inside it hold a run for ~36 minutes. This is the
+      // aggregate ceiling. It fires only for a run whose LAST turn returned at
+      // or after the deadline — a turn still in flight is cut by the clamp
+      // below and classified in the catch instead.
       if (Date.now() - started >= runDeadlineMs) {
         metrics.exit = "timeout";
         break;
@@ -277,9 +288,31 @@ export async function runLoop(opts: RunLoopOpts): Promise<LoopResult> {
       metrics.exit = "max_turns";
     }
   } catch (err) {
-    // An abort surfaces as a fetch AbortError — classify it as "aborted", not "error".
-    if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
+    // An abort surfaces as a fetch AbortError, but TWO different things abort a
+    // turn and they mean opposite things to the user (#1295 L6 follow-up):
+    //
+    //  - the CALLER's signal (supersede / doc close / doc switch / shutdown, and
+    //    the streaming sink's own cap-abort). Deliberately silent — the user
+    //    caused it and already has the partial reply on screen.
+    //  - `postLoopback`'s internal timeout controller, which is the ONLY other
+    //    abort source in the client. That is a wall-clock expiry: either the
+    //    per-turn `timeoutMs` or the clamp to what remained of the run budget
+    //    (`turnTimeoutMs`). Both must reach the user.
+    //
+    // The clamp is why the top-of-loop deadline check is not enough on its own:
+    // it hands `chat()` a timeout that expires exactly AT the deadline, so the
+    // in-flight turn always aborts before the loop can come back around and see
+    // `Date.now() - started >= runDeadlineMs`. Classifying every AbortError as
+    // "aborted" therefore made the "timeout" exit — and the collaborator's
+    // "it ran out of time" notification — unreachable, leaving a run that stalls
+    // out with no message at all.
+    //
+    // `signal?.aborted` is checked FIRST so a caller abort that races a timeout
+    // stays silent.
+    if (signal?.aborted) {
       metrics.exit = "aborted";
+    } else if (err instanceof Error && err.name === "AbortError") {
+      metrics.exit = "timeout";
     } else {
       metrics.exit = "error";
       metrics.errorMessage = err instanceof Error ? err.message : String(err);
