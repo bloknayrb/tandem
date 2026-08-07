@@ -58,7 +58,21 @@ describe("resolveNodeBinary", () => {
   });
 
   it("rejects a plain UNC path", () => {
+    // Platform-independent by construction, and it has to be said out loud
+    // because this assertion passed on Windows while failing on Linux CI.
+    // `resolve()` preserves a leading `\\` on win32 but treats the same string
+    // as a RELATIVE name on POSIX, prepending cwd and erasing the prefix the
+    // NTLM-leak guard keys on — after which the basename (`node.exe`) validates
+    // and a UNC path is emitted into the user's config. So the UNC question is
+    // asked of the written path, before any normalization.
     expect(resolveNodeBinary("\\\\server\\share\\node.exe")).toBe(BARE_NODE);
+  });
+
+  it("rejects the forward-slash UNC spelling too", () => {
+    // This one never broke — `//server/...` is absolute on both platforms, so
+    // `resolve` left it alone and the guard fired. Pinned anyway: it is the
+    // same rule, and a fix that only handled backslashes would look correct.
+    expect(resolveNodeBinary("//server/share/node.exe")).toBe(BARE_NODE);
   });
 });
 

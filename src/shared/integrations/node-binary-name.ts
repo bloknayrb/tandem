@@ -14,8 +14,18 @@
  * hand-edited config naming an arbitrary executable.
  */
 
-/** Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM hash leaks. */
-function hasUncPrefix(p: string): boolean {
+/**
+ * Reject UNC paths (both backslash and forward-slash variants) to prevent NTLM
+ * hash leaks.
+ *
+ * Exported because UNC-ness is a property of the path as **written**, not as
+ * resolved, so callers that normalize before validating have to ask this
+ * question first. On POSIX, `path.resolve("\\\\server\\share\\node.exe")` treats
+ * the input as a relative name and prepends cwd — erasing the leading `\\` this
+ * predicate keys on and leaving a basename (`node.exe`) that validates. The
+ * guard then passes something it was written to reject.
+ */
+export function hasUncPrefix(p: string): boolean {
   return p.startsWith("\\\\") || p.startsWith("//");
 }
 

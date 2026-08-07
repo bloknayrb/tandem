@@ -41,7 +41,7 @@
  */
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
+import { hasUncPrefix, isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 
 /** The pre-existing behaviour, and the fallback whenever an absolute path
  *  cannot be produced or would not validate. Never emit something the
@@ -68,8 +68,13 @@ const WIN_EXTENDED_DRIVE_RE = /^\\\\\?\\([A-Za-z]:)/;
 export function resolveNodeBinary(candidate: string = process.execPath): string {
   if (!candidate) return BARE_NODE;
   const stripped = candidate.replace(WIN_EXTENDED_DRIVE_RE, "$1");
-  // `resolve` normalizes away any `..`, which the validator rejects outright.
-  const absolute = resolve(stripped);
+  // Ask about UNC BEFORE resolving, because `resolve` is platform-dependent
+  // here and the guard is not. On Windows it preserves the leading `\\`; on
+  // POSIX it treats `\\server\share\node.exe` as a relative name and prepends
+  // cwd, which erases the prefix and leaves a basename that validates. Checking
+  // after would make the NTLM-leak rejection fire only on the one platform
+  // where a UNC path is least surprising.
+  const absolute = hasUncPrefix(stripped) ? stripped : resolve(stripped);
   if (isValidNodeBinary(absolute)) return absolute;
 
   // Say so. Falling back silently would reintroduce the exact bug this module
