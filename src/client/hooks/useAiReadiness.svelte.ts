@@ -64,12 +64,13 @@ import {
 } from "../../shared/launcher/contract.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
-/** Loopback `/health` response. `hasSession` is omitted for non-loopback
- * callers; the client only ever talks to 127.0.0.1 so it is present in
- * practice, but absence is treated as "unknown" (no promotion). */
+/** Loopback `/health` response. `hasSession` and `push` are omitted for
+ * non-loopback callers; the client only ever talks to 127.0.0.1 so they are
+ * present in practice, but absence is treated as "unknown" (no promotion). */
 interface HealthResponse {
   status?: string;
   hasSession?: boolean;
+  push?: { subscribers?: number };
 }
 
 export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
@@ -179,6 +180,14 @@ export const AI_CTA: Record<
  */
 export type AiLiveIndicator = "connected" | "solo-paused" | null;
 
+/**
+ * Whether anything is delivering real-time events to the attached agent.
+ *   - `none`     — zero SSE consumers. The one sound negative; safe to act on.
+ *   - `attached` — at least one consumer, which does NOT prove delivery.
+ *   - `unknown`  — not yet polled, or the loopback-only field was redacted.
+ */
+export type PushDelivery = "none" | "attached" | "unknown";
+
 export interface AiReadiness {
   readonly state: AiReadinessState;
   /** The CTA to surface, with Solo-mode suppression already applied. */
@@ -192,6 +201,29 @@ export interface AiReadiness {
    * startup window), where an "AI connected" badge would be a false green.
    */
   readonly liveIndicator: AiLiveIndicator;
+  /**
+   * Whether any real-time push consumer (channel shim / plugin monitor) is
+   * attached.
+   *
+   * ONLY `"none"` is actionable, and that asymmetry is the whole contract. The
+   * `makeHealthHandler` docblock in `server/mcp/routes/health.ts` states it:
+   * `subscribers: 0` is a sound negative, but any positive count includes an
+   * attached-but-inert shim, so `"attached"` does NOT mean events reach a
+   * model. Use it to explain a delay, never to assert that push is working —
+   * do not build a "push is live" indicator on it.
+   *
+   * A named union rather than `boolean | null` deliberately. As a tri-state
+   * boolean, `if (!pushConsumerAttached)` compiled and read as "not attached"
+   * while firing on `null` — telling a working user their comment went
+   * nowhere, the exact alarm the health route forbids. Every member of a string
+   * union is truthy, so that mistake stops type-checking as intended. This is
+   * the same lesson `AI_CTA` above records: make the safe reading the only
+   * convenient one.
+   *
+   * This is the missing half of `liveIndicator`. That signal proves Claude
+   * *can read* the document; this one says whether Claude will be *told* to.
+   */
+  readonly pushDelivery: PushDelivery;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
   /**
@@ -222,6 +254,9 @@ export function createAiReadiness(deps: {
   // Whether an MCP client transport is currently open (from `/health`). An
   // active session means AI works regardless of launcher state (#1054).
   let mcpSessionActive = $state(false);
+  // Whether `/health` reported any SSE consumer. `null` = not yet known or
+  // redacted, which is NOT the same as "none".
+  let pushAttached = $state<boolean | null>(null);
   // Have we ever read launcher status successfully? Distinguishes "still
   // booting" from a genuine `available: false`, so the chip never flashes
   // during cold start. `/health` is not gated on this: readiness derives
@@ -259,24 +294,44 @@ export function createAiReadiness(deps: {
     }
   }
 
-  /** One `/health` read. `null` means "unknown" (network blip, non-OK,
-   *  malformed body, or the loopback-only `hasSession` field is absent) —
-   *  callers keep their prior value rather than demote to false. */
-  async function fetchHasSession(): Promise<boolean | null> {
+  /** One `/health` read, yielding both loopback-only signals. Each field is
+   *  independently `null` for "unknown" (network blip, non-OK, malformed body,
+   *  or the field absent because the caller wasn't loopback) — callers keep
+   *  their prior value rather than demote.
+   *
+   *  Both come off ONE fetch deliberately. They answer different questions
+   *  (`hasSession` = an MCP transport completed initialize; `push.subscribers`
+   *  = an SSE consumer is attached) and the `makeHealthHandler` docblock in
+   *  `server/mcp/routes/health.ts` is explicit that they are structurally
+   *  disjoint — which is precisely why a user can see "AI connected" while
+   *  nothing they do reaches Claude. Reading them at the same instant keeps the
+   *  two halves of that story consistent. */
+  async function fetchHealth(): Promise<{
+    hasSession: boolean | null;
+    pushAttached: boolean | null;
+  }> {
+    // A fresh literal per return, not one shared object — callers receive this
+    // by reference.
+    const unknown = () => ({ hasSession: null, pushAttached: null });
     let res: Response;
     try {
       res = await fetch(`${API_BASE}${API_HEALTH}`);
     } catch {
-      return null; // network blip
+      return unknown(); // network blip
     }
-    if (!res.ok) return null; // transient server error
+    if (!res.ok) return unknown(); // transient server error
     try {
       const body = (await res.json()) as HealthResponse;
-      // Only trust the field when present (loopback). Absence is "unknown",
-      // not "no session".
-      return typeof body.hasSession === "boolean" ? body.hasSession : null;
+      // Only trust each field when present (loopback). Absence is "unknown",
+      // not "no session" / "no consumer". The count collapses to a boolean
+      // here because nothing needs the number — and `> 0` is the only reading
+      // of it that `routes/health.ts` vouches for.
+      return {
+        hasSession: typeof body.hasSession === "boolean" ? body.hasSession : null,
+        pushAttached: typeof body.push?.subscribers === "number" ? body.push.subscribers > 0 : null,
+      };
     } catch {
-      return null; // malformed body
+      return unknown(); // malformed body
     }
   }
 
@@ -289,11 +344,14 @@ export function createAiReadiness(deps: {
    *  fetched value either way so callers can act on their own read. */
   async function readHasSession(): Promise<boolean | null> {
     const mine = ++healthSeq;
-    const fresh = await fetchHasSession();
-    if (fresh !== null && mine === healthSeq && !destroyed) {
-      mcpSessionActive = fresh;
+    const fresh = await fetchHealth();
+    if (mine === healthSeq && !destroyed) {
+      // Each field is written only when known, so a redacted or partial body
+      // can never demote one signal on the strength of the other's absence.
+      if (fresh.hasSession !== null) mcpSessionActive = fresh.hasSession;
+      if (fresh.pushAttached !== null) pushAttached = fresh.pushAttached;
     }
-    return fresh;
+    return fresh.hasSession;
   }
 
   /** See `AiReadiness.probeSession`. Issues a fresh `/health` read (which also
@@ -388,6 +446,15 @@ export function createAiReadiness(deps: {
     !mcpSessionActive ? null : deps.soloMode() ? "solo-paused" : "connected",
   );
 
+  // Deliberately NOT folded into `liveIndicator` or `state`. Push delivery is
+  // orthogonal to whether an agent is attached: a hand-launched session has a
+  // live MCP transport and no consumer at all, which is the exact state this
+  // exists to make legible. Folding it in would either blank a genuinely
+  // connected indicator or claim push works from a signal that cannot prove it.
+  const pushDelivery = $derived<PushDelivery>(
+    pushAttached === null ? "unknown" : pushAttached ? "attached" : "none",
+  );
+
   return {
     get state() {
       return state;
@@ -400,6 +467,9 @@ export function createAiReadiness(deps: {
     },
     get liveIndicator() {
       return liveIndicator;
+    },
+    get pushDelivery() {
+      return pushDelivery;
     },
     refresh: () => poll(),
     probeSession,

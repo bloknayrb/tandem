@@ -59,9 +59,10 @@ import { makeShutdownHandler, type ShutdownRouteDeps } from "./routes/shutdown.j
 import { handleStoreReclaimLock } from "./routes/store-reclaim.js";
 import { handleUpload } from "./routes/upload.js";
 
+export { isValidNodeBinary } from "../../shared/integrations/node-binary-name.js";
 export type { Handler } from "./routes/_shared.js";
 // Re-export shared utilities that tests and other modules import from here
-export { errorCodeToHttpStatus, isValidNodeBinary } from "./routes/_shared.js";
+export { errorCodeToHttpStatus } from "./routes/_shared.js";
 
 /**
  * Check if a Host header value is allowed (127.0.0.1 + tauri.localhost + optional extra hosts).

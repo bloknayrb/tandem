@@ -40,6 +40,7 @@ import type * as Y from "yjs";
 import { Y_MAP_ANNOTATION_REPLIES, Y_MAP_ANNOTATIONS } from "../../shared/constants.js";
 import { withInternal } from "../../shared/origins.js";
 import { isUploadPath } from "../../shared/paths.js";
+import { rejectUnsafeWindowsPrefix } from "../file-io/windows-path-safety.js";
 import { extractText } from "../mcp/document-model.js";
 import { contentHash, ENVELOPE_FILENAME_RE } from "./doc-hash.js";
 import { type AnnotationDocV1, parseAnnotationDoc, SCHEMA_VERSION } from "./schema.js";
@@ -148,12 +149,19 @@ export async function recoverRenamedEnvelope(
       // Only accept absolute paths — relative paths from untrusted JSON could
       // resolve to unexpected locations. path.isAbsolute rejects them early.
       if (!path.isAbsolute(oldPath)) continue;
+      // Reject UNC/device-namespace prefixes to prevent NTLM hash leakage via
+      // Windows authentication challenges — on the RAW string and again after
+      // resolving. Checking only the resolved form (which is what this did) is
+      // a platform-dependent guard: on Windows `resolve` preserves a leading
+      // `\\`, but on POSIX it treats `\\server\share\x` as a RELATIVE name and
+      // prepends cwd, erasing the prefix. It was safe here only by accident —
+      // the `path.isAbsolute` check above happens to reject backslash-UNC on
+      // POSIX — and an accident that nothing documents is not a guard.
+      if (rejectUnsafeWindowsPrefix(oldPath) !== null) continue;
       // Normalize via path.resolve so the downstream fs.access receives a
-      // fully-resolved path. After resolving, reject any UNC/network share
-      // prefix (\\\\server\\share or //server/share) to prevent NTLM hash
-      // leakage via Windows authentication challenges.
+      // fully-resolved path; re-check to catch a `..` traversal onto a share.
       const resolvedOldPath = path.resolve(oldPath);
-      if (resolvedOldPath.startsWith("\\\\") || resolvedOldPath.startsWith("//")) continue;
+      if (rejectUnsafeWindowsPrefix(resolvedOldPath) !== null) continue;
 
       // The rename signal: the old path must no longer exist. If it still
       // exists, this is a copy — do NOT steal its annotations.
