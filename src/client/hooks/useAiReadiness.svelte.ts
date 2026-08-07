@@ -637,10 +637,15 @@ export function createAiReadiness(deps: {
       // confident lie for another.
       pushAttached = null;
       // The join is deliberately NOT cleared here, and re-adding a clear would
-      // be adding a line nothing can observe. `serverUnreachable` above already
-      // outranks the stall inside `deliveryStall`, and the answered branch
-      // reassigns the join unconditionally — so between the two there is no
-      // reachable state in which a stale join is rendered.
+      // be adding a line nothing can observe: `serverUnreachable` above already
+      // outranks the stall inside `deliveryStall`, so ONCE THE SERVER IS
+      // DECLARED UNREACHABLE the join cannot reach the banner either way.
+      //
+      // Below the floor is a different case, and it is deliberate rather than a
+      // gap: a single dead read takes NEITHER branch, so the previous join
+      // survives and keeps rendering. That is correct — a dropped request is
+      // not evidence the stall ended — and it is pinned by "One dead read holds
+      // the claim" in the hook's tests. Do not "fix" the code to clear early.
     }
     return out;
   }
@@ -766,15 +771,19 @@ export function createAiReadiness(deps: {
     get serverUnreachable() {
       return serverUnreachable;
     },
+    // A getter over raw `$state` rather than a `$derived`, matching
+    // `serverUnreachable` directly above and `yjsSync.connected`. Reactivity in
+    // Svelte 5 comes from reading a signal inside a tracking context, not from
+    // `$derived` — the four signals read here land in the consuming component's
+    // own tracked scope. It must keep returning a PRIMITIVE: handing back a
+    // fresh object per read would invalidate any consumer `$derived` every time.
     get deliveryStalledMs() {
-      return (
-        deliveryStall({
-          state: deliveryState,
-          waitingMs: deliveryWaitingMs,
-          soloMode: deps.soloMode(),
-          serverUnreachable,
-        })?.waitingMs ?? null
-      );
+      return deliveryStall({
+        state: deliveryState,
+        waitingMs: deliveryWaitingMs,
+        soloMode: deps.soloMode(),
+        serverUnreachable,
+      });
     },
     refresh: () => poll(),
     probeSession,

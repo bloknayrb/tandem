@@ -25,7 +25,7 @@
  * (which gives a reactivity scope but no component lifecycle for `onDestroy`).
  */
 
-import { cleanup, render } from "@testing-library/svelte";
+import { cleanup, render, screen } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiChip, AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
@@ -1227,6 +1227,48 @@ describe("createAiReadiness — push consumer", () => {
       const h = mount();
       await settle();
       expect(h.get().deliveryStalledMs).toBeNull();
+    });
+
+    it("re-renders the mounted banner as the wait changes, not just the getter", async () => {
+      // Every other assertion in this block reads `deliveryStalledMs` from a
+      // NON-TRACKING context, which proves the logic and nothing about the
+      // wiring. If the getter were ever collapsed into a value computed once at
+      // construction, all of them would stay green while the banner froze at its
+      // mount-time text. This one goes through the rendered DOM instead, so the
+      // reactive path is what is under test.
+      let body: unknown = { status: "ok", hasSession: true };
+      globalThis.fetch = routedFetch({
+        launcher: RUNNING_LAUNCHER,
+        health: () => mkResponse(body),
+      });
+      const h = mount();
+      await settle();
+      expect(screen.queryByTestId("wake-stall-banner")).toBeNull();
+
+      body = {
+        status: "ok",
+        hasSession: true,
+        delivery: { state: "awaiting-poll", waitingMs: 200_000 },
+      };
+      h.get().refresh();
+      await settle();
+      expect(screen.getByTestId("wake-stall-banner").textContent).toContain("3 minutes");
+
+      // The number must track the poll, not stick at whatever it first showed.
+      body = {
+        status: "ok",
+        hasSession: true,
+        delivery: { state: "awaiting-poll", waitingMs: 600_000 },
+      };
+      h.get().refresh();
+      await settle();
+      expect(screen.getByTestId("wake-stall-banner").textContent).toContain("10 minutes");
+
+      // …and it erases itself when a poll finally lands. No dismiss control.
+      body = { status: "ok", hasSession: true, delivery: { state: "polled", waitingMs: null } };
+      h.get().refresh();
+      await settle();
+      expect(screen.queryByTestId("wake-stall-banner")).toBeNull();
     });
   });
 });

@@ -55,12 +55,18 @@ export interface DeliveryStallInput {
   serverUnreachable: boolean;
 }
 
-export function deliveryStall(input: DeliveryStallInput): { waitingMs: number } | null {
+/**
+ * @returns how long the oldest unanswered message has waited, in ms, or `null`
+ *   for "no claim". A bare number rather than a wrapper object: `0` is
+ *   unreachable (the threshold gate is strictly greater), so `null` carries the
+ *   whole no-claim/claim distinction on its own.
+ */
+export function deliveryStall(input: DeliveryStallInput): number | null {
   if (input.soloMode) return null;
   // The offline notice already tells this story, and better: with the server
   // gone, "Claude hasn't picked this up" is true but blames the wrong party.
   if (input.serverUnreachable) return null;
   if (input.state !== "awaiting-poll") return null;
   if (input.waitingMs === null || input.waitingMs < DELIVERY_STALL_MS) return null;
-  return { waitingMs: input.waitingMs };
+  return input.waitingMs;
 }
