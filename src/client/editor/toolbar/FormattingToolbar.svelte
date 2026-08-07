@@ -85,9 +85,11 @@ $effect(() => {
 // the deferred focus arrived. That frame is not free — a throttled or hidden tab
 // never runs the callback and the restore is simply lost. ProseMirror's own
 // `view.focus()` is synchronous, so focus leaves the menu item BEFORE it
-// unmounts and there is no drop to recover from. It also cannot scroll the
-// document the way the command's selection restoration can, which makes the
-// outside-mousedown branch strictly safer than it was.
+// unmounts and there is no drop to recover from. Nothing is given up: it runs
+// `selectionToDOM()`, so the caret returns to where it was (see Toolbar.svelte's
+// #768 note), and neither call scrolls — both reach the DOM through
+// `focusPreventScroll`. It is also what every other focus restore in
+// src/client/ already uses; this call site was the lone `commands.focus()`.
 function closeHeadingMenu() {
   const ours =
     (!!headingMenuEl && headingMenuEl.contains(document.activeElement)) ||

@@ -69,7 +69,6 @@ describe("heading menu — focus restore on close (#1313)", () => {
   it("Escape returns focus to the editor without waiting for an animation frame", async () => {
     const editor = makeEditor();
     const { container } = render(FormattingToolbar, { props: { editor } });
-    document.body.appendChild(container);
 
     await openHeadingMenu(container);
 
@@ -86,7 +85,6 @@ describe("heading menu — focus restore on close (#1313)", () => {
   it("outside mousedown from inside the menu restores the editor on the same flush", async () => {
     const editor = makeEditor();
     const { container } = render(FormattingToolbar, { props: { editor } });
-    document.body.appendChild(container);
 
     await openHeadingMenu(container);
 
@@ -105,7 +103,6 @@ describe("heading menu — focus restore on close (#1313)", () => {
   it("does not yank focus into the editor when the user has already moved elsewhere", async () => {
     const editor = makeEditor();
     const { container } = render(FormattingToolbar, { props: { editor } });
-    document.body.appendChild(container);
 
     await openHeadingMenu(container);
 
