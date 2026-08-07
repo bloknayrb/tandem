@@ -64,9 +64,11 @@ export function filterDevRepoChecks(report: DoctorReport): DoctorReport {
  * Loopback-only, unconditionally: the report embeds absolute paths (which
  * include the username) and PIDs — and the unfiltered collector additionally
  * sees MCP config URLs. This is deliberately stricter than /api/info's
- * per-field stripping — there is no useful LAN subset of this report. Note
- * `assertLoopbackForMutation` would NOT work here: it is a no-op outside the
- * unauthenticated-LAN opt-in. "Loopback-only" still includes every web origin
+ * per-field stripping — there is no useful LAN subset of this report. The
+ * hand-rolled check predates #1293, which made `assertLoopbackForMutation`
+ * unconditional; either would work now, and this one is kept only because a
+ * read route has no business importing a helper named "for mutation".
+ * "Loopback-only" still includes every web origin
  * served from this machine (any 127.0.0.1:* page passes the socket check and
  * the CORS allowlist) — same accepted posture as /api/info, richer payload.
  *
