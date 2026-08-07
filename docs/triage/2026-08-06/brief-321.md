@@ -22,8 +22,12 @@ The precondition is unmet, and the code says so:
   zero `tandem_*` tools over HTTP-in-plugin. Nothing crosses the VM boundary except stdio JSON-RPC.
 - **Codex (#1265) is a host-local managed child**, spawned by the supervisor with an MCP config
   pointing at loopback — same posture as Claude Code. No sandbox, no WS.
-- **The launcher is forbidden from widening the bind.** `src-tauri/src/integrations_probe.rs:322-324`:
-  *"The launcher MUST NEVER set `TANDEM_BIND_HOST=0.0.0.0`."*
+- **The launcher is forbidden from widening the bind, except behind an opt-in nobody has built.**
+  `src-tauri/src/integrations_probe.rs:322-324`: *"The launcher MUST NEVER set `TANDEM_BIND_HOST=0.0.0.0`
+  unless the user has opted into LAN mode with an auth token (#477 PR 4 out of scope)."* The `unless`
+  clause is the exception, and it is **unimplemented** — PR 4 was declared out of scope, so no code path
+  sets the var today. The prohibition is therefore absolute in practice but conditional in principle:
+  building that opt-in is exactly what would fire #321's precondition.
 
 One thing did change since filing: the WS is no longer origin-check-only. `onAuthenticate`
 (`provider.ts:136-144`) now runs, gating every room — including `CTRL_ROOM` — on the server run's
