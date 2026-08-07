@@ -34,8 +34,32 @@
 // Usage: node tests/perf/perf-server.mjs <server-entry> [args...]
 // The remaining argv is run under this same Node binary.
 import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
 import path from "node:path";
+
+/**
+ * Paths under `root` whose contents cannot be listed — the descendants that
+ * make a recursive delete fail. Diagnostic only, so its own errors are the
+ * answer rather than a problem: a directory that throws on `readdirSync` IS the
+ * thing being looked for.
+ */
+function findUnreadable(root) {
+  const stuck = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      stuck.push(dir);
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) walk(path.join(dir, entry.name));
+    }
+  };
+  walk(root);
+  return stuck;
+}
 
 /** The one directory this script is ever allowed to delete. Must match
  *  `PERF_APP_DATA_DIR` in tests/perf/playwright.config.ts. */
@@ -53,7 +77,55 @@ if (!resolved || path.basename(resolved) !== PERF_APP_DATA_BASENAME) {
   );
   process.exit(1);
 }
-rmSync(resolved, { recursive: true, force: true });
+// ## Why the wipe is retried, and why it also reports the offending child
+//
+// Observed 2026-08-07, Windows 11: after a normal `perf:gate` run, the next
+// four consecutive runs all died here and the gate became un-runnable for
+// roughly ten minutes:
+//
+//   Error: EPERM, Permission denied: \\?\...\Temp\tandem-perf-data
+//   Error: Process from config.webServer was not able to start. Exit code: 1
+//
+// Both of those messages name the app-data ROOT, and neither names the wipe as
+// the failing step — so from the operator's seat the harness has simply stopped
+// working. It had not. The actual blocker was ONE child:
+// `doc-backups/<docHash>/`, left un-traversable and un-deletable by whatever
+// still held it (an `icacls` on it listed no ACEs at all and `dir` reported its
+// contents as not found — the shape of a Windows delete-pending entry). It
+// cleared on its own later, and a plain `rmdir` then removed it instantly.
+//
+// So there are two separate failures to fix, and only the first is a wait:
+//
+//  1. RETRY covers the short window. `force: true` only suppresses ENOENT, so
+//     it does nothing here. 20 x 250ms bounds the wait at ~5s, well inside the
+//     120s webServer timeout, and costs nothing on first-try success.
+//
+//  2. When the retries are NOT enough — and in the observed case they were
+//     not, by two orders of magnitude — the operator must at least be told
+//     which path is stuck, because that is the whole difference between "wait
+//     and re-run" and "the perf gate is broken". Node reports the root it was
+//     asked to delete, not the descendant that refused, so the walk below
+//     recovers the real offender. Deliberately still FATAL: booting the server
+//     over a surviving `sessions/` dir would silently restore the previous
+//     run's tabs and annotation envelopes and measure a load nobody chose,
+//     which is the exact defect this file exists to prevent (run 1, see
+//     docs/perf-gate-results.md). A wrong number is worse than no number.
+try {
+  rmSync(resolved, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+} catch (err) {
+  console.error(
+    `[perf-server] could not wipe app-data at ${resolved}\n` +
+      `[perf-server] ${err?.code ?? "error"}: ${err?.message ?? err}`,
+  );
+  for (const stuck of findUnreadable(resolved)) {
+    console.error(`[perf-server]   still held: ${stuck}`);
+  }
+  console.error(
+    `[perf-server] On Windows this is usually a delete-pending directory left by the\n` +
+      `[perf-server] previous run; it clears on its own. Wait, or remove the path above by hand.`,
+  );
+  process.exit(1);
+}
 console.error(`[perf-server] wiped app-data at ${resolved} before server start`);
 
 const child = spawn(process.execPath, process.argv.slice(2), { stdio: "inherit" });
