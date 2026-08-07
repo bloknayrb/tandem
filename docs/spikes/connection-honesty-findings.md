@@ -94,7 +94,7 @@ settled on a mechanism.
 **The tell was in the original data.** The count went **1 → 2 *after* the
 consumer died.** A leak holds steady at 1; it does not climb. Two live
 subscribers explains 2 exactly, and the explanation arrived later: the channel
-shim is default-on (S1), and there were two terminal Claude sessions open, each
+shim is default-on (A7), and there were two terminal Claude sessions open, each
 running one. The owner asked at the start of this investigation whether two
 concurrent sessions could account for the number. They could, and did.
 
@@ -131,7 +131,7 @@ server-side "push capability" detector is structurally impossible.
 Outcome-based detection ("did Claude actually react?") is the only formulation
 robust to A5. But `tandem_checkInbox` — the event that *is* delivery, since the
 item enters the model's context — writes no presence, no stamp, nothing
-(`mcp/awareness.ts:178-192`, wrapped only in `withErrorBoundary`). Presence
+(`mcp/awareness.ts:178-192`, wrapped in `withStructuredErrors` / `withErrorBoundary` only — notably NOT `withTypingPresence`). Presence
 today comes from `tandem_status` plus the five `withTypingPresence` tools, which
 are the wrong signals to key on. The stamp is trivial to add; it just does not
 exist yet.
@@ -147,7 +147,7 @@ per-session: `claudeSessionId` is absent for the direct-HTTP entry
 (`push-liveness.ts:52`) already records "an event reached a consumer at T"; the
 δ against a checkInbox stamp at T′ is delivery latency, and is the only cheap
 in-product measurement of E4 anyone has proposed. Also reconcile with
-`wasEmittedViaChannel` / `alreadyPushed` (`awareness.ts:476`, `queue.ts:474`+),
+`wasEmittedViaChannel` / `alreadyPushed` (`awareness.ts#buildInbox`, `queue.ts#wasEmittedViaChannel`),
 which is already a per-item, subscriber-gated record of "this was pushed."
 
 ### A7 — The channel shim is default-on and inert. **VERIFIED 2026-08-07**
@@ -160,7 +160,8 @@ path. `runChannel` then calls `startEventBridge` unconditionally
 
 It survives non-negotiation *silently*: the SDK's `assertNotificationCapability`
 (`server/index.js:162-181`) has no case for `notifications/claude/channel`, so
-delivery never throws, `sse-consumer.ts:484-489` never rethrows, the stream is
+delivery never throws, so `sse-consumer.ts:484-489` — which WOULD rethrow and
+tear the stream down — never fires, and the stream is
 never torn down, and the shim holds its subscriber slot for the life of the
 session.
 
@@ -202,21 +203,37 @@ stdin — strictly after `connect()` resolves. Reading it at `run.ts:207` return
 
 ### B1 — The AI pill stays green when the server is unreachable. **PROVEN**
 
-`hooks/useAiReadiness.svelte.ts:351`:
+> **Fixed 2026-08-07 (PR #1324).** Everything below describes the code as it
+> stood before that PR; the identifiers it quotes no longer exist. See the
+> correction at the end of this section.
+
+`hooks/useAiReadiness.svelte.ts`, in `readHasSession`:
 
 ```ts
 if (fresh.hasSession !== null) mcpSessionActive = fresh.hasSession;
 ```
 
-`fetchHealth()` returns `unknown()` (with `hasSession: null`) for **two
+`fetchHealth()` returned `unknown()` (with `hasSession: null`) for **two
 different situations**:
 
 1. a successful response whose field was **redacted** (non-loopback caller), and
 2. the fetch **failing outright** because the server is gone.
 
 Case 1 must not demote — that is what the comment above the line reasons about,
-correctly. Case 2 is positive evidence the server is dead, and takes the same
-branch. So `mcpSessionActive` holds its last value indefinitely.
+correctly. Case 2 is positive evidence the server is dead, and took the same
+branch. So `mcpSessionActive` held its last value indefinitely.
+
+**Correction (2026-08-07).** `unknown()` is gone, replaced by a `HealthRead`
+union that discriminates on a narrower question than the one stated above: not
+"did something answer" but *did OUR server answer*. `makeHealthHandler` has no
+failure branch — it unconditionally sends a 200 carrying valid JSON — so on this
+route a non-OK status or an unparseable body is not the server being unwell, it
+is evidence that what is on the port is not Tandem. Those now accrue a strike
+alongside an outright throw and a body-stream error; two consecutive strikes
+**from the poll path** demote. Redaction remains what it always was and is the
+one case that never demotes: null FIELDS on an answered read. The read is also
+time-bounded now, because an unbounded fetch made "wedged" indistinguishable
+from "healthy" — the same floorless fail-safe wearing a different hat.
 
 Observed: server killed and confirmed down by six consecutive probes over 30 s;
 the app showed its "We've lost the connection to the Tandem server" banner and
@@ -261,9 +278,9 @@ had connected *and already replied*, sitting next to a green pill.
 "inherits this exactly." It does not, and the difference is the whole mechanism.
 `useNotifications` prunes only `severity: "info"` entries, at
 `ACTIVITY_INFO_TTL_MS` (5 min, `shared/constants.ts:269`); warnings and errors
-persist until dismissed. #1316's `no-push` notice is `info` (`App.svelte:613`)
+persist until dismissed. #1316's `no-push` notice is `info` (`App.svelte`, the `no-push` branch)
 and therefore self-erases. The `no-agent` notice is `warning`
-(`App.svelte:584`) and never expires — **that is the instance actually
+(`App.svelte`, the `no-agent` branch) and never expires — **that is the instance actually
 observed**, and the only one needing a copy fix.
 
 Fixed by rewording the observation to past tense while leaving the promise in
@@ -429,7 +446,7 @@ Not investigated further.
 (retracted) and mis-scoped B4. What actually holds:
 
 The PR's trigger (`pushDelivery === "none"`, a confirmed zero) is *sound* — a
-zero really does mean nothing is attached. But **S1 makes it largely
+zero really does mean nothing is attached. But **A7 makes it largely
 unreachable**: the channel shim is registered by default, connects
 unconditionally, and holds `subscribers >= 1` while discarding every
 notification, because the host never negotiated `claude/channel`. For a
@@ -442,8 +459,15 @@ population:
   and `process.exit(1)`s (`sse-consumer.ts:184-206`). A user who starts Claude
   Code *before* Tandem loses it permanently for that session → zero → the notice
   fires, correctly.
-- Wizard opt-outs, configs written before default-on, and Claude Desktop targets
-  (which never get a shim).
+- Configs written before default-on, and Claude Desktop targets (which never get
+  a shim — `apply.ts` returns `false` for them).
+
+  A "wizard opt-out" was listed here in an earlier revision and is **withdrawn**:
+  the wizard path passes no override at all, and the only override plumbed
+  (`cli/setup.ts`, `apply.ts`) comes from `--with-channel-shim`, which resolves
+  to `true` or `undefined` — never `false`. There is no code path by which a
+  user declines the shim. An unciteable population is the wrong thing to have in
+  the section that justifies shipping.
 
 That start-order case is the shape of the field reports, which is why the PR is
 still worth shipping as-is. What it does *not* do is catch the mainstream
@@ -457,5 +481,5 @@ Also bearing on it:
   to the PR's own new `no-push` notice (`info`, self-erases at 5 min). The
   original claim that it applied "verbatim" was wrong; see B4 above.
 
-**B1 remains the largest single honesty defect found, is independent of push,
-and is not addressed by the PR at all.**
+**B1 was the largest single honesty defect found and is independent of push.
+PR #1316 did not address it; PR #1324 does — see the correction under B1.**

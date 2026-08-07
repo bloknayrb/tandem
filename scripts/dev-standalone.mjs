@@ -214,6 +214,13 @@ export async function launchStandalone({
   // the monitor. Do not restore this: an always-on consumer is not a neutral
   // default, it is a mask.
   console.error(`[standalone] Backend ready at ${baseUrl}`);
+  // Printed, not only commented: the person who needs this is watching this
+  // terminal wondering why idle-wake stopped working. A signal that lives only
+  // where nobody looks is the same mistake in miniature.
+  console.error(
+    "[standalone] Monitor NOT started — an always-on consumer masks `subscribers === 0`. " +
+      "Run `npx tsx src/monitor/index.ts` to test push delivery.",
+  );
 
   return { baseUrl, client, server };
 }

@@ -78,8 +78,15 @@ test("a chat send with an attached agent but no push consumer explains the delay
   // Affirms the save and frames the gap as deferred delivery — never
   // "failed"/"lost", because nothing was lost.
   await expect(toast).toContainText("saved");
-  // NOT the agent-absence notice: an agent is attached.
-  await expect(toast).not.toContainText("no AI is connected");
+  // NOT the agent-absence notice: an agent is attached. The two notices are the
+  // two branches of one handler, so this exclusion is the whole point of the
+  // test — and it must quote the OTHER branch's live copy. It read "no AI is
+  // connected" until that string was past-tensed to "no AI was connected" (the
+  // tray persists `warning`s, so present tense outlives its moment); the
+  // assertion went vacuously true and would have stayed green while the wrong
+  // notice fired. Keep it in sync with `App.svelte`'s `no-agent` message, or
+  // re-key both onto a testid.
+  await expect(toast).not.toContainText("no AI was connected");
 });
 
 test("the same send stays silent when a push consumer IS attached", async ({ page }) => {

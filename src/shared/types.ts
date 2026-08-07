@@ -538,7 +538,10 @@ export interface TandemNotification {
    *  activity tray, which is a LOG. A present-tense observation at those two
    *  severities outlives the moment it describes and becomes a false claim
    *  about now — state the observation in past tense and reserve future tense
-   *  for what remains true (a promise, a pending item). */
+   *  for what remains true (a promise, a pending item, a consequence that has
+   *  not finished happening). Convention only: the lifetime half is enforced
+   *  (`isInfoExpired` in `useNotifications.svelte.ts`), the tense half has no
+   *  lint, test or hook behind it. */
   severity: "info" | "warning" | "error";
   message: string;
   documentId?: string;

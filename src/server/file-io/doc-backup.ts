@@ -48,8 +48,12 @@ export const MAX_DOC_BACKUPS = 3;
 /**
  * Total-size ceiling for the whole doc-backups tree. Bounds confused-deputy
  * churn (an MCP client opening unlimited fresh paths, each earning a snapshot)
- * without per-doc bookkeeping. When exceeded, snapshotting pauses for the
- * rest of the server run (one notification).
+ * without per-doc bookkeeping. When exceeded, THIS snapshot is skipped and its
+ * path is not retried this run; every other path re-evaluates the cap on its
+ * own first write, so it is not a global pause. Only the notification is
+ * run-scoped (`sizeCapNotified`) — one per run, however many paths skip. The
+ * cap clears when the tree shrinks, which in practice means the 30-day boot
+ * sweep, i.e. across a restart rather than mid-session.
  */
 export const MAX_DOC_BACKUP_BYTES = 500 * 1024 * 1024;
 
@@ -329,13 +333,19 @@ export async function snapshotBeforeFirstWrite(
           id: generateNotificationId(),
           type: "general-error",
           severity: "warning",
-          // Past tense: `sizeCapNotified` latches for the process, but the cap
-          // is re-checked per snapshot and 30-day pruning can clear it — so a
-          // present-tense "backups are paused" outlives the pause it names.
-          // See `TandemNotification.severity`.
+          // Past tense on the observation, future on the consequence — and the
+          // consequence is the load-bearing half. `sizeCapNotified` latches for
+          // the process and the `dedupKey` dedupes on top, so this fires EXACTLY
+          // ONCE per run, while the cap is re-checked on every snapshot: every
+          // document touched afterwards is overwritten with no pre-write copy.
+          // An earlier draft past-tensed the whole sentence and reported that as
+          // a singular "a backup was skipped", which reads as a resolved one-off
+          // and invites a dismiss. See `TandemNotification.severity`: past tense
+          // for what happened, future for what remains true.
           message:
             "A document backup was skipped: the backup folder had reached its size limit. " +
-            "Older backups are removed automatically after 30 days.",
+            "Further backups will be skipped until it shrinks, so documents may be " +
+            "overwritten without a snapshot. Older backups are removed automatically after 30 days.",
           dedupKey: "doc-backup:size-cap",
           timestamp: Date.now(),
         });
