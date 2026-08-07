@@ -119,7 +119,7 @@ Without the flag nothing breaks and nothing is lost: your messages and comments 
 
 ### What you get
 
-- Multiple documents open in tabs, with `.md`, `.txt`, `.html`, and `.docx` support (Word files are editable; the original is only written when you explicitly save).
+- Multiple documents open in tabs, with `.md`, `.markdown`, `.txt`, `.html`, and `.docx` support (Word files are editable; the original is only written when you explicitly save).
 - A scratchpad (`Ctrl+N`) for drafts you do not want to save to disk.
 - A command palette (`Ctrl+Shift+P`) with fuzzy search, ranked by how well each result matches.
 - Find and replace, including across all open tabs.

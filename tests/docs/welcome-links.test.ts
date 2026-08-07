@@ -28,6 +28,18 @@ import { isSafeExternalHref } from "../../src/client/editor/utils/url-safety.js"
  * `docs/` resolves for a developer running from source and for nobody else.
  * That is exactly how `[User Guide](../docs/user-guide.md)` shipped broken.
  *
+ * WHY THE FIX IS AN EXTERNAL URL AND NOT A BUNDLED FILE. Bundling was
+ * available — `docs/workflows.md` is already a Tauri resource and package.json
+ * `files` is one more line — so "it could not ship" is NOT the reason, and a
+ * future reader should not re-derive that. The reason is the readOnly flag:
+ * `Editor.svelte#openHref` calls `openServerPath(resolvedPath)` with no
+ * options, so a bundled guide would open as an EDITABLE tab on a file inside
+ * the installed app's resources directory, and the 60s autosave would then
+ * round-trip it through `remark-stringify`. That is the hazard `CHANGELOG.md`
+ * is opened `readOnly: true` to avoid (lesson #69 / #605). Making a bundled
+ * guide safe would mean teaching the link intercept to open some targets
+ * read-only — a real feature, not a link fix. Hence the URL.
+ *
  * This test reads both shipping manifests from their real sources rather than
  * restating them — a restated manifest is what would drift.
  */

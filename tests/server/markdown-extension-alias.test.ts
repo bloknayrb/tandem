@@ -50,6 +50,12 @@ describe(".markdown is a first-class alias for .md", () => {
     // Auto-save is format-keyed, and the write target is the doc's own
     // filePath — so "md" here is what makes an edited .markdown file persist
     // to `notes.markdown` rather than being silently skipped or renamed.
-    expect(AUTO_SAVE_FORMATS.has(detectFormat("/tmp/notes.markdown"))).toBe(true);
+    const format = detectFormat("/tmp/notes.markdown");
+    // Pin the format first. `AUTO_SAVE_FORMATS` contains "txt" as well as "md",
+    // so the membership check ALONE passes under the exact defect this file
+    // exists to catch (the alias falling through to the plaintext fallback) —
+    // it is an assertion that cannot fail, and cannot be evidence on its own.
+    expect(format).toBe("md");
+    expect(AUTO_SAVE_FORMATS.has(format)).toBe(true);
   });
 });
