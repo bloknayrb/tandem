@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 4
+version: 5
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
   document editing, or iterating on text collaboratively. Provides workflow
@@ -22,7 +22,7 @@ These prevent the most common failures. Follow them always.
 2. **Pass `textSnapshot`.** Include the matched text as `textSnapshot` on mutations and annotations. If the text moved, the server returns `RANGE_MOVED` with relocated coordinates instead of corrupting the document.
 3. **Use `tandem_getTextContent` for document reads.** Use `getTextContent({ section: "Section Name" })` for targeted reads. The `section` parameter is case-insensitive.
 4. **`tandem_edit` cannot create paragraphs.** Newlines become literal characters. For multi-paragraph changes, use multiple `tandem_edit` calls or `tandem_comment` with `suggestedText`.
-5. **`.docx` files are read-only.** Use annotations instead of `tandem_edit`. Offer `tandem_convertToMarkdown` if the user wants an editable copy.
+5. **`.docx` files are editable, but only an explicit save writes them.** Edit them like any other document; edits are held in the Y.Doc and written back to the original `.docx` only when the user saves (or you call `tandem_save`). Auto-save deliberately skips `.docx`, so unsaved edits persist in the session and never silently overwrite the user's file. Conversion is lossy at the edges: `tandem_save` returns `fidelityWarnings` when the export downgraded anything, and the user sees a fidelity banner in the editor. Report those warnings rather than claiming a clean round-trip. A document can still be read-only for other reasons (uploads, an explicit `readOnly` flag); when it is, `tandem_edit` returns `FORMAT_ERROR` and annotations are the right surface.
 
 ## Workflow
 
@@ -82,18 +82,26 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 ## .docx Review Workflow
 
-1. `tandem_open` — opens in read-only mode (`readOnly: true`)
+1. `tandem_open` — opens editable, like any other document
 2. `tandem_getAnnotations({ author: "import" })` — check for imported Word comments; read and act on them
 3. Annotate with findings (comment, comment with suggestedText)
 4. `tandem_exportAnnotations` — generate a review summary the user can share
-5. If the user wants editable text, offer `tandem_convertToMarkdown`
+
+Then pick an ending, and say which one you're doing:
+
+- **Leave it to the user.** Annotations stay in the session; the file is untouched until someone saves.
+- **`tandem_save`** — writes your edits back into the original `.docx`, and writes shared comments back as native Word comments. Check `fidelityWarnings` in the response and pass anything it reports on to the user.
+- **`tandem_applyChanges`** — writes accepted suggestions into the `.docx` as Word **tracked changes** (`w:del` + `w:ins`), so the recipient reviews them in Word. Takes an optional `author` (default `"Tandem Review"`). Only works on a `.docx` opened from disk, and returns `NO_SUGGESTIONS` if nothing was accepted.
+- **`tandem_convertToMarkdown`** — still the right call if the user wants a Markdown copy rather than a Word file.
+
+Tandem snapshots the file's bytes before its first write each run, so a save is reversible: `tandem_restoreBackup` with no `backup` lists snapshots, and with `backup` set restores one in place (annotations preserved and re-anchored). If something else changed the file on disk meanwhile, the save is refused and a conflict banner asks the user to keep or reload — `tandem_save` reports that instead of claiming a save that didn't happen.
 
 ## Error Recovery
 
 - **`RANGE_MOVED`** — Text shifted since you read it. The response includes `resolvedFrom`/`resolvedTo` — use those coordinates for your next call.
 - **`RANGE_GONE`** — The text was deleted. Re-read the section with `tandem_getTextContent` and re-assess.
 - **`INVALID_RANGE`** — You hit heading markup (e.g., `## `). Target text content only, not the heading prefix.
-- **`FORMAT_ERROR`** — Attempted `tandem_edit` on a read-only `.docx`. Use annotations instead.
+- **`FORMAT_ERROR`** — The operation doesn't apply to this document. Most often the document is genuinely read-only (an upload, or opened with an explicit `readOnly` flag) — use annotations instead. Also returned by `tandem_appendContent` on a non-Markdown document, and by `tandem_applyChanges` on anything that isn't a `.docx` opened from disk. Note `.docx` alone no longer causes this: those open editable.
 
 ## Session Handoff
 
@@ -111,7 +119,7 @@ When multiple documents are open, always pass `documentId` explicitly — omitti
 
 ## Project Context Discovery
 
-Tandem auto-launches you in a single working directory (the user's home by default, or whatever they configured under Settings → Claude Code → Working directory). The document the user opens may live elsewhere — a different project, a different repo. When you're working on a file outside your launch cwd:
+Tandem auto-launches you in a single working directory (the user's home by default, or whatever they configured under Settings → AI Assistant → Working directory). The document the user opens may live elsewhere — a different project, a different repo. When you're working on a file outside your launch cwd:
 
 1. **Read `<docDir>/CLAUDE.md`** if it exists — it's the project's own playbook.
 2. **Walk up** the directory tree from `<docDir>` looking for `CLAUDE.md`, `.claude/`, `README.md`, or `package.json`/`Cargo.toml`/`pyproject.toml` to identify the project root.

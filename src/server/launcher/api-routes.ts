@@ -401,7 +401,7 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
     inflight.relaunch = true;
     try {
       if (deps.relaunchHook) await deps.relaunchHook();
-      await sup.relaunch(cwd);
+      await sup.relaunch(cwd, { persistCwd: parsePersistCwd(body) });
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "relaunch failed");
@@ -409,6 +409,22 @@ function makeRelaunchHandler(deps: LauncherRoutesDeps): Handler {
       inflight.relaunch = false;
     }
   };
+}
+
+/**
+ * Did the caller explicitly ask for this folder to STICK?
+ *
+ * Strict `=== true`, and absence means false. A cwd in the body is not evidence
+ * of intent: the recovery chip sends `dirname(activeDocumentPath)` whenever a
+ * tab is open, and durably repointing Claude off that guess is exactly the
+ * silent state change the launcher-relocate work exists to stop. Only the
+ * palette's explicit "relaunch here" sets the flag.
+ *
+ * Deliberately NOT a 400 on a non-boolean: this is an additive, optional field,
+ * and the safe reading of garbage is "the user did not ask to persist".
+ */
+function parsePersistCwd(body: Record<string, unknown>): boolean {
+  return body.persistCwd === true;
 }
 
 function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
@@ -433,7 +449,7 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
     inflight.startFresh = true;
     try {
       if (deps.startFreshHook) await deps.startFreshHook();
-      await sup.startFresh(cwd);
+      await sup.startFresh(cwd, { persistCwd: parsePersistCwd(body) });
       res.json({ ok: true, cwd: landedCwd(sup, cwd) });
     } catch (err) {
       sendUnexpected(res, err, "start-fresh failed");
@@ -457,11 +473,14 @@ function makeStartFreshHandler(deps: LauncherRoutesDeps): Handler {
  * would be an HTTP **bypass of `TANDEM_DISABLE_LAUNCHER=1`** — a kill switch
  * that today cannot be defeated remotely at all.
  *
- * Guard posture is the same as `relaunch`, deliberately. Note that
- * `assertLoopbackForMutation` only rejects when
- * `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`; in the default configuration it is a
- * no-op, and `assertOriginAllowlisted` reads a forgeable header. The real
- * protection is the loopback bind plus Bearer auth for non-loopback callers.
+ * Guard posture is the same as `relaunch`, deliberately. This comment used to
+ * be the only honest description of the gate in the codebase — it recorded that
+ * `assertLoopbackForMutation` was a no-op in the default configuration. #1293
+ * fixed the code instead, so it now rejects every non-loopback caller in every
+ * configuration. `assertOriginAllowlisted` still reads a forgeable header and is
+ * a CSRF control, not an authorization one; the loopback bind plus Bearer auth
+ * remains the primary protection, with the loopback gate covering the one case
+ * neither does — a token-holder who is not on this machine.
  */
 function makeStartHandler(deps: LauncherRoutesDeps): Handler {
   return async (req: Request, res: Response) => {

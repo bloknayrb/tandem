@@ -90,9 +90,16 @@ function escapeRegExp(s: string): string {
 /**
  * Check if an Origin header is an allowed local URL. Exported for testing.
  *
- * Narrowed in #477 PR 2: only `127.0.0.1` and `tauri.localhost` are accepted; the
- * bare `localhost` hostname is rejected to align with the browser-distribution
- * deprecation and remove a DNS-resolution attack surface.
+ * Narrowed in #477 PR 2: of the *hostname* forms only `127.0.0.1` and
+ * `tauri.localhost` are accepted; the bare `localhost` hostname is rejected to
+ * align with the browser-distribution deprecation and remove a DNS-resolution
+ * attack surface.
+ *
+ * This regex is not the whole allowlist — `isLocalhostOrigin` below also accepts
+ * `TAURI_LINUX_ORIGIN` (`tauri://localhost`) via a separate exact-string branch.
+ * Saying "only 127.0.0.1 and tauri.localhost are accepted" here read as a claim
+ * about the accepted set and stopped being true when that branch was added
+ * (#1307).
  */
 export const LOCALHOST_ORIGIN_RE = new RegExp(
   `^https?://(127\\.0\\.0\\.1|${escapeRegExp(TAURI_HOSTNAME)})(:\\d+)?$`,
@@ -120,7 +127,33 @@ export function createApiMiddleware(extraHosts: string[] = []): Handler {
       return;
     }
     const origin = req.headers.origin as string | undefined;
-    res.header("Access-Control-Allow-Origin", isLocalhostOrigin(origin) ? origin! : "null");
+    // Emit the header ONLY for an allowlisted origin. Absence is the denial.
+    //
+    // This was previously `... : "null"`, which reads as a deny value and is
+    // not one: `null` is the origin serialization the Fetch spec assigns to
+    // OPAQUE contexts, so a sandboxed/`data:`/`srcdoc` iframe on any page sends
+    // `Origin: null`, the CORS check byte-matches it, and the response body
+    // becomes cross-origin readable. Absence has no matching semantics at all,
+    // so it denies every origin including opaque ones (#1291).
+    //
+    // The two surfaces that would otherwise catch this both legitimately pass:
+    // the attacker fetches `127.0.0.1` directly so the Host check is satisfied,
+    // and the victim's browser is on loopback so auth is exempt. CORS is the
+    // only control in play, which is why getting it exactly right matters here.
+    //
+    // Reaches further than the /api JSON routes: the SSE handlers set their
+    // headers with `res.writeHead(200, {...})`, which Node MERGES with headers
+    // already set here rather than replacing them — so `/api/events` inherited
+    // this too and was `EventSource`-readable cross-origin. If either stream is
+    // ever rewritten to a replacing header write, that coverage disappears
+    // silently.
+    if (isLocalhostOrigin(origin)) {
+      res.header("Access-Control-Allow-Origin", origin!);
+    }
+    // The response genuinely varies by Origin and /api carries no Cache-Control,
+    // so it is heuristically cacheable. Set unconditionally, including on the
+    // denied responses.
+    res.header("Vary", "Origin");
     // DELETE added in #477 PR 3c-i for /api/integrations/secrets/:ref — Tauri's
     // tauri.localhost origin sends preflight for cross-origin requests, and
     // omitting DELETE here silently breaks secret deletion.

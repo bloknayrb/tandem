@@ -54,7 +54,7 @@ const labelStyle =
 const subtextStyle =
   "font-size: 10px; color: var(--tandem-fg-subtle); margin-top: var(--tandem-space-1);";
 const errorStyle =
-  "font-size: 10px; color: var(--tandem-error-fg); margin-top: var(--tandem-space-1);";
+  "font-size: 10px; color: var(--tandem-error-fg-strong); margin-top: var(--tandem-space-1);";
 /** The bordered-surface recipe every row in this tab repeats. */
 const rowCardStyle =
   "padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface);";

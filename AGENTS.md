@@ -15,6 +15,16 @@ Tandem is a TypeScript/Vite document editor with a Node server, CLI, monitor, an
 - `npm run lint` / `npm run format`: run ESLint and Biome formatting.
 - `npm run dev:tauri` / `npm run build:tauri`: run or package the Tauri desktop app.
 
+## Invariants That Fail Silently
+
+These are not style preferences. Violating one produces code that type-checks, passes tests, and is wrong at runtime — read [`CLAUDE.md` → Critical Rules](CLAUDE.md) before touching the areas they cover.
+
+- **Origin-tag every Y.Doc write.** Raw `doc.transact(...)` is forbidden in `src/`. Use one of the six helpers in `src/shared/origins.ts`; the helper you pick is a semantic contract that decides which observers and event consumers react. There is no blocking gate on this — only a warn-only hook and `npm run audit:origins`. See [ADR-031](docs/decisions.md).
+- **Y.Map key strings come from `src/shared/constants.ts`**, never string literals.
+- **stdout is reserved** for the MCP wire in stdio mode. `console.log/warn/info` are redirected to stderr; a dependency that writes to stdout corrupts the protocol.
+- **Three coordinate systems** — flat text offsets, ProseMirror positions, and Yjs RelativePositions — are not interchangeable. Use `validateRange()` / `anchoredRange()` rather than raw offsets.
+- **`tandem_getTextContent` uses `extractText()`, never `extractMarkdown()`**; the latter shifts offsets out of the annotation coordinate system.
+
 ## Coding Style & Naming Conventions
 
 Follow `.editorconfig` and `biome.json`: UTF-8, LF endings, final newline, two-space indentation, 100-column formatting, double quotes, semicolons, and trailing commas. Svelte components use `PascalCase` (`.svelte` files); rune-based hooks use `camelCase` (`.svelte.ts` files); tests use `*.test.ts` or `*.spec.ts`; route/service files use descriptive kebab-case where the surrounding directory already does.

@@ -63,3 +63,9 @@ CLAUDE.local.md
 # It was committed until #1190: a 3.1MB non-diffable file that embeds today's date at
 # capture time, so every regeneration dirtied it even when nothing had visually changed.
 docs/design-system-impl/preview/baselines/baselines.html
+
+# Generated v1.0 performance-gate fixture (`node scripts/fixtures/make-perf-doc.mjs`).
+# ~200KB of seeded lorem plus its annotation seed — reproducible from the checked-in
+# generator, so the artifact itself is noise in the history. The GENERATOR is tracked;
+# this output is not. See docs/roadmap.md §"Performance gate".
+tests/perf/.generated/

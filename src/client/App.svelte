@@ -48,6 +48,7 @@ import { annotationPluginKey } from "./editor/extensions/annotation";
 import { authorshipPluginKey } from "./editor/extensions/authorship";
 import { getFindState } from "./editor/extensions/find-replace.js";
 import FindReplaceBar from "./editor/find-replace/FindReplaceBar.svelte";
+import ScrollPill from "./editor/ScrollPill.svelte";
 import SourceView from "./editor/SourceView.svelte";
 import Toolbar from "./editor/toolbar/Toolbar.svelte";
 import { createAccentHue } from "./hooks/useAccentHue.svelte";
@@ -1885,6 +1886,47 @@ const isReadOnly = $derived(activeTab?.readOnly === true);
 const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
+/**
+ * Tab stop on the scroll container, but ONLY when nothing else in it can take
+ * focus and scroll it.
+ *
+ * An editable document is reachable already: ProseMirror's contenteditable is
+ * focusable and arrow/Page keys move the caret, which scrolls. A READ-ONLY
+ * document has neither — `editable: false` is not tabbable — and Chrome and
+ * Firefox paper over that by making overflow scrollers implicitly focusable,
+ * while **WebKit does not**. WebKit is the desktop app's WebView, so on macOS a
+ * read-only document (the changelog after an update, a `.docx` in review-only,
+ * anything behind the license wall) had no keyboard scroll path at all. Now
+ * that the scroll pill hides the native scrollbar, it also has no visible one
+ * until the mouse comes near — so this is the whole keyboard story for that
+ * case, not a nicety.
+ *
+ * Deliberately NOT unconditional: a tab stop on every document would spend the
+ * tab-traversal budget that `App.svelte` already declines to spend on the
+ * edge-collapse strips, and would buy nothing where the editor is focusable.
+ * Source view is excluded for the same reason — its textarea is focusable and
+ * scrolls itself.
+ */
+const editorScrollTabIndex = $derived(editorReadOnly && !inSourceView ? 0 : undefined);
+/**
+ * Pre-narrowed to a plain boolean so `ScrollPill`'s effect subscribes to THIS
+ * derived (which equality-checks its own value) rather than to `activeTab`,
+ * whose identity churns whenever the tab array updates for unrelated reasons —
+ * that would rebuild every listener and drop any drag in flight.
+ *
+ * Excluded in source view: `SourceView`'s textarea is its own scroller with its
+ * own native bar, so a second affordance 5px outboard of it is noise. The
+ * exclusion is also working around a defect it did not cause —
+ * `.source-view-container`'s `height: 100%` resolves against the scroller's
+ * CONTENT box, so `.editor-scroll` reports phantom overflow of exactly its own
+ * padding for the whole session (which also leaves `scroll-fade`'s mask on a
+ * surface that never scrolls). Fixing that height resolution would let this
+ * term go away; until then the pill declines rather than scrubbing ~100px of
+ * nothing.
+ */
+const scrollPillEnabled = $derived(
+  settingsState.settings.scrollPill && !!activeTab && !inSourceView,
+);
 const chatVisible = $derived(
   activeRailTab === "chat" &&
     (effectiveRightVisible || railFloat.right || railFloatClosing.right || chatReveal),
@@ -2383,6 +2425,8 @@ const shouldShowModelPicker = $derived(
            focusable buttons, and keyboard users pin via Alt+Shift+Arrow. -->
       <div
         class="rail-shell rail-shell-left"
+        role="complementary"
+        aria-label="Document outline"
         class:collapsed={!effectiveLeftVisible}
         class:animating={railAnimating.left}
         class:rail-floating-chrome={railFloat.left || railFloatClosing.left}
@@ -2435,6 +2479,8 @@ const shouldShowModelPicker = $derived(
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="rail-shell rail-shell-right"
+        role="complementary"
+        aria-label="Annotations and chat"
         class:collapsed={!effectiveRightVisible}
         class:animating={railAnimating.right}
         class:rail-floating-chrome={railFloat.right || railFloatClosing.right || chatReveal}
@@ -2796,13 +2842,27 @@ const shouldShowModelPicker = $derived(
        editor column's top-right so it floats above the doc and never scrolls
        away. `.editor-scroll` keeps all its bindings, handlers, and styles. -->
   <div class="editor-column-wrap">
+    <!-- `role="main"`, not `region`: this is the document being edited, so it
+         is the page's main content. As a bare region it satisfied no landmark
+         rule, and axe's `page-has-main` / `landmark-one-main` both fired —
+         invisibly, because the audit scoped itself to `#root`, where page-level
+         landmark rules do not apply. Exactly one editor column, so exactly one
+         `main`. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <!-- The warning is right in general and wrong here: a scroll container with
+         no focusable content is the documented exception (it is what axe's
+         `scrollable-region-focusable` asks for), and the value is `undefined`
+         whenever the editor IS focusable. See `editorScrollTabIndex`. -->
     <div
       bind:this={editorScrollEl}
       data-testid="editor-scroll-container"
+      tabindex={editorScrollTabIndex}
       class="editor-scroll tandem-scroll-fade-y"
       class:hide-raw-md={!settingsState.settings.showRawMarkdown}
+      class:tandem-scroll-pill-surface={!inSourceView}
+      class:tandem-scroll-pill-host={scrollPillEnabled}
       use:scrollFade={"y"}
-      role="region"
+      role="main"
       aria-label="Document editor"
       style={`position: relative; flex: 1; overflow: auto; padding: max(var(--tandem-space-7), 52px) var(--tandem-space-5) var(--tandem-space-7) var(--tandem-space-5); border: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "2px dashed var(--tandem-accent)" : "2px solid transparent"}; background: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-accent-bg)" : "var(--tandem-bg)"}; transition: border-color 0.15s, background 0.15s; border-radius: ${fileDrop.fileDragOver || tauriFileDrop.fileDragOver ? "var(--tandem-r-5)" : "0"};`}
       ondragover={fileDrop.handleEditorDragOver}
@@ -3032,12 +3092,23 @@ const shouldShowModelPicker = $derived(
          Hidden when there's no active document so the EmptyState scene
          isn't dragged down by phantom space. -->
     {#if activeTab}
-      <div class="editor-end-marker" aria-hidden="true">
+      <!-- `data-scroll-spacer` is a contract, not decoration: the scroll pill
+           subtracts this block's height so 70vh of blank scroll room doesn't
+           read as document length. Deleting the attribute puts a pill on every
+           file; see `contentExtent` in `editor/scroll-pill.ts`. -->
+      <div class="editor-end-marker" data-scroll-spacer aria-hidden="true">
         <span class="editor-end-pill">End of document</span>
       </div>
     {/if}
     {/if}
     </div>
+    <!-- Scroll pill: sibling of the scroll container, never a child — see the
+         mount-point note in `ScrollPill.svelte`. -->
+    <ScrollPill
+      scrollEl={editorScrollEl}
+      enabled={scrollPillEnabled}
+      reduceMotion={settingsState.settings.reduceMotion}
+    />
     <!-- Find/Replace bar: sibling of the scroll container so it floats top-right
          of the editor column without scrolling with the document. The `{#if open}`
          gate lives inside the component. -->
@@ -3380,6 +3451,16 @@ const shouldShowModelPicker = $derived(
     font-weight: 700;
   }
 
+  /* Only reachable when `editorScrollTabIndex` is 0 (a read-only document, see
+     its doc comment). `:focus-visible` rather than `:focus` so a mouse click
+     anywhere in the document doesn't ring the whole editor. Inset by the 2px
+     transparent border the scroller already carries for its file-drop state, so
+     the ring sits inside the column instead of over the rail seam. */
+  .editor-scroll:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -2px;
+  }
+
   .editor-column-wrap {
     /* Wraps `.editor-scroll` so the floating find bar (its sibling) anchors to
        the editor column's bounds and floats above the scrolling document rather
@@ -3437,7 +3518,15 @@ const shouldShowModelPicker = $derived(
     background: var(--tandem-surface-muted);
     border-radius: var(--tandem-r-pill);
     padding: var(--tandem-space-1) var(--tandem-space-3);
-    opacity: 0.6;
+    /* No `opacity` here. `--tandem-fg-faint` sits just above the AA floor by
+       construction — it is the lightest rung the 4.5:1 requirement permits — so
+       compositing it at 0.6 pushed the *rendered* contrast back under 4.5:1.
+       The token's guarantee is about the colour, and opacity silently spends
+       it. (This margin is thin on purpose and is the whole reason the
+       de-emphasis ladder is as compressed as it is: on a near-white surface,
+       AA for small text caps how light de-emphasised text can be.) The wrapper is `aria-hidden`, which exempts this from the
+       accessibility tree but not from being visible text a sighted user has to
+       read. De-emphasis comes from the faint token and the 2xs size instead. */
   }
   .panel-edge-collapse {
     position: absolute;

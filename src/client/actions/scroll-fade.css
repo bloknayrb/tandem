@@ -18,19 +18,53 @@
 
 /* Gate scrollbar hiding behind mask-image support. On unsupported
    browsers we fall back to the native scrollbar so overflow is never
-   invisibly clipped. */
+   invisibly clipped.
+
+   `.tandem-scroll-pill-surface` opts a surface OUT of this gate entirely, in
+   both directions — see the pair of rules below. Only the editor scroller
+   carries it, and only when it is the surface actually being scrolled: in
+   source view the textarea is its own scroller with its own bar, and
+   `.editor-scroll` reports phantom overflow of its own padding, so it drops the
+   class and falls back to this gate rather than restoring a dead native bar
+   alongside the textarea's real one. */
 @supports (mask-image: linear-gradient(#000, #000)) or
   (-webkit-mask-image: linear-gradient(#000, #000)) {
-  .tandem-scroll-fade-y,
-  .tandem-scroll-fade-x {
+  .tandem-scroll-fade-y:not(.tandem-scroll-pill-surface),
+  .tandem-scroll-fade-x:not(.tandem-scroll-pill-surface) {
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
 
-  .tandem-scroll-fade-y::-webkit-scrollbar,
-  .tandem-scroll-fade-x::-webkit-scrollbar {
+  .tandem-scroll-fade-y:not(.tandem-scroll-pill-surface)::-webkit-scrollbar,
+  .tandem-scroll-fade-x:not(.tandem-scroll-pill-surface)::-webkit-scrollbar {
     display: none;
   }
+}
+
+/* A surface that owns its own scroll affordance (the editor's scroll pill)
+   decides for itself, because the reason for the `@supports` gate above does
+   not apply to it: the pill is a visible affordance and does not depend on mask
+   support, so a browser outside the gate must not paint a second scrollbar 5px
+   inboard of the thumb.
+
+   The two states are the presence or absence of `-host`:
+     - `-host` present (pill on)  → hide the native bar, unconditionally.
+     - `-host` absent  (pill off) → NOTHING here matches, so `index.html`'s
+       global `*::-webkit-scrollbar` recipe applies on its own and the ordinary
+       scrollbar comes back. This is why the off state declares no width or
+       colour of its own: re-stating the 8px recipe would put a second copy of
+       it in a file that compiles through lightningcss while the original is
+       emitted verbatim, which is exactly the cross-file seam lesson 83 warns
+       about. Without the opt-out the off state would inherit the gated hide and
+       leave the editor with no scroll affordance at all — the bug the pill
+       exists to fix. */
+.tandem-scroll-pill-surface.tandem-scroll-pill-host {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tandem-scroll-pill-surface.tandem-scroll-pill-host::-webkit-scrollbar {
+  display: none;
 }
 
 /* Vertical fades. Composed: both edges → top+bottom; one edge → that side. */

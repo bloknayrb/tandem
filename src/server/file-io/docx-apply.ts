@@ -8,6 +8,7 @@ import type { ChildNode } from "domhandler";
 import { Element, Text } from "domhandler";
 import { parseDocument } from "htmlparser2";
 import JSZip from "jszip";
+import { assertDocxWithinSizeLimits } from "./docx-size-gate.js";
 import {
   findAllByName,
   getAttr,
@@ -485,6 +486,12 @@ export async function applyTrackedChanges(
   suggestions: AcceptedSuggestion[],
   options: ApplyOptions,
 ): Promise<ApplyOutput> {
+  // #1310: this path re-reads the SAME on-disk file the document was opened from
+  // (`mcp/docx-apply.ts` → `fs.readFile`), so it carries the identical untrusted input as import and
+  // needs the identical ceiling. The `tandem_applyChanges` license gate is a monetization control
+  // that currently ships dark; it authenticates nothing about the bytes.
+  await assertDocxWithinSizeLimits(docxBuffer);
+
   const zip = await JSZip.loadAsync(docxBuffer);
   const documentXml = await zip.file("word/document.xml")?.async("text");
   if (!documentXml) {

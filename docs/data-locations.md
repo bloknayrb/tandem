@@ -23,11 +23,18 @@ Inside it:
 | `annotations/` | The durable annotation store (one JSON per document hash) and its `store.lock` |
 | `doc-backups/` | Pre-overwrite snapshots of your documents — verbatim byte copies taken before Tandem's first write to a file each run, restorable with any file manager (see [troubleshooting → Recovering a previous version](troubleshooting.md#recovering-a-previous-version-of-a-document)) |
 | `integrations.json` | Integration config; secrets are keychain references, not plaintext |
+| `auth-token` | The auto-generated Bearer token (mode `0o600`) that non-loopback callers must present. Deleting it makes Tandem mint a new one on next launch, which invalidates any config still carrying the old value — run `tandem rotate-token` instead of deleting it by hand. |
 | `license.json` | **Your activated license.** Contains the signed blob, which carries your name and email address — the only identity information Tandem writes to disk. Deleting it means re-activating from the key you were emailed. |
 | `trial.json` | The trial clock's start timestamp. Deleting it restarts the trial (the clock is deliberately soft — see [ADR-040](decisions.md)). |
 | `tandem_backups/` | Backups of `~/.claude.json` taken before Tandem rewrote a customized entry |
 | `.broken-backups/` | Quarantined copies of malformed config files (user-only permissions) |
 | `last-seen-version` | Drives the "what's new" changelog on upgrade |
+| `autostart-seen` | Linux only, and only with start-at-login enabled — marks that a login launch has happened |
+
+You may also see `.tandem-tmp-*` files inside `sessions/` and `annotations/`. These are
+half-finished atomic writes orphaned when the process was killed between writing and renaming
+(a force-quit, a dev restart). Tandem sweeps ones older than an hour at boot; they are safe to
+delete, and never appear in your own document folders.
 
 ## Logs
 

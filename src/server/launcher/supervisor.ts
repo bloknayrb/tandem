@@ -10,10 +10,16 @@
  *   relaunch(cwd?) — stop + respawn, optionally with a new cwd (/relaunch-here).
  *   stop() — SIGTERM the reaper; reaper forwards to Claude with 5s SIGKILL escalation.
  *
- * Session persistence: stores the last session ID in
- * `<appDataDir>/launcher-session.json`. On startup, attempts `--resume <id>`;
- * on non-zero exit within the resume window, falls back to a fresh
- * `--session-id <uuid>` spawn.
+ * Session persistence: stores the last session ID **and the directory it was
+ * created in** in `<appDataDir>/launcher-session.json`. On startup, attempts
+ * `--resume <id>` only when the planned cwd still matches that directory —
+ * Claude Code stores conversations per directory, so a resume from anywhere
+ * else cannot succeed (see `sessionCwdMatches`). On non-zero exit within the
+ * resume window, falls back to a fresh `--session-id <uuid>` spawn.
+ *
+ * Moving Claude: a `relaunch`/`startFresh` that names a cwd also PERSISTS it to
+ * the integration, so a later crash-restart — which rebuilds the plan with no
+ * override — stays where the user put it (see `persistWorkingDirectory`).
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -23,7 +29,10 @@ import os from "node:os";
 import path from "node:path";
 
 import type { TandemEvent } from "../../shared/events/types.js";
-import type { ClaudeCodeIntegration } from "../../shared/integrations/contract.js";
+import type {
+  ClaudeCodeIntegration,
+  IntegrationConfig,
+} from "../../shared/integrations/contract.js";
 import {
   detectClaudeCli,
   isBareNameLaunchable,
@@ -160,8 +169,43 @@ const WAKE_LATCH_MAX_MS = 10 * 60_000;
 interface SpawnPlan {
   integration: ClaudeCodeIntegration;
   cwd: string;
+  /** Was `cwd` the caller's override, resolved and honored? False when no
+   * override was passed, and false when one was passed but did not resolve —
+   * in which case `cwd` is the configured directory or home, NOT the request.
+   * The only honest answer to "did the move happen?", produced by the function
+   * that decided it (`resolveCwd`) rather than reconstructed by a second
+   * resolution of the same string. */
+  cwdFromOverride: boolean;
   sessionId: string;
   resuming: boolean;
+}
+
+/** The claude-code entry the supervisor will actually launch. `apply: "skip"`
+ * means configured-but-disabled, so such an entry is not a launch candidate.
+ *
+ * Named and shared so the read (`readIntegration`) and the durable write
+ * (`persistWorkingDirectory`) cannot drift: a mismatch would persist into an
+ * entry the launcher never reads. `makeWorkingDirHandler` (api-routes.ts)
+ * deliberately does NOT use this — see `persistWorkingDirectory`. */
+function isLaunchableClaudeCode(i: IntegrationConfig): i is ClaudeCodeIntegration {
+  return i.kind === "claude-code" && i.apply !== "skip";
+}
+
+/** The last-resort working directory, canonicalized.
+ *
+ * `resolveCwd`'s other exit realpaths via `resolveSafeCwd`, and `plan.cwd` is
+ * written verbatim into `launcher-session.json` and then compared by
+ * `sessionCwdMatches`, whose contract is "both sides are realpath'd". A raw
+ * `os.homedir()` breaks exactly that invariant on any host where $HOME is
+ * reached through a symlink (enterprise NFS, a macOS data volume), so the
+ * bare-restart spelling and the override spelling of the same folder compare
+ * unequal — discarding a live conversation, and oscillating, because a
+ * crash-restart lands on one spelling and an explicit restart on the other.
+ *
+ * `?? os.homedir()` preserves today's behaviour for the pathological case
+ * where home itself does not resolve to a directory. */
+export function homeCwd(): string {
+  return resolveSafeCwd(os.homedir()) ?? os.homedir();
 }
 
 const SESSION_FILE_NAME = "launcher-session.json";
@@ -184,18 +228,46 @@ const CIRCUIT_BREAKER_WINDOW_MS = 5 * 60_000;
  * Claude's loaded conversation state. Reject anything not UUID-shaped. */
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Options for the two cwd-bearing lifecycle calls. */
+export interface RelocateOpts {
+  /**
+   * Also write the requested folder to the integration's `workingDirectory`,
+   * making the move outlive this spawn.
+   *
+   * Defaults to false, and the default is the safe one: a caller that merely
+   * *has* a cwd (the recovery chip, which derives one from the active tab) must
+   * not durably repoint Claude. Only a caller that knows the user named the
+   * folder should set it. See `persistRequestedCwd`.
+   */
+  persistCwd?: boolean;
+}
+
 export interface Supervisor {
   start(): Promise<void>;
-  /** Respawn Claude with a new cwd. Loses conversation context. */
-  /** Omit `newCwd` to fall back to the integration's configured directory. */
-  relaunch(newCwd?: string): Promise<void>;
+  /**
+   * Stop and respawn. Omit `newCwd` to fall back to the integration's
+   * configured directory.
+   *
+   * The conversation survives a same-folder restart; `startFresh` is the one
+   * that always drops it. It does NOT survive a move — not by choice, but
+   * because Claude Code stores conversations per directory (see
+   * `sessionCwdMatches`). "Lost" there means Tandem loses its *pointer*: the
+   * old conversation still exists on disk under the old directory, and can be
+   * reached by running `claude --resume <id>` from that directory by hand.
+   *
+   * `newCwd` alone moves Claude for THIS spawn only. Pass
+   * `{ persistCwd: true }` to also make it the integration's
+   * `workingDirectory`, so later restarts stay there. The split is deliberate —
+   * see `persistRequestedCwd` for why a cwd on the wire is not evidence that
+   * the user chose that folder.
+   */
+  relaunch(newCwd?: string, opts?: RelocateOpts): Promise<void>;
   /** Idempotent — safe to call when not running. */
   stop(): Promise<void>;
-  /** Drop any persisted session and respawn fresh.
-   * If `cwdOverride` is provided, the spawn uses that cwd (and the integration's
-   * persisted workingDirectory is left untouched). Otherwise uses the integration's
-   * setting. Single atomic stop+clear+spawn under the supervisor lock. */
-  startFresh(cwdOverride?: string): Promise<void>;
+  /** Drop any persisted session and respawn fresh. Omit `cwdOverride` to use the
+   * integration's configured directory; `opts.persistCwd` behaves as in
+   * `relaunch`. Single atomic stop+clear+spawn under the supervisor lock. */
+  startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void>;
   /** Current state for /api/launcher/status. */
   status(): SupervisorStatus;
 }
@@ -240,6 +312,90 @@ export function shouldClearSession(opts: {
   resumeConfirmed: boolean;
 }): boolean {
   return opts.resuming && opts.code !== null && opts.code !== 0 && !opts.resumeConfirmed;
+}
+
+/** Contents of `launcher-session.json`. */
+interface SavedSession {
+  sessionId: string;
+  /** Directory the session was created in — *created*, not last-used:
+   * `writeSavedSession` only fires when `resuming` is false, so a resumed
+   * session never rewrites the record.
+   *
+   * `undefined` for files written before this field existed, AND for a present
+   * but non-string value. The two are treated identically, deliberately: unlike
+   * `sessionId` — which gets a UUID-shape gate because a tampered value flows
+   * into `--resume` — a bad `cwd` can only cost one doomed resume, so the
+   * permissive branch is cheaper than a second log line.
+   *
+   * That bound covers the shapes this branch can DETECT (absent, or
+   * present-but-not-a-string → `undefined` → treated as a match). A well-typed
+   * but *wrong* `cwd` — reachable because this file is not written atomically,
+   * so a kill mid-write can truncate it — costs the opposite and worse thing:
+   * a guaranteed mismatch, a fresh UUID, and this single-slot file overwritten,
+   * i.e. a discarded conversation with no doomed resume at all. Nothing here
+   * can tell that case from a real relocation, which is why the file should
+   * eventually be written atomically. */
+  cwd?: string;
+}
+
+/**
+ * May the saved session be resumed by a spawn planned for `plannedCwd`?
+ *
+ * **The load-bearing fact: Claude Code scopes conversations to the working
+ * directory they were created in.** A session minted in folder A cannot be
+ * resumed from folder B — measured against the real CLI (2.1.223, 2026-08-05),
+ * where `claude --resume <id>` from another directory printed
+ * `No conversation found with session ID` and exited 1.
+ *
+ * That behavioural contract is what this gate depends on. The mechanism behind
+ * it — a per-directory store under `~/.claude/projects/<encoded-cwd>/` —
+ * is recorded only to explain WHY, and is deliberately not relied on: nothing
+ * in Tandem reads that path, no test pins it, and Claude Code may restructure
+ * it in any release without this file noticing.
+ *
+ * Without the gate, that exit is indistinguishable from a crash, so the
+ * launcher would attempt the doomed resume, trip `shouldClearSession` (losing
+ * the conversation anyway), and schedule a restart — one wasted spawn and a
+ * backoff cycle to reach the fresh session it could have started with. Worse,
+ * the whole sequence is invisible: the relaunch route already answered
+ * `{ ok: true }`. (That chain holds because `RESUME_CONFIRM_MS` exceeds the
+ * CLI's ~6s detection; drop it below and a doomed resume would instead be
+ * marked confirmed and the dead session KEPT. See the exit handler.)
+ *
+ * This is the single place that decides it, so every source of a cwd change —
+ * `/relaunch` with a cwd, a Settings working-directory edit, a hand-edited
+ * `integrations.json` — is covered by construction rather than one at a time.
+ *
+ * **An unknown origin is treated as a match.** Files written before `cwd` was
+ * recorded carry no origin, and the overwhelmingly common case is that nothing
+ * moved. Assuming a mismatch would discard a live conversation on upgrade for
+ * everyone; assuming a match preserves it, and costs at most the one doomed
+ * resume that is today's unconditional behaviour.
+ *
+ * The cost is real but bounded, and the bound is worth stating precisely: a
+ * legacy file that keeps resuming in the same folder is NEVER upgraded, because
+ * `writeSavedSession` only fires when `resuming` is false. So such a user stays
+ * on the permissive branch indefinitely — and pays exactly once, on their FIRST
+ * relocation, which takes the doomed resume, clears the session, and writes a
+ * cwd-carrying record. Every later move is gated properly.
+ *
+ * `platform` is injectable so both comparison branches run on every CI host —
+ * vitest runs on `ubuntu-latest` only, which would otherwise leave the win32
+ * branch verified nowhere but a maintainer's laptop. Mirrors `resolveRouteCwd`'s
+ * `homeOverride` seam.
+ */
+export function sessionCwdMatches(
+  savedCwd: string | undefined,
+  plannedCwd: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (savedCwd === undefined) return true;
+  // Both sides are realpath'd, but Node's JS `realpathSync` does not
+  // case-normalize on Windows — so this fold is load-bearing, not dead code.
+  if (platform === "win32") {
+    return savedCwd.toLowerCase() === plannedCwd.toLowerCase();
+  }
+  return savedCwd === plannedCwd;
 }
 
 /**
@@ -379,9 +535,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function readIntegration(): Promise<ClaudeCodeIntegration | null> {
     const store = createIntegrationsStore(opts.integrationsBase);
     const file = await store.read();
-    const found = file.integrations.find(
-      (i): i is ClaudeCodeIntegration => i.kind === "claude-code" && i.apply !== "skip",
-    );
+    const found = file.integrations.find(isLaunchableClaudeCode);
     return found ?? null;
   }
 
@@ -389,25 +543,48 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return path.join(opts.integrationsBase, SESSION_FILE_NAME);
   }
 
-  function readSavedSession(): string | undefined {
+  function readSavedSession(): SavedSession | undefined {
     try {
       const raw = fs.readFileSync(sessionFilePath(), "utf8");
-      const parsed = JSON.parse(raw) as { sessionId?: unknown };
+      const parsed = JSON.parse(raw) as { sessionId?: unknown; cwd?: unknown };
       if (typeof parsed.sessionId !== "string") return undefined;
       // UUID-shape gate: anything else is either corruption or tampering.
       if (!UUID_V4_PATTERN.test(parsed.sessionId)) {
         console.error("[Launcher] launcher-session.json sessionId is not UUID-shaped — ignoring");
         return undefined;
       }
-      return parsed.sessionId;
-    } catch {
+      // Absent is the documented legacy case. Present-but-not-a-string is
+      // corruption or tampering — only this module writes the file, and it
+      // always writes a string. Both end up on the permissive "resume anywhere"
+      // branch, so the corrupt one gets a log line for symmetry with the
+      // sessionId gate above; without it a tampered file changes launcher
+      // behaviour leaving no trace at all.
+      if ("cwd" in parsed && typeof parsed.cwd !== "string") {
+        console.error("[Launcher] launcher-session.json cwd is not a string — treating as unknown");
+      }
+      return {
+        sessionId: parsed.sessionId,
+        // Deliberately `undefined` rather than defaulted — `sessionCwdMatches`
+        // decides what an unknown origin means, in one place.
+        cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
+      };
+    } catch (err) {
+      // ENOENT is the normal "no session yet" path and must stay silent.
+      // Anything else — malformed JSON, EACCES, a file truncated by a kill
+      // mid-write (this is not an atomic write) — silently drops the user's
+      // conversation, so say so.
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        console.error("[Launcher] Could not read launcher-session.json — starting fresh:", err);
+      }
       return undefined;
     }
   }
 
-  function writeSavedSession(sessionId: string): void {
+  /** `cwd` is written alongside the id because a Claude Code session is only
+   * resumable from the directory it was created in — see `sessionCwdMatches`. */
+  function writeSavedSession(sessionId: string, cwd: string): void {
     try {
-      fs.writeFileSync(sessionFilePath(), JSON.stringify({ sessionId }, null, 2), {
+      fs.writeFileSync(sessionFilePath(), JSON.stringify({ sessionId, cwd }, null, 2), {
         encoding: "utf8",
         mode: 0o600,
       });
@@ -424,13 +601,158 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     }
   }
 
-  function resolveCwd(integration: ClaudeCodeIntegration, override?: string): string {
+  /**
+   * Persist an explicitly-requested cwd as the integration's `workingDirectory`.
+   *
+   * Without this, the first crash silently undoes the move: `scheduleRestart` →
+   * `startInternal` → `buildPlan()` is called with NO override, so `resolveCwd`
+   * falls back through the integration to `homeCwd()` and Claude reappears in
+   * the folder the user just moved it out of. Persisting is what makes "restart
+   * Claude here" also mean "and stay here" — across restarts and across a Tandem
+   * restart.
+   *
+   * Called with the RESOLVED `plan.cwd`, not the caller's raw string, so what is
+   * stored is exactly what the spawn runs in.
+   *
+   * Best-effort: a write failure is logged, never thrown. The spawn that follows
+   * still uses the requested cwd, so a failed write costs durability only —
+   * strictly less than failing the relaunch the user asked for.
+   *
+   * Deliberately NOT shared with `makeWorkingDirHandler` (`api-routes.ts`), which
+   * does the same read-modify-write from the Settings route. That one validates a
+   * raw user string, supports clearing to `null`, and 404s on a missing
+   * integration; this one takes an already-resolved path and stays silent. It
+   * also selects the integration with `readIntegration`'s predicate
+   * (`isLaunchableClaudeCode`, i.e. `apply !== "skip"`) rather than the route's
+   * looser `kind === "claude-code"`, because the entry to update is the one the
+   * supervisor actually launches — both take the FIRST match, so they differ
+   * only when the first claude-code entry is skipped and a live one follows it.
+   * When those two entries do differ, the Settings UI reads the route's entry
+   * while the launcher runs the supervisor's, so Settings can display a working
+   * directory the launcher ignores — and every Settings edit then writes
+   * somewhere the launcher never reads. Reconciling the two predicates is a
+   * Settings-route behaviour change (an entry whose only claude-code
+   * integration is `apply: "skip"` would start 404-ing) and is left deliberate
+   * here.
+   *
+   * Known gap: neither path holds a cross-module lock, so any concurrent
+   * `integrations.json` writer landing between this read and write loses one of
+   * the two updates — not just a Settings save, but the wizard's whole-array
+   * `POST /api/integrations`, `applyConfig`, and `tandem setup --apply`, which
+   * are likelier collisions. Narrow because the surfaces are single-user and
+   * separately inflight-guarded (NOT because they are loopback — since #1293
+   * `assertLoopbackForMutation` does gate unconditionally, but a loopback
+   * boundary bounds *who* can race, not whether two local writes interleave).
+   * Fixing it properly belongs in the store, not here.
+   */
+  async function persistWorkingDirectory(cwd: string): Promise<void> {
+    try {
+      const store = createIntegrationsStore(opts.integrationsBase);
+      const file = await store.read();
+      const idx = file.integrations.findIndex(isLaunchableClaudeCode);
+      if (idx === -1) {
+        // Expected-impossible: `buildPlan` just found one. Reachable only if the
+        // entry was removed or skipped between its read and ours (the wizard's
+        // whole-array POST, a hand edit, a sync tool). Loudest branch, not the
+        // quietest — silence here reads as a successful move that then reverts.
+        console.error(
+          "[Launcher] claude-code integration vanished between plan and persist — working directory not saved",
+        );
+        return;
+      }
+      const current = file.integrations[idx] as ClaudeCodeIntegration;
+      if (current.workingDirectory === cwd) return; // no-op write
+      await store.write({
+        ...file,
+        integrations: file.integrations.map(
+          (entry, i): IntegrationConfig =>
+            i === idx ? { ...current, workingDirectory: cwd } : entry,
+        ),
+      });
+    } catch (err) {
+      console.error("[Launcher] Failed to persist workingDirectory:", err);
+    }
+  }
+
+  /**
+   * Persist a caller-requested cwd, under TWO conditions. Both are load-bearing
+   * and each guards a different way of durably moving Claude somewhere the user
+   * never asked for.
+   *
+   * **1. The caller must have meant it (`persistCwd`).** A cwd on the wire is
+   * not evidence of intent. `relaunchClaudeCode()` — the "Restart Claude Code"
+   * recovery chip on the status pill, empty state and AI toast — runs
+   * `relaunchHere(…, { cwdRequired: false })`, which still *sends*
+   * `dirname(activeDocumentPath)` whenever any tab is open; it is bare only in
+   * the empty state. Persisting that would mean clicking a RECOVERY button with
+   * a stray note open silently repoints Claude at that note's folder forever.
+   * Only the palette's explicit "relaunch here" (`cwdRequired: true`) sets this.
+   *
+   * **2. The request must have been honored.** `resolveCwd` short-circuits on
+   * `override ?? workingDirectory`, so a present-but-unresolvable override does
+   * NOT fall back to the configured directory — it drops through to
+   * `os.homedir()`. Persisting that would overwrite the user's project folder
+   * with home. Narrow (both callers pre-validate via `resolveRouteCwd`, so it
+   * needs a TOCTOU — a rename, an unmounted drive, an AV hold on
+   * `realpathSync`) but silent, durable, and destructive.
+   *
+   * That second question is answered by `resolveCwd` — the one function that
+   * decides it — and carried on `SpawnPlan.cwdFromOverride`, rather than being
+   * reconstructed here by resolving the same string a second time. Two
+   * independent `realpathSync` calls only have to AGREE for this to be correct,
+   * and the direction where the second one succeeds after the first failed is
+   * the worse one: it persists a folder the spawn is not running in. One
+   * resolution has no second answer to drift from — which also eliminates,
+   * rather than merely tolerating, a future change to `resolveCwd`'s fallback
+   * order. `plan.cwd` is therefore byte-identical to what the spawn runs in.
+   *
+   * Residual TOCTOU: a symlink swap between the route's `resolveRouteCwd`
+   * (which home-confines) and `buildPlan`'s `safeCwd` (which does not) lands
+   * the SPAWN outside home, and a `persistCwd` request then records that
+   * escaped path durably. Persisting `plan.cwd` does not close that — the
+   * durable write is still only as confined as the permissive resolver — it
+   * closes only the divergence between the persisted and the spawned value.
+   * Home-confining here would move an HTTP-boundary policy into a
+   * process-level API that has non-route callers.
+   *
+   * Note the write lands BEFORE `spawnOnce`, so a spawn that then throws leaves
+   * the setting already moved. Deliberate: the user asked to move, and the next
+   * restart should still honour it.
+   */
+  async function persistRequestedCwd(
+    plan: SpawnPlan,
+    requested: string | undefined,
+    persistCwd: boolean | undefined,
+  ): Promise<void> {
+    if (!persistCwd || requested === undefined) return;
+    if (!plan.cwdFromOverride) {
+      // The request did not survive resolution (a rename, an unmounted share,
+      // an AV hold on `realpathSync` between the route's check and ours). The
+      // spawn is about to run somewhere else; saying so is the whole point —
+      // the user asked to move Claude permanently and it did not happen, and
+      // this was the only untraced branch in a change whose purpose is
+      // removing exactly that.
+      console.error(
+        `[Launcher] Requested working directory ${requested} could not be resolved — spawning in ${plan.cwd}, workingDirectory left unchanged`,
+      );
+      return;
+    }
+    await persistWorkingDirectory(plan.cwd);
+  }
+
+  function resolveCwd(
+    integration: ClaudeCodeIntegration,
+    override?: string,
+  ): { cwd: string; fromOverride: boolean } {
     const candidate = override ?? (integration as { workingDirectory?: unknown }).workingDirectory;
     if (typeof candidate === "string") {
       const normalized = safeCwd(candidate);
-      if (normalized) return normalized;
+      // `override !== undefined`, not truthiness: this must report which INPUT
+      // was honored, and an empty-string override (rejected upstream by the
+      // routes, but not by this function) would read as "no override".
+      if (normalized) return { cwd: normalized, fromOverride: override !== undefined };
     }
-    return os.homedir();
+    return { cwd: homeCwd(), fromOverride: false };
   }
 
   function safeCwd(candidate: string): string | null {
@@ -475,16 +797,28 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     const integration = await readIntegration();
     if (!integration) return null;
 
+    const { cwd, fromOverride } = resolveCwd(integration, cwdOverride);
     const saved = readSavedSession();
-    const sessionId = saved ?? randomUUID();
-    const resuming = !!saved;
 
-    return {
-      integration,
-      cwd: resolveCwd(integration, cwdOverride),
-      sessionId,
-      resuming,
-    };
+    // The resume decision is made HERE, against the planned cwd, rather than at
+    // each caller — see `sessionCwdMatches`. `spawnOnce` rewrites the session
+    // file whenever `resuming` is false, so a mismatch self-heals.
+    let sessionId: string;
+    let resuming: boolean;
+    if (saved !== undefined && sessionCwdMatches(saved.cwd, cwd)) {
+      sessionId = saved.sessionId;
+      resuming = true;
+    } else {
+      if (saved !== undefined) {
+        console.error(
+          `[Launcher] Saved session belongs to ${saved.cwd} — starting a fresh session in ${cwd}`,
+        );
+      }
+      sessionId = randomUUID();
+      resuming = false;
+    }
+
+    return { integration, cwd, cwdFromOverride: fromOverride, sessionId, resuming };
   }
 
   async function spawnOnce(plan: SpawnPlan): Promise<void> {
@@ -526,7 +860,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // "current" immediately; if Claude crashes during the resume window we'll
     // drop it in the exit handler.
     if (!plan.resuming) {
-      writeSavedSession(plan.sessionId);
+      writeSavedSession(plan.sessionId, plan.cwd);
     }
 
     const spawnedAt = Date.now();
@@ -988,20 +1322,41 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   // the chip CTAs fire from surfaces that legitimately have no document open.
   // Requiring one here is what made the empty state's safe recovery unreachable
   // while its session-destroying secondary kept working.
-  async function relaunch(newCwd?: string): Promise<void> {
-    return withLock(async () => {
-      await stopInternal();
-      // Relaunch always means "user is actively asking" → clear breaker.
-      breakerTripped = false;
-      recentAttempts = [];
-      // stopInternal() raised the stop flag on the way in. Lower it before the
-      // new spawn, or the exit handler treats the *next* crash as a deliberate
-      // stop and silently declines to restart — the supervisor stays dead.
-      stopRequested = false;
-      const plan = await buildPlan(newCwd);
-      if (!plan) return;
-      await spawnOnce(plan);
-    });
+  async function relaunch(newCwd?: string, opts?: RelocateOpts): Promise<void> {
+    return withLock(() => respawn(newCwd, opts, { clearSession: false }));
+  }
+
+  /** The stop+respawn sequence both public entry points perform. They differ by
+   * exactly one statement — whether the saved session is dropped first — so the
+   * flag is the API and everything else is shared.
+   *
+   * Callers wrap this in `withLock`; it must NOT lock itself (it awaits
+   * `stopInternal`). Declared as a `function`, not a `const` arrow, because it
+   * is referenced above its own definition and by `startFresh` below — a
+   * `const` would be a TDZ error at the first user relaunch, not at typecheck.
+   *
+   * Statement order here is load-bearing and pinned by no single test:
+   * `clearSavedSession` must precede `buildPlan` (or `startFresh` resumes the
+   * session it was asked to drop), `stopRequested = false` must follow
+   * `stopInternal`, and the persist must precede `spawnOnce`. */
+  async function respawn(
+    cwdOverride: string | undefined,
+    opts: RelocateOpts | undefined,
+    { clearSession }: { clearSession: boolean },
+  ): Promise<void> {
+    await stopInternal();
+    if (clearSession) clearSavedSession();
+    // relaunch/startFresh always mean "user is actively asking" → clear breaker.
+    breakerTripped = false;
+    recentAttempts = [];
+    // stopInternal() raised the stop flag on the way in. Lower it before the
+    // new spawn, or the exit handler treats the *next* crash as a deliberate
+    // stop and silently declines to restart — the supervisor stays dead.
+    stopRequested = false;
+    const plan = await buildPlan(cwdOverride);
+    if (!plan) return;
+    await persistRequestedCwd(plan, cwdOverride, opts?.persistCwd);
+    await spawnOnce(plan);
   }
 
   async function stopInternal(): Promise<void> {
@@ -1077,19 +1432,8 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return withLock(() => stopInternal());
   }
 
-  async function startFresh(cwdOverride?: string): Promise<void> {
-    return withLock(async () => {
-      await stopInternal();
-      clearSavedSession();
-      breakerTripped = false;
-      recentAttempts = [];
-      // See relaunch(): stopInternal() set stopRequested, and leaving it set
-      // would disarm the auto-restart for the whole life of the new spawn.
-      stopRequested = false;
-      const plan = await buildPlan(cwdOverride);
-      if (!plan) return;
-      await spawnOnce(plan);
-    });
+  async function startFresh(cwdOverride?: string, opts?: RelocateOpts): Promise<void> {
+    return withLock(() => respawn(cwdOverride, opts, { clearSession: true }));
   }
 
   function status(): SupervisorStatus {

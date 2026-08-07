@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import type { Response } from "express";
+import { describe, expect, it, vi } from "vitest";
+import { DocxTooLargeError } from "../../src/server/file-io/docx-size-gate.js";
 import {
+  createApiMiddleware,
   errorCodeToHttpStatus,
   isHostAllowed,
   isLocalhostOrigin,
 } from "../../src/server/mcp/api-routes.js";
+import { sendApiError } from "../../src/server/mcp/routes/_shared.js";
 import { jsonrpcId } from "../../src/server/mcp/server.js";
 
 describe("isHostAllowed (DNS rebinding protection)", () => {
@@ -178,5 +182,168 @@ describe("jsonrpcId", () => {
 
   it("returns null when no id field", () => {
     expect(jsonrpcId({ method: "notify" })).toBeNull();
+  });
+});
+
+/**
+ * Emitted-header tests for the middleware itself (#1291).
+ *
+ * The `isLocalhostOrigin` tests above are thorough and every one of them passed
+ * on the vulnerable code — the predicate was always correct. What was never
+ * tested is what the middleware DID with the answer: it sent
+ * `Access-Control-Allow-Origin: null` for a rejected origin, which is not a
+ * deny value but the origin serialization of an opaque context, so a sandboxed
+ * iframe on any page could read every loopback-gated response.
+ *
+ * These drive real requests through `createApiMiddleware()` and assert on the
+ * response headers. The `Origin: null` case is the load-bearing one: a test
+ * written against `https://evil.com` alone passes on the vulnerable code too.
+ */
+describe("createApiMiddleware — CORS headers (#1291)", () => {
+  const TAURI_LINUX = "tauri://localhost";
+
+  /** Drive one request through the middleware, return what it emitted. */
+  function run(
+    headers: Record<string, string>,
+    method = "GET",
+  ): { headers: Record<string, string>; nextCalled: boolean; status?: number } {
+    const emitted: Record<string, string> = {};
+    let nextCalled = false;
+    let status: number | undefined;
+
+    const req = { headers: { host: "127.0.0.1:3479", ...headers }, method } as never;
+    const res = {
+      header(name: string, value: string) {
+        emitted[name] = value;
+        return this;
+      },
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json() {
+        return this;
+      },
+      sendStatus(code: number) {
+        status = code;
+        return this;
+      },
+    } as never;
+
+    createApiMiddleware()(req, res, () => {
+      nextCalled = true;
+    });
+    return { headers: emitted, nextCalled, status };
+  }
+
+  it("sends NO Access-Control-Allow-Origin for the opaque `null` origin", () => {
+    // The regression test for #1291. `null` is what a sandboxed iframe sends.
+    const { headers } = run({ origin: "null" });
+    expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
+  });
+
+  it("sends NO Access-Control-Allow-Origin for an external origin", () => {
+    const { headers } = run({ origin: "https://evil.com" });
+    expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
+  });
+
+  it("echoes an allowlisted 127.0.0.1 origin exactly", () => {
+    const { headers } = run({ origin: "http://127.0.0.1:5173" });
+    expect(headers["Access-Control-Allow-Origin"]).toBe("http://127.0.0.1:5173");
+  });
+
+  it("echoes the Tauri WebView origin", () => {
+    const { headers } = run({ origin: "http://tauri.localhost" });
+    expect(headers["Access-Control-Allow-Origin"]).toBe("http://tauri.localhost");
+  });
+
+  it("echoes the Linux Tauri custom-scheme origin", () => {
+    const { headers } = run({ origin: TAURI_LINUX });
+    expect(headers["Access-Control-Allow-Origin"]).toBe(TAURI_LINUX);
+  });
+
+  it("passes a request with NO Origin header through without a CORS header", () => {
+    // The compatibility guard: the CLI, `tandem doctor` and every non-browser
+    // caller send no Origin and never enforced CORS. They must keep working.
+    const { headers, nextCalled } = run({});
+    expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
+    expect(nextCalled).toBe(true);
+  });
+
+  it("sets Vary: Origin on both the allowed and the denied response", () => {
+    expect(run({ origin: "http://127.0.0.1:5173" }).headers.Vary).toBe("Origin");
+    expect(run({ origin: "null" }).headers.Vary).toBe("Origin");
+  });
+
+  it("answers an opaque-origin preflight 204 with no CORS grant", () => {
+    // 204 rather than 403 is deliberate: without ACAO the browser blocks the
+    // real request anyway, and the Allow-Methods/Allow-Headers values are inert
+    // because the origin check is evaluated first.
+    const { headers, status } = run({ origin: "null" }, "OPTIONS");
+    expect(status).toBe(204);
+    expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sendApiError — the DOCX_TOO_LARGE mapping (#1310)
+// ---------------------------------------------------------------------------
+
+describe("sendApiError with a decompressed-size refusal", () => {
+  function capture(err: unknown) {
+    let status = 0;
+    let body: unknown;
+    const res = {
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload;
+        return this;
+      },
+    } as unknown as Response;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      sendApiError(res, err);
+      // Snapshot the calls BEFORE restoring: `mockRestore` clears the recorded calls, so asserting
+      // on the spy afterwards asserts on an emptied array and passes no matter what was logged.
+      return {
+        status,
+        body: body as { error: string; message: string },
+        errors: errorSpy.mock.calls.map((c) => String(c[0])),
+        warns: warnSpy.mock.calls.map((c) => String(c[0])),
+      };
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  }
+
+  it("answers 413, not 500, for an over-expanding .docx", () => {
+    // The gate refuses hostile INPUT. Reported as 500 it is indistinguishable from a Tandem fault,
+    // and no caller can tell a policy refusal from a server bug.
+    const { status, body } = capture(
+      new DocxTooLargeError("A part of this .docx expands past…", 3),
+    );
+    expect(status).toBe(413);
+    expect(body.error).toBe("FILE_TOO_LARGE");
+    expect(body.message).toContain("expands past");
+  });
+
+  it("does not log it as an unhandled server error", () => {
+    // `[Tandem] Unhandled API error:` plus a stack is what Copy Diagnostics shows the user, and it
+    // is what a 5xx status triggers. Refusing a bomb is not a crash.
+    const { errors, warns } = capture(new DocxTooLargeError("too big", 1));
+    expect(errors).toEqual([]);
+    // Positive control on the same sample: the refusal IS logged, just at the level a rejected
+    // request warrants. Without this, an assertion that nothing was logged as unhandled would also
+    // pass if `sendApiError` had stopped logging entirely.
+    expect(warns).toEqual([expect.stringContaining("API error (413)")]);
+  });
+
+  it("still maps the code through the exported status mapper", () => {
+    expect(errorCodeToHttpStatus("DOCX_TOO_LARGE")).toBe(413);
   });
 });

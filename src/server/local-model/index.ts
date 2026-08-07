@@ -34,6 +34,8 @@ export interface RunTurnOpts {
   maxToolCalls?: number;
   temperature?: number;
   timeoutMs?: number;
+  /** Raw response-byte ceiling per model call (#1292). See `RunLoopOpts`. */
+  maxResponseBytes?: number;
   signal?: AbortSignal;
   isLicenseRestricted?: () => boolean;
   /** Per assistant content delta, for token streaming (#1123 M1.2). */
@@ -56,6 +58,7 @@ export async function runLocalModelTurn(opts: RunTurnOpts): Promise<LoopResult> 
     maxToolCalls: opts.maxToolCalls,
     temperature: opts.temperature,
     timeoutMs: opts.timeoutMs,
+    maxResponseBytes: opts.maxResponseBytes,
     signal: opts.signal,
     isLicenseRestricted: opts.isLicenseRestricted,
     onContentDelta: opts.onContentDelta,

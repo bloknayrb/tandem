@@ -852,7 +852,7 @@ async function handleReplaceAll() {
     background: var(--tandem-error-bg);
   }
   .fr-msg.warning {
-    color: var(--tandem-warning-fg);
+    color: var(--tandem-warning-fg-strong);
     background: var(--tandem-warning-bg);
   }
   .fr-msg .msg-ic {

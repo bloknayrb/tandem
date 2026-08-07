@@ -1,5 +1,7 @@
 <script lang="ts">
 import { clickOutside } from "../actions/clickOutside.svelte";
+import { ESCAPE_OWNER_ATTR } from "../utils/escape-owner";
+import { focusMenuEntryPoint, handleMenuArrowKeys } from "../utils/menuKeys";
 
 interface Props {
   showAuthorship: boolean;
@@ -35,6 +37,13 @@ let {
 
 let menuOpen = $state(false);
 let caretBtn = $state<HTMLButtonElement | null>(null);
+let menuEl = $state<HTMLDivElement | null>(null);
+
+// The caret button is a sibling of the dropdown, so focus has to be moved into
+// the menu explicitly or arrow keys never reach its handler.
+$effect(() => {
+  if (menuOpen) focusMenuEntryPoint(menuEl);
+});
 
 function toggleMute() {
   onUpdate({ decorationsMuted: !decorationsMuted });
@@ -49,12 +58,22 @@ function toggleRow(
   onUpdate({ [field]: !current, ...(decorationsMuted ? { decorationsMuted: false } : {}) });
 }
 
+// Single close path so focus never strands on <body> when the focused menu item
+// unmounts. Guarded: `clickOutside` fires on mousedown, i.e. before the browser
+// moves focus itself, so restoring unconditionally would override wherever the
+// user just clicked. Restore only when focus is still inside the menu (or has
+// already been lost).
 function closeMenu() {
+  const ours =
+    (!!menuEl && menuEl.contains(document.activeElement)) ||
+    document.activeElement === document.body ||
+    document.activeElement === null;
   menuOpen = false;
-  caretBtn?.focus();
+  if (ours) caretBtn?.focus();
 }
 
 function handleKey(e: KeyboardEvent) {
+  if (handleMenuArrowKeys(e)) return;
   if (e.key === "Escape" && menuOpen) {
     e.stopPropagation();
     closeMenu();
@@ -63,7 +82,7 @@ function handleKey(e: KeyboardEvent) {
 
 function chooseSettings() {
   onOpenSettings?.();
-  menuOpen = false;
+  closeMenu();
 }
 </script>
 
@@ -79,7 +98,8 @@ function chooseSettings() {
   class:open={menuOpen}
   data-testid="decorations-menu"
   data-tauri-drag-region="false"
-  use:clickOutside={() => (menuOpen = false)}
+  {...(menuOpen ? { [ESCAPE_OWNER_ATTR]: "" } : {})}
+  use:clickOutside={closeMenu}
   onkeydown={handleKey}
 >
   <button
@@ -115,7 +135,7 @@ function chooseSettings() {
   </button>
 
   {#if menuOpen}
-    <div class="menu" role="menu" aria-label="Decorations">
+    <div bind:this={menuEl} class="menu" role="menu" aria-label="Decorations">
       <div class="menu-head">Decorations</div>
       <p class="menu-help">
         Inline editor overlays — author colors, comment, highlight, and note

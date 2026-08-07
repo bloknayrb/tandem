@@ -605,19 +605,28 @@ $effect(() => subscribeAnnotationActions());
     border: none;
     border-radius: var(--tandem-r-2);
     background: transparent;
-    color: var(--tandem-fg-subtle);
+    color: var(--tandem-fg-faint);
     cursor: pointer;
-    /* Visible at rest, matching the margin edit-button's 0.55 precedent below.
-       On a minimized card this chevron is the primary "there is more here"
-       affordance, so hiding it until hover would make the expand gesture
-       undiscoverable. */
-    opacity: 0.55;
+    /* Visible at rest. On a minimized card this chevron is the primary "there is
+       more here" affordance, so hiding it until hover would make the expand
+       gesture undiscoverable.
+
+       NO `opacity` here. This used to be `--tandem-fg-subtle` at `opacity: 0.55`,
+       which composites to 2.54:1 against --tandem-surface — under SC 1.4.11's
+       3:1 for a control's identifying graphic. A token's AA guarantee is a
+       property of the COLOUR, and alpha silently spends it; a composite is also
+       invisible to tests/e2e/token-contrast.spec.ts by construction, so nothing
+       can catch the regression. The de-emphasis is expressed as three colour
+       rungs instead — faint at rest (6.01 light / 5.05 dark / 5.58 warm over
+       --tandem-surface, and 4.43 over the darkest card tint), subtle on
+       bubble-hover, full fg on direct hover / pinned. Same argument as
+       App.svelte's `.app-*` note. */
     /* `transform` + `transition`, never an `animation`: scoped @keyframes
        referenced from a component style is fine, but the rotation here has no
        need for one. Rotation uses the shared easing token, matching the app's
        other rotating chevrons (`.cs-chevron` in CollapsibleSection, ActivityTray). */
     transition:
-      opacity 140ms ease,
+      color 140ms ease,
       transform 180ms var(--tandem-ease-out);
   }
   /* Dual-mechanism reduced motion, same as the other chevrons. */
@@ -629,13 +638,18 @@ $effect(() => subscribeAnnotationActions());
       transition: none;
     }
   }
-  .margin-bubble:hover .margin-pin-btn,
-  .margin-pin-btn:focus-visible {
-    opacity: 0.9;
+  /* Mid rung. The `:not()`s are load-bearing: `.margin-bubble:hover
+     .margin-pin-btn` is specificity (0,3,0) and would otherwise shadow the
+     (0,2,0) direct-hover/pinned rule below — and hovering the button always
+     hovers the bubble, so the firm `--tandem-fg` state would be unreachable in
+     exactly the two states it exists for. Harmless while this was an `opacity`
+     ramp (0.9 vs 1 is imperceptible); not harmless for a whole colour rung. */
+  .margin-bubble:hover .margin-pin-btn:not(:hover):not(.is-pinned),
+  .margin-pin-btn:focus-visible:not(:hover):not(.is-pinned) {
+    color: var(--tandem-fg-subtle);
   }
   .margin-pin-btn:hover,
   .margin-pin-btn.is-pinned {
-    opacity: 1;
     color: var(--tandem-fg);
   }
   /* Chevron points down when collapsed (click to expand), up when pinned open. */

@@ -1,6 +1,6 @@
 # Cowork ↔ Claude Code coordination log (archived)
 
-> **Archived 2026-04-17.** Durable findings folded into [ADR-023](../../decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304). Kept for historical context — this log is a 11-append conversation between two parallel Claude instances (one in the Cowork VM, one on the host) that produced the decision tree, the `ERR_UNSUPPORTED_ESM_URL_SCHEME` diagnosis, and the 0.6.2 fix. Useful reading for anyone debugging future Cowork/plugin bridge issues; not active guidance.
+> **Archived 2026-04-17.** Durable findings folded into [ADR-023](../../decisions.md#adr-023-cowork-plugin-bridge--stdio-via-npx-not-http-prs-301-304--claude-default-integration). Kept for historical context — this log is a 11-append conversation between two parallel Claude instances (one in the Cowork VM, one on the host) that produced the decision tree, the `ERR_UNSUPPORTED_ESM_URL_SCHEME` diagnosis, and the 0.6.2 fix. Useful reading for anyone debugging future Cowork/plugin bridge issues; not active guidance.
 
 ## Purpose
 

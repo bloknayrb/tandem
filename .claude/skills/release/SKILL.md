@@ -6,7 +6,9 @@ disable-model-invocation: true
 
 # Cut a Tandem Release
 
-Codifies the release sequence used for v0.14.3 / v0.15.0 / v0.16.0. The version
+Codifies the release sequence used from v0.14.3 onward, and refined by every cut
+through v0.20.1 — including the global-install upgrade step, the two changelog
+gaps, and the duplicate-draft race described below. The version
 bump has **SIX surfaces**, none of which bump automatically. Surfaces 1–4 are
 CI-guarded by `tests/plugin/plugin-version-pin.test.ts` (any divergence from
 `package.json` fails CI); surfaces 5–6 are **not guarded** — this skill is what

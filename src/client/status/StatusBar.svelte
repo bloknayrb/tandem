@@ -318,6 +318,13 @@ function cycleWordMode() {
 <!-- Status pill is faint until hover/focus-within. Pure-CSS opacity
      transition; `:focus-within` reveals on keyboard focus so the word-count
      button remains reachable. -->
+<!-- Deliberately carries NO landmark role. `contentinfo` was tried during the
+     v1.0 accessibility pass and is wrong: it means page-level footer metadata
+     (authorship, copyright), so a screen-reader user navigating by landmark
+     would land on a pill announcing live sync state and a word count.
+     `role="status"` is worse — it is a live region, so every keystroke's
+     word-count tick would be spoken. The pill's contents are individually
+     labelled already; it needs no landmark of its own. -->
 <div
   class="tandem-floating-pill tandem-status-pill"
   style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 6px var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"

@@ -73,10 +73,9 @@
         --tandem-surface-sunk: oklch(0.96 0.006 80);
         --tandem-border: oklch(0.92 0.005 280);
         --tandem-border-strong: oklch(0.86 0.006 280);
-        --tandem-fg-muted: oklch(0.48 0.008 280);
-        /* Backed off from 0.44 → 0.54 to preserve visual hierarchy while meeting WCAG AA 4.5:1 */
-        --tandem-fg-subtle: oklch(0.54 0.008 280);
-        --tandem-fg-faint: oklch(0.64 0.005 280);
+        --tandem-fg-muted: oklch(0.42 0.008 280);
+        --tandem-fg-subtle: oklch(0.455 0.008 280);
+        --tandem-fg-faint: oklch(0.50 0.005 280); /* De-emphasis ladder retuned for AA: muted 6.65:1, subtle 5.75:1, faint 4.73:1 — worst case across every light+warm surface these render text on, which in all three cases is warm --tandem-surface-sunk. (subtle was 0.54 before this sweep; the AA floor pulled it down, so do not "restore hierarchy" by lightening it again.) faint is pinned near 0.50 by the AA floor — on a near-white surface that is simply how light small text is allowed to get. KNOWN COST, confirmed by visual review: muted and subtle now sit 0.035 L apart and are hard to tell apart, so the ladder reads as two steps rather than three. The legal range is wider than the rungs use (body --tandem-fg is 0.22, so 0.22-0.50 is available); spreading into it means darkening muted, which trades "three distinguishable rungs" against "muted recedes less from body text". Not a free fix — see docs/a11y-gate-results.md. SECOND CONSUMER CLASS: faint is also a decorative graphic fill (EmptyState illustration strokes, ActivityTray idle LED, CommandPalette icon stroke, IntegrationWizardModal). Those are not text and are not governed by the AA floor that pins this value; darkening it for text legibility does make the empty-state illustration read firmer than the soft sketch it was. */
         --tandem-accent-h: 275deg;
         --tandem-accent: oklch(0.52 0.16 var(--tandem-accent-h));
         /* Hover state for accent-filled buttons: darker in light mode. The
@@ -128,7 +127,7 @@
         --tandem-success-bg: color-mix(in srgb, var(--tandem-success) 10%, var(--tandem-surface));
         --tandem-success-border: color-mix(in srgb, var(--tandem-success) 40%, var(--tandem-border));
         --tandem-warning: oklch(0.62 0.16 65);
-        --tandem-warning-fg: #ffffff;
+        --tandem-warning-fg: #0f172a; /* Dark on amber. White gave 3.76:1 — the classic amber AA failure. Dark mode already made this choice; light was inconsistent. Now 4.75:1. */
         --tandem-warning-fg-strong: #92400e;
         --tandem-warning-bg: color-mix(in srgb, var(--tandem-warning) 10%, var(--tandem-surface));
         --tandem-warning-border: color-mix(in srgb, var(--tandem-warning) 40%, var(--tandem-border));
@@ -137,7 +136,7 @@
         --tandem-error-fg-strong: #991b1b;
         --tandem-error-bg: color-mix(in srgb, var(--tandem-error) 10%, var(--tandem-surface));
         --tandem-error-border: color-mix(in srgb, var(--tandem-error) 40%, var(--tandem-border));
-        --tandem-info: oklch(0.58 0.2 258);
+        --tandem-info: oklch(0.55 0.2 258); /* Was 0.58, which left white --tandem-info-fg at 4.41:1 — just under AA. 0.55 gives 4.97:1 and keeps the conventional white-on-blue. */
         --tandem-info-fg: #ffffff;
         --tandem-info-fg-strong: oklch(0.38 0.16 258);
         --tandem-info-bg: color-mix(in srgb, var(--tandem-info) 10%, var(--tandem-surface));
@@ -420,8 +419,18 @@
         height: 14px;
         display: block;
       }
+      /* Selected-row badge. The accent tint is 10%, not 14%: the badge paints
+         --tandem-accent as BOLD 10px text on its own tint, so the pair is
+         governed by the 4.5:1 AA floor for small text, and 14% put warm at
+         4.45:1 (#515bc3 on #e1e1ec) — caught by this PR's new warm axe project,
+         which is why light+dark never reported it. At 10% the pair measures
+         ~4.67 warm / ~5.05 light. Raising the tint again re-breaks warm first;
+         warm is the binding theme here because its surface is the darkest of
+         the three light-ish surfaces. The selected state is still carried by
+         --tandem-accent-border and the row's own background, so the weaker
+         tint costs no affordance. */
       .tandem-slash-menu__item[aria-selected="true"] .tandem-slash-menu__icon {
-        background: color-mix(in srgb, var(--tandem-accent) 14%, var(--tandem-surface));
+        background: color-mix(in srgb, var(--tandem-accent) 10%, var(--tandem-surface));
         border-color: var(--tandem-accent-border);
         color: var(--tandem-accent);
       }
@@ -478,7 +487,7 @@
         --tandem-fg-muted: oklch(0.74 0.008 280);
         /* 0.70 keeps WCAG AA 4.5:1 against --tandem-surface-muted (0.25). */
         --tandem-fg-subtle: oklch(0.70 0.008 280);
-        --tandem-fg-faint: oklch(0.58 0.008 280);
+        --tandem-fg-faint: oklch(0.68 0.008 280); /* AA on the surfaces it renders text on: worst is 4.61 on --tandem-author-claude-bg (#4d2419), NOT accent-bg. Raised .67 -> .68 because .ach-time (AnnotationCardHeader) renders faint text on an authorship-tinted card, which measured 4.44 and failed the dark-mode axe scan. The earlier "worst 4.58 on accent-bg" note was an incomplete enumeration — it swept bg/surface/surface-sunk and missed the authorship tints, which are in fact the worst surface for EVERY rung (muted 5.74, subtle 4.96, faint 4.61). tests/e2e/token-contrast.spec.ts now includes them so the claim is enforced rather than asserted. .675 would also pass but only by 0.001; .68 keeps a real margin and the ladder monotonic: muted .74 > subtle .70 > faint .68. NOT AA against --tandem-info-bg (3.16:1) — no consumer pairs faint text with it today; do not introduce one without re-checking. */
         --tandem-accent-h: 275deg;
         --tandem-accent: oklch(0.72 0.14 var(--tandem-accent-h));
         /* Lighter on hover — see the :root counterpart's rationale. */
@@ -565,9 +574,9 @@
         --tandem-surface-sunk: oklch(0.920 0.014 65);
         --tandem-border: oklch(0.91 0.006 75);
         --tandem-border-strong: oklch(0.84 0.008 75);
-        --tandem-fg-muted: oklch(0.48 0.008 280);
-        --tandem-fg-subtle: oklch(0.54 0.008 280);
-        --tandem-fg-faint: oklch(0.64 0.005 280);
+        --tandem-fg-muted: oklch(0.42 0.008 280);
+        --tandem-fg-subtle: oklch(0.455 0.008 280);
+        --tandem-fg-faint: oklch(0.50 0.005 280); /* Ladder mirrors :root — rationale, measured ratios and the second-consumer-class note live there; full results in docs/a11y-gate-results.md. Warm is where the light-theme minima actually fall (all three worst cases are on warm --tandem-surface-sunk), so retuning either block means re-measuring both. */
         --tandem-scrollbar-track: oklch(0.94 0.012 70);
         --tandem-scrollbar-thumb: oklch(0.78 0.010 75);
         --tandem-page-bg: oklch(0.925 0.012 70);

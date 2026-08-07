@@ -203,7 +203,7 @@ function handleReset() {
     <div style="font-size: 13px; font-weight: 600; color: var(--tandem-info-fg-strong);">
       No AI connected yet
     </div>
-    <div style="font-size: 12px; line-height: 1.5; color: var(--tandem-info-fg);">
+    <div style="font-size: 12px; line-height: 1.5; color: var(--tandem-info-fg-strong);">
       Tandem's AI works through Claude Code or Claude Desktop using your existing Claude
       sign-in — no API key needed. The setup wizard connects it in one step.
     </div>
@@ -298,7 +298,7 @@ function handleReset() {
   <div
     role="alert"
     data-testid="settings-modal-working-directory-load-error"
-    style="font-size: 11px; color: var(--tandem-error-fg); background: var(--tandem-error-bg); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); padding: var(--tandem-space-2);"
+    style="font-size: 11px; color: var(--tandem-error-fg-strong); background: var(--tandem-error-bg); border: 1px solid var(--tandem-error-border); border-radius: var(--tandem-r-2); padding: var(--tandem-space-2);"
   >
     {lastLoadError}
   </div>
@@ -346,7 +346,7 @@ function handleReset() {
       >Reset to default</button>
     </div>
     {#if wdError}
-      <div role="alert" style="font-size: 11px; color: var(--tandem-error-fg);">
+      <div role="alert" style="font-size: 11px; color: var(--tandem-error-fg-strong);">
         {wdError}
       </div>
     {/if}
