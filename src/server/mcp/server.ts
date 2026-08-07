@@ -18,6 +18,7 @@ import { getTokenFilePath } from "../auth/token-store.js";
 import { getDeliveryState } from "../events/delivery-state.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
 import { getSubscriberCount } from "../events/queue.js";
+import { attachWakeSocket } from "../events/wake-socket.js";
 import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
 import { readExistingTandemEntries } from "../integrations/existing-config.js";
 import { createKeychain, KEYCHAIN_SERVICE_MODELS } from "../integrations/keychain.js";
@@ -625,6 +626,12 @@ export async function startMcpServerHttp(
     const httpServer = app.listen(port, host, () => {
       httpServer.removeListener("error", reject);
       httpServer.on("error", (err: Error) => console.error("[Tandem] HTTP server error:", err));
+      // The self-arm wake transport (ADR-047). Attached to the http.Server
+      // rather than the Express app because it is a protocol upgrade — it
+      // carries its own guard, and `resolvedLanIP` is passed only so the Host
+      // allowlist matches the rest of the surface. The loopback check inside
+      // rejects a LAN peer regardless.
+      attachWakeSocket(httpServer, resolvedLanIP ? [resolvedLanIP] : []);
       console.error(`[Tandem] MCP HTTP server on http://${host}:${port}/mcp`);
       resolve(httpServer);
     });

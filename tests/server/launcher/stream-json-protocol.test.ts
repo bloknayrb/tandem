@@ -30,6 +30,7 @@ import { buildClaudeArgs, createSupervisor } from "../../../src/server/launcher/
 import {
   CLAUDE_STREAM_JSON_FLAGS,
   SUPERVISOR_INITIAL_PROMPT,
+  SUPERVISOR_NO_ARM_CLAUSE,
   SUPERVISOR_WAKE_PROMPT,
 } from "../../../src/shared/launcher/contract.js";
 
@@ -1048,4 +1049,35 @@ describe("launcher — relocating Claude to a different folder", () => {
       await second.stop();
     }
   }, 40_000);
+});
+
+/**
+ * The no-arm clause (D-4).
+ *
+ * Every other assertion in this file compares a written turn against the
+ * constant it came from, so all of them stay green if the constant is emptied.
+ * These pin the CONTENT, which is the part that has to reach a model.
+ */
+describe("the supervisor's turns tell a launched session not to self-arm", () => {
+  it("carries the clause on the bootstrap turn", () => {
+    expect(SUPERVISOR_INITIAL_PROMPT).toContain(SUPERVISOR_NO_ARM_CLAUSE);
+  });
+
+  it("carries it on the wake turn too, which is the load-bearing half", () => {
+    // The bootstrap prompt is documented fresh-spawns-only, so a RESUMED
+    // session never sees it — and a resumed session is exactly one that has run
+    // long enough to have read the skill and considered arming. On the wake
+    // turn it also survives a context compaction.
+    expect(SUPERVISOR_WAKE_PROMPT).toContain(SUPERVISOR_NO_ARM_CLAUSE);
+  });
+
+  it("still tells the session to pull, which is what actually delivers", () => {
+    // Guards against the clause displacing the instruction it accompanies.
+    expect(SUPERVISOR_INITIAL_PROMPT).toContain("tandem_checkInbox");
+    expect(SUPERVISOR_WAKE_PROMPT).toContain("tandem_checkInbox");
+  });
+
+  it("names Monitor explicitly, so the instruction is actionable", () => {
+    expect(SUPERVISOR_NO_ARM_CLAUSE).toContain("Monitor");
+  });
 });
