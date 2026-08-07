@@ -65,6 +65,25 @@ async function thumbOpacity(page: import("@playwright/test").Page): Promise<numb
   return thumbOf(page).evaluate((el) => Number(getComputedStyle(el).opacity));
 }
 
+/**
+ * Open a fixture READ-ONLY through the same `/api/open` route the "View
+ * Changelog" button uses. Loopback callers need no auth header.
+ */
+async function openReadOnly(page: import("@playwright/test").Page, fixture: string): Promise<void> {
+  await page.goto(APP_URL);
+  await expect(scrollerOf(page)).toBeVisible();
+  const filePath = path.join(tmpDir, fixture);
+  const status = await page.evaluate(async (fp) => {
+    const res = await fetch("http://127.0.0.1:3479/api/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: fp, readOnly: true, force: false }),
+    });
+    return res.status;
+  }, filePath);
+  expect(status).toBe(200);
+}
+
 /** Open `tall.md` and wait until the pill is actually painted. */
 async function openTall(page: import("@playwright/test").Page, expectPill = true): Promise<void> {
   await mcp.callTool("tandem_open", { filePath: path.join(tmpDir, "tall.md") });
@@ -306,4 +325,44 @@ test("no pill for a short document, despite the 70vh end marker", async ({ page 
       timeout: 5_000,
     })
     .toBe("none");
+});
+
+test("a read-only document is keyboard-scrollable", async ({ page }) => {
+  // With the native scrollbar hidden and the pill mouse-driven, the keyboard is
+  // the only remaining path — and a read-only ProseMirror is not tabbable, so
+  // without an explicit tab stop there is none. Chrome and Firefox make
+  // overflow scrollers implicitly focusable and paper over this; WebKit, which
+  // is the desktop app's WebView, does not.
+  await openReadOnly(page, "tall.md");
+  const scroller = scrollerOf(page);
+
+  await expect
+    .poll(async () => scroller.evaluate((el) => el.getAttribute("tabindex")), { timeout: 10_000 })
+    .toBe("0");
+  await expect
+    .poll(async () => scroller.evaluate((el) => el.scrollHeight - el.clientHeight))
+    .toBeGreaterThan(400);
+
+  await scroller.focus();
+  await expect
+    .poll(async () =>
+      page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? null),
+    )
+    .toBe("editor-scroll-container");
+
+  await page.keyboard.press("PageDown");
+  await expect.poll(async () => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+
+  const afterPage = await scroller.evaluate((el) => el.scrollTop);
+  await page.keyboard.press("End");
+  await expect.poll(async () => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(afterPage);
+});
+
+test("an editable document gains no extra tab stop", async ({ page }) => {
+  // The flip side: the tab stop exists only where nothing else can take focus.
+  // An unconditional one would spend tab-traversal budget on every document.
+  await openTall(page);
+  await expect
+    .poll(async () => scrollerOf(page).evaluate((el) => el.getAttribute("tabindex")))
+    .toBeNull();
 });

@@ -1792,6 +1792,28 @@ const editorReadOnly = $derived(isReadOnly || licenseStore.ui.showWall);
 const canSourceView = $derived(!!activeTab && activeTab.format === "md" && !isReadOnly);
 const inSourceView = $derived(!!activeTab && sourceViewTabs.has(activeTab.id));
 /**
+ * Tab stop on the scroll container, but ONLY when nothing else in it can take
+ * focus and scroll it.
+ *
+ * An editable document is reachable already: ProseMirror's contenteditable is
+ * focusable and arrow/Page keys move the caret, which scrolls. A READ-ONLY
+ * document has neither — `editable: false` is not tabbable — and Chrome and
+ * Firefox paper over that by making overflow scrollers implicitly focusable,
+ * while **WebKit does not**. WebKit is the desktop app's WebView, so on macOS a
+ * read-only document (the changelog after an update, a `.docx` in review-only,
+ * anything behind the license wall) had no keyboard scroll path at all. Now
+ * that the scroll pill hides the native scrollbar, it also has no visible one
+ * until the mouse comes near — so this is the whole keyboard story for that
+ * case, not a nicety.
+ *
+ * Deliberately NOT unconditional: a tab stop on every document would spend the
+ * tab-traversal budget that `App.svelte` already declines to spend on the
+ * edge-collapse strips, and would buy nothing where the editor is focusable.
+ * Source view is excluded for the same reason — its textarea is focusable and
+ * scrolls itself.
+ */
+const editorScrollTabIndex = $derived(editorReadOnly && !inSourceView ? 0 : undefined);
+/**
  * Pre-narrowed to a plain boolean so `ScrollPill`'s effect subscribes to THIS
  * derived (which equality-checks its own value) rather than to `activeTab`,
  * whose identity churns whenever the tab array updates for unrelated reasons —
@@ -2727,9 +2749,15 @@ const shouldShowModelPicker = $derived(
          invisibly, because the audit scoped itself to `#root`, where page-level
          landmark rules do not apply. Exactly one editor column, so exactly one
          `main`. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <!-- The warning is right in general and wrong here: a scroll container with
+         no focusable content is the documented exception (it is what axe's
+         `scrollable-region-focusable` asks for), and the value is `undefined`
+         whenever the editor IS focusable. See `editorScrollTabIndex`. -->
     <div
       bind:this={editorScrollEl}
       data-testid="editor-scroll-container"
+      tabindex={editorScrollTabIndex}
       class="editor-scroll tandem-scroll-fade-y"
       class:hide-raw-md={!settingsState.settings.showRawMarkdown}
       class:tandem-scroll-pill-surface={!inSourceView}
@@ -3322,6 +3350,16 @@ const shouldShowModelPicker = $derived(
     align-items: center;
     justify-content: center;
     font-weight: 700;
+  }
+
+  /* Only reachable when `editorScrollTabIndex` is 0 (a read-only document, see
+     its doc comment). `:focus-visible` rather than `:focus` so a mouse click
+     anywhere in the document doesn't ring the whole editor. Inset by the 2px
+     transparent border the scroller already carries for its file-drop state, so
+     the ring sits inside the column instead of over the rail seam. */
+  .editor-scroll:focus-visible {
+    outline: 2px solid var(--tandem-accent);
+    outline-offset: -2px;
   }
 
   .editor-column-wrap {
