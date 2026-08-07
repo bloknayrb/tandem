@@ -42,6 +42,7 @@ import ReviewOnlyBanner from "./components/ReviewOnlyBanner.svelte";
 import SettingsModal, { SETTINGS_TAB_IDS } from "./components/SettingsModal.svelte";
 import ToastContainer from "./components/ToastContainer.svelte";
 import UpdaterBanner from "./components/UpdaterBanner.svelte";
+import WakeStallBanner from "./components/WakeStallBanner.svelte";
 import { isTauriRuntime } from "./cowork/cowork-helpers";
 import Editor from "./editor/Editor.svelte";
 import { annotationPluginKey } from "./editor/extensions/annotation";
@@ -2904,6 +2905,9 @@ const shouldShowModelPicker = $derived(
         />
       {/key}
     {/if}
+    <!-- D-5: a projection, not an event. Document-independent (the join is
+         process-global), so it sits outside the per-tab guards above. -->
+    <WakeStallBanner stalledMs={aiReadiness.deliveryStalledMs} />
     {#if activeTab && activeTab.format === "docx"}
       <FidelityReportBanner
         ydoc={activeTab.ydoc}

@@ -156,6 +156,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `external-conflict-banner`, `external-conflict-keep-btn`,
   `external-conflict-reload-btn` (#1069 — keep-vs-reload after an external
   write; every format since #1238)
+- `wake-stall-banner` (Track D-5 — "Claude hasn't picked this up for N
+  minutes"). No dismiss selector, deliberately: like `fidelity-report-banner`
+  it is a projection of live state rather than an event, so it erases itself
+  when `/health` reports a poll and has nothing to acknowledge.
 
 ### Modals & dialogs
 - `help-modal`, `help-modal-close`

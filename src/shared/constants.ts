@@ -285,6 +285,19 @@ export const ACTIVITY_HISTORY_CAP = 50;
 // cap keep ambient SSE info from flooding the tray in the meantime.
 export const ACTIVITY_INFO_TTL_MS = 5 * 60_000;
 
+/**
+ * How long an unanswered message waits before the editor says so (D-5).
+ *
+ * Minutes, not seconds, and the reason is not caution for its own sake: a model
+ * that is working polls. The shipped skill instructs `tandem_checkInbox` every
+ * 2–3 tool calls, so an active turn clears an outstanding forward on its own
+ * almost immediately. A climbing wait therefore means nothing is polling AND
+ * nothing is waking — the real symptom. What is left is a long generation that
+ * calls no tools at all, and two minutes clears that comfortably while still
+ * being short enough that the user has not yet concluded the product is broken.
+ */
+export const DELIVERY_STALL_MS = 2 * 60_000;
+
 // Onboarding tutorial
 export const TUTORIAL_COMPLETED_KEY = "tandem:tutorialCompleted";
 // Load-bearing: useTutorial.svelte.ts uses this prefix to exclude tutorial
