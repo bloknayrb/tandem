@@ -370,3 +370,60 @@ describe("ollama-client — streaming (#1123 M1.2)", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("ollama-client — endpoint is rebuilt from the validated URL (#1295 L4/L5)", () => {
+  const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }));
+
+  it("drops a fragment instead of welding it in front of the API path", async () => {
+    const fetchMock = stubFetch(ok);
+    await chat({
+      config: { ...V1, endpoint: "http://127.0.0.1:11434#frag" },
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+    });
+    // Trimming trailing slashes off the RAW string left the fragment attached,
+    // producing `...:11434#frag/v1/chat/completions`, which fetch re-parses as
+    // path `/` — a silent wrong-path request surfacing as "non-JSON response".
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:11434/v1/chat/completions",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("drops a query string the same way", async () => {
+    const fetchMock = stubFetch(ok);
+    await chat({
+      config: { ...V1, endpoint: "http://127.0.0.1:11434/?k=v" },
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:11434/v1/chat/completions");
+  });
+
+  it("connects to 127.0.0.1 for a validated `localhost`, so check and connect agree", async () => {
+    const fetchMock = stubFetch(ok);
+    await chat({
+      config: { ...V1, endpoint: "http://localhost:11434" },
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+    });
+    // The literal-name match accepted `localhost`, but fetch would have resolved
+    // it independently — validate-by-name-then-connect-by-name is the rebinding
+    // shape. The dialed URL must carry the address, not the name.
+    const dialed = fetchMock.mock.calls[0]?.[0] as string;
+    expect(dialed).toBe("http://127.0.0.1:11434/v1/chat/completions");
+    expect(dialed).not.toContain("localhost");
+  });
+
+  it("still preserves a legitimate base path", async () => {
+    // Positive control: the fix rebuilds the URL, so prove it does not also
+    // discard a path the user deliberately configured (a reverse-proxied Ollama).
+    const fetchMock = stubFetch(ok);
+    await chat({
+      config: { ...V1, endpoint: "http://127.0.0.1:11434/ollama/" },
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:11434/ollama/v1/chat/completions");
+  });
+});

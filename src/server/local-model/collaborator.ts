@@ -41,6 +41,57 @@ const INLINE_CHAR_LIMIT = 8000;
 /** Coalesce streamed deltas: flush at most this often OR every FLUSH_CHARS chars. */
 const STREAM_FLUSH_MS = 120;
 const STREAM_FLUSH_CHARS = 80;
+
+/**
+ * Ceiling on a single streamed reply (#1292).
+ *
+ * Every flush re-`set`s the ENTIRE message value into the ctrl-room Y.Map, which
+ * Hocuspocus then broadcasts to every connected client — so a stream of length n
+ * costs O(n²) in Yjs encoding and WebSocket bytes. The only other ceiling is the
+ * per-response raw-byte cap, which is sized for a whole JSON response rather than
+ * a chat bubble; a local model in a repetition loop (a routine failure mode for
+ * quantized small models) reaches it with no attacker involved.
+ *
+ * 64 KiB is generous for a chat bubble. This cap is load-bearing beyond the
+ * quadratic blowup: it also bounds what lands in the persisted session file.
+ */
+const MAX_STREAMED_CHARS = 64 * 1024;
+
+/** Appended once when {@link MAX_STREAMED_CHARS} is hit, so the cut is visible. */
+const TRUNCATION_MARKER = "\n\n_[Reply truncated — the model exceeded the streaming limit.]_";
+
+/**
+ * Wire-level twin of {@link MAX_STREAMED_CHARS} (#1292).
+ *
+ * The two caps must be compared in CONTENT chars, not in bytes, and doing that
+ * inverts the naive reading: per-frame framing overhead means a streamed byte
+ * budget buys far fewer content chars than its size suggests. Measured against
+ * realistic frames carrying a 5-char token:
+ *
+ *   v1 SSE (id, object, created, model, system_fingerprint, choices[0].delta,
+ *   logprobs, finish_reason)  ~264 B/frame  ->  ~53 B per content char
+ *   Ollama-native NDJSON      ~132 B/frame  ->  ~26 B per content char
+ *
+ * At 1 MiB that admitted only ~20k (v1) / ~40k (native) content chars — both
+ * BELOW the 64 KiB sink cap, so the wire cap always tripped first and the sink's
+ * truncation marker was unreachable in production. 4 MiB clears the ~3.3 MiB a
+ * v1 stream needs to deliver 64 KiB of content, restoring the intended order:
+ * the sink cap is the primary bound (it is what shows the user a marker), this
+ * is the backstop. Still four times below the client's 16 MB default, which
+ * exists for whole-JSON reads rather than chat.
+ *
+ * What the raise actually costs is `readStream`'s line buffer, and the sink
+ * cannot help there: the case that cap was added for is a newline-less flood,
+ * where no frame ever completes, so no delta is ever emitted and the sink's
+ * cap-abort can never fire. This constant is the only bound on that buffer.
+ * 4 MiB of transient decode buffer against a loopback endpoint is the price of
+ * making the sink's marker reachable at all.
+ *
+ * It cannot be ordered for EVERY stream: a degenerate one-char-token stream runs
+ * ~260 B per content char and still trips this cap first. That path exits
+ * `error`, which is why `executeRun`'s error branch also flushes the sink.
+ */
+const MAX_STREAMED_RESPONSE_BYTES = 4 * 1024 * 1024;
 /** Truncate selectedText before embedding in the model prompt. A large selection
  *  can't inflate token usage unboundedly; 500 chars captures any reasonable
  *  user-selected excerpt (a paragraph or two). */
@@ -128,6 +179,9 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
     let buffer = "";
     let charsSinceFlush = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // Latch, not a counter: the marker is appended exactly once, and every
+    // subsequent delta is dropped rather than re-triggering the cap branch.
+    let truncated = false;
 
     const isOwner = () =>
       current?.token === ctx.token &&
@@ -161,8 +215,36 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
 
     return {
       push: (delta: string) => {
+        // Post-cap deltas are dropped outright: the marker is already committed
+        // and the run is aborting, so appending would only grow a buffer nobody
+        // will write.
+        if (truncated) return;
+
         buffer += delta;
         charsSinceFlush += delta.length;
+
+        if (buffer.length >= MAX_STREAMED_CHARS) {
+          // #1292. ORDER IS LOAD-BEARING — do not reorder these two calls.
+          // `write()` returns early on `!isOwner()`, and `isOwner()` includes
+          // `!ctx.abort.signal.aborted`, so aborting FIRST would permanently
+          // disable the only write path: the marker would never reach the
+          // Y.Map, and the user would see a silently truncated reply. The
+          // terminal path in `executeRun` cannot rescue it either — its
+          // `stillOwner()` carries the same abort clause.
+          //
+          // Both calls ride ONE deferred task so the ordering is guaranteed
+          // while preserving this file's nested-txn invariant (see the header:
+          // the sink flushes only from a timer, never on a delta stack).
+          truncated = true;
+          buffer = buffer.slice(0, MAX_STREAMED_CHARS) + TRUNCATION_MARKER;
+          cancelTimer();
+          timer = setTimeout(() => {
+            write();
+            ctx.abort.abort();
+          }, 0);
+          return;
+        }
+
         // Deferred always — a flush must never run on the onContentDelta stack.
         if (charsSinceFlush >= STREAM_FLUSH_CHARS) {
           cancelTimer();
@@ -172,6 +254,10 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         }
       },
       onTurnEnd: (info: { hadToolCalls: boolean }) => {
+        // Once truncated, the buffer holds the committed-or-committing marker.
+        // Dropping it here would cancel the pending cap flush and wipe the
+        // marker, which is the one write the user needs to see (#1292).
+        if (truncated) return;
         if (info.hadToolCalls) {
           // The turn's content was preamble/scaffolding — drop it so the next
           // turn's content replaces it (no "" write → no empty-bubble flip).
@@ -219,6 +305,12 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
         config,
         task,
         includeFullText,
+        // #1292: the client default is 16 MB, sized for a whole JSON response.
+        // A chat reply is bounded by MAX_STREAMED_CHARS on the sink side; this
+        // is the wire-level twin, so a hostile or looping endpoint cannot make
+        // us buffer 16 MB before the sink ever sees it. Both are needed — the
+        // sink cap bounds the Y.Map write, this bounds the raw read.
+        maxResponseBytes: MAX_STREAMED_RESPONSE_BYTES,
         signal: abort.signal,
         onContentDelta: sink.push,
         onTurnEnd: sink.onTurnEnd,
@@ -245,7 +337,30 @@ export function createLocalModelCollaborator(deps: CollaboratorDeps = DEFAULT_DE
             documentId: req.docName,
             timestamp: Date.now(),
           });
+        } else if (exit === "timeout") {
+          // Deliberately its own branch, not folded into the budget message
+          // above (#1295 L6). A wall-clock exit happens with turns to spare, so
+          // "reached its step limit" would be false and would send the user to
+          // raise maxTurns for what is really a slow or stalling endpoint.
+          sink.flushFinal();
+          pushNotification({
+            id: generateMessageId(),
+            type: "general-error",
+            severity: "warning",
+            message: "The local model stopped before finishing (it ran out of time).",
+            documentId: req.docName,
+            timestamp: Date.now(),
+          });
         } else if (exit === "error") {
+          // Commit what did arrive before the fault (#1292). The runaway case
+          // this cap exists for — a quantized model in a repetition loop —
+          // trips the WIRE cap inside readStream, which throws, so the run
+          // lands here rather than on the sink's own truncation path. Without
+          // this flush the user is left with a bubble frozen at the last 80-char
+          // flush boundary and only a generic notification to explain it.
+          // no-ops on an empty buffer, so a fault before any content still
+          // mints nothing.
+          sink.flushFinal();
           console.error(
             `[local-model] run error (exit=${exit}): ${result.metrics.errorMessage ?? "unknown"}`,
           );

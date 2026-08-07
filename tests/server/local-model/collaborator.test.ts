@@ -652,9 +652,43 @@ describe("collaborator — failure + robustness", () => {
     collab.__setConfigForTests(CONFIG);
     collab.onEvent(chatEvent("go", { documentId: "doc-err" }));
     await drain(collab);
-    // No chat reply on error; the raw error stays on stderr only.
+    // Nothing was streamed, so the error branch's flush has nothing to commit
+    // and mints no empty bubble; the raw error stays on stderr only.
     expect(chatMessages()).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("commits the streamed partial when the run exits 'error' (#1292)", async () => {
+    // The runaway case this PR exists for — a quantized model in a repetition
+    // loop — trips the WIRE cap inside readStream, which throws, so the run
+    // lands on the `error` branch and NOT on the sink's own truncation path.
+    // That branch used to notify without flushing, so everything received since
+    // the last 80-char flush boundary was dropped and the bubble stayed frozen
+    // mid-sentence.
+    setupDoc("doc-err-partial", "Body");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          // Under STREAM_FLUSH_CHARS (80), so nothing has been committed yet:
+          // this content exists ONLY in the sink buffer when the fault lands.
+          opts.onContentDelta?.("The answer is ");
+          return errorResult("local model response exceeded 4194304-byte cap");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-err-partial" }));
+    await drain(collab);
+
+    const msgs = chatMessages();
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toBe("The answer is ");
+    // The notification is still required — the partial alone doesn't say why.
+    const notes = getBuffer().filter((n) => n.documentId === "doc-err-partial");
+    expect(notes).toHaveLength(1);
+    expect(notes[0].message).toMatch(/too large/);
     errorSpy.mockRestore();
   });
 
@@ -850,5 +884,156 @@ describe("dark audit — engine reachability", () => {
       if (/from\s+["'][^"']*local-model\/(?!collaborator)/.test(src)) offenders.push(norm);
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("collaborator — streamed reply is bounded (#1292)", () => {
+  // Mirrors MAX_STREAMED_CHARS in collaborator.ts. Kept as a literal rather than
+  // exported: these tests assert the OBSERVABLE contract (a bounded, marked
+  // message in the Y.Map), so importing the constant would let a bad cap change
+  // move the test with it.
+  const CAP = 64 * 1024;
+
+  /** Push `total` chars in realistic ~16 KiB chunks, like undici delivers them. */
+  function pushChunks(opts: { onContentDelta?: (d: string) => void }, total: number) {
+    const CHUNK = 16 * 1024;
+    for (let sent = 0; sent < total; sent += CHUNK) {
+      opts.onContentDelta?.("x".repeat(Math.min(CHUNK, total - sent)));
+    }
+  }
+
+  it("caps a runaway stream and persists the truncation marker to the Y.Map", async () => {
+    setupDoc("doc-runaway", "Body");
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          // A repetition-looping model: 4x the cap, no tool calls, never stops.
+          pushChunks(opts, CAP * 4);
+          // Yield so the cap's deferred commit+abort actually runs mid-stream.
+          // This is what makes the test discriminating: once aborted, the
+          // terminal `flushFinal()` in executeRun is skipped (its `stillOwner()`
+          // carries the abort clause), so the ONLY thing that can have written
+          // the marker is the cap's own commit. Without this yield the clean
+          // exit's flushFinal commits the buffer for us and the assertion below
+          // passes even when the abort happens first — verified by inverting the
+          // ordering, where this test stayed green and only the abort test caught it.
+          await new Promise((r) => setTimeout(r, 0));
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("unused");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-runaway" }));
+    await drain(collab);
+
+    const msgs = chatMessages();
+    expect(msgs).toHaveLength(1);
+
+    // THE load-bearing assertion, and the reason this reads the Y.Map rather
+    // than the sink. `write()` bails on `!isOwner()`, which includes
+    // `!abort.signal.aborted` — so an implementation that aborts BEFORE
+    // committing the marker leaves the bubble frozen at the last 80-char flush
+    // boundary and the user never learns the reply was cut. A sink-level
+    // assertion, or one that only checks `abort` was called, passes against
+    // exactly that bug.
+    expect(msgs[0].text).toContain("Reply truncated");
+
+    // Bounded: the cap plus one marker, not 4x the cap.
+    expect(msgs[0].text.length).toBeLessThan(CAP + 500);
+    expect(msgs[0].text.length).toBeGreaterThan(CAP - 500);
+  });
+
+  it("appends the truncation marker exactly once across many post-cap deltas", async () => {
+    setupDoc("doc-marker-once", "Body");
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          pushChunks(opts, CAP * 8); // many chunks land after the latch trips
+          await new Promise((r) => setTimeout(r, 0)); // let the cap commit+abort run
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("unused");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-marker-once" }));
+    await drain(collab);
+
+    const text = chatMessages()[0].text;
+    expect(text.split("Reply truncated")).toHaveLength(2); // one occurrence
+  });
+
+  it("aborts the run once capped, so the endpoint stops being read", async () => {
+    setupDoc("doc-abort", "Body");
+    let signalAfterCap: boolean | undefined;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          pushChunks(opts, CAP * 2);
+          // The cap commits + aborts on a deferred task; yield so it runs.
+          await new Promise((r) => setTimeout(r, 0));
+          signalAfterCap = opts.signal?.aborted;
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("unused");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-abort" }));
+    await drain(collab);
+
+    expect(signalAfterCap).toBe(true);
+    // Positive control on the same sample: the abort must not have cost us the
+    // marker. Asserting the abort alone is satisfied by the broken ordering.
+    expect(chatMessages()[0].text).toContain("Reply truncated");
+  });
+
+  it("keeps the marker when a tool-call turn ends after the cap trips", async () => {
+    setupDoc("doc-marker-toolcall", "Body");
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          pushChunks(opts, CAP * 2);
+          // `onTurnEnd({hadToolCalls:true})` normally cancels the pending flush
+          // and clears the buffer to drop preamble — which would wipe the
+          // not-yet-committed marker. The truncation latch must win.
+          opts.onTurnEnd?.({ hadToolCalls: true });
+          return cleanResult("unused");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-marker-toolcall" }));
+    await drain(collab);
+
+    const msgs = chatMessages();
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].text).toContain("Reply truncated");
+  });
+
+  it("passes an explicit chat-sized response-byte ceiling, not the 16 MB client default", async () => {
+    setupDoc("doc-bytecap", "Body");
+    let seen: number | undefined;
+    const collab = createLocalModelCollaborator(
+      makeDeps({
+        runTurn: async (opts) => {
+          seen = opts.maxResponseBytes;
+          opts.onContentDelta?.("hi");
+          opts.onTurnEnd?.({ hadToolCalls: false });
+          return cleanResult("hi");
+        },
+      }),
+    );
+    collab.__setConfigForTests(CONFIG);
+    collab.onEvent(chatEvent("go", { documentId: "doc-bytecap" }));
+    await drain(collab);
+
+    // Assert on the VALUE reaching runTurn. Asserting only "no error" would pass
+    // while the option silently defaulted to DEFAULT_MAX_RESPONSE_BYTES (16 MB),
+    // which is the bug — the field being threaded but never set.
+    expect(seen).toBeDefined();
+    expect(seen).toBeLessThan(16 * 1024 * 1024);
+    expect(seen).toBeGreaterThanOrEqual(CAP);
   });
 });
