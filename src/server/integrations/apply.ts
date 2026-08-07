@@ -45,6 +45,7 @@ import { fileURLToPath } from "node:url";
 
 import { SKILL_CONTENT } from "../../cli/skill-content.js";
 import { DEFAULT_MCP_PORT } from "../../shared/constants.js";
+import { targetPushSupport } from "../../shared/integrations/contract.js";
 import { resolveAppDataDir } from "../platform.js";
 import { setRestrictiveAcl } from "./acl-win.js";
 import { backupDir, pruneOldBackups, shouldBackup, writeBackup } from "./backup.js";
@@ -1198,8 +1199,13 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
  * default for the Claude Code target stays ON, gated only by the build
  * artifact actually existing.
  *
- * - `claude-desktop` → always false (Cowork stdio path; the node-process
- *   shim does not apply there).
+ * - `targetPushSupport(kind) === "none"` (today: `claude-desktop`, the Cowork
+ *   stdio path — the node-process shim does not apply there) → always false,
+ *   ahead of the override, because no flag can conjure a transport that does
+ *   not exist. That predicate lives in `shared/integrations/contract.ts` rather
+ *   than as a bare `=== "claude-desktop"` here so the WIZARD can read the same
+ *   fact and say it out loud. It could not before, which is how a Claude
+ *   Desktop user came to be told "AI connected" and then ignored (#1299).
  * - `override` (the explicit `--with-channel-shim` / wizard opt-out) wins
  *   when provided.
  * - Otherwise: default-on for Claude Code, but only if `channelPath` exists.
@@ -1215,7 +1221,7 @@ export function shouldRegisterChannelShim(
   channelPath: string,
   override?: boolean,
 ): boolean {
-  if (targetKind === "claude-desktop") return false;
+  if (targetPushSupport(targetKind) === "none") return false;
   if (override !== undefined) return override;
   return validateChannelShimPrereq(channelPath);
 }
