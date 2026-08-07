@@ -578,7 +578,16 @@ async function fetchLauncherNonce(): Promise<FetchResult<string>> {
   return { ok: true, value: body.nonce };
 }
 
-function deriveCwdFromDocPath(docPath: string | null): string | null {
+/**
+ * The folder a "relaunch here" would target, from a document path.
+ *
+ * Exported so the #1282 drift preview asks about the SAME folder the relaunch
+ * would use. A second dirname implementation on the query side is how you get a
+ * nudge that offers a folder the action then declines to use — the split
+ * between a client derivation and a server check being the defect #1282 itself
+ * was filed for.
+ */
+export function deriveCwdFromDocPath(docPath: string | null): string | null {
   if (!docPath) return null;
   // Reject upload:// and other non-filesystem URIs before they reach the API.
   if (/^[a-z]+:\/\//.test(docPath)) return null;
@@ -799,6 +808,20 @@ async function relaunchHere(
  */
 export function relaunchClaudeCode(): void {
   guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d, { cwdRequired: false }));
+}
+
+/**
+ * Move Claude to the active document's folder — the palette's "Relaunch Claude
+ * in this folder", exported so the #1282 drift nudge runs the *same* code rather
+ * than a second copy of it.
+ *
+ * Distinct from `relaunchClaudeCode` in the one way that matters: this is the
+ * caller that means "here", so it is the caller that persists the folder. The
+ * drift nudge names a specific folder and offers to move Claude into it, which
+ * is that intent exactly — a chip that recovers a crashed Claude is not.
+ */
+export function relaunchClaudeHere(): void {
+  guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d, { cwdRequired: true }));
 }
 
 export function startFreshClaudeCode(): void {
@@ -1170,7 +1193,7 @@ const BUILTINS: Action[] = [
     label: "Relaunch Claude in this folder",
     group: "claude",
     run() {
-      guardedRun("launcher-relaunch-here", (d) => void relaunchHere(d, { cwdRequired: true }));
+      relaunchClaudeHere();
     },
   },
   {

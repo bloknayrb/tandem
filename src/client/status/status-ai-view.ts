@@ -1,4 +1,5 @@
-import type { AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
+import type { AiChip, AiLiveIndicator, AiReadinessState } from "../hooks/useAiReadiness.svelte";
+import type { CwdDrift } from "../hooks/useCwdDrift.svelte";
 
 /**
  * Consolidated AI-status indicator for the status pill (replaces the old
@@ -98,4 +99,65 @@ export function aiIndicatorView(
   if (state === "ready") return null; // launcher running, no session yet
   if (soloMode) return null; // opted out of AI — don't nag
   return NOT_CONNECTED; // unconfigured / stopped, Tandem: honest "not connected"
+}
+
+// --- Working-directory drift qualifier (#1282) -----------------------------
+
+export interface CwdDriftPill {
+  /** Compact status-bar text. */
+  label: string;
+  /** Hover tooltip. */
+  title: string;
+  /** Screen-reader label — carries the full paths, which the pill elides. */
+  ariaLabel: string;
+  /** Menu heading: the explanation the pill has no room for. */
+  explanation: string;
+  /** Label for the act-on-it row. */
+  actionLabel: string;
+}
+
+/**
+ * The working-directory drift pill, or `null` to render nothing.
+ *
+ * **Why this is a sibling of the AI indicator and not folded into it.** The
+ * obvious placement — inside `aiIndicatorView`'s returned view — is dead code
+ * in exactly the state the nudge exists for: `aiIndicatorView` returns `null`
+ * when `state === "ready"` with no live MCP session, which is precisely the
+ * auto-launched desktop startup window where the launcher is running (and so
+ * has a cwd to be wrong about) but no agent has connected yet. Anything nested
+ * inside `{#if aiView}` would never render there.
+ *
+ * **Why two adjacent Claude chips is not the #1268 shape.** That failure was two
+ * CTAs for the same situation, describing it differently and wired to different
+ * handlers. These two cannot coexist by construction: `aiChip` is non-null only
+ * for `unconfigured` / `stopped`, both of which mean the supervised launcher is
+ * not running — and the server reports drift only when it IS. They can overlap
+ * only transiently, when Claude dies between a drift probe and the next
+ * readiness poll, so `aiChip` wins outright. This is a staleness gate, not a
+ * second copy of the server's predicate: it never turns a `false` into a `true`.
+ *
+ * `drift` being non-null already means "the server says nudge"; suppression the
+ * USER asked for (per-pair dismissal, session backstop, permanent opt-out) is
+ * applied by the caller before this point, so it stays in one place —
+ * `cwdDriftDismiss` — rather than half here and half there.
+ */
+export function cwdDriftPill(drift: CwdDrift | null, aiChip: AiChip): CwdDriftPill | null {
+  if (drift === null) return null;
+  if (aiChip !== null) return null;
+  // Names the consequence, not the state. "AI · other folder" reads as a
+  // connection status and leaves the user with no idea what is actually
+  // degraded — the document syncs fine and Claude can still edit it; what it
+  // cannot see is everything AROUND the document.
+  const consequence =
+    `Claude is running in ${drift.claudeCwd}, not ${drift.suggestedCwd}. ` +
+    "It can still read and edit this document, but it can't see that folder's " +
+    "CLAUDE.md, .claude/ settings or git history, and its own file tools can't " +
+    "reach the files beside it.";
+  return {
+    label: `Claude in ${drift.claudeLabel}`,
+    title: consequence,
+    ariaLabel: `Working folder mismatch. ${consequence}`,
+    explanation: consequence,
+    actionLabel: `Restart Claude in ${drift.label}…`,
+  };
 }

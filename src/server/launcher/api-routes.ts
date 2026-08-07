@@ -1,7 +1,7 @@
 /**
  * HTTP routes for the Claude Code auto-launcher (#477 PR 4b).
  *
- * Five endpoints, all under `/api/launcher/*`:
+ * Seven endpoints, all under `/api/launcher/*`:
  *   - `GET /status` — read-only; loopback returns full struct (with
  *     `sessionId` redacted to "<set>"), non-loopback returns the minimal
  *     `{ available, running }` shape (mirrors `/health`'s redaction pattern).
@@ -16,6 +16,9 @@
  *     Narrow write to the first claude-code integration's
  *     `workingDirectory` field. Bypasses the integrations apply-nonce
  *     rotation that a full-array POST would trigger.
+ *   - `POST /start` — promote a `deferred-autostart` launcher (#1236).
+ *   - `POST /cwd-preview` — body `{ cwd }`. Read-only drift verdict (#1282);
+ *     loopback-only, no nonce. See `makeCwdPreviewHandler`.
  *
  * The supervisor singleton is bridged via `() => Supervisor | null`. Routes
  * return 503 + `NOT_AVAILABLE` when the getter returns null (stdio mode,
@@ -27,6 +30,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response } from "express";
 
 import {
+  API_LAUNCHER_CWD_PREVIEW,
   API_LAUNCHER_NONCE,
   API_LAUNCHER_RELAUNCH,
   API_LAUNCHER_START,
@@ -45,6 +49,7 @@ import {
   LAUNCHER_ERROR_NOT_AVAILABLE,
   LAUNCHER_ERROR_PATH_REJECTED,
   LAUNCHER_ERROR_REAPER_NOT_FOUND,
+  type LauncherCwdPreview,
   type LauncherStatus,
   type LauncherUnavailableReason,
   REAPER_NOT_FOUND_MARKER,
@@ -55,6 +60,7 @@ import { assertLoopbackForMutation, assertOriginAllowlisted } from "../integrati
 import type { IntegrationConfig } from "../integrations/schema.js";
 import type { IntegrationsStore } from "../integrations/storage.js";
 import type { Handler } from "../mcp/routes/_shared.js";
+import { previewCwdDrift } from "./cwd-preview.js";
 import { resolveRouteCwd, type Supervisor } from "./supervisor.js";
 
 /**
@@ -153,6 +159,12 @@ export interface LauncherRoutesDeps {
   startSupervisor: () => Promise<void>;
   /** Reads/writes the integrations file. Same store passed to integrations routes. */
   store: IntegrationsStore;
+  /** Directories holding Tandem's own auto-opened documents, excluded from the
+   * drift preview. Injected rather than imported: the paths are resolved in
+   * `mcp/server.ts` (which registers these routes), and passing them keeps the
+   * exclusion list testable without a real install layout. See
+   * `CwdPreviewDeps.bundledDocDirs` for why the exclusion exists at all. */
+  bundledDocDirs?: readonly string[];
   /** Loopback-only side-channel for skill refresh failures. `null` when the
    * last refresh succeeded or the helper is not wired (test mode). */
   getSkillRefreshError?: () => SkillRefreshError | null;
@@ -182,6 +194,9 @@ export function registerLauncherRoutes(app: Express, mw: Handler, deps: Launcher
 
   app.options(API_LAUNCHER_WORKING_DIRECTORY, mw);
   app.post(API_LAUNCHER_WORKING_DIRECTORY, mw, makeWorkingDirHandler(deps));
+
+  app.options(API_LAUNCHER_CWD_PREVIEW, mw);
+  app.post(API_LAUNCHER_CWD_PREVIEW, mw, makeCwdPreviewHandler(deps));
 }
 
 // --- Handlers -------------------------------------------------------------
@@ -299,27 +314,47 @@ function sendInProgress(res: Response, message: string): void {
   });
 }
 
+type CwdPrecheck = { ok: true; cwd: string } | { ok: false; reason: "not-a-string" | "too-long" };
+
+/**
+ * The I/O-free half of the cwd-field predicate: type, then length cap.
+ *
+ * Shared — not restated — by the mutating routes and the read-only preview, and
+ * shared at exactly this seam because the two halves cannot be shared as one.
+ * The mutating routes resolve the path synchronously; the preview runs at
+ * tab-switch frequency and must resolve it asynchronously (`statSync` on a
+ * disconnected mapped drive blocks the event loop). So the fs half necessarily
+ * forks, and the pre-checks must not, or the preview would green-light a
+ * 2000-character dirname that the relaunch it advertises then rejects. A
+ * predicate that answers differently on the query path and the action path is
+ * the defect #1282 was filed for; keeping this function the only home for the
+ * cap means deleting it breaks the relaunch tests, not just the preview's.
+ */
+function precheckCwdField(raw: unknown): CwdPrecheck {
+  if (typeof raw !== "string") return { ok: false, reason: "not-a-string" };
+  if (raw.length > LAUNCHER_CWD_MAX_LENGTH) return { ok: false, reason: "too-long" };
+  return { ok: true, cwd: raw };
+}
+
 /** Validate a string cwd field: type, length cap, and home-confined resolution.
- * `fieldName` parameterizes the error messages — "cwd" for request bodies,
- * "workingDirectory" for the POST /working-directory route. */
+ * The mutating half of the split above — `precheckCwdField` plus the synchronous
+ * fs resolution. `fieldName` parameterizes the error messages — "cwd" for
+ * request bodies, "workingDirectory" for the POST /working-directory route. */
 function validateCwdString(
   raw: unknown,
   res: Response,
   fieldName: "cwd" | "workingDirectory",
 ): string | null {
-  if (typeof raw !== "string") {
-    sendBadRequest(res, LAUNCHER_ERROR_INVALID_BODY, `${fieldName} must be a string`);
+  const pre = precheckCwdField(raw);
+  if (!pre.ok) {
+    const message =
+      pre.reason === "not-a-string"
+        ? `${fieldName} must be a string`
+        : `${fieldName} exceeds ${LAUNCHER_CWD_MAX_LENGTH} chars`;
+    sendBadRequest(res, LAUNCHER_ERROR_INVALID_BODY, message);
     return null;
   }
-  if (raw.length > LAUNCHER_CWD_MAX_LENGTH) {
-    sendBadRequest(
-      res,
-      LAUNCHER_ERROR_INVALID_BODY,
-      `${fieldName} exceeds ${LAUNCHER_CWD_MAX_LENGTH} chars`,
-    );
-    return null;
-  }
-  const resolved = resolveRouteCwd(raw);
+  const resolved = resolveRouteCwd(pre.cwd);
   if (resolved === null) {
     sendBadRequest(
       res,
@@ -581,6 +616,81 @@ function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
       inflight.workingDirectory = false;
     }
   };
+}
+
+/**
+ * `POST /api/launcher/cwd-preview` (#1282) — read-only drift verdict.
+ *
+ * Gates, and why they are these gates:
+ *
+ *   - **Origin allowlist**, like every other launcher route.
+ *   - **A bare loopback check, NOT `assertLoopbackForMutation`.** That helper
+ *     only rejects when `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`, so in the default
+ *     configuration it is a no-op — using it here would read as a gate while
+ *     enforcing nothing. The response reconstructs the launcher `cwd` that
+ *     `makeStatusHandler` deliberately withholds off-loopback, and adds a second
+ *     path under the user's home directory, so it needs the unconditional
+ *     posture `GET /api/document/raw` and `/api/diagnostics` use (#1121).
+ *   - **No nonce.** Nonces exist to stop replayed *destructive* calls. This route
+ *     starts nothing, stops nothing and writes nothing; consuming a nonce would
+ *     also rotate it out from under a relaunch the user is about to confirm.
+ *
+ * A `503` is impossible here on purpose: "the launcher isn't available" is a
+ * perfectly good answer to "is Claude in the wrong folder", and it is `no`.
+ */
+function makeCwdPreviewHandler(deps: LauncherRoutesDeps): Handler {
+  return async (req: Request, res: Response) => {
+    if (assertOriginAllowlisted(req, res, API_LAUNCHER_CWD_PREVIEW)) return;
+    if (!isLoopback(req.socket.remoteAddress)) {
+      res.status(403).json({ error: "FORBIDDEN", message: "Loopback only." });
+      return;
+    }
+    const body = parseJsonObjectBody(req, res);
+    if (body === null) return;
+    // A non-string `cwd` is a caller bug and gets a 400. Every other rejection —
+    // over-length, outside home, non-existent, UNC — is a legitimate answer to
+    // the question asked, and the answer is "no drift". The client probes this
+    // on every settled tab switch; a document on an external drive is not an
+    // error the user committed.
+    const pre = precheckCwdField(body.cwd);
+    if (!pre.ok) {
+      if (pre.reason === "not-a-string") {
+        sendBadRequest(res, LAUNCHER_ERROR_INVALID_BODY, "cwd must be a string");
+        return;
+      }
+      res.json({ drifted: false } satisfies LauncherCwdPreview);
+      return;
+    }
+
+    try {
+      const preview = await previewCwdDrift({
+        candidate: pre.cwd,
+        claudeCwd: runningCwd(deps.getSupervisor()),
+        bundledDocDirs: deps.bundledDocDirs ?? [],
+      });
+      res.json(preview);
+    } catch (err) {
+      // Deliberately NOT a 500. This endpoint's contract is "should I nudge?",
+      // and a failed check answers that as well as a successful one does. Logged
+      // so a systematically failing probe is discoverable rather than silently
+      // suppressing the whole feature.
+      console.error("[Launcher routes] cwd-preview failed:", err);
+      res.json({ drifted: false } satisfies LauncherCwdPreview);
+    }
+  };
+}
+
+/** Where the supervised Claude is running right now, or `null` when nothing is
+ * (no supervisor, stopped, or `status()` threw — which it should never do, but a
+ * drift verdict is a suggestion, and "no drift" is the safe one). */
+function runningCwd(sup: Supervisor | null): string | null {
+  if (sup === null) return null;
+  try {
+    const st = sup.status();
+    return st.running ? st.cwd : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Cap on the error detail surfaced over the wire. These routes are loopback +

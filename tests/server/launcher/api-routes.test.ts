@@ -930,3 +930,203 @@ describe("GET /api/launcher/status — reason redaction (#1236)", () => {
     expect(res.body).toEqual({ available: false, reason: "deferred-autostart" });
   });
 });
+
+describe("POST /api/launcher/cwd-preview (#1282)", () => {
+  /**
+   * The gates here are deliberately unlike the mutating routes', and the tests
+   * pin the differences rather than the similarities: no nonce (nothing is
+   * mutated, and consuming one would rotate it out from under the relaunch the
+   * user is about to confirm), an UNCONDITIONAL loopback check rather than
+   * `assertLoopbackForMutation` (which is a no-op outside the
+   * unauthenticated-LAN opt-in), and no 503 (an unavailable launcher is a fine
+   * answer to "is Claude in the wrong folder", and the answer is "no").
+   */
+  let home: string;
+  let projA: string;
+  let projB: string;
+
+  beforeEach(() => {
+    home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cwd-preview-route-")));
+    projA = path.join(home, "alpha");
+    projB = path.join(home, "beta");
+    fs.mkdirSync(projA);
+    fs.mkdirSync(projB);
+  });
+
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  /** The route resolves against the REAL `os.homedir()` (no seam on the HTTP
+   * surface), so the folders under test must actually live there. */
+  function underRealHome(): { dir: string; other: string; cleanup: () => void } {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), ".tandem-cwd-test-")));
+    const dir = path.join(root, "alpha");
+    const other = path.join(root, "beta");
+    fs.mkdirSync(dir);
+    fs.mkdirSync(other);
+    return { dir, other, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  }
+
+  it("reports drift for a real home-confined folder Claude is not in", async () => {
+    const { dir, other, cleanup } = underRealHome();
+    try {
+      const sup = makeFakeSupervisor({ running: true, cwd: other });
+      const { app } = makeApp(baseDeps(sup));
+      const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      expect(res.status).toBe(200);
+      const body = res.body as { drifted: boolean; label?: string };
+      expect(body.drifted).toBe(true);
+      expect(body.label).toBe("alpha");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects a non-loopback caller outright", async () => {
+    // The response reconstructs the launcher `cwd` that GET /status withholds
+    // off-loopback, plus a second path under the user's home directory.
+    const sup = makeFakeSupervisor({ running: true, cwd: projB });
+    const { app } = makeApp(baseDeps(sup), { remoteAddress: "192.168.1.50" });
+    const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: projA });
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects a disallowed origin", async () => {
+    const sup = makeFakeSupervisor({ running: true, cwd: projB });
+    const { app } = makeApp(baseDeps(sup));
+    const res = await request(
+      app,
+      "POST",
+      "/api/launcher/cwd-preview",
+      { cwd: projA },
+      { Origin: "https://evil.example" },
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("needs no nonce", async () => {
+    const { dir, other, cleanup } = underRealHome();
+    try {
+      const sup = makeFakeSupervisor({ running: true, cwd: other });
+      const { app } = makeApp(baseDeps(sup));
+      const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      expect(res.status).toBe(200);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does not consume the relaunch nonce", async () => {
+    // A preview that rotated the nonce would break the very action it advertises:
+    // the user opens the menu, the pill probes again, and their click 403s.
+    const { dir, other, cleanup } = underRealHome();
+    try {
+      const sup = makeFakeSupervisor({ running: true, cwd: other });
+      const { app } = makeApp(baseDeps(sup));
+      const nonceRes = await request(app, "GET", "/api/launcher/nonce");
+      const nonce = (nonceRes.body as { nonce: string }).nonce;
+      await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      const relaunch = await request(app, "POST", "/api/launcher/relaunch", { nonce });
+      expect(relaunch.status).toBe(200);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("400s on a non-string cwd", async () => {
+    const sup = makeFakeSupervisor({ running: true, cwd: projB });
+    const { app } = makeApp(baseDeps(sup));
+    for (const cwd of [undefined, 42, null, { path: "x" }]) {
+      const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd });
+      expect(res.status, `cwd=${JSON.stringify(cwd)}`).toBe(400);
+    }
+  });
+
+  it("answers 'no drift' rather than 400 for an over-length cwd", async () => {
+    // An over-length path is a legitimate answer to the question asked, not a
+    // caller error — and the length cap runs BEFORE path resolution in the
+    // relaunch route, so answering it any other way here would re-open the
+    // split-predicate gap: a preview that green-lights what the action rejects.
+    const sup = makeFakeSupervisor({ running: true, cwd: projB });
+    const { app } = makeApp(baseDeps(sup));
+    const res = await request(app, "POST", "/api/launcher/cwd-preview", {
+      cwd: `/${"x".repeat(4096)}`,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ drifted: false });
+  });
+
+  // Both of these use a folder that WOULD drift (`underRealHome`), so a pass
+  // proves the launcher-state gate specifically. Handing them a path that is
+  // outside home on some hosts would make them pass for the wrong reason there.
+  it("answers 'no drift' rather than 503 when the launcher is unavailable", async () => {
+    const { dir, cleanup } = underRealHome();
+    try {
+      const { app } = makeApp(baseDeps(null, "stdio-mode"));
+      const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ drifted: false });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("answers 'no drift' when the launcher is available but stopped", async () => {
+    const { dir, cleanup } = underRealHome();
+    try {
+      const sup = makeFakeSupervisor({ running: false });
+      const { app } = makeApp(baseDeps(sup));
+      const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      expect(res.body).toEqual({ drifted: false });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("collapses a path outside home to the same 'no drift' answer", async () => {
+    // Indistinguishable from every other no-case by design: a client that could
+    // tell "outside home" from "same folder" would have a probe for what exists
+    // under the user's home directory.
+    //
+    // The filesystem root, not `os.tmpdir()` — on Windows the temp directory
+    // lives under `%LOCALAPPDATA%\Temp`, i.e. INSIDE home, so a tmpdir-based
+    // "outside home" fixture asserts the opposite of its name there. It did,
+    // until this test failed and said so.
+    const outside = path.parse(os.homedir()).root;
+    const sup = makeFakeSupervisor({ running: true, cwd: projB });
+    const { app } = makeApp(baseDeps(sup));
+    const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: outside });
+    expect(res.body).toEqual({ drifted: false });
+  });
+
+  it("honours the bundled-doc exclusion", async () => {
+    const { dir, other, cleanup } = underRealHome();
+    try {
+      const sup = makeFakeSupervisor({ running: true, cwd: other });
+      const { app } = makeApp({ ...baseDeps(sup), bundledDocDirs: [dir] });
+      const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      expect(res.body).toEqual({ drifted: false });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("answers 'no drift' rather than 500 when the supervisor's status throws", async () => {
+    const { dir, cleanup } = underRealHome();
+    try {
+      const sup = {
+        ...makeFakeSupervisor({ running: true }),
+        status: () => {
+          throw new Error("boom");
+        },
+      } as unknown as Supervisor;
+      const { app } = makeApp(baseDeps(sup));
+      const res = await request(app, "POST", "/api/launcher/cwd-preview", { cwd: dir });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ drifted: false });
+    } finally {
+      cleanup();
+    }
+  });
+});
