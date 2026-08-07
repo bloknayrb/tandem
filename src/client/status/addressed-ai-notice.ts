@@ -10,10 +10,17 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  * handler renders has already shipped one wrong-branch bug (see `AI_CTA`'s doc
  * comment, where a binary ternary sent `setup` users down the restart path).
  *
- * There are TWO distinct silences, and conflating them is the bug this exists
+ * There are THREE distinct silences, and conflating them is the bug this exists
  * to prevent:
  *
- *   - `no-agent` — nothing is attached. The message waits for an agent.
+ *   - `offline`  — the SERVER is gone, so the question "is an AI attached" has
+ *     no meaningful answer. This is the newest branch and it exists because the
+ *     other two both imply a working server. Without it the case fell into the
+ *     `chip === null` hole below and produced NO notice at all: `state` is
+ *     `booting` whenever `connected()` is false, so a send into a dead server
+ *     was silent. That silence replaced a wrong message with no message, which
+ *     is not the same as fixing it.
+ *   - `no-agent` — the server is fine, nothing is attached. The message waits.
  *   - `no-push`  — an agent IS attached and can read the document, but no
  *     real-time consumer is delivering to it, so it won't look until its next
  *     `tandem_checkInbox`. This is the hand-launched session, and it is the
@@ -22,24 +29,36 @@ import type { AiChip, PushDelivery } from "../hooks/useAiReadiness.svelte";
  *
  * Ordering rules (order is load-bearing):
  *   1. Solo outranks everything. The user deliberately opted out of AI
- *      surfacing, so both notices contradict that intent — the same reasoning
- *      that makes `chip` null in Solo.
- *   2. A live session decides which branch applies. Without one, only the
- *      agent-absence notice can be correct; with one, only the delivery notice
- *      can be.
- *   3. `no-push` fires ONLY on a confirmed zero. `routes/health.ts:43-45` is
+ *      surfacing, so all three notices contradict that intent — the same
+ *      reasoning that makes `chip` null in Solo.
+ *   2. Server-reachability outranks the AI questions, because both of those
+ *      presuppose a server to be attached to. `sessionLive` is false when the
+ *      server is gone, but only as a CONSEQUENCE — reading it as "no AI" and
+ *      promising the message will be seen "when one connects" is a second false
+ *      promise in place of the one this whole change removed.
+ *   3. A live session decides which of the remaining branches applies. Without
+ *      one, only the agent-absence notice can be correct; with one, only the
+ *      delivery notice can be.
+ *   4. `no-push` fires ONLY on a confirmed zero. `routes/health.ts:43-45` is
  *      explicit that `subscribers: 0` is a sound negative while any positive
  *      count includes an attached-but-inert shim — so `true` and `null` (field
  *      absent, redacted, or not yet read) must both stay silent. Guessing here
  *      would tell a working user their comment went nowhere.
  */
 export type AddressedAiNotice =
+  | { kind: "offline" }
   | { kind: "no-agent"; chip: Exclude<AiChip, null> }
   | { kind: "no-push" };
 
 export function addressedAiNotice(input: {
   /** Must be re-read after any await — see the caller. */
   soloMode: boolean;
+  /**
+   * `/health` has gone quiet for a full strike run — the server itself is gone,
+   * not merely un-attached. Keyed on the run rather than a single failed read
+   * so a blip cannot raise an alarm about data loss.
+   */
+  serverUnreachable: boolean;
   /** Fresh `/health` confirmation that an MCP transport is open. */
   sessionLive: boolean;
   /** Re-read after the probe — readiness may have settled while it was in flight. */
@@ -53,13 +72,18 @@ export function addressedAiNotice(input: {
   // depending on every call site remembering.
   if (input.soloMode) return null;
 
-  // Rule 2 — no agent attached.
+  // Rule 2 — the server, before the AI. Deliberately ahead of the `sessionLive`
+  // branch: with the server gone `sessionLive` is false too, so ordering these
+  // the other way round would report the consequence and hide the cause.
+  if (input.serverUnreachable) return { kind: "offline" };
+
+  // Rule 3 — no agent attached.
   if (!input.sessionLive) {
     // `chip` is null while booting, and in the launcher's running-but-no-session
     // startup window. Neither is a state worth alarming about.
     return input.chip === null ? null : { kind: "no-agent", chip: input.chip };
   }
 
-  // Rule 3 — attached, but is anything delivering?
+  // Rule 4 — attached, but is anything delivering?
   return input.pushDelivery === "none" ? { kind: "no-push" } : null;
 }

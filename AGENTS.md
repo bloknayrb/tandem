@@ -6,7 +6,7 @@ Tandem is a TypeScript/Vite document editor with a Node server, CLI, monitor, an
 
 ## Build, Test, and Development Commands
 
-- `npm run dev:standalone`: starts Vite, the server watcher, and monitor for local development.
+- `npm run dev:standalone`: starts Vite and the server watcher for local development. It deliberately does NOT start the monitor — an always-on push consumer with no Claude behind it masks `subscribers === 0`, the only sound negative the server has. Run `npx tsx src/monitor/index.ts` by hand when testing push delivery.
 - `npm run dev`: starts only the Vite client.
 - `npm run build`: typechecks, builds the client with Vite, then bundles server/CLI code with tsup.
 - `npm run typecheck`: runs both server and client TypeScript checks.

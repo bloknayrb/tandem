@@ -370,8 +370,12 @@ async function main() {
         id: `store-readonly-${Date.now()}`,
         type: "save-error",
         severity: "warning",
+        // Past tense on the lock observation — the other process can exit
+        // while this notice sits in the tray. The disabled-writes half stays
+        // present tense because it is decided at boot and holds for the whole
+        // session regardless. See `TandemNotification.severity`.
         message:
-          "Annotation store is read-only (another process holds the lock); annotation writes are disabled for this session. Close the other Tandem instance and restart.",
+          "Annotation store started read-only (another process held the lock); annotation writes are disabled for this session. Close the other Tandem instance and restart.",
         dedupKey: "annotation-store:readonly",
         timestamp: Date.now(),
       });

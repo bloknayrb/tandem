@@ -19,7 +19,8 @@
  *      about clients on that revision — see #1249 before treating a `false`
  *      here as "no agent". Note this hook is NOT promotion-only with respect
  *      to it: `readHasSession` writes any non-null value, so a confident
- *      `false` demotes both `state` and `liveIndicator`.
+ *      `false` demotes both `state` and `liveIndicator` — as does a sustained
+ *      inability to reach the server at all (see the fail-safe note below).
  *
  * An active MCP session means AI works regardless of launcher state, so it
  * promotes readiness to `ready` and suppresses both the restart CTA and the
@@ -49,11 +50,31 @@
  * chosen to work without AI surfacing, so a persistent "Connect AI" nag would
  * contradict that intent.
  *
- * Fail-safe: a transient fetch failure (network blip, non-OK) keeps the PRIOR
- * value rather than clobbering to a scarier state — mirroring
- * `useFirstRunNeeded`'s "don't assert a scary state on a hiccup" discipline.
- * This applies to both the launcher status and `hasSession`, so a momentary
- * `/health` blip never flips a connected agent's chip back on.
+ * Fail-safe, and its limit: a transient `/health` failure keeps the PRIOR value
+ * rather than clobbering to a scarier state — mirroring `useFirstRunNeeded`'s
+ * "don't assert a scary state on a hiccup" discipline. But "transient" used to
+ * mean *every* way a read could fail to produce an answer, including the server
+ * not being there at all, and a fail-safe with no floor is just a lie with good
+ * manners: the pill went on reporting "AI connected" indefinitely against a
+ * process that had exited, next to the disconnection banner saying otherwise.
+ *
+ * So the read is now discriminated (see `fetchHealth`) around a narrower
+ * question than "did something answer": did OUR server answer. Only a 200 with
+ * a body that reads and parses counts; anything else accrues a strike, and two
+ * consecutive strikes **from the poll path** demote. `readHasSession` documents
+ * why the count sits above the staleness guard and why only increments are
+ * poll-gated.
+ *
+ * `pollLauncherStatus` has the same floor, off the same `makeStrikeCounter`,
+ * clearing `status` to null (→ "booting", i.e. "we do not know") rather than to
+ * a fabricated launcher state. Its strike rule is deliberately narrower: unlike
+ * `makeHealthHandler`, the launcher route genuinely can fail, so a non-OK there
+ * really is the server answering.
+ *
+ * `serverUnreachable` is the one signal that distinguishes "no AI is attached to
+ * a working server" from "the server is gone". Downstream those need opposite
+ * messages, and before it existed they were indistinguishable — see the field's
+ * doc on `AiReadiness`.
  */
 import { onDestroy } from "svelte";
 import { API_HEALTH, API_LAUNCHER_STATUS } from "../../shared/api-paths.js";
@@ -71,6 +92,68 @@ interface HealthResponse {
   status?: string;
   hasSession?: boolean;
   push?: { subscribers?: number };
+}
+
+/**
+ * Outcome of one `/health` read.
+ *
+ * The distinction is narrower than "did something answer": it is **did OUR
+ * server answer**. `makeHealthHandler` (`server/mcp/routes/health.ts`) has no
+ * failure branch at all — it unconditionally sends a 200 carrying valid JSON,
+ * and the only thing that can reject the request before it is the DNS-rebinding
+ * Host check, which a 127.0.0.1 / `tauri.localhost` client never trips. So a
+ * non-OK status, or complete bytes that will not parse, is not this server
+ * being unwell; it is evidence that whatever is on the port is **not this
+ * server** — a stale Vite instance, a previous Tandem that never released
+ * :3479, any squatter. Reading those as "answered, so reset the strike count"
+ * reopened the exact hole this discrimination exists to close, one branch over.
+ *
+ * `answered: true` therefore means exactly: 200, body read to completion, body
+ * parsed. Everything else counts toward demotion. The redaction case — a real
+ * 200 whose loopback-only fields are absent — is expressed as `null` FIELDS on
+ * an `answered: true` read, not as a third variant, because that is what it is:
+ * our server, answering, declining to say.
+ */
+type HealthRead =
+  | { answered: true; hasSession: boolean | null; pushAttached: boolean | null }
+  | { answered: false; why: string };
+
+/** Consecutive dead POLL reads before we stop believing in the session.
+ *  Two, not one: a single dropped request is common and must not flap the
+ *  pill. At `POLL_MS` = 8s that is ~16s of a stale claim, which is well inside
+ *  the window where a user could act on it — and far better than the previous
+ *  behaviour, which was to keep claiming it indefinitely. */
+const DEAD_READS_BEFORE_DEMOTING = 2;
+
+/** Per-read bound on both polls. Shorter than `POLL_MS` so a wedged server
+ *  accrues one strike per interval rather than queueing reads behind one
+ *  another. See the note at the `/health` fetch for why an unbounded read is
+ *  the same floorless fail-safe this module exists to remove. */
+const READ_TIMEOUT_MS = 5_000;
+
+/**
+ * "Has this reader gone quiet for long enough to stop believing its last
+ * answer?" — one mechanism, two readers.
+ *
+ * A factory rather than two hand-rolled counters because the rule is one rule
+ * and it is easy to get subtly different in two places: reset on ANY answer,
+ * count only reads that are allowed to (the `/health` reader excludes its
+ * out-of-band probes), and report the threshold crossing rather than exposing
+ * the number. `record` returns whether the caller should now stop trusting its
+ * retained value.
+ */
+function makeStrikeCounter(limit: number) {
+  let strikes = 0;
+  return {
+    record(answered: boolean, counts = true): boolean {
+      if (answered) {
+        strikes = 0;
+        return false;
+      }
+      if (counts) strikes++;
+      return strikes >= limit;
+    },
+  };
 }
 
 export type AiReadinessState = "booting" | "unconfigured" | "stopped" | "ready";
@@ -224,6 +307,20 @@ export interface AiReadiness {
    * *can read* the document; this one says whether Claude will be *told* to.
    */
   readonly pushDelivery: PushDelivery;
+  /**
+   * Has `/health` gone quiet for a full strike run?
+   *
+   * The question is about the SERVER, not the AI, and the two were previously
+   * indistinguishable downstream: both surfaced as "no session". They call for
+   * opposite messages. "No AI is attached to a server that is fine" means the
+   * message waits. "The server is gone" means the message is sitting in a local
+   * Y.Doc with nowhere to sync — and if the server returns on a new generation,
+   * the stale-tab gate rebuilds from empty Y.Docs and it is dropped.
+   *
+   * Deliberately keyed on the same two-strike run as the demotion, not on a
+   * single failed read, so a blip cannot raise an alarm about data loss.
+   */
+  readonly serverUnreachable: boolean;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
   /**
@@ -257,6 +354,14 @@ export function createAiReadiness(deps: {
   // Whether `/health` reported any SSE consumer. `null` = not yet known or
   // redacted, which is NOT the same as "none".
   let pushAttached = $state<boolean | null>(null);
+  // Has `/health` gone quiet for a full strike run — i.e. is the SERVER gone,
+  // as distinct from an AI not being attached to a server that is fine? The
+  // send path needs the difference: with the server down, a chat message is
+  // written to a local Y.Doc that has nowhere to sync, and if the server comes
+  // back on a new generation the stale-tab gate rebuilds from empty Y.Docs and
+  // the message is dropped. Telling that user "it'll be seen when an AI
+  // connects" is a second false promise in place of the one just removed.
+  let serverUnreachable = $state(false);
   // Have we ever read launcher status successfully? Distinguishes "still
   // booting" from a genuine `available: false`, so the chip never flashes
   // during cold start. `/health` is not gated on this: readiness derives
@@ -276,63 +381,129 @@ export function createAiReadiness(deps: {
   // older response resolving late can never overwrite a fresher one.
   let healthSeq = 0;
   let destroyed = false;
+  /** Not `$state` — nothing renders these; they gate the writes that do. */
+  const healthStrikes = makeStrikeCounter(DEAD_READS_BEFORE_DEMOTING);
+  const launcherStrikes = makeStrikeCounter(DEAD_READS_BEFORE_DEMOTING);
 
+  /**
+   * The launcher half of the same floor.
+   *
+   * This retained `status` through every failure forever once a single read had
+   * succeeded — the identical shape the `/health` reader was fixed for, and it
+   * was NOT masked by the way the comment here used to claim. The
+   * `!settledOnce || status === null` half of the booting gate only covers a
+   * route that never once succeeded. What actually hid it was `deps.connected()`:
+   * :3478 and :3479 are bound by the same process, so the Hocuspocus socket
+   * drops when it dies. That is an incidental coupling of two ports to one
+   * process — nothing here enforces it, and any failure that takes the HTTP API
+   * down while the WebSocket survives makes it live.
+   *
+   * So it now clears to `null` after the same two consecutive dead reads, which
+   * lands on "booting" — "we do not know" — rather than on a fabricated
+   * launcher state. Note the asymmetry with `/health`: a non-OK or unparseable
+   * response is NOT a strike here, because unlike `makeHealthHandler` the
+   * launcher route genuinely can fail (`requireSupervisor` 503s while the
+   * launcher is deferred), so on THIS route those really are the server
+   * answering.
+   */
   async function pollLauncherStatus(mine: number): Promise<void> {
     let res: Response;
     try {
-      res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`);
+      res = await fetch(`${API_BASE}${API_LAUNCHER_STATUS}`, {
+        signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+      });
     } catch {
-      return; // network blip — keep prior status (fail-safe)
+      // Nothing answered. Strike — and once the run is long enough, stop
+      // presenting a launcher state read from a server that is gone.
+      if (launcherStrikes.record(false) && mine === gen && !destroyed) status = null;
+      return;
     }
+    launcherStrikes.record(true);
     if (mine !== gen) return;
-    if (!res.ok) return; // transient server error — keep prior status
+    if (!res.ok) return; // real server error (e.g. 503 deferred) — keep prior status
+    let body: unknown;
     try {
-      status = (await res.json()) as LauncherStatus;
-      settledOnce = true;
+      body = await res.json();
     } catch {
-      // malformed body — keep prior status
+      return; // malformed body — keep prior status
     }
+    // Validate before trusting. An unchecked cast here is not cosmetic: any
+    // parseable non-`LauncherStatus` body — `{}` from a port squatter, an error
+    // envelope — makes `available === false` and `running === true` both false,
+    // which lands on `state === "stopped"` with no `lastError`, which renders a
+    // working "Restart Claude Code" button derived from a body nobody checked.
+    if (typeof (body as LauncherStatus | null)?.available !== "boolean") return;
+    status = body as LauncherStatus;
+    settledOnce = true;
   }
 
-  /** One `/health` read, yielding both loopback-only signals. Each field is
-   *  independently `null` for "unknown" (network blip, non-OK, malformed body,
-   *  or the field absent because the caller wasn't loopback) — callers keep
-   *  their prior value rather than demote.
+  /** One `/health` read, separating "our server answered" from everything else
+   *  — see `HealthRead` for why the line is drawn there and not at "something
+   *  answered".
    *
-   *  Both come off ONE fetch deliberately. They answer different questions
+   *  All of it used to collapse into one `null`-everything result, and the
+   *  collapse was a lie the user could see: a fetch that threw because the
+   *  server was gone was treated exactly like a good response with the
+   *  loopback-only fields redacted, so the pill went on asserting "AI
+   *  connected" next to the disconnection banner.
+   *
+   *  Both fields come off ONE fetch deliberately. They answer different questions
    *  (`hasSession` = an MCP transport completed initialize; `push.subscribers`
    *  = an SSE consumer is attached) and the `makeHealthHandler` docblock in
    *  `server/mcp/routes/health.ts` is explicit that they are structurally
    *  disjoint — which is precisely why a user can see "AI connected" while
    *  nothing they do reaches Claude. Reading them at the same instant keeps the
    *  two halves of that story consistent. */
-  async function fetchHealth(): Promise<{
-    hasSession: boolean | null;
-    pushAttached: boolean | null;
-  }> {
-    // A fresh literal per return, not one shared object — callers receive this
-    // by reference.
-    const unknown = () => ({ hasSession: null, pushAttached: null });
+  async function fetchHealth(): Promise<HealthRead> {
     let res: Response;
     try {
-      res = await fetch(`${API_BASE}${API_HEALTH}`);
+      // Bounded, because "dead" has to mean wedged as well as refused. A
+      // process that is up but not answering produces no rejection at all —
+      // the fetch just hangs, no strike accrues, and the pill holds its claim
+      // until the browser's own multi-minute timeout. That is the same
+      // floorless fail-safe in a different disguise. The bound is shorter than
+      // `POLL_MS` so a hung server accrues one strike per interval instead of
+      // queueing reads behind each other.
+      res = await fetch(`${API_BASE}${API_HEALTH}`, {
+        signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+      });
     } catch {
-      return unknown(); // network blip
+      return { answered: false, why: "request failed or timed out" };
     }
-    if (!res.ok) return unknown(); // transient server error
+    if (!res.ok) return { answered: false, why: `HTTP ${res.status}` };
+
+    // Read the body and parse it in SEPARATE steps — the same split
+    // `scripts/dev-standalone.mjs` makes, and for the same reason. A single
+    // `res.json()` folds two opposite failures into one catch: a `SyntaxError`
+    // (complete bytes, bad JSON) and a `TypeError` (the body stream errored —
+    // headers arrived, the body never did, i.e. the server started answering
+    // and then stopped existing). Both land here as `answered: false` today,
+    // but they are worth telling apart in the log: the second is what a
+    // crash-looping sidecar or an update-time `kill_sidecar()` looks like from
+    // the client, and it is the one that used to reset the strike count on
+    // every poll and hold the pill green forever.
+    let raw: string;
     try {
-      const body = (await res.json()) as HealthResponse;
-      // Only trust each field when present (loopback). Absence is "unknown",
-      // not "no session" / "no consumer". The count collapses to a boolean
-      // here because nothing needs the number — and `> 0` is the only reading
-      // of it that `routes/health.ts` vouches for.
-      return {
-        hasSession: typeof body.hasSession === "boolean" ? body.hasSession : null,
-        pushAttached: typeof body.push?.subscribers === "number" ? body.push.subscribers > 0 : null,
-      };
+      raw = await res.text();
     } catch {
-      return unknown(); // malformed body
+      return { answered: false, why: "body stream errored mid-response" };
     }
+    let body: HealthResponse;
+    try {
+      body = JSON.parse(raw) as HealthResponse;
+    } catch {
+      return { answered: false, why: "unparseable body (not this server)" };
+    }
+
+    // Only trust each field when present (loopback). Absence is "unknown", not
+    // "no session" / "no consumer". The count collapses to a boolean because
+    // nothing needs the number, and `> 0` is the only reading of it that
+    // `routes/health.ts` vouches for.
+    return {
+      answered: true,
+      hasSession: typeof body.hasSession === "boolean" ? body.hasSession : null,
+      pushAttached: typeof body.push?.subscribers === "number" ? body.push.subscribers > 0 : null,
+    };
   }
 
   /** One ordered `/health` read (shared by the background poll and
@@ -342,16 +513,64 @@ export function createAiReadiness(deps: {
    *  just before the agent's initialize, resolving after the probe that saw
    *  it). A dropped write is recovered by the next interval poll. Returns the
    *  fetched value either way so callers can act on their own read. */
-  async function readHasSession(): Promise<boolean | null> {
+  async function readHasSession(fromPoll: boolean): Promise<boolean | null> {
     const mine = ++healthSeq;
     const fresh = await fetchHealth();
-    if (mine === healthSeq && !destroyed) {
+
+    // Strike accounting happens BEFORE the staleness guard, deliberately.
+    //
+    // That guard orders `$state` writes so a slow older response cannot clobber
+    // a fresher one. Whether the server answered is not a question about
+    // ordering, and counting inside the guard made every superseded poll read
+    // vanish — while `probeSession` bumps `healthSeq` on every send that gets
+    // past the two guards at `App.svelte:553-560` (Solo, and a confirmed
+    // `pushDelivery === "attached"`). Those guards do not help here: the second
+    // is exactly the fast path a hand-launched session never takes, so for the
+    // population this whole branch is about, every send probes. A user typing
+    // at a dead server would therefore postpone demotion indefinitely — the
+    // exact inverse of the hazard `fromPoll` exists to prevent.
+    //
+    // The two paths are treated ASYMMETRICALLY, and only one half is
+    // poll-gated. Increments are, because an out-of-band probe fires on user
+    // action and several in a row would demote in well under the intended
+    // ~16s. Resets are NOT: an answered read is evidence of life whoever asked
+    // for it, and ignoring a probe's success would be inventing a strike we
+    // have positive evidence against. The consequence is real but bounded and
+    // in the safe direction — a probe that answers can zero a legitimately
+    // earned run and postpone demotion by one more interval; it can never
+    // re-promote, because promotion needs a non-null `hasSession` from a read
+    // that also survives the staleness guard.
+    //
+    // `fromPoll` is required, not defaulted: a future call site that forgets it
+    // should not silently opt out of the count.
+    const runIsLongEnough = healthStrikes.record(fresh.answered, fromPoll);
+    if (!fresh.answered) {
+      // The only trace a stuck pill leaves. Otherwise two opposite causes —
+      // "the server sent me HTML" and "the server hung up mid-sentence" —
+      // arrive here indistinguishable and silent.
+      console.warn(`[aiReadiness] /health did not answer: ${fresh.why}`);
+    }
+
+    const value = fresh.answered ? fresh.hasSession : null;
+    if (mine !== healthSeq || destroyed) return value;
+
+    if (fresh.answered) {
+      serverUnreachable = false;
       // Each field is written only when known, so a redacted or partial body
       // can never demote one signal on the strength of the other's absence.
       if (fresh.hasSession !== null) mcpSessionActive = fresh.hasSession;
       if (fresh.pushAttached !== null) pushAttached = fresh.pushAttached;
+    } else if (runIsLongEnough) {
+      serverUnreachable = true;
+      mcpSessionActive = false;
+      // NOT `false`. A server we cannot reach tells us nothing about how many
+      // consumers are attached to it, and `pushAttached === false` is a load-
+      // bearing claim: it is the confirmed zero that drives the "nothing is
+      // notifying Claude" copy. Asserting it from a failed read would swap one
+      // confident lie for another.
+      pushAttached = null;
     }
-    return fresh.hasSession;
+    return value;
   }
 
   /** See `AiReadiness.probeSession`. Issues a fresh `/health` read (which also
@@ -359,14 +578,14 @@ export function createAiReadiness(deps: {
    *  of waiting out the poll interval) and answers with the freshest data it
    *  has — falling back to the last-known polled value when the read fails. */
   async function probeSession(): Promise<boolean> {
-    const fresh = await readHasSession();
+    const fresh = await readHasSession(false);
     return fresh ?? mcpSessionActive;
   }
 
   function poll(): void {
     const mine = ++gen;
     void pollLauncherStatus(mine);
-    void readHasSession();
+    void readHasSession(true);
   }
 
   poll();
@@ -470,6 +689,9 @@ export function createAiReadiness(deps: {
     },
     get pushDelivery() {
       return pushDelivery;
+    },
+    get serverUnreachable() {
+      return serverUnreachable;
     },
     refresh: () => poll(),
     probeSession,

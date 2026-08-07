@@ -11,8 +11,10 @@
  *   - launcher `stopped` + an active MCP session → `ready` (chip suppressed).
  *     This is the #1054 fix: a manually-launched agent must not surface the
  *     restart CTA (clicking it would spawn a second agent).
- *   - `hasSession` only PROMOTES to ready; a `/health` blip never demotes a
- *     connected agent's chip back on (fail-safe).
+ *   - `hasSession` promotes on any confident value and demotes on a confident
+ *     `false` or on two consecutive dead POLL reads; a single `/health` blip
+ *     never demotes (fail-safe). It was promotion-only until B1 — a fail-safe
+ *     with no floor held "AI connected" against a server that had exited.
  *   - readiness stays `booting` until launcher status settles, regardless of
  *     `/health`.
  *   - Solo-mode suppresses the chip regardless.
@@ -23,7 +25,7 @@
  * (which gives a reactivity scope but no component lifecycle for `onDestroy`).
  */
 
-import { render } from "@testing-library/svelte";
+import { cleanup, render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiChip, AiReadiness } from "../../src/client/hooks/useAiReadiness.svelte";
@@ -35,24 +37,86 @@ interface FetchResponse {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+  text: () => Promise<string>;
 }
 
+/** Both accessors, because the two readers in the hook use different ones:
+ *  `pollLauncherStatus` calls `res.json()`, `fetchHealth` calls `res.text()`
+ *  and parses separately so a body-stream failure stays distinguishable from a
+ *  parse failure. */
 function mkResponse(body: unknown, ok = true, status = 200): FetchResponse {
-  return { ok, status, json: async () => body };
+  return { ok, status, json: async () => body, text: async () => JSON.stringify(body) };
 }
+
+/** A 200 carrying bytes that arrived complete and are not JSON — a squatter on
+ *  :3479 serving HTML, say. Tandem's own `/health` cannot produce this. */
+function mkUnparseable(): FetchResponse {
+  const raw = "<!doctype html><title>not tandem</title>";
+  return {
+    ok: true,
+    status: 200,
+    json: async () => JSON.parse(raw),
+    text: async () => raw,
+  };
+}
+
+/** Headers arrived, the body never did — the server began answering and then
+ *  stopped existing (crash-looping sidecar, `kill_sidecar()` mid-poll). */
+function mkStreamError(): FetchResponse {
+  const boom = () => Promise.reject(new TypeError("network error"));
+  return { ok: true, status: 200, json: boom, text: boom };
+}
+
+/** A route is a fixed response, an error to throw, or a thunk re-evaluated on
+ *  every call — the last is what lets one stub change behaviour mid-test
+ *  without rebuilding it. */
+type Route = FetchResponse | Error | (() => FetchResponse);
 
 /** Route the stub by URL so the launcher + health polls get distinct bodies. */
-function routedFetch(routes: {
-  launcher?: FetchResponse | Error;
-  health?: FetchResponse | Error;
-}): typeof fetch {
+function routedFetch(routes: { launcher?: Route; health?: Route }): typeof fetch {
   return (async (input: string) => {
     const url = String(input);
     const pick = url.includes(API_LAUNCHER_STATUS) ? routes.launcher : routes.health;
     if (pick === undefined) throw new Error(`no stub for ${url}`);
     if (pick instanceof Error) throw pick;
+    if (typeof pick === "function") return pick() as unknown as Response;
     return pick as unknown as Response;
   }) as unknown as typeof fetch;
+}
+
+/** The launcher fixture every demotion test shares: configured, not running —
+ *  so readiness turns entirely on the MCP session, which is what those tests
+ *  are about. */
+const STOPPED_LAUNCHER = () => mkResponse({ available: true, running: false });
+
+/** The auto-launched desktop default: the launcher believes Claude is up. Under
+ *  this fixture `state` cannot observe a demotion at all — a dead launcher read
+ *  keeps `running: true`, so `state` stays "ready" — which is exactly why the
+ *  pill has to be asserted directly. */
+const RUNNING_LAUNCHER = () => mkResponse({ available: true, running: true });
+
+/** Wrap a route so it throws once the flag flips. Both `/health` and
+ *  `/api/launcher/status` are served by the same Express app on :3479, so a
+ *  dead server kills BOTH — every demotion fixture must route both through
+ *  this, or it is testing a state the product cannot reach. */
+function whenAlive(isDead: () => boolean, alive: () => FetchResponse): () => FetchResponse {
+  return () => {
+    if (isDead()) throw new Error("server gone");
+    return alive();
+  };
+}
+
+/** What a demotion looks like from outside, now that BOTH readers have floors.
+ *  `state` is no longer the discriminator: with the whole server gone the
+ *  launcher's floor clears `status` to null too, so `state` is "booting" —
+ *  "we do not know" — rather than "stopped", which would assert the specific
+ *  claim that Claude is configured and not running. These three are the
+ *  health-reader's own observables. */
+function expectDemoted(h: { get(): AiReadiness }): void {
+  expect(h.get().state).toBe("booting");
+  expect(h.get().liveIndicator).toBeNull();
+  expect(h.get().pushDelivery).toBe("unknown");
+  expect(h.get().serverUnreachable).toBe(true);
 }
 
 /** Mount the harness; `onReady` fires in an $effect after mount, so the handle
@@ -87,6 +151,13 @@ describe("createAiReadiness", () => {
   });
 
   afterEach(() => {
+    // Unmount first, THEN restore fetch. This project sets no `globals: true`
+    // and no setup file, so `@testing-library/svelte`'s auto-cleanup never
+    // registers — without this every mounted harness leaks a component whose
+    // `onDestroy` never runs and whose 8s poll keeps firing for the rest of the
+    // worker's life, against the restored REAL fetch (`API_BASE` is absolute,
+    // so those are live requests to 127.0.0.1:3479) and into later tests' stubs.
+    cleanup();
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
@@ -257,6 +328,284 @@ describe("createAiReadiness", () => {
     expect(h.get().chip).toBeNull();
   });
 
+  /**
+   * The test above is the fail-safe; these are the defect (B1). They exist
+   * because the blip tests each perform exactly ONE failed read, so they pass
+   * before and after the fix — they pin the tolerance being kept, not the bug.
+   *
+   * A dead server fails BOTH endpoints — both routes are served by the same
+   * Express app on :3479 — so any fixture simulating one kills both. They still
+   * discriminate: the launcher's last good body said `running: false`, and a
+   * dead launcher read keeps that prior value, so readiness turns entirely on
+   * whether the MCP session is still believed in.
+   */
+  it("demotes after two consecutive dead poll reads", async () => {
+    let dead = false;
+    globalThis.fetch = routedFetch({
+      launcher: whenAlive(() => dead, STOPPED_LAUNCHER),
+      health: whenAlive(
+        () => dead,
+        () => mkResponse({ status: "ok", hasSession: true, push: { subscribers: 2 } }),
+      ),
+    });
+
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready");
+    expect(h.get().pushDelivery).toBe("attached");
+
+    dead = true;
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready"); // one strike — still tolerated
+
+    h.get().refresh();
+    await settle();
+    // `pushDelivery` is `unknown`, never `none` — see the hook. A server we
+    // cannot reach says nothing about how many consumers are attached to it.
+    expectDemoted(h);
+  });
+
+  it("a success between two dead reads resets the count", async () => {
+    let mode: "ok" | "dead" = "ok";
+    const isDead = () => mode === "dead";
+    globalThis.fetch = routedFetch({
+      launcher: whenAlive(isDead, STOPPED_LAUNCHER),
+      health: whenAlive(isDead, () => mkResponse({ status: "ok", hasSession: true })),
+    });
+
+    const h = mount();
+    await settle();
+
+    for (const step of ["dead", "ok", "dead"] as const) {
+      mode = step;
+      h.get().refresh();
+      await settle();
+    }
+    // Two dead reads total, but not consecutive — the contract is a run, not a tally.
+    expect(h.get().state).toBe("ready");
+  });
+
+  /**
+   * The three ways a read can fail to be OUR server answering. All of them
+   * demote, and that is the corrected contract — an earlier draft treated a
+   * non-OK status and an unparseable body as "the server answered, so reset the
+   * count", which reopened the exact hole one branch over.
+   *
+   * The justification is a property of the route, not a guess:
+   * `makeHealthHandler` has no failure branch — it unconditionally sends a 200
+   * carrying valid JSON — and the only thing that can reject ahead of it is the
+   * DNS-rebinding Host check, which a 127.0.0.1 / `tauri.localhost` client never
+   * trips. So on THIS route a 500 or a page of HTML is not Tandem being unwell;
+   * it is evidence that Tandem is not what is on the port.
+   */
+  it.each([
+    ["a non-OK status", () => mkResponse({}, false, 500)],
+    ["an unparseable body", mkUnparseable],
+    ["a body-stream failure", mkStreamError],
+  ])("demotes after two consecutive reads that are not this server: %s", async (_label, bad) => {
+    let mode: "ok" | "bad" = "ok";
+    globalThis.fetch = routedFetch({
+      launcher: STOPPED_LAUNCHER,
+      health: () => (mode === "bad" ? bad() : mkResponse({ status: "ok", hasSession: true })),
+    });
+
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready");
+
+    mode = "bad";
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready"); // one strike — still tolerated
+
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("stopped");
+  });
+
+  it("a redacted body is the server declining to say, and never demotes", async () => {
+    // The one case that IS "answered, but told us nothing": a genuine 200 with
+    // valid JSON whose loopback-only fields are absent. It is expressed as null
+    // FIELDS on an answered read, not as a failure, so it must not accrue a
+    // strike however long it repeats.
+    let mode: "full" | "redacted" | "dead" = "full";
+    globalThis.fetch = routedFetch({
+      launcher: STOPPED_LAUNCHER,
+      health: () => {
+        if (mode === "dead") throw new Error("server gone");
+        return mode === "redacted"
+          ? mkResponse({ status: "ok" }) // no hasSession, no push
+          : mkResponse({ status: "ok", hasSession: true });
+      },
+    });
+
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready"); // promoted off the full body
+
+    mode = "redacted";
+    for (let i = 0; i < 4; i++) {
+      h.get().refresh();
+      await settle();
+    }
+    expect(h.get().state).toBe("ready"); // absence never demotes a known value
+
+    // The assertion that bites: four redacted reads must leave the counter at
+    // ZERO, so ONE dead read is still under the threshold. If redaction primed
+    // the counter this demotes at half the intended patience.
+    mode = "dead";
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready");
+  });
+
+  it("probeSession failures do not count toward demotion", async () => {
+    // `probeSession` runs on every chat send and comment, so counting its reads
+    // would let user activity demote well inside the intended two intervals.
+    let dead = false;
+    const isDead = () => dead;
+    globalThis.fetch = routedFetch({
+      launcher: whenAlive(isDead, STOPPED_LAUNCHER),
+      health: whenAlive(isDead, () => mkResponse({ status: "ok", hasSession: true })),
+    });
+
+    const h = mount();
+    await settle();
+
+    dead = true;
+    for (let i = 0; i < 5; i++) {
+      await h.get().probeSession();
+      await settle();
+    }
+    expect(h.get().state).toBe("ready");
+
+    // …and the poll path still demotes on its own two, unaffected by the probes.
+    h.get().refresh();
+    await settle();
+    h.get().refresh();
+    await settle();
+    expectDemoted(h);
+
+    // The seam to the send path: `App.svelte` routes on this return value, and
+    // `false` is what selects the "saved while no AI was connected" notice over
+    // the delivery-delay one. That routing is the user-visible payoff of the
+    // whole demotion, and it is the only assertion here that reaches it.
+    await expect(h.get().probeSession()).resolves.toBe(false);
+  });
+
+  it("drops the connected indicator when the server dies under a running launcher", async () => {
+    // The auto-launched desktop default, and the configuration where `state`
+    // is BLIND to the demotion: a dead launcher read keeps its last-known
+    // `running: true`, so `state` stays "ready" throughout. Every other
+    // demotion test asserts through `state` with a stopped launcher, so a
+    // regression that latched `liveIndicator` — or re-derived it off `state`,
+    // which the hook explicitly forbids — would pass all of them while leaving
+    // the pill claiming "AI connected" against a process that had exited. That
+    // pill is the thing B1 is about.
+    let dead = false;
+    const isDead = () => dead;
+    globalThis.fetch = routedFetch({
+      launcher: whenAlive(isDead, RUNNING_LAUNCHER),
+      health: whenAlive(isDead, () =>
+        mkResponse({ status: "ok", hasSession: true, push: { subscribers: 2 } }),
+      ),
+    });
+
+    const h = mount();
+    await settle();
+    expect(h.get().liveIndicator).not.toBeNull();
+
+    dead = true;
+    h.get().refresh();
+    await settle();
+    h.get().refresh();
+    await settle();
+
+    // Both floors have now engaged, so `state` is "booting" rather than the
+    // launcher's retained "ready". The point of the test is the pill: under a
+    // RUNNING launcher a regression that latched `liveIndicator` — or re-derived
+    // it off `state`, which the hook forbids — would survive every assertion
+    // that goes through `state`, because the launcher's own last-known value
+    // says "ready" right up until its floor engages.
+    expect(h.get().liveIndicator).toBeNull();
+    expect(h.get().pushDelivery).toBe("unknown");
+    expect(h.get().serverUnreachable).toBe(true);
+  });
+
+  it("re-promotes when the server comes back, at full patience", async () => {
+    let dead = false;
+    const isDead = () => dead;
+    globalThis.fetch = routedFetch({
+      launcher: whenAlive(isDead, STOPPED_LAUNCHER),
+      health: whenAlive(isDead, () => mkResponse({ status: "ok", hasSession: true })),
+    });
+
+    const h = mount();
+    await settle();
+    dead = true;
+    h.get().refresh();
+    await settle();
+    h.get().refresh();
+    await settle();
+    expectDemoted(h);
+
+    dead = false;
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready");
+    expect(h.get().serverUnreachable).toBe(false);
+
+    // The half that bites: recovery must reset the count to ZERO, not merely
+    // re-promote. If it only re-promoted, the next single blip would demote at
+    // half the intended patience for the rest of the session.
+    dead = true;
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready");
+  });
+
+  it("still demotes when every poll read is superseded by a concurrent probe", async () => {
+    // The inverse bug (see `readHasSession` for the mechanism), and the one no
+    // other test here can see.
+    //
+    // Reproducing it needs a probe in flight over a poll read that is both
+    // pending AND dead. The interleave alone is not the distinguisher — the
+    // last-issued-wins test below deliberately hangs the boot poll's read and
+    // probes over it — but that read resolves 200 OK, so it can never produce a
+    // strike and the regression passes it. Dead is what matters, and every
+    // other dead-read test awaits `settle()` between calls, so nothing is ever
+    // in flight to supersede.
+    //
+    // Note the demotion write here is performed by the PROBE read: the poll
+    // reads accrue both strikes and are then filtered by the staleness guard,
+    // and the probe is the one still current when it lands. That is deliberate
+    // — a probe may apply a demotion off strikes it did not earn, because the
+    // strike count is a property of the server, not of who asked.
+    globalThis.fetch = routedFetch({
+      launcher: STOPPED_LAUNCHER,
+      health: mkResponse({ status: "ok", hasSession: true }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready");
+
+    globalThis.fetch = routedFetch({
+      launcher: new Error("server gone"),
+      health: new Error("server gone"),
+    });
+    for (let i = 0; i < 2; i++) {
+      h.get().refresh(); // poll read starts…
+      void h.get().probeSession(); // …and is superseded before it resolves
+      await settle();
+      // Makes the accumulation visible. Without it, a refactor that gave probes
+      // their own sequence counter would leave nothing superseded and this test
+      // would still pass — as a duplicate of the plain two-dead-reads case.
+      if (i === 0) expect(h.get().state).toBe("ready");
+    }
+    expectDemoted(h);
+  });
+
   it("absent hasSession (non-loopback shape) does not promote and is treated as unknown", async () => {
     globalThis.fetch = routedFetch({
       launcher: mkResponse({ available: true, running: false }),
@@ -405,6 +754,102 @@ describe("createAiReadiness", () => {
     expect(h.get().chip).toBeNull();
   });
 
+  it("stale dead reads cannot demote against a fresher successful probe", async () => {
+    // The mirror of the test above, in the direction that produces a FALSE
+    // NEGATIVE — and the reason the demotion write stays BELOW the staleness
+    // guard even though the strike count sits above it.
+    //
+    // Those two now live three lines apart with a long comment explaining why
+    // the count moved up, which makes "consolidate them" an inviting edit. This
+    // is what stops it: two hung poll reads that reject only after a fresh
+    // probe has confirmed a live session earn both strikes, but neither is the
+    // most-recently-issued read when it lands, so neither may write. Hoisting
+    // the write demotes against the freshest evidence available.
+    let rejectFirst!: (e: Error) => void;
+    let rejectSecond!: (e: Error) => void;
+    let healthCall = 0;
+    globalThis.fetch = (async (input: string) => {
+      const url = String(input);
+      if (url.includes(API_LAUNCHER_STATUS)) {
+        return mkResponse({ available: true, running: false }) as unknown as Response;
+      }
+      healthCall += 1;
+      if (healthCall === 1) return new Promise<Response>((_, rej) => (rejectFirst = rej));
+      if (healthCall === 2) return new Promise<Response>((_, rej) => (rejectSecond = rej));
+      return mkResponse({ status: "ok", hasSession: true }) as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const h = mount(); // poll read 1 issued, hangs
+    await settle();
+    h.get().refresh(); // poll read 2 issued, hangs
+    await settle();
+
+    // Probe read 3 is issued last and answers: a live session, freshest word.
+    await expect(h.get().probeSession()).resolves.toBe(true);
+    await tick();
+    expect(h.get().state).toBe("ready");
+
+    // Now the two stale reads fail. deadReads reaches the threshold — correctly,
+    // they are poll reads that did not answer — but they are both superseded.
+    rejectFirst(new Error("server gone"));
+    rejectSecond(new Error("server gone"));
+    await settle();
+    expect(h.get().state).toBe("ready");
+    expect(h.get().chip).toBeNull();
+  });
+
+  it("stops presenting a launcher state read from a server that stopped answering", async () => {
+    // The launcher reader's own floor, exercised in isolation — only the
+    // launcher route dies, `/health` keeps answering. That is deliberately NOT
+    // the "dead server" fixture: this floor exists precisely for the case the
+    // dead-server coupling does NOT cover, where the HTTP API degrades while
+    // the Hocuspocus socket survives and `deps.connected()` therefore never
+    // falls. Until this floor existed, `status` was retained through every
+    // subsequent failure forever once one read had succeeded.
+    let launcherDead = false;
+    globalThis.fetch = routedFetch({
+      launcher: whenAlive(() => launcherDead, RUNNING_LAUNCHER),
+      health: () => mkResponse({ status: "ok", hasSession: false }),
+    });
+
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("ready"); // launcher says Claude is up
+
+    launcherDead = true;
+    h.get().refresh();
+    await settle();
+    expect(h.get().state).toBe("ready"); // one strike — prior value still held
+
+    h.get().refresh();
+    await settle();
+    // "booting" = we do not know, chip suppressed. NOT "stopped", which would
+    // assert the specific claim that Claude is configured and not running —
+    // a claim nothing supports once the route reporting it went silent.
+    expect(h.get().state).toBe("booting");
+    expect(h.get().chip).toBeNull();
+    // …and the health reader is untouched: it kept answering, so nothing about
+    // the SERVER being gone is claimed. The two floors are independent.
+    expect(h.get().serverUnreachable).toBe(false);
+  });
+
+  it("a launcher body that isn't a LauncherStatus never settles the status", async () => {
+    // An unchecked cast here is not cosmetic. Any parseable non-LauncherStatus
+    // body — `{}` from a port squatter, an error envelope — makes both
+    // `available === false` and `running === true` false, which lands on
+    // `state === "stopped"` with no `lastError`, which renders a working
+    // "Restart Claude Code" button derived from a body nobody validated. The
+    // honest answer to "I got something I don't understand" is to keep waiting.
+    globalThis.fetch = routedFetch({
+      launcher: mkResponse({ error: "not the launcher" }),
+      health: mkResponse({ status: "ok", hasSession: false }),
+    });
+    const h = mount();
+    await settle();
+    expect(h.get().state).toBe("booting");
+    expect(h.get().chip).toBeNull();
+  });
+
   it("is booting until the launcher status settles, regardless of /health", async () => {
     globalThis.fetch = routedFetch({
       launcher: mkResponse({}, false, 500), // launcher never settles
@@ -532,6 +977,13 @@ describe("createAiReadiness — push consumer", () => {
   });
 
   afterEach(() => {
+    // Unmount first, THEN restore fetch. This project sets no `globals: true`
+    // and no setup file, so `@testing-library/svelte`'s auto-cleanup never
+    // registers — without this every mounted harness leaks a component whose
+    // `onDestroy` never runs and whose 8s poll keeps firing for the rest of the
+    // worker's life, against the restored REAL fetch (`API_BASE` is absolute,
+    // so those are live requests to 127.0.0.1:3479) and into later tests' stubs.
+    cleanup();
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
