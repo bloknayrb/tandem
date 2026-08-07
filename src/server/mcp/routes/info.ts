@@ -47,8 +47,21 @@ export interface InfoHandlerDeps {
 /**
  * GET /api/info — returns app metadata for the client About panel.
  *
- * Public fields (always returned): version, toolCount, mcpSdkVersion, transport, changelogPath.
- * Sensitive fields (loopback-only): storagePath, tokenRotatedAt.
+ * Public fields (always returned): version, toolCount, mcpSdkVersion, transport,
+ * changelogPath, workflowsPath, welcomePath.
+ * Sensitive fields (loopback-only): storagePath, tokenRotatedAt, generationId.
+ *
+ * #1294 note — this route deliberately does NOT apply `scrubPathForCaller` to
+ * the three `*Path` fields, and it is the one documented exception to that
+ * convention. They are absolute install paths, so they do disclose the username
+ * and install layout to a token-holding LAN caller. They are still sent whole
+ * because the client hands each one straight back to `POST /api/open`
+ * ("View Changelog", "Replay tutorial", the About panel's workflows link) — a
+ * basename would not resolve, so scrubbing them breaks those buttons for every
+ * non-loopback browser rather than hardening anything the caller could not
+ * already learn from `/api/info`'s version + platform. Recorded as an accepted
+ * residual rather than left as the earlier "…is not sensitive" comments, which
+ * were simply false.
  */
 export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
   return async (req: Request, res: Response): Promise<void> => {
@@ -86,17 +99,14 @@ export function makeInfoHandler(deps: InfoHandlerDeps): Handler {
       body.bindPort = deps.bindPort;
     }
 
-    // changelogPath is not sensitive — include whenever the file exists on disk.
+    // These three are absolute and unscrubbed on purpose — see the accepted
+    // residual in the handler docstring above. Include whenever the file exists.
     if (deps.changelogPath !== undefined) {
       body.changelogPath = deps.changelogPath;
     }
-
-    // workflowsPath is not sensitive — include whenever the file exists on disk.
     if (deps.workflowsPath !== undefined) {
       body.workflowsPath = deps.workflowsPath;
     }
-
-    // welcomePath is not sensitive — include whenever the file exists on disk.
     if (deps.welcomePath !== undefined) {
       body.welcomePath = deps.welcomePath;
     }
