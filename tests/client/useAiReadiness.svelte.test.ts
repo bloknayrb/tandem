@@ -1097,4 +1097,136 @@ describe("createAiReadiness — push consumer", () => {
     expect(h.get().state).toBe("ready");
     expect(h.get().pushDelivery).toBe("attached");
   });
+
+  // --- D-5: the push↔pull join --------------------------------------------
+  //
+  // The RULES (threshold, Solo/offline precedence, unknown-state handling) are
+  // `status/delivery-stall.ts`'s and are tested there. What is only observable
+  // here is the WIRING, and specifically that the join is held on the opposite
+  // terms from `hasSession` / `push.subscribers`.
+
+  describe("deliveryStalledMs", () => {
+    const STALLED = { state: "awaiting-poll", waitingMs: 200_000 };
+
+    it("surfaces a stall the server reports", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: RUNNING_LAUNCHER,
+        health: mkResponse({ status: "ok", hasSession: true, delivery: STALLED }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().deliveryStalledMs).toBe(200_000);
+    });
+
+    it("clears when a later read omits the join entirely", async () => {
+      // THE point of this block. `hasSession` and `pushAttached` deliberately
+      // only ever promote, so a redacted field cannot demote a live session.
+      // The join is the opposite: absent means "the server declined to say",
+      // and holding the last number would leave the banner asserting a stall
+      // off evidence that no longer exists — the exact "claim outliving its
+      // evidence" failure this whole surface was built to remove. A guard
+      // copied from the two fields above would pass every other test here.
+      let body: unknown = { status: "ok", hasSession: true, delivery: STALLED };
+      globalThis.fetch = routedFetch({
+        launcher: RUNNING_LAUNCHER,
+        health: () => mkResponse(body),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().deliveryStalledMs).toBe(200_000);
+
+      body = { status: "ok", hasSession: true };
+      h.get().refresh();
+      await settle();
+      expect(h.get().deliveryStalledMs).toBeNull();
+      expect(h.get().liveIndicator).toBe("connected"); // …and did not demote the session
+    });
+
+    it("clears once a poll lands and the server reports the join answered", async () => {
+      let body: unknown = { status: "ok", hasSession: true, delivery: STALLED };
+      globalThis.fetch = routedFetch({
+        launcher: RUNNING_LAUNCHER,
+        health: () => mkResponse(body),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().deliveryStalledMs).toBe(200_000);
+
+      body = {
+        status: "ok",
+        hasSession: true,
+        delivery: { state: "polled", waitingMs: null, latencyMs: 200_400 },
+      };
+      h.get().refresh();
+      await settle();
+      expect(h.get().deliveryStalledMs).toBeNull();
+    });
+
+    it("clears when the server dies rather than blaming the model for it", async () => {
+      let dead = false;
+      globalThis.fetch = routedFetch({
+        launcher: whenAlive(() => dead, RUNNING_LAUNCHER),
+        health: whenAlive(
+          () => dead,
+          () => mkResponse({ status: "ok", hasSession: true, delivery: STALLED }),
+        ),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().deliveryStalledMs).toBe(200_000);
+
+      dead = true;
+
+      // One dead read holds the claim, deliberately, and that is the more
+      // interesting half of this test. A dropped request is not evidence the
+      // stall ENDED — the message is still unanswered either way — so clearing
+      // on the first blip would blink the banner off and back on 8s later at a
+      // slightly larger number. The claim survives to the same two-strike floor
+      // the pill uses.
+      h.get().refresh();
+      await settle();
+      expect(h.get().deliveryStalledMs).toBe(200_000);
+
+      // At the floor the offline story takes over, and the two must not stack:
+      // with the server gone, "Claude hasn't picked this up" is still true but
+      // blames the wrong party, and the disconnection banner tells it better.
+      h.get().refresh();
+      await settle();
+      expect(h.get().serverUnreachable).toBe(true);
+      expect(h.get().deliveryStalledMs).toBeNull();
+    });
+
+    it("stays silent in Solo, where the user opted out of AI surfacing", async () => {
+      globalThis.fetch = routedFetch({
+        launcher: RUNNING_LAUNCHER,
+        health: mkResponse({ status: "ok", hasSession: true, delivery: STALLED }),
+      });
+      const h = mount({ soloMode: true });
+      await settle();
+      expect(h.get().deliveryStalledMs).toBeNull();
+    });
+
+    it("ignores a wait that arrives as a string", async () => {
+      // The one half of the parse guard with an observable failure, so it gets
+      // the valid state string: `"200000" < DELIVERY_STALL_MS` coerces to
+      // `200000 < 120000` → false, so an unguarded parse would pass the
+      // threshold and hand a STRING to a component that does arithmetic on it.
+      // (The `state` guard is not observable the same way — any value that is
+      // not the literal `"awaiting-poll"` reads as no-claim by construction, so
+      // it exists to keep the declared `string | null` type honest, and no test
+      // here can distinguish its presence. Said plainly rather than papered
+      // over with an assertion that passes either way.)
+      globalThis.fetch = routedFetch({
+        launcher: RUNNING_LAUNCHER,
+        health: mkResponse({
+          status: "ok",
+          hasSession: true,
+          delivery: { state: "awaiting-poll", waitingMs: "200000" },
+        }),
+      });
+      const h = mount();
+      await settle();
+      expect(h.get().deliveryStalledMs).toBeNull();
+    });
+  });
 });

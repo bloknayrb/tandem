@@ -426,6 +426,7 @@ updater-banner
 updater-banner-dismiss
 updater-banner-install
 updater-banner-visible
+wake-stall-banner
 {*}-cancel
 {*}-input
 {*}-submit
