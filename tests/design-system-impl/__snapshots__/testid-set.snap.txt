@@ -27,6 +27,7 @@ appearance-system-light-warm
 appearance-uniform-tab-width
 apply-changes-btn
 archive-btn-{*}
+banner-stack
 batch-promote-bar
 batch-promote-clear
 batch-promote-confirm
