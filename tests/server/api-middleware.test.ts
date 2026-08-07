@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import type { Response } from "express";
+import { describe, expect, it, vi } from "vitest";
+import { DocxTooLargeError } from "../../src/server/file-io/docx-size-gate.js";
 import {
   createApiMiddleware,
   errorCodeToHttpStatus,
   isHostAllowed,
   isLocalhostOrigin,
 } from "../../src/server/mcp/api-routes.js";
+import { sendApiError } from "../../src/server/mcp/routes/_shared.js";
 import { jsonrpcId } from "../../src/server/mcp/server.js";
 
 describe("isHostAllowed (DNS rebinding protection)", () => {
@@ -279,5 +282,68 @@ describe("createApiMiddleware — CORS headers (#1291)", () => {
     const { headers, status } = run({ origin: "null" }, "OPTIONS");
     expect(status).toBe(204);
     expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sendApiError — the DOCX_TOO_LARGE mapping (#1310)
+// ---------------------------------------------------------------------------
+
+describe("sendApiError with a decompressed-size refusal", () => {
+  function capture(err: unknown) {
+    let status = 0;
+    let body: unknown;
+    const res = {
+      status(code: number) {
+        status = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload;
+        return this;
+      },
+    } as unknown as Response;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      sendApiError(res, err);
+      // Snapshot the calls BEFORE restoring: `mockRestore` clears the recorded calls, so asserting
+      // on the spy afterwards asserts on an emptied array and passes no matter what was logged.
+      return {
+        status,
+        body: body as { error: string; message: string },
+        errors: errorSpy.mock.calls.map((c) => String(c[0])),
+        warns: warnSpy.mock.calls.map((c) => String(c[0])),
+      };
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  }
+
+  it("answers 413, not 500, for an over-expanding .docx", () => {
+    // The gate refuses hostile INPUT. Reported as 500 it is indistinguishable from a Tandem fault,
+    // and no caller can tell a policy refusal from a server bug.
+    const { status, body } = capture(
+      new DocxTooLargeError("A part of this .docx expands past…", 3),
+    );
+    expect(status).toBe(413);
+    expect(body.error).toBe("FILE_TOO_LARGE");
+    expect(body.message).toContain("expands past");
+  });
+
+  it("does not log it as an unhandled server error", () => {
+    // `[Tandem] Unhandled API error:` plus a stack is what Copy Diagnostics shows the user, and it
+    // is what a 5xx status triggers. Refusing a bomb is not a crash.
+    const { errors, warns } = capture(new DocxTooLargeError("too big", 1));
+    expect(errors).toEqual([]);
+    // Positive control on the same sample: the refusal IS logged, just at the level a rejected
+    // request warrants. Without this, an assertion that nothing was logged as unhandled would also
+    // pass if `sendApiError` had stopped logging entirely.
+    expect(warns).toEqual([expect.stringContaining("API error (413)")]);
+  });
+
+  it("still maps the code through the exported status mapper", () => {
+    expect(errorCodeToHttpStatus("DOCX_TOO_LARGE")).toBe(413);
   });
 });
