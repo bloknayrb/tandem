@@ -255,6 +255,40 @@ export function docBackupSnapshotPath(
   return path.join(docBackupsRoot(appDataDir), docHash(filePath), name);
 }
 
+/**
+ * Human cause clause for a snapshot failure, keyed on errno. Deliberately
+ * NOT the raw `err.message`: Node's fs errors serialize as
+ * `EPERM: operation not permitted, open 'C:\\Users\\<name>\\AppData\\...'`,
+ * which is stack-trace-shaped in a toast, leaks the user's account name and
+ * an internal implementation path they have no reason to see, and tells them
+ * nothing they can act on (#1299).
+ *
+ * Unmapped codes contribute no clause rather than a guess — the errno still
+ * travels on the notification's `errorCode`, and the full error object is on
+ * stderr for diagnostics.
+ */
+export function describeSnapshotFailure(err: unknown): string {
+  switch ((err as NodeJS.ErrnoException | undefined)?.code) {
+    case "EPERM":
+    case "EACCES":
+      return "Tandem does not have permission to write to its backup folder — antivirus or folder-permission software may be blocking it.";
+    case "ENOSPC":
+      return "There is no free disk space for the backup.";
+    case "EROFS":
+      return "The backup location is read-only.";
+    case "EBUSY":
+    case "ETXTBSY":
+      return "The document is locked by another program.";
+    case "EMFILE":
+    case "ENFILE":
+      return "Too many files are open on this system.";
+    case "ENAMETOOLONG":
+      return "The backup file path is too long for this filesystem.";
+    default:
+      return "";
+  }
+}
+
 export type SnapshotOutcome =
   | "written"
   | "skipped-already-this-run"
@@ -409,17 +443,25 @@ export async function snapshotBeforeFirstWrite(
     // Gate stays unset — the next save retries. The console line fires on
     // every retry; the user-facing notification only once per path until a
     // snapshot succeeds (a 60s autosave would otherwise re-toast each minute).
-    const msg = err instanceof Error ? err.message : String(err);
     console.error("[DocBackup] Snapshot failed for %s (save proceeds):", filePath, err);
     if (!failureNotifiedPaths.has(pathKey)) {
       failureNotifiedPaths.add(pathKey);
+      // Worth telling the user about even though the save itself is fine: a
+      // silently-absent safety net is worse than a noisy one, because the
+      // whole point of snapshots is that you find out you needed one later.
+      // But the sentence must not claim the save succeeded — this runs
+      // BEFORE the write, which can still fail and raise its own toast.
+      const cause = describeSnapshotFailure(err);
       pushNotification({
         id: generateNotificationId(),
         type: "general-error",
         severity: "warning",
-        message: `Could not back up ${path.basename(filePath)} before saving: ${msg}`,
+        message:
+          `Couldn't store a backup copy of "${path.basename(filePath)}". ` +
+          `Saving is unaffected.${cause ? ` ${cause}` : ""}`,
         documentId: opts.documentId,
         dedupKey: `doc-backup:${pathKey}`,
+        errorCode: (err as NodeJS.ErrnoException | undefined)?.code,
         timestamp: Date.now(),
       });
     }
