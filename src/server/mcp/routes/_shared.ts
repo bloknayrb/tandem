@@ -48,7 +48,12 @@ export function errorCodeToHttpStatus(code: string | undefined): number {
     case "RELOAD_IN_PROGRESS":
     case "EXTERNAL_CONFLICT":
       return 409;
+    // DOCX_TOO_LARGE (#1310) is the decompressed-size sibling of FILE_TOO_LARGE's compressed cap.
+    // Without this case it falls through to 500, which makes sendApiError log
+    // "[Tandem] Unhandled API error:" with a stack — reporting a policy refusal of hostile input as
+    // a Tandem crash, in the one artefact (Copy Diagnostics) a user would send us about it.
     case "FILE_TOO_LARGE":
+    case "DOCX_TOO_LARGE":
       return 413;
     case "EBUSY":
     case "EPERM":
@@ -92,7 +97,12 @@ function errorCodeToLabel(code: string): string {
       return "RELOAD_IN_PROGRESS";
     case "EXTERNAL_CONFLICT":
       return "EXTERNAL_CONFLICT";
+    // Deliberately the SAME label as the compressed-size cap rather than a new one: both are
+    // "this file is too big to open", the distinction between them is in `message`, and a novel
+    // label would be an unrecognized string to every existing client while changing nothing a
+    // caller can act on differently.
     case "FILE_TOO_LARGE":
+    case "DOCX_TOO_LARGE":
       return "FILE_TOO_LARGE";
     case "EBUSY":
     case "EPERM":
