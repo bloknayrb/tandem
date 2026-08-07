@@ -22,7 +22,12 @@ import "./tandem-banner.css";
  */
 
 interface Props {
-  /** ms the oldest unanswered message has waited, or null to render nothing. */
+  /**
+   * ms the oldest unanswered message has waited, or null to render nothing.
+   * Callers should pass `deliveryStall`'s result, which only ever yields a
+   * value at or above `DELIVERY_STALL_MS` — the sub-minute range is
+   * unreachable in practice, and the clamp below keeps it sane regardless.
+   */
   stalledMs: number | null;
 }
 
@@ -32,10 +37,14 @@ const { stalledMs }: Props = $props();
  * Rounded DOWN to whole minutes, deliberately. The banner appears at the
  * two-minute threshold, and "3 minutes" while 3:59 has elapsed understates the
  * wait — which is the safe direction for a claim about someone else's silence.
+ *
+ * Floored at one minute so the component is total: a caller that ignored the
+ * threshold would otherwise render "0 minutes", or "-1 minutes" off a clock
+ * skew, which reads as a bug rather than as a wait.
  */
 const waited = $derived.by(() => {
   if (stalledMs === null) return null;
-  const minutes = Math.floor(stalledMs / 60_000);
+  const minutes = Math.max(1, Math.floor(stalledMs / 60_000));
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 });
 </script>

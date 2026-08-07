@@ -1,5 +1,6 @@
 <script lang="ts">
 import { untrack } from "svelte";
+import WakeStallBanner from "../components/WakeStallBanner.svelte";
 import { type AiReadiness, createAiReadiness } from "../hooks/useAiReadiness.svelte";
 
 interface Props {
@@ -31,3 +32,9 @@ $effect(() => {
   data-state={readiness.state}
   data-chip={readiness.chip ?? ""}
 ></div>
+<!-- Mounted exactly as App.svelte mounts it, so a test can observe the RENDERED
+     banner and not just the getter's return value. Reading `deliveryStalledMs`
+     from a test is a non-tracking read: it proves the logic but would keep
+     passing if the getter were ever collapsed into a value computed once at
+     construction, which freezes the banner while every assertion stays green. -->
+<WakeStallBanner stalledMs={readiness.deliveryStalledMs} />

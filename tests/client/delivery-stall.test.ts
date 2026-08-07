@@ -20,7 +20,7 @@ const base = {
 
 describe("deliveryStall", () => {
   it("fires once the wait crosses the threshold", () => {
-    expect(deliveryStall(base)).toEqual({ waitingMs: DELIVERY_STALL_MS });
+    expect(deliveryStall(base)).toBe(DELIVERY_STALL_MS);
   });
 
   it("stays silent below it", () => {
@@ -73,6 +73,6 @@ describe("deliveryStall", () => {
   });
 
   it("reports the raw wait, leaving formatting to the component", () => {
-    expect(deliveryStall({ ...base, waitingMs: 754_000 })).toEqual({ waitingMs: 754_000 });
+    expect(deliveryStall({ ...base, waitingMs: 754_000 })).toBe(754_000);
   });
 });
