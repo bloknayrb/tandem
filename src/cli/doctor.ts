@@ -30,7 +30,11 @@ import { createConnection } from "node:net";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { parseLockfile } from "../server/annotations/lockfile.js";
-import { isRecordedPathGone, probeNodeBinary } from "../server/integrations/node-binary.js";
+import {
+  isRecordedPathAbsolute,
+  isRecordedPathGone,
+  probeNodeBinary,
+} from "../server/integrations/node-binary.js";
 import { DEFAULT_MCP_PORT, DEFAULT_WS_PORT } from "../shared/constants.js";
 import type { ClaudeCliPresence } from "../shared/integrations/contract.js";
 import { detectClaudeCli, isBareNameLaunchable } from "../shared/integrations/detect-claude-cli.js";
@@ -617,7 +621,11 @@ function checkMcpJson(r: Recorder): void {
   const channel = servers["tandem-channel"];
   if (!channel) {
     r.warn(
-      ".mcp.json has no tandem-channel entry — push here depends on the plugin monitor instead (see the push-path line below)",
+      // No cross-reference to "the push-path line below": `evaluatePushPath`
+      // runs only from `checkHealth`, which `runDoctor` reaches only when :3479
+      // is up and answering — and someone debugging a dead push path is often
+      // running doctor with Tandem stopped, where that line never prints.
+      ".mcp.json has no tandem-channel entry — push here depends on the plugin monitor instead",
     );
   } else {
     const cmd = channel.command;
@@ -688,7 +696,9 @@ function checkUserMcpConfig(r: Recorder): void {
   }
   if (!servers["tandem-channel"]) {
     r.warn(
-      "tandem-channel not registered in ~/.claude.json — push depends on the plugin monitor instead (see the push-path line below)",
+      // See the sibling note in `checkMcpJson`: the push-path line is gated on
+      // a running server, so it cannot be cited unconditionally.
+      "tandem-channel not registered in ~/.claude.json — push depends on the plugin monitor instead",
       "Run: tandem setup --apply",
     );
   } else {
@@ -704,7 +714,15 @@ function checkUserMcpConfig(r: Recorder): void {
       r,
       servers["tandem-channel"],
       "~/.claude.json",
-      "Restart Tandem (it repairs this at startup), or run: tandem setup --apply",
+      // Lead with the remedy that always works. The boot repair is real but
+      // conditional in two ways doctor cannot see and the user cannot act on:
+      // `refreshChannelNodeBinary` deliberately declines when the only
+      // replacement it could offer is the bare name, and the whole sweep is
+      // skipped while another instance holds the annotation-store lock. Under
+      // either, "restart Tandem" is a loop with no exit — the shape of false
+      // promise this check exists to replace.
+      "Run: tandem setup --apply (Tandem also attempts this at startup, but skips it when it " +
+        "has no valid Node path to substitute, or when another instance holds the store lock)",
     );
   }
 }
@@ -734,19 +752,36 @@ function reportChannelCommand(r: Recorder, entry: unknown, label: string, fix: s
   if (entry === null || typeof entry !== "object") return;
   const command = (entry as { command?: unknown }).command;
   if (typeof command !== "string" || command === "") return;
+  // Cheap gate first, and it must come BEFORE the probe: a bare `npx` or `node`
+  // would otherwise be `stat`ed against whatever cwd doctor was invoked from,
+  // for an answer both branches then discard, and a relative path would be
+  // resolved against a working directory that is not the spawning client's.
+  if (!isRecordedPathAbsolute(command)) return;
+
+  // ONE `stat`, reused below. `isRecordedPathGone` takes an injectable probe
+  // precisely so the result can be handed back to it — calling it bare would
+  // stat the same path a second time (expensive on an unreachable share, and
+  // this runs inside `/api/diagnostics`, a request path) and open a window
+  // where the two reads disagree and the branch taken is decided by a value
+  // already superseded.
+  //
   // Three-state on purpose: `false` means definitely gone, `null` means the
   // probe could not run. The server declines to rewrite on `null` — but a path
   // it cannot read is still a dead push path, and staying silent about it would
   // leave the user with no output from any surface.
   const probed = probeNodeBinary(command);
-  if (probed === null && /[/\\]/.test(command)) {
+  if (probed === null) {
     r.warn(
-      `${label} tandem-channel Node path could not be checked (permission denied, broken link, or unreachable share): ${command}`,
+      // NOT "broken link". A dangling symlink resolves to ENOENT, which
+      // `probeNodeBinary` reports as `false` (definitely gone) — it lands in
+      // the branch below, never here. `null` is the narrower set that actually
+      // throws: permission denied, a symlink LOOP, an unreachable share.
+      `${label} tandem-channel Node path could not be checked (permission denied, symlink loop, or unreachable share): ${command}`,
       "Verify the path is readable — Tandem deliberately will not rewrite it on an unreadable probe.",
     );
     return;
   }
-  if (!isRecordedPathGone(command)) return;
+  if (!isRecordedPathGone(command, () => probed)) return;
   r.warn(`${label} tandem-channel points at a Node binary that no longer exists: ${command}`, fix);
 }
 
@@ -849,20 +884,32 @@ export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
   // `false` is a real and common value — a plugin the user deliberately
   // disabled — so test the VALUE, not just key presence. A truthiness check
   // would report a disabled plugin as installed.
-  const installed = Object.entries(input.enabledPlugins).some(
+  // Keep the KEY, not just the fact. Detection matches any marketplace
+  // (`tandem@<whatever>`) on purpose — `docs/spikes/plugin-delivery.md`
+  // recommends a local marketplace for the no-git path — so a hardcoded
+  // `tandem@tandem-editor` in the remedy hands those users a command that
+  // errors. The uninstall string has to name the plugin we actually found.
+  const installedKey = Object.entries(input.enabledPlugins).find(
     ([key, value]) => key.startsWith("tandem@") && value === true,
-  );
-  if (!installed) return [];
+  )?.[0];
+  if (installedKey === undefined) return [];
 
   const out: EvalOutcome[] = [
     {
-      status: "warn",
+      // `pass`, not `warn`. We have no evidence the monitor failed — the check
+      // sees a registry file, not an exit code, and on a host with Node on
+      // PATH it starts fine. Warning unconditionally would mean a permanently
+      // unclean report for doing exactly what `printPushStatus` recommends, and
+      // a warning that cannot be cleared teaches users to ignore the section.
+      // The mechanism and its remedy are still worth stating, so they stay in
+      // `fix`, phrased as the conditional it is.
+      status: "pass",
       message: "The Tandem plugin is installed — its monitor and MCP servers all run via `npx`",
       fix:
         'If you see `Monitor "Tandem real-time document events…" script failed (exit 127)`, ' +
         "Claude Code was started without Node on its PATH — it spawns monitors through a " +
         "non-login shell, so a GUI launch never reads your shell profile. Start Claude from " +
-        "a terminal, or uninstall with `claude plugin uninstall tandem@tandem-editor`.",
+        `a terminal, or uninstall with \`claude plugin uninstall ${installedKey}\`.`,
     },
   ];
 
@@ -875,7 +922,7 @@ export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
         "Both the Tandem plugin and a tandem MCP entry in ~/.claude.json are present — the tandem_* tools will appear twice",
       fix:
         "Plugin MCP servers load alongside your own, under a plugin_ prefix. Keep one: " +
-        "`claude plugin uninstall tandem@tandem-editor` leaves the Tandem-managed config in place.",
+        `\`claude plugin uninstall ${installedKey}\` leaves the Tandem-managed config in place.`,
     });
   }
   return out;
