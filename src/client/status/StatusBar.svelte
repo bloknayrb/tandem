@@ -9,10 +9,17 @@ import type {
   PushDelivery,
 } from "../hooks/useAiReadiness.svelte";
 import { AI_CTA } from "../hooks/useAiReadiness.svelte";
+import type { CwdDrift } from "../hooks/useCwdDrift.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
-import { type AiIndicatorTone, type AiIndicatorView, aiIndicatorView } from "./status-ai-view";
+import CwdDriftPill from "./CwdDriftPill.svelte";
+import {
+  type AiIndicatorTone,
+  type AiIndicatorView,
+  aiIndicatorView,
+  cwdDriftPill,
+} from "./status-ai-view";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
 interface Props {
@@ -73,6 +80,20 @@ interface Props {
    * release; only the count is active-doc-local).
    */
   heldCount?: number;
+  /**
+   * #1282: the server's working-folder drift verdict for the active document,
+   * with the user's own suppression (per-pair dismissal / session backstop /
+   * permanent opt-out) ALREADY applied by the caller. `null` means "say
+   * nothing" — this component never re-derives whether a drift is worth
+   * mentioning, it only renders the answer.
+   */
+  cwdDrift?: CwdDrift | null;
+  /** Open the "restart Claude in this folder" flow (which confirms first). */
+  onRelaunchInFolder?: () => void;
+  /** Hide this (Claude's folder, target folder) pair for the session. */
+  onDismissDrift?: () => void;
+  /** Stop showing the drift nudge entirely, across restarts. */
+  onOptOutDrift?: () => void;
 }
 
 let {
@@ -95,6 +116,10 @@ let {
   lastSaveOk = false,
   editor,
   heldCount = 0,
+  cwdDrift = null,
+  onRelaunchInFolder,
+  onDismissDrift,
+  onOptOutDrift,
 }: Props = $props();
 
 /**
@@ -213,6 +238,10 @@ const labelColor = $derived(
 // former "Assistant · idle" segment). The view is a pure mapping — MUST be
 // `$derived` so it recomputes as the reactive props flip connected→solo→down.
 const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode, pushDelivery));
+
+// #1282. A sibling of the AI indicator rather than part of it, and mutually
+// exclusive with the CTA below by construction — see `cwdDriftPill`.
+const driftView = $derived(cwdDriftPill(cwdDrift, aiChip));
 
 /**
  * The AI indicator's actionable content — title, aria-label, and onclick —
@@ -443,6 +472,17 @@ function cycleWordMode() {
       </div>
     {/if}
   {/if}
+  <!-- #1282 working-folder drift. Deliberately NOT nested inside `{#if aiView}`:
+       `aiIndicatorView` returns null for "launcher running, no MCP session yet",
+       which is exactly the auto-launched startup window this nudge exists for. -->
+  {#if driftView}
+    <CwdDriftPill
+      pill={driftView}
+      onRelaunch={() => onRelaunchInFolder?.()}
+      onDismiss={() => onDismissDrift?.()}
+      onOptOut={() => onOptOutDrift?.()}
+    />
+  {/if}
   <!-- #651 "Claude is {verb}…" pill. Gated on a live session (`aiView.canAnimate`)
        as well as an in-flight tool so it can never render "working" while the
        connection indicator shows nothing (an incoherent activity-without-
@@ -534,6 +574,17 @@ function cycleWordMode() {
     background: var(--tandem-warning-bg);
     border-radius: var(--tandem-r-pill);
     border: 1px solid var(--tandem-warning-border);
+  }
+
+  /* Forced-colors drops the amber fill AND the amber border (both resolve to
+     system colors), leaving "Review Only" and "N held" indistinguishable from
+     ordinary status text — they read as pills only by virtue of color. A
+     system-color border restores the boundary. Pre-existing gap, fixed here
+     because `CwdDriftPill` carries the same recipe and needed the same rule. */
+  @media (forced-colors: active) {
+    .status-warning-pill {
+      border: 1px solid CanvasText;
+    }
   }
 
   /* A9 (#798): reduced-motion guard for the connection + claude-presence dots

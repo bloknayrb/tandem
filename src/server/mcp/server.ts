@@ -585,6 +585,16 @@ export async function startMcpServerHttp(
       startSupervisor: launcher.startSupervisor,
       store: createIntegrationsStore(resolveAppDataDir()),
       getSkillRefreshError,
+      // Tandem's own auto-opened documents. `welcome.md` opens on first run and
+      // `CHANGELOG.md` after every upgrade, both from inside the app bundle —
+      // which on Windows sits under `%LOCALAPPDATA%`, i.e. INSIDE the user's
+      // home directory, and therefore passes every validity check the drift
+      // preview applies. Without this list the two states every desktop user
+      // passes through would each open with a suggestion to move Claude into
+      // Tandem's install directory.
+      bundledDocDirs: [CHANGELOG_PATH, WELCOME_PATH]
+        .filter((p): p is string => p !== undefined)
+        .map((p) => dirname(p)),
     });
   }
 
