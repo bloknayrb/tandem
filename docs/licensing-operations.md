@@ -324,6 +324,15 @@ it a buyer whose activation fails has no inbound channel but the public issue
 tracker, where they will paste a key carrying their own name and email), and
 `ALERT_WEBHOOK_URL` / `ALERT_EMAIL` (§5c).
 
+`SUPPORT_EMAIL` is **required and enforced**: the Worker rejects every request
+with 503 and `stage: "config-support-email"` while the value is unset, still the
+`REPLACE_WITH_…` placeholder, or not address-shaped. That is deliberate — the
+alternative was emitting a license email with no support address at all, or with
+the placeholder printed in it, to a customer who has already paid. A 503 makes
+Polar re-deliver, so the event is fulfilled unchanged once the var is fixed.
+Note that the check is per-request, not a deploy-time gate: nothing alerts on
+it, so a fix is only prompted by Polar's delivery log (§5b).
+
 Point the Polar webhook endpoint (subscribed to `order.paid` + `order.refunded`)
 at the deployed URL. Deploy a **separate sandbox instance** (the sandbox Polar
 secret, its own namespaces) to test end-to-end — the sandbox needs no Polar KYC,
@@ -522,6 +531,8 @@ Then walk §5a steps 2–4 with that order number.
       cheap way to buy off the webhook-auto-disable risk in §5b, and it is
       non-negotiable while `stage: "email"` returns a retryable 500.
 - [ ] `SUPPORT_EMAIL` set, the mailbox actually exists, and someone reads it.
+      The Worker enforces the first clause (503 on unset/placeholder/malformed);
+      the mailbox existing and being read is still only this checklist line.
 - [ ] `ALERT_WEBHOOK_URL` set (see §5c — without it you cannot be alerted about
       the email failures that disable the endpoint).
 - [ ] A sandbox purchase completed end-to-end: email → activate →

@@ -24,6 +24,10 @@ RESEND_FROM = "REPLACE_WITH_VERIFIED_SENDER"
 # TANDEM_SUPPORT_EMAIL in src/shared/constants.ts. Without it a buyer whose
 # activation fails has no inbound channel except the public issue tracker —
 # where they will paste a key carrying their own name and email.
+# REQUIRED. The Worker validates this on every request and returns 503
+# (`stage: "config-support-email"`) while it is unset, still this placeholder,
+# or not address-shaped — deploying it unedited stops issuance rather than
+# emailing the placeholder to someone who just paid.
 SUPPORT_EMAIL = "REPLACE_WITH_SUPPORT_INBOX"
 # Operator alerting. `dropped` results and email-delivery failures are the two
 # outcomes that lose sales silently.
