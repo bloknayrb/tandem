@@ -145,6 +145,14 @@ async function startLauncherSupervisor(): Promise<void> {
     // `tandem setup`. Best-effort, non-blocking.
     const { refreshSkillIfStale } = await import("./integrations/apply.js");
     void refreshSkillIfStale();
+    // Track E: retire the legacy default-on channel-shim entry from existing
+    // installs. Same rationale as the skill refresh — nothing rewrites MCP
+    // config outside a re-run of setup, so a new build is the only event that
+    // can reach a user who already ran it. One-shot and marker-gated, so a
+    // later `--with-channel-shim` opt-in is never undone. Best-effort,
+    // non-blocking, and it swallows its own errors.
+    const { pruneLegacyChannelShimEntry } = await import("./integrations/prune-channel-shim.js");
+    void pruneLegacyChannelShimEntry({ appDataDir: resolveAppDataDir() });
     await launcherSupervisor.start();
   } catch (err) {
     launcherUnavailableReason = "spawn-failed";
