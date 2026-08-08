@@ -497,9 +497,20 @@ The plugin monitor and channel shim both bound their outbound HTTP calls so a ha
 
 `tandem_reply` deliberately re-throws `AbortError` / `TimeoutError` while parsing the response body. If the server returns headers but never finishes JSON, Claude receives a structured `isError: true` response such as `/api/channel-reply timed out after 5000ms` instead of a fake-success "Non-JSON response" payload.
 
-### Why `tandem-channel` Is Now Opt-In
+### Why `tandem-channel` Is Opt-In
 
-Running the plugin alongside the channel shim subscribes `/api/events` twice, producing duplicate notifications for every event. For Claude Code, the channel shim is registered by default (it's the push transport, #985); on a Claude Desktop target only the HTTP `tandem` MCP entry is written. `tandem setup --apply --with-channel-shim` forces the shim on; the in-app wizard registers it by default for Claude Code via the `TANDEM_CHANNEL_DIST` path injected into the sidecar.
+**This section's heading and body contradicted each other from 2026-07 until 2026-08-07** — the heading said "Now Opt-In" while the body said "registered by default", two lines apart. The body was the accurate half at the time, and the contradiction is plausibly why the consequence below went unnoticed for a month. Both halves are now true, because the default actually changed.
+
+Two independent reasons the shim is not registered unless asked for:
+
+1. **Double delivery.** Running the plugin monitor alongside the channel shim subscribes `/api/events` twice, producing duplicate notifications for every event.
+2. **An inert consumer is worse than none (Track E, 2026-08-07).** `runChannel` calls `startEventBridge` unconditionally, without asking whether the host negotiated `claude/channel` — and the SDK has no case for `notifications/claude/channel` in `assertNotificationCapability`, so delivery to a host that ignores the notification never throws and the stream never tears down. A shim registered by default therefore sat **attached and non-delivering** for every user who had run setup, holding the subscriber slot forever. Since `subscribers === 0` is the only *sound* negative Tandem has — a positive count never proves delivery, a zero does prove its absence — that permanently-attached consumer suppressed every signal keyed on the count, including the notice built to warn exactly the users it was silently failing.
+
+So: on a Claude Desktop target only the HTTP `tandem` MCP entry is written, and on Claude Code the shim is written **only** on explicit request — `tandem setup --apply --with-channel-shim`, or the wizard's checkbox. `shouldRegisterChannelShim` is the single source of truth.
+
+**Existing installs keep their entry, deliberately.** This changes the default for setups run from here on; it does not reach back. A boot-time prune was written and then dropped, and the reason is worth keeping: an entry written by the old default is **byte-identical** to one written by `--with-channel-shim`, because the same code produced both. Nothing on disk distinguishes a legacy artifact from a deliberate opt-in, so a prune cannot delete the first without sometimes deleting the second — and for a hand-launched interactive session the shim plus `--dangerously-load-development-channels` is still the only channel mechanism that exists. Silently removing that from a user who is relying on it is a worse failure than leaving an inert consumer attached for the users who are not. Re-running `tandem setup --apply` without the flag removes the entry, and that is the honest way to get it gone.
+
+The two paths that actually deliver are unaffected: launcher-spawned sessions are woken by the supervisor writing to the child's stdin (#1266), and hand-launched sessions can arm their own watch ([ADR-049](decisions.md#adr-049-the-self-armed-wake--ws-transport-no-arbitration-payload-free-frames)).
 
 ---
 

@@ -174,12 +174,29 @@ describe("shouldRegisterChannelShim", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("defaults ON for Claude Code when the channel artifact exists (#985)", () => {
-    expect(shouldRegisterChannelShim("claude-code", realChannel)).toBe(true);
+  // Track E (2026-08-07) inverted this. It read "defaults ON for Claude Code
+  // when the channel artifact exists (#985)" and was correct for as long as the
+  // shim was believed to be the push transport. It is not: `runChannel` starts
+  // its event bridge without asking whether the host negotiated
+  // `claude/channel`, and delivery to a host that ignores the notification
+  // never throws — so the default-on shim sat attached and inert for every
+  // user who had run setup, holding the subscriber slot that makes
+  // `subscribers === 0` the one sound negative Tandem has. Presence of the
+  // build artifact is now irrelevant to the default; only an explicit request
+  // registers it.
+  it("defaults OFF for Claude Code even when the channel artifact exists", () => {
+    expect(shouldRegisterChannelShim("claude-code", realChannel)).toBe(false);
   });
 
-  it("defaults OFF for Claude Code when the artifact is missing (graceful degradation)", () => {
+  it("defaults OFF for Claude Code when the artifact is missing", () => {
     expect(shouldRegisterChannelShim("claude-code", join(tmpDir, "missing.js"))).toBe(false);
+  });
+
+  it("an explicit opt-in still wins — this is opt-in, not removal", () => {
+    // The distinction that makes this a default change rather than a removal:
+    // a user who asks for the shim still gets it, and nothing Tandem does at
+    // boot takes it away again.
+    expect(shouldRegisterChannelShim("claude-code", realChannel, true)).toBe(true);
   });
 
   it("is always OFF for claude-desktop, even when the artifact exists", () => {
