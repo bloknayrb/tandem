@@ -234,6 +234,10 @@ shipped and were removed:
   `integration-wizard-apply-result-{*}`
 - Post-apply reachability (#1174): `integration-wizard-reachability-{*}`,
   `integration-wizard-whats-next`
+- Per-target delivery honesty (#1299): `integration-wizard-push-support-{*}` —
+  renders ONLY on a client Tandem structurally cannot notify (today Claude
+  Desktop), so its ABSENCE is the assertion for every other row. Carries
+  `data-push-support="none"`; there is deliberately no affirmative counterpart.
 - CLI honesty: `integration-wizard-shim-warning` — renders in the connect step
   for ALL detection outcomes, unlike the empty-state-only install testids
 - More integrations + Cowork sub-view: `integration-wizard-more`,

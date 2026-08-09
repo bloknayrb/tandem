@@ -24,6 +24,7 @@ import {
   validateChannelShimPrereq,
 } from "../../src/server/integrations/apply.js";
 import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
+import { targetPushSupport } from "../../src/shared/integrations/contract.js";
 import { isValidNodeBinary } from "../../src/shared/integrations/node-binary-name.js";
 
 describe("buildMcpEntries", () => {
@@ -192,6 +193,22 @@ describe("shouldRegisterChannelShim", () => {
 
   it("override does not resurrect the channel for claude-desktop", () => {
     expect(shouldRegisterChannelShim("claude-desktop", realChannel, true)).toBe(false);
+  });
+
+  it("refuses the shim for exactly the kinds the shared predicate calls unpushable (#1299)", () => {
+    // The wizard renders its "no real-time updates" line off
+    // `targetPushSupport`; this gate decides what actually gets written. They
+    // were the same fact stated twice — a bare `=== "claude-desktop"` here and
+    // nothing at all in the UI — which is how a Claude Desktop user came to be
+    // told "AI connected" and then ignored. Pinning the gate to the predicate
+    // means a kind added to `"none"` cannot get a shim, and a kind removed
+    // from it cannot keep a stale warning.
+    for (const kind of ["claude-code", "claude-desktop"] as const) {
+      const unpushable = targetPushSupport(kind) === "none";
+      // Artifact present AND an explicit opt-in — the most permissive inputs
+      // there are. Only the predicate may still say no.
+      expect(shouldRegisterChannelShim(kind, realChannel, true)).toBe(!unpushable);
+    }
   });
 });
 

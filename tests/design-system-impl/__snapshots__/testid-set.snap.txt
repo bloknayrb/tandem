@@ -211,6 +211,7 @@ integration-wizard-models-setup
 integration-wizard-more
 integration-wizard-pick-{*}
 integration-wizard-push-mode
+integration-wizard-push-support-{*}
 integration-wizard-reachability-{*}
 integration-wizard-reopen-hint
 integration-wizard-secret-input-{*}
