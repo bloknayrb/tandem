@@ -5985,6 +5985,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows-sys 0.59.0",
+ "windows-version",
 ]
 
 [[package]]

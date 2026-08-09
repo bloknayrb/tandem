@@ -20,6 +20,12 @@ mod cowork_installer;
 mod firewall;
 #[cfg(target_os = "windows")]
 mod cowork_meta;
+// Native theming (#992): resolves the undocumented uxtheme.dll "preferred
+// app mode" exports that theme context menus, the tray menu, and common
+// dialogs on Windows. See the module doc comment for why this replaces
+// `WebviewWindow::set_theme` there.
+#[cfg(target_os = "windows")]
+mod win_app_mode;
 
 // Windows-only: kill-on-job-close ownership so the sidecar dies with the shell
 // even on ungraceful exit (taskkill / crash / dev-runner restart). See #987.
@@ -1500,7 +1506,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             setup_overlay_titlebar,
             get_app_theme,
-            set_window_theme,
+            set_native_theme,
             sentry_enabled,
             cowork_scan_workspaces,
             cowork_toggle_integration,
@@ -2670,8 +2676,18 @@ fn setup_overlay_titlebar(window: tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads `AppsUseLightTheme` from `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`
-/// (app-mode preference, not taskbar color mode). Fixes #535.
+/// Reads the native/OS theme via `window.theme()` — not a direct registry
+/// read; Tauri/tao resolve `AppsUseLightTheme` from
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`
+/// internally and this just surfaces the result. Fixes #535.
+///
+/// Two platform caveats this reading inherits from `window.theme()` itself:
+/// on macOS it returns Tandem's own forced theme while `set_native_theme`
+/// has an override active (#992) — it is not purely an OS read there. On
+/// Linux, `window.theme()` reports Light regardless of the desktop theme
+/// unless tao's `dbus` feature is enabled
+/// (`tao-0.35.2/src/platform_impl/linux/window.rs:1011-1022`), which this
+/// project does not turn on.
 #[tauri::command]
 fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
     match window.theme() {
@@ -2681,29 +2697,265 @@ fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
     }
 }
 
-/// Maps the client's theme preference to a native `tauri::Theme`. `None`
-/// clears any forced window theme so it reverts to following the OS — this is
-/// the branch for `"system"`, and it matters: without it, `window.theme()`
-/// (which `get_app_theme` reads) would keep reporting the last forced value
-/// forever, even after the user returns to "system" (#992). `"warm"` is a
-/// light-family theme with no native analog and maps to `Light`.
-fn theme_pref_to_native(pref: &str) -> Option<tauri::Theme> {
+/// Distinguishes the three ways a theme preference resolves so the loud
+/// fallback warning fires only for a genuinely unrecognized string, never
+/// for `"system"` — the most common transition in the whole feature.
+/// `theme_pref_to_native` collapses this to a plain `Option`; this is the
+/// testable seam that keeps "system" and "unrecognized" as distinct,
+/// assertable branches instead of both silently landing in one catch-all
+/// (#992 rev2 — three independent reviewers caught the collapsed version).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThemePrefResolution {
+    Native(tauri::Theme),
+    /// Explicit "follow the OS" — clears any forced native theme.
+    System,
+    /// Not one of the four known `ThemePreference` values. Falls back to the
+    /// same "follow the OS" behavior as `System`, but logs, because this
+    /// path means the client and server enum have drifted.
+    Unrecognized,
+}
+
+fn resolve_theme_pref(pref: &str) -> ThemePrefResolution {
     match pref {
-        "dark" => Some(tauri::Theme::Dark),
-        "light" | "warm" => Some(tauri::Theme::Light),
-        _ => None,
+        "dark" => ThemePrefResolution::Native(tauri::Theme::Dark),
+        "light" | "warm" => ThemePrefResolution::Native(tauri::Theme::Light),
+        "system" => ThemePrefResolution::System,
+        _ => ThemePrefResolution::Unrecognized,
     }
 }
 
-/// Pushes the app's theme preference to the native window (#992) so real OS
-/// surfaces — context menus, file dialogs, the title bar — match an explicit
-/// in-app override instead of always following the OS appearance. Blast
-/// radius is the whole window, not just menus; signed off as acceptable.
-#[tauri::command]
-fn set_window_theme(window: tauri::WebviewWindow, theme: String) -> Result<(), String> {
+/// Maps the client's theme preference to a native `tauri::Theme`. `None`
+/// clears any forced window theme so it reverts to following the OS — this
+/// is the branch for `"system"`, and it matters: without it, `window.theme()`
+/// (which `get_app_theme` reads) would keep reporting the last forced value
+/// forever, even after the user returns to "system" (#992). `"warm"` is a
+/// light-family theme with no native analog and maps to `Light`. A genuinely
+/// unrecognized preference string also falls back to `None` (follow the OS)
+/// rather than panicking or leaving a stale forced theme in place, but logs
+/// loudly — see `resolve_theme_pref` for the distinction.
+fn theme_pref_to_native(pref: &str) -> Option<tauri::Theme> {
+    match resolve_theme_pref(pref) {
+        ThemePrefResolution::Native(theme) => Some(theme),
+        ThemePrefResolution::System => None,
+        ThemePrefResolution::Unrecognized => {
+            log::warn!(
+                "theme_pref_to_native: unrecognized theme preference {pref:?}, falling back to \"system\""
+            );
+            None
+        }
+    }
+}
+
+/// Which native host `native_theme_action` is deciding for. Threaded through
+/// as a parameter — rather than branched on via `cfg!` inside the decision
+/// function — so the full host × pref × high-contrast matrix is
+/// unit-testable from a single CI runner regardless of which OS actually
+/// runs the test (#992 rev2 A1). `current_native_host` below is the single
+/// `cfg!` call site that adapts this to the real build target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeHost {
+    Windows,
+    MacOs,
+    Linux,
+}
+
+fn current_native_host() -> NativeHost {
+    if cfg!(target_os = "windows") {
+        NativeHost::Windows
+    } else if cfg!(target_os = "macos") {
+        NativeHost::MacOs
+    } else {
+        NativeHost::Linux
+    }
+}
+
+/// Windows app-mode target. Deliberately a different type from
+/// `win_app_mode::PreferredAppMode` (the raw FFI enum matching uxtheme.dll's
+/// Win32 ABI) — this one has no platform-specific representation to keep in
+/// sync, so it stays available (and testable) on every OS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppMode {
+    ForceDark,
+    ForceLight,
+    /// The release target — see `native_theme_action` and
+    /// `win_app_mode::set_preferred_app_mode` for why this is `AllowDark`
+    /// and not `Default`.
+    AllowDark,
+}
+
+/// The decided action for a `set_native_theme` call, one per platform:
+/// Linux has no reachable native surface (#1363); macOS pushes via
+/// `WebviewWindow::set_theme`; Windows forces (or releases) the process-wide
+/// uxtheme app mode instead of calling `set_theme`, which reaches nothing
+/// visible there — see the module doc comment on `win_app_mode` for why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeThemeAction {
+    Skip,
+    SetWindowTheme(Option<tauri::Theme>),
+    SetAppMode(AppMode),
+}
+
+/// Pure decision layer for `set_native_theme` (#992 rev2 A1). Exhaustively
+/// unit-tested across all three hosts, all four `ThemePreference` values,
+/// and both High Contrast states — see `theme_pref_tests::native_theme_action_matrix`.
+fn native_theme_action(pref: &str, high_contrast: bool, host: NativeHost) -> NativeThemeAction {
+    match host {
+        NativeHost::Linux => NativeThemeAction::Skip,
+        // High Contrast has no macOS guard — the guard exists because
+        // forcing a Windows app mode fights `SystemParametersInfoW`'s own
+        // High Contrast color substitution; macOS's appearance API has no
+        // equivalent conflict.
+        NativeHost::MacOs => NativeThemeAction::SetWindowTheme(theme_pref_to_native(pref)),
+        NativeHost::Windows => {
+            // Do not force an app mode while High Contrast is active — that
+            // would fight the accessibility setting the user turned on.
+            // Mid-session toggling is not re-released by this guard; that is
+            // #1364, a separate, narrower gap.
+            if high_contrast {
+                return NativeThemeAction::SetAppMode(AppMode::AllowDark);
+            }
+            NativeThemeAction::SetAppMode(match theme_pref_to_native(pref) {
+                Some(tauri::Theme::Dark) => AppMode::ForceDark,
+                Some(_) => AppMode::ForceLight,
+                None => AppMode::AllowDark,
+            })
+        }
+    }
+}
+
+/// Applies a decided `NativeThemeAction`'s side effect. Split out from
+/// `set_native_theme` so the platform-specific `apply_app_mode` halves
+/// (below) stay small and symmetric; this function itself is not
+/// platform-gated so it type-checks — and its `SetAppMode` arm is reachable
+/// — on every OS CI builds (ubuntu-latest and windows-latest), even though
+/// `native_theme_action` only ever produces that variant when `host` is
+/// `NativeHost::Windows`.
+fn apply_native_theme_action(
+    window: &tauri::WebviewWindow,
+    action: NativeThemeAction,
+) -> Result<(), String> {
+    match action {
+        NativeThemeAction::Skip => Ok(()),
+        NativeThemeAction::SetWindowTheme(theme) => window
+            .set_theme(theme)
+            .map_err(|e| format!("set_theme failed: {e}")),
+        NativeThemeAction::SetAppMode(mode) => apply_app_mode(window, mode),
+    }
+}
+
+/// Forces/releases the Windows app mode. Routed through
+/// `WebviewWindow::run_on_main_thread` because `SetPreferredAppMode`/
+/// `FlushMenuThemes` are UI-global uxtheme calls and Tauri may run a sync
+/// command off the main thread (#992 rev2 A4). Blocks on a channel until the
+/// main-thread closure completes so the command's return value — and the
+/// `window.theme()` read-back in `set_native_theme` — never race ahead of
+/// the actual uxtheme call.
+#[cfg(target_os = "windows")]
+fn apply_app_mode(window: &tauri::WebviewWindow, mode: AppMode) -> Result<(), String> {
+    let (tx, rx) = std::sync::mpsc::channel();
     window
-        .set_theme(theme_pref_to_native(&theme))
-        .map_err(|e| format!("set_theme failed: {e}"))
+        .run_on_main_thread(move || {
+            if !win_app_mode::set_preferred_app_mode(mode) {
+                log::debug!(
+                    "set_native_theme: uxtheme app-mode call unavailable (pre-1903 Windows or missing export)"
+                );
+            }
+            let _ = tx.send(());
+        })
+        .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+    rx.recv()
+        .map_err(|e| format!("app-mode main-thread call did not complete: {e}"))
+}
+
+/// Non-Windows stub so `apply_native_theme_action`'s `SetAppMode` arm
+/// compiles on every OS. Unreachable in practice: `native_theme_action`
+/// only produces `SetAppMode` when `host` is `NativeHost::Windows`, and
+/// `current_native_host` only returns that when `cfg!(target_os = "windows")`.
+#[cfg(not(target_os = "windows"))]
+fn apply_app_mode(_window: &tauri::WebviewWindow, _mode: AppMode) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn native_host_high_contrast_active() -> bool {
+    win_app_mode::is_high_contrast_active()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn native_host_high_contrast_active() -> bool {
+    false
+}
+
+/// Pure outcome assembly for `set_native_theme`, split out from the real
+/// `window.theme()` I/O so it's unit-testable (#992 rev2 A6/A8). `action`
+/// can only legitimately come from `native_theme_action` in production code
+/// — this is the seam that pins `set_native_theme` as routing through the
+/// pure decision layer rather than recomputing `overrideActive`/`osTheme`
+/// some other way. `read_os_theme` is invoked only when the reading would
+/// be authoritative (`override_active` is false); see the frozen IPC
+/// contract — `osTheme` must never carry a value that could be a stale echo
+/// of our own forced theme.
+fn native_theme_outcome(
+    action: NativeThemeAction,
+    read_os_theme: impl FnOnce() -> Option<String>,
+) -> NativeThemeOutcome {
+    let override_active = matches!(action, NativeThemeAction::SetWindowTheme(Some(_)));
+    let os_theme = if override_active { None } else { read_os_theme() };
+    NativeThemeOutcome {
+        override_active,
+        os_theme,
+    }
+}
+
+/// Result of a `set_native_theme` call. `overrideActive` is true only on
+/// macOS with an explicit (non-"system") theme forced — Windows never
+/// forces `window.theme()` itself, so it is always `false` there, and
+/// `osTheme` is always the authoritative live read. See the frozen IPC
+/// contract in the #992 rev2 plan.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeThemeOutcome {
+    override_active: bool,
+    os_theme: Option<String>,
+}
+
+/// Pushes the app's theme preference to native OS surfaces (#992 rev2).
+/// Renamed from `set_window_theme`: the Windows mechanism this now uses is
+/// process-wide (uxtheme's preferred app mode), not per-window, so the old
+/// name was misleading on the platform where this does the most work.
+///
+/// Mechanism is platform-specific — see `native_theme_action`:
+/// - **Windows**: forces/releases the process-wide uxtheme app mode
+///   (`win_app_mode`), themeing context menus, the tray menu, and common
+///   dialogs. Never calls `set_theme` — see `win_app_mode`'s module doc
+///   comment for why that reaches no visible surface here. Deferred while
+///   High Contrast is active.
+/// - **macOS**: `WebviewWindow::set_theme(...)` → `NSApp.appearance`,
+///   app-wide (menus, dialogs, panels).
+///  - **Linux**: no-op (#1363).
+///
+/// This command intentionally stays a thin wrapper around
+/// `native_theme_action` (decision) and `native_theme_outcome` (result
+/// assembly) — both pure and exhaustively unit-tested — plus the real I/O
+/// (`apply_native_theme_action`, `window.theme()`) that needs a live
+/// `WebviewWindow` and isn't unit-testable, matching the existing
+/// `theme_pref_tests` precedent for `set_window_theme`.
+#[tauri::command]
+fn set_native_theme(
+    window: tauri::WebviewWindow,
+    theme: String,
+) -> Result<NativeThemeOutcome, String> {
+    let high_contrast = native_host_high_contrast_active();
+    let action = native_theme_action(&theme, high_contrast, current_native_host());
+    apply_native_theme_action(&window, action)?;
+    Ok(native_theme_outcome(action, || match window.theme() {
+        Ok(tauri::Theme::Dark) => Some("dark".to_string()),
+        Ok(_) => Some("light".to_string()),
+        Err(e) => {
+            log::warn!("set_native_theme: window.theme() read-back failed: {e}");
+            None
+        }
+    }))
 }
 
 /// Whether opt-in crash reporting (#921) is active. The WebView calls this to
@@ -4359,9 +4611,12 @@ mod reveal_command_tests {
 mod theme_pref_tests {
     use super::*;
 
-    // #992 — native menus/dialogs/title bar follow window.theme(), which
-    // set_window_theme pushes. These test only the pure mapping; the actual
-    // set_theme() call needs a live WebviewWindow and isn't unit-testable.
+    // #992 — native menus/dialogs/tray/dialogs follow either window.theme()
+    // (macOS/Linux) or the process-wide uxtheme app mode (Windows), both
+    // pushed by set_native_theme. These test the pure mapping and decision
+    // layers only; the actual set_theme()/run_on_main_thread calls need a
+    // live WebviewWindow and aren't unit-testable — see set_native_theme's
+    // doc comment for the restructuring that keeps everything else pure.
 
     #[test]
     fn dark_maps_to_native_dark() {
@@ -4385,6 +4640,164 @@ mod theme_pref_tests {
         // get_app_theme) would keep reporting the last forced value forever,
         // even after the user returns to "system".
         assert_eq!(theme_pref_to_native("system"), None);
+    }
+
+    // --- A2/A3: "system" and "unrecognized" must be distinct, assertable
+    // branches, not both silently swallowed by one catch-all. ---
+
+    #[test]
+    fn resolve_theme_pref_system_is_its_own_variant() {
+        assert_eq!(resolve_theme_pref("system"), ThemePrefResolution::System);
+    }
+
+    #[test]
+    fn resolve_theme_pref_unrecognized_is_distinct_from_system() {
+        assert_eq!(
+            resolve_theme_pref("sepia"),
+            ThemePrefResolution::Unrecognized
+        );
+        assert_ne!(
+            resolve_theme_pref("sepia"),
+            resolve_theme_pref("system"),
+            "an unrecognized preference must not be conflated with the explicit \"system\" branch"
+        );
+    }
+
+    #[test]
+    fn theme_pref_to_native_treats_unrecognized_like_system() {
+        // Both fall back to None (follow the OS) so a client/server enum
+        // drift degrades gracefully instead of leaving a stale forced theme
+        // — but only the Unrecognized branch (asserted above) logs.
+        assert_eq!(theme_pref_to_native("sepia"), None);
+        assert_eq!(theme_pref_to_native("system"), None);
+    }
+
+    // --- A1: the full host × pref × high-contrast decision matrix, run from
+    // whichever OS actually executes `cargo test` (ubuntu-latest AND
+    // windows-latest in CI) since `native_theme_action` takes the host as a
+    // parameter instead of branching on `cfg!` internally. ---
+
+    #[test]
+    fn native_theme_action_matrix() {
+        struct Case {
+            pref: &'static str,
+            mac_theme: Option<tauri::Theme>,
+            windows_mode: AppMode,
+        }
+        let cases = [
+            Case {
+                pref: "dark",
+                mac_theme: Some(tauri::Theme::Dark),
+                windows_mode: AppMode::ForceDark,
+            },
+            Case {
+                pref: "light",
+                mac_theme: Some(tauri::Theme::Light),
+                windows_mode: AppMode::ForceLight,
+            },
+            Case {
+                pref: "warm",
+                mac_theme: Some(tauri::Theme::Light),
+                windows_mode: AppMode::ForceLight,
+            },
+            Case {
+                pref: "system",
+                mac_theme: None,
+                windows_mode: AppMode::AllowDark,
+            },
+        ];
+
+        for case in cases {
+            for high_contrast in [false, true] {
+                // Linux: always Skip — no reachable native surface (#1363) —
+                // regardless of pref or High Contrast.
+                assert_eq!(
+                    native_theme_action(case.pref, high_contrast, NativeHost::Linux),
+                    NativeThemeAction::Skip,
+                    "linux pref={} high_contrast={high_contrast}",
+                    case.pref
+                );
+
+                // macOS: mirrors theme_pref_to_native; High Contrast has no
+                // macOS guard (Windows-only concern, see A5).
+                assert_eq!(
+                    native_theme_action(case.pref, high_contrast, NativeHost::MacOs),
+                    NativeThemeAction::SetWindowTheme(case.mac_theme),
+                    "macos pref={} high_contrast={high_contrast}",
+                    case.pref
+                );
+            }
+
+            // Windows, High Contrast off: forces the mapped app mode.
+            assert_eq!(
+                native_theme_action(case.pref, false, NativeHost::Windows),
+                NativeThemeAction::SetAppMode(case.windows_mode),
+                "windows pref={} high_contrast=false",
+                case.pref
+            );
+
+            // Windows, High Contrast on: always releases regardless of pref
+            // — the A5 guard, distinct from the pref-driven branch above.
+            assert_eq!(
+                native_theme_action(case.pref, true, NativeHost::Windows),
+                NativeThemeAction::SetAppMode(AppMode::AllowDark),
+                "windows pref={} high_contrast=true",
+                case.pref
+            );
+        }
+    }
+
+    // --- A6/A8: native_theme_outcome, composed with native_theme_action
+    // exactly as set_native_theme's body does — the wiring seam for the
+    // command itself, which needs a live WebviewWindow and can't be
+    // unit-tested directly. ---
+
+    #[test]
+    fn outcome_macos_explicit_theme_overrides_and_skips_readback() {
+        let action = native_theme_action("dark", false, NativeHost::MacOs);
+        let mut read_called = false;
+        let outcome = native_theme_outcome(action, || {
+            read_called = true;
+            Some("dark".to_string())
+        });
+        assert!(outcome.override_active);
+        assert_eq!(outcome.os_theme, None);
+        assert!(
+            !read_called,
+            "osTheme must never be sourced from a read that could echo our own forced theme"
+        );
+    }
+
+    #[test]
+    fn outcome_macos_system_releases_and_reads_authoritatively() {
+        let action = native_theme_action("system", false, NativeHost::MacOs);
+        let outcome = native_theme_outcome(action, || Some("dark".to_string()));
+        assert!(!outcome.override_active);
+        assert_eq!(outcome.os_theme, Some("dark".to_string()));
+    }
+
+    #[test]
+    fn outcome_windows_never_reports_override_active_for_any_pref() {
+        // Windows never calls set_theme, so window.theme() stays honest
+        // regardless of which AppMode was forced — overrideActive must be
+        // false for every pref, matching the platform contract table.
+        for pref in ["dark", "light", "warm", "system", "bogus"] {
+            let action = native_theme_action(pref, false, NativeHost::Windows);
+            let outcome = native_theme_outcome(action, || Some("light".to_string()));
+            assert!(
+                !outcome.override_active,
+                "windows overrideActive must be false (pref={pref})"
+            );
+            assert_eq!(outcome.os_theme, Some("light".to_string()));
+        }
+    }
+
+    #[test]
+    fn outcome_linux_always_reads_authoritatively() {
+        let action = native_theme_action("dark", false, NativeHost::Linux);
+        let outcome = native_theme_outcome(action, || Some("light".to_string()));
+        assert!(!outcome.override_active);
+        assert_eq!(outcome.os_theme, Some("light".to_string()));
     }
 }
 

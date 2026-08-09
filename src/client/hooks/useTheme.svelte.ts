@@ -1,6 +1,6 @@
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { SystemLightVariant, ThemePreference } from "./useTandemSettings.js";
-import { initTauriTheme, setWindowTheme, tauriTheme } from "./useTauriTheme.svelte.js";
+import { initTauriTheme, setNativeTheme, tauriTheme } from "./useTauriTheme.svelte.js";
 import type { ResolvedTheme } from "./useTheme.js";
 
 export type { ResolvedTheme } from "./useTheme.js";
@@ -119,6 +119,22 @@ export function applyTheme(
  * OS app-mode changes are tracked reactively. In browser mode, the matchMedia
  * subscription inside applyTheme handles OS changes instead.
  *
+ * A single effect both pushes the resolved preference to the native window
+ * (#992 -- `setNativeTheme`: process app mode on Windows, `NSApp.appearance`
+ * on macOS, no-op on Linux) and applies it to the DOM (`applyTheme`). These
+ * were originally two separate effects -- `setNativeTheme` only reads
+ * `getPref()`, while `applyTheme` also reads `getLightVariant()` and
+ * `tauriTheme.current` -- specifically to avoid re-pushing on
+ * `lightVariant`-only churn. They're merged now (#1362 rev2, B4) because
+ * `setNativeTheme` already dedupes internally on `lastPushedPref`
+ * (useTauriTheme.svelte.ts): a `lightVariant`-only rerun just calls
+ * `setNativeTheme` with the SAME `pref` it was last called with, which
+ * no-ops. `setNativeTheme` is called first, before `applyTheme`, so the
+ * native push is issued before the DOM update -- there's no synchronous
+ * ordering guarantee that follows from this (the push resolves later, via
+ * IPC), it just keeps the two effects' worth of intent readable as one
+ * body.
+ *
  * Accepts getters for `pref` and `lightVariant` so callers with `$state`
  * values propagate reactively. `lightVariant` (#993) controls which
  * light-family theme a LIGHT OS appearance resolves to under `pref="system"`;
@@ -131,18 +147,32 @@ export function createTheme(
   // Initialize the Tauri theme bridge once — no-op in browser mode
   initTauriTheme();
 
-  // Pushes the theme to the native window (#992) on every explicit
-  // settings.theme change. Kept as its own effect (reading only getPref())
-  // rather than folded into the one below, which also reruns on lightVariant
-  // changes — set_window_theme should fire once per actual theme change.
-  $effect(() => {
-    setWindowTheme(getPref());
-  });
-
   $effect(() => {
     const pref = getPref();
     const lightVariant = getLightVariant();
+
+    // Push the raw, unresolved preference to the native window (#992).
+    // Deduped internally, so this is a no-op on lightVariant-only reruns.
+    setNativeTheme(pref);
+
+    // Load-bearing, NOT dead code: reading `tauriTheme.current` subscribes
+    // THIS effect to it, so a native OS flip (delivered via
+    // onThemeChanged/the poll/the set_native_theme release round trip, all
+    // in useTauriTheme.svelte.ts) re-runs this effect and re-resolves
+    // "system" through `applyTheme` below. Do not delete this on the
+    // grounds that the value is never used -- the read itself is the
+    // subscription, and post-B3 (osTheme applied on the release round
+    // trip) it can look like it no longer does anything.
     void tauriTheme.current;
+
+    // Do NOT "fix" staleness by writing `setTauriTheme(...)` (or
+    // `tauriTheme.current = ...`) synchronously from inside this effect
+    // body. Effect bodies run inside an active Svelte reaction, and a
+    // synchronous `$state` write from within one throws
+    // `state_unsafe_mutation` -- in production too, not just dev (see
+    // CLAUDE.md). All native read-backs are written through the async
+    // `acceptReadback` gate in useTauriTheme.svelte.ts instead.
+
     return applyTheme(pref, lightVariant);
   });
 }
