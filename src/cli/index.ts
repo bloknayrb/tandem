@@ -73,10 +73,12 @@ Usage:
                                     tandem server running on the host)
   tandem channel                    Run the Tandem channel shim (stdio MCP)
                                     (used by the plugin's tandem-channel entry)
-  tandem monitor                    Run the Tandem plugin monitor: stream event
+  tandem monitor                    Run the Tandem plugin monitor: stream wake
                                     lines to stdout for Claude Code to surface as
                                     notifications (used by the plugin's
-                                    experimental.monitors entry; needs no flag)
+                                    experimental.monitors entry, which starts it
+                                    when the tandem skill is first used in a
+                                    session; needs no flag)
   tandem --version
   tandem --help
 `);

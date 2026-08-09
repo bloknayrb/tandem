@@ -138,7 +138,7 @@ Either way, look for the push line. `No real-time push consumer attached` means 
 
 *The quickest, where it is available:* **ask Claude to watch for updates.** It needs nothing installed, but it does need a Claude Code that offers a `Monitor` tool — enabled per account rather than per version, and on Windows it also wants Git Bash. Some sessions simply do not have one, and for those the channel shim further down is the option that does not need it (the plugin monitor needs the same tool). Tandem's bundled skill tells it how, so "watch Tandem for updates while we work" is usually enough — it opens a watch on Tandem's wake stream and is woken whenever you comment or send a message. No install, no flag, and it lives and dies with that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that `tandem_status` reports a `wakeUrl` — the watch has nothing to attach to without one, and stdio-mode Tandem reports none. **Ask directly rather than waiting to be offered.** Claude normally only volunteers a watch when Tandem reports that nothing at all is listening, and a channel shim left over from an older setup stays listening forever while delivering nothing — so in exactly the case you are debugging, it will not offer. Asking overrides that.
 
-*Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). Start `claude` from a terminal window when you do: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127` every session](#plugin-monitor-reports-script-failed-exit-127-every-session).
+*Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). It starts watching when Claude first uses Tandem's skill in a session, so ask for Tandem by name; if you have been chatting about something else, it is not listening yet. Start `claude` from a terminal window: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127`](#plugin-monitor-reports-script-failed-exit-127).
 
 *Or* register the channel shim and start Claude Code with the channel flag:
 
@@ -151,13 +151,18 @@ Both halves are needed. The shim is **not registered by default** — so on a fr
 
 **Do not enable more than one.** Each delivers independently, so a session running two receives every event twice. Note that `No real-time push consumer attached` cannot tell you which one is missing — they all attach to the same stream — so pick the one you meant to be using.
 
+Two combinations can arise without you enabling anything twice, and both show the same symptom — Claude waking twice for one comment. In both, nothing is lost and no reply is duplicated: the inbox de-duplicates, so the cost is a wasted turn.
+
+- **The plugin monitor plus a self-armed watch.** Claude only arms a watch when Tandem reports nothing subscribed, which used to be a reliable test because the monitor started at session start. Since #1354 it starts when Claude first uses the Tandem skill and takes a few seconds to connect, so the count Claude reads can be a few seconds out of date — and both end up running. Tandem's skill tells Claude to stop its own watch when it notices; if it does not, ask it to, or uninstall the plugin and keep the watch.
+- **The plugin monitor twice over.** The plugin declares two monitors because the skill can be installed twice — once by the plugin, once by `tandem setup --apply` — and which name a `/tandem` dispatch resolves to depends on which copies exist. A session that dispatches *both* `/tandem` and `/tandem:tandem` arms both. Use one name per session. This one cannot be fixed in the plugin: Claude Code requires a plugin's monitor names to be unique, so the two entries cannot be collapsed into one that arms only once.
+
 **Meanwhile, nothing is lost.** Your message is saved and Claude sees it the next time it calls `tandem_checkInbox`. If Claude is mid-task, asking it to "check your inbox" surfaces everything immediately.
 
 **None of the three applies to Claude Desktop**, and it is the one case where there is nothing to configure. All of them are Claude Code mechanisms: the channel shim is a node subprocess Claude Code spawns, the plugin monitor rides Claude Code's plugin host, and the self-armed watch uses a Claude Code tool. For a Claude Desktop target the setup wizard writes an MCP entry and nothing else — deliberately — and its Done screen now says so on that target's row rather than leaving you to find out by being ignored. Push there does not fail; it does not exist. Nothing is lost either way: as above, your comments and messages are saved and Claude Desktop sees them the next time it calls `tandem_checkInbox`, so asking it to "check your inbox" is the workflow rather than a workaround (#1299).
 
 **One caveat `tandem doctor` cannot resolve for you.** If a consumer *is* attached, that proves events reach the shim — not that Claude sees them. A session started without the flag still runs a channel shim that receives every event and discards it, because whether the channel is honored is decided inside Claude Code and never reported back. If push looks attached and Claude still isn't reacting, start the session with the flag explicitly rather than assuming the config alone is enough.
 
-Related: [Channel shim fails to start](#channel-shim-fails-to-start), [`claude plugin install` fails with "unsafe location"](#claude-plugin-install-fails-command-git-not-found-or-is-in-an-unsafe-location-current-directory), [`claude plugin install` fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https), [Plugin monitor exit 127](#plugin-monitor-reports-script-failed-exit-127-every-session), [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version).
+Related: [Channel shim fails to start](#channel-shim-fails-to-start), [`claude plugin install` fails with "unsafe location"](#claude-plugin-install-fails-command-git-not-found-or-is-in-an-unsafe-location-current-directory), [`claude plugin install` fails to clone](#claude-plugin-install-fails-to-clone-ssh-vs-https), [Plugin monitor exit 127](#plugin-monitor-reports-script-failed-exit-127), [Stale global `tandem-editor`](#stale-global-tandem-editor-shadows-the-pinned-version).
 
 ## Channel shim fails to start
 
@@ -196,7 +201,7 @@ Then retry the install. The same guard applies to `npm` and `npx`, so if a plugi
 commands fail with "not found" while you can run them yourself in the same shell, check
 where you launched Claude from before anything else.
 
-## Plugin monitor reports "script failed (exit 127)" every session
+## Plugin monitor reports "script failed (exit 127)"
 
 Exit 127 is command-not-found. The published plugin's monitor runs
 `npx -y tandem-editor@<version> monitor`, so this fires when `npx` isn't resolvable from
@@ -217,8 +222,13 @@ Two things worth knowing:
 
 - **Nothing is lost.** This only disables *push*. Your edits, comments and chat still reach
   Claude on its next `tandem_checkInbox`.
-- **It fires in every Claude Code session**, including ones unrelated to Tandem, because
-  plugin monitors are spawned per session regardless of what you're working on.
+- **It no longer fires in sessions that have nothing to do with Tandem.** It used to: plugin
+  monitors were spawned in every session regardless of what you were working on, so a
+  monitor that could not run reported this failure in all of them. Tandem's monitor now
+  starts only when Claude first uses the Tandem skill in a session, so you should see this
+  where it is informative — you asked for Tandem and push is not available — and nowhere
+  else. If you are still seeing it in unrelated sessions, the plugin is from before this
+  change; reinstall it.
 
 **Fixes, in order of preference:**
 

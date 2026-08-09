@@ -226,9 +226,9 @@ describe("background mode refresh", () => {
       sseFrame(
         {
           id: "e1",
-          type: "document:opened",
+          type: "annotation:created",
           timestamp: 1,
-          payload: { fileName: "a.md", format: "md" },
+          payload: { annotationId: "a1", fileName: "a.md" },
         },
         "e1",
       ),
@@ -236,12 +236,20 @@ describe("background mode refresh", () => {
 
     // Advance time but DO NOT resolve /api/mode
     await vi.advanceTimersByTimeAsync(100);
-    // stdout should already have the formatted event (cached default is
-    // "tandem", non-blocking). Match the full formatter prefix from
-    // formatEventContent so a regression that drops the "User opened
-    // document:" prefix or the filename cannot sneak past.
+    // stdout should already carry the wake line (cached default is "tandem",
+    // non-blocking). What this test is really pinning is that the mode fetch
+    // does not BLOCK delivery, so it asserts on the event type — the filename
+    // it used to match on is payload and, since #1354, deliberately absent.
+    //
+    // The vehicle is `annotation:created` rather than the `document:opened` it
+    // used to push: the emit gate now drops non-wake-worthy types, so a
+    // `document:*` fixture would assert an empty stdout and go green whether or
+    // not the mode fetch blocked delivery.
     const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(stdoutWrites).toMatch(/User opened document: a\.md/);
+    // Whole line, not `toContain` plus a list of absences: the fixture's own
+    // literals are the only thing an absence list can refuse, so a leak of a
+    // field this fixture does not happen to carry would pass it.
+    expect(stdoutWrites).toBe("Tandem: annotation:created — call tandem_checkInbox for details\n");
 
     // Now resolve mode and end the stream
     modeResolve?.(new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));

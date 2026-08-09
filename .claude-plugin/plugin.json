@@ -29,7 +29,14 @@
       {
         "name": "tandem-events",
         "command": "npx -y tandem-editor@0.20.1 monitor",
-        "description": "Tandem real-time document events (annotations, chat, selections)"
+        "description": "Tandem real-time document events (annotations, chat, selections)",
+        "when": "on-skill-invoke:tandem:tandem"
+      },
+      {
+        "name": "tandem-events-user-skill",
+        "command": "npx -y tandem-editor@0.20.1 monitor",
+        "description": "Tandem real-time document events (annotations, chat, selections)",
+        "when": "on-skill-invoke:tandem"
       }
     ]
   }

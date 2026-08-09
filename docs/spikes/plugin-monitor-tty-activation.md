@@ -203,6 +203,122 @@ resolve the double-install too, not just correct the trigger string.
 > resolution, which is the axis the `plugin:skill` qualifier exists on; user-level versus
 > project-level precedence is a different axis and is not what decides this.
 
+### F8 — declaring BOTH name forms catches either copy. **MEASURED.**
+
+F7 looks like it forces a product-level fix: if the bare name reaches the non-plugin copy,
+the plugin's trigger can never see it. That is wrong, and the reason is in the matcher.
+From the same binary:
+
+```js
+pQs.subscribe((s) => o4l(enabledPlugins, (a) => a.when === `on-skill-invoke:${s}`, …))
+```
+
+Plain string equality against the name the dispatcher publishes — there is no
+plugin-scoping in the comparison itself. So a manifest may declare the unqualified form
+and match a dispatch from any source that publishes it.
+
+**Probe:** the same `probe-skill-name-collision.py`, extended to declare **two** monitors
+differing only in `when` (`on-skill-invoke:armcheck` and
+`on-skill-invoke:monprobe:armcheck`), then dispatch the bare name once.
+
+| `when` | Idle | After bare `/armcheck` |
+|---|---|---|
+| `on-skill-invoke:armcheck` | not armed | **ARMED** |
+| `on-skill-invoke:monprobe:armcheck` | not armed | not armed |
+
+`bare /armcheck ran: non-plugin copy` in the same run, so the arming monitor was matched
+by a dispatch of the **non-plugin** skill. CC 2.1.226, win32, one run plus F7's two.
+
+**This does not contradict F6, and the distinction matters.** F6 dispatched the *plugin's*
+copy, which publishes `monprobe:armcheck`; the unqualified monitor correctly did not match
+it. F7 dispatched the non-plugin copy with only the qualified monitor declared, so nothing
+matched. F8 declares both. The three results are one rule: **the published name is
+qualified iff the dispatched skill came from a plugin, and `when` must equal it exactly.**
+
+So the double-install is a **manifest** problem — two entries, same command, distinct
+`name`s — not a product one. The cost is that if one session dispatches both names, both
+monitors arm and every event is delivered twice; the host's dedupe key is
+`pluginName:monitorName` (IN CODE, quoted below — it is not something this probe
+measured), so it cannot collapse them. There is no session key available to
+a monitor for a singleton lock (F5: `CLAUDE_PLUGIN_ROOT` is not in the child env).
+
+> **Probe gotcha that cost a run, and would cost yours.** Workspace trust is activation
+> gate #4, and a fixture cwd that has never been trusted parks the session on *"Is this a
+> project you trust?"* — the UI never mounts, no monitor arms, and the capture shows only
+> the prompt. It reads exactly like a negative result. Worse, a probe that blind-writes
+> Enter into that prompt **answers** it. Trust the fixture directory deliberately, or reuse
+> one already trusted, and check the capture for the prompt before believing a null.
+
+### F9 — a monitor that exits is never respawned, whatever its exit code. **MEASURED.**
+
+**Probe:** `scripts/spikes/probe-monitor-respawn.py`. Two `when: "always"` monitors,
+identical but for their exit code, each appending a line to its own marker before
+exiting — so the marker's line count *is* the spawn count.
+
+| exit code | starts in 120 s |
+|---|---|
+| `0` | **1** |
+| `1` | **1** |
+
+Both armed once and stayed dead. No throttled retry, no backoff, nothing.
+
+**Two things follow, in opposite directions.**
+
+*It enables the singleton.* A monitor that finds another already serving this Tandem
+can stand down by exiting, and the host will not spin it back up. That is the
+mechanical precondition for "one monitor across N sessions", and it holds.
+
+*It falsifies a comment our own recovery path rests on.* `src/monitor/run.ts`'s EPIPE
+handler said "exit 1 so the plugin host respawns us with a fresh stdout". It does not.
+Once the host's read end closes, that session has no monitor for the rest of its life.
+Exiting is still the right move — a monitor that cannot write cannot deliver, and
+carrying on would advance `lastEventId` past events nobody received — but it is a clean
+shutdown, not a recovery, and the comment now says so. It also settles the disagreement
+that comment created about `when: "always"`: an exhausted monitor really does stay dead.
+
+### F10 — the SHIPPED manifest arms, and it is the bare-name entry that does it. **MEASURED.**
+
+**Probe:** `scripts/spikes/probe-shipped-arm-trigger.py`. F6–F8 established the
+mechanism with synthetic names; this one runs the real
+`.claude-plugin/plugin.json` — `name`, `when`, and the skill's frontmatter copied
+verbatim — in the double-install shape (`skills/tandem/` from the plugin, plus a
+non-plugin copy of the same skill). **Three** substitutions, none of which touches
+the string the host compares: `mcpServers` stripped; each monitor's `command`
+swapped for a marker emitter, since the `when` match is decided before anything
+is spawned; and the skill *body* replaced with a one-word reply, so the dispatch
+does not start real Tandem work against a server the probe never launched. The
+frontmatter — which is where the published name comes from — is untouched.
+
+| phase | `tandem-events`<br>(`on-skill-invoke:tandem:tandem`) | `tandem-events-user-skill`<br>(`on-skill-invoke:tandem`) |
+|---|---|---|
+| idle 35 s | — | — |
+| bare `/tandem` | — | **armed, 16 s** |
+
+The idle phase is the negative control: neither armed, so `when` is being honoured
+rather than ignored.
+
+**The entry that fired is the one that would have been easy to leave out.** The
+plugin's own copy of the skill is right there in the fixture, and the intuition is
+that a plugin-supplied skill publishes the qualified name. What is *measured* here
+is narrower: only the bare-name entry armed. The reading that the bare dispatch
+resolved to the **non-plugin** copy is an inference from that plus F7, which
+measured the same selection directly, twice — this run did not observe it
+independently, for the reason below. Either way the manifest consequence is the
+same and it is the one that matters: a manifest carrying just
+`on-skill-invoke:tandem:tandem` arms nothing for any user who ran
+`tandem setup --apply`, which is the documented setup path.
+
+*Known limits of the run:*
+
+- The arm poll is a 1 s loop, and teardown follows detection immediately, so the
+  session ends up to ~1 s after the marker is written. The skill's one-word reply
+  never made it into the capture and the probe's own "which copy ran" line reads
+  `neither`. The marker is the observable; the reply is a cross-check this phase
+  does not get to make.
+- The fixture is loaded with `--plugin-dir`, not from a marketplace install. See
+  "What is still not established" item 2 — that gap applies here as it does to
+  F1/F6/F7/F8.
+
 ## What the shipped binary says (IN CODE, 2.1.226)
 
 Same extraction method as `plugin-delivery.md` F1/F2. These corroborate the runtime
@@ -231,6 +347,93 @@ P-A2 armed the **shell** source, which is what a manifest monitor is.
 > source, described as pure JSON config with *no shell*, so the two share the delivery half
 > and not the runner. The `ws` path's own end-to-end evidence is `wake-socket-end-to-end.md`,
 > not P-A2.
+>
+> The converse **does** transfer, and one claim in `src/monitor/run.ts` rests on it: a
+> *delivery-half* result measured on the `ws` watch — the 25-event burst in
+> `monitor-self-arm-probe.md` where at least 7 never became notifications — applies here,
+> because delivery is the half the two share. The same rate limiter is in this path's own
+> code: `` `[plugin monitor "${e.name}" suppressed ${o} events — output rate exceeded]` ``.
+> A burst has still not been *run* on this path; see "What is still not established".
+
+**The arming loop, verbatim** — this is where the dedupe key lives, cited because F8's
+"declare both names" conclusion and `tests/plugin-manifest.test.ts`'s distinct-names
+assertion both rest on it:
+
+```js
+async function o4l(e, t, r, n = yvv, o = fvv) {
+  if (Ip("pluginMonitors")) return;
+  if (!Zue()) return;
+  if (Ln()) return;
+  let i = !1;
+  for (let s of hvv(e)) {
+    if (!t(s)) continue;
+    let a = `${s.pluginName}:${s.name}`;
+    if (o.has(a)) continue;
+    o.add(a);
+    …
+  }
+}
+```
+
+Two things follow. The set `o` is keyed on **plugin name + monitor name**, so two entries
+with distinct `name`s are two independent arms — which is exactly what makes the
+double-declaration in F8 work, and what makes a duplicated `name` silently collapse the
+second entry into the first. And `t(s)` is the caller-supplied predicate: the `when` match
+is decided *before* the key is computed and before anything is spawned, which is why F10 can
+substitute the `command` without affecting what it measures.
+
+**The monitor schema, verbatim** — extracted the same way, and it settles two questions a
+review raised about the shipped manifest:
+
+```js
+when: A.union([
+  A.literal("always"),
+  A.string().startsWith("on-skill-invoke:")
+   .refine((e) => e.length > 16, { message: "on-skill-invoke: must specify a skill name" }),
+]).default("always")
+```
+
+```js
+Dgi = _e(() => A.array(dVm()).refine(
+  (e) => new Set(e.map((t) => t.name)).size === e.length,
+  { message: "Monitor names must be unique within a plugin" },
+))
+```
+
+**Distinct `name`s are not a choice — the host rejects duplicates.** The arming loop's
+dedupe key would make one shared `name` collapse the second entry into the first, which
+looks like a clean way to stop a session that dispatches BOTH `/tandem` and
+`/tandem:tandem` from arming two monitors. It is not available: the array-level refine
+fails the manifest outright. So the double-arm below is a cost with no manifest-level
+remedy, not an oversight.
+
+**The double-arm, stated plainly.** Both entries can fire in one session — the user has to
+dispatch both name forms, which needs both skill copies installed *and* the user invoking
+each. The cost is one duplicated wake per event: two monitors, two `<task_notification>`s,
+two awareness POSTs, and double pressure on the rate limiter. It is bounded by the same
+thing that bounds the self-arming race — the inbox ledger de-duplicates, so it costs a
+wasted turn rather than a duplicate reply — and no singleton lock is reachable from a
+manifest.
+
+### F11 — `on-skill-invoke` is present in 2.1.212, with the same matcher. **MEASURED (static, 2026-08-09).**
+
+The docs restate a **2.1.212** floor for the monitor, but every `when` measurement in this
+note ran on 2.1.226. If `when` postdated the floor, then on an in-between version the
+manifest would carry a `when` the host did not understand — and with no `always` entry left
+as a fallback, the monitor would silently never arm.
+
+It does not. `npm pack @anthropic-ai/claude-code-win32-x64@2.1.212` and grep: the binary
+contains the same `when` schema above, and the same predicate,
+
+```js
+GFa(o, (s) => s.when === "always", …)
+_rs.subscribe((s) => GFa(t.getState().plugins.enabled, (a) => a.when === `on-skill-invoke:${s}`, …))
+```
+
+— plain string equality against the dispatched skill's published name, identical to 2.1.226.
+The floor stands as written and needs no version caveat.
+
+*Limit:* static. It shows the code is present and shaped the same; it is not a run on 2.1.212.
 
 ### The five activation gates
 
@@ -283,7 +486,18 @@ troubleshooting, CLAUDE.md) and recorded as a dated amendment to ADR-049.
   of at session start, which retires the objection that the monitor fires in sessions
   unrelated to Tandem. **Measured working (F6); the name must be `plugin:skill`** — and
   a same-named skill from any non-plugin source takes the bare name and does not arm it
-  (F7), which is exactly what `tandem setup --apply` installs today.
+  (F7), which is exactly what `tandem setup --apply` installs today. Declaring both name
+  forms as two entries catches either copy (F8) — and must, since the host refuses
+  duplicate monitor `name`s, so the two entries cannot be collapsed into one.
+- `${user_config.KEY}` — **measured NOT to substitute in a monitor command**
+  (`scripts/spikes/probe-monitor-userconfig.py`): a bare-`node` control armed and an
+  otherwise identical `"${user_config.node_path}"` entry did not, with the session
+  reporting `1 monitor`. The `command` field's own description lists `${user_config.*}`
+  among its substitutions, so the manifest schema and the runtime disagree. This closes
+  the one candidate manifest-level fix for the exit-127 PATH failure — a `type: "file"`
+  field defaulting to an absolute node path. *Limit:* `--plugin-dir` runs no enable-time
+  prompt, so this cannot separate "monitors do not substitute `user_config`" from
+  "defaults are not applied unless prompted". Either way it is unusable from a manifest.
 
 ## What is still not established
 
@@ -316,9 +530,14 @@ delivery still reads as success. For the other two findings:
   before calling it a null.
 - **F4 (no orphan)** — scan for surviving processes yourself; the probe does not.
   `Get-CimInstance Win32_Process -Filter "Name='node.exe'"` filtered on `emit.mjs`.
-- **F6 / F7** have their own scripts, same venv and same two arguments:
+- **F6 / F7 / F8** have their own scripts, same venv and same two arguments:
   `probe-skill-arm-trigger.py` and `probe-skill-name-collision.py`. Both write their own
   verdict line; both take ~105 s because the idle settle is deliberate.
+- **F10** — `probe-shipped-arm-trigger.py <workdir> <trusted-cwd>`. Same venv, same shape,
+  but it builds its fixture from the real `.claude-plugin/plugin.json` rather than a
+  synthetic one, so re-run it after ANY edit to the manifest's monitor block, to the
+  plugin `name`, or to `skills/tandem/SKILL.md`'s frontmatter `name:`. All four are
+  inputs to the string the host compares, and three of them are nowhere near the manifest.
 
 **If a capture comes back nearly empty, do not read it as a null result.** pywinpty decodes
 to `str`, so a UTF-8 sequence split across a chunk boundary raises `UnicodeDecodeError` and

@@ -76,22 +76,108 @@ describe("published Claude Code plugin manifest", () => {
     // matching the tandem / tandem-channel mcpServers entries. The version pin
     // is guarded in tests/plugin/plugin-version-pin.test.ts.
     const experimental = plugin.experimental as {
-      monitors?: Array<{ command?: string; env?: Record<string, string> }>;
+      monitors?: Array<{
+        name?: string;
+        command?: string;
+        env?: Record<string, string>;
+        when?: string;
+      }>;
     };
-    const monitor = experimental?.monitors?.[0];
+    const monitors = experimental?.monitors ?? [];
     const version = pkg.version as string;
-    expect(monitor?.command).toBe(`npx -y tandem-editor@${version} monitor`);
-    // The monitor entry carries NO `env` block, unlike the mcpServers entries.
-    // Two reasons: (1) ADR-028 records that the monitors[] manifest schema
-    // rejected `env` blocks (CLI 2.1.126) — until that's re-verified lifted,
-    // an `env` block risks making the whole entry uninstallable, which would
-    // regress the activation the B1 spike proved. (2) It's redundant anyway:
-    // resolveTandemUrl() (src/shared/cli-runtime.ts) already defaults to
-    // http://127.0.0.1:3479, and in Cowork the plugin host's
-    // CLAUDE_PLUGIN_OPTION_SERVER_URL takes precedence over TANDEM_URL. So the
-    // env would only ever match the default where it's harmless and be wrong
-    // where it matters. Guard that it stays absent.
-    expect(monitor?.env).toBeUndefined();
+    expect(monitors.length).toBeGreaterThan(0);
+    // EVERY entry, not `[0]`. There are two since #1354, and an index-0 check
+    // would let the second one drift — different command, a stale pin, or an
+    // `env` block — with CI still green.
+    for (const monitor of monitors) {
+      expect(monitor?.command).toBe(`npx -y tandem-editor@${version} monitor`);
+      // The monitor entry carries NO `env` block, unlike the mcpServers entries.
+      // Two reasons: (1) ADR-028 records that the monitors[] manifest schema
+      // rejected `env` blocks (CLI 2.1.126) — until that's re-verified lifted,
+      // an `env` block risks making the whole entry uninstallable, which would
+      // regress the activation the B1 spike proved. (2) It's redundant anyway:
+      // resolveTandemUrl() (src/shared/cli-runtime.ts) already defaults to
+      // http://127.0.0.1:3479, and in Cowork the plugin host's
+      // CLAUDE_PLUGIN_OPTION_SERVER_URL takes precedence over TANDEM_URL. So the
+      // env would only ever match the default where it's harmless and be wrong
+      // where it matters. Guard that it stays absent.
+      expect(monitor?.env).toBeUndefined();
+    }
+  });
+
+  it("both arm triggers are declared, because one of them cannot catch both skill copies", () => {
+    // #1354. The host matches `when === "on-skill-invoke:" + <published name>`
+    // by plain string equality, and the published name is qualified iff the
+    // dispatched skill came from a plugin. Tandem ships the `tandem` skill
+    // TWICE — the plugin auto-loads `skills/tandem/`, and `tandem setup
+    // --apply` writes `~/.claude/skills/tandem/SKILL.md`. With both installed
+    // the picker offers `/tandem` and `/tandem:tandem`, and the bare one
+    // resolves to the NON-plugin copy (spike F7, reproduced twice). Declaring
+    // only the qualified form therefore arms for nobody who ran our own setup.
+    //
+    // Measured in spike F8: declaring both catches either copy. Losing either
+    // entry is a silent failure — valid manifest, no error, monitor simply
+    // never arms — which is exactly why it is pinned here.
+    const experimental = plugin.experimental as {
+      monitors?: Array<{ name?: string; when?: string }>;
+    };
+    const monitors = experimental?.monitors ?? [];
+    const triggers = monitors.map((m) => m.when);
+    expect(triggers).toContain("on-skill-invoke:tandem:tandem");
+    expect(triggers).toContain("on-skill-invoke:tandem");
+    // No entry may fall back to `always`: that is what armed the monitor in
+    // sessions with nothing to do with Tandem, so a failing `npx` reported
+    // `exit 127` in every one of them.
+    expect(triggers).not.toContain("always");
+    for (const m of monitors) expect(m.when).toBeDefined();
+    // The host dedupes re-arming on `pluginName:monitorName`, so duplicate
+    // names would silently collapse the second trigger into the first.
+    const names = monitors.map((m) => m.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("the arm triggers are derivable from the plugin name and the skill's own frontmatter", () => {
+    // The test above pins the two literals. That is not enough on its own: the
+    // string the host compares is assembled from THREE sources, and two of them
+    // are nowhere near the manifest —
+    //
+    //   `on-skill-invoke:` + [plugin.json `name`] + `:` + [SKILL.md `name:`]
+    //
+    // so renaming the plugin, or editing the frontmatter of a skill file a
+    // thousand lines long, leaves both the manifest and the literal assertion
+    // untouched while the trigger stops matching anything. There is no error
+    // for that: valid manifest, valid skill, monitor never arms.
+    //
+    // Spike F10 measures the live behaviour, but that probe is Windows-only and
+    // hand-run. This is the part that can be checked on every commit.
+    const skill = readText("../skills/tandem/SKILL.md");
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(skill)?.[1];
+    expect(frontmatter, "skills/tandem/SKILL.md has no frontmatter block").toBeDefined();
+    // Tolerate a quoted value: `name: "tandem"` is valid YAML the host
+    // resolves to `tandem`, and matching it as `"tandem"` would fail this test
+    // for a manifest that is actually correct.
+    const skillName = /^name:\s*["']?([^"'\r\n]+?)["']?\s*$/m.exec(frontmatter ?? "")?.[1];
+    expect(skillName, "skills/tandem/SKILL.md declares no `name:`").toBeDefined();
+
+    const pluginName = plugin.name as string;
+    const experimental = plugin.experimental as { monitors?: Array<{ when?: string }> };
+    const triggers = (experimental?.monitors ?? []).map((m) => m.when);
+
+    // Qualified: what a dispatch of the PLUGIN's copy publishes.
+    expect(triggers).toContain(`on-skill-invoke:${pluginName}:${skillName}`);
+    // Bare: what a dispatch of the `tandem setup --apply` copy publishes, and
+    // the one that actually fired in F10's double-install run.
+    expect(triggers).toContain(`on-skill-invoke:${skillName}`);
+
+    // …and that copy lives at a hardcoded path. F10 could not tell the
+    // directory name apart from the frontmatter name because both are
+    // `tandem`; rename the install directory alone and the bare trigger stops
+    // matching, with every other assertion here still green.
+    const apply = readText("../src/server/integrations/apply.ts");
+    expect(
+      apply,
+      "the installed skill's directory no longer matches the bare arm trigger",
+    ).toContain(`join(home, ".claude", "skills", "${skillName}", "SKILL.md")`);
   });
 
   it("the README #cowork anchor the dialogs link to exists", () => {

@@ -221,12 +221,18 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
  */
 function printPushStatus(shimRegisteredFor: string[]): void {
   const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
-  // `--plugin-dir` loads the skill and MCP entries, but does NOT activate the
-  // monitor — measured 2026-08-06 on 2.1.223 (docs/spikes/plugin-delivery.md).
-  // Say so, or this reads as a third way to get push.
+  // `--plugin-dir` DOES activate the monitor. The previous copy here said it
+  // did not, citing a 2026-08-06 null on 2.1.223; that null was the print-mode
+  // confound, and F1/F6/F8/F10 in `plugin-monitor-tty-activation.md` each
+  // armed a manifest monitor through `--plugin-dir` on 2.1.226 in an
+  // interactive session. (Not F7 — its whole result is a null: the bare
+  // dispatch selected the non-plugin copy and no marker appeared. It is the
+  // reason there are two entries, not evidence that one armed.) Claiming less
+  // than the truth here is still a wrong claim: it told developers a working
+  // path was dead.
   const devInstructions = existsSync(pluginManifest)
-    ? `  For development you can load the package directly (skill + MCP only —\n` +
-      `  this does NOT activate the monitor, so it gives you no push):\n\n` +
+    ? `  For development you can load the package directly — skill, MCP entries\n` +
+      `  and the monitor, in an interactive session:\n\n` +
       `    claude --plugin-dir ${PACKAGE_ROOT}\n\n`
     : "";
 
@@ -255,7 +261,9 @@ function printPushStatus(shimRegisteredFor: string[]): void {
     "\n\x1b[1mReal-time push notifications:\x1b[0m\n" +
       status +
       "  A Tandem plugin is also published (skill + MCP + a real-time monitor that\n" +
-      "  activates on Claude Code 2.1.212+ interactive sessions and needs no flag).\n" +
+      "  needs no flag on Claude Code 2.1.212+ interactive sessions). The monitor\n" +
+      "  starts when Claude first uses the Tandem skill in a session, not at session\n" +
+      "  start — so ask for Tandem by name rather than expecting it to be listening.\n" +
       "  Use one or the other — both active in one session deliver every event twice:\n\n" +
       "    claude plugin marketplace add bloknayrb/tandem\n" +
       "    claude plugin install tandem@tandem-editor\n\n" +

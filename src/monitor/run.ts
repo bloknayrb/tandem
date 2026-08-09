@@ -3,16 +3,25 @@
  * (`src/monitor/index.ts`, built to `dist/monitor/index.js`) and the
  * `tandem monitor` CLI subcommand (`npx -y tandem-editor@<version> monitor`).
  *
- * Connects to the Tandem server's /api/events SSE endpoint and prints
- * formatted event lines to stdout. Each line becomes a Claude Code
+ * Connects to the Tandem server's /api/events SSE endpoint and prints one
+ * PAYLOAD-FREE wake line to stdout per WAKE-WORTHY event — annotations and
+ * chat, the same `isWakeWorthy` set every other push path uses; `document:*`
+ * tab churn is consumed but not printed. Each line becomes a Claude Code
  * notification automatically via the plugin monitor mechanism. An alternative
  * to the channel shim for event delivery in a hand-launched session, without
  * requiring --dangerously-load-development-channels.
  *
+ * "Payload-free" is the contract, not an implementation detail — see the long
+ * comment on `onEvent`. The event payload is still consumed inside this
+ * process (awareness attribution needs `documentId`); it just never reaches
+ * the model.
+ *
  * "Flagless" is not "unconditional": the plugin host spawns monitors through a
  * non-login shell, so this process inherits whatever PATH Claude Code itself
  * started with. A GUI-launched Claude Code frequently has no resolvable Node
- * and the monitor dies `exit 127` every session — see docs/spikes/plugin-delivery.md.
+ * and the monitor dies `exit 127` — every time it is armed, which since #1354
+ * means every session that dispatched the Tandem skill rather than every
+ * session on the machine. See docs/spikes/plugin-delivery.md.
  * Neither transport is involved in an auto-launched session; those are woken
  * over the supervisor's stdin (ADR-047).
  *
@@ -26,8 +35,8 @@
  * the `src/channel/run.ts` vs `src/channel/index.ts` split.
  *
  * **STDOUT IS RESERVED** (CLAUDE.md rule #3). The only writes to stdout are
- * the formatted event notification inside the `onEvent` callback and the
- * exhaustion notice inside `main`. Everything else — including anything that
+ * the wake line inside the `onEvent` callback and the exhaustion notice
+ * inside `main`. Everything else — including anything that
  * would otherwise call `console.log/warn/info` — is redirected to stderr by
  * the guard immediately below. When adding a new dependency, grep its source
  * for `process.stdout.write` and `console.log` before accepting; a
@@ -41,7 +50,7 @@
  */
 
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
-import { formatEventContent } from "../shared/events/types.js";
+import { isWakeWorthy } from "../shared/events/wake-scope.js";
 import {
   _resetSseConsumerStateForTests,
   _addOutstandingAwarenessForTests as _sharedAddOutstandingAwarenessForTests,
@@ -76,14 +85,65 @@ function buildOptions(): EventConsumerOptions {
     logPrefix: LOG_PREFIX,
     errorCode: MONITOR_CONNECT_FAILED,
     onEvent: (event) => {
-      // Collapse newlines so multi-line content stays as a single
-      // notification (each stdout line is delivered separately).
-      const content = formatEventContent(event).replace(/\n/g, " ");
+      // PAYLOAD-FREE, and deliberately so — ADR-049 decision 2. This line
+      // becomes an unsolicited `<task_notification>` turn, so anything printed
+      // here is content pushed at a model that did not ask for it. Until
+      // #1354 this printed `formatEventContent(event)`: the annotation body, a
+      // verbatim document slice (`textSnippet`), chat text, selected text, the
+      // filename, and `[doc: <documentId>]` — which `docIdFromPath` builds as
+      // `<basename-slug>-<hash>`, i.e. a filename in all but name.
+      //
+      // Three reasons it is a wake and not a report, in ascending order:
+      //  1. A line with no content cannot leak content, so a future regression
+      //     in `shouldForwardExternally` costs timing rather than the user's
+      //     words. The sharpest case is a `.docx` import: Word comment bodies
+      //     land as notes, and "Send to Claude" promotes them onto this emit
+      //     branch, so third-party file text reached this channel after one
+      //     click, with only `\n`→space applied to it.
+      //  2. A model that answers from the payload never calls
+      //     `tandem_checkInbox`, so the item is never marked surfaced and is
+      //     re-reported on the next wake.
+      //  3. Wakes are lossy under load — a 25-event burst reached the socket
+      //     in full while at least 7 never became notifications. Answering
+      //     from a payload means answering from a partial view.
+      //
+      //     Cite this one carefully: it was measured on the SELF-ARMED `ws`
+      //     watch (docs/spikes/monitor-self-arm-probe.md), not on this path.
+      //     It transfers because the loss is in the half the two paths SHARE —
+      //     the manifest contributes no delivery machinery of its own, it
+      //     produces the same `kind:"monitor"` task with the same
+      //     stdout→`task_notification` delivery and the same host-side rate
+      //     limiter (which emits `[plugin monitor "…" suppressed N events —
+      //     output rate exceeded]` here, in code, 2.1.226). But a burst has
+      //     NOT been run on this path: plugin-monitor-tty-activation.md lists
+      //     it under "what is still not established". Reasons 1 and 2 stand
+      //     alone and do not need it.
+      //
+      // `event.type` is not content: it is the same field `toWakeFrame` keeps.
+      //
+      // The monitor still consumes the FULL stream rather than
+      // `?filter=wake`, because `flushAwareness` needs `event.documentId` to
+      // attribute the "Claude is processing" indicator to a document, and a
+      // wake frame carries none. The payload stays inside this process and
+      // never reaches the model. If per-document awareness is ever dropped
+      // here, switching the request to `?filter=wake` is the remaining step.
+      //
+      // CONSUMING the full stream is not EMITTING on all of it. `document:*`
+      // lifecycle fires whenever the user clicks a tab, and every other push
+      // path drops it (`isWakeWorthy` — supervisor stdin, `?filter=wake`,
+      // `/api/wake`). This one printed it, which mattered less when the line
+      // was descriptive; now that it says "call tandem_checkInbox", each tab
+      // click becomes a forced turn that can only discover there was nothing
+      // to do. And the cost is not just the wasted turn: those lines spend the
+      // same host rate limiter that reason 3 above says silently drops wakes,
+      // so navigation noise can push out the annotation the user is waiting on.
+      if (!isWakeWorthy(event)) return;
+      const content = `Tandem: ${event.type} — call tandem_checkInbox for details`;
       // False-checkpoint guard: the shared consumer advances lastEventId
       // only AFTER `onEvent` resolves without throwing. EPIPE on
       // process.stdout is almost always async — Node emits 'error' after
-      // the close; see installStdoutErrorHandler, which calls
-      // process.exit(1) so the plugin host respawns us. A synchronous
+      // the close; see installStdoutErrorHandler, which exits (the host does
+      // NOT respawn us — measured; see that function's note). A synchronous
       // throw (rare) propagates out and the retry layer handles it.
       process.stdout.write(content + "\n");
     },
@@ -92,12 +152,25 @@ function buildOptions(): EventConsumerOptions {
       // plugin host, so a user whose stream really dropped would otherwise
       // see events just stop with no signal.
       //
-      // But ONLY when we actually had a stream. The plugin host spawns this
-      // monitor in every Claude Code session, and a desktop user runs Tandem
-      // occasionally while running `claude` constantly — so announcing "restart
-      // Tandem" on a never-connected run injects an unrelated instruction into
-      // the model's context in the common case. Silence is correct there:
-      // nothing was lost, because nothing was ever flowing.
+      // But ONLY when we actually had a stream.
+      //
+      // The original argument for that was population-based: the host armed
+      // this monitor in EVERY session (`when: "always"`) while a desktop user
+      // runs Tandem occasionally, so a never-connected run was usually a
+      // session with nothing to do with Tandem. #1354 inverted that premise —
+      // arming now follows a Tandem skill dispatch, so a never-connected run
+      // means the user asked for Tandem and Tandem was not reachable, which is
+      // a case where "restart Tandem" is at least on-topic.
+      //
+      // Silence is still right, for reasons that never depended on the
+      // population:
+      //   - Nothing was lost. The line says "restore real-time events", which
+      //     presupposes events were flowing; none ever were.
+      //   - The model finds out far better by calling any `tandem_*` tool,
+      //     which fails with a real error naming the real problem.
+      //   - A monitor that exits is never respawned (spike F9), so this line
+      //     would be the last thing this process ever says — a claim that
+      //     stays in context after it stops being true.
       if (!everConnected) return;
       process.stdout.write(
         "Tandem monitor disconnected — restart Tandem to restore real-time events\n",
@@ -179,8 +252,17 @@ function installShutdownHandlers(): void {
  * writes after the close are silently dropped and the retry loop keeps
  * advancing lastEventId past events that never arrived; the next reconnect's
  * Last-Event-ID header then skips the lost range. Logging to stderr keeps a
- * trail for support; exit 1 so the plugin host respawns us with a fresh
- * stdout instead of wedging on a dead pipe.
+ * trail for support; exit rather than wedge on a dead pipe.
+ *
+ * **This used to say "exit 1 so the plugin host respawns us with a fresh
+ * stdout". It does not.** Measured 2026-08-09 on CC 2.1.226
+ * (`scripts/spikes/probe-monitor-respawn.py`): a monitor that exits is not
+ * respawned, and the exit code makes no difference — 0 and 1 both stayed dead
+ * for the rest of the session. So this is a clean shutdown, not a recovery:
+ * once the host's read end closes, that session has no monitor again until it
+ * is restarted. Exiting is still right — a monitor that cannot write cannot
+ * deliver, and continuing would advance `lastEventId` past events nobody
+ * received — but do not build anything on the respawn that isn't there.
  */
 function onStdoutError(err: Error): void {
   console.error(`${LOG_PREFIX} stdout error (plugin-host pipe likely closed):`, err);

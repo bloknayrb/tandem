@@ -30,6 +30,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { TandemEvent } from "../../shared/events/types.js";
+import { isWakeWorthy } from "../../shared/events/wake-scope.js";
 import type {
   ClaudeCodeIntegration,
   IntegrationConfig,
@@ -47,7 +48,6 @@ import {
   serializeUserTurn,
 } from "../../shared/launcher/contract.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
-import { isWakeWorthy } from "../events/wake-scope.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 
 interface SupervisorOpts {
