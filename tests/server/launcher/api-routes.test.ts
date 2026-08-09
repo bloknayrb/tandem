@@ -938,10 +938,15 @@ describe("POST /api/launcher/cwd-preview (#1282)", () => {
    * The gates here are deliberately unlike the mutating routes', and the tests
    * pin the differences rather than the similarities: no nonce (nothing is
    * mutated, and consuming one would rotate it out from under the relaunch the
-   * user is about to confirm), an UNCONDITIONAL loopback check rather than
-   * `assertLoopbackForMutation` (which is a no-op outside the
-   * unauthenticated-LAN opt-in), and no 503 (an unavailable launcher is a fine
+   * user is about to confirm), a bare unconditional loopback check rather than
+   * `assertLoopbackForMutation`, and no 503 (an unavailable launcher is a fine
    * answer to "is Claude in the wrong folder", and the answer is "no").
+   *
+   * On that middle one: the original reason was that the helper *was* a no-op
+   * outside the unauthenticated-LAN opt-in — true until #1293 made it reject
+   * unconditionally. The two are equivalent now, and what remains is that this
+   * route mutates nothing: it is a read with the disclosure posture of
+   * `/api/document/raw`, not a mutation carrying a weakened gate.
    */
   let home: string;
   let projA: string;

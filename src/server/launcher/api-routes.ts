@@ -633,13 +633,19 @@ function makeWorkingDirHandler(deps: LauncherRoutesDeps): Handler {
  * Gates, and why they are these gates:
  *
  *   - **Origin allowlist**, like every other launcher route.
- *   - **A bare loopback check, NOT `assertLoopbackForMutation`.** That helper
- *     only rejects when `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`, so in the default
- *     configuration it is a no-op — using it here would read as a gate while
- *     enforcing nothing. The response reconstructs the launcher `cwd` that
- *     `makeStatusHandler` deliberately withholds off-loopback, and adds a second
- *     path under the user's home directory, so it needs the unconditional
- *     posture `GET /api/document/raw` and `/api/diagnostics` use (#1121).
+ *   - **A bare loopback check, not `assertLoopbackForMutation`** — and the
+ *     reason is now naming, not strength. When this route was written that
+ *     helper rejected only under `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1`, making it
+ *     a no-op in the default configuration; **#1293 made it unconditional**, so
+ *     the two are behaviourally equivalent today. What remains is that this
+ *     route mutates nothing: it is a read whose response reconstructs the
+ *     launcher `cwd` that `makeStatusHandler` deliberately withholds
+ *     off-loopback, plus a second path under the user's home directory. That
+ *     puts it with `GET /api/document/raw` and `/api/diagnostics` (#1121), which
+ *     use the same bare check for the same reason.
+ *
+ *     If #1320 lands its `/api`-wide loopback invariant, this hand-rolled check
+ *     should fold into it rather than persist as an exception.
  *   - **No nonce.** Nonces exist to stop replayed *destructive* calls. This route
  *     starts nothing, stops nothing and writes nothing; consuming a nonce would
  *     also rotate it out from under a relaunch the user is about to confirm.
