@@ -6,7 +6,7 @@ import type { TandemEvent } from "../../../src/server/events/types.js";
 import { setCtrlMode } from "../../helpers/ctrl-mode.js";
 
 /**
- * `/api/events?filter=wake` — ADR-047 decision 2.
+ * `/api/events?filter=wake` — ADR-049 decision 2.
  *
  * The filter does TWO things and the second is the one that matters: it narrows
  * event types (so tab churn doesn't wake an idle session) AND it strips the
@@ -72,7 +72,7 @@ const NOW = Date.now();
  * assertion below would still pass, because dropping `payload` would take the
  * misplaced id with it. Against a real event that mutant puts the
  * filename-derived document id on the wire. The most load-bearing claim in
- * ADR-047 decision 2 was guarded by a fixture that could not fail.
+ * ADR-049 decision 2 was guarded by a fixture that could not fail.
  */
 const CHAT: TandemEvent = {
   id: "evt_chat_1",
@@ -117,7 +117,7 @@ describe("parseWakeFilter", () => {
   it("treats a present-but-unrecognised filter as INVALID, not as absent", () => {
     // The distinction is the whole point. Folding these into "none" hands a
     // caller that asked to be NARROWED the opposite — full message bodies — and
-    // per ADR-047 decision 2 that is what causes duplicate replies and answering
+    // per ADR-049 decision 2 that is what causes duplicate replies and answering
     // from a view the model cannot know is incomplete. Failing open on a typo in
     // a privacy narrowing is the wrong direction.
     //

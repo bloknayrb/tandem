@@ -24,7 +24,7 @@ import { isWakeWorthy, toWakeFrame } from "./wake-scope.js";
  * existing consumer (channel shim, plugin monitor) and correctly means the full
  * stream. Unrecognised — `?filter=Wake`, `?filter=wake%20`, an array — is a
  * caller that asked to be narrowed and, on the old `null` fallback, was silently
- * handed the OPPOSITE: whole message bodies pushed at a model, which per ADR-047
+ * handed the OPPOSITE: whole message bodies pushed at a model, which per ADR-049
  * decision 2 is exactly what causes duplicate replies and answering from a view
  * the model cannot know is incomplete. Failing open on a typo in a privacy
  * narrowing is the wrong direction; that case now 400s.
