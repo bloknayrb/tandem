@@ -42,7 +42,7 @@ These WILL break things if violated:
 | Licensing, the dark gate, update window | [docs/licensing-explained.md](docs/licensing-explained.md) |
 | Network posture, CORS, auth, privacy | [docs/security.md](docs/security.md) |
 | Why a hook just fired | [.claude/hooks/README.md](.claude/hooks/README.md) |
-| "Why is it like this?" — 94 numbered lessons | [docs/lessons-learned.md](docs/lessons-learned.md) |
+| "Why is it like this?" — 96 numbered lessons | [docs/lessons-learned.md](docs/lessons-learned.md) |
 | Architectural decisions, ADR-001–046 | [docs/decisions.md](docs/decisions.md) |
 | What shipped / what's left to v1.0 | [CHANGELOG.md](CHANGELOG.md), [docs/roadmap.md](docs/roadmap.md) |
 | Cutting a release | [.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md) |
