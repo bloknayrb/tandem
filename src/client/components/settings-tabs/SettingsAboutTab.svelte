@@ -184,6 +184,7 @@ const aboutRows = $derived.by(() => {
     <div style="font-size: 11px; color: var(--tandem-fg-subtle);">Loading...</div>
   {:else if appInfo.info}
     <dl
+      data-allow-context-menu
       style="display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; margin: 0; font-size: 11px;"
     >
       {#each aboutRows as row (row.label)}

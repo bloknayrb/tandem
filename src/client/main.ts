@@ -1,8 +1,14 @@
 import { mount } from "svelte";
+import { installGlobalContextMenuPolicy } from "./context-menu-policy";
 import { initializeStore } from "./hooks/useModels.svelte";
 import Root from "./Root.svelte";
 import { initCrashReporting } from "./sentry";
 import "./actions/scroll-fade.css";
+
+// Global context-menu allowlist (#994) — installed once, for the app's
+// lifetime, before mount. Suppresses the WebView's default menu everywhere
+// except the allowlisted surfaces; see context-menu-policy.ts.
+installGlobalContextMenuPolicy();
 
 // Crash reporting (#921) — opt-in, off by default. Self-gates on the Tauri
 // WebView + an operator-configured DSN; a no-op in plain-browser builds and

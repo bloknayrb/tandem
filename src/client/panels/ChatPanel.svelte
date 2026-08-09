@@ -294,6 +294,7 @@ async function exportChat() {
       {/if}
       <div
         class="chat-bubble"
+        data-allow-context-menu
         class:user={msg.author === "user"}
         class:claude={msg.author === "claude"}
         class:identified={msg.author === "claude" && !!msg.agentIdentity}
