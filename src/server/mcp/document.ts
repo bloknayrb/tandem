@@ -18,6 +18,7 @@ import type { AuthorshipRange, ClaudeAwareness } from "../../shared/types.js";
 import { TandemModeSchema, toFlatOffset } from "../../shared/types.js";
 import { generateAuthorshipId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { getWakeEndpoint } from "../events/wake-socket.js";
 import { mdParser } from "../file-io/markdown.js";
 import { appendMdast } from "../file-io/mdast-ydoc.js";
 // Position system
@@ -855,10 +856,18 @@ export function registerDocumentTools(server: McpServer): void {
             ctrlAwareness.get(Y_MAP_MODE),
           );
 
+          // Reported rather than hardcoded in SKILL.md, because a wake URL that
+          // names the wrong port fails SILENTLY — the model opens a socket to
+          // whatever unrelated service holds 3479 and believes it is armed.
+          // Absent (not a guess) when no wake transport is running: stdio mode
+          // has no HTTP server to attach one to.
+          const wakeUrl = getWakeEndpoint();
+
           return mcpStructured({
             running: true,
             mode,
             storeReadOnly: isStoreReadOnly(),
+            ...(wakeUrl ? { wakeUrl } : {}),
             activeDocument: active
               ? { documentId: active.id, filePath: active.filePath, format: active.format }
               : null,

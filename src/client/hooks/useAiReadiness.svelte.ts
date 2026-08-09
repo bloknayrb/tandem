@@ -83,6 +83,7 @@ import {
   type LauncherErrorCode,
   type LauncherStatus,
 } from "../../shared/launcher/contract.js";
+import { deliveryStall } from "../status/delivery-stall.js";
 import { API_BASE } from "../utils/fileUpload.js";
 
 /** Loopback `/health` response. `hasSession` and `push` are omitted for
@@ -92,6 +93,8 @@ interface HealthResponse {
   status?: string;
   hasSession?: boolean;
   push?: { subscribers?: number };
+  /** The push↔pull join — see `server/events/delivery-state.ts`. */
+  delivery?: { state?: string; waitingMs?: number | null };
 }
 
 /**
@@ -115,7 +118,17 @@ interface HealthResponse {
  * our server, answering, declining to say.
  */
 type HealthRead =
-  | { answered: true; hasSession: boolean | null; pushAttached: boolean | null }
+  | {
+      answered: true;
+      hasSession: boolean | null;
+      pushAttached: boolean | null;
+      /** The join's state string, verbatim. Unknown values pass through as-is
+       *  and are simply not matched by `deliveryStall` — an older or newer
+       *  server naming a state this client has never heard of must read as "no
+       *  claim", never as a claim it happens to resemble. */
+      deliveryState: string | null;
+      deliveryWaitingMs: number | null;
+    }
   | { answered: false; why: string };
 
 /** Consecutive dead POLL reads before we stop believing in the session.
@@ -321,6 +334,17 @@ export interface AiReadiness {
    * single failed read, so a blip cannot raise an alarm about data loss.
    */
   readonly serverUnreachable: boolean;
+  /**
+   * How long the user's last message has gone unanswered, in ms — or `null`
+   * when there is nothing sound to say.
+   *
+   * A projection of current truth (D-5), not an event. The `no-push` and
+   * `offline` notices fire once at send, on what was known then; this answers
+   * whether the thing you sent is STILL waiting, so it re-derives and erases
+   * itself. See `status/delivery-stall.ts` for the precedence rules and for the
+   * gap it deliberately cannot cover.
+   */
+  readonly deliveryStalledMs: number | null;
   /** Re-poll launcher status + session now (e.g. just after a restart). */
   refresh: () => void;
   /**
@@ -371,6 +395,12 @@ export function createAiReadiness(deps: {
   // the message is dropped. Telling that user "it'll be seen when an AI
   // connects" is a second false promise in place of the one just removed.
   let serverUnreachable = $state(false);
+  // The push↔pull join, mirrored from `/health` (D-5). Held as raw state and
+  // interpreted by `deliveryStall`, so the threshold and the Solo/offline
+  // precedence live in one pure, testable place rather than in a reactive
+  // expression nothing can drive.
+  let deliveryState = $state<string | null>(null);
+  let deliveryWaitingMs = $state<number | null>(null);
   // Have we ever read launcher status successfully? Distinguishes "still
   // booting" from a genuine `available: false`, so the chip never flashes
   // during cold start. `/health` is not gated on this: readiness derives
@@ -523,6 +553,9 @@ export function createAiReadiness(deps: {
       answered: true,
       hasSession: typeof body.hasSession === "boolean" ? body.hasSession : null,
       pushAttached: typeof body.push?.subscribers === "number" ? body.push.subscribers > 0 : null,
+      deliveryState: typeof body.delivery?.state === "string" ? body.delivery.state : null,
+      deliveryWaitingMs:
+        typeof body.delivery?.waitingMs === "number" ? body.delivery.waitingMs : null,
     };
   }
 
@@ -587,6 +620,13 @@ export function createAiReadiness(deps: {
       // can never demote one signal on the strength of the other's absence.
       if (fresh.hasSession !== null) mcpSessionActive = fresh.hasSession;
       if (fresh.pushAttached !== null) pushAttached = fresh.pushAttached;
+      // Assigned unconditionally, unlike the two above. Those only ever
+      // PROMOTE, because a redacted field must not demote a live session. The
+      // join is the opposite: `null` there means the server declined to say, and
+      // continuing to render a stall on a stale read is precisely the "claim
+      // outliving its evidence" failure this whole surface exists to remove.
+      deliveryState = fresh.deliveryState;
+      deliveryWaitingMs = fresh.deliveryWaitingMs;
     } else if (runIsLongEnough) {
       serverUnreachable = true;
       mcpSessionActive = false;
@@ -596,6 +636,16 @@ export function createAiReadiness(deps: {
       // notifying Claude" copy. Asserting it from a failed read would swap one
       // confident lie for another.
       pushAttached = null;
+      // The join is deliberately NOT cleared here, and re-adding a clear would
+      // be adding a line nothing can observe: `serverUnreachable` above already
+      // outranks the stall inside `deliveryStall`, so ONCE THE SERVER IS
+      // DECLARED UNREACHABLE the join cannot reach the banner either way.
+      //
+      // Below the floor is a different case, and it is deliberate rather than a
+      // gap: a single dead read takes NEITHER branch, so the previous join
+      // survives and keeps rendering. That is correct — a dropped request is
+      // not evidence the stall ended — and it is pinned by "One dead read holds
+      // the claim" in the hook's tests. Do not "fix" the code to clear early.
     }
     return out;
   }
@@ -720,6 +770,20 @@ export function createAiReadiness(deps: {
     },
     get serverUnreachable() {
       return serverUnreachable;
+    },
+    // A getter over raw `$state` rather than a `$derived`, matching
+    // `serverUnreachable` directly above and `yjsSync.connected`. Reactivity in
+    // Svelte 5 comes from reading a signal inside a tracking context, not from
+    // `$derived` — the four signals read here land in the consuming component's
+    // own tracked scope. It must keep returning a PRIMITIVE: handing back a
+    // fresh object per read would invalidate any consumer `$derived` every time.
+    get deliveryStalledMs() {
+      return deliveryStall({
+        state: deliveryState,
+        waitingMs: deliveryWaitingMs,
+        soloMode: deps.soloMode(),
+        serverUnreachable,
+      });
     },
     refresh: () => poll(),
     probeSession,

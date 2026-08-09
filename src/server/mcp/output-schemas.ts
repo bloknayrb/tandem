@@ -117,6 +117,12 @@ export const statusOutputShape = {
   activeDocument: openDocumentEntry.omit({ readOnly: true }).nullable().optional(),
   openDocuments: z.array(openDocumentEntry).optional(),
   documentCount: z.number().optional(),
+  wakeUrl: z
+    .string()
+    .optional()
+    .describe(
+      "Read mode: live ws:// URL of the wake stream, absent when no wake transport is running",
+    ),
 };
 
 // ---------------------------------------------------------------------------
