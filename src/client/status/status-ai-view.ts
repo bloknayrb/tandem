@@ -89,14 +89,26 @@ const CONNECTED_NO_PUSH: AiIndicatorView = {
     "Claude is connected and can read your document, but is not notified in real time. It will see your comments the next time it checks in.",
 };
 
+/**
+ * #1287: the label used to read "Solo · edits held", which overstates what
+ * Solo actually withholds. Solo gates *forwarding* of annotation
+ * notifications — `shouldForwardExternally` at the event fan-out, plus
+ * `hideFromAI` on the pull paths — not document mutations, chat, or Claude's
+ * ability to read the document on request. "Edits held" reads as "the AI is
+ * idle and blind," which is false: Claude can still be mid-tool-call while
+ * this pill shows. "Comments held" names the actual contract — your
+ * annotation comments and replies aren't pushed to Claude's inbox until you
+ * switch back to Tandem.
+ */
 const SOLO_PAUSED: AiIndicatorView = {
-  label: "Solo · edits held",
+  label: "Solo · comments held",
   tone: "solo",
   dataState: "solo-paused",
   canAnimate: true,
   title:
-    "Solo mode — the AI won't see your edits or comments (chat still works). Switch to Tandem to share them.",
-  ariaLabel: "Solo mode — the AI is connected but won't see your edits until you switch to Tandem",
+    "Solo mode — your comments and replies aren't sent to the AI until you switch to Tandem (chat and document edits still work).",
+  ariaLabel:
+    "Solo mode — the AI is connected, but your comments and replies aren't forwarded until you switch to Tandem",
 };
 
 const NOT_CONNECTED: AiIndicatorView = {

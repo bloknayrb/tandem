@@ -445,7 +445,22 @@ function cycleWordMode() {
       <span
         style="transition: color 0.3s ease; color: {AI_TONE[view.tone].text};"
       >
-        {view.label}{#if claudeStatus && view.canAnimate} · {claudeStatus}{/if}
+        <!-- #1287: "Solo · comments held · reviewing scratchpad…" still reads
+             as two claims unless the activity is qualified — a reader can
+             infer that visible activity disproves the hold. The parenthetical
+             folds them into one sentence by naming what the activity is NOT:
+             Claude can be busy on something else while your comments still
+             aren't reaching it.
+
+             It deliberately does not repeat "held". The label already says
+             that, and a status strip that reads "comments held · … (comments
+             still held)" spends its scarcest resource — width — restating
+             itself instead of supplying the fact the reader is missing.
+
+             Only appended in Solo (`view.tone === "solo"`); the connected and
+             no-push states make no forwarding promise for activity to
+             contradict. -->
+        {view.label}{#if claudeStatus && view.canAnimate} · {claudeStatus}{#if view.tone === "solo"} (not your comments){/if}{/if}
       </span>
   {/snippet}
   {#if aiView}
