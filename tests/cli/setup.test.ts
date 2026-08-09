@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSetup } from "../../src/cli/setup.js";
 // These helpers moved to src/server/integrations/apply.ts in #477 PR 3c-ii-a;
@@ -388,6 +388,25 @@ describe("applyConfig", () => {
   });
 });
 
+/**
+ * Where `detectTargets` puts the Claude Desktop config under a given home.
+ *
+ * Mirrors the three platform branches in `detectTargets`. Spelled out rather
+ * than imported, because an expectation derived from the code under test
+ * cannot fail — but it has to be spelled out for ALL THREE platforms: the
+ * first version of the test below hard-coded the win32 path, passed locally,
+ * and went red on Linux CI.
+ */
+function desktopConfigUnder(home: string): string {
+  if (process.platform === "win32") {
+    return join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
+  }
+  if (process.platform === "darwin") {
+    return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+  }
+  return join(home, ".config", "claude", "claude_desktop_config.json");
+}
+
 describe("applyConfigWithToken — rotation preserves, it does not re-derive", () => {
   let home: string;
 
@@ -455,9 +474,10 @@ describe("applyConfigWithToken — rotation preserves, it does not re-derive", (
     // than against whatever Claude Desktop config the developer happens to
     // have — which is how the branch went unexercised while the suite was
     // quietly writing to the real one.
-    mkdirSync(join(home, "AppData", "Roaming", "Claude"), { recursive: true });
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
     writeFileSync(
-      join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json"),
+      desktopPath,
       JSON.stringify({ mcpServers: { "tandem-channel": { command: "node" } } }),
     );
     writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
@@ -467,12 +487,9 @@ describe("applyConfigWithToken — rotation preserves, it does not re-derive", (
     // Claude Desktop has no push transport at all, so a shim there is removed
     // regardless of what the file said (#1299) — and, crucially, the write
     // landed inside the temp home rather than on the real config.
-    const desktop = JSON.parse(
-      readFileSync(
-        join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json"),
-        "utf-8",
-      ),
-    ) as { mcpServers: Record<string, unknown> };
+    const desktop = JSON.parse(readFileSync(desktopPath, "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
     expect(desktop.mcpServers["tandem-channel"]).toBeUndefined();
   });
 
@@ -541,20 +558,27 @@ describe("detectTargets", () => {
     }
   });
 
-  it("lets appDataOverride win over homeOverride for the Desktop target", () => {
-    const appData = mkdtempSync(join(tmpdir(), "tandem-appdata-"));
-    try {
-      const targets = detectTargets({
-        homeOverride: tmpDir,
-        appDataOverride: appData,
-        force: true,
-      });
-      const desktop = targets.find((t) => t.label === "Claude Desktop");
-      if (desktop) expect(desktop.configPath.startsWith(appData)).toBe(true);
-    } finally {
-      rmSync(appData, { recursive: true, force: true });
-    }
-  });
+  // `%APPDATA%` exists only on win32, and so does the branch that reads it —
+  // elsewhere the Desktop path is derived from `home` alone and the override
+  // has nothing to win over. Skipped rather than softened to `if (desktop)`,
+  // which is how the first version passed vacuously nowhere and failed on CI.
+  it.skipIf(process.platform !== "win32")(
+    "lets appDataOverride win over homeOverride for the Desktop target",
+    () => {
+      const appData = mkdtempSync(join(tmpdir(), "tandem-appdata-"));
+      try {
+        const targets = detectTargets({
+          homeOverride: tmpDir,
+          appDataOverride: appData,
+          force: true,
+        });
+        const desktop = targets.find((t) => t.label === "Claude Desktop");
+        expect(desktop?.configPath.startsWith(appData)).toBe(true);
+      } finally {
+        rmSync(appData, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("sets kind to claude-code for Claude Code targets", () => {
     writeFileSync(join(tmpDir, ".claude.json"), "{}");
