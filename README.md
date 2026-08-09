@@ -292,7 +292,7 @@ curl http://127.0.0.1:3479/health
 #    "push":{"subscribers":0,"lastEventAt":null,"eventCount":0}}
 ```
 
-For exposing the server on a LAN, set `TANDEM_BIND_HOST` and use `tandem rotate-token` to rotate the auth token. See [docs/security.md](docs/security.md) for the full network posture.
+For exposing the server on a LAN, set `TANDEM_BIND_HOST`. LAN peers holding the auth token can **read** `/api` but not write to it — `/api` is loopback-only for non-GET methods, so `tandem rotate-token` has to be run on the machine hosting the server. See [docs/security.md](docs/security.md) for the full network posture.
 
 See [docs/cli.md](docs/cli.md#npm-run-scripts-source-checkouts-only) for the full list of npm scripts.
 

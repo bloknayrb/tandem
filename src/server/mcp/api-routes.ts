@@ -6,6 +6,12 @@ import {
   API_APPLY_CHANGES,
   API_BACKUPS,
   API_BACKUPS_RESTORE,
+  API_CHANNEL_AWARENESS,
+  API_CHANNEL_ERROR,
+  API_CHANNEL_PERMISSION,
+  API_CHANNEL_PERMISSION_VERDICT,
+  API_CHANNEL_REPLY,
+  API_CHAT,
   API_CLOSE,
   API_CONVERT,
   API_DIAGNOSTICS,
@@ -32,6 +38,8 @@ import {
   API_UPLOAD,
 } from "../../shared/api-paths.js";
 import { TAURI_HOSTNAME, TAURI_LINUX_ORIGIN } from "../../shared/constants.js";
+import { ERROR_CODE_BAD_ORIGIN } from "../../shared/integrations/contract.js";
+import { isLoopback } from "../auth/middleware.js";
 import { licenseGateMiddleware } from "./license-gate.js";
 import type { Handler } from "./routes/_shared.js";
 import { handleAnnotationReply } from "./routes/annotation-reply.js";
@@ -169,6 +177,117 @@ export function createApiMiddleware(extraHosts: string[] = []): Handler {
 
 /** Default CORS + DNS rebinding protection middleware (loopback-only allowlist). */
 export const apiMiddleware: Handler = createApiMiddleware();
+
+/**
+ * The only `/api` paths a non-loopback caller may reach with a non-GET method.
+ *
+ * The channel shim (`src/channel/`) and the plugin monitor (`src/monitor/`) are
+ * documented to run against a non-loopback `TANDEM_URL` — that is how Cowork
+ * reaches a Tandem running elsewhere — so gating them would break that
+ * transport, not harden it.
+ *
+ * The whole `/api/channel-*` family is carved out rather than the subset with a
+ * caller in the tree today. Two members (`channel-permission-verdict`, and
+ * `DELETE /api/chat`, whose only caller builds a hardcoded `127.0.0.1` URL)
+ * have no non-loopback caller right now, but picking them off would be an
+ * untested tightening of a documented transport, and a family is something a
+ * reviewer can check at a glance. Widening this set is the one hand-maintained
+ * decision left in the invariant; treat an addition as a security change.
+ *
+ * NOT here, for two different reasons:
+ * - `/api/shutdown` gates itself, and more strictly (its Origin half must permit
+ *   an ABSENT Origin, which `assertOriginAllowlisted` rejects).
+ * - `/api/wake` is a WebSocket upgrade registered on the `http.Server` upgrade
+ *   event (`events/wake-socket.ts`), so `app.use("/api", …)` structurally never
+ *   sees it. It carries its own Origin guard. It is an exception to the reach of
+ *   this middleware, not to the policy.
+ */
+const NON_LOOPBACK_ALLOWED_PATHS: ReadonlySet<string> = new Set(
+  [
+    API_CHANNEL_AWARENESS,
+    API_CHANNEL_ERROR,
+    API_CHANNEL_REPLY,
+    API_CHANNEL_PERMISSION,
+    API_CHANNEL_PERMISSION_VERDICT,
+    API_CHAT,
+  ].map(normalizeApiPath),
+);
+
+/**
+ * Normalize a request path for carve-out lookup.
+ *
+ * Express 5 routes case-insensitively and non-strictly, so `/api/Channel-Reply`
+ * and `/api/channel-reply/` both reach the handler — but arrive here as
+ * different strings. An exact-set miss fails CLOSED (403 on a route that would
+ * otherwise work), so neither is an evasion vector; both are ways Cowork breaks
+ * for a caller that did nothing wrong. Normalizing is about not breaking them.
+ */
+function normalizeApiPath(path: string): string {
+  const lowered = path.toLowerCase();
+  const collapsed = `/${lowered.replace(/^\/+/, "")}`;
+  return collapsed.length > 1 ? collapsed.replace(/\/+$/, "") : collapsed;
+}
+
+/**
+ * `/api` is loopback-only for every method except GET/HEAD/OPTIONS (#1320).
+ *
+ * This inverts what used to be the shape of the rule. Every other gate on this
+ * surface is a call inside a handler body, which means a new route inherits
+ * nothing and the gate is invisible at the registration site — that is how nine
+ * mutating routes ended up ungated by omission rather than decision, and how the
+ * contested count went 4 → 11 → 9 → 10 across three review passes. Here the
+ * default is deny and the EXEMPTIONS are the enumerated thing, so forgetting to
+ * touch this file fails closed.
+ *
+ * **Non-GET, not "mutating".** The distinction is load-bearing:
+ * `GET /api/channel-permission` evicts TTL-expired entries, so it mutates. A
+ * rule phrased over mutation would require the same per-route inventory this
+ * exists to abolish. Reads keep their existing per-route posture — `document/raw`
+ * and `diagnostics` 403 by hand, while `info`, `sessions`, `backups`,
+ * `launcher/status`, `models` and `integrations` scrub their payload for a
+ * non-loopback caller instead of refusing. That scrubbing is what the LAN Host
+ * accommodation (`createApiMiddleware`'s `extraHosts`) is for, and widening this
+ * middleware to GET would strand it.
+ *
+ * Peer address only, never the `Host` header — that is what makes DNS rebinding
+ * non-exploitable here, and it is the property most easily "simplified" away.
+ */
+export function enforceLoopbackMutation(req: Request, res: Response, next: NextFunction): void {
+  const method = req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    next();
+    return;
+  }
+  // `req.path` is MOUNT-RELATIVE under `app.use("/api", …)` — it reads
+  // `/channel-reply`, not `/api/channel-reply`. Matching the `/api`-prefixed
+  // API_* constants against it misses every carve-out and 403s all of Cowork.
+  // `req.originalUrl` is not the fix either: it carries the query string.
+  // `req.baseUrl` preserves the request's casing (`/API/open` yields `/API`),
+  // which is why the join is normalized rather than compared raw.
+  const fullPath = normalizeApiPath(`${req.baseUrl}${req.path}`);
+  if (NON_LOOPBACK_ALLOWED_PATHS.has(fullPath)) {
+    next();
+    return;
+  }
+  if (isLoopback(req.socket.remoteAddress)) {
+    next();
+    return;
+  }
+  // `createApiMiddleware` is threaded PER ROUTE as each registrar's `mw`
+  // argument, so it runs after this path-wide mount and never gets to set CORS
+  // headers on a rejection. Without these a cross-origin browser sees an opaque
+  // CORS failure rather than the 403 it was sent.
+  if (isLocalhostOrigin(req.headers.origin as string | undefined)) {
+    res.header("Access-Control-Allow-Origin", req.headers.origin as string);
+  }
+  res.header("Vary", "Origin");
+  res.status(403).json({
+    error: "FORBIDDEN",
+    code: ERROR_CODE_BAD_ORIGIN,
+    message:
+      "/api is loopback-only for this method: it must be called from the computer running Tandem. Holding an auth token is not sufficient.",
+  });
+}
 
 /**
  * Register /api/* routes on the Express app.

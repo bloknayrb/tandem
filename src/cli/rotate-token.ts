@@ -92,6 +92,44 @@ export async function rotateToken(): Promise<void> {
     );
   }
 
+  // A reachable server that REFUSED is the one outcome where persisting is
+  // wrong. The unreachable case above deliberately keeps the new token — that
+  // is offline rotation, and restarting the server activates it. But a refusal
+  // means the server is running and still holds the old token, so leaving the
+  // new one on disk (and worse, writing it into every MCP config) strands the
+  // client on a credential nothing will ever accept, with no grace window.
+  //
+  // #1320 made this reachable in practice rather than theoretically: `/api` is
+  // now loopback-only for non-GET, so `tandem rotate-token` against a remote
+  // `TANDEM_URL` gets a 403 here every time.
+  if (serverRejected) {
+    try {
+      await fsPromises.writeFile(tmpPath, oldToken, { encoding: "utf8", mode: 0o600 });
+      await fsPromises.rename(tmpPath, tokenPath);
+    } catch (err) {
+      await fsPromises.unlink(tmpPath).catch(() => {});
+      console.error(
+        `[tandem] Error: server refused the rotation AND the token file could not be restored: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      console.error(
+        `  The token file at ${tokenPath} may hold a token the server does not accept.`,
+      );
+      console.error(`  Old fingerprint: ${fingerprint(oldToken)}`);
+    }
+    console.error(
+      `[tandem] Error: server rejected the rotation request (status: ${serverRejectedStatus}).`,
+    );
+    if (serverRejectedStatus === 403) {
+      console.error(
+        "  Token rotation is loopback-only — run `tandem rotate-token` on the computer\n" +
+          "  running the server, not against a remote TANDEM_URL.",
+      );
+    }
+    console.error("  No token was rotated and no config file was changed.");
+    console.error("");
+    return;
+  }
+
   let updatedCount = 0;
   let configErrors: string[] = [];
   try {
@@ -112,27 +150,6 @@ export async function rotateToken(): Promise<void> {
   // an HTTP bridge — add a POST /api/cowork-apply-token endpoint in the server
   // (guarded by the auth middleware) and call it from here after the server
   // accepts the rotation.
-
-  if (serverRejected) {
-    // Configs now reference the new token but the server still holds the old one.
-    // Print a strong warning — do NOT print "Rotated auth token" as that implies success.
-    console.error(
-      `[tandem] WARNING: server rejected the rotation request (status: ${serverRejectedStatus}).`,
-    );
-    if (updatedCount > 0) {
-      console.error(
-        `  ${updatedCount} config file(s) updated to the new token, but the server still\n` +
-          "  holds the old token. Restart the server to complete rotation.",
-      );
-    }
-    console.error(`  Old fingerprint: ${fingerprint(oldToken)}`);
-    console.error(`  New fingerprint: ${fingerprint(newToken)}`);
-    for (const e of configErrors) {
-      console.error(`  Warning: could not update config — ${e}`);
-    }
-    console.error("");
-    return;
-  }
 
   console.error("[tandem] Rotated auth token.");
   console.error(`  Old fingerprint: ${fingerprint(oldToken)}`);

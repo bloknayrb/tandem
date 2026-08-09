@@ -263,7 +263,12 @@ describe("rotateToken CLI", () => {
     stderrSpy.mockRestore();
   });
 
-  it("prints strong warning (not success) when server returns non-2xx", async () => {
+  it("rolls back rather than half-rotating when the server returns non-2xx", async () => {
+    // Until #1320 this branch left the client on the new token — written to disk
+    // AND propagated into every MCP config — while a reachable server kept the
+    // old one, with no grace window. It printed a warning and called that
+    // acceptable. It is not: the credential the client now presents is one
+    // nothing will ever accept. A refusal must leave nothing changed.
     fetchMock.mockResolvedValue({
       ok: false,
       status: 409,
@@ -278,12 +283,36 @@ describe("rotateToken CLI", () => {
     await rotateToken(); // should not throw
 
     const messages = stderrCalls.flat().join("\n");
-    expect(messages).toContain("WARNING");
     expect(messages).toContain("409");
-    // Must NOT print "Rotated auth token." — that implies success
     expect(messages).not.toContain("[tandem] Rotated auth token.");
-    // Config files were updated; warning about divergence should be present
-    expect(messages).toContain("Restart the server");
+    expect(messages).toContain("No token was rotated and no config file was changed.");
+    // The load-bearing assertion: configs are never touched on a refusal.
+    expect(_applyConfigSpy).not.toHaveBeenCalled();
+
+    stderrSpy.mockRestore();
+  });
+
+  it("names the loopback rule when the refusal is a 403", async () => {
+    // #1320 makes 403 the standard outcome for `tandem rotate-token` against a
+    // remote TANDEM_URL, so the generic "server rejected" message would leave a
+    // user with no idea what to do differently.
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: vi.fn().mockResolvedValue({ error: "FORBIDDEN" }),
+    });
+    const stderrCalls: unknown[][] = [];
+    const stderrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => stderrCalls.push(args));
+
+    const { rotateToken } = await import("../../src/cli/rotate-token.js");
+    await rotateToken();
+
+    const messages = stderrCalls.flat().join("\n");
+    expect(messages).toContain("loopback-only");
+    expect(messages).toContain("on the computer");
+    expect(_applyConfigSpy).not.toHaveBeenCalled();
 
     stderrSpy.mockRestore();
   });

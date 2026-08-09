@@ -73,7 +73,9 @@ tandem rotate-token
 
 Generates a new 32-byte token, posts it to `/api/rotate-token`, and updates Claude's MCP configs. The old token remains valid for a **60-second grace window** so connected clients can pick up the new value without a disconnect. Tokens are stored with mode `0o600`, written atomically (temp file + rename), and compared in constant time against a SHA-256 hash on each request.
 
-### Disabling auth on LAN (insecure)
+**Run it on the computer hosting the server.** Since #1320 `/api` is loopback-only for non-GET methods, so rotation pointed at a remote `TANDEM_URL` returns 403. The CLI rolls the token file back on a refusal rather than leaving you on a credential the server will never accept.
+
+### `TANDEM_ALLOW_UNAUTHENTICATED_LAN` — a misnomer
 
 ```bash
 export TANDEM_BIND_HOST=0.0.0.0
@@ -81,7 +83,9 @@ export TANDEM_ALLOW_UNAUTHENTICATED_LAN=1
 tandem
 ```
 
-This skips the token requirement entirely. Only use it on trusted networks during development — anyone who can reach the port can read and edit your documents.
+**This does not skip the token requirement**, despite the name and despite what this page said until #1320. A token is always minted, and `authMiddleware` always enforces it for non-loopback callers, flag or not (#1121 F7). Since #1293 the flag does exactly one thing: it lets the server *bind* to a LAN host before a token has been provisioned. It relaxes no guard.
+
+Even with a valid token, a LAN peer can only **read** `/api` — writes are refused by the loopback invariant (#1320). See [security.md](security.md#the-api-invariant-1320).
 
 See [security.md](security.md) for the full security model.
 

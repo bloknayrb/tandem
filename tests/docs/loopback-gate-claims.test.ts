@@ -168,4 +168,48 @@ describe("loopback-gate documentation claims (#1293 / #1322)", () => {
       );
     }
   });
+
+  it("the #1320 carve-out set derived from source is exactly what the docs enumerate", () => {
+    // The invariant made deny the default, so the hand-maintained list flipped
+    // from obligations to EXEMPTIONS. That is a safer list to keep by hand —
+    // forgetting to add to it fails closed — but it is still the one place a
+    // reviewer has to trust prose, so pin it to the source the same way.
+    const src = stripComments(readFileSync(API_ROUTES, "utf-8"));
+    const block = src.match(
+      /NON_LOOPBACK_ALLOWED_PATHS[^=]*=\s*new Set\(\s*\[([\s\S]*?)\]\s*\.map/,
+    );
+    expect(
+      block,
+      "NON_LOOPBACK_ALLOWED_PATHS is no longer a literal array of API_* constants",
+    ).not.toBeNull();
+
+    const constants = [...(block?.[1] ?? "").matchAll(/\b(API_[A-Z_]+)\b/g)].map((m) => m[1]);
+    // Sanity, for the same reason PATH_TAKING exists above: a regex that
+    // silently matched nothing would make every assertion below vacuous.
+    expect(constants.length).toBeGreaterThan(1);
+
+    const paths = readFileSync(join(REPO_ROOT, "src", "shared", "api-paths.ts"), "utf-8");
+    const carveOuts = constants.map((name) => {
+      const literal = paths.match(new RegExp(`export const ${name} = "([^"]+)"`));
+      expect(literal, `${name} has no literal in api-paths.ts`).not.toBeNull();
+      return literal?.[1] ?? "";
+    });
+
+    for (const rel of ["CLAUDE.md", "docs/security.md"]) {
+      const doc = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      // Family form is what the docs should say — enumerating five sibling
+      // channel paths is noise a reader will not re-verify. Accept either the
+      // family prefix or the exact path, but the prefix must be the REAL one:
+      // both docs said `/api/channel/*` with a slash for months, which matches
+      // no route and would have been carried straight into the carve-out set.
+      const missing = carveOuts.filter(
+        (p) =>
+          !doc.includes(p) && !(p.startsWith("/api/channel-") && doc.includes("/api/channel-")),
+      );
+      expect(missing, `${rel} omits #1320 carve-out(s)`).toEqual([]);
+      expect(doc, `${rel} must not write the non-existent /api/channel/* form`).not.toMatch(
+        /\/api\/channel\/\*/,
+      );
+    }
+  });
 });

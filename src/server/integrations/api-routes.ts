@@ -286,9 +286,17 @@ export function registerIntegrationsRoutes(
  * has never been able to reach `/api` remotely. If remote `/api` access ever
  * becomes a goal, that constant is the thing to change first, deliberately.
  *
- * Scope: this governs the routes that call it. Four mutating routes take a
- * caller-supplied filesystem path and call neither gate — see #1320. Do not read
- * this function as "`/api` is loopback-only."
+ * Scope: this governs the routes that call it — and since #1320 that is no
+ * longer the same question as whether `/api` is loopback-only. That property now
+ * holds structurally, from `enforceLoopbackMutation` mounted `app.use("/api", …)`
+ * in `server.ts`, which covers every non-GET request including the nine routes
+ * that call neither helper. The 23 call sites here are the second layer, kept
+ * because they carry route-specific copy (the license route's buyer-facing 403)
+ * and because a single mounted middleware is a single thing to get wrong.
+ *
+ * So: a route calling this is doubly covered; a route not calling it is covered
+ * once. Neither is uncovered, and neither fact is visible at a registration site
+ * — which is exactly why the invariant was moved to the mount.
  */
 export function assertLoopbackForMutation(
   req: Request,

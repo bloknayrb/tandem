@@ -356,6 +356,6 @@ Check that:
 2. The token matches the value in `{APP_DATA_DIR}/auth-token`.
 3. You haven't rotated the token without updating the client config — `tandem rotate-token` updates Claude's configs automatically but won't touch other MCP clients.
 
-For trusted networks during development, `TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` disables the token requirement. See [security.md](security.md) for the full model.
+`TANDEM_ALLOW_UNAUTHENTICATED_LAN=1` does **not** disable the token requirement, despite the name — a token is always minted and always enforced for non-loopback callers (#1121 F7). It only permits a LAN bind before a token exists. And since #1320 a LAN peer can read `/api` but not write to it, so `tandem rotate-token` must be run on the host. See [security.md](security.md#the-api-invariant-1320) for the full model.
 
 > **Note:** Tandem writes the Bearer token into your `.mcp.json` headers. On Claude Code CLI **≥ 2.1.141**, `claude mcp get`/`list` no longer prints that token to the terminal (credential headers and URL secrets are redacted, and `${VAR}` references are no longer expanded) — so inspecting the Tandem entry is safe to share. On older CLI versions the token is echoed in plain text; redact it before pasting output anywhere.
