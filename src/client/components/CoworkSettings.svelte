@@ -18,11 +18,13 @@ import {
   workspaceFileStatusLabel,
 } from "../cowork/cowork-helpers";
 import {
+  coworkPreflightSubnet,
   coworkRescan,
   coworkSetLanIpOverride,
   coworkToggleIntegration,
   type InvokeFn,
   loadInvoke,
+  type SubnetPreflight,
 } from "../cowork/cowork-invoke";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
 import type { WorkspaceFileStatus, WorkspaceStatus } from "../types";
@@ -57,6 +59,47 @@ const { refetch } = coworkState;
 let inlineToastMessage = $state<string | null>(null);
 let confirming = $state<"enable" | null>(null);
 let busy = $state(false);
+let preflight = $state<SubnetPreflight | null>(null);
+let probing = $state(false);
+
+// #1298: probe the Hyper-V subnet before offering Enable, so a detection
+// failure says what is wrong instead of blaming the Cowork install. See
+// CoworkOnboardingStep for why this runs on confirm rather than on mount.
+//
+// The staleness guard matters more here than there: this component stays
+// mounted after enabling, so a late probe write is user-visible rather than a
+// no-op on a component the user has left.
+let probeToken = 0;
+
+async function runPreflight(): Promise<void> {
+  const token = ++probeToken;
+  probing = true;
+  preflight = null;
+  try {
+    const invoke = await loadInvoke();
+    const result = await coworkPreflightSubnet(invoke);
+    if (token !== probeToken) return;
+    preflight = result;
+  } catch {
+    if (token !== probeToken) return;
+    preflight = { status: "unknown" };
+  } finally {
+    if (token === probeToken) probing = false;
+  }
+}
+
+function openEnableConfirm(): void {
+  confirming = "enable";
+  void runPreflight();
+}
+
+/** Abandon any in-flight probe so its result can't land on a closed banner. */
+function closeEnableConfirm(): void {
+  confirming = null;
+  probeToken++;
+  probing = false;
+  preflight = null;
+}
 
 const debouncer = makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS);
 onDestroy(() => debouncer.cancel());
@@ -91,7 +134,7 @@ async function handleToggleOn(): Promise<void> {
   await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, true);
     await refetch();
-    confirming = null;
+    closeEnableConfirm();
   }, "Failed to enable Cowork");
 }
 
@@ -168,7 +211,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
         checked={s.enabled}
         disabled={busy}
         onchange={(e) => {
-          if ((e.target as HTMLInputElement).checked) confirming = "enable";
+          if ((e.target as HTMLInputElement).checked) openEnableConfirm();
           else void handleToggleOff();
         }}
       />
@@ -222,21 +265,40 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
           Cowork can reach your open documents. This adds a Windows firewall rule so the Cowork VM
           can connect back — admin is required once.
         </div>
+        {#if preflight?.status === "blocked"}
+          <!-- #1298: we already watched detection fail, so offer a retry rather
+               than an Enable button whose outcome we know. -->
+          <div class="cs-confirm-body" data-testid="cowork-preflight-blocked" role="status">
+            {preflight.hint}
+          </div>
+        {/if}
         <div class="cs-actions">
-          <button
-            class="cs-btn cs-btn--primary"
-            data-testid="cowork-enable-confirm-btn"
-            type="button"
-            onclick={() => void handleToggleOn()}
-            disabled={busy}
-          >
-            Enable
-          </button>
+          {#if preflight?.status === "blocked"}
+            <button
+              class="cs-btn cs-btn--primary"
+              data-testid="cowork-preflight-retry-btn"
+              type="button"
+              onclick={() => void runPreflight()}
+              disabled={busy || probing}
+            >
+              {probing ? "Checking…" : "Check again"}
+            </button>
+          {:else}
+            <button
+              class="cs-btn cs-btn--primary"
+              data-testid="cowork-enable-confirm-btn"
+              type="button"
+              onclick={() => void handleToggleOn()}
+              disabled={busy}
+            >
+              Enable
+            </button>
+          {/if}
           <button
             class="cs-btn cs-btn--ghost"
             data-testid="cowork-enable-cancel-btn"
             type="button"
-            onclick={() => { confirming = null; }}
+            onclick={closeEnableConfirm}
             disabled={busy}
           >
             Cancel

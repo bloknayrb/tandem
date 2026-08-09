@@ -15,6 +15,7 @@ import {
 } from "../../src/client/cowork/cowork-helpers.js";
 import {
   coworkGetStatus,
+  coworkPreflightSubnet,
   coworkRescan,
   coworkRetryAdminElevation,
   coworkSetLanIpOverride,
@@ -25,6 +26,7 @@ import {
 import type {
   CoworkStatus,
   FirewallErrorVariant,
+  SubnetDetectionReason,
   WorkspaceStatus,
 } from "../../src/client/types.js";
 
@@ -184,6 +186,75 @@ describe("firewallErrorHint", () => {
     expect(hint).toContain("subnet");
   });
 
+  // -------------------------------------------------------------------------
+  // #1298: the four reasons behind subnetDetectionFailed. Each describes a
+  // different situation and each wants different advice; they used to share one
+  // message that blamed the user's Cowork install.
+  // -------------------------------------------------------------------------
+
+  const SUBNET_REASONS: SubnetDetectionReason[] = [
+    "noAdapter",
+    "noIpv4",
+    "prefixTooBroad",
+    "queryFailed",
+  ];
+
+  it("gives each subnet-detection reason its own hint", () => {
+    const hints = SUBNET_REASONS.map((reason) =>
+      firewallErrorHint({ kind: "subnetDetectionFailed", reason }),
+    );
+    expect(new Set(hints).size).toBe(hints.length);
+    for (const h of hints) expect(h.length).toBeGreaterThan(0);
+  });
+
+  it("no subnet-detection hint blames the Cowork install", () => {
+    // The defect: this sentence rendered inside a dialog whose own title, two
+    // lines above, read "Claude Desktop Cowork detected".
+    const fallback = firewallErrorHint({ kind: "subnetDetectionFailed" });
+    for (const reason of SUBNET_REASONS) {
+      const hint = firewallErrorHint({ kind: "subnetDetectionFailed", reason });
+      // Positive control on the same call: prove the reason lookup actually
+      // resolved. Without it, "does not contain" is also satisfied by an empty
+      // string, a broken map, or a typo in the reason name.
+      expect(hint).not.toBe(fallback);
+      expect(hint.length).toBeGreaterThan(40);
+      expect(hint.toLowerCase()).not.toContain("set up on this machine");
+    }
+  });
+
+  it("noAdapter reports what Tandem observed, not that no adapter exists", () => {
+    // Three conditions produce a zero match — VM not running, WSL mirrored
+    // networking, and a localized adapter description — and the code cannot
+    // tell them apart. Asserting absence would be false for two of them.
+    const hint = firewallErrorHint({ kind: "subnetDetectionFailed", reason: "noAdapter" });
+    expect(hint).toMatch(/didn't find/i);
+    expect(hint).toMatch(/mirrored networking/i);
+    expect(hint).toMatch(/edition of Windows/i);
+  });
+
+  it("prefixTooBroad says Tandem refused, not that detection failed", () => {
+    const hint = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "prefixTooBroad",
+    });
+    expect(hint).toContain("/20");
+    expect(hint).toMatch(/won't open the firewall/i);
+  });
+
+  it("falls back to the subnet-mentioning hint when reason is absent or unrecognised", () => {
+    // Absent = an older sidecar that predates the field. Unrecognised = a
+    // future Rust-side reason this build has never heard of. Neither may crash
+    // or render an empty banner.
+    const noReason = firewallErrorHint({ kind: "subnetDetectionFailed" });
+    const unknownReason = firewallErrorHint({
+      kind: "subnetDetectionFailed",
+      reason: "somethingNew" as SubnetDetectionReason,
+    });
+    expect(noReason).toBe(unknownReason);
+    expect(noReason.toLowerCase()).toContain("subnet");
+    expect(noReason).not.toContain("set up on this machine");
+  });
+
   it("adapterEnumerationFailed hint mentions Hyper-V adapter", () => {
     const hint = firewallErrorHint({ kind: "adapterEnumerationFailed" }).toLowerCase();
     expect(hint).toContain("hyper-v");
@@ -221,6 +292,68 @@ describe("formatCoworkError", () => {
 
   it("returns raw message for non-object JSON (number)", () => {
     expect(formatCoworkError("42")).toBe("42");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coworkPreflightSubnet (#1298) — the probe that decides whether Enable is
+// offered at all. Three states, because "the probe failed" and "enabling would
+// fail" are different claims and only the second one may block a button.
+// ---------------------------------------------------------------------------
+
+describe("coworkPreflightSubnet", () => {
+  it("reports ok with the detected CIDR", async () => {
+    const invoke = (async () => "172.20.0.0/20") as InvokeFn;
+    await expect(coworkPreflightSubnet(invoke)).resolves.toEqual({
+      status: "ok",
+      cidr: "172.20.0.0/20",
+    });
+  });
+
+  it("calls the command the Rust side actually registers", async () => {
+    // The command existed with no caller for the whole life of the feature;
+    // a typo here would silently restore that state.
+    const seen: string[] = [];
+    const invoke = (async (cmd: string) => {
+      seen.push(cmd);
+      return "172.20.0.0/20";
+    }) as InvokeFn;
+    await coworkPreflightSubnet(invoke);
+    expect(seen).toEqual(["cowork_detect_vethernet_subnet"]);
+  });
+
+  it("blocks with the reason's hint when detection returns a structured error", async () => {
+    const invoke = (async () => {
+      throw new Error(JSON.stringify({ kind: "subnetDetectionFailed", reason: "noAdapter" }));
+    }) as InvokeFn;
+    const result = await coworkPreflightSubnet(invoke);
+    expect(result.status).toBe("blocked");
+    if (result.status !== "blocked") throw new Error("unreachable");
+    expect(result.hint).toMatch(/didn't find/i);
+    expect(result.hint).not.toContain("set up on this machine");
+  });
+
+  it("reports unknown — never blocked — when the probe itself cannot run", async () => {
+    // A broken probe says nothing about whether enabling would work. Blocking
+    // here would stop a user whose enable would have succeeded, which is a
+    // worse failure than the one #1298 is fixing.
+    for (const thrown of [
+      new Error("Tauri runtime not available"),
+      new Error("Windows only"),
+      "a bare string",
+    ]) {
+      const invoke = (async () => {
+        throw thrown;
+      }) as InvokeFn;
+      await expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "unknown" });
+    }
+  });
+
+  it("treats a non-firewall JSON error as unknown, not blocked", () => {
+    const invoke = (async () => {
+      throw new Error(JSON.stringify({ error: "oops" }));
+    }) as InvokeFn;
+    return expect(coworkPreflightSubnet(invoke)).resolves.toEqual({ status: "unknown" });
   });
 });
 

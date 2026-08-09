@@ -80,8 +80,12 @@ cowork-onboarding-enable-confirm-btn
 cowork-onboarding-error
 cowork-onboarding-learn-more-btn
 cowork-onboarding-learn-more-link
+cowork-onboarding-preflight-blocked
+cowork-onboarding-preflight-retry-btn
 cowork-onboarding-skip-btn
 cowork-onboarding-step
+cowork-preflight-blocked
+cowork-preflight-retry-btn
 cowork-reachability
 cowork-rescan-btn
 cowork-settings
@@ -203,6 +207,8 @@ integration-wizard-connect-btn
 integration-wizard-cowork-back
 integration-wizard-cowork-error
 integration-wizard-cowork-explainer
+integration-wizard-cowork-preflight-blocked
+integration-wizard-cowork-preflight-retry-btn
 integration-wizard-cowork-setup
 integration-wizard-cowork-step
 integration-wizard-done-close

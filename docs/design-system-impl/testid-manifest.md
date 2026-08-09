@@ -253,9 +253,18 @@ shipped and were removed:
 - More integrations + Cowork sub-view: `integration-wizard-more`,
   `integration-wizard-cowork-{setup,step,back,error,explainer}`, plus the reused
   `cowork-enable-confirm-btn` / `cowork-vethernet-cidr`
+- Subnet pre-flight (#1298): `integration-wizard-cowork-preflight-{blocked,retry-btn}`.
+  This sub-view has no confirm step — its footer button fires the real enable —
+  so the probe runs on entry to the view, and the retry button *replaces*
+  `cowork-enable-confirm-btn` while blocked rather than sitting beside it.
 
 ### Cowork modals & settings
 - `cowork-onboarding-{step,confirm,error,enable-btn,enable-confirm-btn,enable-cancel-btn,skip-btn,learn-more-btn,learn-more-link}`
+- Subnet pre-flight (#1298), on both surfaces that have a confirm step:
+  `cowork-onboarding-preflight-{blocked,retry-btn}` and
+  `cowork-preflight-{blocked,retry-btn}`. The retry button **replaces** the
+  enable-confirm button while detection is known-failing, so a spec asserting
+  `*-enable-confirm-btn` visible must first establish the probe did not block.
 - `cowork-admin-declined-{backdrop,modal,confirm-disable,error,status-error,disable-btn,disable-confirm-btn,disable-cancel-btn,retry-btn,learn-more-link}`
 - `cowork-settings{,-loading,-unsupported,-undetected,-error}`,
   `cowork-toggle`, `cowork-toggle-checkbox`, `cowork-inline-toast`, `cowork-explainer`,

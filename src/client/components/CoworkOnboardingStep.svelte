@@ -1,7 +1,13 @@
 <script lang="ts">
 import { TANDEM_REPO_URL } from "../../shared/constants";
 import { formatCoworkError, writeCoworkOnboardingSkipped } from "../cowork/cowork-helpers";
-import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke";
+import {
+  coworkPreflightSubnet,
+  coworkToggleIntegration,
+  type InvokeFn,
+  loadInvoke,
+  type SubnetPreflight,
+} from "../cowork/cowork-invoke";
 import type { CoworkStatus } from "../types";
 
 interface Props {
@@ -15,6 +21,45 @@ let { status, onAdvance, onLearnMore }: Props = $props();
 let confirming = $state(false);
 let busy = $state(false);
 let error = $state<string | null>(null);
+let preflight = $state<SubnetPreflight | null>(null);
+let probing = $state(false);
+
+// #1298: the enable path detects the Hyper-V subnet as its second step, and a
+// failure there used to surface as a blanket "is Cowork set up on this
+// machine?" — under a title, two lines above, that says it is. Probe first so
+// we can say what is actually wrong instead of offering a button that cannot
+// work.
+//
+// On confirm rather than on mount: a mount-time probe spawns PowerShell for
+// every Windows user on first launch, including everyone who will hit Skip, and
+// its answer can go stale before the click it exists to inform.
+let probeToken = 0;
+
+async function runPreflight(): Promise<void> {
+  const token = ++probeToken;
+  probing = true;
+  preflight = null;
+  try {
+    const invoke = await loadInvoke();
+    const result = await coworkPreflightSubnet(invoke);
+    // A user can open confirm, cancel, and reopen faster than PowerShell
+    // answers. Only the newest probe may write.
+    if (token !== probeToken) return;
+    preflight = result;
+  } catch {
+    if (token !== probeToken) return;
+    // The bridge itself didn't load. That says nothing about whether enabling
+    // would work, so fall through to the unguarded button.
+    preflight = { status: "unknown" };
+  } finally {
+    if (token === probeToken) probing = false;
+  }
+}
+
+function openConfirm(): void {
+  confirming = true;
+  void runPreflight();
+}
 
 async function withInvoke(
   op: (invoke: InvokeFn) => Promise<void>,
@@ -73,21 +118,40 @@ function handleSkip(): void {
         can connect back — admin is required once. To check it worked afterward, ask Claude in a
         Cowork session to open or list your documents.
       </div>
+      {#if preflight?.status === "blocked"}
+        <!-- Say what stopped us and offer a retry, rather than an Enable button
+             whose failure we have already observed. -->
+        <div class="cos-preflight" data-testid="cowork-onboarding-preflight-blocked" role="status">
+          {preflight.hint}
+        </div>
+      {/if}
       <div class="cos-actions">
-        <button
-          data-testid="cowork-onboarding-enable-confirm-btn"
-          class="cos-btn cos-btn--primary"
-          type="button"
-          onclick={() => void handleEnable()}
-          disabled={busy}
-        >
-          Enable
-        </button>
+        {#if preflight?.status === "blocked"}
+          <button
+            data-testid="cowork-onboarding-preflight-retry-btn"
+            class="cos-btn cos-btn--primary"
+            type="button"
+            onclick={() => void runPreflight()}
+            disabled={busy || probing}
+          >
+            {probing ? "Checking…" : "Check again"}
+          </button>
+        {:else}
+          <button
+            data-testid="cowork-onboarding-enable-confirm-btn"
+            class="cos-btn cos-btn--primary"
+            type="button"
+            onclick={() => void handleEnable()}
+            disabled={busy}
+          >
+            Enable
+          </button>
+        {/if}
         <button
           data-testid="cowork-onboarding-enable-cancel-btn"
           class="cos-btn cos-btn--ghost"
           type="button"
-          onclick={() => { confirming = false; }}
+          onclick={() => { confirming = false; probeToken++; probing = false; }}
           disabled={busy}
         >
           Cancel
@@ -100,7 +164,7 @@ function handleSkip(): void {
         data-testid="cowork-onboarding-enable-btn"
         class="cos-btn cos-btn--primary"
         type="button"
-        onclick={() => { confirming = true; }}
+        onclick={openConfirm}
         disabled={busy}
       >
         Enable
@@ -170,6 +234,16 @@ function handleSkip(): void {
     border: 1px solid var(--tandem-warning-border);
     border-radius: var(--tandem-r-2);
     padding: 8px 10px;
+  }
+  .cos-preflight {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--tandem-warning-fg-strong);
+    background: var(--tandem-warning-bg);
+    border: 1px solid var(--tandem-warning-border);
+    border-radius: var(--tandem-r-2);
+    padding: 6px 8px;
+    margin-bottom: 8px;
   }
   .cos-confirm-heading {
     font-weight: 600;

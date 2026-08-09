@@ -34,12 +34,51 @@ pub enum FirewallError {
     NetshNotFound,
     /// `netsh.exe` ran but returned a non-zero exit code.
     NetshFailure { exit_code: i32, stderr_tail: String, stdout_tail: String },
-    /// The vEthernet subnet could not be determined (e.g. adapter absent, prefix
-    /// too broad, or PowerShell returned unexpected output).
-    SubnetDetectionFailed,
+    /// The vEthernet subnet could not be determined. `reason` says which of the
+    /// several very different situations produced it — see
+    /// [`SubnetDetectionReason`]. Issue #1298: this used to be one opaque
+    /// variant whose single message blamed the user's Cowork install, in a
+    /// dialog whose own title said Cowork had been detected.
+    SubnetDetectionFailed { reason: SubnetDetectionReason },
     /// Hyper-V adapter enumeration via PowerShell failed.
     AdapterEnumerationFailed,
 }
+
+/// Why `detect_vethernet_subnet` could not produce a CIDR.
+///
+/// A payload rather than four sibling `FirewallError` variants, so the wire
+/// discriminant stays `"subnetDetectionFailed"` and the four stay visibly one
+/// family. This mirrors `UndetectedDetail` on the TypeScript side, which splits
+/// a blanket "Cowork not detected" the same way and for the same reason.
+///
+/// None of these mean "Cowork isn't installed" — the workspace scan has already
+/// succeeded by the time this runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubnetDetectionReason {
+    /// The adapter query returned zero Hyper-V vEthernet matches. Usually the
+    /// VM simply isn't running (these adapters appear on VM start and are torn
+    /// down on shutdown). Also covers WSL mirrored networking, where no adapter
+    /// is ever created, and a locale whose adapter descriptions don't match our
+    /// English `*Hyper-V Virtual Ethernet*` filter. We cannot tell these apart,
+    /// so the copy must not claim the adapter is absent — only that we didn't
+    /// find one.
+    NoAdapter,
+    /// Adapters matched, but none carried an IPv4 address.
+    NoIpv4,
+    /// At least one candidate line was present and none survived
+    /// `parse_cidr_from_line` — in practice the `/20` floor (invariant §5).
+    PrefixTooBroad,
+    /// PowerShell ran but exited non-zero, or its output was not in the shape
+    /// we asked for. The least-blaming bucket, and deliberately the fallback.
+    QueryFailed,
+}
+
+/// Marker line the detection script prints before any address lines, carrying
+/// the adapter match count. Without it, empty output is ambiguous between "no
+/// adapter" and "adapter with no address" — the two conditions with the most
+/// different user-facing advice.
+const ADAPTER_COUNT_MARKER: &str = "TANDEM_ADAPTERS ";
 
 impl fmt::Display for FirewallError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -58,10 +97,24 @@ impl fmt::Display for FirewallError {
                 f,
                 "netsh.exe failed (exit {exit_code}): stdout={stdout_tail:?} stderr={stderr_tail:?}"
             ),
-            FirewallError::SubnetDetectionFailed => write!(
-                f,
-                "Could not detect Hyper-V vEthernet subnet — is Cowork set up on this machine?"
-            ),
+            FirewallError::SubnetDetectionFailed { reason } => match reason {
+                SubnetDetectionReason::NoAdapter => write!(
+                    f,
+                    "No Hyper-V vEthernet adapter matched — VM not running, WSL mirrored networking, or a localized adapter description"
+                ),
+                SubnetDetectionReason::NoIpv4 => write!(
+                    f,
+                    "Hyper-V vEthernet adapter present but carries no IPv4 address"
+                ),
+                SubnetDetectionReason::PrefixTooBroad => write!(
+                    f,
+                    "Detected Hyper-V vEthernet subnet is wider than /20 — refused (invariant §5)"
+                ),
+                SubnetDetectionReason::QueryFailed => write!(
+                    f,
+                    "Hyper-V adapter query returned an error or unexpected output"
+                ),
+            },
             FirewallError::AdapterEnumerationFailed => write!(
                 f,
                 "Hyper-V adapter enumeration failed — PowerShell query returned an error"
@@ -98,9 +151,15 @@ const RULE_NAME_PREFIX: &str = "Tandem Cowork";
 /// # Returns
 /// The detected CIDR string (e.g. `"172.20.0.0/20"`) on success.
 pub fn detect_vethernet_subnet() -> Result<String, FirewallError> {
+    // `@(...)` is load-bearing, not style: a zero-match pipeline yields `$null`,
+    // and `$null.Count` is not reliably 0 across PowerShell versions/editions.
+    // Zero matches is exactly the NoAdapter case — the classification this whole
+    // marker exists to make possible — so the array wrapper is what makes the
+    // count trustworthy. It also covers PS collapsing a single result to a scalar.
     let ps_script = r#"
-$adapters = Get-NetAdapter -ErrorAction SilentlyContinue |
-    Where-Object { $_.InterfaceDescription -like '*Hyper-V Virtual Ethernet*' }
+$adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue |
+    Where-Object { $_.InterfaceDescription -like '*Hyper-V Virtual Ethernet*' })
+Write-Output "TANDEM_ADAPTERS $($adapters.Count)"
 foreach ($adapter in $adapters) {
     $ip = $adapter | Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue
     if ($ip) {
@@ -150,19 +209,67 @@ foreach ($adapter in $adapters) {
         truncate_tail(&stderr, 200),
     );
 
-    if !output.status.success() || stdout.is_empty() {
-        return Err(FirewallError::SubnetDetectionFailed);
+    classify_subnet_output(output.status.success(), &stdout)
+}
+
+/// Turn the detection script's output into a CIDR or a classified failure.
+///
+/// Split out from `detect_vethernet_subnet` so the classification table — the
+/// entire point of #1298 — is unit-testable. The PowerShell spawn itself is not,
+/// which is why the marker's real-world shape still needs a manual check.
+fn classify_subnet_output(exit_ok: bool, stdout: &str) -> Result<String, FirewallError> {
+    use SubnetDetectionReason as R;
+    let failed = |reason| Err(FirewallError::SubnetDetectionFailed { reason });
+
+    // Checked before parsing anything: a failed process's stdout may be garbage,
+    // so its shape carries no information about adapters.
+    if !exit_ok {
+        return failed(R::QueryFailed);
     }
 
-    // Parse lines like "172.20.0.1/20" — take the first valid result.
+    // `.trim()` on the captured output strips ASCII whitespace but not a UTF-8
+    // BOM, which would land on the first line — exactly where the marker is.
+    let stdout = stdout.trim_start_matches('\u{feff}');
+
+    let mut adapter_count: Option<usize> = None;
+    let mut saw_candidate_line = false;
+
+    // `lines()` strips a trailing `\r`, so CRLF needs no special handling.
     for line in stdout.lines() {
         let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(count) = line.strip_prefix(ADAPTER_COUNT_MARKER) {
+            adapter_count = count.trim().parse::<usize>().ok();
+            continue;
+        }
+        saw_candidate_line = true;
         if let Some(cidr) = parse_cidr_from_line(line) {
             return Ok(cidr);
         }
     }
 
-    Err(FirewallError::SubnetDetectionFailed)
+    // No marker means the script didn't run the way we asked. Fall to the
+    // least-blaming reason rather than inferring a specific one from output we
+    // have just established we don't understand.
+    let Some(adapter_count) = adapter_count else {
+        return failed(R::QueryFailed);
+    };
+
+    if adapter_count == 0 {
+        return failed(R::NoAdapter);
+    }
+    // A candidate line was present and nothing survived `parse_cidr_from_line`.
+    // That collapses "prefix < 20" with "malformed line", because the parser
+    // returns `Option` for both. Reporting the /20 rejection is the right bet:
+    // it is the case that happens to real users, and a malformed line means our
+    // own parser is wrong — which its `warn!` at the rejection site records
+    // separately, with the actual prefix.
+    if saw_candidate_line {
+        return failed(R::PrefixTooBroad);
+    }
+    failed(R::NoIpv4)
 }
 
 /// Parse an `IPAddress/PrefixLength` string into a proper CIDR network address.
@@ -523,5 +630,115 @@ mod tests {
     fn test_truncate_tail() {
         assert_eq!(truncate_tail("hello world", 5), "world");
         assert_eq!(truncate_tail("short", 100), "short");
+    }
+
+    // -----------------------------------------------------------------------
+    // #1298: the classification table. Each of these used to be the same
+    // opaque `SubnetDetectionFailed`, and each wants different user advice.
+    // -----------------------------------------------------------------------
+
+    fn reason_of(exit_ok: bool, stdout: &str) -> SubnetDetectionReason {
+        match classify_subnet_output(exit_ok, stdout) {
+            Err(FirewallError::SubnetDetectionFailed { reason }) => reason,
+            other => panic!("expected SubnetDetectionFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_accepts_a_narrow_enough_subnet() {
+        assert_eq!(
+            classify_subnet_output(true, "TANDEM_ADAPTERS 1\r\n172.20.0.1/20\r\n").unwrap(),
+            "172.20.0.0/20"
+        );
+    }
+
+    #[test]
+    fn classify_no_adapter_when_the_count_is_zero() {
+        // The VM isn't running, or WSL is in mirrored mode, or the adapter
+        // description is localized. Indistinguishable here — hence one reason.
+        assert_eq!(reason_of(true, "TANDEM_ADAPTERS 0"), SubnetDetectionReason::NoAdapter);
+    }
+
+    #[test]
+    fn classify_no_ipv4_when_adapters_exist_but_print_no_addresses() {
+        assert_eq!(reason_of(true, "TANDEM_ADAPTERS 2"), SubnetDetectionReason::NoIpv4);
+    }
+
+    #[test]
+    fn classify_prefix_too_broad_when_every_candidate_is_rejected() {
+        assert_eq!(
+            reason_of(true, "TANDEM_ADAPTERS 1\n172.16.0.1/12"),
+            SubnetDetectionReason::PrefixTooBroad
+        );
+    }
+
+    #[test]
+    fn classify_prefers_the_first_acceptable_line_over_a_rejected_one() {
+        // A too-broad adapter must not mask a valid one listed after it.
+        assert_eq!(
+            classify_subnet_output(true, "TANDEM_ADAPTERS 2\n10.0.0.1/8\n172.20.0.1/20").unwrap(),
+            "172.20.0.0/20"
+        );
+    }
+
+    #[test]
+    fn classify_query_failed_on_nonzero_exit_even_with_plausible_output() {
+        // Output shape carries no information once the process has failed.
+        assert_eq!(
+            reason_of(false, "TANDEM_ADAPTERS 1\n172.20.0.1/20"),
+            SubnetDetectionReason::QueryFailed
+        );
+    }
+
+    #[test]
+    fn classify_query_failed_when_the_marker_is_missing_or_unparsable() {
+        // Falls to the least-blaming reason rather than inferring NoAdapter
+        // from output we have just established we don't understand.
+        assert_eq!(reason_of(true, ""), SubnetDetectionReason::QueryFailed);
+        assert_eq!(reason_of(true, "some unexpected text"), SubnetDetectionReason::QueryFailed);
+        assert_eq!(reason_of(true, "TANDEM_ADAPTERS many"), SubnetDetectionReason::QueryFailed);
+    }
+
+    #[test]
+    fn classify_tolerates_a_utf8_bom_on_the_marker_line() {
+        // `.trim()` upstream strips ASCII whitespace, not U+FEFF, and the BOM
+        // would land on the first line — exactly where the marker is.
+        assert_eq!(
+            reason_of(true, "\u{feff}TANDEM_ADAPTERS 0"),
+            SubnetDetectionReason::NoAdapter
+        );
+    }
+
+    #[test]
+    fn subnet_failure_messages_no_longer_blame_the_install() {
+        // The #1298 defect in one assertion: the old copy asked "is Cowork set
+        // up on this machine?" inside a dialog titled "Cowork detected".
+        for reason in [
+            SubnetDetectionReason::NoAdapter,
+            SubnetDetectionReason::NoIpv4,
+            SubnetDetectionReason::PrefixTooBroad,
+            SubnetDetectionReason::QueryFailed,
+        ] {
+            let msg = FirewallError::SubnetDetectionFailed { reason }.to_string();
+            assert!(!msg.is_empty(), "{reason:?} has no message");
+            assert!(
+                !msg.contains("is Cowork set up on this machine"),
+                "{reason:?} still blames the install: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn subnet_reason_rides_along_as_a_sibling_field_on_the_wire() {
+        // The client discriminates on `kind` and reads `reason` off the same
+        // object; a nested shape would break `firewallErrorHint` silently.
+        let json = serde_json::to_string(&FirewallError::SubnetDetectionFailed {
+            reason: SubnetDetectionReason::PrefixTooBroad,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"subnetDetectionFailed","reason":"prefixTooBroad"}"#
+        );
     }
 }
