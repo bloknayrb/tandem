@@ -172,15 +172,22 @@ test("slash menu inserts a table in an ephemeral scratchpad (#995)", async ({ pa
   // round-trip covered above.
   await page.goto("/");
   await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
-  await page.evaluate(
+  // Scope to the documentId this call returns, not to the tab's TEXT. Every
+  // scratchpad is titled "Scratchpad.md", the server outlives a Playwright
+  // retry, and a retry POSTs a second one — so a hasText locator resolves to
+  // two tabs and fails strict mode on the retry rather than on the defect.
+  const created = (await page.evaluate(
     (base) => fetch(`${base}/scratchpad`, { method: "POST" }).then((r) => r.json()),
     API_BASE,
-  );
-  await expect(
-    page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
-  ).toBeVisible({ timeout: 5_000 });
+  )) as { data: { documentId: string } };
+  await expect(page.getByTestId(`tab-name-${created.data.documentId}`)).toBeVisible({
+    timeout: 5_000,
+  });
 
-  const editor = page.locator(".tiptap");
+  // Only the active document's editor is mounted, and the POST above made the
+  // new scratchpad active — but scope to the last match anyway so a lingering
+  // tab from an earlier test cannot make this ambiguous.
+  const editor = page.locator(".tiptap").last();
   await editor.click();
   await page.keyboard.type("/table");
   const menu = page.getByRole("listbox", { name: "Slash commands" });
