@@ -13,6 +13,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  getDeliveryState,
+  recordWakeForward,
+  resetDeliveryStateForTests,
+} from "../../src/server/events/delivery-state.js";
 import { createAnnotation, registerAnnotationTools } from "../../src/server/mcp/annotations.js";
 import { registerAwarenessTools, resetInbox } from "../../src/server/mcp/awareness.js";
 import { populateYDoc, registerDocumentTools } from "../../src/server/mcp/document.js";
@@ -951,5 +956,75 @@ describe("MCP tool integration — tandem_edit empty-doc guidance (#979)", () =>
     expect(parsed.error).toBe(true);
     expect(parsed.code).toBe("EMPTY_DOCUMENT");
     expect(parsed.message).toContain("tandem_appendContent");
+  });
+});
+
+/**
+ * The delivery-state join's pull half (Track B-1).
+ *
+ * Driven through the real McpServer rather than by calling the recorder
+ * directly, because the fact under test is a property of WHERE the call sits in
+ * `tandem_checkInbox`'s body — a unit test of `recordInboxPoll` would pass with
+ * the call deleted from the tool entirely.
+ */
+describe("checkInbox stamps the pull path", () => {
+  beforeEach(resetDeliveryStateForTests);
+  afterEach(resetDeliveryStateForTests);
+
+  it("records a poll when the tool dispatches", async () => {
+    setupDoc("inbox-poll-doc", "Hello world");
+    expect(getDeliveryState(Date.now(), 1).pollCount).toBe(0);
+
+    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+
+    const state = getDeliveryState(Date.now(), 1);
+    expect(state.pollCount).toBe(1);
+    // `sincePollMs`, not `lastPollAt` — the latter is a module-local, absent
+    // from the exported `DeliveryState`, so asserting on it read as pinning the
+    // timestamp while comparing `undefined` to null and passing for every
+    // possible behaviour of `recordInboxPoll`. Nothing catches that: tsconfig
+    // includes only `src/**`, and vitest strips types.
+    expect(state.sincePollMs).not.toBeNull();
+  });
+
+  it("records a poll even when no document is open", async () => {
+    // The ordering decision, pinned. `recordInboxPoll` sits ABOVE the
+    // `noDocumentError` guard because the fact being recorded is "a model
+    // reached for the inbox" — the only signal here written by a model rather
+    // than by a transport — and that is equally true when the poll lands on a
+    // closed document. Below the guard, the pull path would read as dead during
+    // exactly the window a user is most likely to be told that it is.
+    setActiveDocId(null);
+
+    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+
+    expect(getDeliveryState(Date.now(), 1).pollCount).toBe(1);
+  });
+
+  it("clears an outstanding forward, closing the join", async () => {
+    setupDoc("inbox-join-doc", "Hello world");
+    recordWakeForward(1_000);
+    expect(getDeliveryState(1_500, 1).state).toBe("awaiting-poll");
+
+    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+
+    expect(getDeliveryState(Date.now(), 1).state).toBe("polled");
+  });
+
+  it("does NOT close the join when the tool bails out on a closed document", async () => {
+    // The other half of the split, through the real tool rather than the
+    // recorder: a poll that returns `noDocumentError` marked nothing read, so
+    // the user's message is still unseen and the round must stay open. Driven
+    // here rather than as a unit test because the fact under test is WHERE the
+    // two calls sit relative to the document guard.
+    setActiveDocId(null);
+    recordWakeForward(1_000);
+
+    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+
+    const state = getDeliveryState(Date.now(), 1);
+    expect(state.state).toBe("awaiting-poll");
+    expect(state.latencyMs).toBeNull();
+    expect(state.pollCount).toBe(1); // liveness still stamped
   });
 });

@@ -46,6 +46,7 @@ import {
   serializeUserTurn,
 } from "../../shared/launcher/contract.js";
 import { subscribe, unsubscribe } from "../events/queue.js";
+import { isWakeWorthy } from "../events/wake-scope.js";
 import { createIntegrationsStore } from "../integrations/storage.js";
 
 interface SupervisorOpts {
@@ -118,24 +119,6 @@ function defaultProbeCliUsable(): boolean {
 export function defaultSubscribeToEvents(cb: (event: TandemEvent) => void): () => void {
   subscribe(cb, "external");
   return () => unsubscribe(cb);
-}
-
-/**
- * Which events are worth interrupting Claude for.
- *
- * Narrower than the channel shim's set, which forwards everything that clears
- * the queue's gates. A channel notification is cheap to ignore; a turn written
- * on stdin compels a response, so `document:*` lifecycle — fired whenever the
- * user clicks a tab — would turn ordinary navigation into a stream of forced
- * wakes. Annotations and chat are the events where the user is actually asking
- * for something, and Claude re-reads document state from `tandem_checkInbox`
- * when it does wake.
- *
- * The Solo→Tandem release wake is a synthetic `annotation:created`
- * (`emitModeReleaseWake`), so it clears this filter by construction.
- */
-function isWakeWorthy(event: TandemEvent): boolean {
-  return event.type.startsWith("annotation:") || event.type === "chat:message";
 }
 
 /**

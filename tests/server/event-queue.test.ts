@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { AnnotationDocV1 } from "../../src/server/annotations/schema.js";
 import {
+  getDeliveryState,
+  resetDeliveryStateForTests,
+} from "../../src/server/events/delivery-state.js";
+import {
   _pushEventForTests,
   attachCtrlObservers,
   attachObservers,
@@ -1717,5 +1721,216 @@ describe("Solo forwarder gate (external consumers)", () => {
     unsubscribe(cb);
 
     expect(external).toHaveLength(1);
+  });
+});
+
+// --- The delivery-state join's push half (Track B-2) ---
+
+/**
+ * `pushEvent` records a wake forward behind THREE conjuncts, and each one is a
+ * different way for the join to tell a lie. These run against the real queue
+ * rather than a mock because every conjunct is a property of `pushEvent`'s own
+ * control flow — a mirror of the gate would agree with itself while the shipped
+ * one drifted.
+ */
+describe("delivery-state forward recording (pushEvent)", () => {
+  let doc: Y.Doc;
+
+  beforeEach(() => {
+    resetDeliveryStateForTests();
+    _ctrlTestDoc = new Y.Doc();
+    doc = new Y.Doc();
+    attachObservers("delivery-doc", doc);
+  });
+
+  afterEach(() => {
+    detachObservers("delivery-doc");
+    doc.destroy();
+    _ctrlTestDoc.destroy();
+    resetDeliveryStateForTests();
+  });
+
+  function setMode(mode: "solo" | "tandem") {
+    _ctrlTestDoc.getMap(Y_MAP_USER_AWARENESS).set(Y_MAP_MODE, mode);
+  }
+
+  function createUserComment(id: string) {
+    doc.getMap(Y_MAP_ANNOTATIONS).set(id, {
+      id,
+      type: "comment",
+      author: "user",
+      content: "please look at this",
+      status: "pending",
+      textSnapshot: "hello",
+      range: { from: 0, to: 5 },
+    });
+  }
+
+  it("records a forward when a wake-worthy event reaches an external consumer", () => {
+    setMode("tandem");
+    const { cleanup } = collectEvents("external");
+
+    createUserComment("ann_delivery_1");
+
+    expect(getDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
+    cleanup();
+  });
+
+  it("records NOTHING with no consumer attached — that is the sound negative's case", () => {
+    // The conjunct that keeps the join honest about who is at fault. With
+    // nothing attached, "no poll followed" means nobody was listening, and
+    // reporting it as an outstanding forward would convert a true "nothing is
+    // attached" into a false "your message was delivered and sat unread".
+    // `subscribers === 0` owns that story.
+    setMode("tandem");
+
+    createUserComment("ann_delivery_none");
+
+    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+  });
+
+  it("records nothing for an INTERNAL subscriber", () => {
+    // The in-process local-model collaborator receiving an event says nothing
+    // about whether it left this machine. Same rule `getSubscriberCount` and
+    // `alreadyPushed` already follow.
+    setMode("tandem");
+    const { cleanup } = collectEvents("internal");
+
+    createUserComment("ann_delivery_internal");
+
+    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    cleanup();
+  });
+
+  it("records nothing for a Solo-held event", () => {
+    // A held event reaches no external consumer, so starting a wait clock for
+    // it would count the user's own privacy choice as Claude ignoring them —
+    // and then nag them about it during the mode they chose to be left alone in.
+    setMode("solo");
+    const { cleanup } = collectEvents("external");
+
+    createUserComment("ann_delivery_solo");
+
+    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    cleanup();
+  });
+
+  it("records nothing for a Solo status flip, which the early return does NOT cover", () => {
+    // The case the Solo test above cannot reach, and the only one that
+    // exercises the `forwardExternally` conjunct at all — mutation-discovered:
+    // deleting that conjunct broke no test until this one existed.
+    //
+    // The two Solo holds are different, not redundant. `isUserPrivacyHeld`
+    // early-returns on user CONTENT (created/edited/user-reply) so it never
+    // reaches the fan-out. A status flip on Claude's own annotation carries no
+    // content the AI cannot already pull, so it is deliberately NOT held there
+    // — it still has to reach the in-process collaborator. It is withheld from
+    // external consumers one layer out, by `shouldForwardExternally`.
+    //
+    // So this event arrives at the recording line, is wake-worthy by prefix,
+    // and has a live external subscriber — and was still handed to nobody.
+    // Recording it would start a wait clock in Solo, the one mode whose whole
+    // promise is not to tell an idle session the user is doing things.
+    setMode("solo");
+    const { events, cleanup } = collectEvents("external");
+
+    _pushEventForTests({
+      id: "evt_solo_accept",
+      type: "annotation:accepted",
+      timestamp: Date.now(),
+      payload: { annotationId: "ann_claude_1", documentId: "delivery-doc" },
+    } as TandemEvent);
+
+    expect(events).toHaveLength(0); // withheld from the external consumer...
+    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    cleanup();
+  });
+
+  it("records nothing for document:* lifecycle churn", () => {
+    // Fired on every tab click. Counting it would keep the join permanently
+    // "awaiting-poll" during ordinary navigation, which is indistinguishable
+    // from the real symptom and would bury it.
+    setMode("tandem");
+    const { cleanup } = collectEvents("external");
+
+    _pushEventForTests({
+      id: "evt_doc_switch",
+      type: "document:switched",
+      timestamp: Date.now(),
+      payload: { documentId: "delivery-doc" },
+    } as TandemEvent);
+
+    expect(getDeliveryState()).toMatchObject({ state: "idle", forwardCount: 0 });
+    cleanup();
+  });
+
+  it("records a forward for chat, the other half of the wake set", () => {
+    setMode("tandem");
+    const { cleanup } = collectEvents("external");
+
+    _pushEventForTests({
+      id: "evt_chat_delivery",
+      type: "chat:message",
+      timestamp: Date.now(),
+      payload: { messageId: "msg_1", text: "are you there?" },
+    } as TandemEvent);
+
+    expect(getDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
+    cleanup();
+  });
+
+  it("stops claiming a poll is owed when the last consumer unsubscribes", () => {
+    // Mutation-discovered: deleting the `noteExternalConsumersGone()` call from
+    // `unsubscribe` broke no test, because the delivery-state unit tests call
+    // that function directly and so verify the function, not the WIRING.
+    //
+    // The bug it guards: the "something was attached" conjunct is evaluated at
+    // push time and never again. A shim whose host exits, or a launcher child
+    // that crashes, leaves the forward outstanding forever — and /health then
+    // reports `push.subscribers: 0` beside `state: "awaiting-poll"` with
+    // waitingMs climbing for days. Two fields on one response contradicting
+    // each other, the sound negative being the one telling the truth.
+    setMode("tandem");
+    const { cleanup } = collectEvents("external");
+
+    createUserComment("ann_delivery_detach");
+    expect(getDeliveryState().state).toBe("awaiting-poll");
+
+    cleanup(); // the consumer goes away
+
+    expect(getDeliveryState().state).toBe("consumer-detached");
+  });
+
+  it("keeps waiting while a SECOND consumer is still attached", () => {
+    // The hook fires on the transition to zero, not on every unsubscribe —
+    // otherwise one of two attached consumers leaving would falsely abandon a
+    // forward the other is still perfectly able to act on.
+    setMode("tandem");
+    const first = collectEvents("external");
+    const second = collectEvents("external");
+
+    createUserComment("ann_delivery_two_consumers");
+    first.cleanup();
+
+    expect(getDeliveryState().state).toBe("awaiting-poll");
+    second.cleanup();
+    expect(getDeliveryState().state).toBe("consumer-detached");
+  });
+
+  it("counts the supervisor's subscription, which never speaks SSE", () => {
+    // The case that made this measurement worth building on the handoff leg
+    // rather than the consumer-ack leg. The launcher's supervisor wakes its
+    // child over stdin and never POSTs `/api/channel-awareness`, so a join
+    // keyed on `push.lastEventAt` reads a working default desktop install as
+    // "nothing was ever delivered" — forever.
+    setMode("tandem");
+    const seen: TandemEvent[] = [];
+    const unsub = defaultSubscribeToEvents((e) => seen.push(e));
+
+    createUserComment("ann_delivery_supervisor");
+
+    expect(seen).toHaveLength(1);
+    expect(getDeliveryState()).toMatchObject({ state: "awaiting-poll", forwardCount: 1 });
+    unsub();
   });
 });

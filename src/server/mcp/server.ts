@@ -15,6 +15,7 @@ import { CLAUDE_SESSION_HEADER, normalizeSessionId } from "../../shared/cli-runt
 import { DEFAULT_BIND_HOST, DEFAULT_WS_PORT, TAURI_HOSTNAME } from "../../shared/constants.js";
 import { createAuthMiddleware } from "../auth/middleware.js";
 import { getTokenFilePath } from "../auth/token-store.js";
+import { getDeliveryState } from "../events/delivery-state.js";
 import { getPushConsumerLiveness } from "../events/push-liveness.js";
 import { getSubscriberCount } from "../events/queue.js";
 import { registerIntegrationsRoutes } from "../integrations/api-routes.js";
@@ -493,6 +494,8 @@ export async function startMcpServerHttp(
       hasSession: () => getMcpSessionCount() > 0,
       getSubscriberCount,
       getPushLiveness: getPushConsumerLiveness,
+      getDeliveryState: (externalConsumerCount) =>
+        getDeliveryState(Date.now(), externalConsumerCount),
     }),
   );
 

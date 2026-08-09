@@ -17,6 +17,7 @@ import type {
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
+import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
 import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -190,8 +191,21 @@ export function registerAwarenessTools(server: McpServer): void {
     },
     withStructuredErrors(
       withErrorBoundary("tandem_checkInbox", async ({ documentId }) => {
+        // Stamped BEFORE the document check, deliberately. The fact being
+        // recorded is "a model reached for the inbox" — the only signal in the
+        // server written by a model rather than by a transport — and that is
+        // equally true when the poll lands on a closed document. Moving it
+        // below the guard would make the pull path look dead during exactly the
+        // window a user is most likely to be told it is.
+        recordInboxPoll();
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
+        // The join closes HERE, below the guard — a separate fact from the
+        // stamp above. The poll that bailed out collected nothing, marked no
+        // chat message read, and touched no ledger, so the user's message is
+        // still unseen; closing the round there would report a delivery that
+        // did not happen. Past this line the full pass runs.
+        resolveDeliveryRound();
         const doc = store.ydoc;
         const allAnnotations = store.listAnnotations();
         const fullText = extractText(doc);
