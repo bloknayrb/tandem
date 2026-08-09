@@ -59,7 +59,7 @@ describe("isContextMenuAllowed", () => {
   });
 
   it("admits an explicit [data-allow-context-menu] marker and its descendants", () => {
-    const bubble = el('<div data-allow-context-menu><span>chat text</span></div>');
+    const bubble = el("<div data-allow-context-menu><span>chat text</span></div>");
     const span = bubble.querySelector("span")!;
     expect(isContextMenuAllowed(bubble)).toBe(true);
     expect(isContextMenuAllowed(span)).toBe(true);

@@ -31,9 +31,14 @@
  * Selectors matched via `closest()` against the `contextmenu` event target.
  * A match means "let the native/existing menu through" — do NOT preventDefault.
  *
- * - `.ProseMirror` — the exact node Tiptap attaches to (verified: `.tandem-editor`
- *   IS `.ProseMirror`, Tiptap stacks both classes on one node — see
- *   `editor/editor.css`'s comment above the `.tandem-editor .ProseMirror` rule).
+ * - `.ProseMirror` — the exact node Tiptap attaches to, i.e. `editor.view.dom`.
+ *   The evidence is `editor/editor-props.ts:21`, which sets
+ *   `editorProps.attributes.class = "tandem-editor"`: those attributes land on
+ *   the content DOM node Tiptap already classes `ProseMirror`, so both classes
+ *   sit on one element and either selector resolves to it. (There is no
+ *   `.tandem-editor .ProseMirror` descendant rule in `editor.css` — an earlier
+ *   draft of this comment cited one, which would have implied two nested nodes
+ *   and sent the next reader looking for a wrapper.)
  *   Matching a wrapper that isn't an ancestor of all editor content would
  *   silently break the macOS Look-Up/Services/spellcheck passthrough
  *   (`context-menu/detect.ts`) with no error.
