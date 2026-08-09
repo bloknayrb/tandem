@@ -132,17 +132,19 @@ tandem doctor
 
 Either way, look for the push line. `No real-time push consumer attached` means nothing is listening — that's the whole problem.
 
+**First, check which kind of session this is.** Sessions Tandem starts for you — the desktop app's **Relaunch Claude** button — are woken directly by Tandem and use neither transport below. If that is the session that isn't reacting, nothing here is the fix; the problem is elsewhere. Everything that follows is about a session you started yourself by typing `claude`.
+
 **Fix it** — two ways, and you want exactly one of them.
 
-*Either* start Claude Code with the channel flag:
+*Either* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). Start `claude` from a terminal window when you do: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127` every session](#plugin-monitor-reports-script-failed-exit-127-every-session).
+
+*Or* start Claude Code with the channel flag:
 
 ```bash
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-In the desktop app, the **Relaunch Claude** button does this for you. Sessions Tandem starts always get the flag; sessions you start by typing `claude` do not.
-
-*Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it).
+It has to be on every session — the flag is not remembered, and it only works in an interactive session, so it does nothing in `claude -p`. There is also no way to make it unnecessary: Claude Code's channel allowlist covers plugins only, and `tandem-channel` is a plain MCP server, so no listing exists that Tandem could apply for.
 
 **Do not enable both.** Each transport delivers independently, so a session running the plugin *and* the channel flag receives every event twice. Note that `No real-time push consumer attached` cannot tell you which one is missing — both attach to the same stream — so pick the one you meant to be using.
 

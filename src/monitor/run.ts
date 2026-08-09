@@ -5,9 +5,16 @@
  *
  * Connects to the Tandem server's /api/events SSE endpoint and prints
  * formatted event lines to stdout. Each line becomes a Claude Code
- * notification automatically via the plugin monitor mechanism. Replaces the
- * channel shim for event delivery without requiring
- * --dangerously-load-development-channels.
+ * notification automatically via the plugin monitor mechanism. An alternative
+ * to the channel shim for event delivery in a hand-launched session, without
+ * requiring --dangerously-load-development-channels.
+ *
+ * "Flagless" is not "unconditional": the plugin host spawns monitors through a
+ * non-login shell, so this process inherits whatever PATH Claude Code itself
+ * started with. A GUI-launched Claude Code frequently has no resolvable Node
+ * and the monitor dies `exit 127` every session — see docs/spikes/plugin-delivery.md.
+ * Neither transport is involved in an auto-launched session; those are woken
+ * over the supervisor's stdin (ADR-047).
  *
  * This module deliberately carries NO auto-run block — the `isDirectRun`
  * guard lives only in the thin `src/monitor/index.ts` standalone entry. That

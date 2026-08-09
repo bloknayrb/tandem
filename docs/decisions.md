@@ -320,6 +320,7 @@ Probe instrumentation — `src/server/mcp/server.ts` patched to (a) advertise `b
 ## ADR-028: Plugin Monitor URL and Auth Resolution — `userConfig` over Hardcoded Default
 
 **Status:** Split — the v0.10.1 resolution (`resolveTandemUrl` / `resolveAuthToken` precedence) is **Accepted** and shipped in v0.11.0; the v0.10.2 `userConfig` installer pre-population remains **Proposed**, pending the Sub-task D gate.
+**Superseded in part by [ADR-047](#adr-047-claude-code-push-transport-activation):** the URL/auth resolution decision this ADR is titled for is untouched. Everything this ADR accumulated *about which transport is canonical* — the four updates and two corrections below — is superseded there, including rationale (1) of the 2026-07-19 decision, which rested on a permission relay that turns out to be unimplemented. Read ADR-047 for the transport question; the material below is kept as the record of how it was arrived at.
 **See ADR-038:** the plugin monitor is one of the six Claude-specific extras built on top of the MCP contract. The URL/auth resolution policy here applies to the Claude monitor; other MCP clients connect to the same MCP HTTP endpoint without the plugin-host indirection.
 **Context:** `src/monitor/index.ts` hardcoded `http://localhost:3479` and `authFetch` in `src/shared/cli-runtime.ts` read only `TANDEM_AUTH_TOKEN`. In Cowork VM sessions the monitor connects to loopback inside the VM (not the host's server) and silently fails; in custom-port and LAN-dev setups the URL override was ignored entirely. Phase 0 probe (2026-05) confirmed: (a) Claude Code's `monitors[]` manifest schema (CLI 2.1.126) rejects `env` blocks — the proposed manifest-level env injection approach is impossible; (b) the documented channel for runtime config is `userConfig` + `CLAUDE_PLUGIN_OPTION_*` env exports.
 **Decision (v0.10.1):** Bake `CLAUDE_PLUGIN_OPTION_SERVER_URL` into `resolveTandemUrl()`'s precedence chain (before `TANDEM_URL`, after explicit override) and add peer function `resolveAuthToken()` with the same pattern for `CLAUDE_PLUGIN_OPTION_AUTH_TOKEN`. `authFetch` calls `resolveAuthToken()` instead of reading `TANDEM_AUTH_TOKEN` directly. Both the monitor and channel shim automatically benefit — no per-caller changes needed.
@@ -757,7 +758,7 @@ Four terms have precise meanings; every doc surface uses them consistently:
 |---|---|
 | **MCP contract** | The active MCP tools at `http://127.0.0.1:3479` and the SSE event stream at `/api/events`. Available to every MCP client. |
 | **Default integration** | Claude. Recommended in all install flows. Documented, tested, and the target of the first-run wizard's one-click setup. |
-| **Claude-specific extras** | Six features built on top of the MCP contract that only work with Claude today: (1) channel push (channel shim + plugin monitor), (2) `--dangerously-load-development-channels` flag wiring, (3) auto-launcher (#477 PR 4), (4) Cowork plugin bridge (`tandem mcp-stdio`), (5) Claude Code skill (`skills/tandem/SKILL.md`), (6) plugin marketplace artifacts (`.claude-plugin/`). |
+| **Claude-specific extras** | Six features built on top of the MCP contract that only work with Claude today: (1) channel push (channel shim + plugin monitor), (2) `--dangerously-load-development-channels` documentation for hand-launched sessions — the *launcher* wiring was deleted 2026-08-07 as inert under `-p` ([ADR-047](#adr-047-claude-code-push-transport-activation)), (3) auto-launcher (#477 PR 4), (4) Cowork plugin bridge (`tandem mcp-stdio`), (5) Claude Code skill (`skills/tandem/SKILL.md`), (6) plugin marketplace artifacts (`.claude-plugin/`). |
 | **Best-effort, not validated** | What we say about other MCP clients today. We don't intentionally break them; we don't test them. The MCP HTTP endpoint is the same surface they all use. |
 
 **Claude-side dev tooling** (`CLAUDE.md`, `.claude/hooks/`, `.claude/agents/`, `.claude/skills/`) is contributor-facing automation for working ON Tandem — not user-facing integration. It is listed separately from "Claude-specific extras" to avoid conflation.
@@ -1028,3 +1029,72 @@ Both are silent from the user's perspective today; both end when the integration
 - Left open deliberately: what opens at boot (`sample/welcome.md`, or `CHANGELOG.md` read-only after an upgrade — so a post-update reboot silently loads the changelog into an invisible window); boot-time native error dialogs from a tray-only app; WebView background throttling of `useAiReadiness`'s poll while indefinitely hidden; and Windows fast-user-switching with two users both autostarting.
 
 **Cross-references:** [ADR-038](#adr-038-mcp-first-integration-policy-claude-as-default-integration) §2 (the consent premise this defers to preserve), ADR-044 (Cowork detection, whose registrations the scrub now actually removes), #477 PR 4a/4b (the Claude Code auto-launcher and its routes).
+
+## ADR-047: Claude Code Push-Transport Activation
+
+**Status:** Accepted (2026-08-07). Supersedes in part [ADR-028](#adr-028-plugin-monitor-url-and-auth-resolution--userconfig-over-hardcoded-default).
+
+**Context:** The question "how does Claude Code get real-time events from Tandem?" had no owner. ADR-028 is titled *Plugin Monitor URL and Auth Resolution* and answers a different question; it then accumulated four updates and two corrections about which transport is canonical, none of which touched its `**Status:**` line. A reader consulting it normally learned nothing about the transport decision, and the record contradicted itself in places. House precedent (ADR-004, ADR-027, ADR-029, ADR-039, ADR-040) is a new ADR plus a pointer when the subject changes. This ADR owns the transport question; ADR-028 keeps the URL/auth precedence chain it was written for.
+
+The immediate trigger was discovering that the auto-launcher had been passing `--dangerously-load-development-channels server:tandem-channel` since #477 PR 4 and that this had never done anything, while six documentation surfaces asserted that it did.
+
+### 1. The activation gate
+
+Read statically from the Claude Code 2.1.223 binary, on one account, on 2026-08-07. Every step must pass before a channel is registered:
+
+| Step | Rejects when |
+|---|---|
+| Capability | the session declares no `claude/channel` capability |
+| Protocol era | the negotiated protocol predates channels |
+| Provider | the auth provider is not `firstParty` — API-key and third-party logins fail here |
+| Feature availability | the remotely-served feature payload has channels off for the account |
+| Org policy | policy blocks channels |
+| Session registration | the channel was never registered for this session |
+| Entry kind | for **`plugin:`** entries: no marketplace match, or not on the allowlist. For **`server:`** entries: **rejected unconditionally unless `dev`** |
+
+Two consequences are load-bearing and neither was previously written down.
+
+**`tandem-channel` can never be allowlisted.** It is a `server:` entry; the allowlist is keyed on `plugin@marketplace`. There is no listing shape a bare MCP server could hold, so "get Tandem onto the allowlist" is not a slow path — it is not a path. `dev` is set at exactly two sites, both on the interactive onboarding path, which is why `--dangerously-load-development-channels` is the only mechanism that exists for this entry kind and why `--channels server:tandem-channel` fails identically in both modes.
+
+**This table describes one account at one moment.** The availability step reads a remotely-served, per-account, disk-cached feature payload. Phrase anything written from it as "as of 2.1.223 on this account", never as a permanent property of Claude Code.
+
+### 2. Canonical transport per session kind
+
+| Session kind | Transport | Needs |
+|---|---|---|
+| **Auto-launched** (supervisor-spawned) | **Supervisor stdin wake** (#1266) | nothing from the user |
+| **Hand-launched, interactive** | Channel shim (default) or plugin monitor | the dev-channels flag, or a plugin install |
+| **Hand-launched, `-p` / headless** | none available | — |
+
+**The launcher no longer emits the dev-channels flag** (deleted 2026-08-07; `src/shared/launcher/contract.ts` carries the reason inline, pinned by a regression test). It was inert for two independent reasons: the flag is parsed only inside an `if (!isNonInteractiveSession)` branch and `-p` is that mode, and #1266 measured end-to-end that no turn results under these flags even when the shim does receive the frame. Nothing observable changes on deletion — the shim's *registration* lives in `~/.claude.json`, independent of argv, so an auto-launched session still spawns it and `push.subscribers` stays above zero. A reader checking `tandem doctor` for a difference will correctly find none; that is the expected result, not a failed change.
+
+The channel shim remains the registered default for hand-launched sessions. The plugin monitor stays an installable alternative and is now the *recommended* one in user-facing copy, with a stated precondition: monitors are spawned through a non-login shell, so they inherit whatever PATH Claude Code itself started with, and a GUI-launched Claude Code frequently has no resolvable Node — `exit 127`, every session (`docs/spikes/plugin-delivery.md`). Recommending it unqualified would be a fresh over-claim of the kind this ADR exists to remove.
+
+### 3. ADR-028's rationale (1) is void
+
+The 2026-07-19 keep-the-channel decision rested on three rationales. Their standing today:
+
+1. **Void.** "The monitor is unidirectional, so the channel-only permission-prompt relay has no monitor equivalent" — the relay does not work either. Nothing in `src/client/` reads `pendingPermissions`; the shim registers `permission_request` as an MCP *notification* handler, and notifications cannot be answered; `POST /api/channel-permission-verdict` deletes the entry and logs the verdict, which never reaches Claude Code. The code says so itself (*"SSE push to browser is a follow-up"*), so this is a capability declared ahead of an implementation that never landed — not a regression. It is documented as shipped API in `docs/mcp-tools.md`, which is also wrong.
+2. **Already retracted** by the 2026-08-04 correction (#1266): auto-launched sessions never received channel push.
+3. **Survives.** Making the plugin a global install would socialize a host-wide registry mutation without expanding the beneficiary set. This is an install-cost argument, not a capability one.
+
+So the keep-the-channel decision now stands on (3) alone. Whether that reopens monitor-canonical is a separate decision and is **not** taken here. What must not happen is the record continuing to claim a capability leg that is a stub.
+
+**On the evidence standing of ADR-028's own history**, absorbed here so it is not a separate chain to follow: the 2026-07-17 update overstated itself in two ways. Its persistent-install and double-delivery claims were credited to #1201, whose body defers exactly those two probes; the real basis for persistent-install activation is the v0.18.0 acceptance run. Its `--plugin-dir` half was asserted by #1201 and is now **unreproduced** on 2.1.223 — deliberately unreproduced rather than falsified, since every cell retested was non-TTY and no primary record of the original re-test survives.
+
+### 4. A supervised session has no approval surface
+
+Worth stating because it is currently incidental rather than designed. `buildClaudeArgs` passes no `--permission-mode`, no `--allowedTools`, and no skip flag; under `-p` the dev-channels flag is not parsed; the channel permission callbacks are wired only on the interactive path; and there is no TTY. A supervised session therefore has no way to ask for tool approval and no way to be answered. The flag deletion is the moment this becomes documented instead of accidental. If an approval surface is ever wanted there, it needs designing — not restoring the flag.
+
+### 5. Open direction (not decided here)
+
+Two facts argue for revisiting the `plugin:` spelling, which was previously dismissed:
+
+- **`plugin.json` has a first-class `channels` field** (`{ server, displayName?, userConfig? }`) and Claude Code ships a scaffold generator for channel plugins. That is the supported authoring path; Tandem's manifest does not use it. A `plugin:` entry is the only kind the allowlist can accept.
+- **A `channel_enable` SDK control request registers a channel at runtime** over the stream-json control channel — the launcher's exact mode. It gates on `pluginSource`, requiring a marketplace-installed plugin, which makes it the only known path to real channel push in an auto-launched session and could retire the supervisor's stdin wake.
+
+Both are speculative and need their own probe. Both also inherit a ceiling: `channel_enable` requires a completed marketplace install, and #1316's field reports are of users who could not complete one.
+
+**Method note.** Every claim here about Claude Code internals comes from reading a minified binary with `grep -a`. That method produced a confidently wrong answer during this work — see lesson 95. Treat each fragment as provisional and re-verify before relying on it.
+
+**Cross-references:** [ADR-028](#adr-028-plugin-monitor-url-and-auth-resolution--userconfig-over-hardcoded-default) (superseded in part), [ADR-038](#adr-038-mcp-first-integration-policy-claude-as-default-integration) §extras, #1266, #1316, `docs/spikes/channel-push-stream-json.md`, `docs/spikes/plugin-delivery.md`, `docs/plans/2026-08-07-channel-flag-removal.md`.
