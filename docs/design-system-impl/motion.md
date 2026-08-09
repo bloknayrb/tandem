@@ -346,11 +346,50 @@ already satisfied, so code is unblocked):
 
 - [x] This canon doc lands in the repo (`docs/design-system-impl/motion.md`) — was
   the missing prerequisite the issue named.
-- [ ] #798 rescoped from its stale 9-scene framing to the A1–A29 reality.
+- [x] #798 rescoped from its stale 9-scene framing to the A1–A29 reality — the
+  issue carries a "Rescoped 2026-05-31" banner pointing here, with the original
+  body preserved below it.
 - [x] Release gate met — Phase-1 re-skin shipped in `v0.13.0`, Phase-3 cluster
   re-skin shipped in `v0.13.5`. No release cut needed; motion code is unblocked.
-- [ ] Foundations sub-PR (easing tokens + keyframes + reduced-motion scaffold).
-- [ ] Per-surface threading sub-PRs (pure-ADD).
-- [ ] Canon-decision sub-PRs (A9, A13, A15, C4-shape — design-review gated).
-- [ ] Morph-family + A6 connector sub-PRs.
+- [x] Foundations sub-PR (easing tokens + keyframes + reduced-motion scaffold) —
+  `--tandem-ease-out` / `--tandem-ease-standard` in `index.html`, plus the
+  dual-mechanism reduced-motion guard (`body.tandem-reduce-motion`, 51 references
+  across `src/client` + `index.html`).
+- [x] Per-surface threading sub-PRs (pure-ADD) — see the scene table above; every
+  ADD-classified scene carries its commit.
+- [x] Canon-decision sub-PRs — A9 `67ee424`, A13 `c62fd83`, A15 `964b6c2`,
+  C4-shape `3b20fee`.
+- [x] Morph-family shipped — A23 `896ee44`, A26 `a6a5f9b`/`c2e2f53`, A27
+  `c3b738c`, A28 `c2e2f53`, A29 `f833ef0`. **A6b, the connector, is exempt** —
+  see below.
 - [ ] v1.0 GA gate: motion language coherent across all surfaces.
+
+Boxes ticked 2026-08-08 against a commit-by-commit audit
+(`docs/triage/2026-08-06/brief-798-status-audit.md`), not against recollection.
+**Reading the scene table's ADD/REPLACE/MATCHES column as a shipped-status
+indicator is a mistake** — it is pre-Phase-4 scope labelling, so A9, A13 and A15
+are REPLACE-classified *and* shipped. That column under-reports; the commit
+hashes are the evidence.
+
+### Exemptions (#798 DoD: "or has a documented exemption")
+
+**A6b — rail SVG connector: exempt, not deferred.** The scene draws a line from a
+margin card to its anchored text. There is no connector code anywhere outside the
+margin leader geometry, and there should not be: this doc's own §A6 calls it the
+most complex scene in the language — a runtime SVG positioned via
+`getBoundingClientRect()` against `#root`, tracking two moving DOM nodes across
+scroll, rail resize and margin-mode switches, with its own reduced-motion story.
+
+The exemption is on *redundancy*, not cost. A6b's purpose — making the card ↔
+text link legible — already ships twice: A6a's anchor pulse on card click, and
+the C4 margin leader lines. A third mechanism would add a live-layout coordinate
+problem to buy a third statement of something already said, and live layout
+coupling is exactly what #917's margin-pressure work exists to avoid.
+
+**A16b — highlight L→R wash: exempt.** Decorative sweep on applying a highlight
+colour. Its sibling half A16a was already dropped because the colour picker
+auto-closes before the animation could be seen; A16b plays into the same closing
+surface. Shipping half a scene the user cannot watch is not coherence.
+
+Both were reviewed on 2026-08-08 and accepted as exemptions rather than backlog.
+Reopening either is a design decision, not a cleanup task.
