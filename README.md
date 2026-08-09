@@ -35,7 +35,7 @@ Tandem is approaching v1.0 and ships continuous improvements. See [CHANGELOG.md]
   - [The MCP integration policy](#the-mcp-integration-policy)
   - [Cowork](#cowork)
   - [MCP tools at a glance](#mcp-tools-at-a-glance)
-  - [Channel push and real-time updates](#channel-push-and-real-time-updates)
+  - [Real-time updates](#real-time-updates)
   - [Development setup](#development-setup)
   - [Tech stack](#tech-stack)
   - [How to contribute](#how-to-contribute)
@@ -107,19 +107,22 @@ You do not have to configure any of this by hand. Tandem opens a setup wizard th
 
 Prefer a different AI? Any MCP-capable client can connect to the same endpoint — see the [compatibility table](#the-mcp-integration-policy) for what is supported and what is untested, and [Cowork](#cowork) for connecting Claude Desktop on Windows.
 
-**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you — including the desktop app's **Relaunch Claude** button — get both, and need no setup from you. A session you start yourself by typing `claude` gets only the first until you add one of two things.
+**How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you — including the desktop app's **Relaunch Claude** button — get both, and need no setup from you. A session you start yourself by typing `claude` gets only the first until you add one of three things.
 
-The simplest is to install the Tandem plugin, which needs no flag — see [Channel push and real-time updates](#channel-push-and-real-time-updates) below. Start `claude` from a terminal window if you do: the plugin's monitor uses whatever program path that shell has, and a Claude Code started from a desktop icon may not have one it can use.
+The simplest needs no installation at all: **ask Claude to watch for updates.** Tandem's bundled skill tells it how, so "watch Tandem for updates while we work" is usually enough — it opens a watch on Tandem's wake stream and is woken whenever you comment or send a message. Nothing to install, no flag, and it lasts as long as that session.
 
-The other way is to start the session like this:
+The second is to install the Tandem plugin, which also needs no flag — see [Real-time updates](#real-time-updates) below. Start `claude` from a terminal window if you do: the plugin's monitor uses whatever program path that shell has, and a Claude Code started from a desktop icon may not have one it can use.
+
+The third is the channel shim, which has to be registered and then switched on for each session:
 
 ```bash
-claude --dangerously-load-development-channels server:tandem-channel
+tandem setup --apply --with-channel-shim                              # once
+claude --dangerously-load-development-channels server:tandem-channel  # every session
 ```
 
-Use one or the other, not both: each delivers independently, so a session running both receives every event twice.
+Use one of the three, not several: each delivers independently, so a session running two receives every event twice.
 
-Without the flag nothing breaks and nothing is lost: your messages and comments are saved, and Claude sees them the next time it checks its inbox. But it will not react on its own, which reads as Claude ignoring you. If that is what you are seeing, [this troubleshooting entry](docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) walks through it, and **Settings → About → Copy Diagnostics** (or `tandem doctor`, on npm installs) reports whether anything is listening. More detail in [Channel push and real-time updates](#channel-push-and-real-time-updates).
+Without any of them nothing breaks and nothing is lost: your messages and comments are saved, and Claude sees them the next time it checks its inbox. But it will not react on its own, which reads as Claude ignoring you. If that is what you are seeing, [this troubleshooting entry](docs/troubleshooting.md#i-sent-a-chat-message-or-left-a-comment-and-nothing-happened) walks through it, and **Settings → About → Copy Diagnostics** (or `tandem doctor`, on npm installs) reports whether anything is listening. More detail in [Real-time updates](#real-time-updates).
 
 ### What you get
 
@@ -227,7 +230,7 @@ Client compatibility:
 - **How to enable (Windows desktop app):** open the integration wizard (Settings → AI Assistant, or "Set up" next to Cowork) and click **Enable Cowork**, or toggle it on in Settings → Network. Tandem writes the plugin entry into every detected Cowork workspace and adds a Windows firewall rule so the VM can reach the Tandem server on this computer. That firewall step needs admin once — without it, the VM can't connect.
 - **Why it's automated, not a manual marketplace install:** inside the VM the plugin must point at `host.docker.internal:3479` and carry a per-machine secret auth token. A published marketplace plugin can't carry that token, so Tandem provisions the workspace entries directly. (The published `tandem@tandem-editor` marketplace plugin is for Claude Code running *on the host*, over `127.0.0.1` — see below.)
 - **Verify:** in a Cowork session, ask Claude to open or list your documents — Tandem's tools should appear. If they don't, re-run Enable.
-- **Real-time updates:** live annotation/chat push needs the Tandem desktop app plus one of the push transports (see [Channel push](#channel-push-and-real-time-updates)); the Cowork connection itself is request/response.
+- **Real-time updates:** live annotation/chat push needs the Tandem desktop app plus one of the push transports (see [Real-time updates](#real-time-updates)); the Cowork connection itself is request/response. Note the self-armed watch is **not** one of the options here — its wake stream refuses non-loopback peers, so a session inside a Cowork VM cannot reach it.
 - **macOS / Linux:** not yet — tracked in #316 / #317.
 
 For Claude Code on the host, the published plugin can be added from the marketplace instead of the wizard:
@@ -237,7 +240,7 @@ claude plugin marketplace add bloknayrb/tandem
 claude plugin install tandem@tandem-editor
 ```
 
-This activates the MCP tools, the bundled skill, and — on Claude Code 2.1.212 or newer — a monitor that delivers real-time events with no extra flag. See [Channel push](#channel-push-and-real-time-updates) for how that compares to the channel shim.
+This activates the MCP tools, the bundled skill, and — on Claude Code 2.1.212 or newer — a monitor that delivers real-time events with no extra flag. See [Real-time updates](#real-time-updates) for how that compares to the other two.
 
 ### MCP tools at a glance
 
@@ -250,28 +253,30 @@ Tandem's MCP tools span six capability areas. Full reference: [docs/mcp-tools.md
 - **Awareness.** Read user presence and Solo/Tandem mode; check the inbox for selection events, chat messages, and annotation actions; reply in the chat sidebar.
 - **Diagnostics.** Report connection and boot health over MCP itself, so a client that can't reach loopback can still self-diagnose.
 
-### Channel push and real-time updates
+### Real-time updates
 
-Real-time push delivers events (selections, annotation actions, chat messages) to the AI client over Server-Sent Events the moment they happen, so the AI does not have to poll. There are two transports.
+Real-time delivery gets events (annotation actions, chat messages) to the AI the moment they happen, so it does not have to wait until it next polls. There are three ways to get it, and they are alternatives — not layers.
 
-Neither is needed for a session Tandem launches for you. Those are woken directly by Tandem and do not use either transport — both of the options below are about sessions you start by hand.
+None of them is needed for a session Tandem launches for you. Those are woken directly by Tandem over the session's own input and use none of the three; everything below is about sessions you start by hand.
 
-**The plugin monitor** needs no flag, which makes it the easier of the two. Installing the plugin (above) registers it, and every `claude` you start afterwards wakes on document changes. Two conditions: it requires **Claude Code 2.1.212 or newer** — on older versions the install still succeeds and the monitor simply never runs, with nothing to tell you so — and you should start `claude` from a terminal, because the monitor runs with whatever program path that session was given and a desktop-icon launch may not include Node. If the monitor reports `exit 127` every session, that is this.
+**A self-armed watch** needs nothing installed and no flag. Ask Claude to watch Tandem for updates and it opens a watch on Tandem's wake stream itself; the bundled skill carries the instructions, and `tandem_status` reports the address to watch. It lasts for that session and disappears with it, which is also the point — nothing is left configured on your machine. This is the path that survives the failures the other two are prone to, so it is the one to try first. Two limits: it needs a Claude Code that offers a `Monitor` tool, and the wake stream is **loopback-only**, so it does not reach a session running anywhere but this machine — Cowork included.
 
-**The channel shim** is what `tandem setup` registers by default, and the transport Tandem tests against ([ADR-028](docs/decisions.md)). Registering it is not enough on its own — the session also has to be started with the flag:
+**The plugin monitor** needs no flag either, and unlike the watch it applies to every session automatically once installed. Two conditions: it requires **Claude Code 2.1.212 or newer** — on older versions the install still succeeds and the monitor simply never runs, with nothing to tell you so — and you should start `claude` from a terminal, because the monitor runs with whatever program path that session was given and a desktop-icon launch may not include Node. If the monitor reports `exit 127` every session, that is this.
+
+**The channel shim** is the transport Tandem has tested against longest ([ADR-028](docs/decisions.md)). It is **not registered by default** — that changed in the release this note ships with, because a shim whose session never enables the flag connects, delivers nothing, and makes Tandem believe something is listening. Registering it is also not enough on its own; the session has to be started with the flag as well:
 
 ```bash
-tandem setup --apply --with-channel-shim                   # persistent setup
+tandem setup --apply --with-channel-shim                   # once
 claude --dangerously-load-development-channels server:tandem-channel   # every session
 ```
 
-The flag is Claude Code's marker for unstable APIs. It works only in an interactive session, and it is required rather than optional: `tandem-channel` is a plain MCP server, and Claude Code's channel allowlist covers only plugins, so there is no list Tandem could join that would remove the need for it.
+The flag is Claude Code's marker for unstable APIs. It works only in an interactive session, and it is required rather than optional: `tandem-channel` is a plain MCP server, and Claude Code's channel allowlist covers only plugins, so there is no list Tandem could join that would remove the need for it. If you already have it configured, your configuration is untouched and keeps working — the change is to what a *new* setup writes. To remove it, re-run `tandem setup --apply` without the flag.
 
-Do not enable both: each transport delivers independently, so a session running the plugin *and* the channel flag receives every event twice.
+Do not enable more than one: each delivers independently, so a session running two receives every event twice.
 
-Note that Solo mode suppresses annotation events on both transports by design — chat still comes through. If you are testing push and only chat arrives, check the mode toggle before debugging the transport.
+Note that Solo mode suppresses annotation events on all three by design — chat still comes through. If you are testing real-time delivery and only chat arrives, check the mode toggle before debugging the transport.
 
-Without either, the AI uses `tandem_checkInbox` to pull the same events on demand. You can also ask Claude to poll periodically with `/loop 30s check tandem inbox and respond to any new messages`.
+Without any of them, the AI uses `tandem_checkInbox` to pull the same events on demand. You can also ask Claude to poll periodically with `/loop 30s check tandem inbox and respond to any new messages`.
 
 ### Development setup
 

@@ -1,6 +1,6 @@
 ---
 name: tandem
-version: 6
+version: 7
 description: >
   Use when tandem_* MCP tools are available, the user asks about Tandem
   document editing, or iterating on text collaboratively. Provides workflow
@@ -84,7 +84,9 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 Polling is the reliable path and stays the authority on what you see. But between your turns nothing polls, so a comment the user leaves while you sit idle waits until your next turn — which may never come.
 
-If your host offers a `Monitor` tool, you can arm a watch on Tandem's wake stream so idle time doesn't swallow the user's messages. **Arm it at most once per session**, and only if Tandem's tool output has told you nothing is subscribed.
+If your host offers a `Monitor` tool, you can arm a watch on Tandem's wake stream so idle time doesn't swallow the user's messages. **Arm it at most once per session**, and only if Tandem's tool output has told you nothing is subscribed — **or if the user asks you to.**
+
+That second clause is not politeness, it is the fix for a real hole. Tandem can only tell you when *nothing at all* is subscribed, and a legacy channel shim that never negotiated the channel stays subscribed forever while delivering nothing. For that user the count never reaches zero, so on the first clause alone you would decline to arm in exactly the session that needs it most. If the user says they are not getting your replies to comments, or asks you to watch for updates, arm — do not check the count first.
 
 **Read the URL from `tandem_status`, don't assume it.** Read mode returns `wakeUrl` — the live address of the wake stream, reported by the server that is running it. It is usually `ws://127.0.0.1:3479/api/wake`, but the port is configurable and guessing it is a *silent* failure: you would open a socket to whatever unrelated service holds 3479 and sit there believing you were armed. If `wakeUrl` is absent, this Tandem has no wake transport and there is nothing to arm — keep polling.
 

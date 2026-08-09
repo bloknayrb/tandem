@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  evaluateAbsentChannelEntry,
   evaluateClaudeCli,
   evaluateNpmStaleness,
   evaluateOrphanedVite,
@@ -1259,6 +1260,32 @@ describe("orphaned-vite integration", () => {
 // while nothing they do reaches Claude. These branches are the user-facing
 // output of that distinction, and none of them were covered.
 
+describe("evaluateAbsentChannelEntry", () => {
+  // The renderer prints `fix` only when `status !== "pass"`. This check is a
+  // PASS, so everything a user is meant to act on has to be in the message —
+  // the first version returned a `{message, fix}` pair and its advice went to
+  // `--json` and nobody else. Assert on the one string, which is also all the
+  // call sites now pass.
+  it("carries its guidance in the message, where a pass line is actually printed", () => {
+    const msg = evaluateAbsentChannelEntry("~/.claude.json");
+    expect(msg).toMatch(/--with-channel-shim/);
+    expect(msg).toMatch(/watch/i);
+  });
+
+  it("does not send the reader to a command that no longer writes the entry", () => {
+    // `tandem setup --apply` alone stopped writing this entry in Track E, so
+    // the old remedy changed nothing and read as "your config is broken".
+    const msg = evaluateAbsentChannelEntry("~/.claude.json");
+    expect(msg).not.toMatch(/setup --apply(?! --with-channel-shim)/);
+  });
+
+  it("says absence is expected rather than broken, and carries the caller's label", () => {
+    expect(evaluateAbsentChannelEntry(".mcp.json")).toMatch(/^\.mcp\.json /);
+    expect(evaluateAbsentChannelEntry("~/.claude.json")).toMatch(/^~\/\.claude\.json /);
+    expect(evaluateAbsentChannelEntry(".mcp.json")).toMatch(/expected/i);
+  });
+});
+
 describe("evaluatePushPath", () => {
   it("skips with an explanation when the server reports no push field", () => {
     // Silence would read as a passing check — the troubleshooting entry tells
@@ -1270,14 +1297,21 @@ describe("evaluatePushPath", () => {
     }
   });
 
-  it("warns when nothing is attached, and names both remedies", () => {
+  it("warns when nothing is attached, and names all three remedies", () => {
     const out = evaluatePushPath({ subscribers: 0, eventCount: 0, lastEventAt: null });
     expect(out?.status).toBe("warn");
     expect(out?.message).toMatch(/not notified/i);
-    // Both transports, because `subscribers: 0` cannot say which one is missing.
-    expect(out?.fix).toMatch(/dangerously-load-development-channels/);
+    // All three transports, because `subscribers: 0` cannot say which one is
+    // missing. The self-armed watch leads: it is the only one of the three that
+    // needs neither an install nor a flag (ADR-049).
+    expect(out?.fix).toMatch(/arm a watch/i);
     expect(out?.fix).toMatch(/plugin/i);
-    expect(out?.fix).toMatch(/not both/i);
+    expect(out?.fix).toMatch(/dangerously-load-development-channels/);
+    // The shim is opt-in since Track E, so the remedy must say how to register
+    // it — naming only the launch flag would send the reader to a flag with no
+    // server entry behind it.
+    expect(out?.fix).toMatch(/--with-channel-shim/);
+    expect(out?.fix).toMatch(/not several/i);
     expect(out?.data).toMatchObject({ subscribers: 0, eventCount: 0 });
   });
 

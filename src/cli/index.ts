@@ -132,13 +132,13 @@ try {
     await runSetup({
       apply: args.includes("--apply"),
       force: args.includes("--force"),
-      // `undefined` when the flag is absent, NOT `false`. This option is an
-      // override, and `shouldRegisterChannelShim` short-circuits on
-      // `override !== undefined` — so passing a bare `args.includes(...)` made
-      // every plain `tandem setup --apply` an explicit opt-OUT, silently
-      // registering no channel shim for Claude Code and defeating the
-      // documented default-on behaviour. There is no `--no-channel-shim`, so
-      // absent must mean "no opinion".
+      // `undefined` when the flag is absent, NOT `false`, and the distinction
+      // still matters after Track E made the shim opt-in. `setup` now writes no
+      // shim either way, but `applyConfigWithToken` reads the same option and
+      // treats absent as "preserve what is there" and `false` as "remove it" —
+      // so collapsing the two would make `tandem rotate-token` delete a
+      // deliberate opt-in. There is no `--no-channel-shim`; absent means "no
+      // opinion".
       withChannelShim: args.includes("--with-channel-shim") || undefined,
       targets,
     });

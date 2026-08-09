@@ -66,7 +66,7 @@ This is a two-person project (Bryan + Claude). Scope gates are minimal — if yo
 
 ## Architecture
 
-Three layers: Editor (Tiptap in Tauri desktop or browser) <-> Tandem Server (Hocuspocus on :3478 + MCP HTTP on :3479) <-> Claude Code. The desktop app is the primary distribution; npm global install opens the same editor in a browser. Channel shim (`src/channel/`) pushes real-time events to Claude Code via SSE, replacing polling; `src/monitor/` is the flagless alternative shipped via the plugin.
+Three layers: Editor (Tiptap in Tauri desktop or browser) <-> Tandem Server (Hocuspocus on :3478 + MCP HTTP on :3479) <-> Claude Code. The desktop app is the primary distribution; npm global install opens the same editor in a browser. **Four push paths, and none is the setup default.** Channel shim (`src/channel/`) pushes real-time events to Claude Code via SSE — **opt-in since Track E** (`--with-channel-shim`), because a shim whose host never negotiated the channel is attached-and-inert and suppresses every signal keyed on the subscriber count. `src/monitor/` is the flagless alternative shipped via the plugin. `supervisor.ts` wakes auto-launched sessions on the child's stdin (#1266). The self-armed `ws` watch on `/api/wake` (ADR-049) needs no install and no flag, and is what `SKILL.md` and `doctor` now recommend first. Pull (`tandem_checkInbox`) is always authoritative over all four.
 
 Full file map: [docs/architecture.md](docs/architecture.md#file-map). Key entry points:
 
@@ -202,7 +202,7 @@ Mechanism, ops, and failure modes: [docs/licensing-explained.md](docs/licensing-
 
 **Shipped: v0.20.1.** Release history is [CHANGELOG.md](CHANGELOG.md); remaining v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10). Do not re-narrate either here.
 
-Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, channel push + plugin monitor, `.md`/`.docx`/`.txt`/`.html`, npm global install, Tauri desktop app.
+Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor stdin), `.md`/`.docx`/`.txt`/`.html`, npm global install, Tauri desktop app.
 
 **Two systems are merged but runtime-inert. Both must stay that way until their flag flips:**
 

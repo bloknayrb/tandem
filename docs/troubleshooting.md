@@ -132,25 +132,28 @@ tandem doctor
 
 Either way, look for the push line. `No real-time push consumer attached` means nothing is listening — that's the whole problem.
 
-**First, check which kind of session this is.** Sessions Tandem starts for you — the desktop app's **Relaunch Claude** button — are woken directly by Tandem and use neither transport below. If that is the session that isn't reacting, nothing here is the fix; the problem is elsewhere. Everything that follows is about a session you started yourself by typing `claude`.
+**First, check which kind of session this is.** Sessions Tandem starts for you — the desktop app's **Relaunch Claude** button — are woken directly by Tandem and use none of the three below. If that is the session that isn't reacting, nothing here is the fix; the problem is elsewhere. Everything that follows is about a session you started yourself by typing `claude`.
 
-**Fix it** — two ways, and you want exactly one of them.
+**Fix it** — three ways, and you want exactly one of them.
 
-*Either* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). Start `claude` from a terminal window when you do: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127` every session](#plugin-monitor-reports-script-failed-exit-127-every-session).
+*The quickest, with nothing to install:* **ask Claude to watch for updates.** Tandem's bundled skill tells it how, so "watch Tandem for updates while we work" is usually enough — it opens a watch on Tandem's wake stream and is woken whenever you comment or send a message. No install, no flag, and it lives and dies with that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that `tandem_status` reports a `wakeUrl` — the watch has nothing to attach to without one, and stdio-mode Tandem reports none. **Ask directly rather than waiting to be offered.** Claude normally only volunteers a watch when Tandem reports that nothing at all is listening, and a channel shim left over from an older setup stays listening forever while delivering nothing — so in exactly the case you are debugging, it will not offer. Asking overrides that.
 
-*Or* start Claude Code with the channel flag:
+*Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). Start `claude` from a terminal window when you do: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127` every session](#plugin-monitor-reports-script-failed-exit-127-every-session).
+
+*Or* register the channel shim and start Claude Code with the channel flag:
 
 ```bash
+tandem setup --apply --with-channel-shim
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-It has to be on every session — the flag is not remembered, and it only works in an interactive session, so it does nothing in `claude -p`. There is also no way to make it unnecessary: Claude Code's channel allowlist covers plugins only, and `tandem-channel` is a plain MCP server, so no listing exists that Tandem could apply for.
+Both halves are needed. The shim is **not registered by default** — so on a fresh setup the flag alone names a server that is not in your config. (If you configured it before that changed, your existing entry is untouched and the flag alone is still enough.) The flag has to be on every session: it is not remembered, and it only works in an interactive session, so it does nothing in `claude -p`. There is also no way to make it unnecessary — Claude Code's channel allowlist covers plugins only, and `tandem-channel` is a plain MCP server, so no listing exists that Tandem could apply for.
 
-**Do not enable both.** Each transport delivers independently, so a session running the plugin *and* the channel flag receives every event twice. Note that `No real-time push consumer attached` cannot tell you which one is missing — both attach to the same stream — so pick the one you meant to be using.
+**Do not enable more than one.** Each delivers independently, so a session running two receives every event twice. Note that `No real-time push consumer attached` cannot tell you which one is missing — they all attach to the same stream — so pick the one you meant to be using.
 
 **Meanwhile, nothing is lost.** Your message is saved and Claude sees it the next time it calls `tandem_checkInbox`. If Claude is mid-task, asking it to "check your inbox" surfaces everything immediately.
 
-**Neither fix applies to Claude Desktop**, and it is the one case where there is nothing to configure. Both transports above are Claude Code mechanisms: the channel shim is a node subprocess Claude Code spawns, and the plugin monitor rides Claude Code's plugin host. For a Claude Desktop target the setup wizard writes an MCP entry and nothing else — deliberately — and its Done screen now says so on that target's row rather than leaving you to find out by being ignored. Push there does not fail; it does not exist. Nothing is lost either way: as above, your comments and messages are saved and Claude Desktop sees them the next time it calls `tandem_checkInbox`, so asking it to "check your inbox" is the workflow rather than a workaround (#1299).
+**None of the three applies to Claude Desktop**, and it is the one case where there is nothing to configure. All of them are Claude Code mechanisms: the channel shim is a node subprocess Claude Code spawns, the plugin monitor rides Claude Code's plugin host, and the self-armed watch uses a Claude Code tool. For a Claude Desktop target the setup wizard writes an MCP entry and nothing else — deliberately — and its Done screen now says so on that target's row rather than leaving you to find out by being ignored. Push there does not fail; it does not exist. Nothing is lost either way: as above, your comments and messages are saved and Claude Desktop sees them the next time it calls `tandem_checkInbox`, so asking it to "check your inbox" is the workflow rather than a workaround (#1299).
 
 **One caveat `tandem doctor` cannot resolve for you.** If a consumer *is* attached, that proves events reach the shim — not that Claude sees them. A session started without the flag still runs a channel shim that receives every event and discards it, because whether the channel is honored is decided inside Claude Code and never reported back. If push looks attached and Claude still isn't reacting, start the session with the flag explicitly rather than assuming the config alone is enough.
 

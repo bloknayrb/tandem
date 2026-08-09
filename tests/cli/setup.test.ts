@@ -8,13 +8,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSetup } from "../../src/cli/setup.js";
 // These helpers moved to src/server/integrations/apply.ts in #477 PR 3c-ii-a;
 // the back-compat re-export from src/cli/setup.ts was dropped in PR 3c-ii-c.
 import {
   applyConfig,
+  applyConfigWithToken,
   applyOpsForCli,
   buildMcpEntries,
   detectTargets,
@@ -387,6 +388,126 @@ describe("applyConfig", () => {
   });
 });
 
+/**
+ * Where `detectTargets` puts the Claude Desktop config under a given home.
+ *
+ * Mirrors the three platform branches in `detectTargets`. Spelled out rather
+ * than imported, because an expectation derived from the code under test
+ * cannot fail — but it has to be spelled out for ALL THREE platforms: the
+ * first version of the test below hard-coded the win32 path, passed locally,
+ * and went red on Linux CI.
+ */
+function desktopConfigUnder(home: string): string {
+  if (process.platform === "win32") {
+    return join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
+  }
+  if (process.platform === "darwin") {
+    return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+  }
+  return join(home, ".config", "claude", "claude_desktop_config.json");
+}
+
+describe("applyConfigWithToken — rotation preserves, it does not re-derive", () => {
+  let home: string;
+
+  function writeConfig(servers: Record<string, unknown>): void {
+    writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: servers }));
+  }
+  function readServers(): Record<string, unknown> {
+    const raw = JSON.parse(readFileSync(join(home, ".claude.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    return raw.mcpServers;
+  }
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-rotate-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  // THE regression this file exists to catch. `shouldRegisterChannelShim`
+  // answers "what should a FRESH setup write" — since Track E, `false` — and
+  // `applyOpsForCli` turns a `false` into an explicit REMOVE. Routing rotation
+  // through it made `tandem rotate-token`, whose entire job is to change the
+  // token, silently delete a shim the user had opted into. The CHANGELOG
+  // promises the opposite in so many words: "nothing changes and nothing is
+  // removed".
+  it("keeps an opted-in tandem-channel entry when no flag is passed", async () => {
+    writeConfig({
+      tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      "tandem-channel": { command: "/usr/bin/node", args: ["/x/channel/index.js"] },
+    });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
+
+    expect(readServers()["tandem-channel"]).toBeDefined();
+  });
+
+  it("does not conjure one into a config that never had it", async () => {
+    // The other direction, so the fix cannot be "always keep the shim" — that
+    // would restore the default-on behaviour Track E removed.
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
+
+    expect(readServers()["tandem-channel"]).toBeUndefined();
+  });
+
+  it("still honours an explicit false — that is a request, not an omission", async () => {
+    writeConfig({
+      tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      "tandem-channel": { command: "/usr/bin/node", args: ["/x/channel/index.js"] },
+    });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+      withChannelShim: false,
+    });
+
+    expect(readServers()["tandem-channel"]).toBeUndefined();
+  });
+
+  it("does not conjure a shim into a config that lacks one, on any target kind", async () => {
+    // Pins the push-support branch of the resolver against a FIXTURE rather
+    // than against whatever Claude Desktop config the developer happens to
+    // have — which is how the branch went unexercised while the suite was
+    // quietly writing to the real one.
+    const desktopPath = desktopConfigUnder(home);
+    mkdirSync(dirname(desktopPath), { recursive: true });
+    writeFileSync(
+      desktopPath,
+      JSON.stringify({ mcpServers: { "tandem-channel": { command: "node" } } }),
+    );
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
+
+    // Claude Desktop has no push transport at all, so a shim there is removed
+    // regardless of what the file said (#1299) — and, crucially, the write
+    // landed inside the temp home rather than on the real config.
+    const desktop = JSON.parse(readFileSync(desktopPath, "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(desktop.mcpServers["tandem-channel"]).toBeUndefined();
+  });
+
+  it("rewrites the token either way", async () => {
+    // Guards against "preserve" being implemented as "skip this target".
+    writeConfig({
+      tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      "tandem-channel": { command: "/usr/bin/node", args: ["/x/channel/index.js"] },
+    });
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+
+    await applyConfigWithToken(token, { homeOverride: home });
+
+    const tandem = readServers().tandem as { headers?: Record<string, string> };
+    expect(tandem.headers?.Authorization).toBe(`Bearer ${token}`);
+  });
+});
+
 describe("detectTargets", () => {
   let tmpDir: string;
 
@@ -421,6 +542,43 @@ describe("detectTargets", () => {
     const targets = detectTargets({ homeOverride: tmpDir, force: true });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
   });
+
+  // The guard that was missing on 2026-08-09, when a test using `homeOverride`
+  // wrote its fixture token into the developer's LIVE Claude Desktop config.
+  // `%APPDATA%` is set on every real Windows box, so reading it first made the
+  // override partial — and `assertPathSafe` cannot catch the escape, because it
+  // validates against the process's real `homedir()`, which the real APPDATA
+  // path sits happily inside. `homeOverride` is a containment boundary; a
+  // partial one is worse than none, because callers reasonably trust it.
+  it("keeps EVERY detected path under homeOverride, %APPDATA% notwithstanding", () => {
+    const targets = detectTargets({ homeOverride: tmpDir, force: true });
+    expect(targets.length).toBeGreaterThan(0);
+    for (const t of targets) {
+      expect(t.configPath.startsWith(tmpDir), `${t.label} escaped to ${t.configPath}`).toBe(true);
+    }
+  });
+
+  // `%APPDATA%` exists only on win32, and so does the branch that reads it —
+  // elsewhere the Desktop path is derived from `home` alone and the override
+  // has nothing to win over. Skipped rather than softened to `if (desktop)`,
+  // which is how the first version passed vacuously nowhere and failed on CI.
+  it.skipIf(process.platform !== "win32")(
+    "lets appDataOverride win over homeOverride for the Desktop target",
+    () => {
+      const appData = mkdtempSync(join(tmpdir(), "tandem-appdata-"));
+      try {
+        const targets = detectTargets({
+          homeOverride: tmpDir,
+          appDataOverride: appData,
+          force: true,
+        });
+        const desktop = targets.find((t) => t.label === "Claude Desktop");
+        expect(desktop?.configPath.startsWith(appData)).toBe(true);
+      } finally {
+        rmSync(appData, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("sets kind to claude-code for Claude Code targets", () => {
     writeFileSync(join(tmpDir, ".claude.json"), "{}");
