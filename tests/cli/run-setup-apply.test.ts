@@ -19,7 +19,12 @@ vi.mock("../../src/server/integrations/apply.js", async (importActual) => {
     installSkill: vi.fn(),
     buildMcpEntries: vi.fn(() => ({})),
     applyOpsForCli: vi.fn(() => ({})),
-    shouldRegisterChannelShim: vi.fn(() => false),
+    // `resolveChannelShimIntent`, not `resolveChannelShimIntent` — `setup`
+    // moved to the former so an omitted flag preserves rather than deletes.
+    // Left unmocked it does a REAL config read against these fake paths,
+    // `assertPathSafe` throws, every target "fails", and the all-failed gate
+    // exits 1 — which is how this file failed when the switch landed.
+    resolveChannelShimIntent: vi.fn(async () => false),
     validateChannelShimPrereq: vi.fn(() => true),
   };
 });
@@ -30,7 +35,7 @@ import {
   type DetectedTarget,
   detectTargets,
   installSkill,
-  shouldRegisterChannelShim,
+  resolveChannelShimIntent,
 } from "../../src/server/integrations/apply.js";
 
 const CLAUDE_CODE: DetectedTarget = {
@@ -53,7 +58,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
     vi.mocked(detectTargets).mockReset();
     vi.mocked(applyConfig).mockReset();
     vi.mocked(installSkill).mockReset().mockResolvedValue(undefined);
-    vi.mocked(shouldRegisterChannelShim).mockReset().mockReturnValue(false);
+    vi.mocked(resolveChannelShimIntent).mockReset().mockResolvedValue(false);
   });
   afterEach(() => {
     errSpy.mockRestore();
@@ -147,7 +152,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
    * The push-status report.
    *
    * It used to print "Enabled" off `existsSync(CHANNEL_DIST)` — a FILE check,
-   * not a record of what was written. `shouldRegisterChannelShim` returns false
+   * not a record of what was written. `resolveChannelShimIntent` returns false
    * for every Claude Desktop target, so `--target=claude-desktop` announced a
    * shim it had never registered. These pin the report to the writes that
    * actually happened; without them, reverting to the file check is silent.
@@ -164,7 +169,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
     const plain = () => stderr().replace(/\x1b\[[0-9;]*m/g, "");
 
     it("does not claim push when no target took a shim (the Desktop-only case)", async () => {
-      vi.mocked(shouldRegisterChannelShim).mockReturnValue(false);
+      vi.mocked(resolveChannelShimIntent).mockReturnValue(false);
       vi.mocked(detectTargets).mockReturnValue([CLAUDE_DESKTOP]);
       vi.mocked(applyConfig).mockResolvedValue(undefined);
       noExit();
@@ -178,7 +183,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
     });
 
     it("names the targets that actually got a shim", async () => {
-      vi.mocked(shouldRegisterChannelShim).mockImplementation((kind) => kind === "claude-code");
+      vi.mocked(resolveChannelShimIntent).mockImplementation((kind) => kind === "claude-code");
       vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
       vi.mocked(applyConfig).mockResolvedValue(undefined);
       noExit();
@@ -199,7 +204,7 @@ describe("runSetup({ apply: true }) orchestration", () => {
       //
       // Two targets, both eligible, one write failing — a single failing target
       // would take the all-failed exit path and never reach the report at all.
-      vi.mocked(shouldRegisterChannelShim).mockReturnValue(true);
+      vi.mocked(resolveChannelShimIntent).mockResolvedValue(true);
       vi.mocked(detectTargets).mockReturnValue([CLAUDE_CODE, CLAUDE_DESKTOP]);
       vi.mocked(applyConfig)
         .mockResolvedValueOnce(undefined)

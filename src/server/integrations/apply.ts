@@ -375,7 +375,16 @@ export function assertPathSafe(targetPath: string, opts: { allowedRoots?: string
 export const MSIX_PACKAGE_PATTERN = /^Claude_[A-Za-z0-9]+$/;
 
 export interface DetectOptions {
+  /**
+   * Redirect every detected path under this root. **Total**: on win32 it also
+   * overrides `%APPDATA%` for the Claude Desktop target — see the note in
+   * `detectTargets`. Anything less is a foot-gun, because the guard downstream
+   * (`assertPathSafe`) validates against the process's real home and therefore
+   * waves through the very path the override was meant to avoid.
+   */
   homeOverride?: string;
+  /** Explicit `%APPDATA%` root; wins over both `homeOverride` and the env var. */
+  appDataOverride?: string;
   localAppDataOverride?: string;
   force?: boolean;
 }
@@ -399,7 +408,19 @@ export function detectTargets(opts: DetectOptions = {}): DetectedTarget[] {
   // With --force, always include.
   let desktopConfig: string | null = null;
   if (process.platform === "win32") {
-    const appdata = process.env.APPDATA ?? join(home, "AppData", "Roaming");
+    // `homeOverride` WINS over %APPDATA%, and this is a containment boundary,
+    // not a preference. %APPDATA% is set on every real Windows box, so reading
+    // it first made the override partial: a caller that redirected `home` to a
+    // temp dir still got the real `…\AppData\Roaming\Claude\` path back for
+    // this target. A test doing exactly that wrote its fixture token into the
+    // developer's live Claude Desktop config on 2026-08-09. `assertPathSafe`
+    // does not catch it either — that guard validates against the process's
+    // real `homedir()`, which the real APPDATA path is happily inside.
+    const appdata =
+      opts.appDataOverride ??
+      (opts.homeOverride
+        ? join(opts.homeOverride, "AppData", "Roaming")
+        : (process.env.APPDATA ?? join(home, "AppData", "Roaming")));
     desktopConfig = join(appdata, "Claude", "claude_desktop_config.json");
   } else if (process.platform === "darwin") {
     desktopConfig = join(
@@ -1277,12 +1298,41 @@ export { CHANNEL_DIST, PACKAGE_ROOT };
  * `applyConfig` will start that file fresh anyway.
  */
 async function targetHasChannelEntry(configPath: string): Promise<boolean> {
-  try {
-    const read = await readConfigForMutation(configPath);
-    return read.status === "ok" && "tandem-channel" in read.servers;
-  } catch {
-    return false;
-  }
+  const read = await readConfigForMutation(configPath);
+  return read.status === "ok" && "tandem-channel" in read.servers;
+}
+
+/**
+ * Should this target carry a `tandem-channel` entry after this write?
+ *
+ * The single resolver for a question two loops used to answer separately, and
+ * drifted on: `applyConfigWithToken` and `tandem setup`'s `writeTargets`. Both
+ * pass `undefined` when the user gave no flag, and `applyOpsForCli` turns a
+ * `false` into an explicit REMOVE — so "no opinion" silently meant "delete it".
+ *
+ * Three-way, in priority order:
+ *
+ *  1. **No push transport for this kind** (today `claude-desktop`, the Cowork
+ *     stdio path) → `false`, ahead of everything, because no flag conjures a
+ *     transport that does not exist (#1299). Entries there were written by
+ *     Tandem during the default-on era and provably cannot deliver, so removing
+ *     them is the intended cleanup rather than a surprise.
+ *  2. **An explicit override** → honoured. `false` is a request to remove.
+ *  3. **Otherwise, preserve what is registered.** A read failure THROWS rather
+ *     than answering `false`: "I could not tell" and "there is nothing there"
+ *     must not collapse, or a transient `EBUSY` from an antivirus scanner
+ *     becomes a deletion. Both callers run this inside their per-target `try`,
+ *     so a throw records an error and skips that target — which is the honest
+ *     outcome for a config you could not read.
+ */
+export async function resolveChannelShimIntent(
+  targetKind: TargetKind,
+  configPath: string,
+  override: boolean | undefined,
+): Promise<boolean> {
+  if (targetPushSupport(targetKind) === "none") return false;
+  if (override !== undefined) return override;
+  return await targetHasChannelEntry(configPath);
 }
 
 /**
@@ -1295,8 +1345,11 @@ async function targetHasChannelEntry(configPath: string): Promise<boolean> {
  * instead; this helper is for `tandem rotate-token` / `tandem setup`
  * where the flag already captures user intent.
  *
- * **When `withChannelShim` is ABSENT, the existing registration is preserved,
- * not re-derived.** These are different questions and conflating them is a
+ * **When `withChannelShim` is ABSENT, the existing REGISTRATION is preserved.**
+ * The entry BODY is still re-derived from `resolveNodeBinary()` and
+ * `CHANNEL_DIST` — this heals a stale Node path the way `refreshChannelNodeBinary`
+ * does, and a hand-customised `command`/`args` will be overwritten. What is
+ * preserved is whether the entry exists at all. These are different questions and conflating them is a
  * data-loss bug. `shouldRegisterChannelShim` answers "what should a fresh
  * setup write?", which since Track E is `false` — and `applyOpsForCli` turns a
  * `false` into an explicit REMOVE. So calling it here made `tandem
@@ -1318,20 +1371,17 @@ export async function applyConfigWithToken(
   let updated = 0;
   const errors: string[] = [];
   for (const t of targets) {
-    // Explicit intent wins; otherwise preserve whatever this config already
-    // has. The push-support gate still overrides both — a Claude Desktop
-    // target must never carry a node-subprocess shim even if one somehow got
-    // written there (#1299).
-    const withChannelShim =
-      targetPushSupport(t.kind) === "none"
-        ? false
-        : (opts.withChannelShim ?? (await targetHasChannelEntry(t.configPath)));
-    const entries = buildMcpEntries(CHANNEL_DIST, {
-      withChannelShim,
-      token: token ?? undefined,
-      targetKind: t.kind,
-    });
     try {
+      const withChannelShim = await resolveChannelShimIntent(
+        t.kind,
+        t.configPath,
+        opts.withChannelShim,
+      );
+      const entries = buildMcpEntries(CHANNEL_DIST, {
+        withChannelShim,
+        token: token ?? undefined,
+        targetKind: t.kind,
+      });
       await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
       updated++;
     } catch (err) {

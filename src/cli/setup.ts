@@ -10,7 +10,7 @@ import {
   detectTargets,
   installSkill,
   PACKAGE_ROOT,
-  shouldRegisterChannelShim,
+  resolveChannelShimIntent,
   type TargetKind,
   validateChannelShimPrereq,
 } from "../server/integrations/apply.js";
@@ -157,17 +157,32 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
   let failures = 0;
   const shimRegisteredFor: string[] = [];
   for (const t of targets) {
-    // Opt-in since Track E: absent the flag this writes the tandem HTTP entry
-    // and nothing else. It was default-on for Claude Code from #985 until an
-    // inert shim was found suppressing the very signal built to warn about it.
-    // An explicit `--with-channel-shim` with a missing build artifact already
-    // hard-errored above.
-    const withChannelShim = shouldRegisterChannelShim(t.kind, CHANNEL_DIST, opts.withChannelShim);
-    const entries = buildMcpEntries(CHANNEL_DIST, {
-      withChannelShim,
-      targetKind: t.kind,
-    });
     try {
+      // Opt-in since Track E: absent the flag this writes the tandem HTTP entry
+      // and nothing else. It was default-on for Claude Code from #985 until an
+      // inert shim was found suppressing the very signal built to warn about it.
+      // An explicit `--with-channel-shim` with a missing build artifact already
+      // hard-errored above.
+      //
+      // `resolveChannelShimIntent`, NOT `shouldRegisterChannelShim`, and the
+      // difference is data loss. `setup --apply` is a re-run/heal command in
+      // practice — `tandem doctor` prescribes it for a malformed config, a
+      // missing entry and a stale Node path — and it arrives with
+      // `withChannelShim: undefined` whenever the flag is absent. Re-deriving
+      // from that turns "no opinion" into `false`, which `applyOpsForCli`
+      // turns into an explicit REMOVE: a user who had opted in with
+      // `--with-channel-shim` lost it the next time doctor sent them here.
+      // Absent a flag, preserve; `--with-channel-shim` still turns it on, and
+      // there is deliberately no `--no-channel-shim`.
+      const withChannelShim = await resolveChannelShimIntent(
+        t.kind,
+        t.configPath,
+        opts.withChannelShim,
+      );
+      const entries = buildMcpEntries(CHANNEL_DIST, {
+        withChannelShim,
+        targetKind: t.kind,
+      });
       await applyConfig(t.configPath, applyOpsForCli(entries, { withChannelShim }));
       console.error(`  \x1b[32m✓\x1b[0m ${t.label}`);
       // Recorded only on a SUCCESSFUL write — a target whose config failed to

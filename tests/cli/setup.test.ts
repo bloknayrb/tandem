@@ -450,6 +450,32 @@ describe("applyConfigWithToken — rotation preserves, it does not re-derive", (
     expect(readServers()["tandem-channel"]).toBeUndefined();
   });
 
+  it("does not conjure a shim into a config that lacks one, on any target kind", async () => {
+    // Pins the push-support branch of the resolver against a FIXTURE rather
+    // than against whatever Claude Desktop config the developer happens to
+    // have — which is how the branch went unexercised while the suite was
+    // quietly writing to the real one.
+    mkdirSync(join(home, "AppData", "Roaming", "Claude"), { recursive: true });
+    writeFileSync(
+      join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json"),
+      JSON.stringify({ mcpServers: { "tandem-channel": { command: "node" } } }),
+    );
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
+
+    // Claude Desktop has no push transport at all, so a shim there is removed
+    // regardless of what the file said (#1299) — and, crucially, the write
+    // landed inside the temp home rather than on the real config.
+    const desktop = JSON.parse(
+      readFileSync(
+        join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json"),
+        "utf-8",
+      ),
+    ) as { mcpServers: Record<string, unknown> };
+    expect(desktop.mcpServers["tandem-channel"]).toBeUndefined();
+  });
+
   it("rewrites the token either way", async () => {
     // Guards against "preserve" being implemented as "skip this target".
     writeConfig({
@@ -498,6 +524,36 @@ describe("detectTargets", () => {
   it("detects Claude Code with --force even when ~/.claude is absent", async () => {
     const targets = detectTargets({ homeOverride: tmpDir, force: true });
     expect(targets.some((t) => t.label === "Claude Code")).toBe(true);
+  });
+
+  // The guard that was missing on 2026-08-09, when a test using `homeOverride`
+  // wrote its fixture token into the developer's LIVE Claude Desktop config.
+  // `%APPDATA%` is set on every real Windows box, so reading it first made the
+  // override partial — and `assertPathSafe` cannot catch the escape, because it
+  // validates against the process's real `homedir()`, which the real APPDATA
+  // path sits happily inside. `homeOverride` is a containment boundary; a
+  // partial one is worse than none, because callers reasonably trust it.
+  it("keeps EVERY detected path under homeOverride, %APPDATA% notwithstanding", () => {
+    const targets = detectTargets({ homeOverride: tmpDir, force: true });
+    expect(targets.length).toBeGreaterThan(0);
+    for (const t of targets) {
+      expect(t.configPath.startsWith(tmpDir), `${t.label} escaped to ${t.configPath}`).toBe(true);
+    }
+  });
+
+  it("lets appDataOverride win over homeOverride for the Desktop target", () => {
+    const appData = mkdtempSync(join(tmpdir(), "tandem-appdata-"));
+    try {
+      const targets = detectTargets({
+        homeOverride: tmpDir,
+        appDataOverride: appData,
+        force: true,
+      });
+      const desktop = targets.find((t) => t.label === "Claude Desktop");
+      if (desktop) expect(desktop.configPath.startsWith(appData)).toBe(true);
+    } finally {
+      rmSync(appData, { recursive: true, force: true });
+    }
   });
 
   it("sets kind to claude-code for Claude Code targets", () => {
