@@ -75,6 +75,7 @@ import { createRootEditorFont } from "./hooks/useEditorFont.svelte";
 import { createFileDrop } from "./hooks/useFileDrop.svelte";
 import { shouldDispatchFindNav } from "./hooks/useFindShortcuts.js";
 import { createFirstRunNeeded } from "./hooks/useFirstRunNeeded.svelte";
+import { createHeadings } from "./hooks/useHeadings.svelte";
 import { createHighContrast } from "./hooks/useHighContrast.svelte";
 import { licenseStore } from "./hooks/useLicense.svelte";
 import { createMarginPositions } from "./hooks/useMarginPositions.svelte";
@@ -2334,6 +2335,11 @@ const marginPositions = createMarginPositions({
   getLayerEl: () => marginLayerEl,
   getEnabled: () => editorStage.effectivelyOn,
 });
+// #832: single instance for the whole app — OutlinePanel and the left
+// PeekStrip both read from this, rather than each running their own
+// `walkHeadings()` + `ed.on("update")` subscription. See the hook's doc
+// comment for why a second instance (e.g. inside PeekStrip) would be wrong.
+const headingsState = createHeadings({ getEditor: () => editor });
 // Replies feed the bubble reply count + thread preview. We observe the raw
 // Y.Map here; MarginColumn applies the `getVisibleReplies()` ADR-027 filter
 // at the lookup site so note / highlight bubbles never expose replies.
@@ -2605,11 +2611,18 @@ const shouldShowModelPicker = $derived(
             kind="outline"
             focusTrigger={outlineFocusTrigger}
             {editor}
+            headings={headingsState.headings}
             visible={true}
           />
           {@render edgeCollapse("left", toggleLeftPanel)}
         </div>
-        <PeekStrip side="left" collapsed={!effectiveLeftVisible} kind="outline" onActivate={toggleLeftPanel} />
+        <PeekStrip
+          side="left"
+          collapsed={!effectiveLeftVisible}
+          kind="outline"
+          headingLevels={headingsState.headings.map((h) => h.level)}
+          onActivate={toggleLeftPanel}
+        />
       </div>
       {#if effectiveLeftVisible}
         {@render resizeHandle("left", (e) => dragResizeLeft.handleResizeStart(e), undefined, dragResizeLeft.width)}

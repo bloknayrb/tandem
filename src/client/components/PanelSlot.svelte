@@ -18,6 +18,7 @@ import type { Annotation } from "../../shared/types";
 import ChatPanel from "../panels/ChatPanel.svelte";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import SidePanel from "../panels/SidePanel.svelte";
+import type { HeadingEntry } from "../utils/headings";
 import OutlinePanel from "./OutlinePanel.svelte";
 
 type ChatSlotProps = { kind: "chat"; visible?: boolean } & ComponentProps<typeof ChatPanel>;
@@ -26,6 +27,7 @@ type OutlineSlotProps = {
   kind: "outline";
   visible?: boolean;
   editor: Editor | null;
+  headings: HeadingEntry[];
   annotations?: Annotation[];
   focusTrigger?: number;
   activeFilterType?: FilterType;
@@ -60,6 +62,7 @@ const wrapStyle = $derived(
     {:else if kind === "outline"}
       <OutlinePanel
         editor={(rest as OutlineSlotProps).editor}
+        headings={(rest as OutlineSlotProps).headings}
         annotations={(rest as OutlineSlotProps).annotations}
         focusTrigger={(rest as OutlineSlotProps).focusTrigger}
         activeFilterType={(rest as OutlineSlotProps).activeFilterType}
@@ -75,6 +78,7 @@ const wrapStyle = $derived(
 {:else if kind === "outline"}
   <OutlinePanel
     editor={(rest as OutlineSlotProps).editor}
+    headings={(rest as OutlineSlotProps).headings}
     annotations={(rest as OutlineSlotProps).annotations}
     focusTrigger={(rest as OutlineSlotProps).focusTrigger}
     activeFilterType={(rest as OutlineSlotProps).activeFilterType}

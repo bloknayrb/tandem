@@ -6,10 +6,14 @@ import type { Annotation } from "../../shared/types";
 import { scrollFade } from "../actions/scrollFade.svelte.js";
 import type { FilterAuthor, FilterStatus, FilterType } from "../panels/FilterBar.svelte";
 import { flatOffsetToPmPos } from "../positions";
-import { type HeadingEntry, walkHeadings } from "../utils/headings";
+import type { HeadingEntry } from "../utils/headings";
 
 interface Props {
   editor: Editor | null;
+  /** Real heading outline, computed once in App.svelte via `createHeadings`
+      and threaded down here (#832) — see that hook's doc comment for why
+      OutlinePanel must not compute it independently. */
+  headings: HeadingEntry[];
   annotations?: Annotation[];
   focusTrigger?: number;
   activeFilterType?: FilterType;
@@ -19,6 +23,7 @@ interface Props {
 
 let {
   editor,
+  headings,
   annotations = [],
   focusTrigger = 0,
   activeFilterType = "all",
@@ -26,40 +31,23 @@ let {
   activeFilterStatus = "all",
 }: Props = $props();
 
-let headings = $state<HeadingEntry[]>([]);
 let focusedIndex = $state<number>(-1);
 let itemEls = $state<(HTMLButtonElement | null)[]>([]);
 let searchQuery = $state("");
 let searchInput = $state<HTMLInputElement | null>(null);
 let scrollSpyIndex = $state<number>(-1);
 
+// `headings` is now an upstream prop (single source of truth, #832). This
+// effect keeps only the OutlinePanel-local UI-state clamp: itemEls/
+// focusedIndex must shrink when the heading count drops. Still wrapped in
+// untrack — `.slice()` always returns a fresh array reference, so tracking
+// the write-back would self-trigger and hit effect_update_depth_exceeded.
 $effect(() => {
-  const ed = editor;
-  if (!ed || ed.isDestroyed) {
-    headings = [];
-    return;
-  }
-
-  headings = walkHeadings(ed);
-  // Use untrack to avoid a self-referential read→write cycle on itemEls.
-  // .slice() always returns a new array reference; tracking it would cause
-  // effect_update_depth_exceeded. focusedIndex has the same issue.
+  const len = headings.length;
   untrack(() => {
-    itemEls = itemEls.slice(0, headings.length);
-    if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
+    itemEls = itemEls.slice(0, len);
+    if (focusedIndex >= len) focusedIndex = Math.max(0, len - 1);
   });
-
-  const handler = () => {
-    headings = walkHeadings(ed);
-    itemEls = itemEls.slice(0, headings.length);
-    if (focusedIndex >= headings.length) focusedIndex = Math.max(0, headings.length - 1);
-  };
-  ed.on("update", handler);
-
-  return () => {
-    if (!ed.isDestroyed) ed.off("update", handler);
-    headings = [];
-  };
 });
 
 // Focus search input when focusTrigger changes (triggered by Ctrl+F from App.svelte).
