@@ -979,7 +979,12 @@ describe("checkInbox stamps the pull path", () => {
 
     const state = getDeliveryState();
     expect(state.pollCount).toBe(1);
-    expect(state.lastPollAt).not.toBeNull();
+    // `sincePollMs`, not `lastPollAt` — the latter is a module-local, absent
+    // from the exported `DeliveryState`, so asserting on it read as pinning the
+    // timestamp while comparing `undefined` to null and passing for every
+    // possible behaviour of `recordInboxPoll`. Nothing catches that: tsconfig
+    // includes only `src/**`, and vitest strips types.
+    expect(state.sincePollMs).not.toBeNull();
   });
 
   it("records a poll even when no document is open", async () => {

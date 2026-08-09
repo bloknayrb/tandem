@@ -110,7 +110,7 @@ export function sseHandler(req: Request, res: Response): void {
 /**
  * The `id:` line is written identically in both modes — `Last-Event-ID`
  * resumption has to keep working for a wake consumer, and the id is opaque.
- * Only the `data:` body differs: ADR-047 makes the wake frame payload-free, so
+ * Only the `data:` body differs: ADR-049 makes the wake frame payload-free, so
  * `toWakeFrame` is what a wake consumer receives, whole events are what
  * everyone else receives.
  */

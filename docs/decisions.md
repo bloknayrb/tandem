@@ -1122,7 +1122,7 @@ This ADR records a choice that was already load-bearing in shipped code but had 
 
 ---
 
-## ADR-047: The Self-Armed Wake — `ws` Transport, No Arbitration, Payload-Free Frames
+## ADR-049: The Self-Armed Wake — `ws` Transport, No Arbitration, Payload-Free Frames
 
 **Status:** Accepted (2026-08-07). Settles the two conflicts Track D-2 of the push-delivery plan deliberately left open. Gated on P-A2, which **passed** — see [docs/spikes/monitor-self-arm-probe.md](spikes/monitor-self-arm-probe.md).
 

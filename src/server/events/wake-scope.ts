@@ -33,7 +33,7 @@ export interface WakeFrame {
 }
 
 /**
- * Strip an event down to a wake. ADR-047 decision 2.
+ * Strip an event down to a wake. ADR-049 decision 2.
  *
  * Built by NAMING the three fields that survive rather than deleting `payload`
  * from a copy. A denylist would silently start forwarding whatever field the
@@ -46,7 +46,7 @@ export interface WakeFrame {
  *  2. A model that answers from the payload never calls `tandem_checkInbox`, so
  *     the item is never marked surfaced and is re-reported on the next wake —
  *     the duplicate-reply hazard, mechanically. This is load-bearing for the
- *     OTHER half of ADR-047: dropping session-bound arbitration is only safe
+ *     OTHER half of ADR-049: dropping session-bound arbitration is only safe
  *     because the inbox ledger arbitrates, and the ledger only arbitrates if
  *     somebody actually polls.
  *  3. Wakes are LOSSY, and this was measured, not assumed. A 25-event burst
