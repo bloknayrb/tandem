@@ -204,7 +204,7 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 
 ### Settings — Appearance tab
 - `theme-{*}-btn`, `default-tab-{chat,annotations}-btn`,
-  `text-size-{*}-btn`, `accent-hue-slider`, `editor-font-{*}-btn`,
+  `text-size-{*}-btn`, `accent-hue-slider`,
   `density-{*}-btn`, `reduce-motion-toggle`, `appearance-formatting-bar` (1.11),
   `appearance-uniform-tab-width`, `appearance-scroll-pill`
 - Decorations mirror group (1.13): `appearance-show-{authorship,comments,highlights,notes}`
@@ -215,6 +215,12 @@ more lines in `__snapshots__/testid-set.snap.txt`.
 - `editor-measure-{*}` (Phase 3.5 Stage B reading-measure preset; one button per
   `narrow|comfortable|wide|full`, interpolated, so it lands as `editor-measure-{*}`
   in the snapshot. Replaced `editor-width-slider` when `editorWidthPercent` → `editorMeasure`.)
+- `editor-font-{*}-btn`, `font-by-extension-section`,
+  `font-by-extension-reset`, `font-by-extension-row-{*}`,
+  `font-by-extension-{*}-{*}` (#1262: moved from Appearance — fonts are a
+  property of the document surface, not app chrome)
+- `appearance-show-raw-markdown` (#981, moved #1262 — testid keeps its
+  historical `appearance-` prefix; Critical Rule 7 forbids renaming it)
 - `high-contrast-toggle`, `annotation-patterns-toggle`
 - `network-{restart-sidecar,degraded-delay-slider,retry-strategy}`
 
