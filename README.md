@@ -109,7 +109,7 @@ Prefer a different AI? Any MCP-capable client can connect to the same endpoint �
 
 **How Claude starts matters.** Tandem talks to Claude over two independent connections: one lets Claude read and edit your document, the other tells it the moment you comment or send a chat message. Sessions Tandem launches for you — including the desktop app's **Relaunch Claude** button — get both, and need no setup from you. A session you start yourself by typing `claude` gets only the first until you add one of three things.
 
-The simplest needs no installation at all: **ask Claude to watch for updates.** Tandem's bundled skill tells it how, so "watch Tandem for updates while we work" is usually enough — it opens a watch on Tandem's wake stream and is woken whenever you comment or send a message. Nothing to install, no flag, and it lasts as long as that session.
+The simplest needs no installation at all: **ask Claude to watch for updates.** Tandem's bundled skill tells it how, so "watch Tandem for updates while we work" is usually enough — it opens a watch on Tandem's wake stream and is woken whenever you comment or send a message. Nothing to install, no flag, and it lasts as long as that session. It does need a Claude Code that offers a `Monitor` tool — not every build does — so if Claude tells you it has none, use one of the two below instead.
 
 The second is to install the Tandem plugin, which also needs no flag — see [Real-time updates](#real-time-updates) below. Start `claude` from a terminal window if you do: the plugin's monitor uses whatever program path that shell has, and a Claude Code started from a desktop icon may not have one it can use.
 

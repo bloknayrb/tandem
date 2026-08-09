@@ -1253,8 +1253,9 @@ async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Pro
 export function evaluateAbsentChannelEntry(label: string): string {
   return (
     `${label} has no tandem-channel entry, which is expected — the channel shim is opt-in. ` +
-    "Real-time delivery comes from a self-armed watch (nothing to install) or the plugin " +
-    "monitor; add the shim with `tandem setup --apply --with-channel-shim` if you want it"
+    "Real-time delivery comes from a self-armed watch (nothing to install, where Claude Code " +
+    "offers a Monitor tool) or the plugin monitor; add the shim with " +
+    "`tandem setup --apply --with-channel-shim` if you want it"
   );
 }
 
@@ -1305,7 +1306,9 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
         "woken directly and do not use this path. Simplest first: ask Claude to watch " +
         "for updates — it can arm a watch on Tandem's wake stream itself, with nothing " +
         "to install and no flag (the bundled skill tells it how; `tandem_status` reports " +
-        "the address). Otherwise install the Tandem plugin, which registers a monitor " +
+        "the address). That one needs a Monitor tool, which not every Claude Code build " +
+        "exposes; if Claude says it has none, use one of the others rather than retrying. " +
+        "Otherwise install the Tandem plugin, which registers a monitor " +
         "needing no flag (`claude plugin list` to check) — start `claude` from a terminal " +
         "if you do, since the monitor inherits that shell's PATH and cannot find Node " +
         "without it — or register the channel shim with " +

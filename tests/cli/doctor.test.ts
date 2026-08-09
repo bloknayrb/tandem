@@ -1279,6 +1279,13 @@ describe("evaluateAbsentChannelEntry", () => {
     expect(msg).not.toMatch(/setup --apply(?! --with-channel-shim)/);
   });
 
+  it("does not promise the watch outright — it has a host precondition", () => {
+    // The `Monitor` tool is behind the remote `tengu_amber_sentinel` gate, which
+    // defaults to false, so "nothing to install" is true only where the host
+    // offers the tool. This line read as an unconditional promise until 2026-08-09.
+    expect(evaluateAbsentChannelEntry("~/.claude.json")).toMatch(/Monitor tool/);
+  });
+
   it("says absence is expected rather than broken, and carries the caller's label", () => {
     expect(evaluateAbsentChannelEntry(".mcp.json")).toMatch(/^\.mcp\.json /);
     expect(evaluateAbsentChannelEntry("~/.claude.json")).toMatch(/^~\/\.claude\.json /);
@@ -1313,6 +1320,18 @@ describe("evaluatePushPath", () => {
     expect(out?.fix).toMatch(/--with-channel-shim/);
     expect(out?.fix).toMatch(/not several/i);
     expect(out?.data).toMatchObject({ subscribers: 0, eventCount: 0 });
+  });
+
+  it("qualifies the leading remedy, and sends the reader onward when it is unavailable", () => {
+    // The watch leads because it needs no install — but it does need a `Monitor`
+    // tool, gated remotely and defaulting off, and the same gate governs the
+    // plugin monitor, so the two do not back each other up. A reader told to ask
+    // Claude to watch, whose Claude has no such tool, must not be left retrying
+    // the one remedy that cannot work for them.
+    const out = evaluatePushPath({ subscribers: 0, eventCount: 0, lastEventAt: null });
+    expect(out?.fix).toMatch(/Monitor tool/);
+    expect(out?.fix).toMatch(/not every Claude Code build/i);
+    expect(out?.fix).toMatch(/use one of the others/i);
   });
 
   it("passes without alarm when attached but nothing delivered yet", () => {
