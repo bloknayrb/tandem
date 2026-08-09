@@ -35,7 +35,12 @@
  * `RANGE_MOVED` and every other load-bearing message sharing that channel.
  *
  * A consumer attaching re-arms it, so the advice returns if the wake path is
- * later lost. That is a real transition, not a timer.
+ * later lost. That is a real transition, not a timer. The re-arm is observed
+ * unconditionally — including during Solo, where the advisory itself is silent.
+ * Solo suppresses *speaking*, not *observing*; conflating the two would let a
+ * consumer that attached and detached entirely inside a Solo period go unseen,
+ * stranding the latch and leaving the session permanently uncovered and
+ * permanently silent about it.
  *
  * ## What it must never contain
  *
@@ -73,17 +78,24 @@ export const WAKE_ADVISORY_TEXT =
  * two advisories.
  */
 export function takeWakeAdvisory(externalConsumerCount: number): string | null {
+  // The RE-ARM runs above the Solo gate, deliberately. A consumer being
+  // attached is a transport fact, not an AI-surfacing one, so it is not Solo's
+  // business to suppress. With the reset below the gate, a consumer whose
+  // entire attached lifetime fell inside a Solo period would never be observed:
+  // advisory fires while uncovered in Tandem → user switches to Solo → a shim
+  // attaches and later detaches → user returns to Tandem with nothing attached,
+  // and the latch is still set. The session is then permanently uncovered AND
+  // permanently silent about it, which is the precise failure this module
+  // exists to prevent, reintroduced by its own rate limit.
+  if (externalConsumerCount > 0) advisedWhileEmpty = false;
+
   // Solo gates before any string is built. During Solo the user has opted out
   // of AI surfacing entirely, and nagging a session into arming a watch is the
   // opposite of the mode's promise. `indeterminate` fails CLOSED — silent —
   // matching every other push-path gate.
   if (readModeState() !== "tandem") return null;
 
-  if (externalConsumerCount > 0) {
-    advisedWhileEmpty = false;
-    return null;
-  }
-  if (advisedWhileEmpty) return null;
+  if (externalConsumerCount > 0 || advisedWhileEmpty) return null;
   advisedWhileEmpty = true;
   return WAKE_ADVISORY_TEXT;
 }

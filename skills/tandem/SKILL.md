@@ -84,10 +84,12 @@ Selections are **not** sent as standalone events. Instead, when the user sends a
 
 Polling is the reliable path and stays the authority on what you see. But between your turns nothing polls, so a comment the user leaves while you sit idle waits until your next turn — which may never come.
 
-If your host offers a `Monitor` tool, you can arm a watch on Tandem's wake stream so idle time doesn't swallow the user's messages. **Arm it at most once per session**, and only if Tandem's tool output has told you nothing is subscribed:
+If your host offers a `Monitor` tool, you can arm a watch on Tandem's wake stream so idle time doesn't swallow the user's messages. **Arm it at most once per session**, and only if Tandem's tool output has told you nothing is subscribed.
+
+**Read the URL from `tandem_status`, don't assume it.** Read mode returns `wakeUrl` — the live address of the wake stream, reported by the server that is running it. It is usually `ws://127.0.0.1:3479/api/wake`, but the port is configurable and guessing it is a *silent* failure: you would open a socket to whatever unrelated service holds 3479 and sit there believing you were armed. If `wakeUrl` is absent, this Tandem has no wake transport and there is nothing to arm — keep polling.
 
 ```
-Monitor({ ws: { url: "ws://127.0.0.1:3479/api/wake" }, persistent: true })
+Monitor({ ws: { url: <wakeUrl from tandem_status> }, persistent: true })
 ```
 
 Three things to know before you do:
@@ -96,7 +98,7 @@ Three things to know before you do:
 - **A wake tells you *that* something happened, never *what*.** Frames carry an id, a type and a timestamp — no message text, by design. Always call `tandem_checkInbox` to find out what actually arrived. Answering from the notification is how the same item gets replied to twice: the inbox never marks it seen, so it comes back.
 - **Wakes are best-effort and can be dropped.** A burst of activity is rate-limited by the host, so some notifications never arrive even though every event reached the server. This is exactly why the point above matters — the inbox has all of them; the wake stream may not. Keep polling every 2-3 tool calls regardless.
 
-If `ws` is unavailable, the equivalent stream is `GET http://127.0.0.1:3479/api/events?filter=wake`, which is payload-free in the same way. It needs a shell with `curl` — fine on macOS and Linux, absent on a stock Windows install.
+If `ws` is unavailable, the equivalent stream is `GET /api/events?filter=wake` on the same host and port as `wakeUrl` (so `ws://127.0.0.1:3479/api/wake` → `http://127.0.0.1:3479/api/events?filter=wake`), which is payload-free in the same way. It needs a shell with `curl` — fine on macOS and Linux, absent on a stock Windows install.
 
 ## .docx Review Workflow
 

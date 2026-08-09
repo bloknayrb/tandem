@@ -80,6 +80,31 @@ describe("takeWakeAdvisory", () => {
     expect(takeWakeAdvisory(0)).toBe(WAKE_ADVISORY_TEXT);
   });
 
+  it("observes a consumer that attached and detached entirely inside Solo", () => {
+    // The re-arm is deliberately ABOVE the Solo gate. With it below, this exact
+    // sequence strands the latch forever: the session ends up genuinely
+    // uncovered AND permanently silent about it, which is the failure this
+    // module exists to prevent, reintroduced by its own rate limit.
+    expect(takeWakeAdvisory(0)).toBe(WAKE_ADVISORY_TEXT); // spoken while uncovered
+
+    setCtrlMode("solo");
+    expect(takeWakeAdvisory(1)).toBeNull(); // a shim attaches — silent, but SEEN
+    expect(takeWakeAdvisory(0)).toBeNull(); // and detaches again
+
+    setCtrlMode("tandem");
+    expect(takeWakeAdvisory(0)).toBe(WAKE_ADVISORY_TEXT);
+  });
+
+  it("does not let a Solo-period consumer hand out a second advisory in one period", () => {
+    // The flip side: observing the attach must re-arm exactly once, not turn
+    // every subsequent call into a fresh advisory.
+    setCtrlMode("solo");
+    expect(takeWakeAdvisory(1)).toBeNull();
+    setCtrlMode("tandem");
+    expect(takeWakeAdvisory(0)).toBe(WAKE_ADVISORY_TEXT);
+    expect(takeWakeAdvisory(0)).toBeNull();
+  });
+
   describe("what the text may never contain", () => {
     it("carries no executable command", () => {
       // Emitting a shell command into the same `content` array as document text

@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { _pushEventForTests, getSubscriberCount } from "../../../src/server/events/queue.js";
 import type { TandemEvent } from "../../../src/server/events/types.js";
-import { attachWakeSocket, verifyWakeUpgrade } from "../../../src/server/events/wake-socket.js";
+import {
+  attachWakeSocket,
+  getWakeEndpoint,
+  verifyWakeUpgrade,
+} from "../../../src/server/events/wake-socket.js";
 import { setCtrlMode } from "../../helpers/ctrl-mode.js";
 
 /**
@@ -209,6 +213,81 @@ describe("the wake socket end to end", () => {
     expect(got).toBe(0);
   });
 
+  it("reports the port it actually bound, not the configured default", async () => {
+    // `SKILL.md` used to hardcode :3479. Under an overridden port that fails
+    // SILENTLY — the model opens a socket to whatever unrelated service holds
+    // 3479 and believes it is armed. The ephemeral port this suite binds is a
+    // real instance of the mismatch, so the assertion only passes if the URL
+    // comes from `address()` rather than from `DEFAULT_MCP_PORT`.
+    const port = (server.address() as AddressInfo).port;
+    expect(port).not.toBe(3479);
+    expect(getWakeEndpoint()).toBe(`ws://127.0.0.1:${port}/api/wake`);
+
+    // And the URL it hands out has to be one a consumer can actually connect on.
+    const ws = new WebSocket(getWakeEndpoint() as string);
+    sockets.push(ws);
+    await opened(ws);
+  });
+
+  it("reports nothing once the transport is gone", async () => {
+    // Absence is the honest answer in stdio mode, where no HTTP server exists to
+    // attach a wake socket to. A guessed URL there would be pure fabrication.
+    detach();
+    expect(getWakeEndpoint()).toBeNull();
+    detach = () => {}; // afterEach must not double-detach
+  });
+
+  it("does not wake on the user's own annotation in Solo", async () => {
+    // The module's central privacy claim, and the whole reason it subscribes as
+    // "external" rather than "internal". Every other test here runs in Tandem,
+    // so without this the `"external"` argument could be changed to `"internal"`
+    // — pushing Solo-held annotations at a model, the precise leak WS-A2 exists
+    // to prevent — with the suite still fully green.
+    setCtrlMode("solo");
+    const ws = open("/api/wake");
+    await opened(ws);
+
+    const got: string[] = [];
+    ws.on("message", (d) => got.push(String(d)));
+    _pushEventForTests({
+      id: "evt_ws_solo",
+      type: "annotation:created",
+      timestamp: Date.now(),
+      payload: { annotationId: "a1", documentId: "d1", author: "user" },
+    } as unknown as TandemEvent);
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(got).toEqual([]);
+  });
+
+  it("still wakes on chat in Solo — the always-delivered channel", async () => {
+    // The pair to the test above: Solo is not a blanket mute, and asserting the
+    // silence without asserting the exception would let an over-broad gate
+    // (`readModeState() === "tandem"` with no chat carve-out) pass as correct.
+    setCtrlMode("solo");
+    const ws = open("/api/wake");
+    await opened(ws);
+
+    const frame = new Promise<string>((resolve) => ws.once("message", (d) => resolve(String(d))));
+    _pushEventForTests({
+      id: "evt_ws_solo_chat",
+      type: "chat:message",
+      timestamp: Date.now(),
+      payload: { messageId: "m1", text: "still reaches you" },
+    } as TandemEvent);
+
+    expect(JSON.parse(await frame).id).toBe("evt_ws_solo_chat");
+  });
+
+  it("closes a socket that sends data on a push-only channel", async () => {
+    const ws = open("/api/wake");
+    await opened(ws);
+
+    const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.send("hello?");
+    await closed;
+  });
+
   it("counts as an EXTERNAL subscriber, and releases the slot on close", async () => {
     // "external" is what puts it behind the queue's Solo gate. It is also what
     // keeps `subscribers === 0` — the one sound negative the whole
@@ -220,6 +299,15 @@ describe("the wake socket end to end", () => {
 
     ws.close();
     await settlesTo(getSubscriberCount, baseline, "slot released on close");
+  });
+
+  it("refuses the 17th consumer rather than accumulating", async () => {
+    // The cap is not a memory argument — these sockets are tiny. It bounds how
+    // far the honesty signal can be degraded: every attached consumer makes
+    // `subscribers === 0` unreachable, and a runaway arm-loop in a model or a
+    // script would otherwise hold it up forever.
+    for (let i = 0; i < 16; i++) await opened(open("/api/wake"));
+    await expect(opened(open("/api/wake"))).rejects.toThrow();
   });
 
   it("refuses a cross-origin socket at the handshake", async () => {
