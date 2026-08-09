@@ -49,14 +49,63 @@ the names promise more than they deliver (#1293):
   `bind-check.ts` permits whenever a token exists.
 
   It governs the routes that **call** it, and **nine** mutating routes registered in
-  `src/server/mcp/api-routes.ts` call neither gate. Four of them take a caller-supplied
-  filesystem path — `open`, `save` (save-as), `convert`, `upload` — which makes them the
-  higher-blast-radius subset and the one #1320 tracks. The other five are `close`,
-  `apply-changes`, `annotation-reply`, `remove-annotation` and `rotate-token`; a token-holding
-  LAN peer can still reach those. (`scratchpad` was the tenth until #1318 gated it.) Separately, `/api/channel/*`
-  and `DELETE /api/chat` are ungated **deliberately**, because the channel shim and monitor are
-  documented to run against a non-loopback `TANDEM_URL` (Cowork) and gating them would break that
-  transport. "Mutating routes are loopback-only" is not a statement about all of `/api`.
+  `src/server/mcp/api-routes.ts` call neither gate: `open`, `save` (save-as), `convert`,
+  `upload` — the four taking a caller-supplied filesystem path, the higher-blast-radius
+  subset #1320 was filed over — plus `close`, `apply-changes`, `annotation-reply`,
+  `remove-annotation` and `rotate-token`. (`scratchpad` was the tenth until #1318 gated it.)
+  Since #1320 a LAN peer can no longer reach any of them, but they hold **one** layer rather
+  than two, which is why the enumeration survives as the review inventory. It is pinned
+  against source by `tests/docs/loopback-gate-claims.test.ts`, so a newly-added ungated
+  route fails CI rather than quietly joining a list nobody re-derives.
+
+### The `/api` invariant (#1320)
+
+Since #1320 the default is structural rather than per-handler. `enforceLoopbackMutation`
+(`src/server/mcp/api-routes.ts`) is mounted `app.use("/api", …)` in `server.ts`, after
+`authMiddleware` and before every registrar, and rejects any non-loopback peer using a
+method other than GET/HEAD/OPTIONS. A route added later inherits it without its author
+knowing the rule exists — which is the point, because every prior gate on this surface was
+a call inside a handler body, invisible at the registration site, and that is how nine
+routes ended up ungated by omission and how the contested count went 4 → 11 → 9 → 10 across
+three review passes.
+
+The rule is phrased over **method, not mutation**, deliberately: `GET /api/channel-permission`
+evicts TTL-expired entries, so it mutates, and a mutation-shaped rule would require exactly
+the per-route inventory this replaces. Reads keep their existing per-route posture —
+`document/raw` and `diagnostics` refuse a non-loopback caller by hand, while `info`,
+`sessions`, `backups`, `launcher/status`, `models` and `integrations` scrub their payload
+instead. That scrubbing is what the LAN Host accommodation (`createApiMiddleware`'s
+`extraHosts`, wired from `resolvedLanIP`) exists for, and it is now exactly scoped: LAN
+hosts may **read** `/api`; their writes are refused.
+
+The exemptions are keyed by **method and path together**, not path alone: the set holds
+`DELETE /api/chat`, so a future `POST /api/chat` would be gated like anything else. A
+path-only set would have silently handed LAN-write access to the next route added on one of
+those six paths — the same fail-open shape this invariant replaced.
+
+Two things sit outside it, for two different reasons:
+
+- **The `/api/channel-*` family and `DELETE /api/chat`** are carved out by name in
+  `NON_LOOPBACK_ALLOWED`, because the channel shim (`src/channel/`) and the plugin
+  monitor (`src/monitor/`) are documented to run against a non-loopback `TANDEM_URL` — that
+  is how Cowork reaches a Tandem running elsewhere. This is the one hand-maintained list
+  left in the design; adding to it is a security change. Nothing in CI exercises the shim
+  against a non-loopback host and `channel/run.ts` logs a 403 to stderr and continues, so
+  the positive-control cases in `tests/server/api-loopback-invariant.test.ts` are the only
+  detector a broken carve-out has.
+- **`/api/wake`** is a WebSocket upgrade registered on the `http.Server` upgrade event
+  (`events/wake-socket.ts`), so `app.use("/api", …)` structurally never sees it. It carries
+  its own Origin guard. This is an exception to the middleware's *reach*, not to the policy.
+
+`/api/shutdown` is **not** one of them — it is covered by the invariant like every other
+mutator, and *additionally* gates itself, more strictly: its Origin half must permit an
+*absent* Origin (the Tauri shell's reqwest client sends none), which
+`assertOriginAllowlisted` rejects. Do not read its hand-rolled gate as redundant.
+
+One consequence worth stating because it is documented usage: `tandem rotate-token` against
+a remote `TANDEM_URL` now gets a 403. Rotation must run on the host. The CLI rolls the token
+file back on a refusal rather than leaving the client on a credential the server will never
+accept — see `src/cli/rotate-token.ts`.
 
 **The primary protection is the loopback bind plus Bearer auth for every non-loopback caller** —
 the two controls described above, which hold regardless of either assertion. `assertOriginAllowlisted`

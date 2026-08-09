@@ -263,7 +263,12 @@ describe("rotateToken CLI", () => {
     stderrSpy.mockRestore();
   });
 
-  it("prints strong warning (not success) when server returns non-2xx", async () => {
+  it("rolls back rather than half-rotating when the server returns non-2xx", async () => {
+    // Until #1320 this branch left the client on the new token — written to disk
+    // AND propagated into every MCP config — while a reachable server kept the
+    // old one, with no grace window. It printed a warning and called that
+    // acceptable. It is not: the credential the client now presents is one
+    // nothing will ever accept. A refusal must leave nothing changed.
     fetchMock.mockResolvedValue({
       ok: false,
       status: 409,
@@ -278,13 +283,73 @@ describe("rotateToken CLI", () => {
     await rotateToken(); // should not throw
 
     const messages = stderrCalls.flat().join("\n");
-    expect(messages).toContain("WARNING");
     expect(messages).toContain("409");
-    // Must NOT print "Rotated auth token." — that implies success
     expect(messages).not.toContain("[tandem] Rotated auth token.");
-    // Config files were updated; warning about divergence should be present
-    expect(messages).toContain("Restart the server");
+    expect(messages).toContain("No token was rotated and no config file was changed.");
+    // The load-bearing assertions. Stderr text alone would pass for a rollback
+    // that wrote nothing at all — which is the entire behaviour under test.
+    expect(_applyConfigSpy).not.toHaveBeenCalled();
+    const lastWrite = _writeFileSpy.mock.calls.at(-1);
+    expect(lastWrite?.[1], "the rollback must write the OLD token back").toBe(OLD_TOKEN);
+    expect(_renameSpy.mock.calls.at(-1)?.[1], "and rename it into place").toBe("/tmp/tandem/token");
 
+    stderrSpy.mockRestore();
+  });
+
+  it("names the loopback rule when the refusal is a 403", async () => {
+    // #1320 makes 403 the standard outcome for `tandem rotate-token` against a
+    // remote TANDEM_URL, so the generic "server rejected" message would leave a
+    // user with no idea what to do differently.
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: vi.fn().mockResolvedValue({ error: "FORBIDDEN" }),
+    });
+    const stderrCalls: unknown[][] = [];
+    const stderrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => stderrCalls.push(args));
+
+    const { rotateToken } = await import("../../src/cli/rotate-token.js");
+    await rotateToken();
+
+    const messages = stderrCalls.flat().join("\n");
+    expect(messages).toContain("loopback-only");
+    // Naming the resolved URL is the point: on a LAN-bound host whose shell
+    // exports TANDEM_URL, the CLI IS on the server machine and still presents a
+    // LAN peer, so "run it on the server" alone tells the user to redo what
+    // they already did.
+    expect(messages).toContain("unset TANDEM_URL");
+    expect(_applyConfigSpy).not.toHaveBeenCalled();
+    expect(_writeFileSpy.mock.calls.at(-1)?.[1]).toBe(OLD_TOKEN);
+
+    stderrSpy.mockRestore();
+  });
+
+  it("exits non-zero when the rollback itself fails, instead of claiming nothing changed", async () => {
+    // The state this describes — token file holding a credential the running
+    // server rejects — is the worst outcome in this function, and it used to
+    // print "No token was rotated and no config file was changed." four lines
+    // later and return 0. Both halves were false.
+    fetchMock.mockResolvedValue({ ok: false, status: 403, json: vi.fn().mockResolvedValue({}) });
+    _renameSpy.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("EACCES"));
+    const stderrCalls: unknown[][] = [];
+    const stderrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => stderrCalls.push(args));
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    const { rotateToken } = await import("../../src/cli/rotate-token.js");
+    await expect(rotateToken()).rejects.toThrow("process.exit called");
+
+    const messages = stderrCalls.flat().join("\n");
+    expect(messages).toContain("could not be restored");
+    expect(messages).not.toContain("No token was rotated");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    exitSpy.mockRestore();
     stderrSpy.mockRestore();
   });
 

@@ -1209,3 +1209,39 @@ Three reasons, in ascending order of force:
 - **Not decided here:** whether the arm command lives in the MCP `instructions` field. Tandem's main server sends none today (only `src/channel/run.ts:58` does), and whether Claude Code surfaces that field to the model is **UNVERIFIED** — it could not be probed because nothing sends one. `SKILL.md` is the fallback home and needs no new mechanism.
 
 **Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id) (why neither session id is a usable key), ADR-027 (the Solo/privacy contract the strip reinforces), #1266 (the supervisor's payload-free wake), `docs/spikes/monitor-self-arm-probe.md` (P-A2, P4, and the burst measurement).
+
+---
+
+## ADR-050: `/api` Is Loopback-Only for Non-GET, Enforced at the Mount
+
+**Status:** Accepted — 2026-08-08
+**Context:** #1320, #1293, #1121 F6/F7, ADR-045
+
+**Decision:** the loopback rule for `/api` is a single middleware mounted `app.use("/api", …)`, not a call each handler is expected to make. `enforceLoopbackMutation` rejects every non-loopback peer using a method other than GET/HEAD/OPTIONS, with an enumerated exemption set.
+
+**Rationale — the shape of the rule was the bug, not any individual missing call.** Every prior gate on this surface was a call inside a handler body. Three consequences, each of which has already cost a review cycle:
+
+1. A new route inherits nothing. Nine mutating routes were ungated by omission rather than decision, four of them taking a caller-supplied filesystem path.
+2. The gate is invisible at the registration site, so `grep 'app.post'` proves nothing about coverage. That is how the contested count went 4 → 11 → 9 → 10 across three passes, each pass correcting the previous *list* instead of re-deriving.
+3. Enforcement for the `/api` half was doc review over a hand-maintained obligation list. Forgetting to add to an obligation list fails **open**.
+
+Inverting the default fixes all three at once: deny is structural, and the hand-maintained list becomes the *exemptions*, where forgetting fails closed.
+
+**Why "non-GET" and not "mutating".** `GET /api/channel-permission` evicts TTL-expired entries, so it mutates. A rule phrased over mutation would need a per-route inventory of what counts — precisely the artifact this ADR abolishes. Method is a property of the request; mutation is a property of the handler, and only one of those is knowable at the mount.
+
+**Why reads are exempt.** `document/raw` and `diagnostics` refuse a non-loopback caller; `info`, `sessions`, `backups`, `launcher/status`, `models` and `integrations` scrub their payload instead. Those scrubs were designed and reviewed for LAN callers, and the `resolvedLanIP` Host accommodation exists to let them work. Extending the invariant to GET would strand both. The result is now coherent rather than accidental: **LAN peers may read `/api`; their writes are refused.**
+
+**Consequences:**
+
+- **The carve-out set is the one hand-maintained decision left.** The `/api/channel-*` family plus `DELETE /api/chat` — the channel shim and monitor run against a non-loopback `TANDEM_URL`, which is how Cowork reaches a Tandem elsewhere. The family is carved out rather than the subset with a caller today: two members have no non-loopback caller in the tree, but picking them off would be an untested tightening of a documented transport, and a family is checkable at a glance. **Adding to this set is a security change.** It is keyed by **method and path**, because a path-only key does not mean `DELETE /api/chat` — it means every non-GET method on that path, so the obvious next route there would inherit LAN-write access with nothing in the diff able to notice. For six paths, forgetting would have failed open.
+- **`/api/shutdown` is inside the invariant, not an exception to it.** It is covered like every other mutator and additionally self-gates. The distinction matters because this repo uses these enumerations as review inventories: a reader who believed it exempt could weaken the hand-rolled gate as redundant, or add a remote caller.
+- **Nothing in CI exercises the shim against a non-loopback host**, and `channel/run.ts` logs a 403 to stderr and continues, so a broken carve-out surfaces only as a Cowork user reporting silence. The positive-control cases in `tests/server/api-loopback-invariant.test.ts` are the only detector — and they must be mounted, because Express strips the mount prefix (`req.path` reads `/channel-reply`, not `/api/channel-reply`) and a unit test calling the middleware directly passes green while every Cowork POST 403s.
+- **`/api/wake` is outside the middleware's reach, not outside the policy.** It is a WebSocket upgrade on the `http.Server` upgrade event and carries its own Origin guard. Naming it is what keeps "`/api` is loopback-only" from becoming the next false absolute — which is the failure mode #1320 was filed about.
+- **`tandem rotate-token` against a remote `TANDEM_URL` now 403s**, and that is documented usage (README, `docs/configuration.md`). Rotation runs on the host. The CLI was fixed in the same change to roll the token file back on a refusal instead of leaving the client on a credential the server will never accept — a defect that predates this decision but which this decision makes routine.
+- **The 23 `assertLoopbackForMutation` call sites stay.** Redundant on the happy path is the point; and one mounted middleware is one thing to get wrong.
+
+**Declined:** making the DNS-rebinding Host check path-wide in the same change. It is a real improvement — `createApiMiddleware` is still threaded per route, the same shape objected to here — but it carries its own OPTIONS-ordering risk and belongs in its own PR.
+
+**Reopen condition:** a supported client that must write to `/api` from another machine. `API_BASE` in `src/client/utils/fileUpload.ts` is a hardcoded `127.0.0.1`, so no shipped client can today; that constant is the thing to change first, deliberately.
+
+**Cross-references:** [ADR-045](#adr-045-mcp-transport-multiplexing--one-mcpserver-per-session-keyed-by-mcp-session-id), #1293 (the unconditional per-handler gate), #1121 F6/F7, #1291 (CORS denies by absence).

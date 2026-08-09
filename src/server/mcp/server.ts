@@ -27,7 +27,12 @@ import { registerModelsRoutes } from "../models/api-routes.js";
 import { resolveAppDataDir, SESSION_DIR } from "../platform.js";
 import { runWithMcpContext } from "../sessions/context.js";
 import { registerAnnotationTools } from "./annotations.js";
-import { apiMiddleware, createApiMiddleware, registerApiRoutes } from "./api-routes.js";
+import {
+  apiMiddleware,
+  createApiMiddleware,
+  enforceLoopbackMutation,
+  registerApiRoutes,
+} from "./api-routes.js";
 import { registerAwarenessTools } from "./awareness.js";
 import { registerChannelRoutes } from "./channel-routes.js";
 import { type DiagnosticsToolDeps, registerDiagnosticsTools } from "./diagnostics.js";
@@ -541,6 +546,13 @@ export async function startMcpServerHttp(
   // Note: all channel routes use /api/channel-* paths (covered by /api below).
   app.use("/mcp", authMiddleware);
   app.use("/api", authMiddleware);
+
+  // #1320: /api is loopback-only for every method except GET/HEAD/OPTIONS, with
+  // the channel/Cowork transport carved out by name. Mounted AFTER auth so an
+  // unauthenticated LAN peer gets 401 rather than a map of which routes exist,
+  // and BEFORE every registrar below so a route added later inherits it without
+  // its author having to know this rule.
+  app.use("/api", enforceLoopbackMutation);
 
   // Health endpoint — lanAwareApiMiddleware protects against DNS rebinding.
   // Auth-exempt: health is public diagnostic info.

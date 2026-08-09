@@ -14,6 +14,12 @@ declare module "express" {
     query: Record<string, unknown>; // Express-parsed query string (strings/arrays/objects)
     method: string; // narrows IncomingMessage's string | undefined
     path: string; // Express-only (IncomingMessage has url, not path)
+    // Mount-relative routing: under `app.use("/api", mw)`, `path`/`url` are
+    // stripped to `/open` and `baseUrl` holds the `/api` the request actually
+    // used — case-preserved, so `/API/open` yields `/API`. Anything matching a
+    // full path from inside a mounted middleware needs both (#1320).
+    baseUrl: string;
+    originalUrl: string;
   }
 
   interface Response extends ServerResponse {
