@@ -897,7 +897,9 @@ export function evaluateTandemPlugin(input: TandemPluginInput): EvalOutcome[] {
       status: "pass",
       message: "The Tandem plugin is installed — its monitor and MCP servers all run via `npx`",
       fix:
-        'If you see `Monitor "Tandem real-time document events…" script failed (exit 127)`, ' +
+        "The monitor starts when Claude first uses the Tandem skill in a session, not at " +
+        "session start, so ask for Tandem by name rather than expecting it to be listening. " +
+        'If you then see `Monitor "Tandem real-time document events…" script failed (exit 127)`, ' +
         "Claude Code was started without Node on its PATH — it spawns monitors through a " +
         "non-login shell, so a GUI launch never reads your shell profile. Start Claude from " +
         `a terminal, or uninstall with \`claude plugin uninstall ${installedKey}\`.`,

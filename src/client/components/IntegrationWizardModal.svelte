@@ -888,8 +888,9 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   Claude to watch Tandem for updates, which needs nothing installed. That one
                   depends on your Claude Code offering a Monitor tool, which not every one does;
                   if Claude says it has none, come back here and register the channel shim, which
-                  does not need it. Installing the Tandem plugin does the same for every session,
-                  as long as you launch
+                  does not need it. Installing the Tandem plugin does the same in any session
+                  where you ask for Tandem by name — it starts watching the first time Claude
+                  uses the Tandem skill, not the moment the session opens — as long as you launch
                   <code class="iw-code-inline">claude</code> from a terminal so it can find Node.
                   Use one, not both.
                 {/if}

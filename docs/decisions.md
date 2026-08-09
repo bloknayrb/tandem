@@ -405,6 +405,20 @@ Three consequences, and the third is the one that costs us something:
 
 `|| exit 0` is **retired unapplied**. It was parked as a way to silence a failure; with delivery proven the failure is worth fixing rather than muting, and the fix is a resolvable command. The manifest's two unused levers — `${CLAUDE_PLUGIN_ROOT}` substitution (which also bypasses the cwd guard, since a path-ful command skips `where.exe` resolution) and `when: "on-skill-invoke:<skill>"` (which stops the monitor arming in sessions that have nothing to do with Tandem, the actual objection behind the removal proposal) — are the replacement. **`${CLAUDE_PLUGIN_ROOT}` is blocked as written**: `dist/` is gitignored, so a github-source install has no `dist/monitor/index.js` to point at, which is why the manifest reaches for `npx` in the first place. That is a distribution problem and needs its own decision; it is not a reason to keep a command that cannot resolve.
 
+**Update (2026-08-09, #1354) — one lever applied, the other closed off.**
+
+`when: "on-skill-invoke:…"` shipped. The monitor now arms when Claude first dispatches the Tandem skill in a session rather than at session start, which retires the "fires in unrelated sessions" objection without giving up the path. **It needs two manifest entries, not one.** The host matches `when === "on-skill-invoke:" + <published name>` by plain string equality, and the published name is qualified iff the dispatched skill came from a plugin. Tandem ships the `tandem` skill twice — the plugin auto-loads `skills/tandem/`, and `tandem setup --apply` writes `~/.claude/skills/tandem/SKILL.md` — so a user with both sees `/tandem` and `/tandem:tandem`, and the bare one resolves to the *non-plugin* copy. A manifest declaring only `tandem:tandem` would therefore arm for nobody who ran our own setup. Measured across F6–F8 in [`docs/spikes/plugin-monitor-tty-activation.md`](spikes/plugin-monitor-tty-activation.md), each reproduced.
+
+The trade is stated rather than hidden: a session that never dispatches the skill now gets no monitor, where before it got one. That is deliberate, and it is not as costly as it looks — the population that suffered the every-session `exit 127` is precisely the population for whom the monitor never worked, so they lose no coverage by it going quiet.
+
+**The command lever is closed, not merely blocked.** Three further measurements:
+
+- The documented field failure is a GUI launch whose PATH contains no Node, so switching the command word from `npx` to `node` fails identically. Both `docs/troubleshooting.md` and `docs/spikes/plugin-delivery.md` already said no static manifest string fixes this; that stands.
+- `${user_config.KEY}` — a `type: "file"` field defaulting to an absolute node path, which would have been the escape hatch — **does not substitute into a monitor command**. Measured with a bare-`node` control that armed while the substituted entry did not (`scripts/spikes/probe-monitor-userconfig.py`). The `command` field's description claims otherwise; the schema and the runtime disagree.
+- A committed bootstrap's fast path is unreachable on every shipping install shape, since `dist/` is gitignored and `package.json` `files` ships no plugin payload.
+
+So the command half depends on distribution — #1335's archive source carrying `dist/` — and there is nothing left to try at the manifest level. Tracked in #1354.
+
 ## ADR-029: Action Registry and Command Palette
 
 **Status:** Accepted
@@ -1093,12 +1107,14 @@ Two consequences are load-bearing and neither was previously written down.
 | Session kind | Transport | Needs |
 |---|---|---|
 | **Auto-launched** (supervisor-spawned) | **Supervisor stdin wake** (#1266) | nothing from the user |
-| **Hand-launched, interactive** | Channel shim (default) or plugin monitor | the dev-channels flag, or a plugin install |
+| **Hand-launched, interactive** | Self-armed watch, channel shim, or plugin monitor | a `Monitor` tool; or the dev-channels flag; or a plugin install **plus a dispatch of the tandem skill** |
 | **Hand-launched, `-p` / headless** | none available | — |
 
 **The launcher no longer emits the dev-channels flag** (deleted 2026-08-07; `src/shared/launcher/contract.ts` carries the reason inline, pinned by a regression test). It was inert for two independent reasons: the flag is parsed only inside an `if (!isNonInteractiveSession)` branch and `-p` is that mode, and #1266 measured end-to-end that no turn results under these flags even when the shim does receive the frame. Nothing observable changes on deletion — the shim's *registration* lives in `~/.claude.json`, independent of argv, so an auto-launched session still spawns it and `push.subscribers` stays above zero. A reader checking `tandem doctor` for a difference will correctly find none; that is the expected result, not a failed change.
 
-The channel shim remains the registered default for hand-launched sessions. The plugin monitor stays an installable alternative and is now the *recommended* one in user-facing copy, with a stated precondition: monitors are spawned through a non-login shell, so they inherit whatever PATH Claude Code itself started with, and a GUI-launched Claude Code frequently has no resolvable Node — `exit 127`, every session (`docs/spikes/plugin-delivery.md`). Recommending it unqualified would be a fresh over-claim of the kind this ADR exists to remove.
+The channel shim remains the registered default for hand-launched sessions. The plugin monitor stays an installable alternative and is now the *recommended* one in user-facing copy, with a stated precondition: monitors are spawned through a non-login shell, so they inherit whatever PATH Claude Code itself started with, and a GUI-launched Claude Code frequently has no resolvable Node — `exit 127` (`docs/spikes/plugin-delivery.md`). Recommending it unqualified would be a fresh over-claim of the kind this ADR exists to remove.
+
+> **Update (2026-08-09, #1354).** That failure used to fire in *every* session, including ones unrelated to Tandem, because the manifest armed the monitor with `when: "always"`. It now arms on `on-skill-invoke`, so it is present when Tandem is in play and absent otherwise — the error is now informative where it appears rather than noise everywhere. **Two entries are required, not one:** the host matches `when === "on-skill-invoke:" + <published name>` by plain string equality, and the published name is qualified iff the skill came from a plugin. Tandem ships the `tandem` skill twice (plugin `skills/`, and `tandem setup --apply`'s user-level copy), so `tandem:tandem` and `tandem` are both live names — measured in `docs/spikes/plugin-monitor-tty-activation.md` F6–F8. The cost is that a session which never dispatches the skill gets no monitor, which is the deliberate trade: the population that suffered the noise is the population for whom the monitor never worked.
 
 ### 3. ADR-028's rationale (1) is void
 

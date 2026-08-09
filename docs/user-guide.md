@@ -307,7 +307,7 @@ Claude can check the connection with `tandem_status`, which reports open documen
 
 Chat messages, annotation accepts/dismisses, and text selections can push to Claude in real time rather than waiting for it to poll. Sessions Tandem launches for you already get this and need no setup; a session you start yourself needs one of three things — see [Real-time updates](../README.md#real-time-updates).
 
-The easier is the **Tandem plugin**, which needs no flag — install it once and every `claude` you start afterwards picks it up. Start `claude` from a terminal, since its monitor uses that session's program path to find Node.
+The easier is the **Tandem plugin**, which needs no flag — install it once and every `claude` you start afterwards picks it up, though it begins watching only when Claude first uses Tandem's skill in that session. Ask for Tandem by name and it starts; a session that has never heard of Tandem is not listening yet. Start `claude` from a terminal, since its monitor uses that session's program path to find Node.
 
 The other is the **channel flag**, on every session:
 

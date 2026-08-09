@@ -258,7 +258,9 @@ function printPushStatus(shimRegisteredFor: string[]): void {
     "\n\x1b[1mReal-time push notifications:\x1b[0m\n" +
       status +
       "  A Tandem plugin is also published (skill + MCP + a real-time monitor that\n" +
-      "  activates on Claude Code 2.1.212+ interactive sessions and needs no flag).\n" +
+      "  needs no flag on Claude Code 2.1.212+ interactive sessions). The monitor\n" +
+      "  starts when Claude first uses the Tandem skill in a session, not at session\n" +
+      "  start — so ask for Tandem by name rather than expecting it to be listening.\n" +
       "  Use one or the other — both active in one session deliver every event twice:\n\n" +
       "    claude plugin marketplace add bloknayrb/tandem\n" +
       "    claude plugin install tandem@tandem-editor\n\n" +
