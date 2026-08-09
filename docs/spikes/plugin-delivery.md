@@ -104,10 +104,10 @@ directory one.
 | Load path | Session mode | Monitor fired? |
 |---|---|---|
 | `--plugin-dir` | `-p` print | **No** |
-| `--plugin-dir` | headless `stream-json` | **No** (confounded — see below) |
+| `--plugin-dir` | headless `stream-json` | **No** (was "confounded"; resolved — see below) |
 | Marketplace install (`--scope local`) | `-p` print | **No** |
 | Marketplace install (`--scope local`) | headless `stream-json` | **No** |
-| Any | TTY-attached interactive | **not testable by this harness** |
+| `--plugin-dir` | TTY-attached interactive | **YES** — see the 2026-08-09 update below |
 
 The stream-json rows use the launcher's exact flag **prefix** (`CLAUDE_STREAM_JSON_FLAGS`,
 imported so it cannot drift) — not its exact spawn. The real launcher additionally appends a
@@ -121,9 +121,17 @@ are real nulls. The two **stream-json** rows are weaker: the harness accepts eit
 carries `session_id` at turn *start* — so a run killed at the 90-second deadline scores as
 "ran" without having finished. Treat those two as bounded, not clean.
 
-The `--plugin-dir` headless cell is additionally **confounded**: `--plugin-dir` is inert for
-monitors in every mode tested, so a null there cannot distinguish "monitors don't fire
-headless" from "the plugin never loaded". The marketplace-install rows carry the weight.
+The `--plugin-dir` headless cell was recorded here as **confounded**: `--plugin-dir` looked
+inert for monitors in every mode tested, so a null there could not distinguish "monitors
+don't fire headless" from "the plugin never loaded", and the marketplace-install rows were
+said to carry the weight.
+
+> **Resolved 2026-08-09 — `--plugin-dir` is not inert.** A TTY run on 2.1.226 loaded via
+> `--plugin-dir` and the monitor armed and delivered
+> (`plugin-monitor-tty-activation.md`). The load path was never the variable; the session
+> mode was. The confound lifts and all four nulls above read as "monitors don't fire
+> headless" — which the binary corroborates: arming is a `useEffect` in the interactive
+> component tree, so a mode that never mounts it can never arm.
 
 **Consequence:** the launcher spawns with `CLAUDE_STREAM_JSON_FLAGS` (headless by
 construction), so a Tandem-launched session will never spawn a monitor. Monitor and
@@ -133,15 +141,20 @@ passes by hand — that pairing is unchanged and remains documented as "use one,
 
 ### F4 — What is NOT established
 
-Five things, and the first three are easy to lose track of:
+Five things, and the first three are easy to lose track of.
 
-1. **TTY-attached interactive activation** — not re-verified here; this harness cannot
-   produce a TTY. The supporting evidence remains the v0.18.0 acceptance run, recorded at
-   `CLAUDE.md`'s v0.18.0 entry as waking "an idle **manual** session" from the published
-   package on 2.1.212 via a **github-marketplace install**. "Manual" there contrasts with
-   *auto-launched*, not with *headless* — it is not itself a TTY claim.
-2. **`--plugin-dir` interactive** — never tested, in this run or any other. The negatives
-   below are all non-TTY.
+> **Items 1 and 2 were closed on 2026-08-09** by `plugin-monitor-tty-activation.md`, which
+> drives ConPTY through `pywinpty` — `winpty(1)` refuses when its own stdin is not a tty,
+> which is why this harness could not produce one. Both are struck below rather than
+> deleted, because the reasoning that made them open is still worth reading.
+
+1. ~~**TTY-attached interactive activation**~~ — **MEASURED 2026-08-09 on 2.1.226**: the
+   monitor armed within a second of session start and each stdout line became a model turn
+   in a session that received no input. The v0.18.0 acceptance run on 2.1.212 is no longer
+   the only support. (Its caveat still holds on its own terms: "manual" there contrasts
+   with *auto-launched*, not with *headless*, so it was never itself a TTY claim.)
+2. ~~**`--plugin-dir` interactive**~~ — **MEASURED**: this is the load path the 2026-08-09
+   run used.
 3. **The decompiled quotes in F1 and F2 are not verified by this harness at all.** The
    probe invokes `claude` only for `--version` and `--help`; it never inspects the binary.
    Those snippets were read by hand out of one build and are the weakest evidence here.

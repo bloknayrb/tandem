@@ -391,6 +391,20 @@ The noise is addressed without touching the path. `npx … monitor || exit 0` us
 
 Either "keep", "replace", or "retire" at review time; "wait and see again" is not an outcome. Tracked as **#1349** (titled with its date, so it surfaces in `gh issue list` rather than living only here), which also parks the untested `|| exit 0` mitigation.
 
+**Update (2026-08-09) — the gate is CLOSED. Verdict: KEEP, permanently. #1349 resolves as "keep"; do not re-open it on a timer.**
+
+Condition 2 above asked for "an **interactive** run, on a named CLI version, of a monitor that starts successfully and whose output never reaches the session." That run has now been made, and it measured the **opposite**: on Claude Code **2.1.226**, win32, a manifest-declared monitor armed within a second of session start and **every stdout line became a model turn** in a session that received no input at all. Four consecutive events, four turns. See [`docs/spikes/plugin-monitor-tty-activation.md`](spikes/plugin-monitor-tty-activation.md).
+
+The gate could not be tested for a year because `winpty(1)` refuses to run when its own stdin is not a tty; driving ConPTY directly through `pywinpty` has no such requirement. That is the whole reason this sat unproven — not a hard constraint, a tooling assumption nobody re-examined.
+
+Three consequences, and the third is the one that costs us something:
+
+- **The 2026-08-08 verdict was right for a weaker reason than the one now available.** It rested on "do not delete a working path on the strength of an unproven replacement." The path is no longer *possibly* working; it is measured working, on the current CLI, end to end. The sentence above — "the positive delivery evidence remains the v0.18.0 acceptance run on 2.1.212, and nothing here strengthens it" — is superseded.
+- **The binary states the mechanism, so the convergence with ADR-049 is not an inference.** `experimental.monitors` is described in the shipped manifest schema as arming "persistent Monitor tasks", and its `command` field as delivering "each stdout line ... to the model as a `<task_notification>` event". Same task kind, same shell runner, as the `Monitor` tool that ADR-049's self-arm uses. The manifest path adds no delivery machinery of its own; it only supplies a different arming trigger.
+- **Both paths sit behind the same remote feature gate, `tengu_amber_sentinel`, which defaults to false.** The `Monitor` tool's `isEnabled()` and the plugin-monitor arming function read the identical flag. So neither path is unconditional, and ADR-049's "no install, no flag" framing overstates what the code supports. Tracked separately — it is a defect in shipped copy, not in this decision.
+
+`|| exit 0` is **retired unapplied**. It was parked as a way to silence a failure; with delivery proven the failure is worth fixing rather than muting, and the fix is a resolvable command. The manifest's two unused levers — `${CLAUDE_PLUGIN_ROOT}` substitution (which also bypasses the cwd guard, since a path-ful command skips `where.exe` resolution) and `when: "on-skill-invoke:<skill>"` (which stops the monitor arming in sessions that have nothing to do with Tandem, the actual objection behind the removal proposal) — are the replacement. **`${CLAUDE_PLUGIN_ROOT}` is blocked as written**: `dist/` is gitignored, so a github-source install has no `dist/monitor/index.js` to point at, which is why the manifest reaches for `npx` in the first place. That is a distribution problem and needs its own decision; it is not a reason to keep a command that cannot resolve.
+
 ## ADR-029: Action Registry and Command Palette
 
 **Status:** Accepted
