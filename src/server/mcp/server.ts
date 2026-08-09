@@ -626,7 +626,7 @@ export async function startMcpServerHttp(
     const httpServer = app.listen(port, host, () => {
       httpServer.removeListener("error", reject);
       httpServer.on("error", (err: Error) => console.error("[Tandem] HTTP server error:", err));
-      // The self-arm wake transport (ADR-047). Attached to the http.Server
+      // The self-arm wake transport (ADR-049). Attached to the http.Server
       // rather than the Express app because it is a protocol upgrade — it
       // carries its own guard, and `resolvedLanIP` is passed only so the Host
       // allowlist matches the rest of the surface. The loopback check inside

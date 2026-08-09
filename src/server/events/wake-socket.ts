@@ -1,7 +1,7 @@
 /**
  * `ws://127.0.0.1:<api-port>/api/wake` — the self-armed wake transport.
  *
- * ADR-047 decision 1 makes this required rather than preferred. A Claude Code
+ * ADR-049 decision 1 makes this required rather than preferred. A Claude Code
  * session can arm its own watch with the host's `Monitor` tool, and `Monitor`'s
  * `ws` source is pure JSON config — no shell. The proven `curl … | grep` shell
  * fallback works on win32 ONLY because git-bash is installed (`curl` resolves to
@@ -9,7 +9,7 @@
  * `Monitor`'s `command` runs in that same shell. So on Windows this endpoint is
  * the only self-arm path there is.
  *
- * Frames are payload-free (`toWakeFrame`) — see ADR-047 decision 2 and that
+ * Frames are payload-free (`toWakeFrame`) — see ADR-049 decision 2 and that
  * function's docblock. This carries the same contract as the supervisor's stdin
  * wake: enough to know something happened, never what.
  *
