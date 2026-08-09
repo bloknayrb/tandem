@@ -160,20 +160,48 @@ valid manifest, no error, monitor simply never arms. For Tandem the value is
 `on-skill-invoke:tandem:tandem` — the plugin is `tandem` and its auto-loaded `skills/`
 folder carries a skill also named `tandem`.
 
-> **Hazard this creates for us, UNVERIFIED.** Tandem ships that skill **twice** by two
-> different mechanisms: the plugin auto-loads `skills/` from the plugin root, and
-> `tandem setup --apply` installs a user-level copy into `~/.claude/skills/tandem/`. The
-> trigger binds to the plugin's copy. If a user with both installed dispatches the
-> user-level one, the name published is presumably unqualified and the monitor would not
-> arm — the exact silent failure above, in the exact configuration `tandem setup` creates.
-> Not tested: it needs a real plugin install alongside a setup-installed skill.
-
 **Why this matters more than it looks.** It is what makes keeping the monitor cheap. The
 standing objection to `experimental.monitors` was never that it fails — it is that
 `when: "always"` arms it in every session the plugin is enabled in, including ones with
 nothing to do with Tandem, which is how a Tandem bug becomes noise in somebody's unrelated
 work. `on-skill-invoke` retires that objection without giving up the path: the monitor
-arms at the moment Tandem becomes relevant to the session and never before.
+arms at the moment Tandem becomes relevant to the session and never before. F7 is the
+condition on collecting that: the trigger has to be reachable by the name a user types.
+
+### F7 — a same-named non-plugin skill wins the bare dispatch, and the monitor does not arm. **MEASURED.**
+
+F6 leaves a hazard, and it is not hypothetical in configuration: Tandem ships the `tandem`
+skill **twice**. The plugin auto-loads `skills/tandem/` from the plugin root, and
+`tandem setup --apply` installs `~/.claude/skills/tandem/SKILL.md`. Same name, two sources,
+and the arm trigger can only bind to the plugin's copy.
+
+**Probe:** `scripts/spikes/probe-skill-name-collision.py`. One plugin declaring
+`on-skill-invoke:monprobe:armcheck` plus its own `skills/armcheck/`, and a rival
+`armcheck` from a non-plugin source. The two `SKILL.md` bodies ask for different one-word
+replies, so the capture says which copy actually ran even when nothing arms.
+
+Both appear in the picker, and the qualified one is visibly labelled:
+
+```
+/armcheck                    Probe skill for the plugin-vs-non-plugin name collision test…
+/monprobe:armcheck  (monprobe) Probe skill for the plugin-vs-non-plugin name collision…
+```
+
+Typing the bare `/armcheck` selected the **non-plugin** copy — the capture shows the
+session replying `RIVALCOPY`, never `PLUGINCOPY` — and the marker file never appeared.
+Reproduced twice.
+
+**So the silent failure of F6 is reachable through ordinary use.** A user with both the
+plugin and a `tandem setup --apply` install sees `/tandem` and `/tandem:tandem`, and the
+obvious one is the one that does not arm the monitor. `on-skill-invoke` alone therefore
+does **not** make the plugin monitor work for our own shipped configuration; #1354 has to
+resolve the double-install too, not just correct the trigger string.
+
+> **One substitution, stated.** The rival copy was placed in the session cwd's
+> `.claude/skills/` rather than in `~/.claude/skills/`, to avoid writing into the
+> operator's real Claude config. What is being measured is plugin-vs-non-plugin name
+> resolution, which is the axis the `plugin:skill` qualifier exists on; user-level versus
+> project-level precedence is a different axis and is not what decides this.
 
 ## What the shipped binary says (IN CODE, 2.1.226)
 
@@ -253,7 +281,9 @@ troubleshooting, CLAUDE.md) and recorded as a dated amendment to ADR-049.
   is why the manifest uses `npx` today, and any fix has to solve distribution first.
 - `when: "on-skill-invoke:<skill>"` — arms on first dispatch of a named skill instead
   of at session start, which retires the objection that the monitor fires in sessions
-  unrelated to Tandem. **Measured working (F6); the name must be `plugin:skill`.**
+  unrelated to Tandem. **Measured working (F6); the name must be `plugin:skill`** — and
+  a same-named skill from any non-plugin source takes the bare name and does not arm it
+  (F7), which is exactly what `tandem setup --apply` installs today.
 
 ## What is still not established
 
@@ -286,6 +316,14 @@ delivery still reads as success. For the other two findings:
   before calling it a null.
 - **F4 (no orphan)** — scan for surviving processes yourself; the probe does not.
   `Get-CimInstance Win32_Process -Filter "Name='node.exe'"` filtered on `emit.mjs`.
+- **F6 / F7** have their own scripts, same venv and same two arguments:
+  `probe-skill-arm-trigger.py` and `probe-skill-name-collision.py`. Both write their own
+  verdict line; both take ~105 s because the idle settle is deliberate.
+
+**If a capture comes back nearly empty, do not read it as a null result.** pywinpty decodes
+to `str`, so a UTF-8 sequence split across a chunk boundary raises `UnicodeDecodeError` and
+kills the reader thread mid-run. That produced a 5-byte capture and an INCONCLUSIVE verdict
+here before the reader was made to survive it.
 
 Prerequisites that will silently produce a false negative if missed:
 

@@ -119,6 +119,11 @@ def main() -> int:
         while True:
             try:
                 chunks.append(proc.read(4096))
+            except UnicodeDecodeError:
+                # pywinpty decodes to str, so a UTF-8 sequence split across a chunk
+                # boundary raises here. Losing those bytes is fine; letting the thread
+                # die is not -- an empty capture reads as "the skill never dispatched".
+                time.sleep(0.01)
             except Exception:  # noqa: BLE001 -- the pty closing is the exit condition
                 return
 
