@@ -1279,6 +1279,25 @@ describe("evaluateAbsentChannelEntry", () => {
     expect(msg).not.toMatch(/setup --apply(?! --with-channel-shim)/);
   });
 
+  it("does not promise the watch outright — it has a host precondition", () => {
+    // The `Monitor` tool is behind the remote `tengu_amber_sentinel` gate, so
+    // "nothing to install" holds only where the host offers the tool. This line
+    // read as an unconditional promise until 2026-08-09. Matching bare /Monitor/
+    // rather than /Monitor tool/ on purpose: the capitalised word is the tool's
+    // literal name and appears exactly once, so it has the same power to catch a
+    // deleted caveat while surviving a reword to "a Monitor capability".
+    expect(evaluateAbsentChannelEntry("~/.claude.json")).toMatch(/Monitor/);
+  });
+
+  it("points a Monitor-less reader at the shim, the one option that does not need it", () => {
+    // Both headline options here read the same remote gate, so a reader without
+    // the tool has neither — only the shim, which this line demotes to an aside.
+    // Without this, the pass line lists two remedies that can fail together and
+    // buries the one that cannot.
+    const msg = evaluateAbsentChannelEntry("~/.claude.json");
+    expect(msg).toMatch(/shim does not/);
+  });
+
   it("says absence is expected rather than broken, and carries the caller's label", () => {
     expect(evaluateAbsentChannelEntry(".mcp.json")).toMatch(/^\.mcp\.json /);
     expect(evaluateAbsentChannelEntry("~/.claude.json")).toMatch(/^~\/\.claude\.json /);
@@ -1313,6 +1332,39 @@ describe("evaluatePushPath", () => {
     expect(out?.fix).toMatch(/--with-channel-shim/);
     expect(out?.fix).toMatch(/not several/i);
     expect(out?.data).toMatchObject({ subscribers: 0, eventCount: 0 });
+  });
+
+  it("qualifies the leading remedy, and redirects to the ONE fallback that survives it", () => {
+    // The watch leads because it needs no install — but it needs a `Monitor`
+    // tool, and the same remote gate governs the plugin monitor, so the two fail
+    // together. The first version of this fix said "use one of the others",
+    // which moved a Monitor-less reader from one dead remedy to another.
+    //
+    // Asserted as "the sentence naming Monitor also redirects", so a reword of
+    // either clause survives while deleting either one fails.
+    const out = evaluatePushPath({ subscribers: 0, eventCount: 0, lastEventAt: null });
+    expect(out?.fix).toMatch(/Monitor/);
+
+    // Anchored on the sentence that fires when the tool is missing, not on the
+    // whole string: "shim" appears further down regardless, as one of the three
+    // remedies, so a whole-string match would pass even with the redirect gone.
+    const redirect = out?.fix?.split(/(?<=\.)\s+/).find((s) => /has none/i.test(s));
+    expect(redirect, "nothing tells the reader what to do when the tool is absent").toBeDefined();
+    expect(redirect).toMatch(/shim/i);
+    expect(redirect, "must warn that the plugin shares the gate").toMatch(/will not help/i);
+    // And it must not send them to the path behind the same gate.
+    expect(out?.fix).not.toMatch(/use one of the others/i);
+  });
+
+  it("does not blame the Claude Code version for a per-account feature", () => {
+    // `tengu_amber_sentinel` is a remote gate: two users on byte-identical builds
+    // differ. "not every Claude Code build exposes it" — the wording this fix
+    // shipped with for a few hours — sends the reader hunting for an upgrade
+    // that cannot help, and README's neighbouring plugin advice IS a real
+    // version requirement, which makes the misread easy.
+    const out = evaluatePushPath({ subscribers: 0, eventCount: 0, lastEventAt: null });
+    expect(out?.fix).not.toMatch(/Claude Code build/i);
+    expect(out?.fix).toMatch(/per account/i);
   });
 
   it("passes without alarm when attached but nothing delivered yet", () => {

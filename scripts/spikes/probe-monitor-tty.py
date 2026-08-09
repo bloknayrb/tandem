@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 from winpty import PtyProcess
 
@@ -67,7 +68,27 @@ setInterval(() => {
 '''
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
 def ensure_fixture(plugin_dir: str) -> None:
+    """Write the throwaway plugin, refusing to clobber anything that is not ours.
+
+    The first version overwrote unconditionally, which the doc described as
+    'created if absent' -- pointed at a real plugin directory it would have
+    silently replaced the manifest.
+    """
+    if os.path.isdir(plugin_dir) and os.listdir(plugin_dir):
+        manifest = os.path.join(plugin_dir, ".claude-plugin", "plugin.json")
+        if not os.path.exists(manifest):
+            raise SystemExit(
+                f"refusing to write the probe fixture into non-empty {plugin_dir!r}: "
+                "point at a new or previously-used probe directory"
+            )
+        with open(manifest, encoding="utf-8") as fh:
+            if '"monprobe"' not in fh.read():
+                raise SystemExit(f"{plugin_dir!r} holds a plugin that is not the probe fixture")
     os.makedirs(os.path.join(plugin_dir, ".claude-plugin"), exist_ok=True)
     manifest_path = os.path.join(plugin_dir, ".claude-plugin", "plugin.json")
     with open(manifest_path, "w", encoding="utf-8", newline="") as fh:
@@ -96,7 +117,11 @@ def main() -> int:
             os.remove(stale)
 
     argv = ["claude", "--plugin-dir", plugin_dir]
+    # Timestamps matter: the first writeup reconstructed a teardown time it had
+    # not recorded, and stated a last-emission AFTER it -- which reads as an
+    # orphan, the opposite of the finding.
     print(f"spawning: {' '.join(argv)}\n  cwd={cwd}\n  capture={capture}", flush=True)
+    print(f"spawn at {_now()}", flush=True)
 
     proc = PtyProcess.spawn(argv, cwd=cwd, dimensions=(40, 120))
     chunks = []
@@ -114,6 +139,7 @@ def main() -> int:
             proc.terminate(force=True)
         except Exception:  # noqa: BLE001 -- teardown must not mask the result
             pass
+        print(f"terminated at {_now()}", flush=True)
 
     if os.path.exists(marker):
         with open(marker, encoding="utf-8") as fh:
