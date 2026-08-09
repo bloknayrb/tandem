@@ -93,4 +93,46 @@ describe("StatusBar AI action indicator", () => {
     expect(indicator.getAttribute("role")).toBe("img");
     expect(indicator.getAttribute("aria-label")).toContain("Claude is connected");
   });
+  // #1287: the Solo qualifier is only meaningful when it renders from the real
+  // component. An earlier draft asserted it via `page.setContent()` in an E2E
+  // spec -- writing the HTML and then reading it back, which passes with the
+  // feature deleted. These render StatusBar itself.
+  it("qualifies Claude's activity text in Solo so it doesn't read as disproving the hold", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        soloMode: true,
+        aiLiveIndicator: "solo-paused" as const,
+        aiState: "ready" as const,
+        claudeStatus: "reviewing scratchpad…",
+        claudeActive: true,
+      },
+    });
+
+    const indicator = getByTestId("status-ai-indicator");
+    expect(indicator.textContent).toContain("Solo · comments held");
+    expect(indicator.textContent).toContain("reviewing scratchpad…");
+    expect(indicator.textContent).toContain("(not your comments)");
+    // The label already says "held"; the qualifier must add the missing fact,
+    // not restate it on a status strip whose scarcest resource is width.
+    expect(indicator.textContent).not.toContain("comments still held");
+  });
+
+  it("leaves the connected copy unqualified -- it makes no forwarding promise", () => {
+    const { getByTestId } = render(StatusBar, {
+      props: {
+        ...baseProps,
+        aiLiveIndicator: "connected" as const,
+        aiState: "ready" as const,
+        claudeStatus: "reviewing scratchpad…",
+        claudeActive: true,
+      },
+    });
+
+    const indicator = getByTestId("status-ai-indicator");
+    // Positive control: the activity text IS rendering here, so the negative
+    // assertion below is about the gate and not about an empty pill.
+    expect(indicator.textContent).toContain("reviewing scratchpad…");
+    expect(indicator.textContent).not.toContain("not your comments");
+  });
 });
