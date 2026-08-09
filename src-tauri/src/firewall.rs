@@ -700,6 +700,19 @@ mod tests {
     }
 
     #[test]
+    fn classify_handles_real_captured_powershell_output() {
+        // Captured verbatim from `powershell -NoProfile -NonInteractive
+        // -Command <the detection script>` on Windows 11 (2026-08-09), bytes
+        // checked with `od -c`: CRLF line endings, and NO byte-order mark —
+        // so the BOM handling below is belt-and-braces, not something this
+        // machine actually needs. Kept as a fixture because every other test
+        // here asserts against output *I* wrote, which cannot reveal a wrong
+        // assumption about what PowerShell really emits.
+        let real = "TANDEM_ADAPTERS 2\r\n172.18.192.1/20\r\n172.28.80.1/20\r\n";
+        assert_eq!(classify_subnet_output(true, real).unwrap(), "172.18.192.0/20");
+    }
+
+    #[test]
     fn classify_tolerates_a_utf8_bom_on_the_marker_line() {
         // `.trim()` upstream strips ASCII whitespace, not U+FEFF, and the BOM
         // would land on the first line — exactly where the marker is.
