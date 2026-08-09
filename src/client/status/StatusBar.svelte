@@ -445,7 +445,15 @@ function cycleWordMode() {
       <span
         style="transition: color 0.3s ease; color: {AI_TONE[view.tone].text};"
       >
-        {view.label}{#if claudeStatus && view.canAnimate} · {claudeStatus}{/if}
+        <!-- #1287: "Solo · comments held · reviewing scratchpad…" is still two
+             claims sitting side by side unless the second is qualified — a
+             reader can infer the activity text proves comments AREN'T held.
+             The parenthetical folds them into one sentence: Claude can be
+             busy on something else while your comments still aren't reaching
+             it. Only appended in Solo (`view.tone === "solo"`) — the
+             connected/no-push copy needs no qualifier, since neither of those
+             states makes a forwarding promise to contradict. -->
+        {view.label}{#if claudeStatus && view.canAnimate} · {claudeStatus}{#if view.tone === "solo"} (comments still held){/if}{/if}
       </span>
   {/snippet}
   {#if aiView}

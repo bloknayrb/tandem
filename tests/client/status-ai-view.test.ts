@@ -45,16 +45,19 @@ describe("aiIndicatorView", () => {
     }
   });
 
-  it("ready + solo-paused (Solo, session open) → Solo · edits held, animatable, has a11y copy", () => {
+  it("ready + solo-paused (Solo, session open) → Solo · comments held, animatable, has a11y copy", () => {
     const v = aiIndicatorView("ready", "solo-paused", true);
     expect(v).toMatchObject({
-      label: "Solo · edits held",
+      label: "Solo · comments held",
       tone: "solo",
       dataState: "solo-paused",
       canAnimate: true,
     });
     // The visible label is terse — the aria-label must explain what "held" means.
-    expect(v?.ariaLabel).toMatch(/won't see your edits/i);
+    // #1287: it must promise only what Solo delivers — comments/replies withheld
+    // from forwarding — not "edits", which Claude can still read on request.
+    expect(v?.ariaLabel).toMatch(/comments and replies aren't forwarded/i);
+    expect(v?.ariaLabel).not.toMatch(/edits/i);
   });
 
   it("ready + no session (launcher running, startup window) → nothing (no false alarm)", () => {
