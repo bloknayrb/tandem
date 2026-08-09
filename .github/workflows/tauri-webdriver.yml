@@ -17,17 +17,32 @@ name: Tauri WebDriver E2E
 # `assets/script.js`), so Windows coverage is equally valid (Tandem declares the
 # plugin with NO `platform-windows` feature, so there is no native-path divergence).
 
-# Runs on release tags + manual dispatch. Too heavy to gate every PR (see #560 /
-# batch scope-down decision), but cheap insurance on the handful of tag pushes:
-# it exercises webview-level key interception that the Playwright suite (real
-# browser, not the Tauri WebView) structurally cannot. Deliberately a separate
-# workflow from tauri-release.yml: a failure here is a signal to investigate
-# before announcing the release, not a gate that blocks artifact publishing —
-# see docs/release-smoke-checklist.md for how it slots into the release pass.
+# DISPATCH-ONLY SINCE 2026-08-08 (#1197). The `push: tags: v*` trigger was
+# removed because this job fails on every run and nobody has been able to
+# reproduce the cause outside CI: `DevToolsActivePort file doesn't exist`, with
+# the driver and the runtime at an EXACT version match (150.0.4078.105 across
+# runs 30974836130 / 31022514071 / 31027157696) and the app provably alive in
+# the same run — only the CDP handshake is missing. The obvious hypothesis is
+# therefore refuted: the pin table below is working, and cause (a) from #1197,
+# Microsoft's BlobNotFound CDN gap, is genuinely fixed. Do not start by chasing
+# the pin; that ground is spent. The leading unverified suspect is a collision
+# between wry's WebView2 AdditionalBrowserArguments and the driver's
+# WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, which needs a human on a Windows box.
+#
+# The workflow is kept rather than deleted because re-enabling is one of three
+# live outcomes at the 2026-11-01 review (#1345) — the others being replace it
+# with a cheaper mechanism, or retire it and verify by hand. What is lost
+# meanwhile is real: this is the only automated coverage of webview-level key
+# interception, which the Playwright suite (real browser, not the Tauri WebView)
+# structurally cannot reach. `docs/release-smoke-checklist.md` records the gap
+# rather than dropping the row, so a release pass cannot mistake absence for a
+# pass.
+#
+# Too heavy to gate every PR regardless (see #560 / batch scope-down decision).
+# Deliberately a separate workflow from tauri-release.yml: a failure here was
+# always a signal to investigate before announcing, never a gate blocking
+# artifact publishing.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch: {}
 
 # Minimal token scope (CodeQL actions/missing-workflow-permissions).
