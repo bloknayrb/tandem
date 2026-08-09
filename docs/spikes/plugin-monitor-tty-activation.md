@@ -138,6 +138,43 @@ yet the child process saw `process.env.CLAUDE_PLUGIN_ROOT` as **unset**. Substit
 happens at command construction. A monitor script must not read it from the
 environment.
 
+### F6 — `when: "on-skill-invoke:<skill>"` works, and the name must be plugin-qualified. **MEASURED.**
+
+**Probe:** `scripts/spikes/probe-skill-arm-trigger.py`, same ConPTY harness. Two phases,
+because one phase cannot separate "correctly deferred" from "ignored in a way that
+disables the monitor": idle first (neither may arm), then dispatch (one must).
+
+Two monitors were declared differing *only* in the name form, so a single run decides it:
+
+| `when` | Idle | After `/armcheck` |
+|---|---|---|
+| `on-skill-invoke:armcheck` | not armed | **not armed** |
+| `on-skill-invoke:monprobe:armcheck` | not armed | **ARMED** |
+
+Reproduced twice. Arming landed ~13 s after dispatch. The skill itself demonstrably ran
+in both runs — the capture shows the session replying `ACK`, the skill's entire body — so
+the bare-name null is a name-matching result, not a dispatch failure.
+
+**So the matched string is `plugin:skill`, not `skill`.** The bare form fails silently:
+valid manifest, no error, monitor simply never arms. For Tandem the value is
+`on-skill-invoke:tandem:tandem` — the plugin is `tandem` and its auto-loaded `skills/`
+folder carries a skill also named `tandem`.
+
+> **Hazard this creates for us, UNVERIFIED.** Tandem ships that skill **twice** by two
+> different mechanisms: the plugin auto-loads `skills/` from the plugin root, and
+> `tandem setup --apply` installs a user-level copy into `~/.claude/skills/tandem/`. The
+> trigger binds to the plugin's copy. If a user with both installed dispatches the
+> user-level one, the name published is presumably unqualified and the monitor would not
+> arm — the exact silent failure above, in the exact configuration `tandem setup` creates.
+> Not tested: it needs a real plugin install alongside a setup-installed skill.
+
+**Why this matters more than it looks.** It is what makes keeping the monitor cheap. The
+standing objection to `experimental.monitors` was never that it fails — it is that
+`when: "always"` arms it in every session the plugin is enabled in, including ones with
+nothing to do with Tandem, which is how a Tandem bug becomes noise in somebody's unrelated
+work. `on-skill-invoke` retires that objection without giving up the path: the monitor
+arms at the moment Tandem becomes relevant to the session and never before.
+
 ## What the shipped binary says (IN CODE, 2.1.226)
 
 Same extraction method as `plugin-delivery.md` F1/F2. These corroborate the runtime
@@ -215,8 +252,8 @@ troubleshooting, CLAUDE.md) and recorded as a dated amendment to ADR-049.
   github-source marketplace install has no `dist/monitor/index.js` to point at. That
   is why the manifest uses `npx` today, and any fix has to solve distribution first.
 - `when: "on-skill-invoke:<skill>"` — arms on first dispatch of a named skill instead
-  of at session start. This directly addresses the objection that the monitor fires
-  in sessions unrelated to Tandem.
+  of at session start, which retires the objection that the monitor fires in sessions
+  unrelated to Tandem. **Measured working (F6); the name must be `plugin:skill`.**
 
 ## What is still not established
 
