@@ -6,9 +6,9 @@
 
 import type { Request, Response } from "express";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
+import { isWakeWorthy, toWakeFrame } from "../../shared/events/wake-scope.js";
 import { replaySince, subscribe, unsubscribe } from "./queue.js";
 import type { TandemEvent } from "./types.js";
-import { isWakeWorthy, toWakeFrame } from "./wake-scope.js";
 
 /**
  * Is this connection asking for the wake stream, the full one, or nonsense?

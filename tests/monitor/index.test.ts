@@ -327,12 +327,12 @@ describe("monitor: mode is stale-preserving across /api/mode failure", () => {
     stream.push(
       sseFrame(
         {
-          id: "evt_open",
-          type: "document:opened",
+          id: "evt_ann",
+          type: "annotation:created",
           timestamp: 1,
-          payload: { fileName: "x.md", format: "md" },
+          payload: { annotationId: "a1", fileName: "x.md" },
         },
-        "evt_open",
+        "evt_ann",
       ),
     );
     await vi.advanceTimersByTimeAsync(50);
@@ -340,8 +340,13 @@ describe("monitor: mode is stale-preserving across /api/mode failure", () => {
     // Mode preserved as "tandem" — the non-chat event was NOT suppressed.
     // Asserted on the event type, not the filename: the wake line carries no
     // payload since #1354, and the filename was payload.
+    //
+    // Must be a wake-worthy non-chat type. The `document:opened` this used to
+    // push satisfies "non-chat" but is no longer emitted at all, so the
+    // assertion would have been measuring the emit gate while claiming to
+    // measure the Solo one.
     const writes = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(writes).toContain("document:opened");
+    expect(writes).toContain("annotation:created");
     expect(writes).not.toContain("x.md");
     expect(getModeSync()).toBe("tandem");
 

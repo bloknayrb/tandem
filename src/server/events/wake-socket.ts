@@ -48,11 +48,11 @@ import type { Duplex } from "node:stream";
 import { type WebSocket, WebSocketServer } from "ws";
 import { API_WAKE } from "../../shared/api-paths.js";
 import { CHANNEL_SSE_KEEPALIVE_MS } from "../../shared/constants.js";
+import { isWakeWorthy, toWakeFrame } from "../../shared/events/wake-scope.js";
 import { isLoopback } from "../auth/middleware.js";
 import { isHostAllowed, isLocalhostOrigin } from "../mcp/api-routes.js";
 import { subscribe, unsubscribe } from "./queue.js";
 import type { TandemEvent } from "./types.js";
-import { isWakeWorthy, toWakeFrame } from "./wake-scope.js";
 
 /**
  * Ceiling on simultaneously-attached wake consumers.

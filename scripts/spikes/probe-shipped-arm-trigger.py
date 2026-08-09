@@ -35,6 +35,12 @@ Prerequisites, and the two traps that have produced false results before:
     session on the trust prompt, which is activation gate #4, and every monitor
     reads as "did not arm" for a reason that has nothing to do with `when`.
   * the reader thread must survive `UnicodeDecodeError` (see below).
+
+The cwd must also NOT already contain a `.claude/skills/<name>/`. This probe
+writes a rival copy of the skill there and DELETES that directory on teardown,
+so it refuses rather than clobber an existing one -- `$HOME` is the case that
+matters, where the path resolves to the real skill `tandem setup --apply`
+installs.
 """
 
 import json
@@ -95,6 +101,9 @@ def build(workdir: str, cwd: str) -> tuple[str, str, dict[str, str], str]:
     skill_name = os.path.basename(os.path.dirname(SKILL_PATH))
 
     plugin = os.path.join(workdir, "plugin")
+    manifest_out = os.path.join(plugin, ".claude-plugin", "plugin.json")
+    if os.path.isdir(plugin) and os.listdir(plugin) and not os.path.exists(manifest_out):
+        raise SystemExit(f"refusing to write the fixture into non-empty {plugin!r}")
     os.makedirs(os.path.join(plugin, ".claude-plugin"), exist_ok=True)
     os.makedirs(os.path.join(plugin, "skills", skill_name), exist_ok=True)
     with open(os.path.join(plugin, ".claude-plugin", "plugin.json"), "w", newline="") as fh:
@@ -106,8 +115,21 @@ def build(workdir: str, cwd: str) -> tuple[str, str, dict[str, str], str]:
 
     # The double-install shape: a second, NON-plugin copy of the same skill.
     # Placed project-level rather than in the operator's real ~/.claude/skills.
+    #
+    # Guarded, because the teardown `rmtree`s this path and the argument that
+    # made it safe -- "project-level, not the real one" -- is only true for the
+    # cwd the operator happens to pass. Pass $HOME and `<cwd>/.claude/skills/
+    # tandem` IS the real skill that `tandem setup --apply` installs: the probe
+    # would overwrite it, then delete it, destroying the very skill the bare arm
+    # trigger under test depends on. Same guard as `probe-monitor-respawn.py`.
     rival = os.path.join(cwd, ".claude", "skills", skill_name)
-    os.makedirs(rival, exist_ok=True)
+    if os.path.exists(rival):
+        raise SystemExit(
+            f"refusing to overwrite an existing skill at {rival!r} -- this probe "
+            f"deletes that directory on teardown. Pass a cwd that has no "
+            f"{skill_name!r} skill of its own."
+        )
+    os.makedirs(rival)
     with open(os.path.join(rival, "SKILL.md"), "w", encoding="utf-8", newline="") as fh:
         fh.write(skill_body("RIVALCOPY"))
 

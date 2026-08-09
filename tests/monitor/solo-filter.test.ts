@@ -43,13 +43,19 @@ describe("solo-mode event filtering", () => {
     // so the cache must be seeded before the first event is processed.
     await getCachedMode();
 
+    // A WAKE-WORTHY non-chat event, deliberately. This pushed `document:opened`
+    // until the emit gate started dropping non-wake-worthy types — at which
+    // point the assertion went hollow: stdout would be empty in Tandem mode
+    // too, so the test would have gone on passing with the Solo gate deleted.
+    // The vehicle for "X is suppressed" must be something that is otherwise
+    // emitted (lesson 96).
     stream.push(
       sseFrame(
         {
           id: "e1",
-          type: "document:opened",
+          type: "annotation:created",
           timestamp: 1,
-          payload: { fileName: "a.md", format: "md" },
+          payload: { annotationId: "a1", fileName: "a.md" },
         },
         "e1",
       ),
@@ -160,7 +166,7 @@ describe("solo-mode event filtering", () => {
     expect(stdoutSpy).toHaveBeenCalled();
   });
 
-  it("delivers all event types when mode is tandem", async () => {
+  it("delivers non-chat wake-worthy events when mode is tandem", async () => {
     stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
     const promise = connectAndStream(
       undefined,
@@ -172,9 +178,9 @@ describe("solo-mode event filtering", () => {
       sseFrame(
         {
           id: "e2",
-          type: "document:opened",
+          type: "annotation:created",
           timestamp: 1,
-          payload: { fileName: "a.md", format: "md" },
+          payload: { annotationId: "a2", fileName: "a.md" },
         },
         "e2",
       ),
@@ -183,5 +189,31 @@ describe("solo-mode event filtering", () => {
     await promise.catch(() => {});
 
     expect(stdoutSpy).toHaveBeenCalled();
+  });
+
+  // The counterpart, and the reason the two tests above no longer use
+  // `document:*`: silence there is the EMIT gate, not the Solo gate. Without
+  // this test nothing distinguishes the two causes, and "suppressed in Solo"
+  // would be indistinguishable from "never printed at all".
+  it("prints nothing for document:* even in tandem — not wake-worthy", async () => {
+    stub.on("/api/mode", () => new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));
+    const promise = connectAndStream(
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    for (const type of ["document:opened", "document:closed", "document:switched"] as const) {
+      stream.push(
+        sseFrame(
+          { id: type, type, timestamp: 1, payload: { fileName: "a.md", format: "md" } },
+          type,
+        ),
+      );
+    }
+    stream.end();
+    await promise.catch(() => {});
+
+    expect(stdoutSpy).not.toHaveBeenCalled();
   });
 });

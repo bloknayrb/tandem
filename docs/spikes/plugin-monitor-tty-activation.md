@@ -382,6 +382,59 @@ second entry into the first. And `t(s)` is the caller-supplied predicate: the `w
 is decided *before* the key is computed and before anything is spawned, which is why F10 can
 substitute the `command` without affecting what it measures.
 
+**The monitor schema, verbatim** — extracted the same way, and it settles two questions a
+review raised about the shipped manifest:
+
+```js
+when: A.union([
+  A.literal("always"),
+  A.string().startsWith("on-skill-invoke:")
+   .refine((e) => e.length > 16, { message: "on-skill-invoke: must specify a skill name" }),
+]).default("always")
+```
+
+```js
+Dgi = _e(() => A.array(dVm()).refine(
+  (e) => new Set(e.map((t) => t.name)).size === e.length,
+  { message: "Monitor names must be unique within a plugin" },
+))
+```
+
+**Distinct `name`s are not a choice — the host rejects duplicates.** The arming loop's
+dedupe key would make one shared `name` collapse the second entry into the first, which
+looks like a clean way to stop a session that dispatches BOTH `/tandem` and
+`/tandem:tandem` from arming two monitors. It is not available: the array-level refine
+fails the manifest outright. So the double-arm below is a cost with no manifest-level
+remedy, not an oversight.
+
+**The double-arm, stated plainly.** Both entries can fire in one session — the user has to
+dispatch both name forms, which needs both skill copies installed *and* the user invoking
+each. The cost is one duplicated wake per event: two monitors, two `<task_notification>`s,
+two awareness POSTs, and double pressure on the rate limiter. It is bounded by the same
+thing that bounds the self-arming race — the inbox ledger de-duplicates, so it costs a
+wasted turn rather than a duplicate reply — and no singleton lock is reachable from a
+manifest.
+
+### F11 — `on-skill-invoke` is present in 2.1.212, with the same matcher. **MEASURED (static, 2026-08-09).**
+
+The docs restate a **2.1.212** floor for the monitor, but every `when` measurement in this
+note ran on 2.1.226. If `when` postdated the floor, then on an in-between version the
+manifest would carry a `when` the host did not understand — and with no `always` entry left
+as a fallback, the monitor would silently never arm.
+
+It does not. `npm pack @anthropic-ai/claude-code-win32-x64@2.1.212` and grep: the binary
+contains the same `when` schema above, and the same predicate,
+
+```js
+GFa(o, (s) => s.when === "always", …)
+_rs.subscribe((s) => GFa(t.getState().plugins.enabled, (a) => a.when === `on-skill-invoke:${s}`, …))
+```
+
+— plain string equality against the dispatched skill's published name, identical to 2.1.226.
+The floor stands as written and needs no version caveat.
+
+*Limit:* static. It shows the code is present and shaped the same; it is not a run on 2.1.212.
+
 ### The five activation gates
 
 The arming function returns early unless all of these hold. Enumerated because four
@@ -434,7 +487,8 @@ troubleshooting, CLAUDE.md) and recorded as a dated amendment to ADR-049.
   unrelated to Tandem. **Measured working (F6); the name must be `plugin:skill`** — and
   a same-named skill from any non-plugin source takes the bare name and does not arm it
   (F7), which is exactly what `tandem setup --apply` installs today. Declaring both name
-  forms as two entries catches either copy (F8).
+  forms as two entries catches either copy (F8) — and must, since the host refuses
+  duplicate monitor `name`s, so the two entries cannot be collapsed into one.
 - `${user_config.KEY}` — **measured NOT to substitute in a monitor command**
   (`scripts/spikes/probe-monitor-userconfig.py`): a bare-`node` control armed and an
   otherwise identical `"${user_config.node_path}"` entry did not, with the session

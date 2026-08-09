@@ -14,11 +14,19 @@ import type { TandemEvent } from "./types.js";
  * The Solo→Tandem release wake is a synthetic `annotation:created`
  * (`emitModeReleaseWake`), so it clears this filter by construction.
  *
- * Lives here rather than in `supervisor.ts`, where it started, because three
+ * Lives here rather than in `supervisor.ts`, where it started, because four
  * unrelated things now have to agree on the answer: the supervisor's stdin
- * wake, the SSE `?filter=wake` narrowing, and the `/api/wake` WebSocket
- * endpoint. Two of those are user-visible honesty signals, so a drifted second
- * copy would not fail loudly — it would quietly report the wrong story.
+ * wake, the SSE `?filter=wake` narrowing, the `/api/wake` WebSocket endpoint,
+ * and the plugin monitor's stdout line. Two of those are user-visible honesty
+ * signals, so a drifted second copy would not fail loudly — it would quietly
+ * report the wrong story.
+ *
+ * It sits in `src/shared/` rather than `src/server/` for the fourth: the
+ * monitor and channel bundles must not cross the server layer boundary, which
+ * is the same reason `src/shared/events/types.ts` exists. The monitor is the
+ * one caller that applies the predicate to its OUTPUT while still consuming the
+ * full stream — it needs `documentId` off every event, `document:*` included,
+ * to attribute the awareness indicator.
  *
  * **The delivery-state join is NOT one of them**, and it is worth saying so
  * where a maintainer will read it: the join runs on `isUnansweredAsk`, which is

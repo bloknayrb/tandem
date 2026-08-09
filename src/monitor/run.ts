@@ -4,7 +4,9 @@
  * `tandem monitor` CLI subcommand (`npx -y tandem-editor@<version> monitor`).
  *
  * Connects to the Tandem server's /api/events SSE endpoint and prints one
- * PAYLOAD-FREE wake line per event to stdout. Each line becomes a Claude Code
+ * PAYLOAD-FREE wake line to stdout per WAKE-WORTHY event — annotations and
+ * chat, the same `isWakeWorthy` set every other push path uses; `document:*`
+ * tab churn is consumed but not printed. Each line becomes a Claude Code
  * notification automatically via the plugin monitor mechanism. An alternative
  * to the channel shim for event delivery in a hand-launched session, without
  * requiring --dangerously-load-development-channels.
@@ -48,6 +50,7 @@
  */
 
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
+import { isWakeWorthy } from "../shared/events/wake-scope.js";
 import {
   _resetSseConsumerStateForTests,
   _addOutstandingAwarenessForTests as _sharedAddOutstandingAwarenessForTests,
@@ -124,6 +127,17 @@ function buildOptions(): EventConsumerOptions {
       // wake frame carries none. The payload stays inside this process and
       // never reaches the model. If per-document awareness is ever dropped
       // here, switching the request to `?filter=wake` is the remaining step.
+      //
+      // CONSUMING the full stream is not EMITTING on all of it. `document:*`
+      // lifecycle fires whenever the user clicks a tab, and every other push
+      // path drops it (`isWakeWorthy` — supervisor stdin, `?filter=wake`,
+      // `/api/wake`). This one printed it, which mattered less when the line
+      // was descriptive; now that it says "call tandem_checkInbox", each tab
+      // click becomes a forced turn that can only discover there was nothing
+      // to do. And the cost is not just the wasted turn: those lines spend the
+      // same host rate limiter that reason 3 above says silently drops wakes,
+      // so navigation noise can push out the annotation the user is waiting on.
+      if (!isWakeWorthy(event)) return;
       const content = `Tandem: ${event.type} — call tandem_checkInbox for details`;
       // False-checkpoint guard: the shared consumer advances lastEventId
       // only AFTER `onEvent` resolves without throwing. EPIPE on

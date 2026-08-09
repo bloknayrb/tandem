@@ -76,29 +76,89 @@ const NAMES_THE_TRIGGER =
   /on-skill-invoke|first uses|first use of|asking for Tandem by name|ask for Tandem by name|dispatch(es|ed|ing)? the|uses (the |Tandem's )?(Tandem )?skill|skill dispatch/i;
 
 /**
- * Paragraph = blank-line-separated block, PLUS two extra splits, because
- * "scoped to the paragraph" was false for two kinds of carrier:
+ * The three regexes above ask three different questions, so they are asked of
+ * three different-sized units. Collapsing any two of them has already produced
+ * a hole, each one measured:
  *
- *  - a `.svelte` file's markup has no blank lines inside a block, so
- *    `IntegrationWizardModal.svelte` produced one 11k-char "paragraph" — a
- *    stray token anywhere in it excused a false claim anywhere else in it.
- *  - a tight markdown bullet list is one block, so a qualification in bullet 1
- *    excused a claim in bullet 2.
+ *  - **`claim`** — the narrowest unit, what `UNCONDITIONAL` is tested on. Small
+ *    so that a qualification elsewhere cannot cover a false claim here.
+ *  - **`context`** — the claim plus a line either side, what `NAMES_THE_TRIGGER`
+ *    is tested on. Prose wraps, so a claim and the clause qualifying it land on
+ *    different lines routinely; judging the excuse on the claim alone reported
+ *    the *corrected* doctor.ts wording as an offender, because "…reporting it in
+ *    every session on the machine)" wrapped away from the `on-skill-invoke` that
+ *    qualifies it.
+ *  - **`topic`** — the whole blank-line block, what `ABOUT_THE_MONITOR` is tested
+ *    on. Topicality is a property of the passage, not of one line. Judging it on
+ *    the claim is what made coverage uneven: `src/cli/doctor.ts` reverted to its
+ *    verbatim pre-#1354 wording ("Claude Code reports it in EVERY session —
+ *    including ones with nothing to do with Tandem") left the sweep **12/12
+ *    green**, because the offending line names neither "plugin" nor "monitor" —
+ *    both sit on the line above. The same mutation in `index.ts` and the Svelte
+ *    carrier WAS caught, which is the shape of the hazard: a tripwire that fires
+ *    on some carriers and not others reads as coverage.
+ *
+ * `context` must be a window around the claim rather than a fragment in its own
+ * right. Overlapping windows were tried and leak: with each window scored as
+ * both claim and excuse, the offending line reappears as the middle of the NEXT
+ * window, this time without the qualifying line, and the offence resurfaces.
  */
-function paragraphs(text: string): string[] {
-  return text
-    .split(/\n\s*\n/)
-    .flatMap((block) => block.split(/\n(?=\s*[-*]\s)/))
-    .flatMap((block) => (block.length > 1500 ? block.split(/\n/) : [block]));
+interface Fragment {
+  claim: string;
+  context: string;
+  topic: string;
+}
+
+function lineFragments(block: string, topic: string): Fragment[] {
+  const lines = block.split("\n");
+  return lines.map((claim, i) => ({
+    claim,
+    context: lines.slice(Math.max(0, i - 1), i + 2).join("\n"),
+    topic,
+  }));
+}
+
+/**
+ * Markdown and source files fragment differently, and conflating them is what
+ * produced the doctor.ts hole.
+ *
+ * The bullet split `\n(?=\s*[-*]\s)` cannot tell a markdown `* ` bullet from a
+ * JSDoc continuation line, which is also whitespace-then-`*`-then-space. So in
+ * a `.ts` file it silently split every comment line into its own paragraph,
+ * with no window to restore the sentence. That inverts the split's purpose:
+ * markdown bullets are separate assertions and must NOT excuse each other,
+ * while wrapped comment prose is one sentence and must.
+ *
+ * The 1500-char escape hatch stays for markdown only, because the carrier it
+ * exists for is a `.svelte` file — 11k chars with no blank line, where a stray
+ * token anywhere excused a false claim anywhere.
+ */
+function fragments(rel: string, text: string): Fragment[] {
+  const isMarkdown = rel.endsWith(".md");
+  return text.split(/\n\s*\n/).flatMap((block) => {
+    if (!isMarkdown) return lineFragments(block, block);
+    return block
+      .split(/\n(?=\s*[-*]\s)/)
+      .flatMap((bullet) =>
+        bullet.length > 1500
+          ? lineFragments(bullet, block)
+          : [{ claim: bullet, context: bullet, topic: block }],
+      );
+  });
 }
 
 describe("plugin-monitor arming claims name the trigger", () => {
   for (const rel of CARRIERS) {
     it(`${rel} does not promise unconditional arming`, () => {
       const text = readFileSync(join(ROOT, rel), "utf-8");
-      const offenders = paragraphs(text).filter(
-        (p) => UNCONDITIONAL.test(p) && ABOUT_THE_MONITOR.test(p) && !NAMES_THE_TRIGGER.test(p),
-      );
+      const offenders = fragments(rel, text)
+        .filter(
+          (f) =>
+            UNCONDITIONAL.test(f.claim) &&
+            ABOUT_THE_MONITOR.test(f.topic) &&
+            !NAMES_THE_TRIGGER.test(f.context),
+        )
+        .map((f) => f.claim);
       expect(
         offenders,
         `${rel}: paragraph claims the monitor covers sessions unconditionally without naming the skill-dispatch trigger`,
@@ -118,7 +178,9 @@ describe("plugin-monitor arming claims name the trigger", () => {
   for (const rel of ["README.md", "docs/troubleshooting.md", "docs/user-guide.md"]) {
     it(`${rel} explains when the plugin monitor starts`, () => {
       const text = readFileSync(join(ROOT, rel), "utf-8");
-      const explains = paragraphs(text).some((p) => /plugin/i.test(p) && NAMES_THE_TRIGGER.test(p));
+      const explains = fragments(rel, text).some(
+        (f) => /plugin/i.test(f.context) && NAMES_THE_TRIGGER.test(f.context),
+      );
       expect(explains, `${rel} no longer says when the plugin monitor arms`).toBe(true);
     });
   }
