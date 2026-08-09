@@ -97,7 +97,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
         {restarting ? "Restarting…" : "Restart sidecar"}
       </button>
     {:else}
-      <span style="font-size: 10px; color: var(--tandem-fg-subtle);">Run <code>tandem stop &amp;&amp; tandem start</code> to restart</span>
+      <span data-allow-context-menu style="font-size: 10px; color: var(--tandem-fg-subtle);">Run <code>tandem stop &amp;&amp; tandem start</code> to restart</span>
     {/if}
   </div>
   {#if restartError}
@@ -111,6 +111,7 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
 <div>
   <div style={labelStyle}>Transport</div>
   <div
+    data-allow-context-menu
     style="display: flex; gap: var(--tandem-space-4); padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface); font-size: 12px; color: var(--tandem-fg);"
   >
     <span><strong>Mode:</strong> {transport ? transport.toUpperCase() : "—"}</span>
@@ -172,11 +173,12 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
     <div>
       <div style={labelStyle}>Loopback Port</div>
       <div
+        data-allow-context-menu
         style="padding: var(--tandem-space-2) var(--tandem-space-3); border: 1px solid var(--tandem-border); border-radius: var(--tandem-r-3); background: var(--tandem-surface-muted); font-size: 13px; color: var(--tandem-fg-subtle); display: inline-block;"
       >
         {bindPort ?? "—"}
       </div>
-      <div style={subtextStyle}>Port used when transport is HTTP. To change, run <code>tandem start --port &lt;N&gt;</code>.</div>
+      <div data-allow-context-menu style={subtextStyle}>Port used when transport is HTTP. To change, run <code>tandem start --port &lt;N&gt;</code>.</div>
     </div>
   {/if}
 
@@ -231,12 +233,12 @@ const tokenRotatedAt = $derived(appInfo.info?.tokenRotatedAt);
   {#if tokenRotatedAt !== undefined}
     <div>
       <div style={labelStyle}>Token Rotation</div>
-      <div style="font-size: 12px; color: var(--tandem-fg);">
+      <div data-allow-context-menu style="font-size: 12px; color: var(--tandem-fg);">
         {tokenRotatedAt === null
           ? "Auth token not yet created"
           : `Last rotated: ${new Date(tokenRotatedAt).toLocaleString()}`}
       </div>
-      <div style={subtextStyle}>To rotate: run <code>tandem rotate-token</code> in the CLI.</div>
+      <div data-allow-context-menu style={subtextStyle}>To rotate: run <code>tandem rotate-token</code> in the CLI.</div>
     </div>
   {/if}
 </CollapsibleSection>
