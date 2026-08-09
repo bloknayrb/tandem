@@ -1500,6 +1500,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             setup_overlay_titlebar,
             get_app_theme,
+            set_window_theme,
             sentry_enabled,
             cowork_scan_workspaces,
             cowork_toggle_integration,
@@ -2678,6 +2679,31 @@ fn get_app_theme(window: tauri::WebviewWindow) -> Result<String, String> {
         Ok(_) => Ok("light".to_string()),
         Err(e) => Err(format!("theme() error: {e}")),
     }
+}
+
+/// Maps the client's theme preference to a native `tauri::Theme`. `None`
+/// clears any forced window theme so it reverts to following the OS — this is
+/// the branch for `"system"`, and it matters: without it, `window.theme()`
+/// (which `get_app_theme` reads) would keep reporting the last forced value
+/// forever, even after the user returns to "system" (#992). `"warm"` is a
+/// light-family theme with no native analog and maps to `Light`.
+fn theme_pref_to_native(pref: &str) -> Option<tauri::Theme> {
+    match pref {
+        "dark" => Some(tauri::Theme::Dark),
+        "light" | "warm" => Some(tauri::Theme::Light),
+        _ => None,
+    }
+}
+
+/// Pushes the app's theme preference to the native window (#992) so real OS
+/// surfaces — context menus, file dialogs, the title bar — match an explicit
+/// in-app override instead of always following the OS appearance. Blast
+/// radius is the whole window, not just menus; signed off as acceptable.
+#[tauri::command]
+fn set_window_theme(window: tauri::WebviewWindow, theme: String) -> Result<(), String> {
+    window
+        .set_theme(theme_pref_to_native(&theme))
+        .map_err(|e| format!("set_theme failed: {e}"))
 }
 
 /// Whether opt-in crash reporting (#921) is active. The WebView calls this to
@@ -4326,6 +4352,39 @@ mod reveal_command_tests {
         let nasty = "/Users/me/$(rm -rf ~) file.md";
         let (_program, args) = reveal_command_args(nasty, "macos");
         assert_eq!(args, vec!["-R".to_string(), nasty.to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod theme_pref_tests {
+    use super::*;
+
+    // #992 — native menus/dialogs/title bar follow window.theme(), which
+    // set_window_theme pushes. These test only the pure mapping; the actual
+    // set_theme() call needs a live WebviewWindow and isn't unit-testable.
+
+    #[test]
+    fn dark_maps_to_native_dark() {
+        assert_eq!(theme_pref_to_native("dark"), Some(tauri::Theme::Dark));
+    }
+
+    #[test]
+    fn light_maps_to_native_light() {
+        assert_eq!(theme_pref_to_native("light"), Some(tauri::Theme::Light));
+    }
+
+    #[test]
+    fn warm_maps_to_native_light_as_its_closest_analog() {
+        // "warm" is a light-family theme with no native OS equivalent (#993).
+        assert_eq!(theme_pref_to_native("warm"), Some(tauri::Theme::Light));
+    }
+
+    #[test]
+    fn system_clears_the_forced_theme() {
+        // The critical branch: without None here, window.theme() (read by
+        // get_app_theme) would keep reporting the last forced value forever,
+        // even after the user returns to "system".
+        assert_eq!(theme_pref_to_native("system"), None);
     }
 }
 

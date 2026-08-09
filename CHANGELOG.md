@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **We stopped saying the flag is temporary.** Older text implied it would become unnecessary once Claude Code's real-time API settled. It won't: the list that would make it optional covers plugins only, and Tandem's channel is a plain connection rather than a plugin, so there is nothing for it to be added to. Better to say so than to leave people waiting.
 
+<!-- PENDING: Windows popup-menu behaviour unverified (#992) -->
+
+- **Native right-click menus, and the rest of the window, now follow your chosen theme, not just the operating system's (#992).** Tandem's context menus are real OS menus, so before now they always rendered in whichever appearance Windows, macOS, or Linux was set to — even if you had picked a different theme inside Tandem itself. Choosing an explicit theme now pushes it to the window, so the menus match; switching back to "Match system" hands control back to the OS. This reaches beyond menus: native file-open/save dialogs and the title bar now follow your in-app theme too, for as long as you have an explicit one selected.
+
 ### Fixed
 
 - **The collapsed left rail's tick marks now show your document's actual outline, not a fixed decoration (#832).** When the outline panel is tucked away, a sliver pokes out with a preview of what's inside — tick marks standing in for headings. Those ticks were five hardcoded literals (`h1/h2/h2/h3/h2`) that rendered identically for every document, including one with no headings at all: a shipped surface that looked like a live preview but asserted nothing true about what you'd opened. It now reflects the real heading levels, computed once and shared with the outline panel itself so the two can never disagree, capped at the first 12 headings (the sliver is a few pixels wide and clips anything past that). A document with no headings now shows an empty strip rather than a fabricated one. Annotation-dot density and the wider contextual-preview design remain deferred; this closes only the false-outline half of #832.

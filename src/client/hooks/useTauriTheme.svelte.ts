@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
+import type { ThemePreference } from "./useTandemSettings.js";
 import type { ResolvedTheme } from "./useTheme.js";
 
 declare global {
@@ -33,6 +34,22 @@ export function _resetForTests(): void {
 function setTauriTheme(next: "light" | "dark"): void {
   tauriTheme.current = next;
   if (typeof window !== "undefined") window.__TANDEM_INITIAL_THEME__ = next;
+}
+
+/**
+ * Pushes the app's theme preference to the native window (#992) so real OS
+ * surfaces — context menus, file dialogs, the title bar — match an explicit
+ * override instead of always following the OS. Called on every
+ * `settings.theme` change: an explicit preference forces that theme, and
+ * `"system"` clears the override (Rust maps this to `None`) so the window
+ * resumes following the OS — otherwise `window.theme()` would keep reporting
+ * the last forced value forever, breaking `get_app_theme`'s read-back.
+ */
+export function setWindowTheme(pref: ThemePreference): void {
+  if (!isTauriRuntime()) return;
+  import("@tauri-apps/api/core")
+    .then(({ invoke }) => invoke("set_window_theme", { theme: pref }))
+    .catch((e) => console.warn("[useTauriTheme] set_window_theme failed:", e));
 }
 
 /** Initialize the Tauri theme bridge. Called once on first import in Tauri. */

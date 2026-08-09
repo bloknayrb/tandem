@@ -1,6 +1,6 @@
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { SystemLightVariant, ThemePreference } from "./useTandemSettings.js";
-import { initTauriTheme, tauriTheme } from "./useTauriTheme.svelte.js";
+import { initTauriTheme, setWindowTheme, tauriTheme } from "./useTauriTheme.svelte.js";
 import type { ResolvedTheme } from "./useTheme.js";
 
 export type { ResolvedTheme } from "./useTheme.js";
@@ -130,6 +130,14 @@ export function createTheme(
 ): void {
   // Initialize the Tauri theme bridge once — no-op in browser mode
   initTauriTheme();
+
+  // Pushes the theme to the native window (#992) on every explicit
+  // settings.theme change. Kept as its own effect (reading only getPref())
+  // rather than folded into the one below, which also reruns on lightVariant
+  // changes — set_window_theme should fire once per actual theme change.
+  $effect(() => {
+    setWindowTheme(getPref());
+  });
 
   $effect(() => {
     const pref = getPref();

@@ -117,3 +117,48 @@ describe("useTauriTheme", () => {
     expect(systemTheme()).toBe("dark");
   });
 });
+
+describe("setWindowTheme (#992)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
+  });
+
+  it("does not invoke in browser mode (no Tauri runtime)", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(false);
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { setWindowTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+    vi.mocked(invoke).mockClear();
+
+    setWindowTheme("dark");
+
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled();
+  });
+
+  it("invokes set_window_theme with the explicit preference in Tauri", async () => {
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { setWindowTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+    vi.mocked(invoke).mockClear();
+
+    setWindowTheme("dark");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_window_theme", { theme: "dark" });
+  });
+
+  it("invokes set_window_theme with 'system' on transition back to system", async () => {
+    // The critical case (#992): the transition INTO "system" must still call
+    // through — Rust maps "system" to None to clear the forced theme, not
+    // skip the call.
+    vi.mocked(coworkHelpers.isTauriRuntime).mockReturnValue(true);
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { setWindowTheme } = await import("../../src/client/hooks/useTauriTheme.svelte.js");
+    vi.mocked(invoke).mockClear();
+
+    setWindowTheme("system");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_window_theme", { theme: "system" });
+  });
+});
