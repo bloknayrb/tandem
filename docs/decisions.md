@@ -389,7 +389,7 @@ The noise is addressed without touching the path. `npx … monitor || exit 0` us
 1. `git log --grep='self-arm'` shows the `ws` wake path shipped and no field report of it failing for one full release cycle, **and**
 2. `docs/spikes/` contains a run recording a CLI version in which `experimental.monitors[]` does *not* activate — the mirror of the `exit 127` evidence, which is what would show the incumbent has stopped being a path at all.
 
-Either "keep", "replace", or "retire" at review time; "wait and see again" is not an outcome. Tracked as a dated issue so it surfaces in `gh issue list` rather than living only here.
+Either "keep", "replace", or "retire" at review time; "wait and see again" is not an outcome. Tracked as **#1349** (titled with its date, so it surfaces in `gh issue list` rather than living only here), which also parks the untested `|| exit 0` mitigation.
 
 ## ADR-029: Action Registry and Command Palette
 
