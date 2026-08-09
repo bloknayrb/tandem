@@ -286,8 +286,12 @@ describe("rotateToken CLI", () => {
     expect(messages).toContain("409");
     expect(messages).not.toContain("[tandem] Rotated auth token.");
     expect(messages).toContain("No token was rotated and no config file was changed.");
-    // The load-bearing assertion: configs are never touched on a refusal.
+    // The load-bearing assertions. Stderr text alone would pass for a rollback
+    // that wrote nothing at all — which is the entire behaviour under test.
     expect(_applyConfigSpy).not.toHaveBeenCalled();
+    const lastWrite = _writeFileSpy.mock.calls.at(-1);
+    expect(lastWrite?.[1], "the rollback must write the OLD token back").toBe(OLD_TOKEN);
+    expect(_renameSpy.mock.calls.at(-1)?.[1], "and rename it into place").toBe("/tmp/tandem/token");
 
     stderrSpy.mockRestore();
   });
@@ -311,9 +315,41 @@ describe("rotateToken CLI", () => {
 
     const messages = stderrCalls.flat().join("\n");
     expect(messages).toContain("loopback-only");
-    expect(messages).toContain("on the computer");
+    // Naming the resolved URL is the point: on a LAN-bound host whose shell
+    // exports TANDEM_URL, the CLI IS on the server machine and still presents a
+    // LAN peer, so "run it on the server" alone tells the user to redo what
+    // they already did.
+    expect(messages).toContain("unset TANDEM_URL");
     expect(_applyConfigSpy).not.toHaveBeenCalled();
+    expect(_writeFileSpy.mock.calls.at(-1)?.[1]).toBe(OLD_TOKEN);
 
+    stderrSpy.mockRestore();
+  });
+
+  it("exits non-zero when the rollback itself fails, instead of claiming nothing changed", async () => {
+    // The state this describes — token file holding a credential the running
+    // server rejects — is the worst outcome in this function, and it used to
+    // print "No token was rotated and no config file was changed." four lines
+    // later and return 0. Both halves were false.
+    fetchMock.mockResolvedValue({ ok: false, status: 403, json: vi.fn().mockResolvedValue({}) });
+    _renameSpy.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("EACCES"));
+    const stderrCalls: unknown[][] = [];
+    const stderrSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args) => stderrCalls.push(args));
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit called");
+    }) as never);
+
+    const { rotateToken } = await import("../../src/cli/rotate-token.js");
+    await expect(rotateToken()).rejects.toThrow("process.exit called");
+
+    const messages = stderrCalls.flat().join("\n");
+    expect(messages).toContain("could not be restored");
+    expect(messages).not.toContain("No token was rotated");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    exitSpy.mockRestore();
     stderrSpy.mockRestore();
   });
 

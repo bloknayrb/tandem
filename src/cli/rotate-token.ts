@@ -103,30 +103,46 @@ export async function rotateToken(): Promise<void> {
   // now loopback-only for non-GET, so `tandem rotate-token` against a remote
   // `TANDEM_URL` gets a 403 here every time.
   if (serverRejected) {
+    let restored = true;
     try {
       await fsPromises.writeFile(tmpPath, oldToken, { encoding: "utf8", mode: 0o600 });
       await fsPromises.rename(tmpPath, tokenPath);
     } catch (err) {
+      restored = false;
       await fsPromises.unlink(tmpPath).catch(() => {});
       console.error(
         `[tandem] Error: server refused the rotation AND the token file could not be restored: ${err instanceof Error ? err.message : String(err)}`,
       );
-      console.error(
-        `  The token file at ${tokenPath} may hold a token the server does not accept.`,
-      );
-      console.error(`  Old fingerprint: ${fingerprint(oldToken)}`);
+      console.error(`  The token file at ${tokenPath} holds a token the server will not accept.`);
+      console.error(`  Restore it by hand — old fingerprint: ${fingerprint(oldToken)}`);
     }
     console.error(
       `[tandem] Error: server rejected the rotation request (status: ${serverRejectedStatus}).`,
     );
     if (serverRejectedStatus === 403) {
+      // #1320: /api is loopback-only for non-GET. Naming the resolved URL rather
+      // than saying "run it on the server" is the difference between actionable
+      // and infuriating: on a TANDEM_BIND_HOST=0.0.0.0 host whose shell exports
+      // TANDEM_URL=http://<lan-ip>:3479 — how Cowork and the shim are configured
+      // — the CLI IS on the server machine and still presents a LAN peer address.
       console.error(
-        "  Token rotation is loopback-only — run `tandem rotate-token` on the computer\n" +
-          "  running the server, not against a remote TANDEM_URL.",
+        `  Token rotation is loopback-only, and this ran against ${serverUrl}.\n` +
+          "  Run it on the computer hosting the server, and unset TANDEM_URL (or\n" +
+          "  point it at 127.0.0.1) so the request originates from loopback.",
       );
     }
-    console.error("  No token was rotated and no config file was changed.");
+    // Only claim nothing changed when nothing did. The restore-failure path
+    // above describes the opposite state, and this line is the one a user skims.
+    if (restored) {
+      console.error("  No token was rotated and no config file was changed.");
+    }
     console.error("");
+    if (!restored) {
+      // A half-rotated token file is a hard failure, not a warning: the server
+      // will reject every subsequent request from this client until a human
+      // fixes the file. Exiting 0 here would tell a script it succeeded.
+      process.exit(1);
+    }
     return;
   }
 

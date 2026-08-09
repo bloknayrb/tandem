@@ -78,10 +78,15 @@ instead. That scrubbing is what the LAN Host accommodation (`createApiMiddleware
 `extraHosts`, wired from `resolvedLanIP`) exists for, and it is now exactly scoped: LAN
 hosts may **read** `/api`; their writes are refused.
 
-Three things sit outside the invariant, for three different reasons:
+The exemptions are keyed by **method and path together**, not path alone: the set holds
+`DELETE /api/chat`, so a future `POST /api/chat` would be gated like anything else. A
+path-only set would have silently handed LAN-write access to the next route added on one of
+those six paths — the same fail-open shape this invariant replaced.
+
+Two things sit outside it, for two different reasons:
 
 - **The `/api/channel-*` family and `DELETE /api/chat`** are carved out by name in
-  `NON_LOOPBACK_ALLOWED_PATHS`, because the channel shim (`src/channel/`) and the plugin
+  `NON_LOOPBACK_ALLOWED`, because the channel shim (`src/channel/`) and the plugin
   monitor (`src/monitor/`) are documented to run against a non-loopback `TANDEM_URL` — that
   is how Cowork reaches a Tandem running elsewhere. This is the one hand-maintained list
   left in the design; adding to it is a security change. Nothing in CI exercises the shim
@@ -91,9 +96,11 @@ Three things sit outside the invariant, for three different reasons:
 - **`/api/wake`** is a WebSocket upgrade registered on the `http.Server` upgrade event
   (`events/wake-socket.ts`), so `app.use("/api", …)` structurally never sees it. It carries
   its own Origin guard. This is an exception to the middleware's *reach*, not to the policy.
-- **`/api/shutdown`** gates itself and more strictly: its Origin half must permit an
-  *absent* Origin (the Tauri shell's reqwest client sends none), which
-  `assertOriginAllowlisted` rejects.
+
+`/api/shutdown` is **not** one of them — it is covered by the invariant like every other
+mutator, and *additionally* gates itself, more strictly: its Origin half must permit an
+*absent* Origin (the Tauri shell's reqwest client sends none), which
+`assertOriginAllowlisted` rejects. Do not read its hand-rolled gate as redundant.
 
 One consequence worth stating because it is documented usage: `tandem rotate-token` against
 a remote `TANDEM_URL` now gets a 403. Rotation must run on the host. The CLI rolls the token

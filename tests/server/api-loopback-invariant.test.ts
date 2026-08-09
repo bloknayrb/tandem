@@ -125,7 +125,15 @@ async function call(
     headers: peer === undefined ? {} : { "x-test-peer": peer },
   });
   const text = await res.text();
-  return { status: res.status, body: text === "" ? undefined : JSON.parse(text) };
+  // Express's 404 handler serves HTML, so parsing unconditionally would turn a
+  // "the router declined it" result into a SyntaxError.
+  let body: unknown;
+  try {
+    body = text === "" ? undefined : JSON.parse(text);
+  } catch {
+    body = text;
+  }
+  return { status: res.status, body };
 }
 
 const LAN = "192.168.1.50";
@@ -181,6 +189,28 @@ describe("#1320 /api loopback invariant", () => {
     const { status } = await call("POST", API_OPEN, undefined);
     expect(status).toBe(403);
   });
+
+  it("exempts a carve-out by METHOD AND path, not by path alone", async () => {
+    // `DELETE /api/chat` is the carve-out. A path-keyed set would also exempt
+    // `POST /api/chat` — no such route today, but it is the obvious next one,
+    // and it would inherit LAN-write access with nothing able to notice. A 404
+    // would mean the gate passed and the router refused; 403 is the gate.
+    expect((await call("POST", API_CHAT, LAN)).status).toBe(403);
+    expect((await call("DELETE", API_CHAT, LAN)).status).toBe(200);
+  });
+
+  it("never serves a doubled-slash path that skips the mount entirely", async () => {
+    // `app.use("/api", …)` does not match `//api/open` — the middleware never
+    // runs, and so does `app.use("/api", authMiddleware)` in production. Today
+    // the router declines it too, so it 404s and the two disagreements cancel.
+    // That is a coincidence, not a guarantee: any normalizing hop added later
+    // (reverse proxy, strict-routing change) turns it into an auth AND loopback
+    // bypass. Assert the outcome, so the coincidence cannot break quietly.
+    for (const path of [`/${API_OPEN}`, `//${API_OPEN}`]) {
+      const { status } = await call("POST", path, LAN);
+      expect(status, path).not.toBe(200);
+    }
+  });
 });
 
 describe("#1320 the invariant is actually mounted", () => {
@@ -191,14 +221,27 @@ describe("#1320 the invariant is actually mounted", () => {
     "utf-8",
   );
 
-  it("mounts enforceLoopbackMutation under /api, after auth and before the registrars", () => {
+  it("mounts enforceLoopbackMutation under /api, after auth and before EVERY registrar", () => {
     const auth = serverSrc.indexOf('app.use("/api", authMiddleware)');
     const invariant = serverSrc.indexOf('app.use("/api", enforceLoopbackMutation)');
-    const firstRegistrar = serverSrc.indexOf("registerApiRoutes(");
     expect(invariant, "server.ts must mount enforceLoopbackMutation under /api").toBeGreaterThan(
       -1,
     );
     expect(invariant).toBeGreaterThan(auth);
-    expect(firstRegistrar).toBeGreaterThan(invariant);
+
+    // All five, not just the first. Pinning only `registerApiRoutes` would stay
+    // green while the mount slid below the channel, integrations, launcher or
+    // models registrars — silently un-gating everything those register.
+    for (const registrar of [
+      "registerApiRoutes(",
+      "registerChannelRoutes(",
+      "registerIntegrationsRoutes(",
+      "registerLauncherRoutes(",
+      "registerModelsRoutes(",
+    ]) {
+      const at = serverSrc.indexOf(registrar);
+      expect(at, `${registrar} not found in server.ts`).toBeGreaterThan(-1);
+      expect(at, `${registrar} must run after the invariant is mounted`).toBeGreaterThan(invariant);
+    }
   });
 });

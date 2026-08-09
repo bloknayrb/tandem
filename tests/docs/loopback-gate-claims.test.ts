@@ -175,12 +175,10 @@ describe("loopback-gate documentation claims (#1293 / #1322)", () => {
     // forgetting to add to it fails closed — but it is still the one place a
     // reviewer has to trust prose, so pin it to the source the same way.
     const src = stripComments(readFileSync(API_ROUTES, "utf-8"));
-    const block = src.match(
-      /NON_LOOPBACK_ALLOWED_PATHS[^=]*=\s*new Set\(\s*\[([\s\S]*?)\]\s*\.map/,
-    );
+    const block = src.match(/NON_LOOPBACK_ALLOWED[^=]*=\s*new Set\(([\s\S]*?)\n\);/);
     expect(
       block,
-      "NON_LOOPBACK_ALLOWED_PATHS is no longer a literal array of API_* constants",
+      "NON_LOOPBACK_ALLOWED is no longer a literal list of API_* constants",
     ).not.toBeNull();
 
     const constants = [...(block?.[1] ?? "").matchAll(/\b(API_[A-Z_]+)\b/g)].map((m) => m[1]);

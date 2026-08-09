@@ -194,23 +194,34 @@ export const apiMiddleware: Handler = createApiMiddleware();
  * reviewer can check at a glance. Widening this set is the one hand-maintained
  * decision left in the invariant; treat an addition as a security change.
  *
- * NOT here, for two different reasons:
- * - `/api/shutdown` gates itself, and more strictly (its Origin half must permit
- *   an ABSENT Origin, which `assertOriginAllowlisted` rejects).
+ * **Keyed by METHOD AND PATH, not path alone.** Every doc and comment describes
+ * the exemption as `DELETE /api/chat`, and a path-only set would not mean that —
+ * it would exempt `POST /api/chat` too. That route does not exist today, but it
+ * is the obvious next one on this path, and it would inherit LAN-write access
+ * with nothing in the diff or the tests able to notice. For six paths, forgetting
+ * would have failed OPEN — the precise failure this middleware exists to end.
+ *
+ * NOT here:
+ * - `/api/shutdown` IS covered by the invariant like every other mutator. It
+ *   additionally gates itself, more strictly (its Origin half must permit an
+ *   ABSENT Origin, which `assertOriginAllowlisted` rejects). Covered twice, not
+ *   exempt — do not read its hand-rolled gate as redundant.
  * - `/api/wake` is a WebSocket upgrade registered on the `http.Server` upgrade
  *   event (`events/wake-socket.ts`), so `app.use("/api", …)` structurally never
  *   sees it. It carries its own Origin guard. It is an exception to the reach of
  *   this middleware, not to the policy.
  */
-const NON_LOOPBACK_ALLOWED_PATHS: ReadonlySet<string> = new Set(
-  [
-    API_CHANNEL_AWARENESS,
-    API_CHANNEL_ERROR,
-    API_CHANNEL_REPLY,
-    API_CHANNEL_PERMISSION,
-    API_CHANNEL_PERMISSION_VERDICT,
-    API_CHAT,
-  ].map(normalizeApiPath),
+const NON_LOOPBACK_ALLOWED: ReadonlySet<string> = new Set(
+  (
+    [
+      ["POST", API_CHANNEL_AWARENESS],
+      ["POST", API_CHANNEL_ERROR],
+      ["POST", API_CHANNEL_REPLY],
+      ["POST", API_CHANNEL_PERMISSION],
+      ["POST", API_CHANNEL_PERMISSION_VERDICT],
+      ["DELETE", API_CHAT],
+    ] as const
+  ).map(([method, path]) => `${method} ${normalizeApiPath(path)}`),
 );
 
 /**
@@ -265,7 +276,7 @@ export function enforceLoopbackMutation(req: Request, res: Response, next: NextF
   // `req.baseUrl` preserves the request's casing (`/API/open` yields `/API`),
   // which is why the join is normalized rather than compared raw.
   const fullPath = normalizeApiPath(`${req.baseUrl}${req.path}`);
-  if (NON_LOOPBACK_ALLOWED_PATHS.has(fullPath)) {
+  if (NON_LOOPBACK_ALLOWED.has(`${method} ${fullPath}`)) {
     next();
     return;
   }
@@ -275,8 +286,11 @@ export function enforceLoopbackMutation(req: Request, res: Response, next: NextF
   }
   // `createApiMiddleware` is threaded PER ROUTE as each registrar's `mw`
   // argument, so it runs after this path-wide mount and never gets to set CORS
-  // headers on a rejection. Without these a cross-origin browser sees an opaque
-  // CORS failure rather than the 403 it was sent.
+  // headers on a rejection. Narrow population: everyone reaching this line is
+  // non-loopback, so a LAN browser sending `Origin: http://192.168.x.x` is not
+  // allowlisted and still sees an opaque CORS failure. This fires only for a
+  // page served from another machine's own `127.0.0.1`, or a remote Tauri shell
+  // — kept because emitting nothing would be a second bug layered on the first.
   if (isLocalhostOrigin(req.headers.origin as string | undefined)) {
     res.header("Access-Control-Allow-Origin", req.headers.origin as string);
   }
