@@ -11,19 +11,29 @@ import type { TandemEvent } from "./types.js";
 import { isWakeWorthy, toWakeFrame } from "./wake-scope.js";
 
 /**
- * Is this connection asking for the wake stream rather than the full one?
+ * Is this connection asking for the wake stream, the full one, or nonsense?
  *
  * Strict `=== "wake"`, and the strictness is not fussiness: `req.query.filter`
  * is `string | string[] | ParsedQs | ParsedQs[]` on Express, so `?filter=wake&
  * filter=x` arrives as an ARRAY and `?filter[a]=b` as an OBJECT. A loose check
  * (`includes`, truthiness, `startsWith`) would accept one of those and then be
- * read as "wake mode" by one branch and "full mode" by another. Anything that
- * is not exactly the string returns `null` and gets the full, unfiltered stream
- * — which is the safe default here because it is the pre-existing behaviour, not
- * because it is more permissive.
+ * read as "wake mode" by one branch and "full mode" by another.
+ *
+ * Three-valued rather than `"wake" | null`, because ABSENT and UNRECOGNISED are
+ * not the same request and must not get the same answer. Absent is every
+ * existing consumer (channel shim, plugin monitor) and correctly means the full
+ * stream. Unrecognised — `?filter=Wake`, `?filter=wake%20`, an array — is a
+ * caller that asked to be narrowed and, on the old `null` fallback, was silently
+ * handed the OPPOSITE: whole message bodies pushed at a model, which per ADR-047
+ * decision 2 is exactly what causes duplicate replies and answering from a view
+ * the model cannot know is incomplete. Failing open on a typo in a privacy
+ * narrowing is the wrong direction; that case now 400s.
  */
-export function parseWakeFilter(raw: unknown): "wake" | null {
-  return raw === "wake" ? "wake" : null;
+export type WakeFilterVerdict = "wake" | "none" | "invalid";
+
+export function parseWakeFilter(raw: unknown): WakeFilterVerdict {
+  if (raw === undefined) return "none";
+  return raw === "wake" ? "wake" : "invalid";
 }
 
 /** Express route handler for SSE event stream. */
@@ -31,7 +41,17 @@ export function sseHandler(req: Request, res: Response): void {
   // Opt-in, per connection. Existing consumers send no `filter` and are
   // completely unaffected — the channel shim and plugin monitor still receive
   // whole events, so this cannot regress them.
-  const wakeMode = parseWakeFilter(req.query?.filter) !== null;
+  const verdict = parseWakeFilter(req.query?.filter);
+  if (verdict === "invalid") {
+    // Refused before the stream opens, so the caller sees a status code rather
+    // than an event stream quietly carrying more than it asked for.
+    res.status(400).json({
+      error: "INVALID_FILTER",
+      message: 'Unsupported `filter`. The only supported value is "wake"; omit it for full events.',
+    });
+    return;
+  }
+  const wakeMode = verdict === "wake";
   // SSE headers
   res.writeHead(200, {
     "Content-Type": "text/event-stream",

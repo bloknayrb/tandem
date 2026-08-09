@@ -16,10 +16,17 @@ import type { TandemEvent } from "./types.js";
  *
  * Lives here rather than in `supervisor.ts`, where it started, because three
  * unrelated things now have to agree on the answer: the supervisor's stdin
- * wake, the delivery-state join (a `document:switched` from a tab click is not
- * a message going unanswered), and the SSE `?filter=wake` narrowing. Two of
- * those are user-visible honesty signals, so a drifted second copy would not
- * fail loudly — it would quietly report the wrong story.
+ * wake, the SSE `?filter=wake` narrowing, and the `/api/wake` WebSocket
+ * endpoint. Two of those are user-visible honesty signals, so a drifted second
+ * copy would not fail loudly — it would quietly report the wrong story.
+ *
+ * **The delivery-state join is NOT one of them**, and it is worth saying so
+ * where a maintainer will read it: the join runs on `isUnansweredAsk`, which is
+ * narrower at both ends (it drops the accept/dismiss status flips, which are
+ * the user acknowledging Claude's work rather than asking for anything). The
+ * two predicates are deliberately separate — see `isUnansweredAsk`'s docblock —
+ * so widening this one does NOT retune `waitingMs`, and believing it does is
+ * the specific mistake this paragraph exists to prevent.
  */
 export function isWakeWorthy(event: TandemEvent): boolean {
   return event.type.startsWith("annotation:") || event.type === "chat:message";

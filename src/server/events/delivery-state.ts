@@ -132,24 +132,50 @@ export function isUnansweredAsk(event: TandemEvent): boolean {
 }
 
 /**
- * The pull path ran. Clears any outstanding forward and closes the interval.
+ * A model reached for the inbox. Pull-path liveness ONLY — this does not close
+ * the join.
  *
  * Call at the point `tandem_checkInbox` DISPATCHES, not where it succeeds: a
  * poll against a closed document still tells us a model is reaching for the
  * inbox, which is the fact this stamp reports.
+ *
+ * Split from {@link resolveDeliveryRound} because the two facts are true at
+ * different moments and one of them is a claim about the USER's message. A poll
+ * that returns `noDocumentError()` collected no annotations, no replies, and
+ * never reached the CTRL_ROOM chat loop — so it marked nothing read and the
+ * user's message is still unseen. Closing the join there would report
+ * `{state: "polled", latencyMs: 240}` — "push delivered in a quarter second" —
+ * for a message the model never received, which is the comforting-and-wrong
+ * shape this module exists to eliminate.
  */
 export function recordInboxPoll(now: number = Date.now()): void {
   lastPollAt = now;
   pollCount += 1;
-  if (pendingSince !== null) {
-    // No latency is recorded for an abandoned round. That interval spans a
-    // period with nothing attached, so it measures the user's absence rather
-    // than the wake path's speed — and it would be the one number a reader
-    // most wants to trust.
-    if (!pendingAbandoned) lastLatencyMs = Math.max(0, now - pendingSince);
-    pendingSince = null;
-    pendingAbandoned = false;
-  }
+}
+
+/**
+ * The inbox poll actually collected. Closes any outstanding forward.
+ *
+ * Call only once the poll is committed to running its full pass — past the
+ * document guard, so the chat loop's `read: true` writes and the `surfacedIds`
+ * ledger updates are going to happen. See {@link recordInboxPoll} for why the
+ * split exists.
+ */
+export function resolveDeliveryRound(now: number = Date.now()): void {
+  if (pendingSince === null) return;
+  // No latency is recorded for an abandoned round. That interval spans a
+  // period with nothing attached, so it measures the user's absence rather
+  // than the wake path's speed — and it would be the one number a reader
+  // most wants to trust.
+  //
+  // The stale value is CLEARED rather than left standing: `lastLatencyMs` has
+  // no age of its own, so keeping it would let a round that measured nothing
+  // present a number from an older one. `{state: "polled", latencyMs: 50}`
+  // where the 50 came from two rounds ago is indistinguishable, to a reader,
+  // from a fresh measurement.
+  lastLatencyMs = pendingAbandoned ? null : Math.max(0, now - pendingSince);
+  pendingSince = null;
+  pendingAbandoned = false;
 }
 
 /**
@@ -194,6 +220,34 @@ export function noteExternalConsumersGone(): void {
   if (pendingSince !== null) pendingAbandoned = true;
 }
 
+/**
+ * An external consumer attached again, with a forward still outstanding.
+ *
+ * The counterpart to {@link noteExternalConsumersGone}, and NOT optional: the
+ * latch is otherwise one-directional. Only a poll or a fresh forward could clear
+ * it, so a routine reconnect produced the exact contradiction the detach hook
+ * exists to prevent, mirrored — `push.subscribers: 1` beside
+ * `delivery.state: "consumer-detached"` on the same response, with the sound
+ * positive being the one telling the truth.
+ *
+ * This is the default desktop install, not an edge case. The launcher's child
+ * crashes, `teardownTurnDelivery` unsubscribes, `scheduleRestart` respawns two
+ * seconds later, and `wakeOwedAcrossSpawns` re-sends the wake — so the event
+ * genuinely IS delivered to the new consumer. Same for any SSE reconnect, where
+ * `Last-Event-ID` replay re-delivers it.
+ *
+ * Clearing the latch does not fake a delivery. `pendingSince` is untouched, so
+ * the round stays open and the clock keeps running from the ORIGINAL forward —
+ * the user has been waiting since then. If the re-delivery did not in fact
+ * happen, the state reads `awaiting-poll` with a climbing `waitingMs`, which is
+ * the louder alarm, not the quieter one.
+ *
+ * Called on the transition to non-zero, not per subscribe.
+ */
+export function noteExternalConsumerAttached(): void {
+  pendingAbandoned = false;
+}
+
 export type DeliveryJoinState =
   /** Nothing has been forwarded this run. No claim is made. */
   | "idle"
@@ -231,7 +285,17 @@ export interface DeliveryState {
    * response to the wake.
    */
   latencyMs: number | null;
-  /** How long the outstanding forward has waited, or null when none is. */
+  /**
+   * How long the outstanding forward has waited — null when none is, AND null
+   * once the round is stranded.
+   *
+   * The second clause is the same argument as `latencyMs`'s, pointed the other
+   * way. Nothing has been "waiting" across a span with no consumer attached;
+   * that interval measures the gap since the user's last action, and rendering
+   * it beside `consumer-detached` invites "Claude has been ignoring you for 24
+   * hours" when nothing was ever listening. `state` already carries the whole
+   * of what is known about a stranded round.
+   */
   waitingMs: number | null;
   /** ms since the last inbox poll, or null if a model has never polled. */
   sincePollMs: number | null;
@@ -241,11 +305,15 @@ export interface DeliveryState {
  * `externalConsumerCount` is passed in rather than imported: `queue.ts` already
  * imports this module, so reaching back for `getSubscriberCount` would close a
  * cycle. The caller holds both.
+ *
+ * REQUIRED, with no default. A default of `1` is the unsound direction of this
+ * codebase's central asymmetry — only zero is a sound claim — so a caller that
+ * simply forgot the argument would silently assert "something is attached" and
+ * suppress `consumer-detached` on a machine with nothing attached. Making it
+ * required turns that into a type error at the one moment it can still be
+ * caught. Tests pass an explicit count like everyone else.
  */
-export function getDeliveryState(
-  now: number = Date.now(),
-  externalConsumerCount = 1,
-): DeliveryState {
+export function getDeliveryState(now: number, externalConsumerCount: number): DeliveryState {
   // Read-time re-evaluation, not just the detach hook. It also covers the case
   // where a consumer detaches and a NEW one attaches before anything is
   // forwarded — the old clock is meaningless either way, and only a read knows
@@ -270,7 +338,7 @@ export function getDeliveryState(
     // duration is not a measurement, and rendering one looks like a bug in the
     // feature being diagnosed.
     latencyMs: outstanding ? null : lastLatencyMs,
-    waitingMs: pendingSince === null ? null : Math.max(0, now - pendingSince),
+    waitingMs: pendingSince === null || stranded ? null : Math.max(0, now - pendingSince),
     sincePollMs: lastPollAt === null ? null : Math.max(0, now - lastPollAt),
   };
 }

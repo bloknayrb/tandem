@@ -973,11 +973,11 @@ describe("checkInbox stamps the pull path", () => {
 
   it("records a poll when the tool dispatches", async () => {
     setupDoc("inbox-poll-doc", "Hello world");
-    expect(getDeliveryState().pollCount).toBe(0);
+    expect(getDeliveryState(Date.now(), 1).pollCount).toBe(0);
 
     await client.callTool({ name: "tandem_checkInbox", arguments: {} });
 
-    const state = getDeliveryState();
+    const state = getDeliveryState(Date.now(), 1);
     expect(state.pollCount).toBe(1);
     // `sincePollMs`, not `lastPollAt` — the latter is a module-local, absent
     // from the exported `DeliveryState`, so asserting on it read as pinning the
@@ -998,16 +998,33 @@ describe("checkInbox stamps the pull path", () => {
 
     await client.callTool({ name: "tandem_checkInbox", arguments: {} });
 
-    expect(getDeliveryState().pollCount).toBe(1);
+    expect(getDeliveryState(Date.now(), 1).pollCount).toBe(1);
   });
 
   it("clears an outstanding forward, closing the join", async () => {
     setupDoc("inbox-join-doc", "Hello world");
     recordWakeForward(1_000);
-    expect(getDeliveryState(1_500).state).toBe("awaiting-poll");
+    expect(getDeliveryState(1_500, 1).state).toBe("awaiting-poll");
 
     await client.callTool({ name: "tandem_checkInbox", arguments: {} });
 
-    expect(getDeliveryState().state).toBe("polled");
+    expect(getDeliveryState(Date.now(), 1).state).toBe("polled");
+  });
+
+  it("does NOT close the join when the tool bails out on a closed document", async () => {
+    // The other half of the split, through the real tool rather than the
+    // recorder: a poll that returns `noDocumentError` marked nothing read, so
+    // the user's message is still unseen and the round must stay open. Driven
+    // here rather than as a unit test because the fact under test is WHERE the
+    // two calls sit relative to the document guard.
+    setActiveDocId(null);
+    recordWakeForward(1_000);
+
+    await client.callTool({ name: "tandem_checkInbox", arguments: {} });
+
+    const state = getDeliveryState(Date.now(), 1);
+    expect(state.state).toBe("awaiting-poll");
+    expect(state.latencyMs).toBeNull();
+    expect(state.pollCount).toBe(1); // liveness still stamped
   });
 });

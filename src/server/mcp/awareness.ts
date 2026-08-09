@@ -17,7 +17,7 @@ import type {
 } from "../../shared/types.js";
 import { generateMessageId } from "../../shared/utils.js";
 import { isStoreReadOnly } from "../annotations/store.js";
-import { recordInboxPoll } from "../events/delivery-state.js";
+import { recordInboxPoll, resolveDeliveryRound } from "../events/delivery-state.js";
 import { getAnnotationEditedChannelKey, wasEmittedViaChannel } from "../events/queue.js";
 import { hideFromAI, type ModeState, readModeState, reportedMode } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
@@ -200,6 +200,12 @@ export function registerAwarenessTools(server: McpServer): void {
         recordInboxPoll();
         const store = getDocumentStore(documentId);
         if (!store) return noDocumentError();
+        // The join closes HERE, below the guard — a separate fact from the
+        // stamp above. The poll that bailed out collected nothing, marked no
+        // chat message read, and touched no ledger, so the user's message is
+        // still unseen; closing the round there would report a delivery that
+        // did not happen. Past this line the full pass runs.
+        resolveDeliveryRound();
         const doc = store.ydoc;
         const allAnnotations = store.listAnnotations();
         const fullText = extractText(doc);

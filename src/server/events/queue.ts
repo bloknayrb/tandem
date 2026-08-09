@@ -20,7 +20,13 @@ import {
 } from "../documents/dirty.js";
 import { readModeState } from "../mode.js";
 import { getOrCreateDocument } from "../yjs/provider.js";
-import { isUnansweredAsk, noteExternalConsumersGone, recordWakeForward } from "./delivery-state.js";
+import {
+  isUnansweredAsk,
+  noteExternalConsumerAttached,
+  noteExternalConsumersGone,
+  recordWakeForward,
+  resetDeliveryStateForTests,
+} from "./delivery-state.js";
 import {
   clearFileSyncContext,
   resetForTesting as fileSyncResetForTesting,
@@ -282,6 +288,16 @@ function pushEvent(event: TandemEvent): void {
   //
   //  - `forwardExternally` — a Solo-held event reaches no external consumer, so
   //    recording it would start a wait clock for something never handed out.
+  //    UNREACHABLE-FALSE today, and kept deliberately: `isUnansweredAsk`'s set
+  //    is `{annotation:created, annotation:edited, annotation:reply(user)}` —
+  //    exactly `isUserPrivacyHeld`'s set, which the early return above already
+  //    dropped unless mode is "tandem" — plus `chat:message`, which
+  //    `shouldForwardExternally` passes unconditionally. So nothing can reach
+  //    here with this conjunct false. It stays as defense in depth because the
+  //    two predicates are independently editable and the day `isUnansweredAsk`
+  //    widens (a `document:*` type, an accept/dismiss flip) is the day this
+  //    becomes load-bearing with nothing to announce the change. No test can
+  //    cover it; that is the point, and saying so beats a test that pretends to.
   //  - a non-empty external set — with nothing attached, "no poll followed"
   //    means nobody was listening, not that Claude is ignoring the user. That
   //    case is `subscribers === 0`'s to report, and it is the sound negative;
@@ -363,7 +379,15 @@ export function getSubscriberCount(): number {
  */
 export function subscribe(cb: EventCallback, kind: SubscriberKind): void {
   subscribers.add(cb);
-  if (kind === "external") externalSubscribers.add(cb);
+  if (kind !== "external") return;
+  const wasEmpty = externalSubscribers.size === 0;
+  externalSubscribers.add(cb);
+  // Symmetric with `unsubscribe`'s detach hook, and required for the same
+  // reason: the abandoned latch is otherwise one-directional, so a crash-restart
+  // or an SSE reconnect would leave `state: "consumer-detached"` standing beside
+  // `subscribers: 1` — the mirror image of the contradiction the detach hook
+  // fixes. Fires on the transition to non-zero only, not per subscriber.
+  if (wasEmpty) noteExternalConsumerAttached();
 }
 
 export function unsubscribe(cb: EventCallback): void {
@@ -546,4 +570,11 @@ export function resetForTesting(): void {
   fileSyncResetForTesting();
 
   dirtyResetForTesting();
+
+  // `pushEvent` writes delivery-state module globals, so the two are one unit
+  // of test state whether or not a given suite knows it. Without this, a file
+  // that merely pushes events with a subscriber attached (sse-wake-filter, say)
+  // leaves `forwardCount` and `pendingSince` set for whatever runs next, and
+  // the leak only surfaces as a confusing failure in an unrelated suite.
+  resetDeliveryStateForTests();
 }

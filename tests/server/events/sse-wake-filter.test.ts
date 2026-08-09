@@ -29,8 +29,12 @@ function makeReq(query: Record<string, unknown> = {}, lastEventId?: string) {
 
 function makeRes() {
   const writes: string[] = [];
+  const json = vi.fn();
+  const status = vi.fn(() => ({ json }) as unknown as Response);
   const res = {
     writeHead: vi.fn(),
+    status,
+    json,
     write: vi.fn((chunk: string) => {
       writes.push(chunk);
       return true;
@@ -38,7 +42,7 @@ function makeRes() {
     end: vi.fn(),
     writableEnded: false,
   } as unknown as Response;
-  return { res, writes };
+  return { res, writes, status, json };
 }
 
 /** The parsed `data:` bodies, in order — comments and `id:` lines dropped. */
@@ -57,10 +61,24 @@ function dataFrames(writes: string[]): Array<Record<string, unknown>> {
  */
 const NOW = Date.now();
 
+/**
+ * `documentId` sits at the TOP LEVEL, because that is where a real event carries
+ * it — `TandemEventBase` (`src/shared/events/types.ts`), set by every observer.
+ * It is in no payload interface at all.
+ *
+ * This is not a cosmetic correction. With `documentId` nested inside `payload`,
+ * the strip could be mutated into the denylist form `toWakeFrame`'s own docblock
+ * forbids — `const {payload, ...rest} = event; return rest;` — and every
+ * assertion below would still pass, because dropping `payload` would take the
+ * misplaced id with it. Against a real event that mutant puts the
+ * filename-derived document id on the wire. The most load-bearing claim in
+ * ADR-047 decision 2 was guarded by a fixture that could not fail.
+ */
 const CHAT: TandemEvent = {
   id: "evt_chat_1",
   type: "chat:message",
   timestamp: NOW,
+  documentId: "q4-layoffs-plan-1a2b3c",
   payload: { messageId: "msg_1", text: "the secret is hunter2", replyTo: null, anchor: null },
 } as TandemEvent;
 
@@ -68,7 +86,8 @@ const DOC_SWITCH: TandemEvent = {
   id: "evt_doc_1",
   type: "document:switched",
   timestamp: NOW + 1,
-  payload: { documentId: "q4-layoffs-plan-1a2b3c" },
+  documentId: "q4-layoffs-plan-1a2b3c",
+  payload: { fileName: "q4-layoffs-plan.md" },
 } as TandemEvent;
 
 const opened: Array<() => void> = [];
@@ -91,19 +110,58 @@ describe("parseWakeFilter", () => {
     expect(parseWakeFilter("wake")).toBe("wake");
   });
 
-  it("rejects the shapes Express can actually deliver", () => {
+  it("treats ABSENT as the full stream — every existing consumer", () => {
+    expect(parseWakeFilter(undefined)).toBe("none");
+  });
+
+  it("treats a present-but-unrecognised filter as INVALID, not as absent", () => {
+    // The distinction is the whole point. Folding these into "none" hands a
+    // caller that asked to be NARROWED the opposite — full message bodies — and
+    // per ADR-047 decision 2 that is what causes duplicate replies and answering
+    // from a view the model cannot know is incomplete. Failing open on a typo in
+    // a privacy narrowing is the wrong direction.
+    //
     // `?filter=wake&filter=x` arrives as an array; `?filter[a]=b` as an object.
-    // A loose check would read one of these as wake mode in one branch and full
-    // mode in another, which is how a stream ends up half-stripped.
-    expect(parseWakeFilter(["wake"])).toBeNull();
-    expect(parseWakeFilter(["wake", "x"])).toBeNull();
-    expect(parseWakeFilter({ a: "wake" })).toBeNull();
-    expect(parseWakeFilter("wake ")).toBeNull();
-    expect(parseWakeFilter("WAKE")).toBeNull();
-    expect(parseWakeFilter("wakeful")).toBeNull();
-    expect(parseWakeFilter(undefined)).toBeNull();
-    expect(parseWakeFilter(null)).toBeNull();
-    expect(parseWakeFilter(true)).toBeNull();
+    for (const raw of [
+      ["wake"],
+      ["wake", "x"],
+      { a: "wake" },
+      "wake ",
+      "WAKE",
+      "wakeful",
+      "",
+      null,
+      true,
+    ]) {
+      expect(parseWakeFilter(raw), `filter=${JSON.stringify(raw)}`).toBe("invalid");
+    }
+  });
+});
+
+describe("an unrecognised filter is refused, not silently widened", () => {
+  it("400s instead of opening a full-payload stream", () => {
+    setCtrlMode("tandem");
+    const { req } = makeReq({ filter: "Wake" });
+    const { res, writes, status } = makeRes();
+    sseHandler(req, res);
+
+    expect(status).toHaveBeenCalledWith(400);
+    // And crucially: no stream was opened, so a subsequent event cannot reach a
+    // consumer that thought it had asked to be narrowed.
+    expect(res.writeHead).not.toHaveBeenCalled();
+    _pushEventForTests(CHAT);
+    expect(writes.join("")).toBe("");
+    resetForTesting();
+  });
+
+  it("still gives an ABSENT filter the full, unstripped stream", () => {
+    // The regression this pairs with: folding "absent" into the refusal would
+    // break the channel shim and the plugin monitor, which send no filter at all.
+    const { writes } = connect({});
+
+    _pushEventForTests(CHAT);
+
+    expect(writes.join("")).toContain("hunter2");
   });
 });
 
@@ -138,11 +196,12 @@ describe("GET /api/events?filter=wake", () => {
       id: "evt_ann_1",
       type: "annotation:created",
       timestamp: NOW + 2,
+      documentId: "q4-layoffs-plan-1a2b3c",
       payload: {
         annotationId: "ann_1",
         annotationType: "comment",
-        documentId: "q4-layoffs-plan-1a2b3c",
         content: "please review the severance numbers",
+        textSnippet: "severance",
       },
     } as TandemEvent);
 
@@ -199,11 +258,19 @@ describe("GET /api/events with no filter — the regression guard", () => {
     expect(dataFrames(writes)).toEqual([DOC_SWITCH]);
   });
 
-  it("treats a malformed filter as no filter, not as wake", () => {
-    const { writes } = connect({ filter: ["wake", "x"] });
+  it("refuses a malformed filter rather than treating it as no filter", () => {
+    // This assertion is INVERTED from what it used to be. The old behaviour —
+    // `?filter=["wake","x"]` silently yielding the full stream — is the
+    // fail-open the review caught: it hands full message bodies to a caller who
+    // asked to be narrowed. It must never be silently reachable again.
+    setCtrlMode("tandem");
+    const { req } = makeReq({ filter: ["wake", "x"] });
+    const { res, writes, status } = makeRes();
+    sseHandler(req, res);
 
+    expect(status).toHaveBeenCalledWith(400);
     _pushEventForTests(CHAT);
-
-    expect(dataFrames(writes)).toEqual([CHAT]);
+    expect(writes.join("")).not.toContain("hunter2");
+    resetForTesting();
   });
 });
