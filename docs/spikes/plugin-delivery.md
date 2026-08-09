@@ -129,9 +129,11 @@ said to carry the weight.
 > **Resolved 2026-08-09 — `--plugin-dir` is not inert.** A TTY run on 2.1.226 loaded via
 > `--plugin-dir` and the monitor armed and delivered
 > (`plugin-monitor-tty-activation.md`). The load path was never the variable; the session
-> mode was. The confound lifts and all four nulls above read as "monitors don't fire
-> headless" — which the binary corroborates: arming is a `useEffect` in the interactive
-> component tree, so a mode that never mounts it can never arm.
+> mode was. The confound lifts, so the two **print-mode** nulls now read cleanly as
+> "monitors don't fire headless" — which the binary corroborates: arming is a `useEffect` in
+> the interactive component tree, so a mode that never mounts it can never arm. The two
+> stream-json rows remain **bounded** for the separate scoring reason above; lifting the
+> load-path confound does not touch that.
 
 **Consequence:** the launcher spawns with `CLAUDE_STREAM_JSON_FLAGS` (headless by
 construction), so a Tandem-launched session will never spawn a monitor. Monitor and
@@ -141,7 +143,8 @@ passes by hand — that pairing is unchanged and remains documented as "use one,
 
 ### F4 — What is NOT established
 
-Five things, and the first three are easy to lose track of.
+Five things. Items 1 and 2 were closed on 2026-08-09; item 3 is the one still easy to lose
+track of.
 
 > **Items 1 and 2 were closed on 2026-08-09** by `plugin-monitor-tty-activation.md`, which
 > drives ConPTY through `pywinpty` — `winpty(1)` refuses when its own stdin is not a tty,
@@ -195,8 +198,12 @@ Together these are why the absolute-Node-path change (`src/server/integrations/n
 landed ahead of any plugin-delivery work: bare commands in generated config fail for at
 least two distinct reasons, both silent.
 
-Unexplained and unaddressed: the same user measured **~4 minutes** from send to surface.
-Not investigated here.
+Unexplained and unaddressed: the same user measured **~4 minutes** from send to surface
+(this is the report the other documents call **E4**). Not investigated here.
+
+> **2026-08-09:** still unexplained, but no longer mechanism-less. A wake is a full model
+> turn, so time-to-surface should track the session's effort setting — `UNVERIFIED`, n=1, and
+> nothing measured reaches the ~4-minute scale. See `plugin-monitor-tty-activation.md` F2.
 
 ## Reproducing
 

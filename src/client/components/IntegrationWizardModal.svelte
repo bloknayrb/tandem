@@ -885,8 +885,11 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                   Sessions Tandem starts for you are woken directly and need nothing further. A
                   session you start yourself will see your comments and messages when it next
                   checks its inbox — to have it react as they happen, the simplest way is to ask
-                  Claude to watch Tandem for updates, which needs nothing installed. Installing the
-                  Tandem plugin does the same for every session, as long as you launch
+                  Claude to watch Tandem for updates, which needs nothing installed. That one
+                  depends on your Claude Code offering a Monitor tool, which not every one does;
+                  if Claude says it has none, come back here and register the channel shim, which
+                  does not need it. Installing the Tandem plugin does the same for every session,
+                  as long as you launch
                   <code class="iw-code-inline">claude</code> from a terminal so it can find Node.
                   Use one, not both.
                 {/if}
