@@ -238,7 +238,8 @@ qualified iff the dispatched skill came from a plugin, and `when` must equal it 
 So the double-install is a **manifest** problem — two entries, same command, distinct
 `name`s — not a product one. The cost is that if one session dispatches both names, both
 monitors arm and every event is delivered twice; the host's dedupe key is
-`pluginName:monitorName`, so it cannot collapse them. There is no session key available to
+`pluginName:monitorName` (IN CODE, quoted below — it is not something this probe
+measured), so it cannot collapse them. There is no session key available to
 a monitor for a singleton lock (F5: `CLAUDE_PLUGIN_ROOT` is not in the child env).
 
 > **Probe gotcha that cost a run, and would cost yours.** Workspace trust is activation
@@ -281,9 +282,12 @@ that comment created about `when: "always"`: an exhausted monitor really does st
 mechanism with synthetic names; this one runs the real
 `.claude-plugin/plugin.json` — `name`, `when`, and the skill's frontmatter copied
 verbatim — in the double-install shape (`skills/tandem/` from the plugin, plus a
-non-plugin copy of the same skill). Two substitutions, neither of which touches
-what is measured: `mcpServers` stripped, and each monitor's `command` swapped for
-a marker emitter, since the `when` match is decided before anything is spawned.
+non-plugin copy of the same skill). **Three** substitutions, none of which touches
+the string the host compares: `mcpServers` stripped; each monitor's `command`
+swapped for a marker emitter, since the `when` match is decided before anything
+is spawned; and the skill *body* replaced with a one-word reply, so the dispatch
+does not start real Tandem work against a server the probe never launched. The
+frontmatter — which is where the published name comes from — is untouched.
 
 | phase | `tandem-events`<br>(`on-skill-invoke:tandem:tandem`) | `tandem-events-user-skill`<br>(`on-skill-invoke:tandem`) |
 |---|---|---|
@@ -295,17 +299,25 @@ rather than ignored.
 
 **The entry that fired is the one that would have been easy to leave out.** The
 plugin's own copy of the skill is right there in the fixture, and the intuition is
-that a plugin-supplied skill publishes the qualified name — but F7's collision
-holds in the shipped shape too: the bare dispatch resolved to the *non-plugin*
-copy, which publishes `tandem`, so only the second entry matched. A manifest
-carrying just `on-skill-invoke:tandem:tandem` would arm nothing at all for any
-user who ran `tandem setup --apply`, which is the documented setup path.
+that a plugin-supplied skill publishes the qualified name. What is *measured* here
+is narrower: only the bare-name entry armed. The reading that the bare dispatch
+resolved to the **non-plugin** copy is an inference from that plus F7, which
+measured the same selection directly, twice — this run did not observe it
+independently, for the reason below. Either way the manifest consequence is the
+same and it is the one that matters: a manifest carrying just
+`on-skill-invoke:tandem:tandem` arms nothing for any user who ran
+`tandem setup --apply`, which is the documented setup path.
 
-*Known limit of the run:* the probe terminates the session ~0.1 s after the marker
-appears, so the capture never contains the skill's one-word reply and the
-"which copy ran" line reads `neither`. The marker is the observable; the reply is
-a redundant cross-check that this phase does not get to make. Which copy ran is
-already established by F7, twice.
+*Known limits of the run:*
+
+- The arm poll is a 1 s loop, and teardown follows detection immediately, so the
+  session ends up to ~1 s after the marker is written. The skill's one-word reply
+  never made it into the capture and the probe's own "which copy ran" line reads
+  `neither`. The marker is the observable; the reply is a cross-check this phase
+  does not get to make.
+- The fixture is loaded with `--plugin-dir`, not from a marketplace install. See
+  "What is still not established" item 2 — that gap applies here as it does to
+  F1/F6/F7/F8.
 
 ## What the shipped binary says (IN CODE, 2.1.226)
 
@@ -335,6 +347,40 @@ P-A2 armed the **shell** source, which is what a manifest monitor is.
 > source, described as pure JSON config with *no shell*, so the two share the delivery half
 > and not the runner. The `ws` path's own end-to-end evidence is `wake-socket-end-to-end.md`,
 > not P-A2.
+>
+> The converse **does** transfer, and one claim in `src/monitor/run.ts` rests on it: a
+> *delivery-half* result measured on the `ws` watch — the 25-event burst in
+> `monitor-self-arm-probe.md` where at least 7 never became notifications — applies here,
+> because delivery is the half the two share. The same rate limiter is in this path's own
+> code: `` `[plugin monitor "${e.name}" suppressed ${o} events — output rate exceeded]` ``.
+> A burst has still not been *run* on this path; see "What is still not established".
+
+**The arming loop, verbatim** — this is where the dedupe key lives, cited because F8's
+"declare both names" conclusion and `tests/plugin-manifest.test.ts`'s distinct-names
+assertion both rest on it:
+
+```js
+async function o4l(e, t, r, n = yvv, o = fvv) {
+  if (Ip("pluginMonitors")) return;
+  if (!Zue()) return;
+  if (Ln()) return;
+  let i = !1;
+  for (let s of hvv(e)) {
+    if (!t(s)) continue;
+    let a = `${s.pluginName}:${s.name}`;
+    if (o.has(a)) continue;
+    o.add(a);
+    …
+  }
+}
+```
+
+Two things follow. The set `o` is keyed on **plugin name + monitor name**, so two entries
+with distinct `name`s are two independent arms — which is exactly what makes the
+double-declaration in F8 work, and what makes a duplicated `name` silently collapse the
+second entry into the first. And `t(s)` is the caller-supplied predicate: the `when` match
+is decided *before* the key is computed and before anything is spawned, which is why F10 can
+substitute the `command` without affecting what it measures.
 
 ### The five activation gates
 

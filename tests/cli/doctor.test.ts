@@ -1399,10 +1399,15 @@ describe("evaluatePushPath", () => {
  * The Tandem plugin check.
  *
  * Two live field hazards, both reported by the same macOS tester: the plugin's
- * monitor exits 127 in EVERY Claude Code session when Node is not on the PATH
- * the client inherits, and the plugin's MCP servers duplicate the ones setup
- * writes. Nothing in a published static manifest can fix either, so naming
- * them is the whole remedy available.
+ * monitor exits 127 when Node is not on the PATH the client inherits, and the
+ * plugin's MCP servers duplicate the ones setup writes. Nothing in a published
+ * static manifest can fix either, so naming them is the whole remedy available.
+ *
+ * The tester saw the 127 in EVERY session, which is what made it a field
+ * report rather than a footnote; #1354 narrowed that to sessions that actually
+ * dispatched the Tandem skill (`on-skill-invoke` replaced `when: "always"`).
+ * The check itself is unchanged — in an armed session it still fails every
+ * time — but do not re-derive "every session" from this docblock.
  */
 describe("evaluateTandemPlugin", () => {
   it("says nothing when settings could not be read", () => {
@@ -1447,6 +1452,10 @@ describe("evaluateTandemPlugin", () => {
     expect(out[0].fix).toContain("exit 127");
     // Names the actual mechanism, not just the symptom.
     expect(out[0].fix).toContain("non-login shell");
+    // And the arming precondition (#1354) — a user who never asks for Tandem
+    // by name sees no monitor at all, which reads as a broken install unless
+    // the fix text says so. This sentence had no coverage of any kind.
+    expect(out[0].fix).toContain("Tandem skill");
   });
 
   it("adds the duplication warning only when a wizard entry also exists", () => {

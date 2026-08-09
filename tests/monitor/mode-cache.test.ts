@@ -241,8 +241,10 @@ describe("background mode refresh", () => {
     // does not BLOCK delivery, so it asserts on the event type — the filename
     // it used to match on is payload and, since #1354, deliberately absent.
     const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(stdoutWrites).toContain("document:opened");
-    expect(stdoutWrites).not.toContain("a.md");
+    // Whole line, not `toContain` plus a list of absences: the fixture's own
+    // literals are the only thing an absence list can refuse, so a leak of a
+    // field this fixture does not happen to carry would pass it.
+    expect(stdoutWrites).toBe("Tandem: document:opened — call tandem_checkInbox for details\n");
 
     // Now resolve mode and end the stream
     modeResolve?.(new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));

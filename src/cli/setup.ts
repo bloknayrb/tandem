@@ -223,10 +223,13 @@ function printPushStatus(shimRegisteredFor: string[]): void {
   const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
   // `--plugin-dir` DOES activate the monitor. The previous copy here said it
   // did not, citing a 2026-08-06 null on 2.1.223; that null was the print-mode
-  // confound, and every probe in `plugin-monitor-tty-activation.md` (F1, F6,
-  // F7, F8) armed a manifest monitor through `--plugin-dir` on 2.1.226 in an
-  // interactive session. Claiming less than the truth here is still a wrong
-  // claim: it told developers a working path was dead.
+  // confound, and F1/F6/F8/F10 in `plugin-monitor-tty-activation.md` each
+  // armed a manifest monitor through `--plugin-dir` on 2.1.226 in an
+  // interactive session. (Not F7 — its whole result is a null: the bare
+  // dispatch selected the non-plugin copy and no marker appeared. It is the
+  // reason there are two entries, not evidence that one armed.) Claiming less
+  // than the truth here is still a wrong claim: it told developers a working
+  // path was dead.
   const devInstructions = existsSync(pluginManifest)
     ? `  For development you can load the package directly — skill, MCP entries\n` +
       `  and the monitor, in an interactive session:\n\n` +

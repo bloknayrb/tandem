@@ -153,7 +153,10 @@ describe("published Claude Code plugin manifest", () => {
     const skill = readText("../skills/tandem/SKILL.md");
     const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(skill)?.[1];
     expect(frontmatter, "skills/tandem/SKILL.md has no frontmatter block").toBeDefined();
-    const skillName = /^name:\s*(\S+)\s*$/m.exec(frontmatter ?? "")?.[1];
+    // Tolerate a quoted value: `name: "tandem"` is valid YAML the host
+    // resolves to `tandem`, and matching it as `"tandem"` would fail this test
+    // for a manifest that is actually correct.
+    const skillName = /^name:\s*["']?([^"'\r\n]+?)["']?\s*$/m.exec(frontmatter ?? "")?.[1];
     expect(skillName, "skills/tandem/SKILL.md declares no `name:`").toBeDefined();
 
     const pluginName = plugin.name as string;
@@ -165,6 +168,16 @@ describe("published Claude Code plugin manifest", () => {
     // Bare: what a dispatch of the `tandem setup --apply` copy publishes, and
     // the one that actually fired in F10's double-install run.
     expect(triggers).toContain(`on-skill-invoke:${skillName}`);
+
+    // …and that copy lives at a hardcoded path. F10 could not tell the
+    // directory name apart from the frontmatter name because both are
+    // `tandem`; rename the install directory alone and the bare trigger stops
+    // matching, with every other assertion here still green.
+    const apply = readText("../src/server/integrations/apply.ts");
+    expect(
+      apply,
+      "the installed skill's directory no longer matches the bare arm trigger",
+    ).toContain(`join(home, ".claude", "skills", "${skillName}", "SKILL.md")`);
   });
 
   it("the README #cowork anchor the dialogs link to exists", () => {

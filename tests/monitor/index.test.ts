@@ -53,6 +53,13 @@ describe("monitor: per-event stdout delivery", () => {
     // `<task_notification>` turn, so the message body must not appear on it.
     // The negative half is the point of the test: before #1354 this asserted
     // the OPPOSITE — that "hello world" reached stdout.
+    //
+    // Asserted as the WHOLE line, not as a set of absences. An earlier version
+    // of this test listed the fixture's own literals (`"hello world"`, `"m1"`)
+    // and nothing else, which meant a line that appended `payload.content` or
+    // `textSnippet` — the exact leak reason 1 in `run.ts` calls the sharpest
+    // case — passed it green. Absence assertions can only refuse what the
+    // fixture happens to contain; an equality assertion refuses everything.
     const { connectAndStream } = await import("../../src/monitor/index.js");
     const promise = connectAndStream(undefined, () => {});
 
@@ -72,11 +79,97 @@ describe("monitor: per-event stdout delivery", () => {
 
     const writes = stdoutSpy.mock.calls.map((c) => String(c[0]));
     const matched = writes.find((w) => w.includes("chat:message"));
-    expect(matched).toBeDefined();
-    expect(matched!.endsWith("\n")).toBe(true);
-    expect(matched).toContain("tandem_checkInbox");
-    expect(writes.join("")).not.toContain("hello world");
-    expect(writes.join("")).not.toContain("m1");
+    expect(matched).toBe("Tandem: chat:message — call tandem_checkInbox for details\n");
+  });
+
+  it("carries no payload field of any wake-worthy event, not just the ones a fixture happens to have", async () => {
+    // Every string in these fixtures is a unique sentinel, so the assertion is
+    // "none of the payload reached stdout" rather than "these two literals did
+    // not". `annotation:created` is the important one and had NO coverage on
+    // this path at all: it is the only wake-worthy type carrying both
+    // `content` (the annotation body) and `textSnippet` (a verbatim document
+    // slice), and `.docx` import puts third-party Word comment text in
+    // `content`. `documentId` is included because `docIdFromPath` builds it as
+    // `<basename-slug>-<hash>` — ADR-049 refuses it by name for that reason.
+    const { connectAndStream } = await import("../../src/monitor/index.js");
+    const promise = connectAndStream(undefined, () => {});
+
+    const sentinels = [
+      "SENTINEL_annotationId",
+      "SENTINEL_content",
+      "SENTINEL_snippet",
+      "SENTINEL_replyText",
+      "SENTINEL_messageId",
+      "SENTINEL_text",
+      "SENTINEL_textSnapshot",
+      "SENTINEL_docid",
+    ];
+
+    stream.push(
+      sseFrame(
+        {
+          id: "evt_ann",
+          type: "annotation:created",
+          timestamp: 1,
+          documentId: "SENTINEL_docid",
+          payload: {
+            annotationId: "SENTINEL_annotationId",
+            annotationType: "comment",
+            content: "SENTINEL_content",
+            textSnippet: "SENTINEL_snippet",
+            hasSuggestedText: true,
+          },
+        },
+        "evt_ann",
+      ),
+    );
+    stream.push(
+      sseFrame(
+        {
+          id: "evt_reply",
+          type: "annotation:reply",
+          timestamp: 2,
+          documentId: "SENTINEL_docid",
+          payload: {
+            annotationId: "SENTINEL_annotationId",
+            replyId: "r1",
+            replyText: "SENTINEL_replyText",
+            replyAuthor: "user",
+            textSnippet: "SENTINEL_snippet",
+          },
+        },
+        "evt_reply",
+      ),
+    );
+    stream.push(
+      sseFrame(
+        {
+          id: "evt_chat2",
+          type: "chat:message",
+          timestamp: 3,
+          documentId: "SENTINEL_docid",
+          payload: {
+            messageId: "SENTINEL_messageId",
+            text: "SENTINEL_text",
+            replyTo: null,
+            anchor: { from: 0, to: 4, textSnapshot: "SENTINEL_textSnapshot" },
+          },
+        },
+        "evt_chat2",
+      ),
+    );
+    stream.end();
+    await promise.catch(() => {});
+
+    const all = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
+    for (const sentinel of sentinels) {
+      expect(all, `${sentinel} reached stdout`).not.toContain(sentinel);
+    }
+    // And the wakes themselves did happen — otherwise the loop above passes
+    // for the uninteresting reason that nothing was written at all.
+    expect(all).toContain("Tandem: annotation:created — call tandem_checkInbox for details\n");
+    expect(all).toContain("Tandem: annotation:reply — call tandem_checkInbox for details\n");
+    expect(all).toContain("Tandem: chat:message — call tandem_checkInbox for details\n");
   });
 
   it("keeps a multi-line message body to exactly one stdout line, carrying none of it", async () => {
@@ -377,12 +470,16 @@ describe("monitor: retry exhaustion -> MONITOR_CONNECT_FAILED + stdout notice", 
     exitSpy.mockRestore();
   });
 
-  // Tandem was never running. The plugin host spawns the monitor in EVERY
-  // Claude Code session, so a "restart Tandem" line here would inject an
-  // unrelated instruction into the model's context during unrelated work —
-  // for a desktop user, most sessions. Nothing was lost, so say nothing.
-  // The error report and exit code are unchanged; only the stdout line is
-  // suppressed, because stdout is what the model reads.
+  // Tandem was never running, so say nothing on stdout — stdout is what the
+  // model reads, and the line claims events stopped flowing when none ever did.
+  //
+  // The original argument was population-based (the host armed this monitor in
+  // EVERY session, so a never-connected run was usually unrelated work) and
+  // #1354 inverted that premise: arming now follows a Tandem skill dispatch.
+  // The contract is unchanged, on grounds that never depended on population —
+  // nothing was lost, any `tandem_*` call reports the real problem far better,
+  // and a monitor that exits is never respawned (spike F9), so this line would
+  // outlive its own truth. See the long note in `src/monitor/run.ts`.
   it("reports MONITOR_CONNECT_FAILED and exits 1 but stays SILENT when it never connected", async () => {
     let attempts = 0;
     stub.on("/api/events", () => {

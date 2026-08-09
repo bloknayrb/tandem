@@ -1126,7 +1126,7 @@ The channel API endpoints expose real-time events from the editor as an SSE stre
 
 ### GET /api/events
 
-SSE (Server-Sent Events) stream of `TandemEvent` objects. The channel shim connects here and forwards events to Claude Code as `notifications/claude/channel`; the plugin monitor is a second consumer of this same stream, writing each event to stdout as a plugin notification.
+SSE (Server-Sent Events) stream of `TandemEvent` objects. The channel shim connects here and forwards events to Claude Code as `notifications/claude/channel`; the plugin monitor is a second consumer of this same stream, writing a payload-free wake line — the event's `type` and nothing else — to stdout as a plugin notification (#1354). It reads the full stream rather than `?filter=wake` only because its awareness flush needs `event.documentId`; the payload never leaves the monitor process.
 
 **Headers:**
 - `Accept: text/event-stream`

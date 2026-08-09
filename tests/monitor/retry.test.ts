@@ -73,10 +73,13 @@ describe("retry counter semantics", () => {
 
   // Contract narrowed deliberately: the exit notice is now conditional on
   // having connected at least once. Here the server was never reachable, so
-  // there is nothing to report — stdout is the model's context, and the plugin
-  // host runs this monitor in every Claude Code session whether or not Tandem
-  // is up. `tests/monitor/index.test.ts` covers the connected-then-dropped
-  // case, where the notice DOES fire.
+  // there is nothing to report — the line claims real-time events stopped, and
+  // none ever started. (The original justification also leaned on the host
+  // arming this monitor in every session; #1354 replaced `when: "always"` with
+  // `on-skill-invoke`, so that half no longer holds — see the note in
+  // `src/monitor/run.ts` for why the contract survives without it.)
+  // `tests/monitor/index.test.ts` covers the connected-then-dropped case,
+  // where the notice DOES fire.
   it("stays silent on stdout when it never connected, and still exits 1", async () => {
     stub.on("/api/events", () => {
       throw new Error("refused");

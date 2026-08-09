@@ -204,8 +204,12 @@ describe("installStdoutErrorHandler (async EPIPE)", () => {
     // on EPIPE. Node emits an 'error' event asynchronously when the plugin-host
     // read end closes mid-stream. Without a listener, writes keep advancing
     // lastEventId past events that never arrived. This test fences that the
-    // handler (a) logs to stderr so support has a trail, and (b) exits 1 so
-    // the plugin host respawns us with a fresh stdout.
+    // handler (a) logs to stderr so support has a trail, and (b) exits 1.
+    //
+    // Not "so the host respawns us" — it does not. `probe-monitor-respawn.py`
+    // measured one start and no retry at either exit code (spike F9). Exiting
+    // is a clean shutdown: a monitor that cannot write cannot deliver, and
+    // carrying on would advance lastEventId past events nobody received.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     const mod = await import("../../src/monitor/index.js");

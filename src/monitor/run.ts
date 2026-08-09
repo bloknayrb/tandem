@@ -17,7 +17,9 @@
  * "Flagless" is not "unconditional": the plugin host spawns monitors through a
  * non-login shell, so this process inherits whatever PATH Claude Code itself
  * started with. A GUI-launched Claude Code frequently has no resolvable Node
- * and the monitor dies `exit 127` every session — see docs/spikes/plugin-delivery.md.
+ * and the monitor dies `exit 127` — every time it is armed, which since #1354
+ * means every session that dispatched the Tandem skill rather than every
+ * session on the machine. See docs/spikes/plugin-delivery.md.
  * Neither transport is involved in an auto-launched session; those are woken
  * over the supervisor's stdin (ADR-047).
  *
@@ -98,9 +100,21 @@ function buildOptions(): EventConsumerOptions {
       //  2. A model that answers from the payload never calls
       //     `tandem_checkInbox`, so the item is never marked surfaced and is
       //     re-reported on the next wake.
-      //  3. Wakes are lossy — a 25-event burst reached the socket in full while
-      //     at least 7 never became notifications. Answering from a payload
-      //     means answering from a view the model cannot discover is partial.
+      //  3. Wakes are lossy under load — a 25-event burst reached the socket
+      //     in full while at least 7 never became notifications. Answering
+      //     from a payload means answering from a partial view.
+      //
+      //     Cite this one carefully: it was measured on the SELF-ARMED `ws`
+      //     watch (docs/spikes/monitor-self-arm-probe.md), not on this path.
+      //     It transfers because the loss is in the half the two paths SHARE —
+      //     the manifest contributes no delivery machinery of its own, it
+      //     produces the same `kind:"monitor"` task with the same
+      //     stdout→`task_notification` delivery and the same host-side rate
+      //     limiter (which emits `[plugin monitor "…" suppressed N events —
+      //     output rate exceeded]` here, in code, 2.1.226). But a burst has
+      //     NOT been run on this path: plugin-monitor-tty-activation.md lists
+      //     it under "what is still not established". Reasons 1 and 2 stand
+      //     alone and do not need it.
       //
       // `event.type` is not content: it is the same field `toWakeFrame` keeps.
       //
@@ -124,12 +138,25 @@ function buildOptions(): EventConsumerOptions {
       // plugin host, so a user whose stream really dropped would otherwise
       // see events just stop with no signal.
       //
-      // But ONLY when we actually had a stream. The plugin host spawns this
-      // monitor in every Claude Code session, and a desktop user runs Tandem
-      // occasionally while running `claude` constantly — so announcing "restart
-      // Tandem" on a never-connected run injects an unrelated instruction into
-      // the model's context in the common case. Silence is correct there:
-      // nothing was lost, because nothing was ever flowing.
+      // But ONLY when we actually had a stream.
+      //
+      // The original argument for that was population-based: the host armed
+      // this monitor in EVERY session (`when: "always"`) while a desktop user
+      // runs Tandem occasionally, so a never-connected run was usually a
+      // session with nothing to do with Tandem. #1354 inverted that premise —
+      // arming now follows a Tandem skill dispatch, so a never-connected run
+      // means the user asked for Tandem and Tandem was not reachable, which is
+      // a case where "restart Tandem" is at least on-topic.
+      //
+      // Silence is still right, for reasons that never depended on the
+      // population:
+      //   - Nothing was lost. The line says "restore real-time events", which
+      //     presupposes events were flowing; none ever were.
+      //   - The model finds out far better by calling any `tandem_*` tool,
+      //     which fails with a real error naming the real problem.
+      //   - A monitor that exits is never respawned (spike F9), so this line
+      //     would be the last thing this process ever says — a claim that
+      //     stays in context after it stops being true.
       if (!everConnected) return;
       process.stdout.write(
         "Tandem monitor disconnected — restart Tandem to restore real-time events\n",

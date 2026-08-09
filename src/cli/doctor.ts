@@ -849,9 +849,11 @@ export function evaluateClaudeCli(
  *    and the monitor. Claude Code spawns a monitor with `shell: true` and an
  *    environment it builds itself, which on POSIX is a NON-LOGIN `/bin/sh -c`:
  *    no profile is sourced, so PATH is whatever Claude Code itself started
- *    with. A GUI-launched client therefore has no Node, the monitor exits 127,
- *    and Claude Code reports it in EVERY session — including ones with nothing
- *    to do with Tandem. Nothing in a static manifest can fix that
+ *    with. A GUI-launched client therefore has no Node and the monitor exits
+ *    127. Since #1354 that is reported only in sessions that dispatched the
+ *    Tandem skill (`on-skill-invoke` replaced `when: "always"`, which had been
+ *    reporting it in every session on the machine) — but in those sessions it
+ *    still fails every time. Nothing in a static manifest can fix that
  *    cross-platform, so naming it is the whole remedy available here.
  * 2. **The plugin's MCP servers duplicate the ones setup writes.** Plugin
  *    servers load additively under `plugin_<plugin>_<server>`, so a user with

@@ -43,24 +43,53 @@ const CARRIERS = [
   "docs/user-guide.md",
   "docs/cli.md",
   "src/cli/setup.ts",
+  "src/cli/doctor.ts",
+  "src/cli/index.ts",
   "src/client/components/IntegrationWizardModal.svelte",
 ];
 
 /**
  * Phrasings that promise the monitor covers sessions unconditionally.
- * Deliberately loose — the six offenders all said it differently.
+ * Deliberately loose — the offenders all said it differently. `every session`
+ * with no preposition is included because `docs/cli.md` said "reports `exit
+ * 127` every session", which the earlier `in every … session` form missed
+ * while the file sat in CARRIERS looking covered.
  */
 const UNCONDITIONAL =
-  /(every session automatically|every `?claude`? you start afterwards picks it up|applies to every session|does the same for every session|in every (Claude Code )?session)/i;
+  /(every session automatically|every `?claude`? you start afterwards picks it up|applies to every session|does the same for every session|(in|for) every (Claude Code )?session|(reports?|dies|fails|exits|spawns?|starts?|runs?)[^.]{0,60}every session)/i;
 
 /** The plugin monitor specifically — not the watch, not the shim. */
 const ABOUT_THE_MONITOR = /plugin|monitor/i;
 
-/** Any phrasing that names the actual trigger. */
-const NAMES_THE_TRIGGER = /skill|on-skill-invoke|by name|used to|before this change|it used to/i;
+/**
+ * Phrasing that names the ACTUAL trigger. Deliberately narrow, and it was not
+ * always: the first version excused a paragraph on `used to`, `by name` or a
+ * bare `skill`. All three are generic English, and `skill` in particular
+ * appears in every carrier because the self-armed watch's own paragraph says
+ * Tandem's skill explains how to arm it. Measured consequence: reverting one
+ * CHANGELOG clause to its false pre-#1354 wording left the sweep 8/8 green,
+ * because an unrelated "which Tandem used to recommend first" elsewhere in the
+ * same bullet supplied the excuse. An excuse token must be one that cannot
+ * plausibly appear except when describing this trigger.
+ */
+const NAMES_THE_TRIGGER =
+  /on-skill-invoke|first uses|first use of|asking for Tandem by name|ask for Tandem by name|dispatch(es|ed|ing)? the|uses (the |Tandem's )?(Tandem )?skill|skill dispatch/i;
 
+/**
+ * Paragraph = blank-line-separated block, PLUS two extra splits, because
+ * "scoped to the paragraph" was false for two kinds of carrier:
+ *
+ *  - a `.svelte` file's markup has no blank lines inside a block, so
+ *    `IntegrationWizardModal.svelte` produced one 11k-char "paragraph" — a
+ *    stray token anywhere in it excused a false claim anywhere else in it.
+ *  - a tight markdown bullet list is one block, so a qualification in bullet 1
+ *    excused a claim in bullet 2.
+ */
 function paragraphs(text: string): string[] {
-  return text.split(/\n\s*\n/);
+  return text
+    .split(/\n\s*\n/)
+    .flatMap((block) => block.split(/\n(?=\s*[-*]\s)/))
+    .flatMap((block) => (block.length > 1500 ? block.split(/\n/) : [block]));
 }
 
 describe("plugin-monitor arming claims name the trigger", () => {
@@ -77,20 +106,20 @@ describe("plugin-monitor arming claims name the trigger", () => {
     });
   }
 
-  it("at least one surface actually explains the trigger, so the sweep is not vacuous", () => {
-    // A regex that only ever removes text passes trivially once every mention
-    // is deleted. Require the explanation to exist somewhere a user reads.
-    const explained = ["README.md", "docs/troubleshooting.md", "docs/user-guide.md"].filter(
-      (rel) => {
-        const text = readFileSync(join(ROOT, rel), "utf-8");
-        return paragraphs(text).some(
-          (p) => ABOUT_THE_MONITOR.test(p) && /skill/i.test(p) && /watch|start/i.test(p),
-        );
-      },
-    );
-    expect(
-      explained.length,
-      "no user-facing surface explains when the monitor starts",
-    ).toBeGreaterThan(0);
-  });
+  // A sweep that only ever removes text passes trivially once every mention is
+  // deleted, so each of these files must positively CARRY the explanation.
+  //
+  // The first version of this guard was one test over three files, satisfied by
+  // `ABOUT_THE_MONITOR && /skill/i && /watch|start/i` in ANY of them — and it
+  // passed after every sentence about plugin-monitor arming was deleted from
+  // all three, because paragraphs about the self-armed `Monitor` tool match
+  // `ABOUT_THE_MONITOR` on the word "Monitor". Per-file, and requiring the
+  // paragraph to be about the *plugin* and to name the trigger.
+  for (const rel of ["README.md", "docs/troubleshooting.md", "docs/user-guide.md"]) {
+    it(`${rel} explains when the plugin monitor starts`, () => {
+      const text = readFileSync(join(ROOT, rel), "utf-8");
+      const explains = paragraphs(text).some((p) => /plugin/i.test(p) && NAMES_THE_TRIGGER.test(p));
+      expect(explains, `${rel} no longer says when the plugin monitor arms`).toBe(true);
+    });
+  }
 });
