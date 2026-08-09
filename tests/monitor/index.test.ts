@@ -48,7 +48,11 @@ describe("monitor: per-event stdout delivery", () => {
     stdoutSpy.mockRestore();
   });
 
-  it("writes formatEventContent + newline to stdout per delivered event", async () => {
+  it("writes a payload-free wake line per delivered event, never the content", async () => {
+    // ADR-049 decision 2. Each stdout line becomes an unsolicited
+    // `<task_notification>` turn, so the message body must not appear on it.
+    // The negative half is the point of the test: before #1354 this asserted
+    // the OPPOSITE — that "hello world" reached stdout.
     const { connectAndStream } = await import("../../src/monitor/index.js");
     const promise = connectAndStream(undefined, () => {});
 
@@ -67,12 +71,20 @@ describe("monitor: per-event stdout delivery", () => {
     await promise.catch(() => {});
 
     const writes = stdoutSpy.mock.calls.map((c) => String(c[0]));
-    const matched = writes.find((w) => w.includes("hello world"));
+    const matched = writes.find((w) => w.includes("chat:message"));
     expect(matched).toBeDefined();
     expect(matched!.endsWith("\n")).toBe(true);
+    expect(matched).toContain("tandem_checkInbox");
+    expect(writes.join("")).not.toContain("hello world");
+    expect(writes.join("")).not.toContain("m1");
   });
 
-  it("collapses embedded newlines so each event remains a single stdout line", async () => {
+  it("keeps a multi-line message body to exactly one stdout line, carrying none of it", async () => {
+    // The line protocol is one notification per line, so a body containing
+    // newlines must not become three notifications. Since #1354 the body is not
+    // emitted at all, which makes that structural — but the invariant is worth
+    // a fence: a future change that reintroduces any payload must not
+    // reintroduce the line split with it.
     const { connectAndStream } = await import("../../src/monitor/index.js");
     const promise = connectAndStream(undefined, () => {});
 
@@ -91,10 +103,11 @@ describe("monitor: per-event stdout delivery", () => {
     await promise.catch(() => {});
 
     const writes = stdoutSpy.mock.calls.map((c) => String(c[0]));
-    const matched = writes.find((w) => w.includes("line1"));
+    const matched = writes.find((w) => w.includes("chat:message"));
     expect(matched).toBeDefined();
     // No internal newlines (only the trailing one).
     expect(matched!.slice(0, -1).includes("\n")).toBe(false);
+    expect(writes.join("")).not.toContain("line2");
   });
 
   it("eventId advances ONLY after stdout.write completes (order regression fence)", async () => {
@@ -232,8 +245,11 @@ describe("monitor: mode is stale-preserving across /api/mode failure", () => {
     await vi.advanceTimersByTimeAsync(50);
 
     // Mode preserved as "tandem" — the non-chat event was NOT suppressed.
+    // Asserted on the event type, not the filename: the wake line carries no
+    // payload since #1354, and the filename was payload.
     const writes = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(writes).toMatch(/User opened document: x\.md/);
+    expect(writes).toContain("document:opened");
+    expect(writes).not.toContain("x.md");
     expect(getModeSync()).toBe("tandem");
 
     stream.end();

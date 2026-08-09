@@ -221,12 +221,15 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
  */
 function printPushStatus(shimRegisteredFor: string[]): void {
   const pluginManifest = join(PACKAGE_ROOT, ".claude-plugin", "plugin.json");
-  // `--plugin-dir` loads the skill and MCP entries, but does NOT activate the
-  // monitor — measured 2026-08-06 on 2.1.223 (docs/spikes/plugin-delivery.md).
-  // Say so, or this reads as a third way to get push.
+  // `--plugin-dir` DOES activate the monitor. The previous copy here said it
+  // did not, citing a 2026-08-06 null on 2.1.223; that null was the print-mode
+  // confound, and every probe in `plugin-monitor-tty-activation.md` (F1, F6,
+  // F7, F8) armed a manifest monitor through `--plugin-dir` on 2.1.226 in an
+  // interactive session. Claiming less than the truth here is still a wrong
+  // claim: it told developers a working path was dead.
   const devInstructions = existsSync(pluginManifest)
-    ? `  For development you can load the package directly (skill + MCP only —\n` +
-      `  this does NOT activate the monitor, so it gives you no push):\n\n` +
+    ? `  For development you can load the package directly — skill, MCP entries\n` +
+      `  and the monitor, in an interactive session:\n\n` +
       `    claude --plugin-dir ${PACKAGE_ROOT}\n\n`
     : "";
 

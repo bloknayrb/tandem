@@ -430,7 +430,11 @@ The plugin monitor (`src/monitor/index.ts`) is a shipped, installable alternativ
 
 ### Role
 
-`main()` connects to `GET /api/events` (the same SSE endpoint used by the channel shim), decodes incoming events via `formatEventContent()`, and writes one notification line per event to stdout. Claude Code routes each stdout line to the user as a plugin notification — no polling, no `--dangerously-load-development-channels` flag required.
+`main()` connects to `GET /api/events` (the same SSE endpoint used by the channel shim) and writes one **payload-free wake line** per event to stdout — the event type plus an instruction to call `tandem_checkInbox`, never the content. Claude Code routes each stdout line to the user as a plugin notification — no polling, no `--dangerously-load-development-channels` flag required.
+
+**Payload-free is a contract, not an implementation detail** ([ADR-049](decisions.md) decision 2, extended to this path in #1354). Until #1354 the line was `formatEventContent(event)`, which carries the annotation body, a verbatim document slice, chat text, selected text, the filename and `[doc: <documentId>]` — and a stdout line here becomes an *unsolicited* model turn, so that was content pushed at a model that had not asked for it. The three reasons it is now a wake, ascending: a line with no content cannot leak content (the sharp case is a `.docx` import, where "Send to Claude" promotes Word comment bodies onto this emit branch); a model that answers from the payload never calls `tandem_checkInbox`, so the item is never marked surfaced and is re-reported; and wakes are measurably lossy, so answering from one means answering from a view the model cannot discover is partial.
+
+The monitor still consumes the **full** stream rather than `?filter=wake`, because `flushAwareness` needs `event.documentId` to attribute the "Claude is working" indicator to a document and a wake frame carries none. The payload stays inside the monitor process. Dropping per-document awareness here is the one remaining step to making it a `?filter=wake` consumer outright.
 
 **The flagless property has a precondition.** Monitors are spawned `spawn(cmd, [], { shell: true })`, and `shell: true` on POSIX is a *non-login* `/bin/sh -c` — no profile is sourced, so the monitor inherits whatever PATH Claude Code itself started with. A terminal launch works; a GUI launch often has no Node and the monitor dies `exit 127` every session. There is no manifest-level fix: the monitor command is one static string for every platform, and `sh -lc '…'` has no equivalent under the `cmd.exe` that `shell: true` resolves to on Windows. See `docs/spikes/plugin-delivery.md`.
 
@@ -444,7 +448,7 @@ The plugin monitor (`src/monitor/index.ts`) is a shipped, installable alternativ
 
 1. JSON parse errors are logged (event ID + frame tail) and skipped without advancing `lastEventId` — bad frames are re-delivered on reconnect.
 2. Schema validation errors are logged separately and also skip `lastEventId`.
-3. Valid events are formatted via `formatEventContent()` and written to stdout as a single line.
+3. Valid events become a single payload-free wake line on stdout (see Role above). `formatEventContent()` is no longer on this path.
 
 ### Mode Check: Stale-Preserving Policy
 
@@ -880,7 +884,7 @@ Detailed file-level listing for navigating the codebase. For architectural conte
 The flagless alternative to the channel shim, run as `tandem monitor` by the plugin's `experimental.monitors[]` entry (#1201, live to users since v0.18.0).
 
 - `index.ts` -- Standalone entry with an auto-run guard. **Not** what the CLI imports: the guard resolves true inside the bundled CLI, which would fire `main()` twice and double every event.
-- `run.ts` -- The runtime the CLI's `monitor` branch imports. Subscribes to `GET /api/events` and writes event lines to stdout for Claude Code to surface as notifications.
+- `run.ts` -- The runtime the CLI's `monitor` branch imports. Subscribes to `GET /api/events` and writes payload-free wake lines to stdout for Claude Code to surface as notifications (#1354).
 - Shares the Solo-mode consumer gate in `src/shared/sse-consumer.ts`, retained as a version-skew compatibility layer — see [ADR-028](decisions.md).
 
 ### Channel Shim (`src/channel/`)

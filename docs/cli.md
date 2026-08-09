@@ -94,6 +94,8 @@ tandem monitor
 
 Not intended for direct user invocation — the plugin's `experimental.monitors[]` entry runs it as `npx -y tandem-editor@<version> monitor`. Reads `TANDEM_URL` to find the local server. Do not run this *and* the channel shim: each delivers independently, so a session with both receives every event twice.
 
+Each line it prints is a **wake, not a report**: the event type and an instruction to call `tandem_checkInbox`, never the annotation body, chat text, document slice or filename. That matches [ADR-049](decisions.md) decision 2, which every other push path already follows — a line here becomes an unsolicited model turn, and a model that answers from a payload never polls, so the item is never marked surfaced. The full event is still read inside the monitor process to attribute the "Claude is working" indicator to a document; it just does not reach the model.
+
 ### `tandem activate <license|path>`
 
 Activates a signed license, given either the license blob itself or a path to the `.license` file you were emailed. Writes `license.json` into the app-data directory. Verification is offline — an Ed25519 signature checked against a public key baked into the build — so activation works air-gapped.

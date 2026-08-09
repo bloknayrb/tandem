@@ -236,12 +236,13 @@ describe("background mode refresh", () => {
 
     // Advance time but DO NOT resolve /api/mode
     await vi.advanceTimersByTimeAsync(100);
-    // stdout should already have the formatted event (cached default is
-    // "tandem", non-blocking). Match the full formatter prefix from
-    // formatEventContent so a regression that drops the "User opened
-    // document:" prefix or the filename cannot sneak past.
+    // stdout should already carry the wake line (cached default is "tandem",
+    // non-blocking). What this test is really pinning is that the mode fetch
+    // does not BLOCK delivery, so it asserts on the event type — the filename
+    // it used to match on is payload and, since #1354, deliberately absent.
     const stdoutWrites = stdoutSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(stdoutWrites).toMatch(/User opened document: a\.md/);
+    expect(stdoutWrites).toContain("document:opened");
+    expect(stdoutWrites).not.toContain("a.md");
 
     // Now resolve mode and end the stream
     modeResolve?.(new Response(JSON.stringify({ mode: "tandem" }), { status: 200 }));

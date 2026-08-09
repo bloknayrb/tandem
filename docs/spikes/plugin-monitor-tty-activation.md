@@ -203,6 +203,51 @@ resolve the double-install too, not just correct the trigger string.
 > resolution, which is the axis the `plugin:skill` qualifier exists on; user-level versus
 > project-level precedence is a different axis and is not what decides this.
 
+### F8 — declaring BOTH name forms catches either copy. **MEASURED.**
+
+F7 looks like it forces a product-level fix: if the bare name reaches the non-plugin copy,
+the plugin's trigger can never see it. That is wrong, and the reason is in the matcher.
+From the same binary:
+
+```js
+pQs.subscribe((s) => o4l(enabledPlugins, (a) => a.when === `on-skill-invoke:${s}`, …))
+```
+
+Plain string equality against the name the dispatcher publishes — there is no
+plugin-scoping in the comparison itself. So a manifest may declare the unqualified form
+and match a dispatch from any source that publishes it.
+
+**Probe:** the same `probe-skill-name-collision.py`, extended to declare **two** monitors
+differing only in `when` (`on-skill-invoke:armcheck` and
+`on-skill-invoke:monprobe:armcheck`), then dispatch the bare name once.
+
+| `when` | Idle | After bare `/armcheck` |
+|---|---|---|
+| `on-skill-invoke:armcheck` | not armed | **ARMED** |
+| `on-skill-invoke:monprobe:armcheck` | not armed | not armed |
+
+`bare /armcheck ran: non-plugin copy` in the same run, so the arming monitor was matched
+by a dispatch of the **non-plugin** skill. CC 2.1.226, win32, one run plus F7's two.
+
+**This does not contradict F6, and the distinction matters.** F6 dispatched the *plugin's*
+copy, which publishes `monprobe:armcheck`; the unqualified monitor correctly did not match
+it. F7 dispatched the non-plugin copy with only the qualified monitor declared, so nothing
+matched. F8 declares both. The three results are one rule: **the published name is
+qualified iff the dispatched skill came from a plugin, and `when` must equal it exactly.**
+
+So the double-install is a **manifest** problem — two entries, same command, distinct
+`name`s — not a product one. The cost is that if one session dispatches both names, both
+monitors arm and every event is delivered twice; the host's dedupe key is
+`pluginName:monitorName`, so it cannot collapse them. There is no session key available to
+a monitor for a singleton lock (F5: `CLAUDE_PLUGIN_ROOT` is not in the child env).
+
+> **Probe gotcha that cost a run, and would cost yours.** Workspace trust is activation
+> gate #4, and a fixture cwd that has never been trusted parks the session on *"Is this a
+> project you trust?"* — the UI never mounts, no monitor arms, and the capture shows only
+> the prompt. It reads exactly like a negative result. Worse, a probe that blind-writes
+> Enter into that prompt **answers** it. Trust the fixture directory deliberately, or reuse
+> one already trusted, and check the capture for the prompt before believing a null.
+
 ## What the shipped binary says (IN CODE, 2.1.226)
 
 Same extraction method as `plugin-delivery.md` F1/F2. These corroborate the runtime
@@ -283,7 +328,17 @@ troubleshooting, CLAUDE.md) and recorded as a dated amendment to ADR-049.
   of at session start, which retires the objection that the monitor fires in sessions
   unrelated to Tandem. **Measured working (F6); the name must be `plugin:skill`** — and
   a same-named skill from any non-plugin source takes the bare name and does not arm it
-  (F7), which is exactly what `tandem setup --apply` installs today.
+  (F7), which is exactly what `tandem setup --apply` installs today. Declaring both name
+  forms as two entries catches either copy (F8).
+- `${user_config.KEY}` — **measured NOT to substitute in a monitor command**
+  (`scripts/spikes/probe-monitor-userconfig.py`): a bare-`node` control armed and an
+  otherwise identical `"${user_config.node_path}"` entry did not, with the session
+  reporting `1 monitor`. The `command` field's own description lists `${user_config.*}`
+  among its substitutions, so the manifest schema and the runtime disagree. This closes
+  the one candidate manifest-level fix for the exit-127 PATH failure — a `type: "file"`
+  field defaulting to an absolute node path. *Limit:* `--plugin-dir` runs no enable-time
+  prompt, so this cannot separate "monitors do not substitute `user_config`" from
+  "defaults are not applied unless prompted". Either way it is unusable from a manifest.
 
 ## What is still not established
 

@@ -3,11 +3,16 @@
  * (`src/monitor/index.ts`, built to `dist/monitor/index.js`) and the
  * `tandem monitor` CLI subcommand (`npx -y tandem-editor@<version> monitor`).
  *
- * Connects to the Tandem server's /api/events SSE endpoint and prints
- * formatted event lines to stdout. Each line becomes a Claude Code
+ * Connects to the Tandem server's /api/events SSE endpoint and prints one
+ * PAYLOAD-FREE wake line per event to stdout. Each line becomes a Claude Code
  * notification automatically via the plugin monitor mechanism. An alternative
  * to the channel shim for event delivery in a hand-launched session, without
  * requiring --dangerously-load-development-channels.
+ *
+ * "Payload-free" is the contract, not an implementation detail — see the long
+ * comment on `onEvent`. The event payload is still consumed inside this
+ * process (awareness attribution needs `documentId`); it just never reaches
+ * the model.
  *
  * "Flagless" is not "unconditional": the plugin host spawns monitors through a
  * non-login shell, so this process inherits whatever PATH Claude Code itself
@@ -26,8 +31,8 @@
  * the `src/channel/run.ts` vs `src/channel/index.ts` split.
  *
  * **STDOUT IS RESERVED** (CLAUDE.md rule #3). The only writes to stdout are
- * the formatted event notification inside the `onEvent` callback and the
- * exhaustion notice inside `main`. Everything else — including anything that
+ * the wake line inside the `onEvent` callback and the exhaustion notice
+ * inside `main`. Everything else — including anything that
  * would otherwise call `console.log/warn/info` — is redirected to stderr by
  * the guard immediately below. When adding a new dependency, grep its source
  * for `process.stdout.write` and `console.log` before accepting; a
@@ -41,7 +46,6 @@
  */
 
 import { resolveTandemUrl } from "../shared/cli-runtime.js";
-import { formatEventContent } from "../shared/events/types.js";
 import {
   _resetSseConsumerStateForTests,
   _addOutstandingAwarenessForTests as _sharedAddOutstandingAwarenessForTests,
@@ -76,9 +80,37 @@ function buildOptions(): EventConsumerOptions {
     logPrefix: LOG_PREFIX,
     errorCode: MONITOR_CONNECT_FAILED,
     onEvent: (event) => {
-      // Collapse newlines so multi-line content stays as a single
-      // notification (each stdout line is delivered separately).
-      const content = formatEventContent(event).replace(/\n/g, " ");
+      // PAYLOAD-FREE, and deliberately so — ADR-049 decision 2. This line
+      // becomes an unsolicited `<task_notification>` turn, so anything printed
+      // here is content pushed at a model that did not ask for it. Until
+      // #1354 this printed `formatEventContent(event)`: the annotation body, a
+      // verbatim document slice (`textSnippet`), chat text, selected text, the
+      // filename, and `[doc: <documentId>]` — which `docIdFromPath` builds as
+      // `<basename-slug>-<hash>`, i.e. a filename in all but name.
+      //
+      // Three reasons it is a wake and not a report, in ascending order:
+      //  1. A line with no content cannot leak content, so a future regression
+      //     in `shouldForwardExternally` costs timing rather than the user's
+      //     words. The sharpest case is a `.docx` import: Word comment bodies
+      //     land as notes, and "Send to Claude" promotes them onto this emit
+      //     branch, so third-party file text reached this channel after one
+      //     click, with only `\n`→space applied to it.
+      //  2. A model that answers from the payload never calls
+      //     `tandem_checkInbox`, so the item is never marked surfaced and is
+      //     re-reported on the next wake.
+      //  3. Wakes are lossy — a 25-event burst reached the socket in full while
+      //     at least 7 never became notifications. Answering from a payload
+      //     means answering from a view the model cannot discover is partial.
+      //
+      // `event.type` is not content: it is the same field `toWakeFrame` keeps.
+      //
+      // The monitor still consumes the FULL stream rather than
+      // `?filter=wake`, because `flushAwareness` needs `event.documentId` to
+      // attribute the "Claude is processing" indicator to a document, and a
+      // wake frame carries none. The payload stays inside this process and
+      // never reaches the model. If per-document awareness is ever dropped
+      // here, switching the request to `?filter=wake` is the remaining step.
+      const content = `Tandem: ${event.type} — call tandem_checkInbox for details`;
       // False-checkpoint guard: the shared consumer advances lastEventId
       // only AFTER `onEvent` resolves without throwing. EPIPE on
       // process.stdout is almost always async — Node emits 'error' after
