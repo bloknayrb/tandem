@@ -12,9 +12,27 @@ interface Props {
   kind: "outline" | "annotations";
   /** Right-rail only: annotations to render as dots (presentation only). */
   annotations?: Annotation[];
+  /** Left-rail only: real heading levels (from `createHeadings`, the single
+      source of truth also used by OutlinePanel — #832) to render as ticks. */
+  headingLevels?: number[];
 }
 
-const { side, onActivate, collapsed, kind, annotations = [] }: Props = $props();
+const { side, onActivate, collapsed, kind, annotations = [], headingLevels = [] }: Props = $props();
+
+// The sliver is short and `.peek-content` clips with overflow:hidden, so an
+// unbounded document (hundreds of headings) would still only need to render
+// a handful of ticks to read as "there's an outline here." Cap at 12, taken
+// from the start of the document — a preview, not a full map (#832).
+const MAX_PEEK_TICKS = 12;
+const visibleTickLevels = $derived(headingLevels.slice(0, MAX_PEEK_TICKS));
+
+// Only h1/h2/h3 tick widths exist; deeper levels clamp to h3 rather than
+// disappearing or inventing a fourth width.
+function tickClass(level: number): string {
+  if (level <= 1) return "h1";
+  if (level === 2) return "h2";
+  return "h3";
+}
 
 // Left rail is locked to the outline; right rail hosts annotations + chat.
 // The collapsed-state label names the panel so the user knows what they're
@@ -74,11 +92,9 @@ function dotClass(a: Annotation): string {
        is the accessible name. -->
   <div class="peek-content" aria-hidden="true">
     {#if kind === "outline"}
-      <span class="peek-tick h1"></span>
-      <span class="peek-tick h2"></span>
-      <span class="peek-tick h2"></span>
-      <span class="peek-tick h3"></span>
-      <span class="peek-tick h2"></span>
+      {#each visibleTickLevels as level, i (i)}
+        <span class="peek-tick {tickClass(level)}"></span>
+      {/each}
     {:else}
       {#each annotations as a (a.id)}
         {@const cls = dotClass(a)}
