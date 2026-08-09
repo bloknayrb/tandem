@@ -220,13 +220,11 @@ export class PathRejectedError extends Error {
 }
 
 export interface BuildMcpEntriesOptions {
-  /** Include the stdio channel shim. This raw option defaults to false, but
-   *  `shouldIncludeChannelShim` turns it ON by default for the Claude Code
-   *  target — the shim is the default push transport. The plugin monitor is an
-   *  independent push path (activates on Claude Code 2.1.212+ interactive sessions
-   *  when persistently installed, no flag); the
-   *  channel shim stays canonical by decision (2026-07-19), the monitor
-   *  installable but not the default. */
+  /** Include the stdio channel shim. Defaults to false, and since Track E
+   *  (2026-08-07) `shouldRegisterChannelShim` no longer turns it on by default
+   *  either — the shim is opt-in via `--with-channel-shim` or the wizard's
+   *  checkbox. See that function for why a default-on inert consumer was worse
+   *  than no consumer. */
   withChannelShim?: boolean;
   /** Override the Node binary the channel shim is spawned with. Omit in
    *  production: the default resolves `process.execPath`, which is the Node
@@ -1216,15 +1214,27 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
 /**
  * Single source of truth for "should this target get the stdio channel shim?".
  *
- * The channel shim is Claude Code's default real-time push transport. The
- * plugin also carries a monitor that activates on Claude Code 2.1.212+ interactive
- * sessions when persistently installed, and
- * needs no flag — an independent push path (it was inactive on 2.1.143, the
- * historical Spike B / #985 NO-GO, since reversed). The channel shim stays
- * canonical by decision (2026-07-19, ADR-028) — the monitor is installable but
- * not made the default; both active in one session double-deliver — so the
- * default for the Claude Code target stays ON, gated only by the build
- * artifact actually existing.
+ * **The shim is opt-in (Track E, 2026-08-07). It used to be default-on for the
+ * Claude Code target, and that default was doing active harm.**
+ *
+ * `runChannel` calls `startEventBridge` unconditionally, without asking whether
+ * the host negotiated `claude/channel` — and the SDK has no case for
+ * `notifications/claude/channel` in `assertNotificationCapability`, so delivery
+ * never throws, the stream never tears down, and a shim whose host ignores the
+ * notification holds its subscriber slot forever. For every user who had run
+ * setup, something was therefore **attached and inert**.
+ *
+ * That is not merely wasteful. `subscribers === 0` is the only SOUND negative
+ * Tandem has — a positive count never proves delivery, but a zero does prove
+ * its absence — so a permanently-attached inert consumer suppressed every
+ * signal keyed on the count, including the "nothing is notifying Claude"
+ * notice built to warn exactly the users it was silently failing. Restoring a
+ * reachable zero is the point of this change; the shim itself was never the
+ * thing delivering for the mainstream.
+ *
+ * The two paths that DO deliver are unaffected: launcher-spawned sessions are
+ * woken by the supervisor writing to the child's stdin (#1266, measured), and
+ * hand-launched sessions can arm their own watch (ADR-047).
  *
  * - `targetPushSupport(kind) === "none"` (today: `claude-desktop`, the Cowork
  *   stdio path — the node-process shim does not apply there) → always false,
@@ -1233,24 +1243,23 @@ export function validateChannelShimPrereq(channelPath: string): boolean {
  *   than as a bare `=== "claude-desktop"` here so the WIZARD can read the same
  *   fact and say it out loud. It could not before, which is how a Claude
  *   Desktop user came to be told "AI connected" and then ignored (#1299).
- * - `override` (the explicit `--with-channel-shim` / wizard opt-out) wins
- *   when provided.
- * - Otherwise: default-on for Claude Code, but only if `channelPath` exists.
- *   That `existsSync` guard does double duty — it degrades gracefully when
- *   `tandem` runs from source without a build, AND it stops the CLI/wizard
- *   from writing a wrong `CHANNEL_DIST` on a desktop bundle. On the desktop
- *   bundle the correct resource-dir channel path is injected via the
- *   `TANDEM_CHANNEL_DIST` env var (see `resolveChannelDist`), so `CHANNEL_DIST`
- *   already resolves to an existing file there and the shim registers.
+ * - `override` (explicit `--with-channel-shim`, or the wizard's checkbox)
+ *   wins when provided. Opting in is still fully supported.
+ * - Otherwise → **false**. Absent an explicit request, no shim is written.
+ *
+ * The old default also consulted `validateChannelShimPrereq`, and that call is
+ * gone along with the default it guarded — but the function is deliberately
+ * still exported and still used by the CLI: an explicit opt-in whose build
+ * artifact is missing should be reported to the user, not silently honoured
+ * into an unstartable entry.
  */
 export function shouldRegisterChannelShim(
   targetKind: TargetKind,
-  channelPath: string,
+  _channelPath: string,
   override?: boolean,
 ): boolean {
   if (targetPushSupport(targetKind) === "none") return false;
-  if (override !== undefined) return override;
-  return validateChannelShimPrereq(channelPath);
+  return override ?? false;
 }
 
 /** Re-exported for `tandem setup` orchestration in `src/cli/setup.ts`. */
