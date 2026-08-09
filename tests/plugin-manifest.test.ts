@@ -136,6 +136,37 @@ describe("published Claude Code plugin manifest", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
+  it("the arm triggers are derivable from the plugin name and the skill's own frontmatter", () => {
+    // The test above pins the two literals. That is not enough on its own: the
+    // string the host compares is assembled from THREE sources, and two of them
+    // are nowhere near the manifest —
+    //
+    //   `on-skill-invoke:` + [plugin.json `name`] + `:` + [SKILL.md `name:`]
+    //
+    // so renaming the plugin, or editing the frontmatter of a skill file a
+    // thousand lines long, leaves both the manifest and the literal assertion
+    // untouched while the trigger stops matching anything. There is no error
+    // for that: valid manifest, valid skill, monitor never arms.
+    //
+    // Spike F10 measures the live behaviour, but that probe is Windows-only and
+    // hand-run. This is the part that can be checked on every commit.
+    const skill = readText("../skills/tandem/SKILL.md");
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(skill)?.[1];
+    expect(frontmatter, "skills/tandem/SKILL.md has no frontmatter block").toBeDefined();
+    const skillName = /^name:\s*(\S+)\s*$/m.exec(frontmatter ?? "")?.[1];
+    expect(skillName, "skills/tandem/SKILL.md declares no `name:`").toBeDefined();
+
+    const pluginName = plugin.name as string;
+    const experimental = plugin.experimental as { monitors?: Array<{ when?: string }> };
+    const triggers = (experimental?.monitors ?? []).map((m) => m.when);
+
+    // Qualified: what a dispatch of the PLUGIN's copy publishes.
+    expect(triggers).toContain(`on-skill-invoke:${pluginName}:${skillName}`);
+    // Bare: what a dispatch of the `tandem setup --apply` copy publishes, and
+    // the one that actually fired in F10's double-install run.
+    expect(triggers).toContain(`on-skill-invoke:${skillName}`);
+  });
+
   it("the README #cowork anchor the dialogs link to exists", () => {
     // CoworkSettings, CoworkOnboardingStep and CoworkAdminDeclinedModal all link
     // to `${TANDEM_REPO_URL}#cowork`. GitHub derives that anchor from a heading

@@ -275,6 +275,38 @@ carrying on would advance `lastEventId` past events nobody received — but it i
 shutdown, not a recovery, and the comment now says so. It also settles the disagreement
 that comment created about `when: "always"`: an exhausted monitor really does stay dead.
 
+### F10 — the SHIPPED manifest arms, and it is the bare-name entry that does it. **MEASURED.**
+
+**Probe:** `scripts/spikes/probe-shipped-arm-trigger.py`. F6–F8 established the
+mechanism with synthetic names; this one runs the real
+`.claude-plugin/plugin.json` — `name`, `when`, and the skill's frontmatter copied
+verbatim — in the double-install shape (`skills/tandem/` from the plugin, plus a
+non-plugin copy of the same skill). Two substitutions, neither of which touches
+what is measured: `mcpServers` stripped, and each monitor's `command` swapped for
+a marker emitter, since the `when` match is decided before anything is spawned.
+
+| phase | `tandem-events`<br>(`on-skill-invoke:tandem:tandem`) | `tandem-events-user-skill`<br>(`on-skill-invoke:tandem`) |
+|---|---|---|
+| idle 35 s | — | — |
+| bare `/tandem` | — | **armed, 16 s** |
+
+The idle phase is the negative control: neither armed, so `when` is being honoured
+rather than ignored.
+
+**The entry that fired is the one that would have been easy to leave out.** The
+plugin's own copy of the skill is right there in the fixture, and the intuition is
+that a plugin-supplied skill publishes the qualified name — but F7's collision
+holds in the shipped shape too: the bare dispatch resolved to the *non-plugin*
+copy, which publishes `tandem`, so only the second entry matched. A manifest
+carrying just `on-skill-invoke:tandem:tandem` would arm nothing at all for any
+user who ran `tandem setup --apply`, which is the documented setup path.
+
+*Known limit of the run:* the probe terminates the session ~0.1 s after the marker
+appears, so the capture never contains the skill's one-word reply and the
+"which copy ran" line reads `neither`. The marker is the observable; the reply is
+a redundant cross-check that this phase does not get to make. Which copy ran is
+already established by F7, twice.
+
 ## What the shipped binary says (IN CODE, 2.1.226)
 
 Same extraction method as `plugin-delivery.md` F1/F2. These corroborate the runtime
@@ -398,9 +430,14 @@ delivery still reads as success. For the other two findings:
   before calling it a null.
 - **F4 (no orphan)** — scan for surviving processes yourself; the probe does not.
   `Get-CimInstance Win32_Process -Filter "Name='node.exe'"` filtered on `emit.mjs`.
-- **F6 / F7** have their own scripts, same venv and same two arguments:
+- **F6 / F7 / F8** have their own scripts, same venv and same two arguments:
   `probe-skill-arm-trigger.py` and `probe-skill-name-collision.py`. Both write their own
   verdict line; both take ~105 s because the idle settle is deliberate.
+- **F10** — `probe-shipped-arm-trigger.py <workdir> <trusted-cwd>`. Same venv, same shape,
+  but it builds its fixture from the real `.claude-plugin/plugin.json` rather than a
+  synthetic one, so re-run it after ANY edit to the manifest's monitor block, to the
+  plugin `name`, or to `skills/tandem/SKILL.md`'s frontmatter `name:`. All four are
+  inputs to the string the host compares, and three of them are nowhere near the manifest.
 
 **If a capture comes back nearly empty, do not read it as a null result.** pywinpty decodes
 to `str`, so a UTF-8 sequence split across a chunk boundary raises `UnicodeDecodeError` and
