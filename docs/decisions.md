@@ -1098,3 +1098,24 @@ Both are speculative and need their own probe. Both also inherit a ceiling: `cha
 **Method note.** Every claim here about Claude Code internals comes from reading a minified binary with `grep -a`. That method produced a confidently wrong answer during this work — see lesson 95. Treat each fragment as provisional and re-verify before relying on it.
 
 **Cross-references:** [ADR-028](#adr-028-plugin-monitor-url-and-auth-resolution--userconfig-over-hardcoded-default) (superseded in part), [ADR-038](#adr-038-mcp-first-integration-policy-claude-as-default-integration) §extras, #1266, #1316, `docs/spikes/channel-push-stream-json.md`, `docs/spikes/plugin-delivery.md`, `docs/plans/2026-08-07-channel-flag-removal.md`.
+---
+
+## ADR-048: Chat stays global (CTRL_ROOM-scoped), not document-scoped
+
+**Status:** Accepted — 2026-08-08
+**Context:** #1263, #1264, ADR-018 (CTRL_ROOM)
+
+**Decision:** the chat thread between the user and Claude is a single global conversation, stored in `CTRL_ROOM` and shared across every open document. It does not become per-document.
+
+This ADR records a choice that was already load-bearing in shipped code but had never been written down as a decision — which is why #1263 sat open for months as a `needs-design-decision`. The behaviour is at `constants.ts` (the chat Y.Map key), `awareness.ts` (the CTRL_ROOM chat map), and `ctrl-chat.ts`. #1264 then made unread counts and message filenames `documentId`-aware while *deliberately* leaving scope global, and that split is the substance of this decision: **messages carry document context; the thread does not inherit document boundaries.**
+
+**Rationale.** The conversation is not per-file, and the mismatch is not cosmetic. A user asks about one document while looking at another, pastes from a third, and asks a follow-up after switching tabs — that is one thread, and cutting it at tab boundaries would fragment a conversation the user experiences as continuous. The genuine problem behind the request ("which message was about which file?") is a *labelling* problem, and #1264 solved it the cheap way, by labelling.
+
+**Consequences:**
+
+- `Clear Chat` clears everything. That is the correct blast radius for a global thread, and it is the one place a user may be surprised; the confirmation copy carries the weight.
+- Messages sent with no document open, and system messages, have somewhere to live by construction. Under per-room scoping they would have needed an invented home — a real design problem that global scoping simply does not have.
+- The unread count is global, with per-document attribution shown on the message. A per-document badge would need `chatSeen` to become per-room state.
+- **What was declined, with its price**, so this is not re-litigated as a small change: per-document chat is multi-PR — per-room chat maps, a `chatSeen` baseline migration for every existing user (there is no per-room baseline to migrate *from*), a home for `documentId`-less messages, and re-deciding `Clear Chat`'s scope. None of that is exotic; all of it is real, and none of it buys back something #1264 did not already deliver.
+
+**Reopen condition:** a concrete workflow where the global thread actively loses information — most plausibly many-document sessions where attribution labels stop being enough to find a past exchange. Volume alone is not the trigger; search over the global thread is the cheaper answer to that.

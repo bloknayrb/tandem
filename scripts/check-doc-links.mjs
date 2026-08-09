@@ -18,10 +18,21 @@ import { dirname, join, normalize, relative, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
-/** Directories with no prose worth checking, or not ours to fix. */
+/**
+ * Directories with no prose worth checking, or not ours to fix.
+ *
+ * `worktrees` is the load-bearing one. `.claude/worktrees/` is gitignored, and
+ * the checked-out branches inside it are frozen at whatever `docs/` layout they
+ * were cut from — so every doc move since then reads as a broken link there.
+ * Scanning them reported **171 broken links, none of them real**, which is worse
+ * than not running: a checker whose output is entirely noise trains you to skip
+ * it, and then it cannot report the one link that does matter. The rule this
+ * file already states about `#anchor` noise applies to its own file selection.
+ */
 const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
+  "worktrees",
   "dist",
   "target",
   "playwright-report",

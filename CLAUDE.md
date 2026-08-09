@@ -55,6 +55,13 @@ For every feature or fix: draft a plan (`/plan`), spawn adversarial agents to re
 
 **`/diverge`** is an optional step *before* `/plan`, for genuinely open-ended design problems where the right shape isn't obvious: 6 frame-isolated generators, a critic, then a picker (~16 `Agent` calls, 60–180s). Invoke only when the next artifact would be `/plan`, there's no confident one-sentence answer, and the problem is design-shaped rather than bug-shaped. **When it informs a piece of work, write `via /diverge` in that work's commit or PR body** — its own output lands in gitignored `.claude/plans/`, so a tracked trace is the only thing that can later show it was used. See `.claude/commands/diverge.md`.
 
+**Dated gates need a tracked home and a tracked criterion** (#1308). Anything shipped with a kill date, review date, or "revisit if" condition — an experiment, a disabled CI job, a workaround pending an upstream fix — obeys two rules, because breaking either one has already caused a wrong verdict:
+
+1. **File a dated issue with the date in its title.** A date living only in a doc comment or a commit message does not surface in `gh issue list`, so nothing ever puts it in front of a human. #1345 is the current instance.
+2. **The criterion must be answerable from tracked files.** `/diverge` was deleted on 2026-08-06 as "never invoked" when it had in fact been used twice — the evidence sat in gitignored `.claude/plans/`, invisible to the sweep judging it. Its gate is now `git log --grep='via /diverge'`, which reads the same history the reviewer reads. A criterion whose evidence lives where the judge cannot look will fail silently, and it will fail toward deletion.
+
+At review time the outcome must be keep, replace, or retire. "Wait and see again" is not one of them: a gate that can be deferred indefinitely is not a gate.
+
 This is a two-person project (Bryan + Claude). Scope gates are minimal — if you encounter something broken while working, fix it rather than filing it for later. For small tangential fixes, bundle them in; for larger detours, note them and finish the current task first.
 
 ## Architecture
