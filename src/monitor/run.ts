@@ -114,8 +114,8 @@ function buildOptions(): EventConsumerOptions {
       // False-checkpoint guard: the shared consumer advances lastEventId
       // only AFTER `onEvent` resolves without throwing. EPIPE on
       // process.stdout is almost always async — Node emits 'error' after
-      // the close; see installStdoutErrorHandler, which calls
-      // process.exit(1) so the plugin host respawns us. A synchronous
+      // the close; see installStdoutErrorHandler, which exits (the host does
+      // NOT respawn us — measured; see that function's note). A synchronous
       // throw (rare) propagates out and the retry layer handles it.
       process.stdout.write(content + "\n");
     },
@@ -211,8 +211,17 @@ function installShutdownHandlers(): void {
  * writes after the close are silently dropped and the retry loop keeps
  * advancing lastEventId past events that never arrived; the next reconnect's
  * Last-Event-ID header then skips the lost range. Logging to stderr keeps a
- * trail for support; exit 1 so the plugin host respawns us with a fresh
- * stdout instead of wedging on a dead pipe.
+ * trail for support; exit rather than wedge on a dead pipe.
+ *
+ * **This used to say "exit 1 so the plugin host respawns us with a fresh
+ * stdout". It does not.** Measured 2026-08-09 on CC 2.1.226
+ * (`scripts/spikes/probe-monitor-respawn.py`): a monitor that exits is not
+ * respawned, and the exit code makes no difference — 0 and 1 both stayed dead
+ * for the rest of the session. So this is a clean shutdown, not a recovery:
+ * once the host's read end closes, that session has no monitor again until it
+ * is restarted. Exiting is still right — a monitor that cannot write cannot
+ * deliver, and continuing would advance `lastEventId` past events nobody
+ * received — but do not build anything on the respawn that isn't there.
  */
 function onStdoutError(err: Error): void {
   console.error(`${LOG_PREFIX} stdout error (plugin-host pipe likely closed):`, err);

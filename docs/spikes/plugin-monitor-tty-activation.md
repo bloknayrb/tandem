@@ -248,6 +248,33 @@ a monitor for a singleton lock (F5: `CLAUDE_PLUGIN_ROOT` is not in the child env
 > Enter into that prompt **answers** it. Trust the fixture directory deliberately, or reuse
 > one already trusted, and check the capture for the prompt before believing a null.
 
+### F9 — a monitor that exits is never respawned, whatever its exit code. **MEASURED.**
+
+**Probe:** `scripts/spikes/probe-monitor-respawn.py`. Two `when: "always"` monitors,
+identical but for their exit code, each appending a line to its own marker before
+exiting — so the marker's line count *is* the spawn count.
+
+| exit code | starts in 120 s |
+|---|---|
+| `0` | **1** |
+| `1` | **1** |
+
+Both armed once and stayed dead. No throttled retry, no backoff, nothing.
+
+**Two things follow, in opposite directions.**
+
+*It enables the singleton.* A monitor that finds another already serving this Tandem
+can stand down by exiting, and the host will not spin it back up. That is the
+mechanical precondition for "one monitor across N sessions", and it holds.
+
+*It falsifies a comment our own recovery path rests on.* `src/monitor/run.ts`'s EPIPE
+handler said "exit 1 so the plugin host respawns us with a fresh stdout". It does not.
+Once the host's read end closes, that session has no monitor for the rest of its life.
+Exiting is still the right move — a monitor that cannot write cannot deliver, and
+carrying on would advance `lastEventId` past events nobody received — but it is a clean
+shutdown, not a recovery, and the comment now says so. It also settles the disagreement
+that comment created about `when: "always"`: an exhausted monitor really does stay dead.
+
 ## What the shipped binary says (IN CODE, 2.1.226)
 
 Same extraction method as `plugin-delivery.md` F1/F2. These corroborate the runtime
