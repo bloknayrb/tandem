@@ -620,8 +620,7 @@ function checkMcpJson(r: Recorder): void {
   // Check tandem-channel entry
   const channel = servers["tandem-channel"];
   if (!channel) {
-    const out = evaluateAbsentChannelEntry(".mcp.json");
-    r.pass(out.message, out.fix);
+    r.pass(evaluateAbsentChannelEntry(".mcp.json"));
   } else {
     const cmd = channel.command;
     const args = (channel.args || []).join(" ");
@@ -690,8 +689,7 @@ function checkUserMcpConfig(r: Recorder): void {
     r.pass("tandem registered in ~/.claude.json");
   }
   if (!servers["tandem-channel"]) {
-    const out = evaluateAbsentChannelEntry("~/.claude.json");
-    r.pass(out.message, out.fix);
+    r.pass(evaluateAbsentChannelEntry("~/.claude.json"));
   } else {
     // Registration is NECESSARY but not SUFFICIENT, and saying otherwise is
     // how this check misled people: the shim only delivers to an interactive
@@ -1236,29 +1234,28 @@ async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Pro
  * entry, so following it changed nothing and left the reader believing their
  * config was broken. A remedy that cannot work is worse than no remedy.
  *
- * `fix` names `--with-channel-shim` rather than the launch flag alone.
- * `--dangerously-load-development-channels server:tandem-channel` against a
- * config with no such server is a flag pointing at nothing.
+ * **Returns one string, not a `{message, fix}` pair, and that is load-bearing.**
+ * The human renderer prints `fix` only when `status !== "pass"` (see the report
+ * loop), so guidance attached to a pass is emitted to `--json` and to nobody
+ * else. The first version of this function did exactly that: the inversion from
+ * warn to pass silently deleted its own advice from the output a user reads.
  *
- * No cross-reference to the push-path line: `evaluatePushPath` runs only from
- * `checkHealth`, which `runDoctor` reaches only when :3479 is up and answering
- * — and someone debugging a dead push path is often running doctor with Tandem
- * stopped, where that line never prints.
+ * Kept short for the same reason — this is a pass line among thirty others, so
+ * it points at the fuller remedy on the push-path check rather than repeating
+ * it. No cross-reference by name, though: `evaluatePushPath` runs only from
+ * `checkHealth`, which `runDoctor` reaches only when :3479 is up and answering,
+ * and someone debugging a dead push path is often running doctor with Tandem
+ * stopped.
  *
  * Pure and exported for the same reason as `evaluatePushPath` and its siblings:
  * the branch is otherwise reachable only by standing up a home directory.
  */
-export function evaluateAbsentChannelEntry(label: string): { message: string; fix: string } {
-  return {
-    message:
-      `${label} has no tandem-channel entry (opt-in since v0.21.0) — real-time delivery ` +
-      "here comes from a self-armed watch or the plugin monitor instead",
-    fix:
-      "Nothing to do unless you want the channel shim specifically: ask Claude to watch " +
-      "Tandem for updates (no install, no flag), or run " +
-      "`tandem setup --apply --with-channel-shim` and start Claude Code with " +
-      "`--dangerously-load-development-channels server:tandem-channel`.",
-  };
+export function evaluateAbsentChannelEntry(label: string): string {
+  return (
+    `${label} has no tandem-channel entry, which is expected — the channel shim is opt-in. ` +
+    "Real-time delivery comes from a self-armed watch (nothing to install) or the plugin " +
+    "monitor; add the shim with `tandem setup --apply --with-channel-shim` if you want it"
+  );
 }
 
 /**

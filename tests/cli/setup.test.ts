@@ -15,6 +15,7 @@ import { runSetup } from "../../src/cli/setup.js";
 // the back-compat re-export from src/cli/setup.ts was dropped in PR 3c-ii-c.
 import {
   applyConfig,
+  applyConfigWithToken,
   applyOpsForCli,
   buildMcpEntries,
   detectTargets,
@@ -384,6 +385,83 @@ describe("applyConfig", () => {
     await expect(
       applyConfig(configPath, applyOpsForCli(entries, { withChannelShim: false })),
     ).rejects.toThrow();
+  });
+});
+
+describe("applyConfigWithToken — rotation preserves, it does not re-derive", () => {
+  let home: string;
+
+  function writeConfig(servers: Record<string, unknown>): void {
+    writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: servers }));
+  }
+  function readServers(): Record<string, unknown> {
+    const raw = JSON.parse(readFileSync(join(home, ".claude.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    return raw.mcpServers;
+  }
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "tandem-rotate-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  // THE regression this file exists to catch. `shouldRegisterChannelShim`
+  // answers "what should a FRESH setup write" — since Track E, `false` — and
+  // `applyOpsForCli` turns a `false` into an explicit REMOVE. Routing rotation
+  // through it made `tandem rotate-token`, whose entire job is to change the
+  // token, silently delete a shim the user had opted into. The CHANGELOG
+  // promises the opposite in so many words: "nothing changes and nothing is
+  // removed".
+  it("keeps an opted-in tandem-channel entry when no flag is passed", async () => {
+    writeConfig({
+      tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      "tandem-channel": { command: "/usr/bin/node", args: ["/x/channel/index.js"] },
+    });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
+
+    expect(readServers()["tandem-channel"]).toBeDefined();
+  });
+
+  it("does not conjure one into a config that never had it", async () => {
+    // The other direction, so the fix cannot be "always keep the shim" — that
+    // would restore the default-on behaviour Track E removed.
+    writeConfig({ tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" } });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", { homeOverride: home });
+
+    expect(readServers()["tandem-channel"]).toBeUndefined();
+  });
+
+  it("still honours an explicit false — that is a request, not an omission", async () => {
+    writeConfig({
+      tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      "tandem-channel": { command: "/usr/bin/node", args: ["/x/channel/index.js"] },
+    });
+
+    await applyConfigWithToken("abcdefghijklmnopqrstuvwxyz012345", {
+      homeOverride: home,
+      withChannelShim: false,
+    });
+
+    expect(readServers()["tandem-channel"]).toBeUndefined();
+  });
+
+  it("rewrites the token either way", async () => {
+    // Guards against "preserve" being implemented as "skip this target".
+    writeConfig({
+      tandem: { type: "http", url: "http://127.0.0.1:3479/mcp" },
+      "tandem-channel": { command: "/usr/bin/node", args: ["/x/channel/index.js"] },
+    });
+    const token = "abcdefghijklmnopqrstuvwxyz012345";
+
+    await applyConfigWithToken(token, { homeOverride: home });
+
+    const tandem = readServers().tandem as { headers?: Record<string, string> };
+    expect(tandem.headers?.Authorization).toBe(`Bearer ${token}`);
   });
 });
 

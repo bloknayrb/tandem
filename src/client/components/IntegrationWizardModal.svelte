@@ -878,15 +878,17 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
               >
                 {#if wizard.channelRegistered}
                   The channel shim is registered. Sessions Tandem starts for you are woken directly
-                  and need nothing further. A session you start yourself does: either install the
-                  Tandem plugin, which needs no flag but only finds Node when you launch
-                  <code class="iw-code-inline">claude</code> from a terminal, or pass the
-                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag —
-                  use one, not both. Without either, Claude sees your comments and messages when it
-                  checks its inbox.
+                  and need nothing further. A session you start yourself needs the
+                  <code class="iw-code-inline">--dangerously-load-development-channels</code> flag
+                  as well — registration alone does not switch the channel on.
                 {:else}
-                  Polling mode — Claude checks for your changes periodically rather than getting
-                  them pushed in real time.
+                  Sessions Tandem starts for you are woken directly and need nothing further. A
+                  session you start yourself will see your comments and messages when it next
+                  checks its inbox — to have it react as they happen, the simplest way is to ask
+                  Claude to watch Tandem for updates, which needs nothing installed. Installing the
+                  Tandem plugin does the same for every session, as long as you launch
+                  <code class="iw-code-inline">claude</code> from a terminal so it can find Node.
+                  Use one, not both.
                 {/if}
               </div>
             {/if}

@@ -1261,33 +1261,28 @@ describe("orphaned-vite integration", () => {
 // output of that distinction, and none of them were covered.
 
 describe("evaluateAbsentChannelEntry", () => {
-  // The inversion this guards: absence used to WARN and prescribe
-  // `tandem setup --apply`, which since Track E does not write the entry. A
-  // remedy that cannot work is worse than none, and a regression back to it
-  // would be invisible — the check still "passes CI", it just misinforms.
+  // The renderer prints `fix` only when `status !== "pass"`. This check is a
+  // PASS, so everything a user is meant to act on has to be in the message —
+  // the first version returned a `{message, fix}` pair and its advice went to
+  // `--json` and nobody else. Assert on the one string, which is also all the
+  // call sites now pass.
+  it("carries its guidance in the message, where a pass line is actually printed", () => {
+    const msg = evaluateAbsentChannelEntry("~/.claude.json");
+    expect(msg).toMatch(/--with-channel-shim/);
+    expect(msg).toMatch(/watch/i);
+  });
+
   it("does not send the reader to a command that no longer writes the entry", () => {
-    const out = evaluateAbsentChannelEntry("~/.claude.json");
-    expect(out.fix).not.toMatch(/setup --apply(?! --with-channel-shim)/);
-  });
-
-  it("names the flag that DOES write it, not just the launch flag", () => {
-    // `--dangerously-load-development-channels server:tandem-channel` against a
-    // config with no such server is a flag pointing at nothing.
-    const out = evaluateAbsentChannelEntry("~/.claude.json");
-    expect(out.fix).toMatch(/--with-channel-shim/);
-    expect(out.fix).toMatch(/dangerously-load-development-channels/);
-  });
-
-  it("leads with the path that needs neither install nor flag", () => {
-    const out = evaluateAbsentChannelEntry("~/.claude.json");
-    expect(out.fix).toMatch(/watch/i);
-    expect(out.fix.indexOf("watch")).toBeLessThan(out.fix.indexOf("--with-channel-shim"));
+    // `tandem setup --apply` alone stopped writing this entry in Track E, so
+    // the old remedy changed nothing and read as "your config is broken".
+    const msg = evaluateAbsentChannelEntry("~/.claude.json");
+    expect(msg).not.toMatch(/setup --apply(?! --with-channel-shim)/);
   });
 
   it("says absence is expected rather than broken, and carries the caller's label", () => {
-    expect(evaluateAbsentChannelEntry(".mcp.json").message).toMatch(/^\.mcp\.json /);
-    expect(evaluateAbsentChannelEntry("~/.claude.json").message).toMatch(/^~\/\.claude\.json /);
-    expect(evaluateAbsentChannelEntry(".mcp.json").message).toMatch(/opt-in/i);
+    expect(evaluateAbsentChannelEntry(".mcp.json")).toMatch(/^\.mcp\.json /);
+    expect(evaluateAbsentChannelEntry("~/.claude.json")).toMatch(/^~\/\.claude\.json /);
+    expect(evaluateAbsentChannelEntry(".mcp.json")).toMatch(/expected/i);
   });
 });
 

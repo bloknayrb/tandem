@@ -822,14 +822,15 @@ function makeApplyHandler(deps: IntegrationsRoutesDeps): Handler {
           }
         }
 
-        // Default-on for Claude Code (#985). On a desktop bundle the correct
-        // resource-dir channel path is injected via TANDEM_CHANNEL_DIST on
-        // sidecar spawn (resolveChannelDist), so CHANNEL_DIST resolves to an
-        // existing file and the shim registers. When the build artifact is
-        // genuinely absent the helper returns false and only the tandem HTTP
-        // entry is written — no broken entry. The `create`-wins guard in
-        // applyConfig keeps a user-confirmed removal from deleting the entry
-        // we just created.
+        // No third argument, so this is always false since Track E made the
+        // shim opt-in — the wizard writes the tandem HTTP entry and nothing
+        // else. There is deliberately NO wizard checkbox: the CLI flag is the
+        // only opt-in, and any docs claiming otherwise are wrong (that claim
+        // was in three places until 2026-08-09).
+        //
+        // This route never REMOVES the shim either — `remove` below comes from
+        // the user's confirmed diff, not from `applyOpsForCli` — so an existing
+        // entry survives a wizard apply. That is the intended asymmetry.
         const withChannelShim = (deps.shouldRegisterChannelShim ?? shouldRegisterChannelShim)(
           entry.kind,
           CHANNEL_DIST,

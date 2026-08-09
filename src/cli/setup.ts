@@ -157,11 +157,11 @@ async function writeTargets(targets: DetectedTarget[], opts: SetupOptions): Prom
   let failures = 0;
   const shimRegisteredFor: string[] = [];
   for (const t of targets) {
-    // Default-on for Claude Code (channel shim is its push transport, #985);
-    // `--with-channel-shim` is now an explicit override. The helper's
-    // existence check degrades to "tandem HTTP entry only" when the build
-    // artifact is absent (an explicit `--with-channel-shim` with a missing
-    // file already hard-errored above).
+    // Opt-in since Track E: absent the flag this writes the tandem HTTP entry
+    // and nothing else. It was default-on for Claude Code from #985 until an
+    // inert shim was found suppressing the very signal built to warn about it.
+    // An explicit `--with-channel-shim` with a missing build artifact already
+    // hard-errored above.
     const withChannelShim = shouldRegisterChannelShim(t.kind, CHANNEL_DIST, opts.withChannelShim);
     const entries = buildMcpEntries(CHANNEL_DIST, {
       withChannelShim,

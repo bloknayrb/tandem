@@ -447,7 +447,7 @@ Not investigated further.
 
 The PR's trigger (`pushDelivery === "none"`, a confirmed zero) is *sound* — a
 zero really does mean nothing is attached. But **A7 makes it largely
-unreachable**: the channel shim is registered by default, connects
+unreachable**: the channel shim is registered by default *(true when measured; Track E removed that default on 2026-08-07, which is the fix this finding argued for)*, connects
 unconditionally, and holds `subscribers >= 1` while discarding every
 notification, because the host never negotiated `claude/channel`. For a
 set-up user in steady state the notice cannot fire.

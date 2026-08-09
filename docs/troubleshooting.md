@@ -132,11 +132,11 @@ tandem doctor
 
 Either way, look for the push line. `No real-time push consumer attached` means nothing is listening — that's the whole problem.
 
-**First, check which kind of session this is.** Sessions Tandem starts for you — the desktop app's **Relaunch Claude** button — are woken directly by Tandem and use neither transport below. If that is the session that isn't reacting, nothing here is the fix; the problem is elsewhere. Everything that follows is about a session you started yourself by typing `claude`.
+**First, check which kind of session this is.** Sessions Tandem starts for you — the desktop app's **Relaunch Claude** button — are woken directly by Tandem and use none of the three below. If that is the session that isn't reacting, nothing here is the fix; the problem is elsewhere. Everything that follows is about a session you started yourself by typing `claude`.
 
 **Fix it** — three ways, and you want exactly one of them.
 
-*The quickest, with nothing to install:* **ask Claude to watch for updates.** Tandem's bundled skill tells it how, so "watch Tandem for updates while we work" is usually enough — it opens a watch on Tandem's wake stream and is woken whenever you comment or send a message. No install, no flag, and it lives and dies with that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them) and that `tandem_status` reports a `wakeUrl`; the watch has nothing to attach to without one.
+*The quickest, with nothing to install:* **ask Claude to watch for updates.** Tandem's bundled skill tells it how, so "watch Tandem for updates while we work" is usually enough — it opens a watch on Tandem's wake stream and is woken whenever you comment or send a message. No install, no flag, and it lives and dies with that session. If Claude says it cannot, check that the session actually has Tandem's MCP tools (`/mcp` lists them), that your Claude Code offers a `Monitor` tool, and that `tandem_status` reports a `wakeUrl` — the watch has nothing to attach to without one, and stdio-mode Tandem reports none. **Ask directly rather than waiting to be offered.** Claude normally only volunteers a watch when Tandem reports that nothing at all is listening, and a channel shim left over from an older setup stays listening forever while delivering nothing — so in exactly the case you are debugging, it will not offer. Asking overrides that.
 
 *Or* install the Tandem plugin, which registers a monitor that needs no flag — every `claude` you start afterwards picks it up (`claude plugin list` to check whether you already have it). Start `claude` from a terminal window when you do: the monitor runs with whatever program path that session was given, and a Claude Code launched from a desktop icon may have no usable Node on it. That failure shows up as [`exit 127` every session](#plugin-monitor-reports-script-failed-exit-127-every-session).
 
@@ -147,7 +147,7 @@ tandem setup --apply --with-channel-shim
 claude --dangerously-load-development-channels server:tandem-channel
 ```
 
-Both halves are needed. The shim is **not registered by default** — that changed in v0.21.0 — so on a fresh setup the flag alone names a server that is not in your config. (If you set this up before v0.21.0, your existing entry is untouched and the flag alone is still enough.) The flag has to be on every session: it is not remembered, and it only works in an interactive session, so it does nothing in `claude -p`. There is also no way to make it unnecessary — Claude Code's channel allowlist covers plugins only, and `tandem-channel` is a plain MCP server, so no listing exists that Tandem could apply for.
+Both halves are needed. The shim is **not registered by default** — so on a fresh setup the flag alone names a server that is not in your config. (If you configured it before that changed, your existing entry is untouched and the flag alone is still enough.) The flag has to be on every session: it is not remembered, and it only works in an interactive session, so it does nothing in `claude -p`. There is also no way to make it unnecessary — Claude Code's channel allowlist covers plugins only, and `tandem-channel` is a plain MCP server, so no listing exists that Tandem could apply for.
 
 **Do not enable more than one.** Each delivers independently, so a session running two receives every event twice. Note that `No real-time push consumer attached` cannot tell you which one is missing — they all attach to the same stream — so pick the one you meant to be using.
 
