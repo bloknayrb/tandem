@@ -55,6 +55,14 @@ interface ActionDeps {
    * the folder Claude had just left, indefinitely, which is precisely what that
    * refresh exists to prevent. Owning it here makes "every launcher action
    * re-probes" true by construction instead of by everyone remembering.
+   *
+   * Fired from the `finally` of `relaunchHere` / `startFreshConversation` — NOT
+   * from the exported wrappers. The wrappers used to call it beside their
+   * `void`-ed invocation, which runs the moment the async function suspends at
+   * its first `await`, i.e. before the blocking `confirm()`. That put the
+   * staggered re-probes ahead of the mutation they were meant to observe, so a
+   * user who read the dialog for a few seconds got two answers describing the
+   * world before the relaunch. Keep it at the mutation.
    */
   afterLauncherAction: () => void;
   /** Open the Settings modal (the single consolidated settings surface). */
@@ -807,6 +815,21 @@ async function relaunchHere(
     }
   } finally {
     launcherInflight = false;
+    // Re-probe from HERE, not from the click. The callers used to fire this
+    // synchronously alongside `void relaunchHere(...)`, which runs the instant
+    // this function suspends at its first `await` — i.e. BEFORE the blocking
+    // `confirm()` above, whose four lines a user may spend ten seconds reading
+    // while the staggered +2s/+5s refresh timers advance on wall clock. Both
+    // would then fire before the POST completed, answer with the pre-relaunch
+    // cwd, and leave the drift pill asserting Claude is in a folder it has
+    // already left — with nothing to re-arm it, since the drift effect keys only
+    // on document path and epoch.
+    //
+    // In `finally` rather than after the POST so a thrown request still
+    // re-probes: a relaunch that failed midway is exactly when the displayed
+    // state is least trustworthy. Placed inside this try, so a cancelled confirm
+    // (which returns before `launcherInflight = true`) still probes nothing.
+    d.afterLauncherAction();
   }
 }
 
@@ -825,7 +848,6 @@ async function relaunchHere(
 export function relaunchClaudeCode(): void {
   guardedRun("launcher-relaunch-here", (d) => {
     void relaunchHere(d, { cwdRequired: false });
-    d.afterLauncherAction();
   });
 }
 
@@ -842,14 +864,12 @@ export function relaunchClaudeCode(): void {
 export function relaunchClaudeHere(): void {
   guardedRun("launcher-relaunch-here", (d) => {
     void relaunchHere(d, { cwdRequired: true });
-    d.afterLauncherAction();
   });
 }
 
 export function startFreshClaudeCode(): void {
   guardedRun("launcher-start-fresh", (d) => {
     void startFreshConversation(d);
-    d.afterLauncherAction();
   });
 }
 
@@ -872,6 +892,9 @@ async function startFreshConversation(d: ActionDeps): Promise<void> {
     );
   } finally {
     launcherInflight = false;
+    // Same reason as `relaunchHere`'s: measured from the mutation, not from a
+    // click that precedes an unbounded modal.
+    d.afterLauncherAction();
   }
 }
 

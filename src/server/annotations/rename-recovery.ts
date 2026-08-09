@@ -168,7 +168,7 @@ export async function recoverRenamedEnvelope(
       // Safety: path is validated above (isAbsolute + resolve + no-UNC).
       let oldStillExists: boolean;
       try {
-        await fs.access(resolvedOldPath); // lgtm[js/path-injection]
+        await fs.access(resolvedOldPath);
         oldStillExists = true;
       } catch {
         oldStillExists = false;

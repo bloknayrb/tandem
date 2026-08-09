@@ -117,12 +117,35 @@ export function findChangelogPath(startDir: string): string | undefined {
  * under `%LOCALAPPDATA%` — i.e. inside home, passing every other check. So a
  * silently empty list means every desktop user's first run opens with a
  * suggestion to move Claude into Tandem's install directory.
+ *
+ * **Two sample directories, not one, and the second is the one that matters.**
+ * `WELCOME_PATH` comes from `findRepoFile(__dirname, …)`, which lands in the
+ * *resource* dir. But `index.ts` opens `path.join(process.env.TANDEM_DATA_DIR ||
+ * projectRoot, "sample/welcome.md")`, and the Tauri shell always sets
+ * `TANDEM_DATA_DIR` to the app-data dir and copies `sample/*` into it. So on a
+ * packaged desktop first run the document actually open is the app-data copy,
+ * in a directory this list did not contain — and that path is inside home on all
+ * three platforms (`%APPDATA%`, `~/Library/Application Support`, `~/.local/share`),
+ * so it passes the home-confinement check, differs from the launcher's default
+ * `$HOME`, and misses the exact-match exclusion. The result was the amber pill on
+ * every desktop first run, offering to permanently repoint the launcher at
+ * Tandem's own sample folder — the precise failure this exclusion exists to stop.
+ *
+ * Invisible in dev and in every test: `TANDEM_DATA_DIR` is unset there, which
+ * collapses the two directories into one. Derive the app-data sample dir the same
+ * way `index.ts` does rather than restating the join, so the two cannot drift
+ * apart again.
  */
-function resolveBundledDocDirs(): string[] {
-  const dirs = [CHANGELOG_PATH, WELCOME_PATH]
+export function resolveBundledDocDirs(): string[] {
+  const dataDir = process.env.TANDEM_DATA_DIR?.trim();
+  const appDataSample = dataDir ? join(dataDir, "sample") : undefined;
+  const dirs = [
+    CHANGELOG_PATH === undefined ? undefined : dirname(CHANGELOG_PATH),
+    WELCOME_PATH === undefined ? undefined : dirname(WELCOME_PATH),
+    appDataSample,
+  ]
     .filter((p): p is string => p !== undefined)
-    .map((p) => {
-      const dir = dirname(p);
+    .map((dir) => {
       try {
         return realpathSync(dir);
       } catch {

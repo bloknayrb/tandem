@@ -1470,8 +1470,18 @@ export function resolveSafeCwd(candidate: string): string | null {
     // rejects non-directories, and returns null on any failure. Callers
     // either gate the result further (resolveRouteCwd home-confines) or
     // accept advanced users' explicit integrations.json scope.
-    const real = fs.realpathSync(candidate); // lgtm[js/path-injection]
-    const stat = fs.statSync(real); // lgtm[js/path-injection]
+    //
+    // CodeQL flags these two lines as js/path-injection and is right that the
+    // taint reaches them — the confinement runs after, in resolveRouteCwd, not
+    // before. It is accepted, per alert #82 and the async twin's #162: realpath
+    // + stat + isDirectory on a syntactically pre-screened path is an existence
+    // check, not a read or a write, and the routes that reach here are loopback-
+    // and origin-gated. These lines carried `// lgtm[js/path-injection]` for a
+    // while; that syntax is LGTM's, code scanning does not honour it, and the
+    // alerts fired anyway. A comment that looks like a suppression and is not is
+    // worse than none, so it is gone — the record lives in the dismissals.
+    const real = fs.realpathSync(candidate);
+    const stat = fs.statSync(real);
     if (!stat.isDirectory()) return null;
     return real;
   } catch {
@@ -1497,8 +1507,8 @@ export function resolveSafeCwd(candidate: string): string | null {
 export async function resolveSafeCwdAsync(candidate: string): Promise<string | null> {
   if (rejectedSyntactically(candidate)) return null;
   try {
-    const real = await fsp.realpath(candidate); // lgtm[js/path-injection]
-    const stat = await fsp.stat(real); // lgtm[js/path-injection]
+    const real = await fsp.realpath(candidate);
+    const stat = await fsp.stat(real);
     if (!stat.isDirectory()) return null;
     return real;
   } catch {
