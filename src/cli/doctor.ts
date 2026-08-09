@@ -620,16 +620,8 @@ function checkMcpJson(r: Recorder): void {
   // Check tandem-channel entry
   const channel = servers["tandem-channel"];
   if (!channel) {
-    // A PASS since Track E, not a warning: the shim is opt-in, so its absence
-    // is now the default rather than a defect, and there are two push paths
-    // that do not involve it. No cross-reference to "the push-path line below"
-    // either — `evaluatePushPath` runs only from `checkHealth`, which
-    // `runDoctor` reaches only when :3479 is up and answering, and someone
-    // debugging a dead push path is often running doctor with Tandem stopped.
-    r.pass(
-      ".mcp.json has no tandem-channel entry (opt-in since v0.21.0) — push here comes " +
-        "from the plugin monitor or a self-armed watch instead",
-    );
+    const out = evaluateAbsentChannelEntry(".mcp.json");
+    r.pass(out.message, out.fix);
   } else {
     const cmd = channel.command;
     const args = (channel.args || []).join(" ");
@@ -698,15 +690,8 @@ function checkUserMcpConfig(r: Recorder): void {
     r.pass("tandem registered in ~/.claude.json");
   }
   if (!servers["tandem-channel"]) {
-    // See the sibling note in `checkMcpJson`: a PASS since Track E made the
-    // shim opt-in, and deliberately no `fix` — `tandem setup --apply` no
-    // longer writes this entry, so the old remedy would have sent the reader
-    // round a loop that changes nothing.
-    r.pass(
-      "tandem-channel not registered in ~/.claude.json (opt-in since v0.21.0) — push comes " +
-        "from the plugin monitor or a self-armed watch instead; add it with " +
-        "`tandem setup --apply --with-channel-shim` if you want it",
-    );
+    const out = evaluateAbsentChannelEntry("~/.claude.json");
+    r.pass(out.message, out.fix);
   } else {
     // Registration is NECESSARY but not SUFFICIENT, and saying otherwise is
     // how this check misled people: the shim only delivers to an interactive
@@ -1240,6 +1225,40 @@ async function checkHealth(r: Recorder, mcpPort: number, startHint: string): Pro
     r.pass("Server responded on /health (could not parse body)");
   }
   return true;
+}
+
+/**
+ * What to say when there is no `tandem-channel` entry in a config file.
+ *
+ * A **pass** since Track E, and that inversion is the point: the shim is
+ * opt-in, so absence is the default rather than a defect. It used to warn and
+ * offer `tandem setup --apply` as the remedy — which no longer writes the
+ * entry, so following it changed nothing and left the reader believing their
+ * config was broken. A remedy that cannot work is worse than no remedy.
+ *
+ * `fix` names `--with-channel-shim` rather than the launch flag alone.
+ * `--dangerously-load-development-channels server:tandem-channel` against a
+ * config with no such server is a flag pointing at nothing.
+ *
+ * No cross-reference to the push-path line: `evaluatePushPath` runs only from
+ * `checkHealth`, which `runDoctor` reaches only when :3479 is up and answering
+ * — and someone debugging a dead push path is often running doctor with Tandem
+ * stopped, where that line never prints.
+ *
+ * Pure and exported for the same reason as `evaluatePushPath` and its siblings:
+ * the branch is otherwise reachable only by standing up a home directory.
+ */
+export function evaluateAbsentChannelEntry(label: string): { message: string; fix: string } {
+  return {
+    message:
+      `${label} has no tandem-channel entry (opt-in since v0.21.0) — real-time delivery ` +
+      "here comes from a self-armed watch or the plugin monitor instead",
+    fix:
+      "Nothing to do unless you want the channel shim specifically: ask Claude to watch " +
+      "Tandem for updates (no install, no flag), or run " +
+      "`tandem setup --apply --with-channel-shim` and start Claude Code with " +
+      "`--dangerously-load-development-channels server:tandem-channel`.",
+  };
 }
 
 /**

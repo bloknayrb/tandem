@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  evaluateAbsentChannelEntry,
   evaluateClaudeCli,
   evaluateNpmStaleness,
   evaluateOrphanedVite,
@@ -1258,6 +1259,37 @@ describe("orphaned-vite integration", () => {
 // reports, and conflating them is how a user ends up staring at "AI connected"
 // while nothing they do reaches Claude. These branches are the user-facing
 // output of that distinction, and none of them were covered.
+
+describe("evaluateAbsentChannelEntry", () => {
+  // The inversion this guards: absence used to WARN and prescribe
+  // `tandem setup --apply`, which since Track E does not write the entry. A
+  // remedy that cannot work is worse than none, and a regression back to it
+  // would be invisible — the check still "passes CI", it just misinforms.
+  it("does not send the reader to a command that no longer writes the entry", () => {
+    const out = evaluateAbsentChannelEntry("~/.claude.json");
+    expect(out.fix).not.toMatch(/setup --apply(?! --with-channel-shim)/);
+  });
+
+  it("names the flag that DOES write it, not just the launch flag", () => {
+    // `--dangerously-load-development-channels server:tandem-channel` against a
+    // config with no such server is a flag pointing at nothing.
+    const out = evaluateAbsentChannelEntry("~/.claude.json");
+    expect(out.fix).toMatch(/--with-channel-shim/);
+    expect(out.fix).toMatch(/dangerously-load-development-channels/);
+  });
+
+  it("leads with the path that needs neither install nor flag", () => {
+    const out = evaluateAbsentChannelEntry("~/.claude.json");
+    expect(out.fix).toMatch(/watch/i);
+    expect(out.fix.indexOf("watch")).toBeLessThan(out.fix.indexOf("--with-channel-shim"));
+  });
+
+  it("says absence is expected rather than broken, and carries the caller's label", () => {
+    expect(evaluateAbsentChannelEntry(".mcp.json").message).toMatch(/^\.mcp\.json /);
+    expect(evaluateAbsentChannelEntry("~/.claude.json").message).toMatch(/^~\/\.claude\.json /);
+    expect(evaluateAbsentChannelEntry(".mcp.json").message).toMatch(/opt-in/i);
+  });
+});
 
 describe("evaluatePushPath", () => {
   it("skips with an explanation when the server reports no push field", () => {

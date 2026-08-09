@@ -375,6 +375,22 @@ passes the channel flag.
 
 The decision to keep the channel canonical **stands** — rationales (1) and (3) are untouched, and the channel remains correct for manually-launched interactive sessions, which this spike did not test. What changes is that auto-launched sessions no longer depend on it: the supervisor now subscribes to the event queue in-process and writes wake turns onto the child's stdin directly (`src/server/launcher/supervisor.ts`). It registers as an **`"external"`** subscriber, so the WS-A2 Solo gate applies to it exactly as to the SSE consumers, and the wake turn deliberately carries no event payload — `tandem_checkInbox` stays the only path by which content reaches the AI.
 
+**Update (2026-08-08) — the removal gate was evaluated. Verdict: KEEP `experimental.monitors`, and keep the plugin's `tandem-channel` entry.**
+
+Track F of the push-delivery plan proposed deleting both from `.claude-plugin/plugin.json`: the monitor because it fires `exit 127` in sessions unrelated to Tandem when the host has no Node on its PATH, and the plugin's `tandem-channel` MCP entry as its bare-`npx` twin (same command, same host env, same failure — and `node-binary.ts`'s absolute-path fix applies to *generated* config, which a static manifest cannot use). Neither is deleted. Recording why, because the reasoning reverses two things that were briefly believed during the audit:
+
+- **The `exit 127` field report is evidence FOR activation, not against it.** It is *host* output: the plugin host spawned the monitor's command and reported the shell's exit code. A monitor that never activated would produce no such line. So the incumbent's activation on the current CLI is not "unproven" — that report is the proof, and an earlier draft of this audit cited the same line as harm while calling activation unproven. It cannot be both.
+- **The replacement's standing was weaker than assumed at the moment the gate was written.** `docs/spikes/monitor-self-arm-probe.md` (P-A2) records no CLI version and armed the **shell** source — which [ADR-049](#adr-049-the-self-armed-wake--ws-transport-no-arbitration-payload-free-frames) decision 1 then demoted as unusable on Windows. So the `ws` source that actually ships was, at that point, backed by a read of the tool schema and nothing else. It has since been measured end to end (`docs/spikes/wake-socket-end-to-end.md`, Claude Code 2.1.226) — but the gate's rule stands regardless: **do not delete a working path on the strength of a replacement, however good, when the two populations are disjoint.** A user whose `npx` does not resolve has already lost the monitor; deleting it takes nothing from them and takes a working path from everyone else.
+
+The noise is addressed without touching the path. `npx … monitor || exit 0` uses an operator valid in both `/bin/sh` and `cmd.exe` and zeroes the exit code — though it suppresses no stderr, and there is no portable one-liner that does both (`2>/dev/null` is a syntax error in `cmd.exe`). That trade — a silent failure in place of a loud one — is itself a judgement call, so it is **not** applied here either; it is filed with the gate below.
+
+**What would open the gate,** stated so it is answerable from tracked files rather than from a memory of a probe (CLAUDE.md's dated-gate rule, #1308):
+
+1. `git log --grep='self-arm'` shows the `ws` wake path shipped and no field report of it failing for one full release cycle, **and**
+2. `docs/spikes/` contains a run recording a CLI version in which `experimental.monitors[]` does *not* activate — the mirror of the `exit 127` evidence, which is what would show the incumbent has stopped being a path at all.
+
+Either "keep", "replace", or "retire" at review time; "wait and see again" is not an outcome. Tracked as a dated issue so it surfaces in `gh issue list` rather than living only here.
+
 ## ADR-029: Action Registry and Command Palette
 
 **Status:** Accepted
