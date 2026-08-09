@@ -242,16 +242,60 @@
         --tandem-z-above-titlebar: 100000;
         /* v7 floating chrome clearance/position vars — consumed by W2-W6
            rails, fmtbar, status pill. W4a maximalist lifted DocumentTabs
-           into the floating TitleBar (44px tall, no in-flow tabs row), so
-           these drop to 52px per the calm-v7.css target. The fmtbar pill is
-           fixed-positioned at top: 52px, height 36px → bottom at viewport
-           y=88. Editor-scroll lives below the titlebar in the flex column,
-           so its top edge is at viewport y=44; an editor padding-top of at
-           least 52px (max(--tandem-space-7, 52px)) lands content at y≥96,
-           clearing the fmtbar with ≥8px breathing. Rails use
-           rail-top-clearance as margin-top inside the editor row → rail top
-           also at y=96, in line with the editor content. */
-        --tandem-fmtbar-top: 52px;
+           into the floating TitleBar (no in-flow tabs row), so these drop to
+           52px per the calm-v7.css target.
+
+           MEASURED geometry (2026-08-07, default density, 1280px wide). The
+           figures here were previously wrong — the comment claimed a 44px
+           TitleBar, and that stale number is exactly what made the first
+           attempt at the banner-overlap fix land 4px short. Re-measure rather
+           than re-deriving if you change any of this:
+
+             TitleBar          y=0..56    (56px tall, NOT 44)
+             banner stack      y=56..56+H (in flow, H=0 when none showing)
+             fmtbar pill       y=52..88.75 at rest (~36.75px tall)
+             editor-scroll     top edge y=56; padding-top max(space-7, 52px)
+                               → content at y=108
+
+           Note the pill rests 4px ABOVE the titlebar's bottom edge, i.e. it is
+           deliberately tucked under it — which is why any offset expressed as
+           "52px + something" is wrong for clearing in-flow chrome below the
+           titlebar. Rails use rail-top-clearance as margin-top inside the
+           editor row, so they track the editor content automatically. */
+        /* Bottom edge of the in-flow top-of-shell banner stack (server-restart
+           strip, updater, connection, license) in viewport coordinates,
+           measured at runtime by the `bannerStackHeight` action in App.svelte
+           and written as an inline style on <html>. **0px means "no banners
+           showing"**, which the max() below maps back to the resting 52px.
+
+           Why the bottom edge and not the stack's height: a height offset makes
+           the consumer responsible for knowing where the stack STARTS, i.e. for
+           hardcoding the TitleBar height — the very number that was wrong.
+           `max(52px, bottom)` needs no such constant and self-corrects if the
+           TitleBar is ever resized.
+
+           ONLY --tandem-fmtbar-top consumes this, and that asymmetry is the
+           whole contract. The banner stack pushes the editor row down in normal
+           flow, so .editor-scroll's padding-top, the ScrollPill track,
+           FindReplaceBar and --tandem-rail-top-clearance are already expressed
+           in a frame that moved with it. The fmtbar is `position: fixed` — it is
+           the one surface that escaped the flow, so it is the one surface that
+           re-applies the offset by hand. Doing it anywhere else double-counts.
+
+           Three rules for anyone extending this:
+           1. Never feed --tandem-banner-stack-bottom into a property that SIZES
+              a ResizeObserver-observed box (.editor-scroll, the margin layer,
+              the tab scroller, the chat composer — 7 observer sites in
+              src/client). That closes a measure→resize→measure loop, which the
+              action's rounding and last-value guards do NOT suppress: they
+              suppress redundant writes, not a genuine oscillation.
+           2. The measured wrapper must never take padding, border, margin or
+              gap, or the bar's offset diverges from the flow it is tracking.
+           3. This token's computed string is now "max(52px, 0px)", not "52px" —
+              custom-property substitution is not math-resolved, so a
+              getComputedStyle() assertion on it must not expect a bare length. */
+        --tandem-banner-stack-bottom: 0px;
+        --tandem-fmtbar-top: max(52px, var(--tandem-banner-stack-bottom, 0px));
         --tandem-rail-top-clearance: 52px;
         --tandem-status-clearance: 36px;
         /* Bottom inset that any "hugs-content" rail (outline) reserves

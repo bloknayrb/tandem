@@ -8,6 +8,7 @@ import { toPmPos } from "../shared/positions/types";
 import type { Annotation, CapturedAnchor, ChatMessage, TandemNotification } from "../shared/types";
 import { isPendingReviewTarget } from "../shared/types";
 import { generateNotificationId } from "../shared/utils";
+import { bannerStackHeight } from "./actions/bannerStackHeight.svelte.js";
 import {
   createScratchpad,
   relaunchClaudeCode,
@@ -2317,33 +2318,48 @@ const shouldShowModelPicker = $derived(
       Connecting...
     </div>
   {:else}
-    {#if yjsSync.serverRestarted}
-      <div
-        style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-warning-bg); border-bottom: 1px solid var(--tandem-warning-border); font-size: 13px; color: var(--tandem-warning-fg-strong); text-align: center;"
-      >
-        Server restarted — refreshing documents
-      </div>
-    {/if}
+    <!-- Top-of-shell banner stack. Wrapped so its total height can be measured
+         in ONE ResizeObserver and published as --tandem-banner-stack-bottom,
+         which index.html folds into --tandem-fmtbar-top so the fixed
+         formatting-bar pill sits below the banners instead of on top of their
+         message text. See the geometry contract in index.html for why only the
+         fmtbar re-applies that offset, and why it tracks the stack's bottom
+         edge rather than its height.
 
-    {#if isTauriRuntime() && updaterBanner.showBanner && updaterBanner.availableVersion}
-      <UpdaterBanner
-        version={updaterBanner.availableVersion}
-        installing={updaterBanner.installing}
-        onInstall={() => { updaterBanner.install(); }}
-        onDismiss={updaterBanner.dismiss}
-      />
-    {/if}
+         One wrapper rather than four observers because LicenseBanner self-gates
+         internally — App cannot tell from state alone whether it has a box, so
+         the wrapper's measured height is the only ground truth. Any future
+         top-of-shell banner belongs INSIDE this element; a sibling added after
+         it is invisible to the measurement and silently re-opens the overlap. -->
+    <div class="banner-stack" data-testid="banner-stack" use:bannerStackHeight>
+      {#if yjsSync.serverRestarted}
+        <div
+          style="padding: var(--tandem-space-2) var(--tandem-space-4); background: var(--tandem-warning-bg); border-bottom: 1px solid var(--tandem-warning-border); font-size: 13px; color: var(--tandem-warning-fg-strong); text-align: center;"
+        >
+          Server restarted — refreshing documents
+        </div>
+      {/if}
 
-    {#if connectionBanner.showBanner}
-      <ConnectionBanner
-        onDismiss={connectionBanner.dismiss}
-        onRetry={() => { yjsSync.reconnect(); }}
-      />
-    {/if}
+      {#if isTauriRuntime() && updaterBanner.showBanner && updaterBanner.availableVersion}
+        <UpdaterBanner
+          version={updaterBanner.availableVersion}
+          installing={updaterBanner.installing}
+          onInstall={() => { updaterBanner.install(); }}
+          onDismiss={updaterBanner.dismiss}
+        />
+      {/if}
 
-    <!-- #1116: trial countdown. Self-gates (renders only during an active trial;
-         silent when the gate is dark or a license is active). -->
-    <LicenseBanner />
+      {#if connectionBanner.showBanner}
+        <ConnectionBanner
+          onDismiss={connectionBanner.dismiss}
+          onRetry={() => { yjsSync.reconnect(); }}
+        />
+      {/if}
+
+      <!-- #1116: trial countdown. Self-gates (renders only during an active trial;
+           silent when the gate is dark or a license is active). -->
+      <LicenseBanner />
+    </div>
 
     <Toolbar
       {editor}
@@ -3124,6 +3140,27 @@ const shouldShowModelPicker = $derived(
 {/snippet}
 
 <style>
+  /* Measured wrapper for the top-of-shell banners (see markup above).
+
+     `flex-shrink: 0` is DEFENSIVE, and the reason is narrower than it looks:
+     wrapping does not by itself make the stack shrinkable, because a column
+     flex item with `overflow: visible` gets `min-height: auto`, whose
+     content-based minimum is its full min-content height — the same floor each
+     banner already had as a direct child. It earns its place as the guard for
+     the one case that WOULD shrink: adding `overflow: hidden` here drops that
+     automatic minimum to 0, at which point the wrapper compresses while its
+     block children overflow, getBoundingClientRect() under-reports the height,
+     and the pill lands back on the banner text.
+
+     So: no `overflow: hidden` (it also clips the banners' slide-in, which
+     translates from -100% over the titlebar, and their box-shadow), and no
+     `display: contents` (it erases the box entirely — ResizeObserver skips
+     box-less elements and getBoundingClientRect returns zeros). No padding,
+     border, margin or gap either, per rule 2 of the index.html contract. */
+  .banner-stack {
+    flex-shrink: 0;
+  }
+
   /* Always-mounted dual-layer rail. The shell owns width + chrome (bg, inner
      radius, side shadow) + the hover-grow; its two children (`.rail-full` via
      the data-testid divs in markup, and `.rail-peek` via PeekStrip) are

@@ -146,6 +146,10 @@ more lines in `__snapshots__/testid-set.snap.txt`.
   gaps)
 
 ### Banners
+- `banner-stack` — the measured wrapper around the four top-of-shell banners
+  (server-restart strip, updater, connection, license). Its bottom edge is
+  published as `--tandem-banner-stack-bottom` so the fixed formatting-bar pill
+  clears it; the selector is the hook the geometry E2E uses to inject a probe.
 - `connection-banner`, `connection-banner-retry`
 - `updater-banner`, `updater-banner-{install,dismiss,visible}`
 - `review-only-banner`, `review-only-dismiss`,
