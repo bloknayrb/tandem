@@ -1,5 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
+import fs from "fs";
 import path from "path";
+import { DEFAULT_MCP_PORT } from "../../src/shared/constants.js";
 import {
   cleanupAllOpenDocuments,
   cleanupFixtureDir,
@@ -7,6 +9,8 @@ import {
   McpTestClient,
   openAnnotatePopup,
 } from "./helpers";
+
+const API_BASE = `http://127.0.0.1:${DEFAULT_MCP_PORT}/api`;
 
 let mcp: McpTestClient;
 let tmpDir: string;
@@ -121,6 +125,79 @@ test("slash menu inserts horizontal rule", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(menu).toBeHidden();
   await expect(page.locator(".tiptap hr").first()).toBeVisible();
+});
+
+test("slash menu inserts a fixed 3x3 table and round-trips through save/reload (#995)", async ({
+  page,
+}) => {
+  await openSample(page);
+
+  await page.keyboard.type(" /table");
+  const menu = page.getByRole("listbox", { name: "Slash commands" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("option", { name: "Table" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.press("Enter");
+  await expect(menu).toBeHidden();
+
+  // 1 header row + 2 body rows, 3 columns each -- fixed dimensions, no
+  // alignment/row-col ops/header-toggle/merge (deferred scope, #995).
+  const table = page.locator(".tiptap table").first();
+  await expect(table).toBeVisible();
+  await expect(table.locator("tr")).toHaveCount(3);
+  await expect(table.locator("tr").first().locator("th")).toHaveCount(3);
+  await expect(table.locator("tr").nth(1).locator("td")).toHaveCount(3);
+
+  // Save, then re-open with force:true to reload strictly from the on-disk
+  // markdown (remark-gfm round-trip, already covered at the unit level by
+  // mdast-ydoc.test.ts) and confirm the table survives serialize -> reparse.
+  const saveResult = await mcp.callTool("tandem_save", {});
+  expect(saveResult.isError).toBeFalsy();
+  const savedPath = path.join(tmpDir, "sample.md");
+  const onDisk = fs.readFileSync(savedPath, "utf-8");
+  expect(onDisk).toMatch(/\|.*\|.*\|.*\|/);
+  expect(onDisk).toMatch(/\|\s*-+\s*\|\s*-+\s*\|\s*-+\s*\|/); // GFM header separator row
+
+  await mcp.callTool("tandem_open", { filePath: savedPath, force: true });
+  const reloadedTable = page.locator(".tiptap table").first();
+  await expect(reloadedTable).toBeVisible();
+  await expect(reloadedTable.locator("tr")).toHaveCount(3);
+});
+
+test("slash menu inserts a table in an ephemeral scratchpad (#995)", async ({ page }) => {
+  // Scratchpads have no on-disk file (upload://scratchpad/...), so this
+  // exercises table insertion on that path independent of the save/reload
+  // round-trip covered above.
+  await page.goto("/");
+  await page.waitForSelector(".tandem-editor", { timeout: 10_000 });
+  await page.evaluate(
+    (base) => fetch(`${base}/scratchpad`, { method: "POST" }).then((r) => r.json()),
+    API_BASE,
+  );
+  await expect(
+    page.locator("[data-testid^='tab-name-']", { hasText: "Scratchpad.md" }),
+  ).toBeVisible({ timeout: 5_000 });
+
+  const editor = page.locator(".tiptap");
+  await editor.click();
+  await page.keyboard.type("/table");
+  const menu = page.getByRole("listbox", { name: "Slash commands" });
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(menu).toBeHidden();
+
+  const table = editor.locator("table").first();
+  await expect(table).toBeVisible();
+  await expect(table.locator("tr")).toHaveCount(3);
+
+  // Clear scratchpad recovery data so this doesn't leak into other tests.
+  await page.evaluate(() => {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("tandem:scratchpad:")) localStorage.removeItem(key);
+    }
+  });
 });
 
 test("slash menu suppresses while annotation popup is open (D10)", async ({ page }) => {

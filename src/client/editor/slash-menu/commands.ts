@@ -9,7 +9,8 @@ export type SlashCommandId =
   | "task-list"
   | "quote"
   | "code-block"
-  | "horizontal-rule";
+  | "horizontal-rule"
+  | "table";
 
 // One SVG primitive inside an icon badge. `attrs` are applied verbatim via
 // setAttribute; the extension wraps these in a 16x16 stroke=currentColor svg.
@@ -46,6 +47,11 @@ type SlashCommandChain = ReturnType<TiptapEditor["chain"]> & {
   toggleBlockquote: () => SlashCommandChain;
   toggleCodeBlock: () => SlashCommandChain;
   setHorizontalRule: () => SlashCommandChain;
+  insertTable: (options: {
+    rows: number;
+    cols: number;
+    withHeaderRow: boolean;
+  }) => SlashCommandChain;
 };
 
 function chain(editor: TiptapEditor): SlashCommandChain {
@@ -178,6 +184,25 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
     hint: "hr",
     icon: { kind: "glyph", glyph: "—" },
     run: (editor) => chain(editor).setHorizontalRule().run(),
+  },
+  {
+    id: "table",
+    label: "Table",
+    keywords: ["table", "grid", "rows", "columns"],
+    hint: "3x3",
+    icon: {
+      kind: "svg",
+      els: [
+        { tag: "path", attrs: { d: "M2.5 3.5h11v9h-11z" } },
+        { tag: "path", attrs: { d: "M2.5 6.5h11M2.5 9.5h11M6.5 3.5v9M10.5 3.5v9" } },
+      ],
+    },
+    // Fixed 3x3 with a header row (#995 decided scope). `rows` is the TOTAL
+    // row count in Tiptap's Table extension, not "body rows added to a
+    // header" -- rows:3 + withHeaderRow:true yields 1 header + 2 body rows.
+    // Column alignment, row/column ops, header toggle, and cell merge are
+    // deliberately out of scope for this command.
+    run: (editor) => chain(editor).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
   },
 ];
 

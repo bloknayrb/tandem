@@ -1,6 +1,10 @@
 import { Editor } from "@tiptap/core";
+import Table from "@tiptap/extension-table";
+import TableCell from "@tiptap/extension-table-cell";
+import TableHeader from "@tiptap/extension-table-header";
+import TableRow from "@tiptap/extension-table-row";
 import StarterKit from "@tiptap/starter-kit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   filterSlashCommands,
   findSlashCommandMatch,
@@ -14,7 +18,14 @@ function makeEditor() {
   document.body.appendChild(container);
   const editor = new Editor({
     element: container,
-    extensions: [StarterKit.configure({ history: false }), SlashCommandExtension],
+    extensions: [
+      StarterKit.configure({ history: false }),
+      Table,
+      TableRow,
+      TableCell,
+      TableHeader,
+      SlashCommandExtension,
+    ],
     content: "",
   });
   return { editor, container };
@@ -42,6 +53,51 @@ describe("slash command filtering", () => {
   it("matches labels and aliases", () => {
     expect(filterSlashCommands("h2").map((command) => command.id)).toEqual(["heading-2"]);
     expect(filterSlashCommands("ordered").map((command) => command.id)).toEqual(["numbered-list"]);
+  });
+
+  it("finds the table command by label and keyword (#995)", () => {
+    expect(filterSlashCommands("table").map((command) => command.id)).toEqual(["table"]);
+    expect(filterSlashCommands("grid").map((command) => command.id)).toEqual(["table"]);
+  });
+});
+
+describe("table slash command (#995)", () => {
+  // Fixed 3x3 with header row -- alignment/row-col ops/header toggle/merge
+  // are deferred scope, not implemented here.
+  it("inserts a fixed 3x3 table with a header row via the chain", () => {
+    const insertTable = vi.fn().mockReturnThis();
+    const fakeChain = {
+      focus: vi.fn().mockReturnThis(),
+      insertTable,
+      run: vi.fn(),
+    };
+    const fakeEditor = { chain: () => fakeChain } as unknown as Editor;
+
+    const tableCommand = SLASH_COMMANDS.find((command) => command.id === "table");
+    expect(tableCommand).toBeDefined();
+    tableCommand?.run(fakeEditor);
+
+    expect(insertTable).toHaveBeenCalledWith({ rows: 3, cols: 3, withHeaderRow: true });
+    expect(fakeChain.run).toHaveBeenCalled();
+  });
+
+  it("inserts a real table node into the document", () => {
+    const { editor, container } = makeEditor();
+    try {
+      const tableCommand = SLASH_COMMANDS.find((command) => command.id === "table");
+      tableCommand?.run(editor);
+
+      let tableNode: { type: { name: string }; childCount: number } | null = null;
+      editor.state.doc.descendants((node) => {
+        if (node.type.name === "table") tableNode = node as typeof tableNode & object;
+      });
+      expect(tableNode).not.toBeNull();
+      // 1 header row + 2 body rows = 3 total rows.
+      expect((tableNode as unknown as { childCount: number }).childCount).toBe(3);
+    } finally {
+      editor.destroy();
+      container.remove();
+    }
   });
 });
 
