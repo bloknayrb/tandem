@@ -12,7 +12,13 @@ import { AI_CTA } from "../hooks/useAiReadiness.svelte";
 import type { ConnectionStatus } from "../hooks/yjsSync.svelte";
 import { createCoalescingTick } from "../utils/coalescing-tick";
 import { debounce } from "../utils/debounce";
-import { type AiIndicatorTone, type AiIndicatorView, aiIndicatorView } from "./status-ai-view";
+import CwdDriftPill from "./CwdDriftPill.svelte";
+import {
+  type AiIndicatorTone,
+  type AiIndicatorView,
+  aiIndicatorView,
+  type CwdDriftPill as CwdDriftPillView,
+} from "./status-ai-view";
 import { getCount, loadMode, modeLabel, nextMode, saveMode } from "./word-count-cycle";
 
 interface Props {
@@ -73,6 +79,23 @@ interface Props {
    * release; only the count is active-doc-local).
    */
   heldCount?: number;
+  /**
+   * #1282: the fully-resolved working-folder drift pill, or `null` for "say
+   * nothing". Every gate — the server's verdict, the user's suppression, and the
+   * stale-CTA check — is applied by the caller.
+   *
+   * The composed VIEW is passed rather than the raw drift because App needs the
+   * same answer for the one-time explainer, whose copy points at this pill.
+   * Computing it in both places is how the explainer's precondition drifted
+   * weaker than the pill's render condition in the first place.
+   */
+  cwdDriftView?: CwdDriftPillView | null;
+  /** Open the "restart Claude in this folder" flow (which confirms first). */
+  onRelaunchInFolder?: () => void;
+  /** Hide this (Claude's folder, target folder) pair for the session. */
+  onDismissDrift?: () => void;
+  /** Stop showing the drift nudge entirely, across restarts. */
+  onOptOutDrift?: () => void;
 }
 
 let {
@@ -95,6 +118,10 @@ let {
   lastSaveOk = false,
   editor,
   heldCount = 0,
+  cwdDriftView = null,
+  onRelaunchInFolder,
+  onDismissDrift,
+  onOptOutDrift,
 }: Props = $props();
 
 /**
@@ -214,6 +241,9 @@ const labelColor = $derived(
 // `$derived` so it recomputes as the reactive props flip connected→solo→down.
 const aiView = $derived(aiIndicatorView(aiState, aiLiveIndicator, soloMode, pushDelivery));
 
+// #1282. A sibling of the AI indicator rather than part of it — see
+// `cwdDriftPill` for why, and why it is composed by the caller rather than here.
+
 /**
  * The AI indicator's actionable content — title, aria-label, and onclick —
  * keyed together off `aiChip` as ONE lookup. Previously these were three
@@ -327,6 +357,8 @@ function cycleWordMode() {
      labelled already; it needs no landmark of its own. -->
 <div
   class="tandem-floating-pill tandem-status-pill"
+  data-status-focus-root
+  tabindex="-1"
   style="position: fixed; bottom: var(--tandem-space-3, 12px); left: var(--tandem-space-5, 22px); max-width: calc(100% - var(--tandem-space-7, 44px)); display: inline-flex; align-items: center; padding: 6px var(--tandem-space-3); font-family: var(--tandem-font-mono); font-size: var(--tandem-text-xs); color: var(--tandem-fg-muted); user-select: none; gap: var(--tandem-space-3); z-index: var(--tandem-z-sticky); overflow: hidden;"
 >
   <!-- Left: document/sync fields, faint until the pill is hovered/focused.
@@ -443,6 +475,17 @@ function cycleWordMode() {
       </div>
     {/if}
   {/if}
+  <!-- #1282 working-folder drift. Deliberately NOT nested inside `{#if aiView}`:
+       `aiIndicatorView` returns null for "launcher running, no MCP session yet",
+       which is exactly the auto-launched startup window this nudge exists for. -->
+  {#if cwdDriftView}
+    <CwdDriftPill
+      pill={cwdDriftView}
+      onRelaunch={() => onRelaunchInFolder?.()}
+      onDismiss={() => onDismissDrift?.()}
+      onOptOut={() => onOptOutDrift?.()}
+    />
+  {/if}
   <!-- #651 "Claude is {verb}…" pill. Gated on a live session (`aiView.canAnimate`)
        as well as an in-flight tool so it can never render "working" while the
        connection indicator shows nothing (an incoherent activity-without-
@@ -534,6 +577,17 @@ function cycleWordMode() {
     background: var(--tandem-warning-bg);
     border-radius: var(--tandem-r-pill);
     border: 1px solid var(--tandem-warning-border);
+  }
+
+  /* Forced-colors drops the amber fill AND the amber border (both resolve to
+     system colors), leaving "Review Only" and "N held" indistinguishable from
+     ordinary status text — they read as pills only by virtue of color. A
+     system-color border restores the boundary. Pre-existing gap, fixed here
+     because `CwdDriftPill` carries the same recipe and needed the same rule. */
+  @media (forced-colors: active) {
+    .status-warning-pill {
+      border: 1px solid CanvasText;
+    }
   }
 
   /* A9 (#798): reduced-motion guard for the connection + claude-presence dots

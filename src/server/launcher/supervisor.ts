@@ -25,6 +25,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -373,12 +374,7 @@ export function sessionCwdMatches(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   if (savedCwd === undefined) return true;
-  // Both sides are realpath'd, but Node's JS `realpathSync` does not
-  // case-normalize on Windows — so this fold is load-bearing, not dead code.
-  if (platform === "win32") {
-    return savedCwd.toLowerCase() === plannedCwd.toLowerCase();
-  }
-  return savedCwd === plannedCwd;
+  return samePath(savedCwd, plannedCwd, platform);
 }
 
 /**
@@ -1451,23 +1447,79 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
  * canonical directory on disk. HTTP-driven mutations must use
  * `resolveRouteCwd()` below, which additionally home-confines. */
 export function resolveSafeCwd(candidate: string): string | null {
-  if (typeof candidate !== "string" || !path.isAbsolute(candidate)) return null;
-  if (process.platform === "win32") {
-    if (candidate.startsWith("\\\\?\\") || candidate.startsWith("\\\\.\\")) return null;
-    if (candidate.startsWith("\\\\")) return null; // UNC
-  }
+  if (rejectedSyntactically(candidate)) return null;
   try {
     // This function IS the path validator: it canonicalizes via realpath,
     // rejects non-directories, and returns null on any failure. Callers
     // either gate the result further (resolveRouteCwd home-confines) or
     // accept advanced users' explicit integrations.json scope.
-    const real = fs.realpathSync(candidate); // lgtm[js/path-injection]
-    const stat = fs.statSync(real); // lgtm[js/path-injection]
+    //
+    // CodeQL flags these two lines as js/path-injection and is right that the
+    // taint reaches them — the confinement runs after, in resolveRouteCwd, not
+    // before. It is accepted, per alert #82 and the async twin's #162: realpath
+    // + stat + isDirectory on a syntactically pre-screened path is an existence
+    // check, not a read or a write, and the routes that reach here are loopback-
+    // and origin-gated. These lines carried `// lgtm[js/path-injection]` for a
+    // while; that syntax is LGTM's, code scanning does not honour it, and the
+    // alerts fired anyway. A comment that looks like a suppression and is not is
+    // worse than none, so it is gone — the record lives in the dismissals.
+    const real = fs.realpathSync(candidate);
+    const stat = fs.statSync(real);
     if (!stat.isDirectory()) return null;
     return real;
   } catch {
     return null;
   }
+}
+
+/**
+ * Async twin of `resolveSafeCwd`, for callers on a hot path.
+ *
+ * `resolveSafeCwd` is `realpathSync` + `statSync`. That is fine for the
+ * spawn path (once per launch) and wrong for anything driven by tab switching:
+ * a document on a disconnected mapped drive blocks the whole event loop for the
+ * SMB timeout. UNC is rejected syntactically before any I/O, but a mapped drive
+ * letter looks entirely ordinary.
+ *
+ * The two are held equivalent by sharing BOTH pure halves — `rejectedSyntactically`
+ * here and `homeConfines` in `resolveRouteCwd` — so only the fs mechanics differ,
+ * plus an equivalence test that runs one case table through both. Two resolvers
+ * that could disagree about which paths are acceptable is the split-predicate
+ * bug this whole area already shipped once.
+ */
+export async function resolveSafeCwdAsync(candidate: string): Promise<string | null> {
+  if (rejectedSyntactically(candidate)) return null;
+  try {
+    const real = await fsp.realpath(candidate);
+    const stat = await fsp.stat(real);
+    if (!stat.isDirectory()) return null;
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+/** Pure, I/O-free rejections shared by both resolvers: non-strings, relative
+ * paths, Windows UNC (`\\server\share`) and the `\\?\` / `\\.\` device
+ * namespaces. Checked before any fs call so a hostile path never reaches the
+ * filesystem. */
+function rejectedSyntactically(candidate: string): boolean {
+  if (typeof candidate !== "string" || !path.isAbsolute(candidate)) return true;
+  if (process.platform === "win32") {
+    if (candidate.startsWith("\\\\?\\") || candidate.startsWith("\\\\.\\")) return true;
+    if (candidate.startsWith("\\\\")) return true; // UNC
+  }
+  return false;
+}
+
+/** Is `candidate` (already canonical) inside `homeReal`, or home itself?
+ * Pure — shared by the sync and async home-confining resolvers. */
+function homeConfines(homeReal: string, candidate: string): boolean {
+  const rel = path.relative(homeReal, candidate);
+  // Outside home (`rel` starts with `..`), or a different drive on Windows
+  // (`rel` is absolute), or the empty string (home itself — allowed).
+  if (rel === "") return true;
+  return !(rel.startsWith("..") || path.isAbsolute(rel));
 }
 
 /** HTTP-surface variant of `resolveSafeCwd`. Adds: the canonical path must
@@ -1495,10 +1547,39 @@ export function resolveRouteCwd(
   } catch {
     return null;
   }
-  const rel = path.relative(homeReal, safe);
-  // Outside home (`rel` starts with `..`), or a different drive on Windows
-  // (`rel` is absolute), or the empty string (home itself — allowed).
-  if (rel === "") return safe;
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
-  return safe;
+  return homeConfines(homeReal, safe) ? safe : null;
+}
+
+/** Async twin of `resolveRouteCwd` — see `resolveSafeCwdAsync` for why the
+ * async pair exists and how the two are kept from diverging. */
+export async function resolveRouteCwdAsync(
+  candidate: string,
+  opts: { homeOverride?: string } = {},
+): Promise<string | null> {
+  const safe = await resolveSafeCwdAsync(candidate);
+  if (safe === null) return null;
+  let homeReal: string;
+  try {
+    homeReal = await fsp.realpath(opts.homeOverride ?? os.homedir());
+  } catch {
+    return null;
+  }
+  return homeConfines(homeReal, safe) ? safe : null;
+}
+
+/**
+ * Do two canonical paths name the same directory?
+ *
+ * Extracted from `sessionCwdMatches` so the case-fold rule has exactly one
+ * home. Node's JS `realpathSync` does not case-normalize on Windows, so two
+ * realpath'd strings for one directory can still differ by case — the fold is
+ * load-bearing, not defensive. `platform` is injectable for the same reason it
+ * is on `sessionCwdMatches`: CI runs ubuntu-only.
+ */
+export function samePath(
+  a: string,
+  b: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }

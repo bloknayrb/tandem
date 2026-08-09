@@ -92,3 +92,8 @@ export const API_LAUNCHER_START_FRESH = "/api/launcher/start-fresh";
  * Distinct from `start-fresh`, which restarts an *existing* supervisor. */
 export const API_LAUNCHER_START = "/api/launcher/start";
 export const API_LAUNCHER_WORKING_DIRECTORY = "/api/launcher/working-directory";
+/** Read-only "would relaunching here move Claude?" preview (#1282). POST
+ * because it carries a path in the body, not because it mutates — it does not,
+ * which is also why it takes no nonce. Loopback-only: the answer reconstructs
+ * the launcher `cwd` that `GET /api/launcher/status` withholds off-loopback. */
+export const API_LAUNCHER_CWD_PREVIEW = "/api/launcher/cwd-preview";

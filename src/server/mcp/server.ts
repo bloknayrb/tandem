@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
@@ -104,6 +104,64 @@ export function findRepoFile(startDir: string, relPath: string): string | undefi
 export function findChangelogPath(startDir: string): string | undefined {
   return findRepoFile(startDir, "CHANGELOG.md");
 }
+/**
+ * Directories holding Tandem's own auto-opened documents, for the #1282 drift
+ * preview's exclusion list. Canonicalized, because the candidate it is compared
+ * against always is — an un-realpath'd entry silently fails to match wherever
+ * the install path involves a junction or a Windows 8.3 short name.
+ *
+ * Warns when it resolves to nothing. Three `undefined`-tolerant seams sit
+ * between `findRepoFile` and the consumer (`string | undefined` constants, an
+ * optional dep, a `?? []` default), and the failure they would let through is
+ * user-visible and specific: `welcome.md` opens on first run and `CHANGELOG.md`
+ * after every upgrade, both from inside the app bundle, which on Windows lives
+ * under `%LOCALAPPDATA%` — i.e. inside home, passing every other check. So a
+ * silently empty list means every desktop user's first run opens with a
+ * suggestion to move Claude into Tandem's install directory.
+ *
+ * **Two sample directories, not one, and the second is the one that matters.**
+ * `WELCOME_PATH` comes from `findRepoFile(__dirname, …)`, which lands in the
+ * *resource* dir. But `index.ts` opens `path.join(process.env.TANDEM_DATA_DIR ||
+ * projectRoot, "sample/welcome.md")`, and the Tauri shell always sets
+ * `TANDEM_DATA_DIR` to the app-data dir and copies `sample/*` into it. So on a
+ * packaged desktop first run the document actually open is the app-data copy,
+ * in a directory this list did not contain — and that path is inside home on all
+ * three platforms (`%APPDATA%`, `~/Library/Application Support`, `~/.local/share`),
+ * so it passes the home-confinement check, differs from the launcher's default
+ * `$HOME`, and misses the exact-match exclusion. The result was the amber pill on
+ * every desktop first run, offering to permanently repoint the launcher at
+ * Tandem's own sample folder — the precise failure this exclusion exists to stop.
+ *
+ * Invisible in dev and in every test: `TANDEM_DATA_DIR` is unset there, which
+ * collapses the two directories into one. Derive the app-data sample dir the same
+ * way `index.ts` does rather than restating the join, so the two cannot drift
+ * apart again.
+ */
+export function resolveBundledDocDirs(): string[] {
+  const dataDir = process.env.TANDEM_DATA_DIR?.trim();
+  const appDataSample = dataDir ? join(dataDir, "sample") : undefined;
+  const dirs = [
+    CHANGELOG_PATH === undefined ? undefined : dirname(CHANGELOG_PATH),
+    WELCOME_PATH === undefined ? undefined : dirname(WELCOME_PATH),
+    appDataSample,
+  ]
+    .filter((p): p is string => p !== undefined)
+    .map((dir) => {
+      try {
+        return realpathSync(dir);
+      } catch {
+        return dir;
+      }
+    });
+  if (dirs.length === 0) {
+    console.error(
+      "[Tandem] Could not locate CHANGELOG.md or sample/welcome.md — the working-folder " +
+        "nudge may suggest restarting Claude inside Tandem's own install directory.",
+    );
+  }
+  return dirs;
+}
+
 const CHANGELOG_PATH: string | undefined = findRepoFile(__dirname, "CHANGELOG.md");
 const WORKFLOWS_PATH: string | undefined = findRepoFile(__dirname, "docs/workflows.md");
 // Exposed via /api/info so the "Replay tutorial" affordance can reopen the
@@ -588,6 +646,14 @@ export async function startMcpServerHttp(
       startSupervisor: launcher.startSupervisor,
       store: createIntegrationsStore(resolveAppDataDir()),
       getSkillRefreshError,
+      // Tandem's own auto-opened documents. `welcome.md` opens on first run and
+      // `CHANGELOG.md` after every upgrade, both from inside the app bundle —
+      // which on Windows sits under `%LOCALAPPDATA%`, i.e. INSIDE the user's
+      // home directory, and therefore passes every validity check the drift
+      // preview applies. Without this list the two states every desktop user
+      // passes through would each open with a suggestion to move Claude into
+      // Tandem's install directory.
+      bundledDocDirs: resolveBundledDocDirs(),
     });
   }
 
