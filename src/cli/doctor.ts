@@ -620,12 +620,15 @@ function checkMcpJson(r: Recorder): void {
   // Check tandem-channel entry
   const channel = servers["tandem-channel"];
   if (!channel) {
-    r.warn(
-      // No cross-reference to "the push-path line below": `evaluatePushPath`
-      // runs only from `checkHealth`, which `runDoctor` reaches only when :3479
-      // is up and answering — and someone debugging a dead push path is often
-      // running doctor with Tandem stopped, where that line never prints.
-      ".mcp.json has no tandem-channel entry — push here depends on the plugin monitor instead",
+    // A PASS since Track E, not a warning: the shim is opt-in, so its absence
+    // is now the default rather than a defect, and there are two push paths
+    // that do not involve it. No cross-reference to "the push-path line below"
+    // either — `evaluatePushPath` runs only from `checkHealth`, which
+    // `runDoctor` reaches only when :3479 is up and answering, and someone
+    // debugging a dead push path is often running doctor with Tandem stopped.
+    r.pass(
+      ".mcp.json has no tandem-channel entry (opt-in since v0.21.0) — push here comes " +
+        "from the plugin monitor or a self-armed watch instead",
     );
   } else {
     const cmd = channel.command;
@@ -695,11 +698,14 @@ function checkUserMcpConfig(r: Recorder): void {
     r.pass("tandem registered in ~/.claude.json");
   }
   if (!servers["tandem-channel"]) {
-    r.warn(
-      // See the sibling note in `checkMcpJson`: the push-path line is gated on
-      // a running server, so it cannot be cited unconditionally.
-      "tandem-channel not registered in ~/.claude.json — push depends on the plugin monitor instead",
-      "Run: tandem setup --apply",
+    // See the sibling note in `checkMcpJson`: a PASS since Track E made the
+    // shim opt-in, and deliberately no `fix` — `tandem setup --apply` no
+    // longer writes this entry, so the old remedy would have sent the reader
+    // round a loop that changes nothing.
+    r.pass(
+      "tandem-channel not registered in ~/.claude.json (opt-in since v0.21.0) — push comes " +
+        "from the plugin monitor or a self-armed watch instead; add it with " +
+        "`tandem setup --apply --with-channel-shim` if you want it",
     );
   } else {
     // Registration is NECESSARY but not SUFFICIENT, and saying otherwise is
@@ -1280,13 +1286,17 @@ export function evaluatePushPath(push: unknown): EvalOutcome | null {
         "or send a chat message, and only sees them when it polls its inbox",
       fix:
         "This affects sessions you start yourself; sessions Tandem launches are " +
-        "woken directly and do not use this path. Either install the Tandem plugin, " +
-        "which registers a monitor needing no flag (`claude plugin list` to check) — " +
-        "start `claude` from a terminal if you do, since the monitor inherits that " +
-        "shell's PATH and cannot find Node without it — or start Claude Code with " +
-        "`--dangerously-load-development-channels server:tandem-channel`. Use one or " +
-        "the other, not both — each delivers independently, so running both means " +
-        "every event arrives twice.",
+        "woken directly and do not use this path. Simplest first: ask Claude to watch " +
+        "for updates — it can arm a watch on Tandem's wake stream itself, with nothing " +
+        "to install and no flag (the bundled skill tells it how; `tandem_status` reports " +
+        "the address). Otherwise install the Tandem plugin, which registers a monitor " +
+        "needing no flag (`claude plugin list` to check) — start `claude` from a terminal " +
+        "if you do, since the monitor inherits that shell's PATH and cannot find Node " +
+        "without it — or register the channel shim with " +
+        "`tandem setup --apply --with-channel-shim` and start Claude Code with " +
+        "`--dangerously-load-development-channels server:tandem-channel`. Use ONE of the " +
+        "three, not several — each delivers independently, so running two means every " +
+        "event arrives twice.",
       data,
     };
   }

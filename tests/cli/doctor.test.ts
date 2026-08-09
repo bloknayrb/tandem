@@ -1270,14 +1270,21 @@ describe("evaluatePushPath", () => {
     }
   });
 
-  it("warns when nothing is attached, and names both remedies", () => {
+  it("warns when nothing is attached, and names all three remedies", () => {
     const out = evaluatePushPath({ subscribers: 0, eventCount: 0, lastEventAt: null });
     expect(out?.status).toBe("warn");
     expect(out?.message).toMatch(/not notified/i);
-    // Both transports, because `subscribers: 0` cannot say which one is missing.
-    expect(out?.fix).toMatch(/dangerously-load-development-channels/);
+    // All three transports, because `subscribers: 0` cannot say which one is
+    // missing. The self-armed watch leads: it is the only one of the three that
+    // needs neither an install nor a flag (ADR-049).
+    expect(out?.fix).toMatch(/arm a watch/i);
     expect(out?.fix).toMatch(/plugin/i);
-    expect(out?.fix).toMatch(/not both/i);
+    expect(out?.fix).toMatch(/dangerously-load-development-channels/);
+    // The shim is opt-in since Track E, so the remedy must say how to register
+    // it — naming only the launch flag would send the reader to a flag with no
+    // server entry behind it.
+    expect(out?.fix).toMatch(/--with-channel-shim/);
+    expect(out?.fix).toMatch(/not several/i);
     expect(out?.data).toMatchObject({ subscribers: 0, eventCount: 0 });
   });
 
