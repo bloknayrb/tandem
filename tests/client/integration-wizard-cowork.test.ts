@@ -235,12 +235,55 @@ describe("integration wizard — Cowork sub-view gating", () => {
     // The user starts a Cowork session, then retries.
     preflightSubnet.mockResolvedValue({ status: "ok", cidr: "172.20.0.0/20" });
     (q(container, "integration-wizard-cowork-preflight-retry-btn") as HTMLButtonElement).click();
+    // Four ticks, not two: the blocked banner now survives until the re-probe
+    // SETTLES rather than vanishing synchronously on click (see the test below
+    // for why). Two ticks lands mid-probe, where the banner is still correctly
+    // on screen.
+    await tick();
+    await tick();
     await tick();
     await tick();
 
     expect(preflightSubnet).toHaveBeenCalledTimes(2);
     expect(q(container, "integration-wizard-cowork-preflight-blocked")).toBeNull();
     expect(q(container, "cowork-enable-confirm-btn")).toBeTruthy();
+  });
+
+  it("keeps the retry button in place while it re-probes, rather than swapping in Enable", async () => {
+    // The defect: `run()` used to clear `preflight` synchronously, and every
+    // surface gates its retry button on `blocked`. So clicking "Check again"
+    // unmounted the button under the pointer and mounted Enable in its place —
+    // destroying focus mid-interaction, and making the second click of a
+    // double-click fire the real enable (UAC prompt, firewall write) on a
+    // machine the probe had just said could not work.
+    //
+    // The existing "re-probes on Check again" test awaits two ticks and can
+    // only see the settled state, so it passes either way. This one holds the
+    // probe open and looks at the frame in between.
+    preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    await openCoworkSubView(container);
+
+    // `mockImplementationOnce`, not a bare pending promise on the shared mock:
+    // `beforeEach` uses `mockClear`, which does NOT clear implementations, so a
+    // hanging default would wedge every later test in this file.
+    preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
+    const retryBtn = q(container, "integration-wizard-cowork-preflight-retry-btn");
+    (retryBtn as HTMLButtonElement).click();
+    await tick();
+    await tick();
+
+    const stillThere = q(container, "integration-wizard-cowork-preflight-retry-btn");
+    expect(stillThere, "the retry button unmounted mid-probe").toBeTruthy();
+    expect(stillThere).toBe(retryBtn); // same node — focus survives
+    expect(stillThere?.textContent?.trim()).toBe("Checking…");
+    expect(
+      q(container, "cowork-enable-confirm-btn"),
+      "Enable must not take the retry button's slot mid-probe",
+    ).toBeNull();
   });
 
   it("leaves Enable available when the probe itself cannot run", async () => {

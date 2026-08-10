@@ -207,6 +207,19 @@ describe("firewallErrorHint", () => {
     for (const h of hints) expect(h.length).toBeGreaterThan(0);
   });
 
+  it("falls back rather than rendering an empty banner for a blank reason", () => {
+    // `??` passed `""` straight through, because the left operand short-circuits
+    // to `""` rather than to `undefined`. That reached the UI as
+    // `{status:"blocked", hint:""}` — an empty warning box AND a removed Enable
+    // button, the worst of both. `||` is what closes it. The existing coverage
+    // tests `undefined` and an unrecognised name, neither of which catches this.
+    const fallback = firewallErrorHint({ kind: "subnetDetectionFailed" });
+    expect(
+      firewallErrorHint({ kind: "subnetDetectionFailed", reason: "" as SubnetDetectionReason }),
+    ).toBe(fallback);
+    expect(fallback.length).toBeGreaterThan(40);
+  });
+
   it("no subnet-detection hint blames the Cowork install", () => {
     // The defect: this sentence rendered inside a dialog whose own title, two
     // lines above, read "Claude Desktop Cowork detected".

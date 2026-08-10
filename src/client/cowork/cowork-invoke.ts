@@ -24,6 +24,13 @@ export type InvokeFn = <T = unknown>(cmd: string, args?: Record<string, unknown>
  */
 export const TAURI_NOT_AVAILABLE = "Tauri runtime not available";
 
+/**
+ * Mirrors `WINDOWS_ONLY_ERR` in `src-tauri/src/lib.rs`. Used only to keep an
+ * expected rejection out of `console.error` — a drift here costs a noisy log
+ * line, never behaviour, so it is deliberately not pinned by a test.
+ */
+export const COWORK_WINDOWS_ONLY = "Cowork integration is Windows-only";
+
 export async function loadInvoke(): Promise<InvokeFn> {
   try {
     const mod = await import("@tauri-apps/api/core");
@@ -64,8 +71,8 @@ export function coworkRetryAdminElevation(invoke: InvokeFn): Promise<{ ok: true 
  * The command has existed since Cowork shipped but had no caller, so the UI
  * offered an Enable button it could have known would fail: `cowork_toggle_
  * integration` runs this same detection as its second step, and a failure there
- * surfaced as a blanket "is Cowork set up on this machine?" — under a dialog
- * titled "Claude Desktop Cowork detected".
+ * surfaced as a blanket "is Cowork set up on this machine?" — in one case under
+ * a dialog literally titled "Claude Desktop Cowork detected".
  *
  * Advisory only. It does not replace the check inside the enable path, which
  * still runs and is still what fails closed; the VM can stop between the two.
@@ -103,7 +110,26 @@ export async function coworkPreflightSubnet(invoke: InvokeFn): Promise<SubnetPre
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err);
     const variant = parseFirewallErrorVariant(rawMsg);
-    if (!variant) return { status: "unknown" };
+    if (!variant) {
+      // `unknown` is deliberately never rendered, so an unparseable failure is
+      // invisible to the user by design — but it is also how an unregistered
+      // command or a serde downgrade on the Rust side would present, and those
+      // are bugs. Log everything except the two expected cases so a real fault
+      // is diagnosable from a pasted console rather than indistinguishable
+      // from "we couldn't tell".
+      //
+      // Safe to log verbatim: this command's errors are payload-free on the
+      // wire (`SubnetDetectionFailed { reason }` / `AdapterEnumerationFailed`),
+      // and the variants carrying stderr tails are unreachable from it. Do not
+      // widen that — an io::Error from a failed spawn names the resolved
+      // executable path.
+      if (rawMsg === TAURI_NOT_AVAILABLE || rawMsg.includes(COWORK_WINDOWS_ONLY)) {
+        console.debug("[cowork] subnet pre-flight unavailable:", rawMsg);
+      } else {
+        console.error("[cowork] subnet pre-flight could not be classified:", rawMsg);
+      }
+      return { status: "unknown" };
+    }
     return { status: "blocked", hint: firewallErrorHint(variant) };
   }
 }

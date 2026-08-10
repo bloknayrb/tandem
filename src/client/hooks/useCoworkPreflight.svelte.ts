@@ -38,27 +38,38 @@ export function createSubnetPreflight(): SubnetPreflightState {
 
   /**
    * Monotonic ticket. A user can open the confirm, dismiss it, and reopen
-   * faster than PowerShell answers; only the newest probe may write. It
-   * matters most in Settings, which stays mounted after enabling, so a late
-   * write there is user-visible rather than landing on a screen already gone.
+   * faster than PowerShell answers; only the newest probe may write.
    */
   let token = 0;
 
   const run = async (): Promise<void> => {
     const mine = ++token;
-    // Synchronous prologue: this lands before Svelte's first flush, so a
-    // reopened banner never paints a frame of the previous result.
+    // `preflight` is deliberately NOT cleared here, and `reset()` is the sole
+    // owner of clearing it. Nulling it would land before Svelte's first flush,
+    // and every surface gates its retry button on `preflight.status ===
+    // "blocked"` — so a re-probe would unmount the very button the user just
+    // clicked and mount Enable in its place. That is not cosmetic: the second
+    // click of a double-click would land on Enable, firing a UAC prompt and a
+    // firewall write nobody asked for, and the focused element would be
+    // destroyed mid-interaction. Holding the previous result keeps the button
+    // mounted so it can say "Checking…" instead.
+    //
+    // The cost is that every path which closes a surface MUST call `reset()`,
+    // or a stale hint paints on reopen. All three do; the tests pin it.
     probing = true;
-    preflight = null;
     try {
       const invoke = await loadInvoke();
       const result = await coworkPreflightSubnet(invoke);
       if (mine !== token) return;
       preflight = result;
-    } catch {
+    } catch (err) {
       if (mine !== token) return;
-      // The bridge itself didn't load. That says nothing about whether
-      // enabling would work, so fall through to the unguarded button.
+      // Reaching here means the bridge didn't load, or `coworkPreflightSubnet`
+      // threw rather than resolving — several distinct causes that all say
+      // nothing about whether enabling would work, so fall through to the
+      // unguarded button. Log it: `unknown` is never rendered, so without this
+      // a genuine client fault is invisible on both sides of the bridge.
+      console.error("[cowork] subnet pre-flight threw:", err);
       preflight = { status: "unknown" };
     } finally {
       if (mine === token) probing = false;

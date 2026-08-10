@@ -56,15 +56,21 @@ export function undetectedDetail(status: CoworkStatus): UndetectedDetail {
  * Recovery copy per subnet-detection reason (#1298).
  *
  * A `Record` over the union rather than a `switch`: it is exhaustive at compile
- * time, so a rename on the Rust side is a type error in exactly one place —
- * the property `workspaceFileStatusLabel` gets from having no `default` arm.
- * `firewallErrorHint` still needs a runtime fallback (the field is optional for
- * stale sidecars), and a `switch` cannot be both.
+ * time, so a change to the TypeScript union is a type error in exactly one
+ * place — the property `workspaceFileStatusLabel` gets from having no `default`
+ * arm. `firewallErrorHint` still needs a runtime fallback (the field is
+ * optional for stale sidecars), and a `switch` cannot be both.
+ *
+ * It does NOT catch a rename on the Rust side. `SubnetDetectionReason` in
+ * `src/client/types.ts` is hand-maintained against `src-tauri/src/firewall.rs`,
+ * so a Rust-side rename produces zero TypeScript errors and degrades silently
+ * to the fallback hint — which is why the fallback has to stay honest, and why
+ * `tests/build/subnet-reason-alignment.test.ts` pins the two lists together.
  *
  * None of these may say "is Cowork set up on this machine?" — the workspace
- * scan has already succeeded before this code can run, and the dialog rendering
- * this text is titled "Claude Desktop Cowork detected". That sentence was the
- * defect.
+ * scan has already succeeded before any of the three surfaces can reach this
+ * code, and one of them (`CoworkOnboardingStep`) is literally titled "Claude
+ * Desktop Cowork detected". That sentence was the defect.
  */
 const SUBNET_REASON_HINT: Record<SubnetDetectionReason, string> = {
   // Deliberately says what Tandem observed, not what is true of the machine.
@@ -96,11 +102,15 @@ export function firewallErrorHint(variant: FirewallErrorVariant): string {
         variant.stderrTail,
       )}`;
     case "subnetDetectionFailed":
-      // `?? ` covers both an absent `reason` (older sidecar) and one this build
-      // doesn't recognise. The fallback still names the subnet, because that is
-      // the one thing every case has in common.
+      // `||`, not `??`: the left operand is `""` when `reason` is an empty
+      // string, and `??` passes that straight through — rendering an empty
+      // warning box while still removing the Enable button. `||` also covers
+      // an absent `reason` (older sidecar) and one this build doesn't
+      // recognise, and no entry in the table is falsy, so nothing valid is
+      // lost. The fallback still names the subnet, because that is the one
+      // thing every case has in common.
       return (
-        (variant.reason && SUBNET_REASON_HINT[variant.reason]) ??
+        (variant.reason && SUBNET_REASON_HINT[variant.reason]) ||
         "Tandem couldn't work out the Hyper-V subnet Cowork is using, so it didn't change the firewall. Start a Cowork session and try again."
       );
     case "adapterEnumerationFailed":

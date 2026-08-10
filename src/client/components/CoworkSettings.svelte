@@ -61,10 +61,6 @@ let busy = $state(false);
 // #1298: probe the Hyper-V subnet before offering Enable, so a detection
 // failure says what is wrong instead of blaming the Cowork install. See
 // CoworkOnboardingStep for why this runs on confirm rather than on mount.
-//
-// The hook's staleness guard matters more here than it does there: this
-// component stays mounted after enabling, so a late probe write is
-// user-visible rather than a no-op on a component the user has left.
 const probe = createSubnetPreflight();
 
 function openEnableConfirm(): void {
@@ -245,7 +241,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
         {#if probe.preflight?.status === "blocked"}
           <!-- #1298: we already watched detection fail, so offer a retry rather
                than an Enable button whose outcome we know. -->
-          <div class="cs-confirm-body" data-testid="cowork-preflight-blocked" role="status">
+          <div class="cs-preflight" data-testid="cowork-preflight-blocked" role="status">
             {probe.preflight.hint}
           </div>
         {/if}
@@ -419,6 +415,18 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
     margin-bottom: 4px;
   }
   .cs-confirm-body {
+    margin-bottom: 8px;
+  }
+  /* The detection failure has to read as a distinct thing, not as a third
+     paragraph of the confirm blurb. It already inherits the warning tokens from
+     `.cs-warning-banner`, so a border is what separates it — matching
+     `.cos-preflight` in CoworkOnboardingStep, which renders the same hint. */
+  .cs-preflight {
+    font-size: 12px;
+    line-height: 1.5;
+    border: 1px solid var(--tandem-warning-border);
+    border-radius: var(--tandem-r-2);
+    padding: 6px 8px;
     margin-bottom: 8px;
   }
   .cs-link {

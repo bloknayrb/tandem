@@ -193,10 +193,10 @@ function openCoworkView(): void {
 
 /** Leave the sub-view, abandoning any probe still in flight.
  *
- *  Nothing stale can render either way — every reader of the probe sits inside
- *  `{#if view === "cowork"}`, and re-entry nulls the result synchronously
- *  before the next flush. This exists so a probe that never returns doesn't
- *  leave `probing` latched true behind the user's back. */
+ *  Load-bearing, not hygiene: `run()` deliberately does NOT clear `preflight`
+ *  (clearing it would unmount the retry button mid-re-probe), so `reset()` is
+ *  the only thing that does. Every exit from the sub-view must come through
+ *  here or a stale hint paints on re-entry. */
 function leaveCoworkView(): void {
   coworkProbe.reset();
   view = "main";
@@ -214,7 +214,7 @@ async function enableCowork(): Promise<void> {
     const invoke: InvokeFn = await loadInvoke();
     await coworkToggleIntegration(invoke, true);
     await coworkStatus.refetch();
-    view = "main";
+    leaveCoworkView();
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
     coworkError = formatCoworkError(raw);

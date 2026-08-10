@@ -22,14 +22,21 @@ let error = $state<string | null>(null);
 // we can say what is actually wrong instead of offering a button that cannot
 // work.
 //
-// On confirm rather than on mount: a mount-time probe spawns PowerShell for
-// every Windows user on first launch, including everyone who will hit Skip, and
-// its answer can go stale before the click it exists to inform.
+// On confirm rather than on mount: the step mounts for every user with Cowork
+// detected-but-off, including everyone who will hit Skip, and a mount-time
+// answer can go stale before the click it exists to inform.
 const probe = createSubnetPreflight();
 
 function openConfirm(): void {
   confirming = true;
   void probe.run();
+}
+
+/** Leave the confirm, abandoning any probe still in flight. `reset()` is the
+ *  only thing that clears `preflight`, so every exit must come through here. */
+function closeConfirm(): void {
+  confirming = false;
+  probe.reset();
 }
 
 async function withInvoke(
@@ -56,7 +63,13 @@ async function handleEnable(): Promise<void> {
   const ok = await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, true);
   }, "Failed to enable Cowork");
-  if (ok) onAdvance();
+  if (ok) {
+    // `run()` no longer clears `preflight`, so every path that leaves the
+    // confirm owns the reset. Advancing is one of them: the step can be
+    // returned to, and a stale hint would be waiting on arrival.
+    closeConfirm();
+    onAdvance();
+  }
 }
 
 function handleSkip(): void {
@@ -122,7 +135,7 @@ function handleSkip(): void {
           data-testid="cowork-onboarding-enable-cancel-btn"
           class="cos-btn cos-btn--ghost"
           type="button"
-          onclick={() => { confirming = false; probe.reset(); }}
+          onclick={closeConfirm}
           disabled={busy}
         >
           Cancel

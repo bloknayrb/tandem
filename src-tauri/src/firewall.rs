@@ -108,7 +108,7 @@ impl fmt::Display for FirewallError {
                 ),
                 SubnetDetectionReason::PrefixTooBroad => write!(
                     f,
-                    "Detected Hyper-V vEthernet subnet is wider than /20 — refused (invariant §5)"
+                    "Detected Hyper-V vEthernet subnet is wider than /20 — refused"
                 ),
                 SubnetDetectionReason::QueryFailed => write!(
                     f,
@@ -139,23 +139,26 @@ const RULE_NAME_PREFIX: &str = "Tandem Cowork";
 
 /// Detect the Hyper-V vEthernet IPv4 CIDR for the Cowork VM subnet.
 ///
-/// Queries Hyper-V virtual adapters via PowerShell:
-///   `Get-NetAdapter | Where InterfaceDescription -like "*Hyper-V Virtual Ethernet*" |
-///    Get-NetIPAddress -AddressFamily IPv4 | Select IPAddress, PrefixLength`
+/// Queries Hyper-V virtual adapters via PowerShell. The script emits a
+/// `TANDEM_ADAPTERS <n>` marker line first — the adapter count, whether or not
+/// any of them yields an address — followed by one `<ip>/<prefix>` line per
+/// adapter that has an IPv4 address. The marker is what separates "no adapter"
+/// from "adapter with no address"; `classify_subnet_output` reads both.
 ///
 /// # Security invariants
 /// - Rejects any result where prefix length < 20 (too permissive).
-/// - Returns `SubnetDetectionFailed` on zero Hyper-V adapter matches.
+/// - Returns `SubnetDetectionFailed { reason: NoAdapter }` on zero Hyper-V
+///   adapter matches.
 /// - Never falls back to a hardcoded CIDR like `172.16.0.0/12`.
 ///
 /// # Returns
 /// The detected CIDR string (e.g. `"172.20.0.0/20"`) on success.
 pub fn detect_vethernet_subnet() -> Result<String, FirewallError> {
-    // `@(...)` is load-bearing, not style: a zero-match pipeline yields `$null`,
-    // and `$null.Count` is not reliably 0 across PowerShell versions/editions.
-    // Zero matches is exactly the NoAdapter case — the classification this whole
-    // marker exists to make possible — so the array wrapper is what makes the
-    // count trustworthy. It also covers PS collapsing a single result to a scalar.
+    // `@(...)` is load-bearing, not style: it guarantees an array, so `.Count`
+    // is the match count for 0, 1 and n alike — without it a zero-match
+    // pipeline yields `$null` and a single match yields a bare object. Zero
+    // matches is exactly the NoAdapter case, the classification this whole
+    // marker exists to make possible, so that count has to be trustworthy.
     let ps_script = r#"
 $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue |
     Where-Object { $_.InterfaceDescription -like '*Hyper-V Virtual Ethernet*' })
@@ -228,7 +231,10 @@ fn classify_subnet_output(exit_ok: bool, stdout: &str) -> Result<String, Firewal
     }
 
     // `.trim()` on the captured output strips ASCII whitespace but not a UTF-8
-    // BOM, which would land on the first line — exactly where the marker is.
+    // BOM, which lands at the very start of the captured output — where the
+    // marker sits when the stream is clean. If unsolicited output precedes the
+    // marker (see the scan loop below), the BOM rides that line instead and the
+    // marker is unaffected either way. This only strips at offset zero.
     let stdout = stdout.trim_start_matches('\u{feff}');
 
     let mut adapter_count: Option<usize> = None;
@@ -254,9 +260,11 @@ fn classify_subnet_output(exit_ok: bool, stdout: &str) -> Result<String, Firewal
             adapter_count = count.trim().parse::<usize>().ok();
             continue;
         }
-        saw_candidate_line = true;
-        if let Some(cidr) = parse_cidr_from_line(line) {
-            return Ok(cidr);
+        if looks_like_ipv4_cidr(line) {
+            saw_candidate_line = true;
+            if let Some(cidr) = parse_cidr_from_line(line) {
+                return Ok(cidr);
+            }
         }
     }
 
@@ -270,16 +278,44 @@ fn classify_subnet_output(exit_ok: bool, stdout: &str) -> Result<String, Firewal
     if adapter_count == 0 {
         return failed(R::NoAdapter);
     }
-    // A candidate line was present and nothing survived `parse_cidr_from_line`.
-    // That collapses "prefix < 20" with "malformed line", because the parser
-    // returns `Option` for both. Reporting the /20 rejection is the right bet:
-    // it is the case that happens to real users, and a malformed line means our
-    // own parser is wrong — which its `warn!` at the rejection site records
-    // separately, with the actual prefix.
+    // An address-shaped line was present and nothing survived
+    // `parse_cidr_from_line`. Because `looks_like_ipv4_cidr` has already
+    // validated the four octets and the prefix, the only remaining way to fail
+    // is the `prefix < 20` rejection — so this reports what actually happened
+    // rather than betting on it.
     if saw_candidate_line {
         return failed(R::PrefixTooBroad);
     }
     failed(R::NoIpv4)
+}
+
+/// Does this line carry the `<dotted-quad>/<prefix>` shape our script emits?
+///
+/// This gates `saw_candidate_line`, and it has to be a real shape test rather
+/// than a `contains('/')`: any stray PowerShell line carrying a slash — a URL
+/// in a module-autoload notice, a filesystem path in a warning — would
+/// otherwise count as a rejected address, and an adapter with no IPv4 yet would
+/// be reported as `PrefixTooBroad`. That is a confident claim about a subnet
+/// that was never found, and it is the wrong-blame class this classification
+/// exists to remove.
+///
+/// Validating the octets and the prefix here is also what lets the
+/// `PrefixTooBroad` branch below mean exactly one thing: a shaped line can now
+/// only fail `parse_cidr_from_line` via the `prefix < 20` rejection.
+///
+/// An IPv6 line (`fe80::1/64`) is deliberately not a candidate. The script's
+/// `-AddressFamily IPv4` filter means one should never arrive, but if that
+/// filter ever changes, the honest answer for an adapter holding only a v6
+/// address is `NoIpv4` — not a /20 complaint about an address we never read.
+fn looks_like_ipv4_cidr(line: &str) -> bool {
+    let Some((ip, prefix)) = line.split_once('/') else {
+        return false;
+    };
+    if prefix.trim().parse::<u8>().is_err() {
+        return false;
+    }
+    let octets: Vec<&str> = ip.trim().split('.').collect();
+    octets.len() == 4 && octets.iter().all(|o| o.parse::<u8>().is_ok())
 }
 
 /// Parse an `IPAddress/PrefixLength` string into a proper CIDR network address.
@@ -647,6 +683,17 @@ mod tests {
     // opaque `SubnetDetectionFailed`, and each wants different user advice.
     // -----------------------------------------------------------------------
 
+    /// Every `SubnetDetectionReason`, hand-maintained because Rust has no
+    /// built-in enum iteration. A variant added without being listed here is
+    /// caught by the length assertion in the wire-shape test, which is the one
+    /// place that would otherwise ship an unpinned spelling.
+    const ALL_SUBNET_REASONS: [SubnetDetectionReason; 4] = [
+        SubnetDetectionReason::NoAdapter,
+        SubnetDetectionReason::NoIpv4,
+        SubnetDetectionReason::PrefixTooBroad,
+        SubnetDetectionReason::QueryFailed,
+    ];
+
     fn reason_of(exit_ok: bool, stdout: &str) -> SubnetDetectionReason {
         match classify_subnet_output(exit_ok, stdout) {
             Err(FirewallError::SubnetDetectionFailed { reason }) => reason,
@@ -744,9 +791,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_tolerates_a_utf8_bom_on_the_marker_line() {
-        // `.trim()` upstream strips ASCII whitespace, not U+FEFF, and the BOM
-        // would land on the first line — exactly where the marker is.
+    fn classify_tolerates_a_utf8_bom_at_the_start_of_output() {
+        // `.trim()` upstream strips ASCII whitespace, not U+FEFF, and the strip
+        // only applies at offset zero. Named for what is covered: a BOM ahead
+        // of the marker on a clean stream, not a BOM anywhere else.
         assert_eq!(
             reason_of(true, "\u{feff}TANDEM_ADAPTERS 0"),
             SubnetDetectionReason::NoAdapter
@@ -754,35 +802,107 @@ mod tests {
     }
 
     #[test]
+    fn classify_does_not_mistake_stray_output_for_a_rejected_address() {
+        // The defect this guards: `saw_candidate_line` used to be set by ANY
+        // non-marker line, so one unsolicited PowerShell line on a machine whose
+        // adapter has no IPv4 yet produced PrefixTooBroad — a confident claim
+        // that a subnet was found and refused, about a subnet never found. Same
+        // wrong-blame class #1298 exists to remove.
+        let noisy = "Loading personal and system profiles took 812ms.\r\nTANDEM_ADAPTERS 2\r\n";
+        assert_eq!(
+            reason_of(true, noisy),
+            SubnetDetectionReason::NoIpv4,
+            "a noise line must not be counted as a rejected address"
+        );
+
+        // A slash alone must not qualify either — this is why the guard checks
+        // the dotted-quad shape rather than `contains('/')`.
+        let slashy = "WARNING: see https://aka.ms/netadapter for details\r\nTANDEM_ADAPTERS 2\r\n";
+        assert_eq!(reason_of(true, slashy), SubnetDetectionReason::NoIpv4);
+
+        // Positive control on the same sample: swap the noise for a genuinely
+        // address-shaped line that the /20 floor refuses, and the same input
+        // shape reports PrefixTooBroad. Without this the assertions above would
+        // pass with `saw_candidate_line` deleted outright.
+        let too_broad = "10.0.0.1/8\r\nTANDEM_ADAPTERS 2\r\n";
+        assert_eq!(
+            reason_of(true, too_broad),
+            SubnetDetectionReason::PrefixTooBroad
+        );
+    }
+
+    #[test]
+    fn classify_reports_no_ipv4_for_an_adapter_holding_only_ipv6() {
+        // Unreachable through our own script, which filters `-AddressFamily
+        // IPv4`. Pinned because it is the case a future script change would
+        // most plausibly let through, and the honest answer is "no v4 address"
+        // rather than a /20 complaint about an address never read.
+        let v6 = "fe80::215:5dff:fe01:2/64\r\nTANDEM_ADAPTERS 1\r\n";
+        assert_eq!(reason_of(true, v6), SubnetDetectionReason::NoIpv4);
+    }
+
+    #[test]
     fn subnet_failure_messages_no_longer_blame_the_install() {
         // The #1298 defect in one assertion: the old copy asked "is Cowork set
         // up on this machine?" inside a dialog titled "Cowork detected".
-        for reason in [
-            SubnetDetectionReason::NoAdapter,
-            SubnetDetectionReason::NoIpv4,
-            SubnetDetectionReason::PrefixTooBroad,
-            SubnetDetectionReason::QueryFailed,
-        ] {
+        let mut messages = Vec::new();
+        for reason in ALL_SUBNET_REASONS {
             let msg = FirewallError::SubnetDetectionFailed { reason }.to_string();
             assert!(!msg.is_empty(), "{reason:?} has no message");
             assert!(
                 !msg.contains("is Cowork set up on this machine"),
                 "{reason:?} still blames the install: {msg}"
             );
+            messages.push(msg);
         }
+
+        // Distinctness is the load-bearing half. Without it this test passes
+        // when all four arms are collapsed to one string — which would be the
+        // original defect exactly, wearing different words.
+        let unique: std::collections::HashSet<&String> = messages.iter().collect();
+        assert_eq!(
+            unique.len(),
+            messages.len(),
+            "two reasons share a message, so the reason carries no information: {messages:?}"
+        );
     }
 
     #[test]
     fn subnet_reason_rides_along_as_a_sibling_field_on_the_wire() {
         // The client discriminates on `kind` and reads `reason` off the same
         // object; a nested shape would break `firewallErrorHint` silently.
-        let json = serde_json::to_string(&FirewallError::SubnetDetectionFailed {
-            reason: SubnetDetectionReason::PrefixTooBroad,
-        })
-        .unwrap();
+        //
+        // All four spellings are pinned, not one. `SUBNET_REASON_HINT` on the
+        // client is keyed by these exact strings, and a miss there falls through
+        // to the generic hint — silently, in both languages. `noIpv4` is the one
+        // that would plausibly drift (`noIPv4`).
+        let expected = [
+            (
+                SubnetDetectionReason::NoAdapter,
+                r#"{"kind":"subnetDetectionFailed","reason":"noAdapter"}"#,
+            ),
+            (
+                SubnetDetectionReason::NoIpv4,
+                r#"{"kind":"subnetDetectionFailed","reason":"noIpv4"}"#,
+            ),
+            (
+                SubnetDetectionReason::PrefixTooBroad,
+                r#"{"kind":"subnetDetectionFailed","reason":"prefixTooBroad"}"#,
+            ),
+            (
+                SubnetDetectionReason::QueryFailed,
+                r#"{"kind":"subnetDetectionFailed","reason":"queryFailed"}"#,
+            ),
+        ];
         assert_eq!(
-            json,
-            r#"{"kind":"subnetDetectionFailed","reason":"prefixTooBroad"}"#
+            expected.len(),
+            ALL_SUBNET_REASONS.len(),
+            "a reason was added without pinning its wire spelling"
         );
+        for (reason, want) in expected {
+            let json = serde_json::to_string(&FirewallError::SubnetDetectionFailed { reason })
+                .unwrap();
+            assert_eq!(json, want);
+        }
     }
 }
