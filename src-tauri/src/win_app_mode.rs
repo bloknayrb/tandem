@@ -49,9 +49,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SystemPar
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreferredAppMode {
-    // Never constructed — `crate::AppMode` has no "unthemed default" state,
-    // only Force*/AllowDark — but it must stay here at ordinal 0 to keep the
-    // rest of the enum's discriminants matching uxtheme.dll's ABI.
+    // Never constructed: releasing maps to `AllowDark` (see the `From` impl
+    // below), not `Default`. Every discriminant here is written explicitly,
+    // so this variant is NOT padding — deleting it would shift nothing. It
+    // is kept purely as documentation of the real uxtheme.dll enum, so a
+    // future reader comparing this against Microsoft's (unpublished) header
+    // sees the same four values.
     #[allow(dead_code)]
     Default = 0,
     AllowDark = 1,
@@ -112,8 +115,15 @@ fn resolve_ordinal(ordinal: u16) -> FARPROC {
     unsafe { GetProcAddress(module, ordinal as usize as *const u8) }
 }
 
+/// Cached: `OsVersion::current()` is an uncached `RtlGetVersion` syscall in
+/// `windows-version` 0.1.7, and the OS build cannot change under a running
+/// process. `tao` caches the equivalent check in a `Lazy<bool>`
+/// (`windows/dark_mode.rs:31-36`); this module's doc claims to match tao's
+/// pattern, so it caches too.
 fn build_supports_app_mode() -> bool {
-    windows_version::OsVersion::current().build >= MIN_BUILD_FOR_APP_MODE
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED
+        .get_or_init(|| windows_version::OsVersion::current().build >= MIN_BUILD_FOR_APP_MODE)
 }
 
 /// Forces (or releases, via `AppMode::AllowDark`) the process-wide Windows
@@ -165,6 +175,11 @@ pub fn set_preferred_app_mode(mode: crate::AppMode) -> bool {
 /// different shape from the `windows`-crate API `tao` uses elsewhere in this
 /// dependency tree (`HIGHCONTRASTA`, `.ok()`, a `dwFlags.0` tuple field) —
 /// copying that shape here will not compile against windows-sys 0.59.
+/// NOTE: this is the OS accessibility state, NOT Tandem's own
+/// `settings.highContrast` app toggle (`useTandemSettings.ts`, applied by
+/// `useHighContrast.ts`). The two are unrelated despite the shared name —
+/// this one gates whether we may override the OS appearance at all, and a
+/// future reader should not wire them together.
 pub fn is_high_contrast_active() -> bool {
     let mut hc = HIGHCONTRASTW {
         cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,

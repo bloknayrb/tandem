@@ -2844,12 +2844,18 @@ fn apply_native_theme_action(
 }
 
 /// Forces/releases the Windows app mode. Routed through
-/// `WebviewWindow::run_on_main_thread` because `SetPreferredAppMode`/
-/// `FlushMenuThemes` are UI-global uxtheme calls and Tauri may run a sync
-/// command off the main thread (#992 rev2 A4). Blocks on a channel until the
-/// main-thread closure completes so the command's return value — and the
-/// `window.theme()` read-back in `set_native_theme` — never race ahead of
-/// the actual uxtheme call.
+/// `WebviewWindow::run_on_main_thread` because `SetPreferredAppMode` and
+/// `FlushMenuThemes` are UI-global uxtheme calls (#992 rev2 A4).
+///
+/// The channel is a completion handshake, NOT an ordering fix: `window.theme()`
+/// on Windows returns a cached field (`tao` `windows/window.rs:962`) that the
+/// app mode never touches, so there is nothing for the read-back in
+/// `set_native_theme` to race against. It exists so this function's `Result`
+/// reflects whether the closure actually ran. Today it does not even block —
+/// a sync `#[tauri::command]` is dispatched inline on the main thread, and
+/// `run_on_main_thread` runs the closure inline when already there — but the
+/// receive is bounded anyway, because that inlining is a Tauri implementation
+/// detail and one `#[tauri::command(async)]` away from a hang with no ceiling.
 #[cfg(target_os = "windows")]
 fn apply_app_mode(window: &tauri::WebviewWindow, mode: AppMode) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -2863,7 +2869,7 @@ fn apply_app_mode(window: &tauri::WebviewWindow, mode: AppMode) -> Result<(), St
             let _ = tx.send(());
         })
         .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
-    rx.recv()
+    rx.recv_timeout(std::time::Duration::from_secs(2))
         .map_err(|e| format!("app-mode main-thread call did not complete: {e}"))
 }
 
@@ -2920,9 +2926,9 @@ struct NativeThemeOutcome {
 }
 
 /// Pushes the app's theme preference to native OS surfaces (#992 rev2).
-/// Renamed from `set_window_theme`: the Windows mechanism this now uses is
-/// process-wide (uxtheme's preferred app mode), not per-window, so the old
-/// name was misleading on the platform where this does the most work.
+/// Named for "native", not "window", deliberately: the Windows mechanism is
+/// process-wide (uxtheme's preferred app mode) and the macOS one is app-wide
+/// (`NSApp.appearance`), so nothing about this is per-window.
 ///
 /// Mechanism is platform-specific — see `native_theme_action`:
 /// - **Windows**: forces/releases the process-wide uxtheme app mode
@@ -2938,8 +2944,10 @@ struct NativeThemeOutcome {
 /// `native_theme_action` (decision) and `native_theme_outcome` (result
 /// assembly) — both pure and exhaustively unit-tested — plus the real I/O
 /// (`apply_native_theme_action`, `window.theme()`) that needs a live
-/// `WebviewWindow` and isn't unit-testable, matching the existing
-/// `theme_pref_tests` precedent for `set_window_theme`.
+/// `WebviewWindow` and isn't unit-testable. `theme_pref_tests` composes the
+/// two pure halves in the same order this body does, which is the closest
+/// achievable pin on the routing without `tauri::test` mock scaffolding
+/// (which this codebase does not use anywhere).
 #[tauri::command]
 fn set_native_theme(
     window: tauri::WebviewWindow,
@@ -4619,27 +4627,19 @@ mod theme_pref_tests {
     // doc comment for the restructuring that keeps everything else pure.
 
     #[test]
-    fn dark_maps_to_native_dark() {
-        assert_eq!(theme_pref_to_native("dark"), Some(tauri::Theme::Dark));
-    }
-
-    #[test]
-    fn light_maps_to_native_light() {
-        assert_eq!(theme_pref_to_native("light"), Some(tauri::Theme::Light));
-    }
-
-    #[test]
-    fn warm_maps_to_native_light_as_its_closest_analog() {
+    fn theme_pref_to_native_maps_every_known_preference() {
         // "warm" is a light-family theme with no native OS equivalent (#993).
-        assert_eq!(theme_pref_to_native("warm"), Some(tauri::Theme::Light));
-    }
-
-    #[test]
-    fn system_clears_the_forced_theme() {
-        // The critical branch: without None here, window.theme() (read by
-        // get_app_theme) would keep reporting the last forced value forever,
-        // even after the user returns to "system".
-        assert_eq!(theme_pref_to_native("system"), None);
+        // "system" -> None is the critical branch: without it, window.theme()
+        // (read by get_app_theme) would keep reporting the last forced value
+        // forever, even after the user returns to "Match system".
+        for (pref, expected) in [
+            ("dark", Some(tauri::Theme::Dark)),
+            ("light", Some(tauri::Theme::Light)),
+            ("warm", Some(tauri::Theme::Light)),
+            ("system", None),
+        ] {
+            assert_eq!(theme_pref_to_native(pref), expected, "pref={pref}");
+        }
     }
 
     // --- A2/A3: "system" and "unrecognized" must be distinct, assertable

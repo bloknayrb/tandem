@@ -52,13 +52,13 @@ let pollIntervalHandle: ReturnType<typeof setInterval> | null = null;
 // issue time — see `acceptReadback` below.
 let pushSeq = 0;
 
-// The last preference actually sent to `set_native_theme` (dedupe latch) —
-// or, more precisely, the last preference *committed* as sent. Committed
-// only from a RESOLVED push, never optimistically before the `invoke` call
-// settles, and rolled back on rejection. Getting this backwards (committing
-// before the await, with a swallowed `.catch`) was a blocking finding in
-// rev1: one rejected invoke during early boot would have permanently
-// deduped away every retry.
+// The last preference sent to `set_native_theme` (dedupe latch). Set
+// optimistically, before the `invoke` settles, so a rerun while a push is
+// still in flight short-circuits instead of duplicating it — and rolled
+// back in the `.catch` so a rejected push never leaves the latch claiming a
+// preference the native layer did not receive. Optimistic WITHOUT the
+// rollback was a blocking rev1 finding: one rejected invoke during early
+// boot would have permanently deduped away every retry.
 let lastPushedPref: ThemePreference | null = null;
 
 // Mirrors the last-resolved outcome's `overrideActive`. Gates read-backs
@@ -66,6 +66,14 @@ let lastPushedPref: ThemePreference | null = null;
 // override is forced (macOS only — Windows always resolves `false` per the
 // rev2 platform contract) isn't mistaken for a real user-driven OS change.
 let overrideActive = false;
+
+/** Stops the 3s poll if it is running. Idempotent. */
+function stopPoll(): void {
+  if (pollIntervalHandle !== null) {
+    clearInterval(pollIntervalHandle);
+    pollIntervalHandle = null;
+  }
+}
 
 /** Resets module state. Call from test teardown for vitest module isolation. */
 export function _resetForTests(): void {
@@ -75,10 +83,7 @@ export function _resetForTests(): void {
   pushSeq = 0;
   lastPushedPref = null;
   overrideActive = false;
-  if (pollIntervalHandle !== null) {
-    clearInterval(pollIntervalHandle);
-    pollIntervalHandle = null;
-  }
+  stopPoll();
   if (typeof window !== "undefined") window.__TANDEM_INITIAL_THEME__ = undefined;
 }
 
@@ -92,7 +97,17 @@ export function _resetForTests(): void {
  */
 function getInvoke(): Promise<InvokeFn> {
   if (!invokePromise) {
-    invokePromise = import("@tauri-apps/api/core").then((m) => m.invoke as InvokeFn);
+    invokePromise = import("@tauri-apps/api/core")
+      .then((m) => m.invoke as InvokeFn)
+      // Never cache a REJECTED promise. A memoized rejection would make one
+      // transient import failure permanent for the session: every later push
+      // would reject instantly with no retry, and the dedupe latch above
+      // would keep rolling back forever. Clearing the slot lets the next
+      // caller re-attempt the import.
+      .catch((e) => {
+        invokePromise = null;
+        throw e;
+      });
   }
   return invokePromise;
 }
@@ -157,13 +172,17 @@ function acceptReadback(seqAtIssue: number, next: "light" | "dark"): void {
  *
  * `lastPushedPref` dedupes so the effect this feeds (`createTheme`'s merged
  * `$effect`, which also reruns on `lightVariant` churn) doesn't re-push an
- * unchanged preference. The dedupe latch and `overrideActive` are committed
- * ONLY from the RESOLVED outcome, never optimistically before the `invoke`
- * call settles -- and a rejected call rolls `lastPushedPref` back to its
- * previous value, so the very next call (the user re-picking the same
- * theme, or the effect re-running) is not silently swallowed by the
- * dedupe. Getting this backwards was a blocking rev1 finding: it would have
- * permanently frozen both the retry path and the OS read-back gate above.
+ * unchanged preference. It is set OPTIMISTICALLY, before the `invoke`
+ * settles, so a rerun while a push is still in flight short-circuits rather
+ * than duplicating it -- and the `.catch` rolls it back, so the very next
+ * call (the user re-picking the same theme, or the effect re-running) is
+ * not silently swallowed by a latch describing a push that never landed.
+ * `overrideActive` is the opposite: only ever assigned from a RESOLVED
+ * outcome, because it describes what the native layer actually DID, and
+ * that is precisely what the client must not guess -- Linux skips the push
+ * entirely and Windows High Contrast declines to force. Optimistic without
+ * the rollback was a blocking rev1 finding: it would have frozen both the
+ * retry path and the OS read-back gate above.
  */
 export function setNativeTheme(pref: ThemePreference): void {
   if (!isTauriRuntime() || pref === lastPushedPref) return;
@@ -217,13 +236,11 @@ export function initTauriTheme(): void {
     .then(({ getCurrentWindow }) => {
       getCurrentWindow()
         .onThemeChanged(({ payload: theme }) => {
-          // Captured at issue (event-delivery) time -- mirrors the poll's
-          // pattern below. There's no async gap inside this handler itself
-          // (the payload arrives synchronously with the event), but the
-          // pattern is kept identical to the poll's for one shared mental
-          // model in `acceptReadback`.
-          const seq = pushSeq;
-          acceptReadback(seq, theme === "dark" ? "dark" : "light");
+          // Issue and delivery are the same instant here -- the payload
+          // arrives with the event -- so the stamp is just the current
+          // `pushSeq`. The poll below has a real gap and must capture it
+          // before its `invoke`.
+          acceptReadback(pushSeq, theme === "dark" ? "dark" : "light");
         })
         .catch((e) => {
           console.warn("[useTauriTheme] onThemeChanged subscribe failed:", e);
@@ -269,12 +286,6 @@ export function initTauriTheme(): void {
   // theme forced before the reload, until the next real `setNativeTheme`
   // call reconciles it. (Rev1 conflated HMR dispose with app teardown --
   // they are not the same event.)
-  const cleanup = () => {
-    if (pollIntervalHandle !== null) {
-      clearInterval(pollIntervalHandle);
-      pollIntervalHandle = null;
-    }
-  };
-  window.addEventListener("pagehide", cleanup, { once: true });
-  import.meta.hot?.dispose(cleanup);
+  window.addEventListener("pagehide", stopPoll, { once: true });
+  import.meta.hot?.dispose(stopPoll);
 }

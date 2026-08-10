@@ -44,6 +44,9 @@ const CLIENT_HOOK = join(REPO_ROOT, "src", "client", "hooks", "useTauriTheme.sve
 const SETTINGS = join(REPO_ROOT, "src", "client", "hooks", "useTandemSettings.ts");
 const CHANGELOG = join(REPO_ROOT, "CHANGELOG.md");
 
+/** `lib.rs` is ~244 KB and two tests read it; hoisted so it is read once. */
+const RUST = readFileSync(LIB_RS, "utf-8");
+
 /**
  * Slice a Rust `fn <name>(…) { … }` body by brace balance. Naive brace
  * counting is fine for the two small, string-literal-free functions this file
@@ -65,38 +68,39 @@ function rustFnBody(src: string, name: string): string {
 }
 
 describe("native theme (#992 rev2) cross-boundary claims", () => {
-  it("the Tauri command name matches across the client string and both Rust sites", () => {
+  it("every Tauri command this hook invokes is defined and registered in Rust", () => {
     const client = readFileSync(CLIENT_HOOK, "utf-8");
 
-    // Derive the name from the CLIENT, so a rename on either side is caught
-    // rather than the test being seeded with the answer.
-    const invocations = [...client.matchAll(/invoke<[^>]*>\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    // Derive the names from the CLIENT so a rename on either side is caught,
+    // and check ALL of them rather than singling one out. An earlier draft
+    // picked the push command with `name.includes("theme") && name !==
+    // "get_app_theme"`, a heuristic that would silently select the wrong
+    // command as soon as a third theme command appeared — failing in the
+    // "found the wrong thing" direction this file exists to rule out.
+    const invoked = [
+      ...new Set([...client.matchAll(/\binvoke(?:<[^>]*>)?\(\s*"([a-z_]+)"/g)].map((m) => m[1])),
+    ];
     expect(
-      invocations,
-      "useTauriTheme.svelte.ts no longer contains a typed invoke() call",
+      invoked,
+      "useTauriTheme.svelte.ts no longer contains any invoke() call",
     ).not.toHaveLength(0);
 
-    const command = invocations.find((name) => name.includes("theme") && name !== "get_app_theme");
-    expect(
-      command,
-      `no theme-push command found among ${JSON.stringify(invocations)}`,
-    ).toBeTruthy();
-
-    const rust = readFileSync(LIB_RS, "utf-8");
-    expect(rust, `lib.rs has no '#[tauri::command] fn ${command}'`).toMatch(
-      new RegExp(`#\\[tauri::command\\][\\s\\S]{0,200}?\\bfn ${command}\\s*\\(`),
-    );
-
-    // The handler list is what actually exposes the command to the WebView; a
-    // defined-but-unregistered command fails at runtime exactly like a typo.
-    const handlerStart = rust.indexOf("tauri::generate_handler![");
+    const handlerStart = RUST.indexOf("tauri::generate_handler![");
     expect(handlerStart, "lib.rs no longer calls tauri::generate_handler!").toBeGreaterThan(-1);
-    const handlerList = rust.slice(handlerStart, rust.indexOf("]", handlerStart));
-    expect(handlerList, `${command} is not registered in generate_handler!`).toContain(command);
+    const handlerList = RUST.slice(handlerStart, RUST.indexOf("]", handlerStart));
+
+    for (const command of invoked) {
+      // A defined-but-unregistered command fails at runtime exactly like a
+      // typo, so both halves have to hold.
+      expect(RUST, `lib.rs has no '#[tauri::command] fn ${command}'`).toMatch(
+        new RegExp(`#\\[tauri::command\\][\\s\\S]{0,200}?\\bfn ${command}\\s*\\(`),
+      );
+      expect(handlerList, `${command} is not registered in generate_handler!`).toContain(command);
+    }
   });
 
   it("resolve_theme_pref's explicit arms cover exactly the ThemePreference union", () => {
-    const body = rustFnBody(readFileSync(LIB_RS, "utf-8"), "resolve_theme_pref");
+    const body = rustFnBody(RUST, "resolve_theme_pref");
 
     // Only the left-hand side of each arm, and only up to the catch-all: the
     // right-hand sides name enum variants, not preferences. Or-patterns
@@ -135,15 +139,19 @@ describe("native theme (#992 rev2) cross-boundary claims", () => {
     const entry = doc.slice(start, doc.indexOf("\n\n", start));
     expect(entry, "the #992 entry must cite the issue").toContain("#992");
 
-    // Linux is NOT delivered (#1363). The entry may — and should — discuss
-    // Linux, but only to say so; it must carry the tracking issue rather than
-    // implying support.
-    if (/\bLinux\b/.test(entry)) {
-      expect(entry, "the entry mentions Linux without pointing at #1363").toContain("#1363");
-      expect(entry, "the entry must say Linux is unchanged, not supported").toMatch(
-        /nothing changes|not attempted|unchanged/i,
-      );
-    }
+    // Linux is NOT delivered (#1363), and silence about that is the failure
+    // mode — a reader on Linux would otherwise assume the feature applies to
+    // them. Asserted UNCONDITIONALLY: an earlier draft wrapped this in
+    // `if (/\bLinux\b/.test(entry))`, which meant deleting the Linux sentence
+    // made the guard pass rather than fail — the exact vacuity this file's
+    // header claims to prevent.
+    expect(entry, "the entry must address Linux, which does not get this feature").toMatch(
+      /\bLinux\b/,
+    );
+    expect(entry, "the entry mentions Linux without pointing at #1363").toContain("#1363");
+    expect(entry, "the entry must say Linux is unchanged, not supported").toMatch(
+      /nothing changes|not attempted|unchanged/i,
+    );
 
     // High Contrast deliberately wins on Windows; a reader who is told menus
     // follow the app theme, full stop, will file the guard as a bug.
