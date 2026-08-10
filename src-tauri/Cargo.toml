@@ -71,14 +71,28 @@ tauri-plugin-decorum = "1"
 # the borderless-window outline (DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE). See #984.
 # Job-object + threading bindings (#987): bind the Node sidecar to a
 # kill-on-job-close job object so it dies with the shell even on ungraceful exit.
+# LibraryLoader + UI::Accessibility/WindowsAndMessaging (#992): resolve the
+# undocumented, ordinal-only uxtheme.dll "preferred app mode" exports
+# (`win_app_mode.rs`) and read the High Contrast accessibility flag that
+# gates them.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Security",
     "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
     "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
 ] }
+# Reads the running Windows build number via `RtlGetVersion` (the standard
+# way to bypass `GetVersionEx`'s manifest-gated lies). Same crate — same
+# version, already resolved transitively via `tao` — that Tauri's own
+# dark-mode support uses to gate the uxtheme ordinal it resolves; used here
+# so `win_app_mode`'s build >= 18362 guard matches that precedent exactly
+# rather than re-deriving a parallel version-detection mechanism.
+windows-version = "0.1"
 
 [features]
 # Test-only hooks: TANDEM_COWORK_ROOT_OVERRIDE env-var reads.

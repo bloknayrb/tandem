@@ -8,9 +8,14 @@ on:
 
 jobs:
   rust-test:
+    # macos-latest is here for coverage, not parity: the `NativeHost::MacOs`
+    # arm of the native-theme decision layer (#992) — the only host where an
+    # override is ever active — was asserted on no leg at all while this was
+    # ubuntu + windows. macOS needs none of the apt block below and the stub
+    # step is already $TRIPLE-generic, so it costs one line.
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6

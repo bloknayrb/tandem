@@ -1,6 +1,6 @@
 import { isTauriRuntime } from "@client/cowork/cowork-helpers.js";
 import type { SystemLightVariant, ThemePreference } from "./useTandemSettings.js";
-import { initTauriTheme, tauriTheme } from "./useTauriTheme.svelte.js";
+import { initTauriTheme, setNativeTheme, tauriTheme } from "./useTauriTheme.svelte.js";
 import type { ResolvedTheme } from "./useTheme.js";
 
 export type { ResolvedTheme } from "./useTheme.js";
@@ -24,6 +24,14 @@ export function systemTheme(lightVariant: SystemLightVariant = "light"): Resolve
     if (isTauriRuntime()) {
       // tauriTheme.current reflects live AppsUseLightTheme updates. Falls back
       // to the startup seed set by the Rust eval before Svelte mounts (#535).
+      //
+      // This read is ALSO the reactive subscription that makes `createTheme`'s
+      // effect re-run on an OS theme flip -- it is the only one, and it is
+      // invisible from the effect site. Do not hoist it behind the `seed`
+      // check, memoize it, or wrap it in `untrack`: any of those severs the
+      // subscription and `data-theme` silently stops following the OS under
+      // `pref === "system"`. Pinned by the OS-flip case in
+      // `tests/client/useTheme-native-push.svelte.test.ts`.
       const live = tauriTheme.current;
       if (live === "dark") return "dark";
       if (live === "light") return lightResolved;
@@ -119,6 +127,21 @@ export function applyTheme(
  * OS app-mode changes are tracked reactively. In browser mode, the matchMedia
  * subscription inside applyTheme handles OS changes instead.
  *
+ * A single effect both pushes the raw, unresolved preference to the native
+ * window (#992 -- `setNativeTheme`: process app mode on Windows,
+ * `NSApp.appearance` on macOS, no-op on Linux; Rust owns resolving `"warm"`
+ * to a native theme and `"system"` to "no override") and applies the
+ * resolved theme to the DOM (`applyTheme`). One effect rather than two, so
+ * correctness does not depend on Svelte flushing siblings in declaration
+ * order. This is safe because `setNativeTheme` dedupes internally on
+ * `lastPushedPref` (useTauriTheme.svelte.ts), so a `lightVariant`-only rerun
+ * calls it with the same `pref` and no-ops.
+ *
+ * That dedupe is also the LOOP BREAKER: a release round trip writes
+ * `osTheme` back through `tauriTheme.current`, which re-runs this effect. It
+ * terminates only because the second `setNativeTheme` call short-circuits.
+ * Do not "simplify" the latch away.
+ *
  * Accepts getters for `pref` and `lightVariant` so callers with `$state`
  * values propagate reactively. `lightVariant` (#993) controls which
  * light-family theme a LIGHT OS appearance resolves to under `pref="system"`;
@@ -134,7 +157,29 @@ export function createTheme(
   $effect(() => {
     const pref = getPref();
     const lightVariant = getLightVariant();
-    void tauriTheme.current;
+
+    // Push the raw, unresolved preference to the native window (#992).
+    // Deduped internally, so this is a no-op on lightVariant-only reruns.
+    setNativeTheme(pref);
+
+    // NOTE: there is deliberately no bare `void tauriTheme.current;` here.
+    // The subscription to OS flips already exists inside `applyTheme` ->
+    // `resolveTheme` -> `systemTheme`, which reads `tauriTheme.current`
+    // synchronously in the `pref === "system"` case -- the only case where
+    // an OS flip can change the resolved output. A bare read here would
+    // additionally subscribe the effect under an EXPLICIT pref, re-running
+    // it (and re-writing `data-theme`) on OS flips that cannot affect the
+    // result. Measured before removal: the DOM still follows an OS flip
+    // without it. See the comment on that read in `systemTheme`.
+
+    // Do NOT "fix" staleness by writing `setTauriTheme(...)` (or
+    // `tauriTheme.current = ...`) synchronously from inside this effect
+    // body. Effect bodies run inside an active Svelte reaction, and a
+    // synchronous `$state` write from within one throws
+    // `state_unsafe_mutation` -- in production too, not just dev (see
+    // CLAUDE.md). All native read-backs are written through the async
+    // `acceptReadback` gate in useTauriTheme.svelte.ts instead.
+
     return applyTheme(pref, lightVariant);
   });
 }
