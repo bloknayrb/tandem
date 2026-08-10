@@ -220,6 +220,22 @@ describe("native theme (#992) cross-boundary claims", () => {
     // follow the app theme, full stop, will file the guard as a bug.
     expect(entry, "the entry must state the High Contrast carve-out").toMatch(/High Contrast/i);
 
+    // "warm" resolves to a LIGHT native surface on BOTH platforms in scope:
+    // resolve_theme_pref maps `"light" | "warm" => Light` host-agnostically,
+    // and the Windows arm folds every non-Dark theme into ForceLight. So a
+    // user in warm gets a light menu — measured by hand on Windows 11 against
+    // c929cde, and reported as surprising, which is why it is pinned here.
+    // The window is deliberate: a bare /light/ over the whole entry would be
+    // satisfied vacuously by "a light Windows" or "a one-way trip to light
+    // mode", both of which already appear and neither of which says anything
+    // about warm. The claim only holds if the two sit together.
+    const warmAt = entry.toLowerCase().indexOf("warm");
+    expect(warmAt, "the entry never mentions warm, whose menu is not warm").toBeGreaterThan(-1);
+    expect(
+      entry.slice(warmAt, warmAt + 200),
+      "the entry names warm without saying its native menu renders light",
+    ).toMatch(/light/i);
+
     // The invisible-hedge pattern this PR removed must not come back: an HTML
     // comment renders nowhere, including the in-app View Changelog surface.
     expect(entry, "caveats belong in the prose, not an HTML comment").not.toMatch(/<!--/);
