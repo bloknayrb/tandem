@@ -89,6 +89,18 @@ This release closes the findings from the v1.0 security review. **None was reach
 - **A network-path check was being made against the wrong string.** When Tandem writes the location of a helper program into your Claude configuration, it refuses paths that point at a network share, because Windows can be induced to hand over credentials when it reaches one. The check ran after a normalization step that, on macOS and Linux, removes the very prefix it looks for — so a path that should have been refused could be written. It now checks the path as given. This required a non-default setup that supplies its own path, and was found by a test rather than in the wild.
 - **Absolute file paths no longer appear in responses sent to other machines on your network (#1294).** Tandem already stripped the directory part of file paths before sending them to a caller that isn't your own machine, so a network client saw a file's name and not where it lives. Several responses had been missed — the integrations list, some success and error messages, and one internal error that included the layout of Tandem's data directory. All of them now go through the same stripping. A caller on your own machine sees exactly what it did before.
 
+### Internal
+
+- **The v1.0 performance gate exists now, and its first finding was that one of our own bug reports was wrong.** There is a fixture generator, a harness, and two recorded runs. Pointed at the complaint that accepting an annotation took about eight seconds under a heavy load, it separated the time spent getting the click to land from the time spent acting on it — 7851 ms against 379 ms — so the problem is that the button is hard to hit, not that accepting is slow. The report's stated mechanism does not survive the measurement, and the issue has been re-scoped to what the numbers actually say.
+
+- **The accessibility audit went from two surfaces to fifteen.** Settings, the command palette, find and replace, the margin view, chat, the tray, menus and the tutorial were all previously unaudited. Three structural problems had to be fixed first, and one of them was itself hiding a defect: an exclusion added years earlier to skip a faded element was still suppressing three unrelated controls that had since moved out from under it.
+
+- **Forced-colors support was being tested by a switch that does nothing.** Tandem carries sixteen blocks of styling for Windows High Contrast, and the test harness meant to exercise them used a Playwright option measured to be inert on the current Chromium. Those blocks had therefore never once executed under test. They are now driven through the browser's own protocol instead, and they work.
+
+- **The documentation was reconciled against what actually ships.** A sweep across the README, the architecture and security documents, the tool reference and the bundled skill corrected claims that had drifted — most consequentially that `.docx` files open read-only, which has been false since v0.14.0 and was being told to every AI that read the skill. Two documentation claims about a security gate are now pinned by a test, because the same stale claim survived a manual correction sweep twice.
+
+- **Bring-your-own-model support and the licensing gate both remain switched off.** Both received real fixes this release — bounded streaming, a run clock, a rebuilt request URL, and an issuance path that now fails closed on a missing support address. None of it is reachable: both are literal off switches in the source, and the model settings tab is filtered out of the interface entirely while its flag is false.
+
 ## [0.20.1] - 2026-08-05
 
 ### Fixed
