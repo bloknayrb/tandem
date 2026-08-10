@@ -14,6 +14,9 @@
  *   2. Entering the sub-view must not auto-enable (no onMount/$effect call).
  *   3. `cowork-enable-confirm-btn` is the SOLE trigger of
  *      `coworkToggleIntegration(invoke, true)`.
+ *   4. (#1298) Entering the sub-view pre-flights subnet detection, and a
+ *      known-failing detection replaces Enable with a retry — but a probe that
+ *      cannot run leaves Enable exactly as it was.
  *
  * `createIntegrationWizard` is stubbed to the empty-connect state so the MAIN
  * view + "More integrations" section render without a real /api round-trip.
@@ -33,10 +36,19 @@ vi.mock("../../src/client/cowork/cowork-helpers", async (importOriginal) => {
   return { ...actual, isTauriRuntime: () => true };
 });
 
+// #1298: the sub-view pre-flights subnet detection on entry. Default to
+// `unknown` (the probe couldn't run) — the state that must leave Enable alone.
+type Preflight =
+  | { status: "ok"; cidr: string }
+  | { status: "blocked"; hint: string }
+  | { status: "unknown" };
+const preflightSubnet = vi.fn(async (): Promise<Preflight> => ({ status: "unknown" }));
+
 vi.mock("../../src/client/cowork/cowork-invoke", () => ({
   TAURI_NOT_AVAILABLE: "Tauri runtime not available",
   loadInvoke: vi.fn(async () => fakeInvoke),
   coworkToggleIntegration: (...args: unknown[]) => toggleIntegration(...args),
+  coworkPreflightSubnet: () => preflightSubnet(),
 }));
 
 // A "normal" (Windows + detected) status with Cowork OFF, so the "Set up"
@@ -105,6 +117,8 @@ describe("integration wizard — Cowork sub-view gating", () => {
   beforeEach(() => {
     toggleIntegration.mockClear();
     fakeInvoke.mockClear();
+    preflightSubnet.mockClear();
+    preflightSubnet.mockResolvedValue({ status: "unknown" });
   });
 
   afterEach(() => {
@@ -163,5 +177,129 @@ describe("integration wizard — Cowork sub-view gating", () => {
 
     expect(toggleIntegration).toHaveBeenCalledTimes(1);
     expect(toggleIntegration).toHaveBeenCalledWith(fakeInvoke, true);
+  });
+
+  // -------------------------------------------------------------------------
+  // #1298 — the pre-flight. Before this, the sub-view offered an Enable button
+  // whose second step (subnet detection) it could have known would fail, and
+  // reported the failure as "is Cowork set up on this machine?" — on a screen
+  // that only renders because Cowork *was* detected.
+  // -------------------------------------------------------------------------
+
+  async function openCoworkSubView(container: HTMLElement): Promise<void> {
+    (q(container, "integration-wizard-cowork-setup") as HTMLButtonElement).click();
+    await tick();
+    await tick(); // let the pre-flight promise settle
+  }
+
+  it("pre-flights subnet detection when entering the sub-view", async () => {
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    expect(preflightSubnet).not.toHaveBeenCalled();
+
+    await openCoworkSubView(container);
+
+    expect(preflightSubnet).toHaveBeenCalledTimes(1);
+    // Probing is not enabling.
+    expect(toggleIntegration).not.toHaveBeenCalled();
+  });
+
+  it("replaces Enable with a retry, and says why, when detection is known-failing", async () => {
+    preflightSubnet.mockResolvedValue({
+      status: "blocked",
+      hint: "Tandem didn't find a Hyper-V virtual network adapter.",
+    });
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    await openCoworkSubView(container);
+
+    const banner = q(container, "integration-wizard-cowork-preflight-blocked");
+    expect(banner?.textContent).toContain("didn't find a Hyper-V virtual network adapter");
+    expect(q(container, "integration-wizard-cowork-preflight-retry-btn")).toBeTruthy();
+    // The whole point: no button offering an action we've watched fail.
+    expect(q(container, "cowork-enable-confirm-btn")).toBeNull();
+  });
+
+  it("re-probes on Check again, and restores Enable once detection succeeds", async () => {
+    preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    await openCoworkSubView(container);
+
+    // The user starts a Cowork session, then retries.
+    preflightSubnet.mockResolvedValue({ status: "ok", cidr: "172.20.0.0/20" });
+    (q(container, "integration-wizard-cowork-preflight-retry-btn") as HTMLButtonElement).click();
+    // Four ticks, not two: the blocked banner now survives until the re-probe
+    // SETTLES rather than vanishing synchronously on click (see the test below
+    // for why). Two ticks lands mid-probe, where the banner is still correctly
+    // on screen.
+    await tick();
+    await tick();
+    await tick();
+    await tick();
+
+    expect(preflightSubnet).toHaveBeenCalledTimes(2);
+    expect(q(container, "integration-wizard-cowork-preflight-blocked")).toBeNull();
+    expect(q(container, "cowork-enable-confirm-btn")).toBeTruthy();
+  });
+
+  it("keeps the retry button in place while it re-probes, rather than swapping in Enable", async () => {
+    // The defect: `run()` used to clear `preflight` synchronously, and every
+    // surface gates its retry button on `blocked`. So clicking "Check again"
+    // unmounted the button under the pointer and mounted Enable in its place —
+    // destroying focus mid-interaction, and making the second click of a
+    // double-click fire the real enable (UAC prompt, firewall write) on a
+    // machine the probe had just said could not work.
+    //
+    // The existing "re-probes on Check again" test awaits two ticks and can
+    // only see the settled state, so it passes either way. This one holds the
+    // probe open and looks at the frame in between.
+    preflightSubnet.mockResolvedValue({ status: "blocked", hint: "no adapter" });
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    await openCoworkSubView(container);
+
+    // `mockImplementationOnce`, not a bare pending promise on the shared mock:
+    // `beforeEach` uses `mockClear`, which does NOT clear implementations, so a
+    // hanging default would wedge every later test in this file.
+    preflightSubnet.mockImplementationOnce(() => new Promise(() => {}));
+    const retryBtn = q(container, "integration-wizard-cowork-preflight-retry-btn");
+    (retryBtn as HTMLButtonElement).click();
+    await tick();
+    await tick();
+
+    const stillThere = q(container, "integration-wizard-cowork-preflight-retry-btn");
+    expect(stillThere, "the retry button unmounted mid-probe").toBeTruthy();
+    expect(stillThere).toBe(retryBtn); // same node — focus survives
+    expect(stillThere?.textContent?.trim()).toBe("Checking…");
+    expect(
+      q(container, "cowork-enable-confirm-btn"),
+      "Enable must not take the retry button's slot mid-probe",
+    ).toBeNull();
+  });
+
+  it("leaves Enable available when the probe itself cannot run", async () => {
+    // A broken probe says nothing about whether enabling would work. Blocking
+    // here would strand a user whose enable would have succeeded — a worse
+    // failure than the one #1298 fixes.
+    preflightSubnet.mockRejectedValue(new Error("Tauri runtime not available"));
+    const { container } = render(IntegrationWizardModal, {
+      props: { open: true, onClose: vi.fn() },
+    });
+    await tick();
+    await openCoworkSubView(container);
+
+    expect(q(container, "integration-wizard-cowork-preflight-blocked")).toBeNull();
+    const enableBtn = q(container, "cowork-enable-confirm-btn") as HTMLButtonElement;
+    expect(enableBtn).toBeTruthy();
+    expect(enableBtn.disabled).toBe(false);
   });
 });

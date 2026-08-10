@@ -36,6 +36,7 @@ import {
 } from "../cowork/cowork-helpers.js";
 import { coworkToggleIntegration, type InvokeFn, loadInvoke } from "../cowork/cowork-invoke.js";
 import { createClaudeCliStatus } from "../hooks/useClaudeCliStatus.svelte.js";
+import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte.js";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte.js";
 import {
   createIntegrationWizard,
@@ -147,6 +148,7 @@ let view = $state<"main" | "cowork">("main");
 // and reopen is clean (explicitly NOT a module-level singleton).
 let coworkBusy = $state(false);
 let coworkError = $state<string | null>(null);
+const coworkProbe = createSubnetPreflight();
 
 let dialogEl: HTMLElement | null = $state(null);
 let prevFocus: Element | null = null;
@@ -175,6 +177,31 @@ $effect(() => {
   void wizard.begin();
 });
 
+/** Enter the Cowork sub-view and pre-flight subnet detection (#1298).
+ *
+ *  Unlike the other two Enable surfaces this one has no confirm step — the
+ *  button in the footer fires the real enable directly — so the probe hangs off
+ *  view entry instead. Same three-state contract: only a structured firewall
+ *  error swaps the button for a retry; a probe that could not run leaves the
+ *  button alone rather than blocking an enable that would have worked. */
+function openCoworkView(): void {
+  coworkError = null;
+  coworkBusy = false;
+  view = "cowork";
+  void coworkProbe.run();
+}
+
+/** Leave the sub-view, abandoning any probe still in flight.
+ *
+ *  Load-bearing, not hygiene: `run()` deliberately does NOT clear `preflight`
+ *  (clearing it would unmount the retry button mid-re-probe), so `reset()` is
+ *  the only thing that does. Every exit from the sub-view must come through
+ *  here or a stale hint paints on re-entry. */
+function leaveCoworkView(): void {
+  coworkProbe.reset();
+  view = "main";
+}
+
 /** Enable Cowork. `cowork-enable-confirm-btn` is the SOLE caller — never the
  *  footer, never sub-view mount. On success (or UAC-declined, which the Rust
  *  side leaves fail-closed with enabled:false) we refetch and return to MAIN
@@ -187,7 +214,7 @@ async function enableCowork(): Promise<void> {
     const invoke: InvokeFn = await loadInvoke();
     await coworkToggleIntegration(invoke, true);
     await coworkStatus.refetch();
-    view = "main";
+    leaveCoworkView();
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
     coworkError = formatCoworkError(raw);
@@ -591,6 +618,18 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                 </div>
               </details>
             {/if}
+            {#if coworkProbe.preflight?.status === "blocked"}
+              <!-- #1298: detection already failed once here; say why rather
+                   than leaving an Enable button that repeats it. -->
+              <div
+                class="iw-banner-warning"
+                role="status"
+                data-testid="integration-wizard-cowork-preflight-blocked"
+              >
+                {@render warningIcon()}
+                <span>{coworkProbe.preflight.hint}</span>
+              </div>
+            {/if}
             {#if coworkError}
               <div
                 class="iw-banner-warning"
@@ -934,7 +973,7 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
                     <button
                       type="button"
                       class="iw-btn iw-btn-secondary iw-more-btn"
-                      onclick={() => { coworkError = null; coworkBusy = false; view = "cowork"; }}
+                      onclick={openCoworkView}
                       aria-label="Set up Cowork"
                       data-testid="integration-wizard-cowork-setup"
                     >
@@ -980,15 +1019,25 @@ function pushSupportNoteFor(id: string): PushSupportNote | null {
           <button
             type="button"
             class="iw-btn iw-btn-secondary"
-            onclick={() => (view = "main")}
+            onclick={leaveCoworkView}
             data-testid="integration-wizard-cowork-back"
             disabled={coworkBusy}
           >
             Back
           </button>
           {#if coworkStatus.status?.enabled}
-            <button type="button" class="iw-btn iw-btn-primary" onclick={() => (view = "main")}>
+            <button type="button" class="iw-btn iw-btn-primary" onclick={leaveCoworkView}>
               Done
+            </button>
+          {:else if coworkProbe.preflight?.status === "blocked"}
+            <button
+              type="button"
+              class="iw-btn iw-btn-primary"
+              onclick={() => void coworkProbe.run()}
+              disabled={coworkBusy || coworkProbe.probing}
+              data-testid="integration-wizard-cowork-preflight-retry-btn"
+            >
+              {coworkProbe.probing ? "Checking…" : "Check again"}
             </button>
           {:else}
             <button

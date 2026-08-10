@@ -24,6 +24,7 @@ import {
   type InvokeFn,
   loadInvoke,
 } from "../cowork/cowork-invoke";
+import { createSubnetPreflight } from "../hooks/useCoworkPreflight.svelte";
 import { createCoworkStatus } from "../hooks/useCoworkStatus.svelte";
 import type { WorkspaceFileStatus, WorkspaceStatus } from "../types";
 
@@ -57,6 +58,21 @@ const { refetch } = coworkState;
 let inlineToastMessage = $state<string | null>(null);
 let confirming = $state<"enable" | null>(null);
 let busy = $state(false);
+// #1298: probe the Hyper-V subnet before offering Enable, so a detection
+// failure says what is wrong instead of blaming the Cowork install. See
+// CoworkOnboardingStep for why this runs on confirm rather than on mount.
+const probe = createSubnetPreflight();
+
+function openEnableConfirm(): void {
+  confirming = "enable";
+  void probe.run();
+}
+
+/** Abandon any in-flight probe so its result can't land on a closed banner. */
+function closeEnableConfirm(): void {
+  confirming = null;
+  probe.reset();
+}
 
 const debouncer = makeDebouncer(COWORK_RESCAN_DEBOUNCE_MS);
 onDestroy(() => debouncer.cancel());
@@ -91,7 +107,7 @@ async function handleToggleOn(): Promise<void> {
   await withInvoke(async (invoke) => {
     await coworkToggleIntegration(invoke, true);
     await refetch();
-    confirming = null;
+    closeEnableConfirm();
   }, "Failed to enable Cowork");
 }
 
@@ -168,7 +184,7 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
         checked={s.enabled}
         disabled={busy}
         onchange={(e) => {
-          if ((e.target as HTMLInputElement).checked) confirming = "enable";
+          if ((e.target as HTMLInputElement).checked) openEnableConfirm();
           else void handleToggleOff();
         }}
       />
@@ -222,21 +238,40 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
           Cowork can reach your open documents. This adds a Windows firewall rule so the Cowork VM
           can connect back — admin is required once.
         </div>
+        {#if probe.preflight?.status === "blocked"}
+          <!-- #1298: we already watched detection fail, so offer a retry rather
+               than an Enable button whose outcome we know. -->
+          <div class="cs-preflight" data-testid="cowork-preflight-blocked" role="status">
+            {probe.preflight.hint}
+          </div>
+        {/if}
         <div class="cs-actions">
-          <button
-            class="cs-btn cs-btn--primary"
-            data-testid="cowork-enable-confirm-btn"
-            type="button"
-            onclick={() => void handleToggleOn()}
-            disabled={busy}
-          >
-            Enable
-          </button>
+          {#if probe.preflight?.status === "blocked"}
+            <button
+              class="cs-btn cs-btn--primary"
+              data-testid="cowork-preflight-retry-btn"
+              type="button"
+              onclick={() => void probe.run()}
+              disabled={busy || probe.probing}
+            >
+              {probe.probing ? "Checking…" : "Check again"}
+            </button>
+          {:else}
+            <button
+              class="cs-btn cs-btn--primary"
+              data-testid="cowork-enable-confirm-btn"
+              type="button"
+              onclick={() => void handleToggleOn()}
+              disabled={busy}
+            >
+              Enable
+            </button>
+          {/if}
           <button
             class="cs-btn cs-btn--ghost"
             data-testid="cowork-enable-cancel-btn"
             type="button"
-            onclick={() => { confirming = null; }}
+            onclick={closeEnableConfirm}
             disabled={busy}
           >
             Cancel
@@ -380,6 +415,18 @@ function workspaceRowStyle(ws: WorkspaceStatus): string {
     margin-bottom: 4px;
   }
   .cs-confirm-body {
+    margin-bottom: 8px;
+  }
+  /* The detection failure has to read as a distinct thing, not as a third
+     paragraph of the confirm blurb. It already inherits the warning tokens from
+     `.cs-warning-banner`, so a border is what separates it — matching
+     `.cos-preflight` in CoworkOnboardingStep, which renders the same hint. */
+  .cs-preflight {
+    font-size: 12px;
+    line-height: 1.5;
+    border: 1px solid var(--tandem-warning-border);
+    border-radius: var(--tandem-r-2);
+    padding: 6px 8px;
     margin-bottom: 8px;
   }
   .cs-link {

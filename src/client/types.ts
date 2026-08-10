@@ -95,8 +95,18 @@ export type FirewallErrorVariant =
   | { kind: "adminDeclined" }
   | { kind: "netshNotFound" }
   | { kind: "netshFailure"; exitCode: number; stderrTail: string; stdoutTail: string }
-  | { kind: "subnetDetectionFailed" }
+  | { kind: "subnetDetectionFailed"; reason?: SubnetDetectionReason }
   | { kind: "adapterEnumerationFailed" };
+
+/**
+ * Why vEthernet subnet detection failed (#1298). Mirrors
+ * `SubnetDetectionReason` in `src-tauri/src/firewall.rs`.
+ *
+ * Optional on the variant above, for the same stale-sidecar tolerance the rest
+ * of the Cowork surface uses: a desktop shell talking to an older sidecar gets
+ * no `reason` and must still render something honest.
+ */
+export type SubnetDetectionReason = "noAdapter" | "noIpv4" | "prefixTooBroad" | "queryFailed";
 
 // ---------------------------------------------------------------------------
 // App info response from GET /api/info

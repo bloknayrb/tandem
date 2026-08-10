@@ -8,6 +8,7 @@ import { COWORK_ONBOARDING_SKIPPED_KEY } from "../../shared/constants";
 import type {
   CoworkStatus,
   FirewallErrorVariant,
+  SubnetDetectionReason,
   WorkspaceFileStatus,
   WorkspaceStatus,
 } from "../types";
@@ -52,6 +53,40 @@ export function undetectedDetail(status: CoworkStatus): UndetectedDetail {
 }
 
 /**
+ * Recovery copy per subnet-detection reason (#1298).
+ *
+ * A `Record` over the union rather than a `switch`: it is exhaustive at compile
+ * time, so a change to the TypeScript union is a type error in exactly one
+ * place — the property `workspaceFileStatusLabel` gets from having no `default`
+ * arm. `firewallErrorHint` still needs a runtime fallback (the field is
+ * optional for stale sidecars), and a `switch` cannot be both.
+ *
+ * It does NOT catch a rename on the Rust side. `SubnetDetectionReason` in
+ * `src/client/types.ts` is hand-maintained against `src-tauri/src/firewall.rs`,
+ * so a Rust-side rename produces zero TypeScript errors and degrades silently
+ * to the fallback hint — which is why the fallback has to stay honest, and why
+ * `tests/build/subnet-reason-alignment.test.ts` pins the two lists together.
+ *
+ * None of these may say "is Cowork set up on this machine?" — the workspace
+ * scan has already succeeded before any of the three surfaces can reach this
+ * code, and one of them (`CoworkOnboardingStep`) is literally titled "Claude
+ * Desktop Cowork detected". That sentence was the defect.
+ */
+const SUBNET_REASON_HINT: Record<SubnetDetectionReason, string> = {
+  // Deliberately says what Tandem observed, not what is true of the machine.
+  // Three different situations produce a zero match and the code cannot tell
+  // them apart, so asserting "no adapter exists" would be false for two of them.
+  noAdapter:
+    "Tandem didn't find a Hyper-V virtual network adapter, so it can't tell which subnet to allow. Usually that means no Cowork session is running — start one and try again. It can also mean WSL is using mirrored networking (no adapter is ever created), or that Tandem doesn't recognise the adapter's name on this edition of Windows.",
+  noIpv4:
+    "A Hyper-V virtual network adapter is there, but it doesn't have an IPv4 address yet. Start a Cowork session and try again.",
+  prefixTooBroad:
+    "The Hyper-V subnet Tandem found is wider than /20. Tandem won't open the firewall that broadly, so it stopped rather than allow more of the network than Cowork needs.",
+  queryFailed:
+    "Windows couldn't list Hyper-V network adapters, so Tandem can't tell which subnet to allow. Try again, and if it keeps happening, check that PowerShell runs normally on this machine.",
+};
+
+/**
  * Render a distinct user-facing recovery hint per `FirewallError` variant.
  * Kept pure so `tests/client/cowork-settings.test.ts`
  * can exhaustively cover the variant → hint mapping.
@@ -67,7 +102,17 @@ export function firewallErrorHint(variant: FirewallErrorVariant): string {
         variant.stderrTail,
       )}`;
     case "subnetDetectionFailed":
-      return "Could not detect the Hyper-V / Cowork VM subnet. Is Claude Desktop Cowork actually set up on this machine?";
+      // `||`, not `??`: the left operand is `""` when `reason` is an empty
+      // string, and `??` passes that straight through — rendering an empty
+      // warning box while still removing the Enable button. `||` also covers
+      // an absent `reason` (older sidecar) and one this build doesn't
+      // recognise, and no entry in the table is falsy, so nothing valid is
+      // lost. The fallback still names the subnet, because that is the one
+      // thing every case has in common.
+      return (
+        (variant.reason && SUBNET_REASON_HINT[variant.reason]) ||
+        "Tandem couldn't work out the Hyper-V subnet Cowork is using, so it didn't change the firewall. Start a Cowork session and try again."
+      );
     case "adapterEnumerationFailed":
       return "Could not enumerate Hyper-V network adapters. Run Tandem as administrator or reboot to refresh the adapter list.";
     default:
@@ -82,7 +127,17 @@ function truncateStderr(tail: string): string {
   return `${s.slice(0, 197)}...`;
 }
 
-export function formatCoworkError(rawMsg: string): string {
+/**
+ * Recover the structured `FirewallError` the Rust side serialized, or `null`
+ * when the message is something else entirely.
+ *
+ * The `null` case is load-bearing for the enable pre-flight (#1298): a failure
+ * we can't classify — `TAURI_NOT_AVAILABLE`, the non-Windows guard, a panic
+ * string — is a broken *probe*, not evidence that enabling would fail. Callers
+ * distinguish the two so a probe that can't run never blocks an enable that
+ * would have worked.
+ */
+export function parseFirewallErrorVariant(rawMsg: string): FirewallErrorVariant | null {
   try {
     const parsed: unknown = JSON.parse(rawMsg);
     if (
@@ -91,15 +146,21 @@ export function formatCoworkError(rawMsg: string): string {
       "kind" in parsed &&
       typeof (parsed as Record<string, unknown>).kind === "string"
     ) {
-      try {
-        return firewallErrorHint(parsed as FirewallErrorVariant);
-      } catch (hintErr) {
-        console.error("[cowork] firewallErrorHint failed for:", parsed, hintErr);
-        return rawMsg;
-      }
+      return parsed as FirewallErrorVariant;
     }
-    return rawMsg;
+    return null;
   } catch {
+    return null;
+  }
+}
+
+export function formatCoworkError(rawMsg: string): string {
+  const variant = parseFirewallErrorVariant(rawMsg);
+  if (!variant) return rawMsg;
+  try {
+    return firewallErrorHint(variant);
+  } catch (hintErr) {
+    console.error("[cowork] firewallErrorHint failed for:", variant, hintErr);
     return rawMsg;
   }
 }
