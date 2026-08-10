@@ -201,7 +201,7 @@ Mechanism, ops, and failure modes: [docs/licensing-explained.md](docs/licensing-
 
 ## Status
 
-**Shipped: v0.20.1.** Release history is [CHANGELOG.md](CHANGELOG.md); remaining v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10). Do not re-narrate either here.
+**Shipped: v0.21.0** (2026-08-10). Release history is [CHANGELOG.md](CHANGELOG.md); remaining v1.0 work is [docs/roadmap.md](docs/roadmap.md#active--toward-v10). Do not re-narrate either here.
 
 Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotations, chat, four push paths (self-armed wake, plugin monitor, opt-in channel shim, supervisor stdin), `.md`/`.docx`/`.txt`/`.html`, npm global install, Tauri desktop app.
 
@@ -210,7 +210,9 @@ Core is complete — 29 active MCP tools, multi-doc tabs, CRDT-anchored annotati
 - **Licensing** (ADR-040, #1116) — `LICENSE_GATE_ENABLED` in `tsup.config.ts`. Section above.
 - **Local-model collaborator** (ADR-039, #1123) — `BYO_MODELS_ENABLED` is a literal `const false` in `src/shared/constants.ts`. The whole M1a→M4 mechanism is merged dark. It also gates UI: the Settings **Models** tab is filtered out entirely while false, so do not document or test it as a visible surface.
 
-**Blocking v1.0:** the cross-platform install matrix and #316 Cowork macOS/Linux (both hardware-gated); the two flag flips; and the v1.0 exit gates. The security gate's RC re-run **failed** on 2026-08-05 — #1291 has since been fixed, leaving #1292 (O(n²) local-model streaming sink), which blocks the BYO-models flip rather than the release. Prior per-feature version pins (v0.16.0 = licensing, v0.17.0 = local models) are void; both ship incrementally dark across minors.
+**Blocking v1.0:** the cross-platform install matrix and #316 Cowork macOS/Linux (both hardware-gated); the two flag flips; and the v1.0 exit gates. Prior per-feature version pins (v0.16.0 = licensing, v0.17.0 = local models) are void; both ship incrementally dark across minors.
+
+**Security gate, as of v0.21.0.** The RC re-run failed on 2026-08-05 with two HIGH. #1291 (CORS opaque-origin grant) and #1293 (inverted loopback gate) are fixed and closed, as is #1294. **#1292 is still OPEN and is the last HIGH** — its code fix shipped in v0.21.0, but it gates on the BYO-models flip rather than on the release, so do not read the v0.21.0 entry as closing it; verify the issue state, not the changelog. **#1295 is also still open**: three of its six LOW findings shipped in v0.21.0 (the scratchpad gate, the restore documentId binding, the reply cap), the other three did not. A batch issue closes when the batch does, so its open state does not tell you which half remains — read the issue.
 
 ## Tandem-Specific Skills
 
